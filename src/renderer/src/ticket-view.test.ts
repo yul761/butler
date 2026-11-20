@@ -1,0 +1,123 @@
+import { describe, expect, it } from "vitest";
+import type { PrStageCell, PrStagesView } from "../../shared/pr-stages";
+import type { Turn } from "../../shared/turn";
+import type { SessionView } from "../../shared/types";
+import { STRINGS } from "./strings";
+import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession } from "./ticket-view";
+
+const S = STRINGS.zh;
+const ids = (t: Turn, o = { hasPr: true, canFix: false }) => mainActions(t, o, S).map((a) => a.id);
+
+describe("mainActions", () => {
+  it("merge opens the PR; without a PR there is nothing", () => {
+    const a = mainActions({ owner: "you", kind: "merge", risk: null }, { hasPr: true, canFix: false }, S);
+    expect(a).toEqual([{ id: "open_pr", label: "打开 PR", primary: true }]);
+    expect(ids({ owner: "you", kind: "merge", risk: null }, { hasPr: false, canFix: false })).toEqual([]);
+  });
+  it("answer goes to the terminal", () => {
+    const a = mainActions({ owner: "you", kind: "answer", question: "q", options: [], askId: 1, sessionId: "s" }, { hasPr: false, canFix: false }, S);
+    expect(a).toEqual([{ id: "answer", label: "去回答", primary: true, goTab: "terminal" }]);
+  });
+  it("stuck looks, and offers a fix only when it can", () => {
+    const t: Turn = { owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s" };
+    expect(ids(t)).toEqual(["look"]);
+    expect(ids(t, { hasPr: false, canFix: true })).toEqual(["look", "fix"]);
+    expect(mainActions(t, { hasPr: false, canFix: false }, S)[0].goTab).toBe("terminal");
+  });
+  it("unattended reads canSend from the turn", () => {
+    const u = (canSend: boolean, why: "ci_failing" | "agent_stopped" = "ci_failing"): Turn => ({ owner: "you", kind: "unattended", why, canSend, sessionId: null });
+    expect(mainActions(u(true), { hasPr: true, canFix: false }, S).map((a) => [a.id, a.primary, a.goTab])).toEqual([["send", true, undefined], ["pr_details", false, "pr"]]);
+    expect(ids(u(false))).toEqual(["pr_details"]);
+    expect(mainActions(u(false, "agent_stopped"), { hasPr: true, canFix: false }, S)).toEqual([{ id: "look", label: "去看看", primary: true, goTab: "terminal" }]);
+  });
+  it("nobody-to-click owners and butler notices give no buttons", () => {
+    const none: Turn[] = [
+      { owner: "agent", kind: "working", sessionId: "s" },
+      { owner: "external", kind: "ci_running", names: [] },
+      { owner: "done", kind: "merged" },
+      { owner: "idle", kind: "not_started" },
+      { owner: "you", kind: "butler", notice: { kind: "other" } as never },
+    ];
+    for (const t of none) expect(ids(t, { hasPr: true, canFix: true })).toEqual([]);
+  });
+});
+
+describe("contextLine", () => {
+  it("flags near refresh at 80% of the threshold", () => {
+    expect(contextLine({ tokens: 148000, threshold: 150000 }, S)).toEqual({ text: "148k / 150k", nearRefresh: true });
+    expect(contextLine({ tokens: 120000, threshold: 150000 }, S).nearRefresh).toBe(true);
+    expect(contextLine({ tokens: 119000, threshold: 150000 }, S).nearRefresh).toBe(false);
+    expect(contextLine({ tokens: 30000, threshold: 150000 }, S)).toEqual({ text: "30k / 150k", nearRefresh: false });
+  });
+  it("auto refresh off and unknown", () => {
+    expect(contextLine({ tokens: 30000, threshold: 0 }, S)).toEqual({ text: "30k（自动换新已关）", nearRefresh: false });
+    expect(contextLine(null, S)).toEqual({ text: "还不知道", nearRefresh: false });
+  });
+  it("english", () => {
+    expect(contextLine({ tokens: 30000, threshold: 0 }, STRINGS.en).text).toBe("30k (auto refresh off)");
+  });
+});
+
+const cell = (state: PrStageCell["state"], at: number | null = null): PrStageCell => ({ id: "dev", state, round: 1, at });
+const row = (o: Partial<PrStagesView> & { done?: number; at?: number }): PrStagesView => {
+  const stages = Array.from({ length: 6 }, (_, i) => cell(i < (o.done ?? 0) ? "done" : "todo", o.at ?? null));
+  return {
+    ticketKey: "BTL-1", featureId: null, repoId: 1, repoName: "r", prId: 1, slug: null, noPr: false,
+    prNumber: 1, prUrl: "u", closed: false, stages, timeline: [], ...o,
+  };
+};
+
+describe("prStageLine", () => {
+  it("no rows, null, or only no-PR rows", () => {
+    expect(prStageLine({ rows: [] }, S)).toBe("还没开 PR");
+    expect(prStageLine(null, S)).toBe("还没开 PR");
+    expect(prStageLine({ rows: [row({ noPr: true, prNumber: null, prId: null })] }, S)).toBe("还没开 PR");
+  });
+  it("counts done stages of the newest row", () => {
+    expect(prStageLine({ rows: [row({ done: 5 })] }, S)).toBe("6 个阶段走完 5 个");
+  });
+  it("mentions the other open PRs and picks the newest by activity", () => {
+    const line = prStageLine({ rows: [row({ prNumber: 1, done: 2, at: 1 }), row({ prNumber: 2, done: 4, at: 9 })] }, S);
+    expect(line).toBe("6 个阶段走完 4 个 · 另有 1 个 PR");
+  });
+  it("all closed marks the newest as closed", () => {
+    const line = prStageLine({ rows: [row({ closed: true, done: 1, at: 1 }), row({ closed: true, done: 3, at: 5 })] }, S);
+    expect(line).toBe("6 个阶段走完 3 个（已关闭）");
+  });
+  it("a closed old PR does not hide the open one", () => {
+    expect(prStageLine({ rows: [row({ closed: true, done: 6, at: 9 }), row({ done: 2, at: 1 })] }, S)).toBe("6 个阶段走完 2 个");
+  });
+});
+
+const sess = (id: string, o: Partial<SessionView> = {}): SessionView =>
+  ({ id, firstPrompt: `prompt ${id}`, fixesSession: null, spawnedBy: null, ...o }) as SessionView;
+
+describe("primarySession / conversationSessions", () => {
+  it("prefers the newest session that is neither a fix nor spawned", () => {
+    const list = [sess("fix", { fixesSession: "x" }), sess("child", { spawnedBy: "p" }), sess("main"), sess("old")];
+    expect(primarySession(list)?.id).toBe("main");
+  });
+  it("falls back to the first, or null", () => {
+    expect(primarySession([sess("f1", { fixesSession: "x" }), sess("f2", { fixesSession: "x" })])?.id).toBe("f1");
+    expect(primarySession([])).toBeNull();
+  });
+  it("labels fix sessions with a prefix", () => {
+    expect(conversationSessions([sess("a"), sess("b", { fixesSession: "a" })], S)).toEqual([
+      { id: "a", label: "prompt a" },
+      { id: "b", label: "修复 · prompt b" },
+    ]);
+  });
+});
+
+describe("clipSaid", () => {
+  it("clips long text to 280 chars plus an ellipsis", () => {
+    const c = clipSaid("a".repeat(300));
+    expect(c).toHaveLength(281);
+    expect(c.endsWith("…")).toBe(true);
+  });
+  it("keeps short text", () => expect(clipSaid("hi")).toBe("hi"));
+  it("counts characters, not UTF-16 units", () => {
+    const c = clipSaid("😀".repeat(10), 4);
+    expect(Array.from(c)).toEqual([..."😀😀😀😀", "…"]);
+  });
+});
