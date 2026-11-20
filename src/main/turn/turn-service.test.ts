@@ -139,6 +139,39 @@ describe("TurnService.board", () => {
     expect(busy.board({ ticketKey: "BTL-1" }).items.some((i) => i.turn.kind === "butler")).toBe(true);
   });
 
+  it("comments waiting are matched to their own PR by id, and kept when that PR row cannot send", () => {
+    const human = { login: "amy", state: "changes_requested" as const, at: 1, bot: false };
+    // 多仓库：两个仓库都有 #3；A（prId 1）要求修改可以发，评论等着的是 B（prId 2）的
+    const other = { reason: "review" as const, ticketKey: "BTL-1", prId: 2, number: 3, count: 2, since: 40 };
+    const s = new TurnService(failingPr({
+      prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing", reviewers: [human] }),
+      comments: { deliveredAt: () => null, sendable: () => true, sendAll: vi.fn(async () => 2) },
+      notices: () => [{ kind: "comments_waiting", waiting: other, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
+    }));
+    expect(s.board({ ticketKey: "BTL-1" }).items.some((i) => i.turn.kind === "butler")).toBe(true);
+    // 排队超过 30 分钟没送出：PR 行发不了（canSend false），提醒要留着
+    const stuck = { reason: "undelivered" as const, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 40 };
+    const u = new TurnService(failingPr({
+      prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing", reviewers: [human] }),
+      comments: { deliveredAt: () => null, sendable: () => false, sendAll: vi.fn(async () => 0) },
+      notices: () => [{ kind: "comments_waiting", waiting: stuck, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
+    }));
+    const b = u.board({ ticketKey: "BTL-1" });
+    expect(b.items.find((i) => i.pr?.number === 3)?.turn).toMatchObject({ why: "changes_requested", canSend: false });
+    expect(b.items.some((i) => i.turn.kind === "butler")).toBe(true);
+  });
+
+  it("a passing PR whose CI verdict never reached the agent keeps its ci_undelivered notice", () => {
+    const prCi = { item: { kind: "pr", id: 1 }, ticketKey: "BTL-1", number: 3, branch: "feat", reason: "no_session", since: 77, sessionId: null } as const;
+    const s = new TurnService(failingPr({
+      prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing" }),
+      ciUndelivered: () => [prCi],
+      notices: () => [{ kind: "ci_undelivered", ci: prCi, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
+    }));
+    const b = s.board({ ticketKey: "BTL-1" });
+    expect(b.items.find((i) => i.turn.kind === "butler")).toMatchObject({ turn: { notice: { kind: "ci_undelivered" } }, since: 77 });
+  });
+
   it("a blocked report only makes its own session stuck on a multi-repo ticket", () => {
     const s = new TurnService(fakeDeps({
       tickets: () => [ticket("BTL-1", { sessions: [sv("s1"), sv("s2", { repoId: 2 })] })],

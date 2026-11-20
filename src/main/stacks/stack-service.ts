@@ -16,7 +16,7 @@ import * as gh from "./gh-stack";
 import { bottomBody, dependsLine, draftBody, draftTitle, overviewBody, stripPrefix, T, withDependsLine, withoutDependsLine, type GraphLayer } from "./pr-text";
 import { runEngine, type EngineLayer, type NewTip } from "./rebase-engine";
 import type { StackPolicyService } from "./stack-policy";
-import { prUrlKey } from "../../shared/pr-url";
+import { prUrlKey, prUrlParts } from "../../shared/pr-url";
 
 /**
  * 栈式 PR（工作流 K，设计 2026-11-17-ws-k-stacks-design）：维护本地栈表，整栈自动 rebase，栈底合并后提升新栈底，
@@ -1045,12 +1045,15 @@ export class StackService {
 
   /**
    * 「谁该动」看板（UI 重做第 1 层）：这个 PR 是没删的栈里的一层、下面还有没合的层时，最近那层的分支；
-   * 栈底、下面都合了、不在栈里为 null。按分支找，分支同名的几个栈里取 PR 链接对得上的那个。
+   * 栈底、下面都合了、不在栈里为 null。按分支找：先取 PR 链接对得上的层；只按分支名兜底时，这一层得还没记 PR、
+   * 而且栈的仓库和 PR 的仓库一致（多仓库 ticket 在每个仓库起的分支同名，别的仓库里同名分支不在这个栈里）。
    */
   stackBelow(prUrl: string, branch: string | null): string | null {
     const key = prUrlKey(prUrl);
+    const slug = prUrlParts(prUrl)?.slug ?? null;
     const hits = branch ? this.d.repo.findBranchAnyRepo(branch) : [];
-    const hit = hits.find((h) => h.layer.prUrl !== null && prUrlKey(h.layer.prUrl) === key) ?? (hits.length === 1 ? hits[0] : undefined);
+    const loose = hits.filter((h) => h.layer.prUrl === null && (h.stack.repoSlug === null || (slug !== null && h.stack.repoSlug.toLowerCase() === slug)));
+    const hit = hits.find((h) => h.layer.prUrl !== null && prUrlKey(h.layer.prUrl) === key) ?? (loose.length === 1 ? loose[0] : undefined);
     if (!hit) return null;
     const below = this.d.repo.layers(hit.stack.id).filter((l) => l.position < hit.layer.position && l.state !== "merged");
     return below.length === 0 ? null : below[below.length - 1]!.branch;

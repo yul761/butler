@@ -291,10 +291,9 @@ export class TurnService {
       if (bt) bt.others.push(tt);
       else loose.push({ ...tt, featureId: target?.page === "feature" ? target.id : null, epicId: target?.page === "epic" ? target.id : null });
     };
-    const commentNotices: { n: Extract<NowNotice, { kind: "comments_waiting" }>; tt: TimedTurn }[] = [];
+    const prNotices: { n: NowNotice; tt: TimedTurn; key: string | null; target: NowTarget | null }[] = [];
     for (const n of this.d.notices()) {
       if (!noticeNeedsYou(n) || n.kind === "session_limited") continue;
-      if (n.kind === "ci_undelivered" && n.ci.item.kind === "pr") continue;
       const since = n.kind === "ci_undelivered" ? n.ci.since : n.kind === "comments_waiting" ? n.waiting.since : now;
       const tt: TimedTurn = { turn: { owner: "you", kind: "butler", notice: n }, since };
       const target = "target" in n ? n.target : null;
@@ -302,12 +301,15 @@ export class TurnService {
         : n.kind === "comments_waiting" ? n.waiting.ticketKey
         : n.kind === "stack" ? (n.stack.ticketKey ?? null)
         : target?.page === "ticket" ? target.key : null;
-      if (n.kind === "comments_waiting") commentNotices.push({ n, tt });
+      if (n.kind === "comments_waiting" || (n.kind === "ci_undelivered" && n.ci.item.kind === "pr")) prNotices.push({ n, tt, key, target });
       else placeNotice(n, tt, key, target);
     }
 
-    // 「要求修改、没人在改」的 PR（可以一键发评论）：同一个 PR 的评论等着的提醒就不再单独挂一条
-    const reviewUnattended = new Set<string>();
+    // PR 行能接住的提醒等 PR 算完再挂（按 prId 认，多仓库里 PR 号会重）：
+    // 「要求修改、没人在改」且能一键发的 PR，吞掉它的评论等着；CI 失败的 PR，行上已经显示没递出去，吞掉它的 ci_undelivered
+    //（CI 通过的结论也会递，递不出去时 PR 行不显示，提醒要留着）。
+    const sendableReview = new Set<number>();
+    const failingCi = new Set<number>();
     for (const t of tickets) {
       const bt = board.get(t.key)!;
       const heads = headsOf.get(t.key) ?? [];
@@ -315,8 +317,10 @@ export class TurnService {
       for (const w of this.d.prs(t.key)) {
         const row = w.prId !== null ? this.d.prRow(w.prId) : null;
         const p = row ? this.prInput(t.key, w, row, headIds, snap) : null;
-        if (p) bt.prs.push(p);
-        if (p && p.turn.owner === "you" && p.turn.kind === "unattended" && p.turn.why === "changes_requested") reviewUnattended.add(`${t.key}#${p.number}`);
+        if (!p || w.prId === null) continue;
+        bt.prs.push(p);
+        if (p.turn.owner === "you" && p.turn.kind === "unattended" && p.turn.why === "changes_requested" && p.turn.canSend) sendableReview.add(w.prId);
+        if (w.ci === "failing") failingCi.add(w.prId);
       }
       const report = heads.length > 0 ? this.d.lastReport(t.key) : null;
       // 最近一条 report 只算在交它的那条链上：多仓库 ticket 里别的 session 不跟着「报告做不下去」。
@@ -337,8 +341,10 @@ export class TurnService {
       }
     }
 
-    for (const { n, tt } of commentNotices) {
-      if (!reviewUnattended.has(`${n.waiting.ticketKey}#${n.waiting.number}`)) placeNotice(n, tt, n.waiting.ticketKey, n.target);
+    for (const { n, tt, key, target } of prNotices) {
+      if (n.kind === "comments_waiting" && sendableReview.has(n.waiting.prId)) continue;
+      if (n.kind === "ci_undelivered" && n.ci.item.kind === "pr" && failingCi.has(n.ci.item.id)) continue;
+      placeNotice(n, tt, key, target);
     }
 
     // R6：总控 session 要你的才进 loose

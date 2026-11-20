@@ -675,6 +675,19 @@ describe("StackService for other workstreams", () => {
     expect(w.svc.stackBelow("https://github.com/acme/app/pull/9", "zzz")).toBeNull();
   });
 
+  it("stackBelow by branch name alone only matches a layer with no PR yet, in the same repo", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const layers = w.repoT.layers(id);
+    // 还没记 PR 的层：同仓库按分支兜底
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/8", layers[2]!.branch)).toBe(layers[1]!.branch);
+    // 多仓库 ticket 在别的仓库起了同名分支：不在栈里
+    expect(w.svc.stackBelow("https://github.com/acme/other/pull/3", layers[2]!.branch)).toBeNull();
+    // 这一层已经记了别的 PR：同名分支的另一个 PR 不是它
+    w.repoT.updateLayer(layers[2]!.id, { prUrl: "https://github.com/acme/app/pull/8", prNumber: 8 });
+    expect(w.svc.stackBelow("https://github.com/acme/app/pull/30", layers[2]!.branch)).toBeNull();
+  });
+
   it("posts the epic overview as an issue only when asked to", async () => {
     const w = world({ policy: { overview: "issue", dailyRebase: false } });
     await defineAll(w);
