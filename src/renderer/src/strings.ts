@@ -2496,7 +2496,7 @@ const ZH = {
     sendTo: "发给：", toDev: "开发 session", toFork: "只问不改（分叉讨论）", askPlaceholder: "问点什么…", send: "发送",
     block: {
       closed: "session 没开着，先到终端 tab 打开它",
-      hibernated: "session 睡着了，先唤醒",
+      hibernated: "session 睡着了，正在叫醒，醒了再点一次",
       busy: "session 正忙或正在换新，稍后再发",
       screen: "终端里开着别的界面，先关掉",
       needs_you: "session 在等你回答，先回答它",
@@ -2511,7 +2511,7 @@ const ZH = {
       fork_busy: "讨论还在回答，等它答完",
       no_conclusion: "没拿到结论，再试一次",
       not_found: "找不到这个 session",
-    } as Record<DevSendBlock, string>,
+    } satisfies Record<DevSendBlock, string>,
     refusal: {
       fork_busy: "这个讨论还在回答",
       dev_busy: "开发 session 正在跑，等它停下再用完整上下文",
@@ -2520,9 +2520,9 @@ const ZH = {
       not_found: "找不到这个讨论",
       bad_question: "问题是空的或太长",
       not_forked: "命令行没有分叉出新对话，这个讨论不能接着问了，请重新开一个",
-      internal: "内容不符合要求（可能太长了），改一下再试",
+      internal: "这次请求没被接受，再试一次",
       other: "出错了，再试一次",
-    } as Record<ForkRefusal | "internal" | "other", string>,
+    } satisfies Record<ForkRefusal | "internal" | "other", string>,
     error: {
       rate_limited: (time: string | null) => (time === null ? "撞到用量限额了" : `撞到用量限额了，${time} 恢复`),
       interrupted: "Butler 退出时还没答完",

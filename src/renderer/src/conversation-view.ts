@@ -2,6 +2,7 @@
 import type { ConvMessage, ConvPage } from "../../shared/conversation";
 import type { DevSendBlock, ForkMode, ForkView, RememberResult } from "../../shared/fork";
 import type { InboxItemView } from "../../shared/types";
+import { resetClock } from "./availability-view";
 import type { UiStrings } from "./strings";
 
 export type ConvFilter = "all" | "forks" | "search";
@@ -41,12 +42,11 @@ export function buildTimeline(i: TimelineInput): TimelineItem[] {
   if (i.filter === "forks") return forks.sort(byTime);
 
   const main = i.messages.filter((m) => m.forkId === null);
-  let cut: number | null = null;
-  if (i.convHasMore && i.reportsHasMore) {
-    const earliest = [main.map((m) => m.at), i.reports.map((r) => r.createdAt)]
-      .filter((a) => a.length > 0).map((a) => Math.min(...a));
-    if (earliest.length > 0) cut = Math.max(...earliest);
-  }
+  // 没有更早页的一边是完整的，不拦；还有更早页的一边，以它已载入的最早一条为界。
+  const bounds: number[] = [];
+  if (i.convHasMore && main.length) bounds.push(Math.min(...main.map((m) => m.at)));
+  if (i.reportsHasMore && i.reports.length) bounds.push(Math.min(...i.reports.map((r) => r.createdAt)));
+  const cut = bounds.length ? Math.max(...bounds) : null;
 
   const items: TimelineItem[] = [
     ...main.map((msg): TimelineItem => ({ kind: "msg", key: `m${msg.id}`, msg })),
@@ -57,30 +57,40 @@ export function buildTimeline(i: TimelineInput): TimelineItem[] {
   return items.filter((x) => cut === null || timeOf(x) >= cut).sort(byTime);
 }
 
+export type TurnBlock =
+  | { kind: "turn"; key: string; msgs: ConvMessage[] }
+  | { kind: "item"; item: TimelineItem };
+
+/** 把紧挨着、turnId 相同的主流 assistant 消息并成一块；黄框、汇报、分隔线、用户消息都会打断。黄框里的消息不在这里。 */
+export function turnBlocks(items: TimelineItem[]): TurnBlock[] {
+  const out: TurnBlock[] = [];
+  for (const it of items) {
+    if (it.kind === "msg" && it.msg.role === "assistant" && it.msg.forkId === null) {
+      const last = out[out.length - 1];
+      if (last && last.kind === "turn" && last.msgs[0].turnId === it.msg.turnId) { last.msgs.push(it.msg); continue; }
+      out.push({ kind: "turn", key: it.key, msgs: [it.msg] });
+    } else out.push({ kind: "item", item: it });
+  }
+  return out;
+}
+
 const usd = (v: number) => `$${v.toFixed(2)}`;
 
 export function costText(f: Pick<ForkView, "costUsd" | "costPartial" | "status">, t: UiStrings): string {
   const v = f.costUsd;
   if (v === null || !Number.isFinite(v) || v < 0) return f.status === "running" ? t.conv.costPending : t.conv.costUnknown;
-  if (v < 0.01) return t.conv.costUnder;
-  return f.costPartial ? t.conv.costAtLeast(usd(v)) : usd(v);
+  if (f.costPartial) return t.conv.costAtLeast(usd(v));
+  return v < 0.01 ? t.conv.costUnder : usd(v);
 }
 
 export function modeText(mode: ForkMode, t: UiStrings): string {
   return mode === "full" ? t.conv.modeFull : t.conv.modeLight;
 }
 
-/** 恢复的时间：同一天只写时分，不同天带上月日。 */
-function resetText(at: number, now: number): string {
-  const d = new Date(at);
-  const clock = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return d.toDateString() === new Date(now).toDateString() ? clock : `${d.toLocaleDateString([], { month: "numeric", day: "numeric" })} ${clock}`;
-}
-
 export function errorText(e: NonNullable<ForkView["error"]>, t: UiStrings, now: number): string {
   const m = t.conv.error;
   switch (e.code) {
-    case "rate_limited": return m.rate_limited(e.resetAt !== null && e.resetAt > now ? resetText(e.resetAt, now) : null);
+    case "rate_limited": return m.rate_limited(e.resetAt !== null && e.resetAt > now ? resetClock(e.resetAt, now) : null);
     case "interrupted": return m.interrupted;
     case "no_answer": return m.no_answer;
     case "timeout": return m.timeout;

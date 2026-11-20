@@ -2476,7 +2476,7 @@ export const EN: UiStrings = {
     sendTo: "Send to:", toDev: "Dev session", toFork: "Ask only (forked discussion)", askPlaceholder: "Ask something…", send: "Send",
     block: {
       closed: "The session isn't open; open it in the Terminal tab",
-      hibernated: "The session is asleep; wake it first",
+      hibernated: "The session was asleep and is waking up; click again in a moment",
       busy: "The session is working or refreshing; send in a moment",
       screen: "Another screen is open in the terminal; close it first",
       needs_you: "The session is waiting for your answer; answer it first",
@@ -2491,7 +2491,7 @@ export const EN: UiStrings = {
       fork_busy: "The discussion is still answering; wait for it",
       no_conclusion: "Didn't get a conclusion; try again",
       not_found: "Can't find this session",
-    } as Record<DevSendBlock, string>,
+    } satisfies Record<DevSendBlock, string>,
     refusal: {
       fork_busy: "This discussion is still answering",
       dev_busy: "The dev session is working; use full context once it stops",
@@ -2500,9 +2500,9 @@ export const EN: UiStrings = {
       not_found: "Can't find this discussion",
       bad_question: "The question is empty or too long",
       not_forked: "The command line didn't fork a new conversation, so this discussion can't be continued; start a new one",
-      internal: "The text isn't acceptable (maybe too long); change it and try again",
+      internal: "The request wasn't accepted; try again",
       other: "Something went wrong; try again",
-    } as Record<ForkRefusal | "internal" | "other", string>,
+    } satisfies Record<ForkRefusal | "internal" | "other", string>,
     error: {
       rate_limited: (time: string | null) => (time === null ? "Hit the usage limit" : `Hit the usage limit; back at ${time}`),
       interrupted: "Butler quit before it finished",

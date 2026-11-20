@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ConvMessage } from "../../shared/conversation";
 import type { DevSendBlock, ForkErrorCode, ForkRefusal, ForkView, RememberResult } from "../../shared/fork";
 import type { InboxItemView } from "../../shared/types";
-import { buildTimeline, costText, errorText, modeText, refusalText, rememberText, sendBlockText, type TimelineInput } from "./conversation-view";
+import { resetClock } from "./availability-view";
+import { buildTimeline, costText, errorText, modeText, refusalText, rememberText, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
 import { STRINGS } from "./strings";
 
 const T = STRINGS.zh;
@@ -21,12 +22,12 @@ const report = (id: number, createdAt: number, reportKind: InboxItemView["report
 const input = (over: Partial<TimelineInput> = {}): TimelineInput => ({
   messages: [], refreshMarks: [], convHasMore: false, forks: [], reports: [], reportsHasMore: false, filter: "all", ...over,
 });
-const keys = (items: { kind: string; key: string }[]) => items.map((i) => `${i.kind}`);
+const kinds = (items: { kind: string; key: string }[]) => items.map((i) => `${i.kind}`);
 
 describe("buildTimeline", () => {
   it("orders messages and the refresh separator", () => {
     const out = buildTimeline(input({ messages: [msg(1, 10), msg(2, 20), msg(3, 40)], refreshMarks: [{ at: 30, sessionId: "s2" }] }));
-    expect(keys(out)).toEqual(["msg", "msg", "sep", "msg"]);
+    expect(kinds(out)).toEqual(["msg", "msg", "sep", "msg"]);
     expect(out[2]).toMatchObject({ kind: "sep", at: 30, sessionId: "s2" });
   });
 
@@ -35,7 +36,7 @@ describe("buildTimeline", () => {
       messages: [msg(1, 10), msg(2, 30), msg(9, 15, { forkId: 7 })],
       forks: [fork(7, 20)],
     }));
-    expect(keys(out)).toEqual(["msg", "fork", "msg"]);
+    expect(kinds(out)).toEqual(["msg", "fork", "msg"]);
     expect(out.some((i) => i.kind === "msg" && i.msg.id === 9)).toBe(false);
   });
 
@@ -43,7 +44,7 @@ describe("buildTimeline", () => {
     const out = buildTimeline(input({
       messages: [msg(1, 10)], forks: [fork(7, 10)], reports: [report(5, 10)], refreshMarks: [{ at: 10, sessionId: "s2" }],
     }));
-    expect(keys(out)).toEqual(["msg", "fork", "report", "sep"]);
+    expect(kinds(out)).toEqual(["msg", "fork", "report", "sep"]);
     expect(new Set(out.map((i) => i.key)).size).toBe(out.length);
   });
 
@@ -52,22 +53,31 @@ describe("buildTimeline", () => {
       messages: [msg(1, 5), msg(2, 50)], refreshMarks: [{ at: 30, sessionId: "s2" }], forks: [fork(7, 20, { lastAt: 40 })],
     }));
     expect(out.filter((i) => i.kind === "fork")).toHaveLength(1);
-    expect(keys(out)).toEqual(["msg", "fork", "sep", "msg"]);
+    expect(kinds(out)).toEqual(["msg", "fork", "sep", "msg"]);
   });
 
-  it("cuts at the later of the two earliest times when both sides have earlier items", () => {
+  it("brief case: only conversation has earlier pages; the cut is the earliest loaded message", () => {
     const out = buildTimeline(input({
-      messages: [msg(1, 100), msg(2, 200)], convHasMore: true,
-      reports: [report(1, 50), report(2, 150)], reportsHasMore: true,
+      messages: [msg(1, 100), msg(2, 200)], convHasMore: true, reports: [report(1, 50), report(2, 150)], reportsHasMore: false,
       forks: [fork(3, 60)], refreshMarks: [{ at: 70, sessionId: "s0" }],
     }));
     expect(out.map((i) => i.key)).toEqual(["m1", "r2", "m2"]);
   });
 
-  it("shows everything when one side has nothing earlier", () => {
-    const base = { messages: [msg(1, 100)], reports: [report(1, 50)], forks: [fork(3, 60)] };
-    expect(buildTimeline(input({ ...base, convHasMore: true, reportsHasMore: false }))).toHaveLength(3);
-    expect(buildTimeline(input({ ...base }))).toHaveLength(3);
+  it("with both sides having more, the cut is the later of the two earliest times", () => {
+    const out = buildTimeline(input({
+      messages: [msg(1, 100), msg(2, 200)], convHasMore: true, reports: [report(1, 50), report(2, 150)], reportsHasMore: true,
+    }));
+    expect(out.map((i) => i.key)).toEqual(["m1", "r2", "m2"]);
+  });
+
+  it("only reports have more: the cut is the earliest loaded report", () => {
+    const out = buildTimeline(input({ messages: [msg(1, 10), msg(2, 100)], reports: [report(1, 50)], reportsHasMore: true }));
+    expect(out.map((i) => i.key)).toEqual(["r1", "m2"]);
+  });
+
+  it("both complete: everything shows", () => {
+    expect(buildTimeline(input({ messages: [msg(1, 100)], reports: [report(1, 50)], forks: [fork(3, 60)] }))).toHaveLength(3);
   });
 
   it("interleaves done and blocked reports by createdAt", () => {
@@ -91,6 +101,7 @@ describe("costText", () => {
     expect(c(null, true, "idle")).toBe(T.conv.costUnknown);
     expect(c(0.0312, true)).toBe("至少 $0.03");
     expect(c(0.004, false)).toBe("<$0.01");
+    expect(c(0.004, true)).toBe("至少 $0.00");
     expect(c(1.2, false)).toBe("$1.20");
   });
   it("never gives NaN or empty", () => {
@@ -118,7 +129,7 @@ describe("errorText", () => {
     const plain = errorText({ code: "rate_limited", resetAt: null }, T, now);
     const past = errorText({ code: "rate_limited", resetAt: now - 1 }, T, now);
     expect(later).toContain("恢复");
-    expect(later.length).toBeGreaterThan(plain.length);
+    expect(later).toContain(resetClock(now + 3_600_000, now));
     expect(plain).toBe("撞到用量限额了");
     expect(past).toBe(plain);
   });
@@ -163,5 +174,25 @@ describe("sendBlockText / rememberText / refusalText", () => {
       expect(refusalText("toString", t)).toBe(t.conv.refusal.other);
     }
     expect(refusalText("not_forked", T)).toContain("重新开一个");
+  });
+});
+
+describe("turnBlocks", () => {
+  const items = (list: Parameters<typeof buildTimeline>[0]) => buildTimeline(list);
+  const ids = (b: ReturnType<typeof turnBlocks>) => b.map((x) => (x.kind === "turn" ? `t[${x.msgs.map((m) => m.id).join(",")}]` : x.item.key));
+  it("merges consecutive same-turn assistant messages", () => {
+    const b = turnBlocks(items(input({ messages: [msg(1, 1, { turnId: 5 }), msg(2, 2, { turnId: 5 }), msg(3, 3, { turnId: 6 })] })));
+    expect(ids(b)).toEqual(["t[1,2]", "t[3]"]);
+  });
+  it("a fork box between same-turn messages breaks the run", () => {
+    const b = turnBlocks(items(input({ messages: [msg(1, 1, { turnId: 5 }), msg(2, 3, { turnId: 5 })], forks: [fork(7, 2)] })));
+    expect(ids(b)).toEqual(["t[1]", "f7", "t[2]"]);
+  });
+  it("reports, separators and user messages break a run", () => {
+    const b = turnBlocks(items(input({
+      messages: [msg(1, 1, { turnId: 5 }), msg(2, 3, { turnId: 5 }), msg(3, 5, { turnId: 5 }), msg(4, 6, { turnId: 5, role: "user" }), msg(5, 7, { turnId: 5 })],
+      reports: [report(1, 2)], refreshMarks: [{ at: 4, sessionId: "s2" }],
+    })));
+    expect(ids(b)).toEqual(["t[1]", "r1", "t[2]", expect.stringMatching(/^s/), "t[3]", "m4", "t[5]"]);
   });
 });
