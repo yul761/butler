@@ -348,7 +348,7 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .sidebar .nav.home { display: flex; align-items: center; gap: 6px; }
 /* 只给读屏的文字：看不见，但在可访问性树里。 */
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.needs-you-badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+.needs-you-badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--turn-ask); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
 .day-list { margin: 4px 0 10px; padding-left: 20px; }
 textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: vertical; }
 .mono { font-family: Menlo, Consolas, "Cascadia Mono", monospace; font-size: 12px; }
@@ -695,3 +695,11 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-bar > i.turn-external { background: var(--turn-external); }
 .turn-bar > i.turn-done { background: var(--turn-done); }
 .turn-bar > i.turn-idle { background: var(--turn-idle); }
+
+/* 侧栏（UI 重做第 2 层）：树在自己的区域里滚动，「总控」「Butler 自己」和防休眠始终看得见；点和数字靠右。 */
+.sidebar .ticket-groups { min-height: 0; }
+.sidebar .ticket .key { flex-shrink: 0; }
+.sidebar .ticket.feature .key { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .ticket .turn-dot { margin-left: auto; align-self: center; }
+.sidebar .ticket .cnt { flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--turn-ask); }
+.sidebar h3.nav-group { margin: 10px 4px 2px; }

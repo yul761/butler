@@ -24,6 +24,7 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
+import type { TurnTone } from "./home-view";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
@@ -351,7 +352,9 @@ const ZH = {
     nowFallbacks: (n: number) => `最近一小时有 ${n} 次降级`,
     nowOpen: "查看模型路由",
   },
-  home: "现在",
+  home: "轮到你",
+  allWork: "全部工作",
+  selfGroup: "Butler 自己",
   /** 首页「轮到你」和全部工作页（UI 重做第 2 层）。 */
   hm: {
     title: (n: number) => `${n} 件事轮到你`,
@@ -388,6 +391,7 @@ const ZH = {
     boardStale: "数据可能不是最新的",
     retry: "重试",
     noWork: "还没有任何工作。",
+    dotTitle: { ask: "要你回答或 review", merge: "可以合并", stuck: "卡住了或没人推进", butler: "Butler 要你点一下", agent: "agent 在处理", external: "在等 CI 或别人", done: "合了", idle: "没开始" } as Record<TurnTone, string>,
   },
   language: "语言 / Language",
   languageOptions: { auto: "跟随系统", zh: "中文", en: "English" } as Record<string, string>,
@@ -409,7 +413,7 @@ const ZH = {
   epicSessionHint: "epic session 在 epic 的工作区里运行，能读所有仓库。在这里规划下一个 feature，定下来后让它建好。",
   noEpicSessions: "还没有 epic session。",
   // Butler 总控（BTL-190 第 5 点）
-  butlerNav: "Butler 总控",
+  butlerNav: "总控",
   butlerTitle: "Butler 总控",
   butlerIntro: "全局的总控：能看所有 epic、feature、ticket、PR 和 session，能给 epic session 和 feature 总控发消息，不能建、删、结束任何东西。epic session 的完成和卡住汇报会送到这里。",
   butlerWorkspace: "工作目录",
@@ -951,7 +955,7 @@ const ZH = {
   llmZeroBudget: "每月预算是 $0：不会调用个人 API。",
   llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
   llmFullWarning: "完整档位下，StateCore 记忆蒸馏会把真实的 ticket 号、原始对话片段、已有的记忆（决策、follow-up、笔记、跨 ticket 的经验、上一次的摘要）和已遗忘条目的原文发给服务商，不替换也不做敏感信息扫描，但都记进审计页、计入月预算。",
-  lessons: "review 经验",
+  lessons: "复盘与规矩",
   lessonsIntro: "从历史 PR 的 review 评论里提炼出来的规矩。你确认后，会送进 Butler 开的 ticket session 和修复 session；没确认的不会送。",
   lessonsPendingTitle: "待确认",
   lessonsConfirmedTitle: "已确认",
@@ -1915,7 +1919,7 @@ const ZH = {
     unknownSince: "—",
   },
   /** 「效果」页（ws-h）。 */
-  effectNav: "效果",
+  effectNav: "效果与花费",
   effect: {
     title: "效果",
     intro: "Butler 做的 PR 有多快、评论多少、要你插手几次、花多少，和 Butler 之前比。和 Butler 总控的 metrics_overview 是同一份数据，每小时汇总一次。",

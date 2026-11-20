@@ -16,6 +16,7 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { ProgressBucket, WaitingOn, WaitingReason } from "../../shared/progress";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
+import type { TurnTone } from "./home-view";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ButlerMessageView, EpicFeatureStatus, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
@@ -343,7 +344,9 @@ export const EN: UiStrings = {
     nowFallbacks: (n: number) => `${n} fallback${n === 1 ? "" : "s"} in the last hour`,
     nowOpen: "Open model routing",
   },
-  home: "Now",
+  home: "Your turn",
+  allWork: "All work",
+  selfGroup: "Butler itself",
   hm: {
     title: (n: number) => (n === 1 ? "1 thing needs you" : `${n} things need you`),
     titleZero: "Nothing needs you",
@@ -380,6 +383,7 @@ export const EN: UiStrings = {
     boardStale: "This may be out of date",
     retry: "Retry",
     noWork: "No work yet.",
+    dotTitle: { ask: "Needs your answer or review", merge: "Ready to merge", stuck: "Stuck or nobody on it", butler: "Butler needs a click", agent: "An agent is on it", external: "Waiting on CI or someone else", done: "Merged", idle: "Not started" } as Record<TurnTone, string>,
   },
   language: "语言 / Language",
   languageOptions: { auto: "Follow the system", zh: "中文", en: "English" } as Record<string, string>,
@@ -398,7 +402,7 @@ export const EN: UiStrings = {
   newEpicSession: "Epic session",
   epicSessionHint: "An epic session runs in the epic's workspace and can read every repo. Plan the next feature here, then have it create the feature.",
   noEpicSessions: "No epic session yet.",
-  butlerNav: "Butler control",
+  butlerNav: "Overseer",
   butlerTitle: "Butler control",
   butlerIntro: "The global control session: it can see every epic, feature, ticket, PR and session, and message epic sessions and feature coordinators. It cannot create, delete or end anything. Done and blocked reports from epic sessions come here.",
   butlerWorkspace: "Working directory",
@@ -935,7 +939,7 @@ export const EN: UiStrings = {
   llmZeroBudget: "The monthly budget is $0, so the personal API won't be called.",
   llmOverBudget: (spent: string, budget: string) => `Spent ${spent} this month, which reaches the budget of ${budget}. No more calls this month.`,
   llmFullWarning: "At the full level, StateCore memory distillation sends real ticket ids, raw conversation excerpts, the existing memory (decisions, follow-ups, notes, cross-ticket learnings, the previous summary) and the text of forgotten entries to the provider, with no replacement and no sensitive-data scan. Every call is still logged on the audit page and counts against the monthly budget.",
-  lessons: "Review lessons",
+  lessons: "Retros and rules",
   lessonsIntro: "Rules distilled from review comments on past PRs. Once you confirm a rule, Butler gives it to the ticket sessions and fix sessions it opens; rules you have not confirmed are never sent.",
   lessonsPendingTitle: "Pending",
   lessonsConfirmedTitle: "Confirmed",
@@ -1899,7 +1903,7 @@ export const EN: UiStrings = {
     durationDays: (d: number, h: number) => (h === 0 ? n(d, "day") : `${n(d, "day")} ${n(h, "hour")}`),
     unknownSince: "—",
   },
-  effectNav: "Effect",
+  effectNav: "Impact and cost",
   effect: {
     title: "Effect",
     intro: "How fast Butler's PRs land, how many comments they get, how often you step in and what they cost, compared with before Butler. The same data as Butler control's metrics_overview, rolled up every hour.",
