@@ -3,6 +3,7 @@
 // 这里只放纯函数和类型；名字和类型逐字照 docs/superpowers/plans/2026-11-19-ui-redesign-00-index.md 的「第 1 层产出」。
 import type { CiUndeliveredReason, NowNotice } from "./types";
 import { INTAKE_DECISION_STATES } from "./intake";
+import type { WaitingInput } from "./progress";
 
 /** 谁该动。done = 合了；idle = 没开始。 */
 export type TurnOwner = "you" | "agent" | "external" | "done" | "idle";
@@ -137,4 +138,69 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "check_demoted":
       return false;
   }
+}
+
+// ---------- 一个 PR 的 turn（R1、R2） ----------
+
+export interface Pusher { sessionId: string; working: boolean; stoppedAt: number | null }
+
+export interface PrTurnInput extends Omit<WaitingInput, "author"> {
+  mergeQueued: boolean;
+  risk: "low" | "medium" | "high" | null;
+  /** 结论该递给的 session（ciRecipient 为 ok）；没有为 null。 */
+  pusher: Pusher | null;
+  /** 当前 head 的 CI 结论递给 pusher 的时间（R2）。 */
+  ciDeliveredAt: number | null;
+  /** 这一轮 review 评论递给 pusher 的最近时间（R2）。 */
+  commentsDeliveredAt: number | null;
+  /** CiDelivery.undelivered() 里有这个 PR（超过 30 分钟没递出去）。 */
+  ciUndelivered: boolean;
+  canResendCi: boolean;
+  canSendComments: boolean;
+}
+
+/** 有人要求修改：照 waitingOnOf 的判断（不 import 它，它会在第 3 层删掉）。 */
+function changesRequested(i: PrTurnInput): boolean {
+  const humans = i.reviewers.filter((r) => !r.bot);
+  return humans.some((r) => r.state === "changes_requested") || (i.review === "changes_requested" && humans.every((r) => r.state !== "approved"));
+}
+
+/** R2：有人在推进 = pusher 在干活，或当前结论递进去以后它还没停。 */
+function pushing(p: Pusher | null, deliveredAt: number | null): boolean {
+  if (p === null) return false;
+  if (p.working) return true;
+  return deliveredAt !== null && (p.stoppedAt === null || p.stoppedAt < deliveredAt);
+}
+
+/** 找到「你这边」的原因后：有人在推进就是 agent，否则是 you/unattended。 */
+function yourSide(i: PrTurnInput, why: UnattendedWhy): Turn {
+  const ci = why === "ci_failing" || why === "ci_undelivered";
+  const deliveredAt = ci ? i.ciDeliveredAt : why === "changes_requested" ? i.commentsDeliveredAt : null;
+  if (i.pusher !== null && pushing(i.pusher, deliveredAt)) {
+    const kind = ci ? "fixing_ci" : why === "changes_requested" ? "addressing_review" : why === "conflicts" || why === "behind" ? "rebasing" : "working";
+    return { owner: "agent", kind, sessionId: i.pusher.sessionId };
+  }
+  const canSend = ci ? i.canResendCi : why === "changes_requested" ? i.canSendComments : false;
+  return { owner: "you", kind: "unattended", why, canSend, sessionId: i.pusher?.sessionId ?? null };
+}
+
+/** R1。已关闭（或状态不明）为 null。 */
+export function prTurn(i: PrTurnInput): Turn | null {
+  if (i.state === "merged") return { owner: "done", kind: "merged" };
+  if (i.state !== "open") return null;
+  // 你这边：ready for review 之前
+  if (i.isDraft) return yourSide(i, "draft");
+  if (i.ci === "failing") return yourSide(i, i.ciUndelivered ? "ci_undelivered" : "ci_failing");
+  if (changesRequested(i)) return yourSide(i, "changes_requested");
+  if (i.mergeable === "conflicting" || i.mergeState === "dirty") return yourSide(i, "conflicts");
+  if (i.mergeState === "behind") return yourSide(i, "behind");
+  // ready for review 之后
+  if (i.ci === "pending") return { owner: "external", kind: "ci_running", names: [] };
+  if (i.mergeQueued) return { owner: "external", kind: "merge_queue", names: [] };
+  const approved = i.reviewers.some((r) => !r.bot && r.state === "approved") || i.review === "approved";
+  if (approved && i.review !== "pending" && i.mergeState !== "blocked") return { owner: "you", kind: "merge", risk: i.risk };
+  if (i.reviewRequests.length > 0) return { owner: "external", kind: "awaiting_review", names: i.reviewRequests.map((r) => r.name) };
+  // 不要求 review、可以直接合
+  if (i.review === null && i.mergeState === "clean") return { owner: "you", kind: "merge", risk: i.risk };
+  return yourSide(i, "no_reviewer");
 }

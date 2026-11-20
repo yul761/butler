@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NowNotice } from "./types";
-import { mostUrgent, noticeNeedsYou, ticketTurn, TURN_PRIORITY, type Turn } from "./turn";
+import { mostUrgent, noticeNeedsYou, prTurn, ticketTurn, TURN_PRIORITY, type PrTurnInput, type Turn } from "./turn";
 
 const merge: Turn = { owner: "you", kind: "merge", risk: null };
 const ask: Turn = { owner: "you", kind: "answer", question: "q", options: [], askId: 1, sessionId: "s" };
@@ -54,5 +54,61 @@ describe("noticeNeedsYou", () => {
     const intake = (state: string) => ({ kind: "intake", item: { state } }) as unknown as NowNotice;
     expect(noticeNeedsYou(intake("needs_decision"))).toBe(true);
     expect(noticeNeedsYou(intake("queued"))).toBe(false);
+  });
+});
+
+const T = 1_000_000;
+const pr = (o: Partial<PrTurnInput> = {}): PrTurnInput => ({
+  state: "open", isDraft: false, ci: "passing", review: null, reviewers: [], reviewRequests: [], mergeable: "mergeable", mergeState: "blocked",
+  mergeQueued: false, risk: null, pusher: { sessionId: "s", working: false, stoppedAt: T - 10 }, ciDeliveredAt: null, commentsDeliveredAt: null,
+  ciUndelivered: false, canResendCi: true, canSendComments: false, ...o,
+});
+
+describe("prTurn", () => {
+  it("merged → done, closed → null", () => {
+    expect(prTurn(pr({ state: "merged" }))).toEqual({ owner: "done", kind: "merged" });
+    expect(prTurn(pr({ state: "closed" }))).toBeNull();
+  });
+  it("ci failing with a working session → agent fixing_ci", () => {
+    expect(prTurn(pr({ ci: "failing", pusher: { sessionId: "s", working: true, stoppedAt: null } }))).toEqual({ owner: "agent", kind: "fixing_ci", sessionId: "s" });
+  });
+  it("delivered and not stopped since → agent", () => {
+    expect(prTurn(pr({ ci: "failing", ciDeliveredAt: T, pusher: { sessionId: "s", working: false, stoppedAt: T - 5 } }))?.owner).toBe("agent");
+  });
+  it("delivered then stopped → unattended", () => {
+    expect(prTurn(pr({ ci: "failing", ciDeliveredAt: T, pusher: { sessionId: "s", working: false, stoppedAt: T + 5 } }))).toEqual({
+      owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s",
+    });
+  });
+  it("no recipient → unattended, cannot send", () => {
+    expect(prTurn(pr({ ci: "failing", pusher: null, canResendCi: false }))).toEqual({ owner: "you", kind: "unattended", why: "ci_failing", canSend: false, sessionId: null });
+  });
+  it("undelivered for 30 min → ci_undelivered", () => {
+    expect(prTurn(pr({ ci: "failing", ciUndelivered: true }))).toMatchObject({ kind: "unattended", why: "ci_undelivered", canSend: true });
+  });
+  it("changes requested: comments decide delivery and sendability", () => {
+    const human = { login: "amy", state: "changes_requested" as const, at: 1, bot: false };
+    expect(prTurn(pr({ reviewers: [human], canSendComments: false }))).toMatchObject({ why: "changes_requested", canSend: false });
+    expect(prTurn(pr({ reviewers: [human], commentsDeliveredAt: T }))).toEqual({ owner: "agent", kind: "addressing_review", sessionId: "s" });
+  });
+  it("draft / conflicts / behind map to their whys; conflicts with a working agent → rebasing", () => {
+    expect(prTurn(pr({ isDraft: true }))).toMatchObject({ why: "draft", canSend: false });
+    expect(prTurn(pr({ mergeable: "conflicting" }))).toMatchObject({ why: "conflicts" });
+    expect(prTurn(pr({ mergeState: "behind" }))).toMatchObject({ why: "behind" });
+    expect(prTurn(pr({ mergeState: "dirty", pusher: { sessionId: "s", working: true, stoppedAt: null } }))).toEqual({ owner: "agent", kind: "rebasing", sessionId: "s" });
+  });
+  it("after ready for review: ci pending, merge queue, awaiting review are external", () => {
+    expect(prTurn(pr({ ci: "pending" }))).toEqual({ owner: "external", kind: "ci_running", names: [] });
+    expect(prTurn(pr({ mergeQueued: true }))).toEqual({ owner: "external", kind: "merge_queue", names: [] });
+    expect(prTurn(pr({ reviewRequests: [{ kind: "user", name: "bob" }] }))).toEqual({ owner: "external", kind: "awaiting_review", names: ["bob"] });
+  });
+  it("approved, or review not required and clean → merge with risk", () => {
+    const ok = { login: "amy", state: "approved" as const, at: 1, bot: false };
+    expect(prTurn(pr({ reviewers: [ok], review: "approved", mergeState: "clean", risk: "low" }))).toEqual({ owner: "you", kind: "merge", risk: "low" });
+    expect(prTurn(pr({ review: null, mergeState: "clean" }))).toEqual({ owner: "you", kind: "merge", risk: null });
+    expect(prTurn(pr({ reviewers: [ok], review: "approved", mergeState: "blocked" }))?.kind).not.toBe("merge");
+  });
+  it("nobody asked to review → no_reviewer", () => {
+    expect(prTurn(pr({ review: "pending" }))).toMatchObject({ owner: "you", kind: "unattended", why: "no_reviewer", canSend: false });
   });
 });
