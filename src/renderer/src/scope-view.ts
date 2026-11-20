@@ -2,6 +2,7 @@
 // 状态一律取自第 1 层的 ticketTurn / mostUrgent，这里不重新判断任何 PR 的状态。
 import { mostUrgent, ticketTurn, type ScopeTurnRow, type Turn, type TurnItem } from "../../shared/turn";
 import type { TicketView } from "../../shared/types";
+import { runningRows, youCards, type RunningRow } from "./home-view";
 import type { UiStrings } from "./strings";
 
 export interface TicketRow {
@@ -19,13 +20,22 @@ export function prTag(pr: { repo: string; number: number }, multiRepo: boolean):
   return multiRepo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
 }
 
+/**
+ * 一个 ticket 在带 filter 的看板里的那几条（按 PR 拆开的、session 级的、多出来的提问）收成 ticket 级的一条：
+ * 和主进程不带 filter 时（首页）同一个 ticketTurn。item 是选中的那条；全都不参与时为 null。
+ */
+function ticketPick(mine: TurnItem[]): { turn: Turn; others: number; item: TurnItem | null } {
+  const prTurns = mine.filter((i) => i.pr !== null).map((i) => i.turn);
+  const sessionTurn = mostUrgent(mine.filter((i) => i.pr === null))?.turn ?? null;
+  const { turn, others } = ticketTurn(prTurns, sessionTurn);
+  return { turn, others, item: mine.find((i) => i.turn === turn) ?? null };
+}
+
 export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureId" | "effectiveStatus">[], items: TurnItem[]): TicketRow[] {
   return tickets.map((t) => {
     const mine = items.filter((i) => i.ticketKey === t.key);
-    const prTurns = mine.filter((i) => i.pr !== null).map((i) => i.turn);
-    const sessionTurn = mostUrgent(mine.filter((i) => i.pr === null))?.turn ?? null;
-    const { turn, others } = ticketTurn(prTurns, sessionTurn);
-    const item: TurnItem = mine.find((i) => i.turn === turn) ?? {
+    const { turn, others, item: picked } = ticketPick(mine);
+    const item: TurnItem = picked ?? {
       ticketKey: t.key, pr: null, epicId: null, featureId: t.featureId, since: 0, others,
       turn: t.effectiveStatus === "done" ? { owner: "done", kind: "merged" } : turn,
     };
@@ -36,6 +46,28 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
     const prs = list.sort((a, b) => a.number - b.number).map((p) => ({ tag: prTag(p, multi), number: p.number, repo: p.repo }));
     return { key: t.key, title: t.title, featureId: t.featureId, turn: item.turn, others, item, since: item.since, prs };
   });
+}
+
+/**
+ * epic / feature 页的「轮到你」卡片、概况页签的标红和「进行中」：和首页、全部 ticket 表格、进度那一句同一口径（spec「不并存两套状态算法」）。
+ * 每个 ticket 一条（ticketPick 选的那条，带上别的 PR 个数）；再加这个 ticket 多出来的没回答的提问（首页也各出一张），
+ * 和不属于 ticket 的（总控 session、Butler 提醒）。被 ticket 级口径排除的 session 级那条（有 PR 时 session 停着）不出。
+ */
+export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { youItems: TurnItem[]; running: RunningRow[]; attention: boolean } {
+  const out: TurnItem[] = [];
+  const byTicket = new Map<string, TurnItem[]>();
+  for (const i of items) {
+    if (i.ticketKey === null) out.push(i);
+    else byTicket.set(i.ticketKey, [...(byTicket.get(i.ticketKey) ?? []), i]);
+  }
+  for (const mine of byTicket.values()) {
+    const { others, item } = ticketPick(mine);
+    if (item === null) continue;
+    out.push(others === item.others ? item : { ...item, others });
+    for (const i of mine) if (i !== item && i.pr === null && i.turn.owner === "you" && i.turn.kind === "answer") out.push(i);
+  }
+  const youItems = youCards(out);
+  return { youItems, running: runningRows(out, S, now), attention: youItems.length > 0 };
 }
 
 /** 一组里合了几个。 */
@@ -87,3 +119,4 @@ export function whoLabel(turn: Turn, S: UiStrings): string {
     case "idle": return S.hm.whoIdle;
   }
 }
+

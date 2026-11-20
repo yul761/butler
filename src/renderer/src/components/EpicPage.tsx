@@ -3,8 +3,8 @@ import type { EpicView, FeatureView, NowTarget } from "../../../shared/types";
 import type { Route } from "../App";
 import { api } from "../api";
 import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
-import { runningRows, youCards, type NameCtx } from "../home-view";
-import { groupByFeature, scopeTotal, ticketRows } from "../scope-view";
+import type { NameCtx } from "../home-view";
+import { groupByFeature, scopeBoardView, scopeTotal, ticketRows } from "../scope-view";
 import { S } from "../strings";
 import { conversationSessions } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
@@ -62,9 +62,11 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
   const board = turn.board;
   const live = epic.features.filter((f) => f.status !== "archived");
   const now = Date.now();
-  const running = board === null ? null : runningRows(board.items, S, now);
+  // 卡片、标红和「进行中」按 ticket 级的轮次（同首页、同「全部 ticket」表格）。
+  const view = board === null ? null : scopeBoardView(board.items, S, now);
+  const running = view?.running ?? null;
+  const youItems = view?.youItems ?? [];
   const tickets = features.flatMap((f) => f.tickets);
-  const youItems = board === null ? [] : youCards(board.items);
 
   const runSummary = (featureId: number): Promise<SummaryRunMessage> =>
     api.runFeatureSummary(featureId).then(
@@ -95,7 +97,7 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
         actions={<button onClick={() => setNewFeature(true)}>+ {S.newFeature}</button>}
         tabs={[
           {
-            id: "overview", label: S.lay.tabOverview, className: youItems.length > 0 ? "attention" : undefined,
+            id: "overview", label: S.lay.tabOverview, className: view?.attention ? "attention" : undefined,
             content: <ScopeBoard turn={turn}>{(b) => (
               <ScopeOverview
                 rows={b.scopes.filter((r) => r.kind === "feature")}

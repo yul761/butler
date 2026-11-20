@@ -3,8 +3,8 @@ import type { EpicView, FeatureView, NowTarget } from "../../../shared/types";
 import type { Route } from "../App";
 import { api, ButlerError } from "../api";
 import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
-import { runningRows, youCards, type NameCtx } from "../home-view";
-import { flatGroup, scopeTotal, ticketRows } from "../scope-view";
+import type { NameCtx } from "../home-view";
+import { flatGroup, scopeBoardView, scopeTotal, ticketRows } from "../scope-view";
 import { S } from "../strings";
 import { conversationSessions } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
@@ -74,8 +74,10 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
   const turn = useTurnBoard({ featureId: feature.id });
   const board = turn.board;
   const now = Date.now();
-  const running = board === null ? null : runningRows(board.items, S, now);
-  const youItems = board === null ? [] : youCards(board.items);
+  // 卡片、标红和「进行中」按 ticket 级的轮次（同首页、同「全部 ticket」表格）。
+  const view = board === null ? null : scopeBoardView(board.items, S, now);
+  const running = view?.running ?? null;
+  const youItems = view?.youItems ?? [];
   const blockers = feature.summary?.payload?.blockers.length ?? 0;
   // 修复 session 的名字带上它修的那个 ticket（从卡住的 session 反查）。
   const fixedTicket = (stuckId: string) => feature.tickets.find((t) => [...t.sessions, ...t.hiddenSessions].some((x) => x.id === stuckId))?.key ?? null;
@@ -122,7 +124,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
         actions={<button onClick={() => setNewTicket(true)}>+ {S.newTicket}</button>}
         tabs={[
           {
-            id: "overview", label: S.lay.tabOverview, className: youItems.length > 0 ? "attention" : undefined,
+            id: "overview", label: S.lay.tabOverview, className: view?.attention ? "attention" : undefined,
             content: <ScopeBoard turn={turn}>{(b) => (
               <ScopeOverview
                 rows={b.scopes.filter((r) => r.kind === "ticket")}

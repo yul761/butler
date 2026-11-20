@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
-import { flatGroup, groupByFeature, prTag, progressLine, scopeTotal, slowestLine, ticketRows, whoLabel } from "./scope-view";
+import { flatGroup, groupByFeature, prTag, progressLine, scopeBoardView, scopeTotal, slowestLine, ticketRows, whoLabel } from "./scope-view";
 import { STRINGS } from "./strings";
 
 const S = STRINGS.zh;
@@ -113,5 +113,50 @@ describe("flatGroup", () => {
     expect(flatGroup(rows)).toEqual([{ name: null, merged: byFeature.merged, total: 3, rows }]);
     expect(byFeature.merged).toBe(1);
     expect(flatGroup([])).toEqual([]);
+  });
+});
+
+describe("scopeBoardView (epic / feature overview and running tab)", () => {
+  const stopped: Turn = { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s1" };
+  const review: Turn = { owner: "external", kind: "awaiting_review", names: ["amy"] };
+  it("an open PR waiting for review and a stopped session: no card is your turn, the tab is not flagged", () => {
+    const items = [item("K-1", review, { repo: "app", number: 5 }), item("K-1", stopped, null)];
+    const v = scopeBoardView(items, S, 1000);
+    expect(v.youItems).toEqual([]);
+    expect(v.attention).toBe(false);
+    // 和全部 ticket 表格同一口径：这个 ticket 在等外部。
+    expect(ticketRows([tk("K-1")], items)[0].turn.owner).toBe("external");
+  });
+  it("a stopped session with no PR is still your turn", () => {
+    const v = scopeBoardView([item("K-1", stopped, null)], S, 1000);
+    expect(v.youItems.map((i) => i.turn)).toEqual([stopped]);
+    expect(v.attention).toBe(true);
+  });
+  it("one card per ticket (the ticket's own turn, with the other PRs counted), plus its extra questions and loose items", () => {
+    const merge: Turn = { owner: "you", kind: "merge", risk: null };
+    const ask = (id: number): Turn => ({ owner: "you", kind: "answer", question: `q${id}`, options: [], askId: id, sessionId: "s1" });
+    const loose: TurnItem = { ticketKey: null, pr: null, epicId: 1, featureId: 10, turn: ask(9), since: 1, others: 0 };
+    const items = [
+      item("K-1", merge, { repo: "app", number: 5 }), item("K-1", merge, { repo: "app", number: 6 }),
+      item("K-2", ask(1), null), item("K-2", ask(2), null), item("K-2", review, { repo: "app", number: 7 }),
+      loose,
+    ];
+    const v = scopeBoardView(items, S, 1000);
+    const k1 = v.youItems.filter((i) => i.ticketKey === "K-1");
+    expect(k1).toHaveLength(1);
+    expect(k1[0].others).toBe(1);
+    expect(v.youItems.filter((i) => i.ticketKey === "K-2").map((i) => i.turn)).toEqual([ask(1), ask(2)]);
+    expect(v.youItems).toContain(loose);
+  });
+  it("running lists each ticket once, by the ticket's own turn", () => {
+    const ci: Turn = { owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: null };
+    const items = [
+      // K-1：一个 PR 在等 review、session 在干活 → 整个 ticket 是 agent 在推进，一行。
+      item("K-1", review, { repo: "app", number: 5 }), item("K-1", agent, null),
+      // K-2：一个 PR 挂了 CI 轮到你，另一个在等 review → 这个 ticket 轮到你，不进「进行中」。
+      item("K-2", ci, { repo: "app", number: 6 }), item("K-2", review, { repo: "app", number: 7 }),
+    ];
+    const v = scopeBoardView(items, S, 1000);
+    expect(v.running.map((r) => [r.ticketKey, r.owner])).toEqual([["K-1", "agent"]]);
   });
 });
