@@ -6,7 +6,7 @@ import { useStateRefetch } from "./useStateRefetch";
 
 const timeOf = (ms: number): string => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-/** 一块范围里的「待你决定」和最近的汇报：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
+/** 一块范围里未决的提问和最近的汇报：打开时取一次，之后每次 stateChanged 重取。还没取到时为 null。 */
 export function useInbox(scope: InboxScope): InboxView | null {
   return useStateRefetch(JSON.stringify(scope), () => api.inbox(scope));
 }

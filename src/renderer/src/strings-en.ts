@@ -2325,7 +2325,7 @@ export const EN: UiStrings = {
     noYouHere: "Nothing here is waiting on you.",
     featuresHeading: "Features",
     featureCard: (merged: number, total: number) => `${merged}/${total} merged`,
-    runningEmpty: "Nothing is being worked on by an agent or CI right now.",
+    runningEmpty: "Nothing is being worked on by an agent, CI or anyone else right now.",
     colTicket: "Ticket",
     colWho: "Who's up",
     colNow: "Status",

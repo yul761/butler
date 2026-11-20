@@ -2343,7 +2343,7 @@ const ZH = {
     noYouHere: "这里没有事轮到你。",
     featuresHeading: "各个 feature",
     featureCard: (merged: number, total: number) => `${merged}/${total} 合了`,
-    runningEmpty: "现在没有 agent 或 CI 在处理的事。",
+    runningEmpty: "现在没有 agent、CI 或别人在处理的事。",
     colTicket: "ticket",
     colWho: "谁该动",
     colNow: "现在怎么样",

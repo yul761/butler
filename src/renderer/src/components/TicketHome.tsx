@@ -138,15 +138,17 @@ export interface TicketHomeTabProps {
   /** 答过的提问由 TicketPage 记着：页签切走时这一块会卸载，状态放这里会丢，再回来又能点选项悄悄换掉答案。 */
   answered: Readonly<Record<number, string>>;
   onAnswered: (askId: number, text: string) => void;
+  /** 回答请求还没回来：也放在 TicketPage 上，请求途中切走再切回，按钮照样禁用，不会再答一次。 */
+  busy: boolean;
+  onBusy: (busy: boolean) => void;
 }
 
-export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered }: TicketHomeTabProps) {
+export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, busy, onBusy }: TicketHomeTabProps) {
   const key = ticket.key;
   const { board, reload } = useTurnBoard({ ticketKey: key });
   const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key));
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
   const turn = row?.turn;
   const stuckSession = turn?.owner === "you" && turn.kind === "stuck" ? turn.sessionId : null;
@@ -169,13 +171,13 @@ export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered }: 
       onAsk={(a, item) => {
         if (busy) return;
         setNotice(null);
-        setBusy(true);
+        onBusy(true);
         runTicketAsk(a, item, { answerInbox: api.answerInbox, onGoTab, onChanged: reload }, S).then((r) => {
           if (r === null) return;
           if ("message" in r) setNotice(r.message);
           // 有回答就一定有 askId（runCardAction 对没有 askId 的提问不回答）。
           else if (item.turn.kind === "answer" && item.turn.askId !== null) onAnswered(item.turn.askId, r.answered);
-        }, reportError).finally(() => setBusy(false));
+        }, reportError).finally(() => onBusy(false));
       }}
     />
   );

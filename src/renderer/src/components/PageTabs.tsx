@@ -7,7 +7,7 @@ export interface PageTab {
   label: ReactNode;
   /** 只有当前 tab 的内容会渲染。 */
   content: ReactNode;
-  /** 加在 tab 按钮上，比如「待你决定」有东西时标红。 */
+  /** 加在 tab 按钮上，比如有东西轮到你时「概况」标红。 */
   className?: string;
 }
 
