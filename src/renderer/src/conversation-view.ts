@@ -139,16 +139,24 @@ function unionById<T extends { id: number }>(cur: T[], next: T[], at: (x: T) => 
   return [...m.values()].sort(byAtId(at));
 }
 
+/** 合并后的 hasMore：第一页、往前翻的一页说了算；往前翻却一条新的都没有（游标那条没了，服务端又给了最新一页）就到头了，不然会一直重复翻同一页。 */
+function nextHasMore<T extends { id: number }>(cur: { hasMore: boolean } | null, loaded: readonly T[], page: { hasMore: boolean }, pageItems: readonly T[], older: boolean): boolean {
+  if (cur === null) return page.hasMore;
+  if (!older) return cur.hasMore;
+  const have = new Set(loaded.map((x) => x.id));
+  return page.hasMore && pageItems.some((x) => !have.has(x.id));
+}
+
 /**
  * 把新取的一页对话并进已经载入的：按 id 去重。older 为 true 时这一页是往前翻的（before 是已载入最早那条的 id），
- * 还有没有更早的跟它走；重取最新一页时已载入的更早部分不动，hasMore 不变（第一页除外）。
+ * 还有没有更早的跟它走（一条新的都没有就算到头）；重取最新一页时已载入的更早部分不动，hasMore 不变（第一页除外）。
  */
 export function mergeConvPage(cur: ConvLoaded | null, page: ConvPage, older: boolean): ConvLoaded {
   const marks = new Map([...(cur?.refreshMarks ?? []), ...page.refreshMarks].map((m) => [`${m.at}-${m.sessionId}`, m]));
   return {
     messages: unionById(cur?.messages ?? [], page.messages, (m) => m.at),
     refreshMarks: [...marks.values()].sort((a, b) => a.at - b.at),
-    hasMore: cur === null || older ? page.hasMore : cur.hasMore,
+    hasMore: nextHasMore(cur, cur?.messages ?? [], page, page.messages, older),
   };
 }
 
@@ -156,7 +164,7 @@ export interface ReportsLoaded { reports: InboxItemView[]; hasMore: boolean }
 
 /** 同 mergeConvPage，汇报这一路（inbox:reports 的 before 也是 id）。 */
 export function mergeReportPage(cur: ReportsLoaded | null, page: ReportsLoaded, older: boolean): ReportsLoaded {
-  return { reports: unionById(cur?.reports ?? [], page.reports, (r) => r.createdAt), hasMore: cur === null || older ? page.hasMore : cur.hasMore };
+  return { reports: unionById(cur?.reports ?? [], page.reports, (r) => r.createdAt), hasMore: nextHasMore(cur, cur?.reports ?? [], page, page.reports, older) };
 }
 
 /** 这个分叉里最后一个问题（「再问一次」重发它）；一个都没有时为 null。 */

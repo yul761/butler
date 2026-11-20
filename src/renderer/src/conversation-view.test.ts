@@ -227,6 +227,14 @@ describe("mergeConvPage", () => {
     expect(out.messages[3].text).toBe("changed");
     expect(out.hasMore).toBe(false);
   });
+  it("an older page that adds nothing new ends paging (the cursor vanished and the server sent the newest page again)", () => {
+    const cur = mergeConvPage(null, page([3, 4], true), false);
+    const out = mergeConvPage(cur, page([3, 4], true), true);
+    expect(out.messages.map((m) => m.id)).toEqual([3, 4]);
+    expect(out.hasMore).toBe(false);
+    // 空的一页同样。
+    expect(mergeConvPage(cur, page([], true), true).hasMore).toBe(false);
+  });
 });
 
 describe("mergeReportPage", () => {
@@ -239,6 +247,11 @@ describe("mergeReportPage", () => {
     const again = mergeReportPage(out, { reports: [report(4, 40), report(5, 50)], hasMore: true }, false);
     expect(again.reports.map((r) => r.id)).toEqual([2, 3, 4, 5]);
     expect(again.hasMore).toBe(false);
+  });
+  it("an older page that adds nothing new ends paging", () => {
+    const cur = mergeReportPage(null, { reports: [report(3, 30), report(4, 40)], hasMore: true }, false);
+    expect(mergeReportPage(cur, { reports: [report(4, 40), report(3, 30)], hasMore: true }, true).hasMore).toBe(false);
+    expect(mergeReportPage(cur, { reports: [], hasMore: true }, true).hasMore).toBe(false);
   });
 });
 
