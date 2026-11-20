@@ -197,7 +197,7 @@ import { M } from "./strings";
 import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
-import { openKnownPr } from "./util/github-url";
+import { knownPrLookup, openKnownPr } from "./util/github-url";
 import { TicketError, TicketService, samePath } from "./tickets/ticket-service";
 import { isValidTicketKey } from "./tickets/ticket-key";
 import type { IntakeSourceKind } from "../shared/intake";
@@ -3035,7 +3035,7 @@ async function bootstrap(): Promise<void> {
       skillTrackingSince: () => skillTrackingSince(settings),
     }),
     // 允许的主机和 lessons 的 openSource 一样，只认 git remote 认出来的仓库（lessons_repos），不认 ticket_prs 自己的 slug。
-    prOpen: (url) => openKnownPr(url, { prs: ticketPrs, trustedSlugs: () => lessonsRepo.repos().map((r) => r.slug), openExternal: (u) => shell.openExternal(u), log: logger }),
+    prOpen: (url) => openKnownPr(url, { prs: knownPrLookup(ticketPrs, () => reviewRequests.list()), trustedSlugs: () => lessonsRepo.repos().map((r) => r.slug), openExternal: (u) => shell.openExternal(u), log: logger }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     terminalVisible: (id, v) => procServices.terminalVisible(id, v),
     terminalInput: (id) => procServices.terminalActive(id),
