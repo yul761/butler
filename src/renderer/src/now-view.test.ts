@@ -201,7 +201,7 @@ describe("inbox helpers (BTL-190 2+3)", () => {
     expect(inboxWho(item({ repo: "api" }), S)).toBe("BTL-1（api）");
     expect(inboxWho(item({ role: "ticket_coordinator" }), S)).toBe("BTL-1 总控");
     expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("feature 总控");
-    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe("Butler 总控");
+    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe(S.butlerNav);
     setUiLang("en");
     expect(inboxWho(item({ role: "epic", ticketKey: null }), S)).toBe("Epic session");
   });
@@ -232,7 +232,7 @@ describe("the live window (BTL-190 7)", () => {
     // Butler 总控在最前，卡片上写「Butler 总控」。
     const butler = row({ sessionId: "b", ticketKey: null, title: null, coordinator: true, working: false, activity: act({ kind: "waiting" }), needsYou: "在问你", target: { page: "butler", sessionId: "b" } });
     expect(liveRows(view([working], [], butler)).map((r) => r.sessionId)).toEqual(["b", "w"]);
-    expect(rowLabel(butler, S)).toBe("Butler 总控");
+    expect(rowLabel(butler, S)).toBe(S.butlerNav);
     expect(liveRows(view([], [stopped]))).toEqual([]);
   });
 
