@@ -8,3 +8,19 @@ export const T2 = {"type":"result","subtype":"success","is_error":false,"session
 export const T3 = {"type":"result","subtype":"success","is_error":false,"session_id":"9cbad367-ca7c-42c8-aa60-5dba4ae21132","total_cost_usd":0.00543366,"usage":{"input_tokens":2,"cache_creation_input_tokens":151,"cache_read_input_tokens":25575,"output_tokens":3,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"cache_creation":{"ephemeral_1h_input_tokens":151,"ephemeral_5m_input_tokens":0}},"modelUsage":{"claude-haiku-5-5":{"inputTokens":6,"outputTokens":9,"thinkingTokens":0,"cacheReadInputTokens":52456,"cacheCreationInputTokens":24520,"cacheCreationEphemeral5mInputTokens":0,"cacheCreationEphemeral1hInputTokens":24520,"webSearchRequests":0,"costUSD":0.00543366,"contextWindow":1000000,"maxOutputTokens":128000,"canonicalModel":"claude-haiku-5-5","provider":"firstParty","costBasis":"list"}}} as const;
 export const F1 = {"type":"result","subtype":"success","is_error":false,"session_id":"881d326c-342b-4cc0-8324-4242ac47f696","total_cost_usd":0.00570497,"usage":{"input_tokens":2,"cache_creation_input_tokens":63,"cache_read_input_tokens":25701,"output_tokens":3,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"cache_creation":{"ephemeral_1h_input_tokens":63,"ephemeral_5m_input_tokens":0}},"modelUsage":{"claude-haiku-5-5":{"inputTokens":8,"outputTokens":12,"thinkingTokens":0,"cacheReadInputTokens":78157,"cacheCreationInputTokens":24583,"cacheCreationEphemeral5mInputTokens":0,"cacheCreationEphemeral1hInputTokens":24583,"webSearchRequests":0,"costUSD":0.00570497,"contextWindow":1000000,"maxOutputTokens":128000,"canonicalModel":"claude-haiku-5-5","provider":"firstParty","costBasis":"list"}}} as const;
 export const F2 = {"type":"result","subtype":"success","is_error":false,"session_id":"881d326c-342b-4cc0-8324-4242ac47f696","total_cost_usd":0.00597666,"usage":{"input_tokens":2,"cache_creation_input_tokens":63,"cache_read_input_tokens":25739,"output_tokens":3,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"cache_creation":{"ephemeral_1h_input_tokens":63,"ephemeral_5m_input_tokens":0}},"modelUsage":{"claude-haiku-5-5":{"inputTokens":10,"outputTokens":15,"thinkingTokens":0,"cacheReadInputTokens":103896,"cacheCreationInputTokens":24646,"cacheCreationEphemeral5mInputTokens":0,"cacheCreationEphemeral1hInputTokens":24646,"webSearchRequests":0,"costUSD":0.00597666,"contextWindow":1000000,"maxOutputTokens":128000,"canonicalModel":"claude-haiku-5-5","provider":"firstParty","costBasis":"list"}}} as const;
+
+/**
+ * 合成的（不是真 CLI 录下来的）：opus 开发 session 存下的累计 DEV_BASE（输出多，4 美元），从它分叉出来的第一轮 FORK_OPUS 几乎全是读缓存。
+ * 两者 token 构成差得远，按份额拆（≈0.2645）和准数 T1 − base（0.3）对不上：公式用错了测试就会挂（F1 − T3 那组 haiku 小样本两者碰巧一样）。
+ * FORK_OPUS 的 modelUsage = DEV_BASE 的 + 这一轮的 usage，costUSD = 4 + 0.3。
+ */
+export const DEV_BASE_MODEL_USAGE = {
+  "claude-opus-5-5": { inputTokens: 1000, outputTokens: 20000, cacheReadInputTokens: 500000, cacheCreationInputTokens: 100000, cacheCreationEphemeral5mInputTokens: 0, cacheCreationEphemeral1hInputTokens: 100000, costUSD: 4 },
+} as const;
+export const FORK_OPUS = {
+  type: "result", subtype: "success", is_error: false, session_id: "fork-opus-1", total_cost_usd: 4.3,
+  usage: { input_tokens: 10, cache_creation_input_tokens: 2000, cache_read_input_tokens: 150000, output_tokens: 800, cache_creation: { ephemeral_1h_input_tokens: 2000, ephemeral_5m_input_tokens: 0 } },
+  modelUsage: {
+    "claude-opus-5-5": { inputTokens: 1010, outputTokens: 20800, cacheReadInputTokens: 650000, cacheCreationInputTokens: 102000, cacheCreationEphemeral5mInputTokens: 0, cacheCreationEphemeral1hInputTokens: 102000, costUSD: 4.3 },
+  },
+} as const;

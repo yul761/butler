@@ -2,15 +2,31 @@
  * 从 CLI 的累计金额拆出这一轮的花费。
  * claude -p 续一个 session（--resume，带不带 --fork-session）时，total_cost_usd 和 modelUsage 都是整个 session 的累计，usage 才是这一轮的。
  * 按价格权重折算 token：这一轮占这个模型累计权重的比例 × 这个模型的累计金额（modelUsage[m].costUSD）≈ 这一轮的金额，不用知道单价。
- * 结果只是约数，调用方要按约数显示：权重（input 1、读缓存 0.1、写 5m 1.25、写 1h 2、output 5）只是近似，同一个模型里各类 token 的价格比
- * 并不处处一样——CLI 2.1.329 的价格表里 opus-5-5、sonnet-5-5 读缓存是 input 的 0.05，fable-5-2 是 0.025，haiku-5-5 过 100k token 后
- * 单价 ×5，opus 的 fast 模式另有一套价格。按真实历史试算，完整分叉第一轮会偏 −17% 到 +38%；只有像测试样本那样小 prompt 的 haiku 正好对得上。
- * 准确的做法（BTL-239）：分叉前从开发 session transcript 最后一条 cost-state 读出 totalCostUSD，第一轮记 T1 − 它。
+ * 结果只是约数，调用方要按约数显示。W 是一套固定的权重，真实的价格比却因模型、因用法而异：CLI 2.1.329 的价格表里读缓存是 input 的
+ * 0.05（opus-5-5、sonnet-5-5）或 0.025（fable-5-2），haiku-5-5 过 100k token 后单价 ×5，fast 模式另有一套价格。
+ * 这一轮的 token 构成跟累计的平均构成差得越多，拆出来的偏差越大：按真实历史试算，完整分叉第一轮会偏 −17% 到 +38%；只有像测试样本那样
+ * 小 prompt 的 haiku 正好对得上。能取差的地方就别用它：续 session 取两次 total 的差；分叉的第一轮取 T1 − 开发 session transcript 最后一条
+ * cost-state 的 totalCostUSD（cost-base 的 costSinceBase，BTL-239；分叉讨论和 handoff、feature 汇总都这样记）。
  * 跨模型更不行：opus 和 haiku 的单价差好几倍，所以只拿这一轮的主模型那一项来拆，不把各模型的权重加在一起。
- * 纯函数，不依赖分叉或 main 的任何东西（handoff、feature 汇总的用量行以后也用它）。
+ * 纯函数，不依赖分叉或 main 的任何东西。分叉讨论在取不到准数时用它的约数（标 approx）；handoff、feature 汇总的用量行没有约数标记，取不到准数就不记金额。
  */
 
-/** 和用量页同一套权重（input 为 1），是近似的价格比（见文件头，各模型不一样）；写缓存哪部分算 5m、哪部分算 1h 见 writes。 */
+/** 一轮怎么起的：fresh 没带 --resume（全新 session）；forked 带 --fork-session（从别的 session 分出来）；resumed 续一个已有的 session。 */
+export type RunStart = "fresh" | "forked" | "resumed";
+
+export function runStart(args: readonly string[]): RunStart {
+  if (!args.includes("--resume")) return "fresh";
+  return args.includes("--fork-session") ? "forked" : "resumed";
+}
+
+/** forked 的一轮是从哪个 session 分出来的（--resume 后面那个 id）；不是 forked 为 null。 */
+export function forkedFrom(args: readonly string[]): string | null {
+  if (!args.includes("--fork-session")) return null;
+  const at = args.indexOf("--resume");
+  return at >= 0 ? (args[at + 1] ?? null) : null;
+}
+
+/** 和用量页同一套权重（input 为 1）。只是一套固定的近似，不是哪个模型真实的价格比（见文件头）；写缓存哪部分算 5m、哪部分算 1h 见 writes。 */
 const W = { input: 1, cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2, output: 5 } as const;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -91,7 +107,7 @@ export function cumulativeWeight(modelUsage: unknown): number | null {
   return sum;
 }
 
-/** 从累计拆出来的这一轮金额，总是约数。partial：拆的时候还没能只看这一轮的模型，偏差更大。 */
+/** 从累计拆出来的这一轮金额，总是约数（W 不是真实的价格比）。partial：拆的时候还没能只看这一轮的模型，偏差更大。 */
 export interface RunCost {
   usd: number;
   partial: boolean;
@@ -104,7 +120,7 @@ const shareOf = (amount: number, part: number, whole: number): number | null =>
 /**
  * 这一轮的金额，从 CLI 的累计里拆出来。
  * - 定得出这一轮的主模型 m（runModel，hint 是这一轮的 --model 或已经推出来的键）而且它有 costUSD：costUSD_m × w(usage) / w(modelUsage[m])，
- *   不标 partial，但仍是约数（权重只是近似的价格比）。
+ *   不标 partial，但仍是约数（W 不是这个模型真实的价格比）。
  * - 否则退回 totalUsd × w(usage) / Σ w(modelUsage)：只有一个模型有权重时一样准；有好几个时是按全 session 的平均单价定价，标 partial。
  *   不退回价格表估：那也要知道模型，而且默认价格表没有价格；这个数至少出自 CLI 自己的金额，也不会超过累计。
  * 缺 usage 或 modelUsage、权重为 0、这一轮比累计还重，或者两条路都缺金额 → null（算不出来）。

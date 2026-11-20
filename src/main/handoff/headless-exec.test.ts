@@ -8,6 +8,10 @@ import { RoutingRepo } from "../db/routing-repo";
 import { UsageRepo } from "../db/usage-repo";
 import { RoutingService } from "../routing/routing-service";
 import { execHeadlessJson, jobOf, withModel, type HeadlessExecDeps } from "./headless-exec";
+import { DEV_BASE_MODEL_USAGE, F1, FORK_OPUS, T1, T3 } from "../../shared/__fixtures__/cli-cost";
+import { cumulativeWeight } from "../../shared/run-cost";
+import type { CostBase } from "../fork/cost-base";
+import { parseClaudeJson } from "../claude/headless";
 
 const USAGE = { input: 1, cacheWrite5m: 2, cacheWrite1h: 3, cacheRead: 4, output: 5 };
 const result = (over: Partial<ClaudeResult> = {}): ClaudeResult => ({
@@ -259,6 +263,81 @@ describe("execHeadlessJson routing", () => {
       ["-p"],
     ]);
     expect(reports[0]).toEqual({ runId: "r", label: "lessons", at: 1000, model: "claude-sonnet-5-5", usage: USAGE, task: "needs_you", costUsd: 0, requestedTier: null, fallbackFrom: null });
+  });
+
+  // BTL-239：--resume X --fork-session 时 CLI 的 total_cost_usd 带着 X 以前的全部花费，用量行要记的是这一轮自己的：
+  // 跟分叉讨论一样取 T1 − X 存下的累计（base，起跑前读、跑完核对没变）；用不上就不记金额（用量页按价格表估），绝不记累计，也不把份额约数当准数记。
+  describe("a forked run (handoff, feature summary)", () => {
+    const args = ["-p", "--resume", "dev-1", "--fork-session", "--output-format", "json"];
+    const devBase = { totalUsd: 4, weight: cumulativeWeight(DEV_BASE_MODEL_USAGE)! };
+    const fork = parseClaudeJson(JSON.stringify(FORK_OPUS), args)!;
+    const withBase = (bases: (CostBase | null)[]) => {
+      const calls: string[] = [];
+      const costBase = async (id: string) => {
+        calls.push(id);
+        return bases.length > 1 ? bases.shift()! : bases[0]!;
+      };
+      return { costBase, calls };
+    };
+
+    it("records T1 minus the dev session's saved total, read before the run and checked after", async () => {
+      const { d, reports } = routed([], () => ({ ok: true, result: fork }));
+      const b = withBase([devBase]);
+      await execHeadlessJson({ ...d, costBase: b.costBase }, { ...o, args, resumedId: "dev-1" });
+      expect((reports[0] as { costUsd: number }).costUsd).toBeCloseTo(0.3, 9);
+      expect(b.calls).toEqual(["dev-1", "dev-1"]);
+    });
+    it("the real CLI's numbers: a fork taken after t3 records F1 − T3, never the cumulative", async () => {
+      const f1 = parseClaudeJson(JSON.stringify(F1), args)!;
+      const { d, reports } = routed([], () => ({ ok: true, result: f1 }));
+      const b = withBase([{ totalUsd: T3.total_cost_usd, weight: cumulativeWeight(T3.modelUsage)! }]);
+      await execHeadlessJson({ ...d, costBase: b.costBase }, { ...o, args, resumedId: "dev-1" });
+      expect((reports[0] as { costUsd: number }).costUsd).toBeCloseTo(F1.total_cost_usd - T3.total_cost_usd, 12);
+    });
+    it("no saved total (no transcript, no cost-state line): no amount, not the share split", async () => {
+      const { d, reports } = routed([], () => ({ ok: true, result: fork }));
+      await execHeadlessJson({ ...d, costBase: withBase([null]).costBase }, { ...o, args, resumedId: "dev-1" });
+      expect(reports[0]).toMatchObject({ costUsd: null });
+    });
+    it("the saved total changed during the run (the dev session exited): no amount", async () => {
+      const { d, reports } = routed([], () => ({ ok: true, result: fork }));
+      const b = withBase([devBase, { totalUsd: 4.2, weight: devBase.weight + 1 }]);
+      await execHeadlessJson({ ...d, costBase: b.costBase }, { ...o, args, resumedId: "dev-1" });
+      expect(reports[0]).toMatchObject({ costUsd: null });
+    });
+    it("reading the saved total throws: logged, no amount, the run itself is unaffected", async () => {
+      const { d, reports } = routed([], () => ({ ok: true, result: fork }));
+      const log = vi.fn();
+      const r = await execHeadlessJson({ ...d, log, costBase: async () => { throw new Error("EACCES"); } }, { ...o, args, resumedId: "dev-1" });
+      expect(r.ok).toBe(true);
+      expect(reports[0]).toMatchObject({ costUsd: null });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("cost base"), expect.any(Error));
+    });
+    it("no costBase wired: no amount", async () => {
+      const { d, reports } = routed([], () => ({ ok: true, result: fork }));
+      await execHeadlessJson(d, { ...o, args, resumedId: "dev-1" });
+      expect(reports[0]).toMatchObject({ costUsd: null });
+    });
+    it("no modelUsage to check the base against: no amount", async () => {
+      const { d, reports } = routed([], () => ({ ok: true, result: result({ costUsd: 5 }) }));
+      await execHeadlessJson({ ...d, costBase: withBase([devBase]).costBase }, { ...o, args, resumedId: "dev-1" });
+      expect(reports[0]).toMatchObject({ costUsd: null });
+    });
+    it("a failed forked run is recorded the same way", async () => {
+      const failed = { ...fork, isError: true };
+      const { d, reports } = routed([], () => ({ ok: false, reason: "claude_error", message: "x", limit: null, stderr: "", result: failed }));
+      await execHeadlessJson({ ...d, costBase: withBase([devBase]).costBase }, { ...o, args, resumedId: "dev-1" });
+      expect((reports[0] as { costUsd: number }).costUsd).toBeCloseTo(0.3, 9);
+    });
+  });
+  it("a fresh run's total is this run's cost and is recorded as is; no saved total is read", async () => {
+    const args = ["-p", "--output-format", "json"];
+    const fresh = parseClaudeJson(JSON.stringify(T1), args)!;
+    const { d, reports } = routed([], () => ({ ok: true, result: fresh }));
+    const costBase = vi.fn(async () => null);
+    await execHeadlessJson({ ...d, costBase }, { ...lo, args });
+    expect((reports[0] as { costUsd: number }).costUsd).toBe(T1.total_cost_usd);
+    expect(costBase).not.toHaveBeenCalled();
   });
 
   it("no routing configured: a limit goes to the account-wide hooks and nothing retries", async () => {

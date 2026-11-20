@@ -1,8 +1,10 @@
 import type { LimitHit } from "../../shared/availability";
 import { TASKS, tierRank, type EffortLevel, type RouteEventKind, type SpendLevel, type TaskId, type Tier } from "../../shared/model-routing";
+import { forkedFrom, runStart } from "../../shared/run-cost";
 import type { ClaudeResult, HeadlessFailure, HeadlessOutcome, HeadlessRun } from "../claude/headless";
 import { headlessEnv } from "../claude/spawn";
 import type { SessionsRepo } from "../db/sessions-repo";
+import { costSinceBase, sameBase, type CostBase } from "../fork/cost-base";
 import type { Candidate, Plan } from "../routing/router";
 import { M } from "../strings";
 import type { UsageCounts } from "../usage/usage-parse";
@@ -45,6 +47,7 @@ export interface UsageReport {
   task?: TaskId;
   requestedTier?: Tier | null;
   fallbackFrom?: string | null;
+  /** 这一次运行自己的准数（runUsd；分叉讨论传 turnCost 算出的）。不是 CLI 的累计 total。null 是没有，由用量统计按价格表估。 */
   costUsd?: number | null;
   /** 归到哪个 ticket（成本熔断按 ticket 汇总，工作流 L）；不归 ticket 为 null。 */
   ticketKey?: string | null;
@@ -74,6 +77,11 @@ export interface HeadlessExecDeps {
   onSuccess?: (startedAt: number, job: string) => void;
   /** 模型路由；没有时每个任务用 2.1.0 的模型，不降级。 */
   routing?: ExecRouting;
+  /**
+   * 一个 session 存下的累计花费（它 transcript 最后一条 cost-state，见 cost-base）。分叉出来的运行（handoff、feature 汇总都是
+   * --resume <开发 session> --fork-session）起跑前和跑完各读一次被分叉的那个，用来记 T1 − base（BTL-239）。没接 → 这类运行不记金额。
+   */
+  costBase?: (sessionId: string) => Promise<CostBase | null>;
   /** 成本熔断（工作流 L）：这个 ticket 的后台调用现在能不能跑、要不要降档。没接时一律照常。 */
   costGate?: (o: { task: TaskId; ticketKey: string | null; label: string }) => CostVerdict;
   log?: (msg: string, err?: unknown) => void;
@@ -126,6 +134,20 @@ export function withModel(args: string[], model: string | null, effort: EffortLe
   return out;
 }
 
+/**
+ * 这一次运行自己的金额。CLI 的 total_cost_usd 是被续的那个 session 的累计：没带 --resume 的就是这一次；
+ * 带了的（handoff、feature 汇总都是 --resume <开发 session> --fork-session）连开发 session 以前的全部花费都算在里面（BTL-239）。
+ * 分叉出来的取 T1 − base（base 是开发 session 存下的累计，起跑前读、跑完核对没变；costSinceBase 还会核对 CLI 真的从它接着记）。
+ * 取不到准数 → null，由用量统计按价格表估。不拿 runCostFromCumulative 的份额来记：用量行没有约数标记，usdOf 会把它当准数，
+ * 而份额能偏 −17% 到 +38%。绝不记成累计。
+ */
+export function runUsd(args: readonly string[], res: ClaudeResult | null | undefined, model: string | null, base: CostBase | null = null): number | null {
+  const total = res?.costUsd ?? null;
+  if (!res || total === null) return null;
+  if (runStart(args) === "fresh") return total;
+  return costSinceBase({ ...res, model: res.model ?? model }, base);
+}
+
 const NO_RETRY: ReadonlySet<HeadlessFailure> = new Set(["timeout", "spawn_failed", "aborted", "bad_output"]);
 const LEARN_FROM: ReadonlySet<HeadlessFailure> = new Set(["claude_error", "exit_nonzero"]);
 
@@ -164,10 +186,24 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
     const effort = r && model !== null ? r.effortFor(o.task, tier) : null;
     const args = withModel(o.args, flags.model ? model : null, flags.effort ? effort : null);
     const runId = d.newRunId();
+    // 分叉出来的运行：起跑前读被分叉的 session 存下的累计（每次起跑都重读：降级重试之前开发 session 可能又退出过）。只有走路由的才记金额。
+    const from = r ? forkedFrom(args) : null;
+    const readBase = async (): Promise<CostBase | null> => {
+      if (!from || !d.costBase) return null;
+      try {
+        return await d.costBase(from);
+      } catch (e) {
+        d.log?.(`${o.label}: reading the cost base of ${from} failed`, e);
+        return null;
+      }
+    };
     const release = r ? await r.acquire(tier) : () => undefined;
+    // 排到了再读：排队的时候开发 session 可能退出、写下新的一条。
+    let base: CostBase | null;
     const startedAt = d.now();
     let out: HeadlessOutcome;
     try {
+      base = await readBase();
       out = await d.run({
         claudePath: path, args, prompt: o.prompt, cwd: o.cwd,
         env: headlessEnv(d.baseEnv, { pathValue, runId }),
@@ -177,11 +213,19 @@ export async function execHeadlessJson(d: HeadlessExecDeps, o: ExecOptions): Pro
     } finally {
       release();
     }
+    // 起跑前读到的累计要跟 CLI 读的是同一条：开发 session 恰好在这中间退出会写下新的一条，CLI 从新的接着记。跑完再读一次，变了就不用。
+    if (base !== null && out.result) {
+      const after = await readBase();
+      if (!sameBase(base, after)) {
+        d.log?.(`${o.label}: the cost base of ${from} changed during the run, not recording an amount`);
+        base = null;
+      }
+    }
     // 失败的运行也花了 token：判断 ok 之前先记。
     const usage = out.result?.usage;
     if (usage) {
       const u: UsageReport = { runId, label: o.label, at: d.now(), model: out.result?.model ?? null, usage, ...(o.ticketKey && { ticketKey: o.ticketKey }) };
-      if (r) Object.assign(u, { task: o.task, costUsd: out.result?.costUsd ?? null, ...extra });
+      if (r) Object.assign(u, { task: o.task, costUsd: runUsd(args, out.result, model, base), ...extra });
       hook("onUsage", () => d.onUsage?.(u));
     }
     const sid = out.result?.sessionId;

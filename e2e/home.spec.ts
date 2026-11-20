@@ -187,6 +187,8 @@ test("the All work page has the create buttons, the entries and every piece of w
 /** 一个元素的文字色和它实际的底色（往上找到不透明为止，半透明的叠起来），算对比度。在页面里用 canvas 换算任何 CSS 颜色。 */
 async function contrastOf(el: Locator): Promise<{ ratio: number; color: string; background: string }> {
   return el.evaluate((node) => {
+    // 脱离页面的节点 getComputedStyle 全是空串：直接说清楚是重挂了，别报成颜色换算不了。
+    if (!node.isConnected) throw new Error("element was detached (re-rendered) before its contrast was read");
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 1;
     const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
@@ -240,6 +242,9 @@ test("the home page is readable in light and dark", async ({ makeSandbox, launch
 
   await goHome(page);
   await expect(page.getByTestId("turn-card")).toHaveCount(1, { timeout: 20_000 });
+  // DMS-1 停下以后先是「没人推进」，需要你的判断回来才变成「要你回答」；kind 在卡片的 key 里，一变整张卡重挂，
+  // 量到一半的旧节点就脱离了页面。等它变成 answer 再量。
+  await expect(page.getByTestId("turn-card")).toHaveAttribute("data-kind", "answer", { timeout: 20_000 });
   const running = page.locator(".home-running > h3 .section-toggle");
   if ((await running.getAttribute("aria-expanded")) !== "true") await running.click();
   await expect(page.locator(".home-run")).toHaveCount(1);
