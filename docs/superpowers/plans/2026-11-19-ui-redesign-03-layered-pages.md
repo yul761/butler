@@ -146,7 +146,7 @@
   - `barSegments({done:9,agent:3,you:2,external:1,idle:0}, 15)`：百分比之和 100（用最大余数法取整），`idle: 0` 的段不出现；`total: 0` → `[]`。
   - `whoLabel`：`you` → `你`，`agent` → `agent`，`external` 走 `externalWho`（同首页「进行中」）：`stack_below` → `栈的下一层`，有 `names` → `names.join("、")`，没有 `names` 时 `ci_running` → `CI`、其余 → `外部`；`done` → `合了`，`idle` → `没开始`。全部工作页单独 ticket 的「谁该动」也用它（按主进程标了 `ticketLevel` 的那条 item 的轮次），`scopeWho` 只给 epic / feature 汇总行。
 - [ ] **Step 2: 运行**：`pnpm vitest run src/renderer/src/scope-view.test.ts`，预期 FAIL。
-- [ ] **Step 3: 实现 `scope-view.ts`**。`ticketRows` 用 `ticketTurn(prTurns, sessionTurn)` 取 `{turn, others}`，`item` 取 `items` 里 `turn` 引用相同的那条；不重新判断任何 PR 状态。
+- [ ] **Step 3: 实现 `scope-view.ts`**。`ticketRows` 取主进程标了 `ticketLevel` 的那条 item 作为 ticket 的 `{turn, others, item}`，没有就按没开始；多出来的孤儿提问放进 `asks`。不重新判断任何 PR 或 ticket 的状态（不调 `ticketTurn` / `mostUrgent`）。
 - [ ] **Step 4: 实现 `useTurnBoard`**：和 `useStateRefetch` 同样的防抖重取，但订阅 `api.onTurnChanged`，key 是 `JSON.stringify(filter)`；没取到返回 `null`。
 - [ ] **Step 5: 写 `scope-parts-render.test.ts`**：`WhoTag` 渲染 `you` 出现 `class="who who-you"` 和文字 `你`；`ScopeBar` `total: 0` 返回空串（`renderToStaticMarkup` 结果为 `""`）；`total > 0` 时每段 `style="width:N%"`。
 - [ ] **Step 6: 实现 `ScopeParts.tsx` 的 `WhoTag`、`ScopeBar`**（后面几个展示组件在 Task 6 加进同一个文件）。
