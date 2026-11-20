@@ -245,7 +245,7 @@ function forkRun(input) {
   const sessionId = has("--fork-session") || !has("--resume") ? randomUUID() : flag("--resume");
   log(`fork-session ${sessionId}`);
   const last = input.trimEnd().split("\n").pop().trim();
-  const result = last.includes("结论") ? FORK_CONCLUSION : `分叉回答：${last}`;
+  const result = /结论|conclusion/i.test(last) ? FORK_CONCLUSION : `分叉回答：${last}`;
   process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result, usage: FORK_USAGE, total_cost_usd: 0.02, permission_denials: [] })}\n`);
 }
 

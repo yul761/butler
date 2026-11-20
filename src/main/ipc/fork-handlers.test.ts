@@ -82,7 +82,16 @@ describe("fork IPC handlers (UI redesign layer 5)", () => {
     await expect(h.reaskFull(0)).rejects.toThrow();
     await expect(h.sendConclusion("1")).rejects.toThrow();
     await expect(h.remember(null)).rejects.toThrow();
-    expect(fork.ask).not.toHaveBeenCalled();
+    for (const f of [fork.ask, fork.reaskFull, fork.sendConclusion, fork.remember]) expect(f).not.toHaveBeenCalled();
+  });
+
+  it("a failed health check still lets the call through: ForkService decides from the health state it has", async () => {
+    const { h, fork } = setup(() => Promise.reject(new Error("probe failed")));
+    expect(await h.ask("root-1", null, "q")).toEqual({ forkId: 7 });
+    expect(await h.reaskFull(3)).toEqual({ forkId: 8 });
+    expect(await h.sendConclusion(3)).toEqual({ ok: true, at: 123 });
+    expect(await h.remember(3)).toEqual({ result: "written" });
+    for (const f of [fork.ask, fork.reaskFull, fork.sendConclusion, fork.remember]) expect(f).toHaveBeenCalledTimes(1);
   });
 
   it("a ForkError reaches the renderer as { ok: false, code }", async () => {

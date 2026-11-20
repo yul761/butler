@@ -145,13 +145,23 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
     await (await draftTo(page, "fork", "第三个问题")).dblclick();
     await expect(boxes).toHaveCount(2);
     await expect(boxes.nth(1).locator(".msg-a")).toHaveText(["分叉回答：第三个问题"]);
-    await page.waitForTimeout(1000);
+    // 这一轮跑完了（回了 session id）之后也没有第二次起跑。
+    await expect.poll(() => forkSessions(s).length).toBe(runsBefore + 1);
     expect(forkRuns(s)).toHaveLength(runsBefore + 1);
     await expect(boxes).toHaveCount(2);
-    // 对话长了以后输入框还在最下面：对话的底边不压到它。
-    const feedBox = await conv.locator(".feed").boundingBox();
-    const inputBox = await page.locator(".conv-input").boundingBox();
-    expect(feedBox!.y + feedBox!.height).toBeLessThanOrEqual(inputBox!.y + 1);
+    // 对话长到超出一屏以后，滚到底，输入框整个在窗口里。
+    const fit = await page.locator(".conv-input").evaluate((input) => {
+      let scroller = input.parentElement;
+      while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+      const el = scroller ?? document.scrollingElement!;
+      const overflowed = el.scrollHeight > el.clientHeight;
+      el.scrollTop = el.scrollHeight;
+      const r = input.getBoundingClientRect();
+      return { overflowed, top: r.top, bottom: r.bottom, viewport: window.innerHeight };
+    });
+    expect(fit.overflowed).toBe(true);
+    expect(fit.top).toBeGreaterThanOrEqual(0);
+    expect(fit.bottom).toBeLessThanOrEqual(fit.viewport);
 
     // 并排显示终端：对话和这个 session 的终端左右排开；收起后回到只有对话。
     await conv.getByRole("button", { name: S.conv.sideTerminal, exact: true }).click();
@@ -174,6 +184,8 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
     await expect(conv.locator(".feed .sep")).toHaveCount(1);
     await expect(boxes).toHaveCount(2);
     await expect(boxes.first().locator(".msg-a").first()).toHaveText("分叉回答：为什么？");
+    // 换新后 Butler 自己输入的那句（refreshResume）不算用户说的话，对话里没有它的「你：」（第 4 层）。
+    expect((await conv.locator(".feed .msg-u").allInnerTexts()).filter((t) => t.startsWith(`${S.conv.you}${RESUME}`))).toEqual([]);
 
     // 5. 撞限额：带着 FAKE_CLAUDE_FORK 重启，再分叉一次。框里说撞了限额、几点恢复；用户的问题还在。
     // 重启后马上问：启动健康检查还没做完时也不能报「找不到 claude」（fork-handlers 等 healthReady）。

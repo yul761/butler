@@ -71,7 +71,7 @@ async function openSession(page: Page): Promise<string> {
 const goHome = (page: Page) => page.locator(".sidebar").getByRole("button", { name: S.home, exact: true }).click();
 const title = (page: Page) => page.locator(".home-top h2");
 
-test("a question for you is a card that opens its terminal and takes an answer", async ({ makeSandbox, launch }) => {
+test("a question for you is a card that opens its conversation and takes an answer", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);

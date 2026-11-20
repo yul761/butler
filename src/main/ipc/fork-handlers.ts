@@ -14,6 +14,7 @@ interface Deps {
  * 对话 tab 的分叉讨论和「发给开发 session」（UI 重做第 5 层）。先校验参数再调服务；
  * ForkService 拒绝时抛 ForkError，经 toIpcResult 变成 { ok: false, code }。session id 可以是链上任意一段。
  * 要跑 claude 的（问、重问、送结论、记下）先等启动健康检查做完；参数不对的不等，马上拒。
+ * 健康检查失败了也放行：ForkService 按手上的健康状态自己判断（找不到 claude 照样报 no_claude）。
  */
 export function forkHandlers(d: Deps): {
   ask: (rootSessionId: unknown, forkId: unknown, question: unknown) => Promise<{ forkId: number }>;
@@ -29,17 +30,17 @@ export function forkHandlers(d: Deps): {
       // null 开一个新分叉，数字接着问那个分叉（ForkService.ask 自己分 askNew / askMore）。
       const fid = forkId === null ? null : forkIdArg(forkId);
       const q = forkQuestionArg(question);
-      await d.ready();
+      await d.ready().catch(() => undefined);
       return d.fork.ask(sid, fid, q);
     },
     async sendConclusion(forkId) {
       const id = forkIdArg(forkId);
-      await d.ready();
+      await d.ready().catch(() => undefined);
       return d.fork.sendConclusion(id);
     },
     async reaskFull(forkId) {
       const id = forkIdArg(forkId);
-      await d.ready();
+      await d.ready().catch(() => undefined);
       return d.fork.reaskFull(id);
     },
     list(anyId) {
@@ -47,7 +48,7 @@ export function forkHandlers(d: Deps): {
     },
     async remember(forkId) {
       const id = forkIdArg(forkId);
-      await d.ready();
+      await d.ready().catch(() => undefined);
       return { result: await d.fork.remember(id) };
     },
     async convSend(anyId, text) {
