@@ -51,7 +51,8 @@ import { SettingsRepo } from "./db/settings-repo";
 import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
 import { UsageRepo } from "./db/usage-repo";
-import { execHeadlessJson, jobOf } from "./handoff/headless-exec";
+import { execHeadlessJson } from "./handoff/headless-exec";
+import { headlessUsageRow } from "./usage/headless-usage";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
@@ -556,14 +557,10 @@ async function bootstrap(): Promise<void> {
     }, 2000);
     costCheckTimer.unref?.();
   };
-  const recordHeadlessUsage = ({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd, ticketKey }: UsageReport) => {
+  const recordHeadlessUsage = (r: UsageReport) => {
     try {
-      usageRepo.record([{
-        messageId: `headless:${runId}`, sessionId: null, agentId: null, source: "headless", job: jobOf(label), at, model, ...usage, ticketKey: ticketKey ?? null,
-        context: usage.input + usage.cacheWrite5m + usage.cacheWrite1h + usage.cacheRead,
-        ...(task !== undefined && { task, requestedTier: requestedTier ?? null, fallbackFrom: fallbackFrom ?? null, costUsd: costUsd ?? null }),
-      }]);
-      if (ticketKey) costCheckSoon();
+      usageRepo.record([headlessUsageRow(r)]);
+      if (r.ticketKey) costCheckSoon();
     } catch (e) {
       logger("recording headless usage failed", e);
     }
