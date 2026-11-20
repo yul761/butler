@@ -552,7 +552,7 @@ export interface NowRow {
   needsYou: string | null;
   /** Butler 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
   refreshing: RefreshStep | null;
-  /** 这个 session 还没答的「待你决定」有几条（BTL-190 第 2+3 点；卡片上答了、等着送的不算）。有未决的条目时 needsYou 为 null，卡片在 NowView.decisions 里。 */
+  /** 这个 session 还没答的「待你决定」有几条（BTL-190 第 2+3 点；卡片上答了、等着送的不算）。有未决的条目时 needsYou 为 null（卡片由 TurnService 从 inbox 出）。 */
   decisions: number;
   prs: WatchedPr[];
   /** 停着、不需要你、不在换新也不在合并排队：默认折起来。开着的 PR 不算（BTL-190 第 7 点），只显示在行上。只有 PR 的行不算空闲。 */
@@ -686,12 +686,8 @@ export type NowNotice =
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */
   notices: NowNotice[];
-  /** 全部需要你的行，按 since 从早到晚。有未决「待你决定」的 session 不在这里（它的卡片在 decisions 里）。 */
-  needsYou: NowRow[];
-  /** 全部未决的「待你决定」（BTL-190 第 2+3 点），从早到晚；终端关着的 session 的也在。 */
-  decisions: InboxItemView[];
   epics: NowEpic[];
-  /** 开着终端的 Butler 总控（BTL-190 第 5 点）的一行；没开为 null。它的「需要你」也在 needsYou 里，在干活也算进 running。 */
+  /** 开着终端的 Butler 总控（BTL-190 第 5 点）的一行；没开为 null。在干活也算进 running。 */
   butler: NowRow | null;
   /** 正在干活的 session 数（NowRow.working）。 */
   running: number;
