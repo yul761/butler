@@ -14,7 +14,7 @@ export interface CardDeps {
   /** 「没事，忽略」：这一次的卡住不再提醒（直到它又动起来再卡住）。 */
   dismissActivity: (sessionId: string) => Promise<void>;
   onOpen: (t: NowTarget) => void;
-  /** 挂在 ticket 上的卡片「去看看」：去 ticket 页，按轮到谁落到对应的页签（landing）。 */
+  /** 挂在 ticket 上的卡片「去看看」：去 ticket 页，按这张卡片的轮次落到对应的页签（landing）。 */
   onGo: (r: Route) => void;
   onFix: (featureId: number, sessionId: string) => void;
   /** 回答没送到、送出成功以后让首页重取。 */
@@ -47,7 +47,8 @@ export async function runCardAction(a: CardAction, item: TurnItem, d: CardDeps, 
     }
     case "look": {
       if (item.ticketKey !== null) {
-        d.onGo({ page: "ticket", key: item.ticketKey, landing: true });
+        // 落点按这张卡片自己的轮次：范围页的卡片可能是一个 PR 的，和这个 ticket 别的 PR、session 不一样。
+        d.onGo({ page: "ticket", key: item.ticketKey, landing: t });
         return null;
       }
       const target = lookTarget(item);

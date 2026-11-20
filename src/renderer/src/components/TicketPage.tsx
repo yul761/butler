@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import type { Turn } from "../../../shared/turn";
 import { TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
 import { S, STATUS_LABEL } from "../strings";
-import { landingTab, type TicketTab } from "../ticket-tabs";
-import { conversationSessions, terminalLanding } from "../ticket-view";
+import type { TicketTab } from "../ticket-tabs";
+import { conversationSessions, ticketLanding } from "../ticket-view";
 import { ConversationPlaceholder } from "./ConversationPlaceholder";
 import { PageTabs } from "./PageTabs";
 import { TicketHomeTab } from "./TicketHome";
@@ -23,8 +24,8 @@ interface Props {
   /** 从别的页面跳进来时要执行的打开请求（落在「终端」页签）。 */
   initialOpen?: OpenSessionRequest | null;
   onInitialOpenDone?: () => void;
-  /** 从「去看看」进来：按这个 ticket 轮到谁落到对应的页签，只在第一次拿到 turn 时落一次。 */
-  landing?: boolean;
+  /** 从卡片的「去看看」进来：那张卡片的轮次；页面打开时按它落一次（ticketLanding）。 */
+  landing?: Turn;
   /** 开修复 session（同首页 TurnCard）。 */
   onFix: (featureId: number, stuckSessionId: string) => void;
   /** ticket 属于的 feature（设计文档 2026-10-26）。 */
@@ -33,7 +34,7 @@ interface Props {
 }
 
 /** ticket 页（UI 重做第 3 层，spec §5.3）：标题栏下五个页签——概况、对话、终端、PR 详情、记录。 */
-export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOpenDone, landing = false, onFix, feature = null, onOpenFeature }: Props) {
+export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOpenDone, landing, onFix, feature = null, onOpenFeature }: Props) {
   // 终端状态留在页面里：切到别的页签再回来，终端从快照重建，不丢。
   const term = useTicketTerminals(ticket);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -42,7 +43,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const goTab = (tab: TicketTab) => setForce((f) => ({ tab, n: (f?.n ?? 0) + 1 }));
   const { board } = useTurnBoard({ ticketKey: ticket.key });
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
-  /** 落点只算一次：之后用户自己切页签不再被拉回；带着打开请求进来时落在终端，不再看 turn。 */
+  /** 落点只算一次：之后用户自己切页签不再被拉回；带着打开请求进来时落在终端，不再看卡片的轮次。 */
   const landed = useRef(false);
 
   // 从别的页面跳进来时的打开请求：恢复 session 并预填提示，切到终端页签，只执行一次。
@@ -54,18 +55,17 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
     void term.open(initialOpen);
   }, [initialOpen]);
 
+  // 卡片带着轮次进来：页面一打开就落（不等看板，看板回来前用户点的页签不会被拉回）。
   useEffect(() => {
-    if (!landing || landed.current || row === null) return;
+    if (!landing || landed.current) return;
     landed.current = true;
-    const tab = landingTab(row.turn);
+    const { tab, terminal: to } = ticketLanding(landing, ticket.sessions, term.panesRef.current);
     goTab(tab);
-    if (tab !== "terminal") return;
     // 落在终端：顺手切到（或恢复）轮到你的那个 session。
-    const to = terminalLanding(row.turn, ticket.sessions, term.panesRef.current);
     if (to === null) return;
     if ("activate" in to) term.setActive(to.activate);
     else void term.open({ ticketKey: ticket.key, sessionId: to.open });
-  }, [landing, row]);
+  }, [landing]);
 
   const statusValue = ticket.statusManual ?? "auto";
 

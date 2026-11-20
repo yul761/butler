@@ -3,7 +3,7 @@ import type { PrStageCell, PrStagesView } from "../../shared/pr-stages";
 import type { Turn } from "../../shared/turn";
 import type { SessionView } from "../../shared/types";
 import { STRINGS } from "./strings";
-import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession, terminalLanding } from "./ticket-view";
+import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession, terminalLanding, ticketLanding } from "./ticket-view";
 
 const S = STRINGS.zh;
 const ids = (t: Turn, o = { hasPr: true, canFix: false }) => mainActions(t, o, S).map((a) => a.id);
@@ -140,5 +140,17 @@ describe("terminalLanding", () => {
   it("does nothing without a session", () => {
     expect(terminalLanding({ owner: "you", kind: "stuck", source: "ticket_blocked", detail: null, sessionId: null }, running, [])).toBeNull();
     expect(terminalLanding({ owner: "you", kind: "merge", risk: null }, running, ["t1"])).toBeNull();
+  });
+});
+
+describe("ticketLanding", () => {
+  const sessions = [sess("s1", { termId: "t1" }), sess("s2")];
+  it("lands by the card's own turn: a PR waiting to be merged stays on the overview, even if the ticket's session is stuck", () => {
+    expect(ticketLanding({ owner: "you", kind: "merge", risk: null }, sessions, ["t1"])).toEqual({ tab: "overview", terminal: null });
+  });
+  it("a failing-CI card lands on PR details; a stuck card on the terminal of its own session", () => {
+    expect(ticketLanding({ owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "pr", terminal: null });
+    expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s1" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { activate: "t1" } });
+    expect(ticketLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s2" }, sessions, ["t1"])).toEqual({ tab: "terminal", terminal: { open: "s2" } });
   });
 });

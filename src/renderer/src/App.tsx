@@ -27,14 +27,15 @@ import { Wizard } from "./components/Wizard";
 import { S } from "./strings";
 import { onboardingReducer } from "./wizard";
 import type { SettingsSection } from "../../shared/settings-layout";
+import type { Turn } from "../../shared/turn";
 
 /** 状态变化事件合并的时间窗。 */
 const STATE_DEBOUNCE_MS = 80;
 
 export type Route =
   | { page: "home" }
-  /** landing：从「去看看」进来时，按这个 ticket 轮到谁落到对应的页签（TicketPage 读它）。 */
-  | { page: "ticket"; key: string; landing?: boolean }
+  /** landing：从卡片的「去看看」进来时那张卡片的轮次，TicketPage 按它落到对应的页签（landingTab）。 */
+  | { page: "ticket"; key: string; landing?: Turn }
   /**
    * focusSession：从「现在」页点进来时先切到的那个 session 的终端。
    * landing "control"：刚开好修复 session（fixLanding），落到「总控」页签看 focusTerm 那个终端；landingSeq 每次开都递增，页面已经开着也会再落一次。

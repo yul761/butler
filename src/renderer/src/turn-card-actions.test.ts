@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Turn, TurnItem } from "../../shared/turn";
 import { ciReasonText } from "./availability-view";
 import { STRINGS } from "./strings";
+import { landingTab } from "./ticket-tabs";
 import { runCardAction, type CardDeps } from "./turn-card-actions";
 
 const S = STRINGS.zh;
@@ -82,11 +83,17 @@ describe("runCardAction", () => {
     expect(c.onFix).not.toHaveBeenCalled();
   });
 
-  it("look: a ticket card goes to the ticket page and lands by whose turn it is", async () => {
+  it("look: a ticket card goes to the ticket page and lands by the card's own turn", async () => {
     const d = deps();
     await runCardAction({ id: "look", primary: true }, item(stuck), d, S);
-    expect(d.onGo).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", landing: true });
+    expect(d.onGo).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", landing: stuck });
     expect(d.onOpen).not.toHaveBeenCalled();
+    // 一个 PR 的卡片（「PR#2 待合」）落到它自己的页签，不看这个 ticket 别的 PR 或 session。
+    const merge: Turn = { owner: "you", kind: "merge", risk: null };
+    const m = deps();
+    await runCardAction({ id: "look", primary: false }, item(merge, { pr }), m, S);
+    expect(m.onGo).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", landing: merge });
+    expect(landingTab(merge)).toBe("overview");
   });
 
   it("ignore: dismisses the stuck session's activity, then refetches", async () => {

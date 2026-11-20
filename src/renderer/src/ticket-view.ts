@@ -7,7 +7,7 @@ import type { SessionView } from "../../shared/types";
 import { newestRow } from "./pr-stages-view";
 import { sessionLabel } from "./sessions";
 import type { UiStrings } from "./strings";
-import type { TicketTab } from "./ticket-tabs";
+import { landingTab, type TicketTab } from "./ticket-tabs";
 
 export interface MainAction {
   id: "open_pr" | "answer" | "look" | "fix" | "send" | "pr_details";
@@ -88,4 +88,13 @@ export function terminalLanding(turn: Turn, sessions: Pick<SessionView, "id" | "
   if (sessionId === null) return null;
   const termId = sessions.find((s) => s.id === sessionId)?.termId ?? null;
   return termId !== null && panes.includes(termId) ? { activate: termId } : { open: sessionId };
+}
+
+/**
+ * 从卡片的「去看看」进 ticket 页：按那张卡片自己的轮次落到哪个页签（landingTab），落在终端时顺手切到 / 恢复哪个 session。
+ * 不等这个 ticket 的看板：卡片已经带着轮次，页面一打开就落；等看板的话，看板回来之前用户自己点的页签会被拉回去。
+ */
+export function ticketLanding(turn: Turn, sessions: Pick<SessionView, "id" | "termId">[], panes: readonly string[]): { tab: TicketTab; terminal: { activate: string } | { open: string } | null } {
+  const tab = landingTab(turn);
+  return { tab, terminal: tab === "terminal" ? terminalLanding(turn, sessions, panes) : null };
 }
