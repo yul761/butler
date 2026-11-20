@@ -33,6 +33,16 @@ describe("ScopeOverview", () => {
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("turn-bar");
   });
+  it("empty scope still shows the cards that are your turn (a coordinator's question before any ticket)", () => {
+    const zero = { done: 0, agent: 0, you: 0, external: 0, idle: 0 };
+    const html = overview({ kind: "feature", rows: [], total: { ...total, kind: "feature", total: 0, merged: 0, youCount: 0, bar: zero, slowest: null }, onCreate: noop });
+    expect(html).toContain("EMPTY");
+    expect(html).toContain('class="scope-you"');
+    expect(html).toContain('data-testid="turn-card"');
+    expect(html).not.toContain("NaN");
+    const none = overview({ kind: "feature", rows: [], total: null, onCreate: noop });
+    expect(none).toContain('data-testid="turn-card"');
+  });
   it("epic with features but no tickets still lists the features", () => {
     const zero = { done: 0, agent: 0, you: 0, external: 0, idle: 0 };
     const html = overview({

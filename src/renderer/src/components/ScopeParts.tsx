@@ -35,12 +35,20 @@ export function ScopeOverview(p: {
   rows: ScopeTurnRow[]; total: ScopeTurnRow | null; youItems: TurnItem[]; kind: "epic" | "feature"; emptyText: string;
   cards: Omit<TurnCardProps, "item">; onOpenRow?: (id: number | string) => void; onCreate?: () => void;
 }) {
+  const you = (
+    <section className="scope-you">
+      <h3>{S.lay.youHere}</h3>
+      {p.youItems.length === 0 ? <p className="muted">{S.lay.noYouHere}</p> : p.youItems.map((item) => <TurnCard key={cardKey(item)} item={item} {...p.cards} />)}
+    </section>
+  );
   // 有 feature 但还没有 ticket 时 total 是 0，feature 行仍要显示。
+  // 还没有 ticket 也可能轮到你（总控问了一句）：页签标着要你看，卡片就得在这里。
   if (p.total === null || (p.total.total === 0 && p.rows.length === 0)) {
     return (
       <div className="scope-overview">
         <p className="muted">{p.emptyText}</p>
         {p.onCreate && <button className="primary" onClick={p.onCreate}>{p.kind === "epic" ? S.newFeature : S.newTicket}</button>}
+        {p.youItems.length > 0 && you}
       </div>
     );
   }
@@ -48,10 +56,7 @@ export function ScopeOverview(p: {
     <div className="scope-overview">
       <p className="scope-progress">{progressLine(p.total, S)}</p>
       <p className="muted">{slowestLine(p.total.slowest, S)}</p>
-      <section className="scope-you">
-        <h3>{S.lay.youHere}</h3>
-        {p.youItems.length === 0 ? <p className="muted">{S.lay.noYouHere}</p> : p.youItems.map((item) => <TurnCard key={cardKey(item)} item={item} {...p.cards} />)}
-      </section>
+      {you}
       {p.rows.length > 0 && (
         <section className="scope-rows">
           {p.kind === "epic" && <h3>{S.lay.featuresHeading}</h3>}
