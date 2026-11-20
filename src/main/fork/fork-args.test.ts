@@ -20,7 +20,8 @@ describe("devForkArgs", () => {
     const a = devForkArgs(dev, o);
     expect(a).toContain("-p");
     expect(a.join(" ")).toContain("--output-format json");
-    expect(a.join(" ")).toContain("--resume s1 --fork-session");
+    expect(a.join(" ")).toContain("--resume s1 ")
+    expect(a).toContain("--fork-session");
     expect(a).not.toContain("--session-id");
     expect(after(a, "--settings")).toBe("/fs.json");
     expect(after(a, "--mcp-config")).toBe("/fm.json");
@@ -36,6 +37,20 @@ describe("devForkArgs", () => {
     expect(a).not.toContain("--permission-mode");
     expect(a).not.toContain("--allowedTools");
   });
+  it("keeps the spike's order: dev args in place, then -p --output-format json --fork-session, permission args last", () => {
+    const a = devForkArgs(dev, o);
+    expect(a.slice(0, 2)).toEqual(["--resume", "s1"]);
+    const at = a.indexOf("-p");
+    expect(a.slice(at, at + 4)).toEqual(["-p", "--output-format", "json", "--fork-session"]);
+    expect(a.indexOf("--mcp-config")).toBeLessThan(at);
+    expect(a.indexOf("--permission-mode")).toBeGreaterThan(at);
+  });
+  it("appends the fork settings when the dev args had none, and keeps a dev --resume", () => {
+    const a = devForkArgs({ ...dev, claudeArgs: ["--resume", "s1", "--model", "opus"] }, o);
+    expect(a.slice(0, 5)).toEqual(["--resume", "s1", "--model", "opus", "-p"]);
+    expect(after(a, "--settings")).toBe("/fs.json");
+    expect(a.indexOf("--settings")).toBeGreaterThan(a.indexOf("--fork-session"));
+  });
   it("keeps the dev mcp config when the plan says so", () => {
     const a = devForkArgs(dev, { ...o, plan: { ...FULL_FORK, ownMcpConfig: false } });
     expect(after(a, "--mcp-config")).toBe("/m.json");
@@ -44,10 +59,10 @@ describe("devForkArgs", () => {
 
 describe("strictForkArgs", () => {
   it("has no --resume without a session to fork", () => {
-    const a = strictForkArgs({ model: null, addDirs: [], forkSettingsPath: null });
+    const a = strictForkArgs({ model: null, addDirs: [], forkSettingsPath: "/fs.json" });
     expect(a).not.toContain("--resume");
     expect(a).not.toContain("--model");
-    expect(a).not.toContain("--settings");
+    expect(after(a, "--settings")).toBe("/fs.json");
   });
   it("forks the given session and keeps the strict flags", () => {
     const a = strictForkArgs({ resumeSessionId: "X", model: "opus", addDirs: ["/r"], forkSettingsPath: "/fs.json" });
@@ -74,7 +89,7 @@ describe("continueArgs", () => {
     expect(a.filter((x) => x !== "--resume" && x !== "f1")).toEqual(first.filter((x) => x !== "--resume" && x !== "s1" && x !== "--fork-session"));
   });
   it("inserts --resume after -p for a lean fork", () => {
-    const first = strictForkArgs({ model: null, addDirs: [], forkSettingsPath: null });
+    const first = strictForkArgs({ model: null, addDirs: [], forkSettingsPath: "/fs.json" });
     const a = continueArgs(first, "f1");
     expect(a.slice(0, 3)).toEqual(["-p", "--resume", "f1"]);
     expect(a.slice(3)).toEqual(first.slice(1));
@@ -84,7 +99,7 @@ describe("continueArgs", () => {
     expect(a.filter((x) => x === "--resume")).toHaveLength(1);
     expect(a).toContain("f2");
     expect(a).not.toContain("f1");
-    const b = continueArgs(continueArgs(strictForkArgs({ model: null, addDirs: [], forkSettingsPath: null }), "f1"), "f2");
+    const b = continueArgs(continueArgs(strictForkArgs({ model: null, addDirs: [], forkSettingsPath: "/fs.json" }), "f1"), "f2");
     expect(b.filter((x) => x === "--resume")).toHaveLength(1);
     expect(b).toContain("f2");
     expect(b).not.toContain("f1");

@@ -755,10 +755,12 @@ export class SessionService {
     return termId;
   }
 
-  /** 开发 session 这次启动时的 claude 参数；只有这个 Butler 进程里开过、终端还开着的 head 才有（/clear 之后的新 head 也认）。 */
+  /** 开发 session 这次启动时的 claude 参数；只有这个 Butler 进程里开过、终端还开着的 head 才有（/clear 之后的新 head 不认，参数指向旧对话）。 */
   devLaunchOf(sessionId: string): DevLaunch | null {
     const termId = this.openHeads().get(sessionId);
-    return (termId && this.launches.get(termId)) || null;
+    const l = termId ? this.launches.get(termId) : undefined;
+    // /clear 之后终端 id 不变、head 换了：启动参数里的 --session-id 指向清掉之前的对话，不能拿来分叉。
+    return l && l.sessionId === sessionId ? l : null;
   }
 
   /** 启动时记下「没有检查」（或清掉上次的）：session 按钮上的标记、预审（G）的覆盖情况都读它。出错只写日志。 */

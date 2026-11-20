@@ -147,11 +147,21 @@ describe("SessionService.devLaunchOf", () => {
 
   it("records the args of a workspace session too (butler)", async () => {
     const ws = join(tempDir("butler-home-"), "_butler");
-    const { service, spawned } = await setup({ butlerWorkspace: ws });
+    const { service, spawned } = await setup({ butlerWorkspace: ws, mcpSettings: () => "/s.json" });
     expect(await service.openButler({})).toMatchObject({ ok: true });
     const dev = service.devLaunchOf("new-1");
-    expect(dev).toMatchObject({ sessionId: "new-1", cwd: ws, mcpConfigPath: null, settingsPath: null, model: null });
+    expect(dev).toMatchObject({ sessionId: "new-1", cwd: ws, mcpConfigPath: null, settingsPath: "/s.json", addDirs: [], model: null });
     expect(dev?.claudeArgs).toEqual(spawned[0].args);
+    expect(dev?.claudeArgs).toContain("/s.json");
+  });
+
+  it("is null for the new head after /clear: the recorded args still point at the old conversation", async () => {
+    const { service, sessions } = await setup();
+    await service.open({ ticketKey: "PROJ-1" });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 3 });
+    sessions.setReplacedBy("new-1", "c2");
+    expect(service.devLaunchOf("c2")).toBeNull();
+    expect(service.devLaunchOf("new-1")).toBeNull();
   });
 });
 
