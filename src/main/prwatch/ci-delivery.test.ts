@@ -69,6 +69,14 @@ describe("CiDelivery", () => {
     expect(s.prs.get(r.id)!.deliveredKey).toBe("abcdef1234567:failing");
   });
 
+  it("records the recipient session and the time on a delivered PR row", async () => {
+    const s = setup({ session: "h9" });
+    s.state.now = 77;
+    const r = s.pr();
+    await s.d.settled({ kind: "pr", id: r.id });
+    expect(s.prs.get(r.id)).toMatchObject({ deliveredKey: "abcdef1234567:failing", deliveredTo: "h9", deliveredAt: 77 });
+  });
+
   it("without an owner, delivers a PR row's CI only when head_branch is the repo's current branch", async () => {
     const s = setup();
     const r = s.pr({ ci: "passing" });

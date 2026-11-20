@@ -1364,4 +1364,9 @@ export const MIGRATIONS: string[] = [
     open_turn_id INTEGER,
     updated_at INTEGER NOT NULL);
   `,
+  // UI 重做第 1 层：CI 结论递给了谁、什么时候（判断「agent 在处理」还是「没人推进」）。
+  `
+  ALTER TABLE ticket_prs ADD COLUMN delivered_at INTEGER;
+  ALTER TABLE ticket_prs ADD COLUMN delivered_to TEXT;
+  `,
 ];

@@ -120,7 +120,7 @@ export function ciRecipient(i: {
 export type CiSkipReason = CiSendSkip;
 
 /** 递一条要用的：哪个 ticket 的哪个仓库哪个分支、通知里写什么、递完记到哪。 */
-interface Pending { ticketKey: string; repoId: number; branch: string; number: number | null; label: string; key: string; text: () => string; mark: () => void }
+interface Pending { ticketKey: string; repoId: number; branch: string; number: number | null; label: string; key: string; text: () => string; mark: (sessionId: string, at: number) => void }
 
 /** 还没递出去的一条：从什么时候起、最近一次为什么没递、本来要递给谁。 */
 interface Waiting { key: string; since: number; reason: CiUndeliveredReason; notify: boolean; sessionId: string | null; ticketKey: string; number: number | null; branch: string }
@@ -211,7 +211,7 @@ export class CiDelivery {
       if (!t) return { skip: "triage", label };
       return {
         ticketKey: r.ticketKey, repoId: r.repoId, branch: r.headBranch, number: r.number, label, key,
-        text: () => withNote(notice(r, M().ciWherePr(r.number)), t.note), mark: () => (this.d.prs.setDelivered(r.id, key), t.onSent?.()),
+        text: () => withNote(notice(r, M().ciWherePr(r.number)), t.note), mark: (sessionId, at) => (this.d.prs.setDelivered(r.id, key, { sessionId, at }), t.onSent?.()),
       };
     }
     const r = this.d.branches.get(item.repoId);
@@ -278,7 +278,7 @@ export class CiDelivery {
       const result = await this.d.deliver(gate.termId, sanitizeTask(p.text()), this.d.guard.recheckAfter(sessionId, gate));
       // 只有真的递出去才记；递的过程中如果结论变了，标记的还是递出去的那一条。
       if (result === "sent") {
-        p.mark();
+        p.mark(sessionId, this.d.now());
         this.forget(id);
         this.d.log(`ci delivery ${p.label}: sent to ${sessionId} (${to.via})`);
         return "sent";

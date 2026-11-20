@@ -142,6 +142,16 @@ describe("TicketPrsRepo", () => {
     expect(linkedOpen([{ ...row, state: "merged" }])).toBe(false);
   });
 
+  it("setDelivered records who got the CI result and when; null clears all three", () => {
+    const { prs } = setup();
+    const p = prs.link(link({})).pr;
+    expect(prs.get(p.id)).toMatchObject({ deliveredKey: null, deliveredAt: null, deliveredTo: null });
+    prs.setDelivered(p.id, "sha:failing", { sessionId: "s1", at: 42 });
+    expect(prs.get(p.id)).toMatchObject({ deliveredKey: "sha:failing", deliveredAt: 42, deliveredTo: "s1" });
+    prs.setDelivered(p.id, null);
+    expect(prs.get(p.id)).toMatchObject({ deliveredKey: null, deliveredAt: null, deliveredTo: null });
+  });
+
   it("pendingMerged (read rows only), setMergedHandled, setDelivered and update round-trip", () => {
     const { prs } = setup();
     const p = prs.link(link({ state: "merged" })).pr;
