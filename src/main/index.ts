@@ -152,6 +152,7 @@ import { DevSender } from "./fork/dev-send";
 import type { DevLaunch } from "./fork/fork-args";
 import { FULL_FORK } from "./fork/fork-cache";
 import { ForkService, writeForkSettings } from "./fork/fork-service";
+import { readCostBase } from "./fork/cost-base";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
@@ -1845,6 +1846,8 @@ async function bootstrap(): Promise<void> {
     // 下面三个 ForkService 都用链上现在的 head id 调。
     devLaunchOf: (id) => sessionService.devLaunchOf(id),
     transcriptExists,
+    // 分叉第一轮的准数：被分叉的开发 session 存下的累计（BTL-239）。
+    costBase: (id) => readCostBase(findTranscript(paths.claudeProjects, id)),
     // 开着终端（gateTerm 按 head 找终端，/clear 之后也找得到）；休眠的没有终端，不算在跑。
     devRunning: (id) => gateTerm(id) !== null,
     lastTurnAt: (id) => usageRepo.lastSessionTurnAt(id),

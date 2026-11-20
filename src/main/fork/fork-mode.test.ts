@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RegistryModel } from "../../shared/model-routing";
+import { F1, T3 } from "../../shared/__fixtures__/cli-cost";
+import { parseClaudeJson } from "../claude/headless";
 import { chooseMode, costOf, FULL_FRESH_MS, fullBlock, runStart, turnCost, type ModeInput } from "./fork-mode";
 
 const NOW = 10_000_000_000;
@@ -140,8 +142,8 @@ describe("turnCost", () => {
     expect(r).toMatchObject({ partial: true, approx: true, seenTotal: 1.04 });
   });
   it("a failed run never pulls the total seen back (a start-up error may report 0); one that went up still moves it", () => {
-    expect(turnCost({ costUsd: 0, usage: null, model: null }, "resumed", 5.02, registry, true)).toEqual({ usd: null, partial: true, approx: false, cli: null, seenTotal: 5.02 });
-    expect(turnCost(run(5.03), "resumed", 5.02, registry, true)).toMatchObject({ partial: false, approx: false, seenTotal: 5.03 });
+    expect(turnCost({ costUsd: 0, usage: null, model: null }, "resumed", 5.02, registry, { failed: true })).toEqual({ usd: null, partial: true, approx: false, cli: null, seenTotal: 5.02 });
+    expect(turnCost(run(5.03), "resumed", 5.02, registry, { failed: true })).toMatchObject({ partial: false, approx: false, seenTotal: 5.03 });
   });
   it("modelUsage with nothing in it falls back to the estimate", () => {
     expect(turnCost({ ...run(5), usageRaw: raw, modelUsage: {} }, "forked", null, registry)).toEqual({ usd: 22.5, partial: false, approx: true, cli: null, seenTotal: 5 });
@@ -160,5 +162,62 @@ describe("turnCost", () => {
   it("a new session (fresh or forked) without a CLI total: the total seen before was another session's, so forget it", () => {
     expect(turnCost({ costUsd: null, usage: null, model: "opus" }, "forked", 5.02, registry)).toMatchObject({ seenTotal: null });
     expect(turnCost(run(null), "fresh", 0.01, registry)).toMatchObject({ usd: 22.5, seenTotal: null });
+  });
+});
+
+// BTL-239：完整分叉第一轮的准数。分叉前读开发 session transcript 最后一条 cost-state 的 totalCostUSD（base），CLI 的 total 从它接着记，
+// 所以这一轮 = T1 − base。读不到（null）、base 比 T1 还大、或者 CLI 没读回费用状态（累计里只有这一轮）时退回按份额拆，标约数。
+describe("turnCost with the dev session's saved total (base)", () => {
+  const registry: RegistryModel[] = [{ name: "opus", tier: "high", enabled: true, account: "a", priceIn: 15, priceOut: 75, note: "" }];
+  const usage = { input: 1_000_000, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 100_000 };
+  const raw = { input_tokens: 100, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0, output_tokens: 50 };
+  const cumulative = { "claude-opus-5": { inputTokens: 100 * 50, outputTokens: 50 * 50, cacheReadInputTokens: 9000 * 50, cacheCreationInputTokens: 0, costUSD: 5.02 } };
+  const forked = (costUsd: number | null) => ({ costUsd, usage, model: "claude-opus-5", usageRaw: raw, modelUsage: cumulative });
+
+  it("a fork's first turn is T1 minus the base: exact", () => {
+    const r = turnCost(forked(5.02), "forked", null, registry, { base: 5 });
+    expect(r.usd).toBeCloseTo(0.02, 12);
+    expect(r).toMatchObject({ partial: false, approx: false, seenTotal: 5.02 });
+    expect(r.cli).toBe(r.usd);
+  });
+  it("the real CLI's numbers: a fork taken after t3 costs F1 − T3", () => {
+    const args = ["-p", "--resume", "t", "--fork-session"];
+    const f1 = parseClaudeJson(JSON.stringify(F1), args)!;
+    const r = turnCost(f1, "forked", null, registry, { base: T3.total_cost_usd });
+    expect(r.usd).toBeCloseTo(F1.total_cost_usd - T3.total_cost_usd, 12);
+    expect(r).toMatchObject({ partial: false, approx: false, seenTotal: F1.total_cost_usd });
+  });
+  it("exact without modelUsage too (the difference doesn't need it)", () => {
+    const r = turnCost({ costUsd: 5.02, usage, model: "claude-opus-5" }, "forked", null, registry, { base: 5 });
+    expect(r.usd).toBeCloseTo(0.02, 12);
+    expect(r.approx).toBe(false);
+  });
+  it("a base equal to T1 is a zero-cost turn, still exact", () => {
+    expect(turnCost(forked(5), "forked", null, registry, { base: 5 })).toMatchObject({ usd: 0, approx: false, partial: false });
+  });
+  it("no base (transcript missing or no cost-state line): the share split, approximate, as before", () => {
+    const r = turnCost(forked(5.02), "forked", null, registry, { base: null });
+    expect(r.usd).toBeCloseTo(5.02 / 50, 12);
+    expect(r).toMatchObject({ partial: false, approx: true, seenTotal: 5.02 });
+    expect(turnCost(forked(5.02), "forked", null, registry)).toEqual(r);
+  });
+  it("a base greater than T1: the numbers don't line up, so the share split, approximate", () => {
+    const r = turnCost(forked(5.02), "forked", null, registry, { base: 6 });
+    expect(r.usd).toBeCloseTo(5.02 / 50, 12);
+    expect(r).toMatchObject({ partial: false, approx: true, seenTotal: 5.02 });
+  });
+  it("the CLI didn't read the saved total back (modelUsage holds only this run): T1 − base would be wrong, so the share split", () => {
+    const only = { "claude-opus-5": { inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 9000, cacheCreationInputTokens: 0, costUSD: 0.03 } };
+    const r = turnCost({ ...forked(0.03), modelUsage: only }, "forked", null, registry, { base: 0.01 });
+    expect(r.usd).toBeCloseTo(0.03, 12);
+    expect(r.approx).toBe(true);
+  });
+  it("no CLI total: the estimate, base unused", () => {
+    expect(turnCost({ costUsd: null, usage, model: "claude-opus-5" }, "forked", null, registry, { base: 5 })).toMatchObject({ approx: true, cli: null, seenTotal: null });
+  });
+  it("only a fork of another session uses the base", () => {
+    expect(turnCost(forked(0.01), "fresh", null, registry, { base: 5 })).toMatchObject({ usd: 0.01, approx: false });
+    const r = turnCost(forked(5.04), "resumed", 5.02, registry, { base: 5 });
+    expect(r.usd).toBeCloseTo(0.02, 10);
   });
 });

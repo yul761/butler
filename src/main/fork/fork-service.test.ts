@@ -71,6 +71,7 @@ function setup(o: { plan?: FullForkPlan; launch?: boolean; lastTurnAgo?: number 
     sessions: { rootOf: (id: string) => chain.get(id) ?? null, head: (id: string) => heads.get(chain.get(id) ?? id) ?? null },
     devLaunchOf: vi.fn((id: string) => (o.launch === false ? null : id === heads.get("root-1")?.id ? launchOf(id) : null)),
     transcriptExists: vi.fn<(id: string) => boolean>(() => true),
+    costBase: vi.fn<ForkDeps["costBase"]>(async () => null),
     devRunning: vi.fn<(id: string) => boolean>(() => true),
     hookReady: vi.fn<() => boolean>(() => true),
     lastTurnAt: vi.fn<(id: string) => number | null>(() => (lastTurnAgo === null ? null : t - lastTurnAgo)),
@@ -800,6 +801,69 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     // 后面的差值是准的，但合计里有第一轮的约数，整个分叉仍是约数。
     expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: true, costSeenTotal: 5.02 });
     expect(s.deps.onUsage.mock.calls[1][0].costUsd).toBeCloseTo(0.02, 10);
+  });
+
+  // BTL-239：分叉前读开发 session transcript 最后一条 cost-state 的 totalCostUSD（base），第一轮 = T1 − base，是准数。
+  it("完整分叉第一轮读得到开发 session 存的累计（5.00）：记 T1 − 5.00，是准数；接着问取差，整个分叉都是准数", async () => {
+    const s = setup();
+    s.deps.costBase.mockResolvedValue(5);
+    s.queue.push(ok({ costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }), ok({ costUsd: 5.05, usageRaw, modelUsage: cumulative(252) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.mode).toBe("full");
+    // 读的是被分叉的那个（--resume 后面的 head），在起跑之前。
+    expect(s.deps.costBase).toHaveBeenCalledWith("head-2");
+    expect(s.deps.costBase.mock.invocationCallOrder[0]).toBeLessThan(s.deps.run.mock.invocationCallOrder[0]);
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.02, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: false, costSeenTotal: 5.02 });
+    expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeCloseTo(0.02, 12);
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    // 接着问是续分叉自己的 session，不再读开发 session 的。
+    expect(s.deps.costBase).toHaveBeenCalledTimes(1);
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.05, 10);
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: false, costSeenTotal: 5.05 });
+  });
+
+  it("开发 session 存的累计比 T1 还大：对不上，退回按份额拆，标约数", async () => {
+    const s = setup();
+    s.deps.costBase.mockResolvedValue(9);
+    s.queue.push(ok({ costUsd: 5, usageRaw, modelUsage: cumulative(250) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(5 / 250, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ costApprox: true, costSeenTotal: 5 });
+  });
+
+  it("读开发 session 的累计出错：照常起跑，按份额拆、标约数，记日志", async () => {
+    const s = setup();
+    s.deps.costBase.mockRejectedValue(new Error("EACCES"));
+    s.queue.push(ok({ costUsd: 5, usageRaw, modelUsage: cumulative(250) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ status: "idle", costApprox: true });
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(5 / 250, 12);
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("cost base"), expect.any(Error));
+  });
+
+  it("精简分叉不续开发 session：不读它的累计", async () => {
+    const s = setup({ head: { waitingForInput: false } });
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.mode).toBe("light");
+    expect(s.deps.costBase).not.toHaveBeenCalled();
+  });
+
+  it("第一轮失败后重跑：再读一次开发 session 的累计（重跑之前它可能又花了）", async () => {
+    const s = setup();
+    s.deps.costBase.mockResolvedValueOnce(5).mockResolvedValueOnce(5.5);
+    s.queue.push({ ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null }, ok({ costUsd: 5.52, usageRaw, modelUsage: cumulative(260) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.deps.costBase).toHaveBeenCalledTimes(2);
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.02, 10);
   });
 
   it("CLI 没分叉但带 modelUsage：费用按份额记、仍标不全，累计不动，不记用量行", async () => {
