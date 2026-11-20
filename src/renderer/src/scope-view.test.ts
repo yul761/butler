@@ -186,6 +186,11 @@ describe("scopeRowLine / ticketsWithPr", () => {
     expect(scopeRowLine({ kind: "feature", id: 3, merged: 1, total: 2 }, withPr, S)).toBe("1/2 合了");
     expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, total: 1 }, withPr, SE)).toBe("No PR yet");
   });
+  it("a ticket with no PR that is done (its bar is all green) says merged, not that it has no PR yet", () => {
+    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 1, total: 1 }, new Set(), S)).toBe(S.turn.done);
+    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 1, total: 1 }, new Set(), SE)).toBe(SE.turn.done);
+    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 0, total: 1 }, new Set(), S)).toBe(S.lay.noPrYet);
+  });
 });
 
 describe("the renderer takes the ticket's turn from main (one state algorithm)", () => {
