@@ -23,4 +23,6 @@ export function auditIsEmpty(a: { llmEntries: number; externalEntries: number })
   return a.llmEntries === 0 && a.externalEntries === 0;
 }
 
+/** 效果页的 tab，按显示顺序。 */
 export const EFFECT_TABS = ["overview", "trend", "spend", "rework", "automation"] as const;
+export type EffectTabId = (typeof EFFECT_TABS)[number];

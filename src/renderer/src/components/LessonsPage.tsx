@@ -24,7 +24,6 @@ import { ScoreParts } from "./ScoreParts";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-/** 只有界面状态放在这里；数据都等 stateChanged 之后重取。 */
 const PAGE_TABS = ["lessons", "wizard", "calibration", "checks", "baselines", "batches", "io"] as const;
 type PageTabId = (typeof PAGE_TABS)[number];
 
@@ -39,6 +38,7 @@ export function LessonsAttention({ count, onOpen }: { count: number; onOpen(): v
   );
 }
 
+/** 只有界面状态放在这里；数据都等 stateChanged 之后重取。 */
 export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(id: string): void; tab?: "checks" }) {
   const state = useStateRefetch("lessons", api.lessonsState);
   // 「该导出了」的提醒在规矩标签页也显示（导入导出标签页里另有一条）。

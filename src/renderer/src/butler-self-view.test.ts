@@ -43,6 +43,13 @@ describe("firstPendingSelection", () => {
     });
     expect(firstPendingSelection(s)).toEqual({ kind: "repo", slug: "o/b" });
   });
+  it("orders repos by the repo list, not by the lesson list", () => {
+    const s = state({
+      repos: [repo("o/a"), repo("o/b")],
+      lessons: [lesson(1, { kind: "repo", slug: "o/b" }, "pending"), lesson(2, { kind: "repo", slug: "o/a" }, "pending")],
+    });
+    expect(firstPendingSelection(s)).toEqual({ kind: "repo", slug: "o/a" });
+  });
   it("returns null with nothing pending", () => {
     expect(firstPendingSelection(state({ repos: [repo("o/a")], lessons: [lesson(1, { kind: "repo", slug: "o/a" }, "confirmed")] }))).toBeNull();
   });

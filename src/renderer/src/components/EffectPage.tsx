@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { IntakeEffect } from "../../../shared/intake";
 import type { LoopEffect } from "../../../shared/loop";
 import type { ReviewEffectView, ReviewGroupStats } from "../../../shared/review-effect";
@@ -8,6 +8,7 @@ import {
   barWidths, compare, comparisonText, DAY_CHOICES, DASH, fmtDay, fmtDuration, fmtNumber, fmtTokens, fmtUsd,
   groupName, interventionName, interventionRows, lineGeometry, spendName,
 } from "../effect-view";
+import { EFFECT_TABS, type EffectTabId } from "../butler-self-view";
 import { shortTime } from "../progress-ui";
 import { dayString, enoughSample } from "../review-view";
 import { S } from "../strings";
@@ -498,14 +499,15 @@ export function EffectPage() {
   const loop = useStateRefetch(`loop-effect:${days}`, () => api.loopEffect(days));
   const review = useStateRefetch(`review-effect:${days}`, () => api.reviewEffect(days));
   const intake = useStateRefetch(`intake-effect:${days}`, () => api.intakeEffect(days));
-  const t = S.lay.effectTabs;
-  const tabs: PageTab[] = [
-    { id: "overview", label: t.overview, content: o ? <EffectOverview o={o} /> : <p className="empty">{S.loading}</p> },
-    { id: "trend", label: t.trend, content: o ? <EffectTrendTab o={o} /> : <p className="empty">{S.loading}</p> },
-    { id: "spend", label: t.spend, content: o ? <EffectSpendTab o={o} /> : <p className="empty">{S.loading}</p> },
-    { id: "rework", label: t.rework, content: o ? <EffectReworkTab o={o} /> : <p className="empty">{S.loading}</p> },
-    { id: "automation", label: t.automation, content: <EffectAutomationTab loop={loop} review={review} intake={intake} /> },
-  ];
+  const loading = <p className="empty">{S.loading}</p>;
+  const content: Record<EffectTabId, ReactNode> = {
+    overview: o ? <EffectOverview o={o} /> : loading,
+    trend: o ? <EffectTrendTab o={o} /> : loading,
+    spend: o ? <EffectSpendTab o={o} /> : loading,
+    rework: o ? <EffectReworkTab o={o} /> : loading,
+    automation: <EffectAutomationTab loop={loop} review={review} intake={intake} />,
+  };
+  const tabs: PageTab[] = EFFECT_TABS.map((id) => ({ id, label: S.lay.effectTabs[id], content: content[id] }));
   return (
     <div className="page effect-page" data-testid="effect-page">
       <h2>{E().title}</h2>
