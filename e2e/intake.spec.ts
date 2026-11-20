@@ -75,7 +75,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await expect(page.getByTestId("intake-policy-message")).toHaveText(S.policySaved);
   await expect(page.getByTestId("intake-effective-enabled")).toHaveText(S.policyBool(true));
 
-  // 4. 全部工作页「栈与自动接活」里的队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
+  // 4. 全部工作页「更多」里的自动接活队列：E2E-31 开工了，E2E-32 缺信息，E2E-33 等名额。
   await openAllWorkMore(page);
   const queue = page.getByTestId("intake-queue");
   await expect(queue).toBeVisible({ timeout: 20_000 });

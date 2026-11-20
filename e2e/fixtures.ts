@@ -485,7 +485,7 @@ export async function newButton(page: Page, which: "newTicket" | "newFeature" | 
   return page.locator(".all-work").getByRole("button", { name: `+ ${T[which]}`, exact: true });
 }
 
-/** 去全部工作页，展开下面的「栈与自动接活」（原来在进度页上的托管栈和自动接活队列）。 */
+/** 去全部工作页，展开下面的「栈、自动接活和待 review」（原来在进度页上的托管栈、自动接活队列和待 review）。 */
 export async function openAllWorkMore(page: Page, T: UiStrings = S): Promise<void> {
   await openAllWork(page, T);
   const fold = page.locator(".all-work-more").getByRole("button", { name: T.hm.all.moreHeading });

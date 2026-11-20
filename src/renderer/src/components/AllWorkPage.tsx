@@ -1,4 +1,5 @@
 // 全部工作（UI 重做第 2 层，spec §5.3）：新建按钮、「已归档」「未认领 session」两个入口，下面一张表——名字、谁该动、现在怎么样、进度。
+// 「更多」里是原来进度页上的栈、自动接活和待 review（第 3 层补回）。
 // 状态全部来自 turn:board 的 scopes，这里只排序和显示；没有统计的行写「—」。
 import { useState } from "react";
 import type { ScopeTurnRow, TurnBoard } from "../../../shared/turn";
@@ -9,6 +10,7 @@ import { S } from "../strings";
 import { featuresOutsideEpics } from "./epic-row";
 import { GroupToggle } from "./HomeMore";
 import { IntakeQueue } from "./IntakeQueue";
+import { ReviewQueue } from "./ReviewQueue";
 import { ManagedStacks } from "./StacksPanel";
 
 export interface AllWorkBodyProps {
@@ -19,7 +21,7 @@ export interface AllWorkBodyProps {
   tickets: TicketView[];
   unclaimedCount: number;
   now: number;
-  /** 从提醒跳来：「栈与自动接活」默认展开。 */
+  /** 从提醒跳来：「更多」默认展开。 */
   focusMore?: "stacks" | "intake";
   onNewTicket: () => void;
   onNewFeature: () => void;
@@ -102,6 +104,7 @@ export function AllWorkBody(p: AllWorkBodyProps) {
           <>
             <ManagedStacks filter={{ epicId: null, featureId: null }} onOpenTicket={p.onOpenTicket} />
             <IntakeQueue onOpenTicket={p.onOpenTicket} />
+            <ReviewQueue onOpenTicket={p.onOpenTicket} />
           </>
         )}
       </section>

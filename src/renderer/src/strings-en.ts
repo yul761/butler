@@ -395,7 +395,7 @@ export const EN: UiStrings = {
       colProgress: "Progress",
       empty: "No work yet. Create something to start.",
       unclaimedBtn: (n: number) => (n > 0 ? `Unclaimed sessions · ${n}` : "Unclaimed sessions"),
-      moreHeading: "Stacks and auto-intake",
+      moreHeading: "Stacks, auto-intake and review queue",
     },
     dotTitle: { ask: "Needs your answer or review", merge: "Ready to merge", stuck: "Stuck or nobody on it", butler: "Butler needs a click", agent: "An agent is on it", external: "Waiting on CI or someone else", done: "Merged", idle: "Not started" } as Record<TurnTone, string>,
   },

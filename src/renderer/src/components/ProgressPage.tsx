@@ -5,8 +5,9 @@ import { api } from "../api";
 import { reportError } from "../errors";
 import type { ReviewQueueItem } from "../../../shared/prereview";
 import { flattenStack, prRef, segmentWidths, shortTime, sinceText, waitingText } from "../progress-ui";
-import { queueFor, queueIndex, riskPill } from "../review-view";
+import { queueFor, queueIndex } from "../review-view";
 import { S } from "../strings";
+import { ReviewBadges, ReviewQueueList } from "./ReviewQueue";
 import { useStateRefetch } from "./useStateRefetch";
 
 const openPr = (url: string): void => void api.prOpen(url).catch(reportError);
@@ -130,42 +131,6 @@ function Stacks({ view }: { view: ProgressView }) {
             )}
           </div>
         ))
-      )}
-    </section>
-  );
-}
-
-/** 一个 PR 的风险和就绪徽标（工作流 G）；没评估过的不显示。 */
-function ReviewBadges({ item }: { item: ReviewQueueItem | undefined }) {
-  if (!item) return <>—</>;
-  return (
-    <span data-testid="progress-review-badges">
-      {item.risk && <span className={`pill ${riskPill(item.risk)}`}>{S.rv.riskBadge(S.rv.level[item.risk])}</span>}
-      {item.ready !== null && <span className={item.ready ? "pill approved" : "pill pending"}>{item.ready ? S.rv.ready : S.rv.notReady}</span>}
-    </span>
-  );
-}
-
-/** 待 review（工作流 G，设计 §10）：未就绪在前 → 风险高在前 → 等得久在前。 */
-function ReviewQueueList({ items, onOpenTicket }: { items: ReviewQueueItem[]; onOpenTicket: (key: string) => void }) {
-  return (
-    <section className="progress-review-queue" data-testid="progress-review-queue">
-      <h3>{S.rv.queueTitle}</h3>
-      <p className="muted">{S.rv.queueIntro}</p>
-      {items.length === 0 ? <p className="muted">{S.rv.queueNone}</p> : (
-        <table className="ticket-table">
-          <tbody>
-            {items.map((i) => (
-              <tr key={i.prId} data-testid={`review-queue-${i.number}`}>
-                <td><button className="pr-link link" title={i.url} onClick={() => openPr(i.url)}>{`${i.repoSlug}#${i.number}`}</button></td>
-                <td>{i.title ?? ""}</td>
-                <td><TicketLink ticketKey={i.ticketKey} onOpenTicket={onOpenTicket} /></td>
-                <td><ReviewBadges item={i} /></td>
-                <td className="muted">{i.missing.length > 0 ? S.rv.missing(i.missing.map((m) => S.rv.cond[m.key]).join(", ")) : ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       )}
     </section>
   );

@@ -401,7 +401,7 @@ const ZH = {
       colProgress: "进度",
       empty: "还没有任何工作，先新建一个。",
       unclaimedBtn: (n: number) => (n > 0 ? `未认领 session · ${n}` : "未认领 session"),
-      moreHeading: "栈与自动接活",
+      moreHeading: "栈、自动接活和待 review",
     },
     dotTitle: { ask: "要你回答或 review", merge: "可以合并", stuck: "卡住了或没人推进", butler: "Butler 要你点一下", agent: "agent 在处理", external: "在等 CI 或别人", done: "合了", idle: "没开始" } as Record<TurnTone, string>,
   },
