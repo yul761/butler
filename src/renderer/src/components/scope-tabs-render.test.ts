@@ -170,3 +170,17 @@ describe("ScopeBoard", () => {
     expect(render({ board, error: "stale" })).toBe("<p>BODY</p>");
   });
 });
+
+describe("ControlSplit fold button (BTL-241)", () => {
+  it("has a fold button on the split line, with both languages", () => {
+    const h = renderToStaticMarkup(createElement(ControlSplit, { left: "LEFT", right: "RIGHT", page: "epic" }));
+    expect(h).toContain('class="control-fold"');
+    expect(h).toContain(`aria-label="${S.lay.ctlCollapse}"`);
+    expect(STRINGS.en.lay.ctlCollapse).toBe("Collapse the conversation column");
+    expect(STRINGS.en.lay.ctlExpand).toBe("Expand the conversation column");
+  });
+  it("the butler page split grows to the window bottom", () => {
+    const css = readFileSync(join(__dirname, "..", "styles.css"), "utf8");
+    expect(css).toMatch(/\.butler-page \.control-split\s*\{\s*flex:\s*1 1 auto/);
+  });
+});

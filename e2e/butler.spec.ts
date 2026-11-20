@@ -69,3 +69,33 @@ test("page tabs are always open and the last tab survives leaving and a reload",
   await openAudit();
   await expect(pageTab(page, S.lay.auditTabs.llm)).toHaveAttribute("aria-selected", "true");
 });
+
+test("the Butler 总控 page fills the window and its right column folds, per page kind (BTL-241)", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
+  const butler = page.locator(".butler-page");
+  const split = butler.locator(".control-split");
+  const win = () => page.evaluate(() => window.innerHeight);
+  // 分栏撑到窗口底（不是停在 50vh）。
+  await expect.poll(async () => (await split.boundingBox())!.y + (await split.boundingBox())!.height).toBeGreaterThan((await win()) - 12);
+  await expect(split.locator(".control-right")).toBeVisible();
+
+  // 收起：右栏没了、左栏占满，终端仍在。
+  await split.locator(".control-left").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  const fold = split.getByRole("button", { name: S.lay.ctlCollapse, exact: true });
+  const narrow = (await split.locator(".control-left").boundingBox())!.width;
+  await fold.click();
+  await expect(split.locator(".control-right")).toHaveCount(0);
+  await expect.poll(async () => (await split.locator(".control-left").boundingBox())!.width).toBeGreaterThan(narrow * 1.5);
+  await expect(split.locator(".control-left .terminal-wrap")).toBeVisible();
+
+  // 重新加载后还是收起；展开后右栏回来。
+  await page.reload();
+  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
+  await expect(butler.locator(".control-right")).toHaveCount(0);
+  await butler.getByRole("button", { name: S.lay.ctlExpand, exact: true }).click();
+  await expect(butler.locator(".control-right")).toBeVisible();
+});

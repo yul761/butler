@@ -131,6 +131,7 @@ export function EpicPage({ epic, features, onOpenFeature, onOpenTicket, onFeatur
             id: "control", label: S.lay.tabControl,
             content: (
               <ControlSplit
+                page="epic"
                 lede={S.lay.ctlLede}
                 left={
                   <SessionArea

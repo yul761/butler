@@ -453,6 +453,14 @@ test("the feature's control tab: reports on the right, the terminal keeps its ha
   await expect(pageTab(page, S.lay.tabOverview)).toBeInViewport();
   await expectTerminalsKeepHalf(page);
   await expect(page.locator(".feature-page .terminal-wrap:visible")).toBeInViewport();
+
+  // 右栏可以收起：左边终端占满；再点展开。epic/feature 页各自记着（这里只收这一页）。
+  const split = page.locator(".feature-page .control-split");
+  await split.getByRole("button", { name: S.lay.ctlCollapse, exact: true }).click();
+  await expect(split.locator(".control-right")).toHaveCount(0);
+  await expect(page.locator(".feature-page .terminal-wrap:visible")).toBeInViewport();
+  await split.getByRole("button", { name: S.lay.ctlExpand, exact: true }).click();
+  await expect(split.locator(".control-right")).toBeVisible();
 });
 
 /**

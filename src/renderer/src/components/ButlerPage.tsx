@@ -65,7 +65,7 @@ export function ButlerLayout(p: { title: string; lede: string; meta?: ReactNode;
         {p.meta}
       </header>
       <p className="muted butler-intro">{p.lede}</p>
-      <ControlSplit left={p.left} right={p.right} />
+      <ControlSplit page="butler" left={p.left} right={p.right} />
     </div>
   );
 }
