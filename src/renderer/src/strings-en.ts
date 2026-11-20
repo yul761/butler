@@ -358,6 +358,7 @@ export const EN: UiStrings = {
       openPr: "Open PR",
       look: "Take a look",
       fix: "Open a fix session",
+      ignore: "It's fine, ignore",
       send: "Send to agent",
       answered: (text: string) => `Answered: ${text}. It goes in when the session stops.`,
       answerGone: "This question is gone",

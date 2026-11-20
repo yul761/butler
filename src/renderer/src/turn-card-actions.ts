@@ -11,6 +11,8 @@ export interface CardDeps {
   answerInbox: (id: number, text: string) => Promise<boolean>;
   prOpen: (url: string) => Promise<{ ok: true } | { ok: false; reason: "bad_url" }>;
   turnSendToAgent: (req: { ticketKey: string; pr: { repo: string; number: number } }) => Promise<{ ok: boolean; reason?: TurnSendReason }>;
+  /** 「没事，忽略」：这一次的卡住不再提醒（直到它又动起来再卡住）。 */
+  dismissActivity: (sessionId: string) => Promise<void>;
   onOpen: (t: NowTarget) => void;
   /** 挂在 ticket 上的卡片「去看看」：去 ticket 页，按轮到谁落到对应的页签（landing）。 */
   onGo: (r: Route) => void;
@@ -55,6 +57,12 @@ export async function runCardAction(a: CardAction, item: TurnItem, d: CardDeps, 
     case "fix": {
       // 修复 session 开在卡住的 ticket 上：总控卡住（ticketKey 为 null）时开不了。
       if (t.owner === "you" && t.kind === "stuck" && item.featureId !== null && item.ticketKey !== null && t.sessionId !== null) d.onFix(item.featureId, t.sessionId);
+      return null;
+    }
+    case "ignore": {
+      if (t.owner !== "you" || t.kind !== "stuck" || t.sessionId === null) return null;
+      await d.dismissActivity(t.sessionId);
+      d.onChanged();
       return null;
     }
     case "send": {

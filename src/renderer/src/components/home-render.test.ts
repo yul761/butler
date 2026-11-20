@@ -234,6 +234,12 @@ describe("TurnCard", () => {
     expect(render(item(turn, { featureId: null }))).not.toContain(S.hm.act.fix);
   });
 
+  it("a silent stuck card can be ignored; a stuck the session reported itself cannot", () => {
+    const silent: Turn = { owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s" };
+    expect(render(item(silent))).toContain(`>${S.hm.act.ignore}</button>`);
+    expect(render(item({ ...silent, source: "needs_you", detail: "卡在权限上" }))).not.toContain(`>${S.hm.act.ignore}</button>`);
+  });
+
   it("a Butler card renders the notice with its own buttons", () => {
     const html = render(item({ owner: "you", kind: "butler", notice: { kind: "lessons_paused" } }, { ticketKey: null, epicId: null, featureId: null }));
     expect(html).toContain('data-testid="now-notice-lessons_paused"');

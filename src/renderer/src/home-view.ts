@@ -75,7 +75,7 @@ export function homeLede(c: TurnBoard["counts"], S: UiStrings): string {
   return c.agent === 0 && c.external === 0 && c.mergedToday === 0 ? S.hm.ledeIdle : S.hm.lede(c.agent, c.external, c.mergedToday);
 }
 
-export type CardAction = { id: "answer"; option: string; primary: boolean } | { id: "openPr" | "look" | "fix" | "send"; primary: boolean };
+export type CardAction = { id: "answer"; option: string; primary: boolean } | { id: "openPr" | "look" | "fix" | "send" | "ignore"; primary: boolean };
 
 /** 卡片上的 1–3 个按钮；butler 卡用 Notice 自己的按钮，这里给空。 */
 export function cardActions(item: TurnItem): CardAction[] {
@@ -89,8 +89,14 @@ export function cardActions(item: TurnItem): CardAction[] {
     }
     case "merge": return item.pr?.url ? [{ id: "openPr", primary: true }, look(false)] : [look(true)];
     case "review": return [{ id: "openPr", primary: true }];
-    // 修复 session 开在卡住的 ticket 上（session-service 要它属于这个 feature）：总控卡住时 ticketKey 为 null，不给这个按钮。
-    case "stuck": return item.featureId !== null && item.ticketKey !== null && t.sessionId !== null ? [look(true), { id: "fix", primary: false }] : [look(true)];
+    case "stuck": {
+      if (t.sessionId === null) return [look(true)];
+      // 修复 session 开在卡住的 ticket 上（session-service 要它属于这个 feature）：总控卡住时 ticketKey 为 null，不给这个按钮。
+      const fix: CardAction[] = item.featureId !== null && item.ticketKey !== null ? [{ id: "fix", primary: false }] : [];
+      // 只有「很久没输出」判的卡住可能是误判（比如在跑很长的测试），给一个「忽略」：这一次不再提醒，直到它又动起来再卡住。
+      const ignore: CardAction[] = t.source === "silent" ? [{ id: "ignore", primary: false }] : [];
+      return [look(true), ...fix, ...ignore];
+    }
     case "unattended": return t.canSend && item.ticketKey !== null && item.pr !== null ? [{ id: "send", primary: true }, look(false)] : [look(true)];
     case "butler": return [];
   }

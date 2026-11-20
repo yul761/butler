@@ -97,11 +97,14 @@ describe("cardActions", () => {
     expect(ids(item(merge, { pr }))).toEqual(["openPr*", "look"]);
     expect(ids(item(merge))).toEqual(["look*"]);
     expect(ids(item(review, { ticketKey: null, pr }))).toEqual(["openPr*"]);
-    expect(ids(item(stuck("s"), { featureId: 3 }))).toEqual(["look*", "fix"]);
-    expect(ids(item(stuck("s")))).toEqual(["look*"]);
+    // 「没动静」判的卡住可能是误判（比如在跑很长的测试）：多一个「忽略」；别的来源（session 自己说卡住、blocked 汇报）没有。
+    expect(ids(item(stuck("s"), { featureId: 3 }))).toEqual(["look*", "fix", "ignore"]);
+    expect(ids(item(stuck("s")))).toEqual(["look*", "ignore"]);
     expect(ids(item(stuck(null), { featureId: 3 }))).toEqual(["look*"]);
-    // 总控卡住了（loose 里，ticketKey 为 null）：修复 session 要找 ticket，点了只会 no_session，所以不给按钮。
-    expect(ids(item(stuck("s"), { featureId: 3, ticketKey: null }))).toEqual(["look*"]);
+    // 总控卡住了（loose 里，ticketKey 为 null）：修复 session 要找 ticket，点了只会 no_session，所以不给「修复」；「忽略」照样有。
+    expect(ids(item(stuck("s"), { featureId: 3, ticketKey: null }))).toEqual(["look*", "ignore"]);
+    expect(ids(item({ owner: "you", kind: "stuck", source: "needs_you", detail: "x", sessionId: "s" }, { featureId: 3 }))).toEqual(["look*", "fix"]);
+    expect(ids(item({ owner: "you", kind: "stuck", source: "blocked_report", detail: "x", sessionId: "s" }))).toEqual(["look*"]);
     expect(ids(item(unattended(true), { pr }))).toEqual(["send*", "look"]);
     expect(ids(item(unattended(true)))).toEqual(["look*"]);
     expect(ids(item(unattended(false), { pr }))).toEqual(["look*"]);

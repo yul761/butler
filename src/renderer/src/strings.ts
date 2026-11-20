@@ -364,6 +364,7 @@ const ZH = {
       openPr: "打开 PR",
       look: "去看看",
       fix: "开修复 session",
+      ignore: "没事，忽略",
       send: "送给 agent",
       answered: (text: string) => `已回答：${text}，等 session 停下来后送进去`,
       answerGone: "这个问题已经没了",

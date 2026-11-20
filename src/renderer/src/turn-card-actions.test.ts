@@ -20,6 +20,7 @@ function deps(o: Partial<CardDeps> = {}): CardDeps & { [K in keyof CardDeps]: Re
     turnSendToAgent: vi.fn(async () => ({ ok: true })),
     onOpen: vi.fn(),
     onGo: vi.fn(),
+    dismissActivity: vi.fn(async () => undefined),
     onFix: vi.fn(),
     onChanged: vi.fn(),
     ...o,
@@ -86,5 +87,15 @@ describe("runCardAction", () => {
     await runCardAction({ id: "look", primary: true }, item(stuck), d, S);
     expect(d.onGo).toHaveBeenCalledWith({ page: "ticket", key: "BTL-1", landing: true });
     expect(d.onOpen).not.toHaveBeenCalled();
+  });
+
+  it("ignore: dismisses the stuck session's activity, then refetches", async () => {
+    const d = deps();
+    expect(await runCardAction({ id: "ignore", primary: false }, item(stuck), d, S)).toBeNull();
+    expect(d.dismissActivity).toHaveBeenCalledWith("s1");
+    expect(d.onChanged).toHaveBeenCalled();
+    const none = deps();
+    await runCardAction({ id: "ignore", primary: false }, item({ ...stuck, sessionId: null } as Turn), none, S);
+    expect(none.dismissActivity).not.toHaveBeenCalled();
   });
 });
