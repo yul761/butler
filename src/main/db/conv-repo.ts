@@ -144,6 +144,11 @@ export class ConvRepo {
     return !!this.db.prepare(`SELECT 1 FROM settings WHERE key = 'convFtsOff'`).get();
   }
 
+  /** 在一个事务里跑 fn（可重入：外面已有事务时用 savepoint）。 */
+  transaction<T>(fn: () => T): T {
+    return withTransaction(this.db, fn);
+  }
+
   // ---- 轮 ----
 
   /** INSERT OR IGNORE：同一链根下 sourceKey 已有时返回已有那一轮的 id，不改它。 */

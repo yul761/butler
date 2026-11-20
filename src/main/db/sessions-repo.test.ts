@@ -178,3 +178,27 @@ describe("SessionsRepo.rootOf (workstream L)", () => {
     expect(["a", "b"]).toContain(repo.rootOf("a"));
   });
 });
+
+describe("SessionsRepo.listConvTargets (UI redesign layer 4)", () => {
+  it("picks heads that Butler opened or that belong somewhere, active since the cutoff", () => {
+    const { db, repo, run } = setup();
+    const feature = Number(db.prepare(`INSERT INTO features (name, workspace_dir, created_at) VALUES ('f', '/w', 1)`).run().lastInsertRowid);
+    const epic = Number(db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES ('e', '/e', 1)`).run().lastInsertRowid);
+    for (const k of ["PROJ-1", "PROJ-2", "PROJ-3"]) db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES (?, '/r', 'branch', 'b', 1)`).run(k);
+    const add = (id: string, extra: Partial<Parameters<SessionsRepo["insertIfAbsent"]>[0]> = {}) =>
+      repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 100, lastActivityAt: 100, ...extra });
+    add("butler-origin", { origin: "butler" });
+    add("ticket", { ticketKey: "PROJ-1" });
+    add("feature", { featureId: feature });
+    add("epic", { epicId: epic });
+    add("controller", { butler: true });
+    add("stray");
+    repo.recordHeadless("headless", "/w", 100);
+    add("lesson", { origin: "butler", lessonRunId: run() });
+    add("old-segment", { ticketKey: "PROJ-2" });
+    add("new-segment", { ticketKey: "PROJ-2" });
+    repo.setReplacedBy("old-segment", "new-segment");
+    add("stale", { ticketKey: "PROJ-3", createdAt: 10, lastActivityAt: 10 });
+    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["butler-origin", "controller", "epic", "feature", "new-segment", "ticket"]);
+  });
+});
