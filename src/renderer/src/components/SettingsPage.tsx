@@ -58,6 +58,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
   }, []);
 
   function choose(t: SettingsTabId) {
+    if (t === tab) return; // 再点当前 tab 不动：链接打开的那一组别被收起
     setTab(t);
     setOpenGroup(null);
     saveTab("settings", t);

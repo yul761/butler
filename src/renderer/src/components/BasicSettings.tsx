@@ -41,6 +41,13 @@ export function BasicSettings({ report, onHealth, onRerunWizard }: { report: Hea
           {S.generalFields[k]}
           <input className="mono" placeholder={S.generalPlaceholders[k]} {...textBlur(k)} />
           <p className="muted">{S.generalHelp[k]}</p>
+          {k === "claudePath" && (
+            <dl className="kv">
+              <dt>{S.claudePath}</dt><dd>{report.claude.path ?? <span className="error">{S.notFound}</span>}</dd>
+              <dt>{S.claudeVersion}</dt><dd>{report.claude.version ?? "—"}</dd>
+              {report.claude.missingFlags.length > 0 && (<><dt>{S.missingFlags}</dt><dd className="error">{report.claude.missingFlags.join(" ")}</dd></>)}
+            </dl>
+          )}
           <div className="actions">
             <button onClick={() => void reset(k)}>{S.resetDefault}</button>
           </div>

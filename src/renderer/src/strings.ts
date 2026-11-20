@@ -71,7 +71,7 @@ const ZH = {
     feat: {
       ci_triage: { title: "CI 失败分诊", desc: "CI 挂了先判断是环境抖动还是代码问题，代码问题把日志送回 session。重跑 CI 要另开「对外动作 › 重跑 CI」。" },
       review_comments: { title: "PR 评论转给 session", desc: "有人在 PR 上提意见，分类后转给 session 去改。不对外发任何东西：回复、标 resolved 要另开对外动作。" },
-      stacks: { title: "栈自动 rebase", desc: "底下的 PR 合了，自动把上面的分支 rebase 好。" },
+      stacks: { title: "栈自动 rebase", desc: "底下的 PR 合了，自动把上面的分支 rebase 好。推到 GitHub 要另开「对外动作 › 强推」。" },
       prereview: { title: "开 PR 前预审", desc: "开 PR 前让另一个 agent 先审一遍，算出风险和还差什么。" },
       intake: { title: "自动接活", desc: "从 tracker 或文件里领活、建 ticket。还要在高级里选来源。" },
       lessons_auto: { title: "规矩自动整理", desc: "复盘出来的规矩自动判断收不收、每天归成原则、session 说明里只留核心规矩。" },

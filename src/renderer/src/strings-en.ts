@@ -65,7 +65,7 @@ export const EN: UiStrings = {
     feat: {
       ci_triage: { title: "CI failure triage", desc: "When CI fails, decide whether it is a flaky environment or a code problem, and send code problems back to the session with the log. Rerunning CI needs its own outward action (Rerun CI)." },
       review_comments: { title: "PR comments to the session", desc: "When someone comments on a PR, sort the comments and pass them to the session to fix. It does not post anything outside: replying and resolving need their own outward actions." },
-      stacks: { title: "Stack auto-rebase", desc: "When a lower PR merges, rebase the branches above it." },
+      stacks: { title: "Stack auto-rebase", desc: "When a lower PR merges, rebase the branches above it. Pushing them to GitHub needs its own outward action (Force push)." },
       prereview: { title: "Pre-review before a PR", desc: "Before a PR opens, another agent reviews it and works out the risk and what is still missing." },
       intake: { title: "Automatic intake", desc: "Pick up work from a tracker or a file and create tickets. You also need to choose a source under Advanced." },
       lessons_auto: { title: "Rules tidy themselves", desc: "Rules from retrospectives are admitted automatically, grouped into principles every day, and only the core rules go into session instructions." },

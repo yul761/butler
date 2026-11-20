@@ -78,8 +78,8 @@ import { currentLang } from "../i18n";
 import { meteredIpcResult } from "./result";
 import { memoryHandlers } from "./memory-handlers";
 import { settingsHandlers } from "./settings-handlers";
-import { featurePolicyHandlers } from "./feature-policy-handlers";
-import type { FeaturePolicyState, PolicyFamily } from "../../shared/feature-rows";
+import { featurePolicyHandlers, featurePolicyLayers } from "./feature-policy-handlers";
+import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
@@ -777,24 +777,9 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.settingsReset, settingsIpc.reset);
   handle(IPC.settingsDetectTrackerTools, () => d.detectTrackerTools());
   // 设置 › 功能：只改全局那一层的一个功能开关，同层其他覆盖原样保留。
-  const ownKeys = (keys: { key: string; override: unknown; set?: boolean }[], useSet: boolean): Record<string, unknown> =>
-    Object.fromEntries(keys.filter((k) => (useSet ? k.set === true : k.override !== null)).map((k) => [k.key, k.override]));
   const featureIpc = featurePolicyHandlers({
     read: () => d.featurePolicy(),
-    globalLayer: (family: PolicyFamily) =>
-      family === "loop"
-        ? ownKeys(d.loop.policyView({ kind: "global" }).keys, false)
-        : family === "stacks"
-          ? ownKeys(d.stacks.policyView({ kind: "global" }).keys, true)
-          : ownKeys(d.intake.policyView({ kind: "global" }).keys, true),
-    writeLayer: (family, layer) => {
-      if (family === "loop") {
-        d.loop.policySet({ kind: "global" }, layer as LoopPolicyOverrides);
-        return;
-      }
-      const r = family === "stacks" ? d.stacks.policySet({ kind: "global" }, layer) : d.intake.policySet({ kind: "global" }, layer);
-      if (!r.ok) throw new Error(r.message);
-    },
+    ...featurePolicyLayers(d),
     notify: () => d.notify(),
   });
   handle(IPC.settingsFeaturePolicy, (): FeaturePolicyState => featureIpc.get());
