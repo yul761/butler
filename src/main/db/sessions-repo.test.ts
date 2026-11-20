@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { memDb } from "../test-utils";
 import { SessionsRepo } from "./sessions-repo";
 
@@ -137,6 +137,24 @@ describe("SessionsRepo hibernation (WS-M B)", () => {
     expect(repo.get("c")?.pinned).toBe(true);
     repo.setPinned("c", false);
     expect(repo.get("c")?.pinned).toBe(false);
+  });
+});
+
+describe("SessionsRepo.rootsOf", () => {
+  it("maps a batch of ids to their chain roots; unknown ids map to themselves", () => {
+    const { repo } = setup();
+    for (const [id, at] of [["a", 1], ["b", 2], ["c", 3], ["x", 4]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+    repo.setReplacedBy("a", "b", "clear");
+    repo.setReplacedBy("b", "c", "resume");
+    expect(repo.rootsOf(["c", "b", "x", "nope"])).toEqual(new Map([["c", "a"], ["b", "a"], ["x", "x"], ["nope", "nope"]]));
+    for (const id of ["a", "b", "c", "x"]) expect(repo.rootsOf([id]).get(id)).toBe(repo.rootOf(id));
+  });
+
+  it("returns an empty map for no ids without querying", () => {
+    const { repo, db } = setup();
+    const spy = vi.spyOn(db, "prepare");
+    expect(repo.rootsOf([])).toEqual(new Map());
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

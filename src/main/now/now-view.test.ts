@@ -26,6 +26,7 @@ function session(id: string, over: Partial<SessionView> = {}): SessionView {
     butler: false,
     lessonRunId: null,
     termId: id,
+    rootId: id,
     ...over,
   };
 }

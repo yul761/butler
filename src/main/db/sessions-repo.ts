@@ -429,6 +429,23 @@ export class SessionsRepo {
     return row?.id ?? head.id;
   }
 
+  /** 一次查完一批 id 的链根（视图每次刷新都要算，不能每行一条递归查询）；不认识的 id 映射到它自己。 */
+  rootsOf(ids: readonly string[]): Map<string, string> {
+    const out = new Map<string, string>();
+    if (ids.length === 0) return out;
+    const rows = this.db
+      .prepare(
+        `WITH RECURSIVE chain(start, id, depth) AS (
+           SELECT value, value, 0 FROM json_each(?)
+           UNION SELECT c.start, s.id, c.depth + 1 FROM sessions s JOIN chain c ON s.replaced_by = c.id WHERE c.depth < ${ROOT_MAX_DEPTH}
+         )
+         SELECT start, id FROM chain ORDER BY start, depth DESC, id`,
+      )
+      .all(JSON.stringify(ids)) as { start: string; id: string }[];
+    for (const r of rows) if (!out.has(r.start)) out.set(r.start, r.id);
+    return out;
+  }
+
   head(id: string): Session | null {
     let cur = this.get(id);
     const seen = new Set<string>();

@@ -65,7 +65,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
     open.add(id);
     return { ok: true as const, termId: id };
   };
-  const view = (id: string): SessionView => ({ ...sessions.get(id)!, termId: open.has(id) ? id : null });
+  const view = (id: string): SessionView => ({ ...sessions.get(id)!, termId: open.has(id) ? id : null, rootId: id });
   const rows: (EpicFeatureRow & { epicId: number | null })[] = [
     { id: checkout, epicId: shop, name: "checkout", status: "waiting", archivedAt: null, summaryAt: 5, summary: "x".repeat(2000), blockers: ["等 API"], decisions: [], openQuestions: [] },
     { id: docs, epicId: null, name: "docs", status: "not_started", archivedAt: null, summaryAt: null, summary: null, blockers: [], decisions: [], openQuestions: [] },

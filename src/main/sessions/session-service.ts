@@ -537,7 +537,9 @@ export class SessionService {
   butlerView(): ButlerView {
     const heads = this.openHeads();
     const { sessions, hiddenSessions } = this.split(this.d.sessions.listButler(), heads);
-    const lessonSessions = this.d.sessions.listLessonSessions().map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
+    const lessonRows = this.d.sessions.listLessonSessions();
+    const roots = this.d.sessions.rootsOf(lessonRows.map((s) => s.id));
+    const lessonSessions = lessonRows.map((s) => ({ ...s, termId: heads.get(s.id) ?? null, rootId: roots.get(s.id) ?? s.id }));
     return { workspaceDir: this.d.butlerWorkspace ?? "", sessions, hiddenSessions, lessonSessions };
   }
 
@@ -886,7 +888,9 @@ export class SessionService {
 
   /** session 行加上它的终端；分成显示的和隐藏的（正在运行的终端永远显示，隐藏只对没在跑的 session 起作用）。 */
   private split(rows: Session[], heads: Map<string, string>): { sessions: SessionView[]; hiddenSessions: SessionView[] } {
-    const all = rows.filter((s) => !s.replacedBy).map((s) => ({ ...s, termId: heads.get(s.id) ?? null }));
+    const live = rows.filter((s) => !s.replacedBy);
+    const roots = this.d.sessions.rootsOf(live.map((s) => s.id));
+    const all = live.map((s) => ({ ...s, termId: heads.get(s.id) ?? null, rootId: roots.get(s.id) ?? s.id }));
     return { sessions: all.filter((s) => !s.dismissed || s.termId !== null), hiddenSessions: all.filter((s) => s.dismissed && s.termId === null) };
   }
 

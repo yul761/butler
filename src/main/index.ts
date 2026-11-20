@@ -2942,7 +2942,7 @@ async function bootstrap(): Promise<void> {
         features: sessionService.featureViews(),
         epics: sessionService.epicViews(),
         // 休眠着的 Butler 总控照样算（WS-M B）。
-        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id) } : null))(
+        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
           sessionService.runningButler() ?? hibernatedHeads().find((h) => h.butler && h.ticketKey === null) ?? null,
         ),
         activity: (id) => activityMonitor.get(id),
