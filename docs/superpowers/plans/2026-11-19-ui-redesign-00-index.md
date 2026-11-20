@@ -174,3 +174,4 @@ ticket 号对应：BTL-231 是第 1 层，BTL-232 第 2 层，BTL-233 第 3 层�
   5. `NowNotice` 新增一种 `approval`，表示 session 停在权限确认上。第 2 层的 `Notice.tsx` 和 `turnSentence` 要能显示它，按钮是「去看看」，落到那个 session 的终端。
   6. `turn:send-to-agent` 的 reason 类型收紧成 `TurnSendReason`，由第 1 层定义。
   7. 已知限制：`gh search` 只查默认主机，企业版 GitHub 上请你 review 的 PR 查不到。这条写进发版说明。
+- 同一个 ticket 下有多个 session 各有一条提问时，每一条都列出来，不折在一起。

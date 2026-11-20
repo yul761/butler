@@ -239,6 +239,19 @@ describe("TurnService.board", () => {
     expect(b.counts.you).toBe(2);
   });
 
+  it("two live sessions under one ticket each asked: both first questions are items, each with its own session and askId", () => {
+    const s = new TurnService(fakeDeps({
+      tickets: () => [ticket("BTL-1", { sessions: [sv("s1"), sv("s2")] })],
+      decisions: () => [ask(1, "s1", { ticketKey: "BTL-1" }), ask(2, "s2", { ticketKey: "BTL-1" })],
+    }));
+    for (const f of [null, { ticketKey: "BTL-1" }]) {
+      const b = s.board(f);
+      const asks = b.items.flatMap((i) => (i.turn.kind === "answer" ? [{ id: i.turn.askId, sid: i.turn.sessionId }] : []));
+      expect(asks.sort((a, c) => (a.id ?? 0) - (c.id ?? 0))).toEqual([{ id: 1, sid: "s1" }, { id: 2, sid: "s2" }]);
+      expect(b.counts.you).toBe(2);
+    }
+  });
+
   it("an ask whose session is closed still shows on its ticket", () => {
     const s = new TurnService(fakeDeps({
       tickets: () => [ticket("BTL-1", { sessions: [sv("s1", { termId: null })] })],

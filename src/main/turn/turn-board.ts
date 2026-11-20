@@ -37,7 +37,9 @@ interface TicketCalc {
   pr: BoardPr | null;
   since: number;
   others: number;
-  /** 不带 filter 口径下 owner 为 you 的条数：ticket 那条再加 moreAsks。 */
+  /** 别的 session 的提问：others 里 mostUrgent 只取一条，其余的提问不能折掉，各自出一条提问 item（同 moreAsks）。 */
+  extraAsks: TimedTurn[];
+  /** 不带 filter 口径下 owner 为 you 的条数：ticket 那条再加 moreAsks 和 extraAsks。 */
   youCount: number;
 }
 
@@ -46,14 +48,17 @@ const emptyBar = (): Bar => ({ done: 0, agent: 0, you: 0, external: 0, idle: 0 }
 const live = (o: TurnOwner) => o === "you" || o === "agent" || o === "external";
 const prRef = (p: { repo: string; number: number; title: string; url: string }) => ({ repo: p.repo, number: p.number, title: p.title, url: p.url });
 
+const isAsk = (o: TimedTurn) => o.turn.owner === "you" && o.turn.kind === "answer";
+
 function calcTicket(t: BoardTicket, epicId: number | null): TicketCalc {
   const session = mostUrgent(t.others);
   const r = ticketTurn(t.prs.map((p) => p.turn), session?.turn ?? null);
   // 按引用找来源：PR 的 turn 还是 others 里那条
   const pr = t.prs.find((p) => p.turn === r.turn) ?? null;
   const since = pr ? pr.since : session && session.turn === r.turn ? session.since : 0;
-  const youCount = (r.turn.owner === "you" ? 1 : 0) + t.moreAsks.filter((a) => a.turn.owner === "you").length;
-  return { t, epicId, turn: r.turn, pr, since, others: r.others, youCount };
+  const extraAsks = t.others.filter((o) => o.turn !== r.turn && isAsk(o));
+  const youCount = (r.turn.owner === "you" ? 1 : 0) + t.moreAsks.filter((a) => a.turn.owner === "you").length + extraAsks.length;
+  return { t, epicId, turn: r.turn, pr, since, others: r.others, extraAsks, youCount };
 }
 
 const normFilter = normTurnFilter;
@@ -91,6 +96,7 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
     for (const c of scoped) {
       items.push({ ticketKey: c.t.key, pr: c.pr ? prRef(c.pr) : null, epicId: c.epicId, featureId: c.t.featureId, turn: c.turn, since: c.since, others: c.others, ticketLevel: true });
       for (const a of c.t.moreAsks) items.push(askItem(c, a));
+      for (const a of c.extraAsks) items.push(askItem(c, a));
     }
     for (const l of loose) items.push(looseItem(l));
     for (const r of input.reviews) {
@@ -108,6 +114,8 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
       const s = mostUrgent(c.t.others);
       if (s) items.push({ ticketKey: c.t.key, pr: null, epicId: c.epicId, featureId: c.t.featureId, turn: s.turn, since: s.since, ...own(c, s.turn) });
       for (const a of c.t.moreAsks) items.push(askItem(c, a));
+      // 上面 session 那条已经出了的不重复出
+      for (const a of c.extraAsks) if (a !== s) items.push(askItem(c, a));
     }
     for (const l of loose) items.push(looseItem(l));
   }
@@ -119,6 +127,7 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
   for (const c of scoped) {
     bump(c.turn.owner);
     for (const a of c.t.moreAsks) bump(a.turn.owner);
+    for (const a of c.extraAsks) bump(a.turn.owner);
   }
   for (const l of loose) bump(l.turn.owner);
   if (filter === null) counts.you += input.reviews.length;
