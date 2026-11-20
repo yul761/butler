@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { EpicView, FeatureView, TicketView } from "../../shared/types";
 import { fixLanding, missingTicket, routeGone } from "./route-view";
@@ -46,5 +48,20 @@ describe("missingTicket", () => {
     expect(missingTicket({ page: "ticket", key: "BTL-9", landing: { owner: "you", kind: "merge", risk: null } }, tickets)).toBe("BTL-9");
     expect(missingTicket({ page: "ticket", key: "BTL-1" }, tickets)).toBeNull();
     expect(missingTicket({ page: "home" }, tickets)).toBeNull();
+  });
+});
+
+describe("App wiring: every way into a ticket page checks the ticket is still there", () => {
+  // 页面上点 ticket（「进行中」行、feature 概况的 ticket 行、全部工作的表格、待 review 队列的 chip）都走 openTicket / go：
+  // 刚归档的 ticket 报 S.ticketMissing，不跳到空白页。直接给 setRoute 的就绕过了这个检查。
+  const app = readFileSync(join(__dirname, "App.tsx"), "utf8");
+  const props = [...app.matchAll(/\bon(OpenTicket|Go)(?:=\{|:\s*)([^}\n,]*(?:\([^)]*\)[^}\n,]*)?)/g)].map((m) => `on${m[1]} ${m[2].trim()}`);
+  it("finds the page props it checks", () => {
+    expect(props.filter((p) => p.startsWith("onOpenTicket")).length).toBeGreaterThanOrEqual(4);
+    expect(props.filter((p) => p.startsWith("onGo")).length).toBeGreaterThanOrEqual(4);
+  });
+  it("no onOpenTicket or onGo goes straight to setRoute", () => {
+    expect(props.filter((p) => p.includes("setRoute"))).toEqual([]);
+    for (const p of props) expect(p, p).toMatch(/^onOpenTicket \(key\) => openTicket\(key\)$|^onGo go$/);
   });
 });

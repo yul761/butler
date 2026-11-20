@@ -225,7 +225,7 @@ export function App() {
             {route.page === "home" && (
               <HomePage
                 state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null, nowView?.notices.length ?? 0)}
-                firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onNewEpic: () => setShowNewEpic(true), onGo: setRoute })} />}
+                firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onNewEpic: () => setShowNewEpic(true), onGo: go })} />}
                 ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
                 onFix={openFix} onOpen={openTarget} onGo={go} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
                 onResumeSetup={() => dispatchOnboarding({ type: "rerun" })}
@@ -249,7 +249,7 @@ export function App() {
                 key={currentFeature.id}
                 feature={currentFeature}
                 epics={epics}
-                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onOpenTicket={(key) => openTicket(key)}
                 onTicketCreated={goTicket}
                 focusSession={route.focusSession}
                 landing={route.landing}
@@ -267,7 +267,7 @@ export function App() {
                 epic={currentEpic}
                 features={features.filter((f) => f.epicId === currentEpic.id && f.archivedAt === null)}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}
-                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onOpenTicket={(key) => openTicket(key)}
                 onFeatureCreated={goFeature}
                 focusSession={route.focusSession}
                 onOpenTarget={openTarget}
@@ -290,8 +290,8 @@ export function App() {
                 onNewTicket={() => setShowNew(true)}
                 onNewFeature={() => setShowNewFeature(true)}
                 onNewEpic={() => setShowNewEpic(true)}
-                onGo={setRoute}
-                onOpenTicket={(key) => setRoute({ page: "ticket", key })}
+                onGo={go}
+                onOpenTicket={(key) => openTicket(key)}
               />
             )}
             {route.page === "effect" && <EffectPage />}
