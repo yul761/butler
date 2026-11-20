@@ -306,6 +306,19 @@ describe("TurnService.prTurns", () => {
     expect(of(URL3.toLowerCase())).toEqual(of(URL3));
     expect(of("https://github.com/O/r/pull/9")).toBeNull();
   });
+  it("a PR linked to two tickets gets each ticket's own turn when the ticket is given", () => {
+    const of = new TurnService(failingPr({
+      tickets: () => [ticket("BTL-1", { sessions: [sv("s1")] }), ticket("BTL-2", { sessions: [sv("s2")] })],
+      prs: (key) => [watched({ ticketKey: key })],
+      recipient: (key) => ({ ok: true, sessionId: key === "BTL-1" ? "s1" : "s2", via: "owner" }),
+      activity: (id) => (id === "s2" ? act("edit") : null),
+    })).prTurns();
+    expect(of(URL3, "BTL-1")).toMatchObject({ owner: "you", kind: "unattended" });
+    expect(of(URL3, "BTL-2")).toMatchObject({ owner: "agent", kind: "fixing_ci", sessionId: "s2" });
+    // 不给 ticket（或 ticket 不认识这个 PR）时落回第一个 ticket 的。
+    expect(of(URL3)).toEqual(of(URL3, "BTL-1"));
+    expect(of(URL3, "BTL-9")).toEqual(of(URL3, "BTL-1"));
+  });
   it("a closed PR has no turn", () => {
     const of = new TurnService(failingPr({ prs: () => [watched({ state: "closed" })] })).prTurns();
     expect(of(URL3)).toBeNull();

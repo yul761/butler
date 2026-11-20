@@ -113,12 +113,24 @@ export class TurnService {
 
   /**
    * 每个没关闭的 PR 的 turn，按 PR 链接查（不分大小写）；查不到为 null。
+   * 同一个 PR 挂在几个 ticket 上时 turn 跟 ticket 走（推的人按 ticket 找）：给了 ticketKey 就查那个 ticket 的，
+   * 没给或那个 ticket 不认识这个 PR 时落回第一个 ticket 的。
    * 总控的 list_prs、progress_overview 和 feature 汇总都用它，和看板是同一套算法，不再有第二套「卡在谁手上」。
    */
-  prTurns(): (url: string) => Turn | null {
-    const out = new Map<string, Turn>();
-    for (const t of this.input().tickets) for (const p of t.prs) if (!out.has(p.url.toLowerCase())) out.set(p.url.toLowerCase(), p.turn);
-    return (url) => out.get(url.toLowerCase()) ?? null;
+  prTurns(): (url: string, ticketKey?: string) => Turn | null {
+    const byUrl = new Map<string, Turn>();
+    const byTicket = new Map<string, Turn>();
+    for (const t of this.input().tickets) {
+      for (const p of t.prs) {
+        const u = p.url.toLowerCase();
+        if (!byUrl.has(u)) byUrl.set(u, p.turn);
+        byTicket.set(`${t.key}\n${u}`, p.turn);
+      }
+    }
+    return (url, ticketKey) => {
+      const u = url.toLowerCase();
+      return (ticketKey !== undefined ? byTicket.get(`${ticketKey}\n${u}`) : undefined) ?? byUrl.get(u) ?? null;
+    };
   }
 
   /** 切到首页（turn:home-opened）：补查请你 review 的 PR（离开时、一分钟内查过时由 poller 跳过）。 */

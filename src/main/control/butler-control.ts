@@ -21,7 +21,7 @@ export interface ButlerControlDeps {
   /** Butler 在盯的所有 PR（PrWatcher.statusOf）。 */
   prs: () => WatchedPr[];
   /** 每个 PR 轮到谁，按链接查（TurnService.prTurns，和看板同一套算法）；没有为 null。 */
-  prTurns: () => (url: string) => Turn | null;
+  prTurns: () => (url: string, ticketKey?: string) => Turn | null;
   /** 开着终端的 Butler session 的 head。 */
   openHeads: () => Session[];
   /** 「需要你」的理由；不需要为 null。 */
@@ -273,11 +273,11 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
             prId: p.prId,
             ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
             checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { feature: null, epic: null }),
-            // ws-b：叠放、卡在谁手上要的字段。分支行（还没有 PR）没有。
+            // ws-b：叠放、轮到谁要的字段。分支行（还没有 PR）没有。
             ...(x && p.checkedAt > 0 && {
               title: x.title, headBranch: p.branch || null, baseBranch: x.baseBranch, draft: x.isDraft, author: x.author, labels: x.labels,
               reviewRequests: x.reviewRequests, reviewers: x.reviewers.map((r) => ({ ...r, at: iso(r.at) })), mergeable: x.mergeable, mergeState: x.mergeState,
-              statusChangedAt: iso(x.statusChangedAt), turn: p.url ? turnOf(p.url) : null,
+              statusChangedAt: iso(x.statusChangedAt), turn: p.url ? turnOf(p.url, p.ticketKey) : null,
             }),
             // ws-g：只是读表（还没评估过为 null）。
             ...(b.assessment && p.prId !== null && { risk: a?.risk ?? null, ready: a?.ready ?? null, missing: (a?.missing ?? []).map((m: Readiness["missing"][number]) => m.detail) }),

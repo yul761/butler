@@ -14,7 +14,7 @@ export interface FeatureTicketContext {
   /** Butler 实时读到的 PR（ticket_prs，ws-b）；给了就优先用它，handoff 里提到、没在这里的 PR 照旧列出。 */
   live?: WatchedPr[];
   /** 实时 PR 轮到谁（TurnService.prTurns，和看板同一套算法）；没有为 null。 */
-  turnOf?: (url: string) => Turn | null;
+  turnOf?: (url: string, ticketKey?: string) => Turn | null;
 }
 
 /** 给 claude 看的字段说明，和 src/shared/handoff.ts 的 FeatureHandoffSchema 一一对应。 */
@@ -170,11 +170,11 @@ export function turnLabel(t: Turn): string {
 }
 
 /** 实时 PR 写成"仓库名#号 状态 [draft]，CI x，review y，轮到：谁（为什么）"；合了的不写轮到谁。 */
-function livePrLabel(p: WatchedPr, l: Lang, turnOf: ((url: string) => Turn | null) | undefined): string {
+function livePrLabel(p: WatchedPr, l: Lang, turnOf: ((url: string, ticketKey?: string) => Turn | null) | undefined): string {
   const f = FILL[l];
   const d = p.detail;
   const repo = d?.slug.split("/").pop() ?? (p.url ? /github\.com\/[^/]+\/([^/]+)\/pull\//.exec(p.url)?.[1] : null) ?? "";
-  const t = p.url && turnOf ? turnOf(p.url) : null;
+  const t = p.url && turnOf ? turnOf(p.url, p.ticketKey) : null;
   const who = t && t.owner !== "done" ? turnLabel(t) : null;
   return `${repo}#${p.number} ${p.state}${d?.isDraft ? f.draft : ""}${f.ci(p.ci)}${p.review ? f.review(p.review) : ""}${who ? f.turn(who) : ""}`;
 }

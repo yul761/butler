@@ -29,7 +29,7 @@ export interface ProgressInput {
   /** 开工过：有过 session，或者 PR 进度里记过第一个 commit。 */
   started: (ticketKey: string) => boolean;
   /** 这个 PR 轮到谁（TurnService.prTurns）；关了的、看板上没有的为 null。 */
-  turnOf: (url: string) => Turn | null;
+  turnOf: (url: string, ticketKey: string) => Turn | null;
 }
 
 /** 汇总的第一句：截到第一个句末标点（英文句号要跟空白或结尾），最多这么多字。 */
@@ -49,7 +49,7 @@ const repoName = (path: string): string => path.split(/[\\/]/).filter(Boolean).a
 /** slug 从 PR url 里取（github.com/o/r/pull/1 → o/r）；拿不到为 null。 */
 const slugOfUrl = (url: string): string | null => /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(url)?.[1] ?? null;
 
-function toProgressPr(p: WatchedPr, turnOf: (url: string) => Turn | null): ProgressPr | null {
+function toProgressPr(p: WatchedPr, turnOf: (url: string, ticketKey: string) => Turn | null): ProgressPr | null {
   if (p.prId === null || p.number === null || p.url === null || p.state === null) return null;
   const d = p.detail;
   const slug = d?.slug ?? slugOfUrl(p.url);
@@ -58,11 +58,11 @@ function toProgressPr(p: WatchedPr, turnOf: (url: string) => Turn | null): Progr
     reviewRequests: d?.reviewRequests ?? [], mergeable: d?.mergeable ?? null, mergeState: d?.mergeState ?? null,
     ticketKey: p.ticketKey, prId: p.prId, repo: p.repoPath !== null ? repoName(p.repoPath) : (slug ?? "?"), slug, number: p.number, url: p.url,
     title: d?.title ?? null, headBranch: p.branch || null, baseBranch: d?.baseBranch ?? null, labels: d?.labels ?? [],
-    turn: turnOf(p.url), checkedAt: p.checkedAt, statusChangedAt: d?.statusChangedAt ?? null, readError: p.readError,
+    turn: turnOf(p.url, p.ticketKey), checkedAt: p.checkedAt, statusChangedAt: d?.statusChangedAt ?? null, readError: p.readError,
   };
 }
 
-/** 让 ticket 落进"阻塞"的 PR 情况：CI 挂了、有人要求修改、有冲突。draft 也一样看（turn 对 draft 先给 draft，会盖住冲突和要求修改）。 */
+/** 让 ticket 落进"阻塞"的 PR 情况：CI 挂了、有人要求修改、有冲突。draft 也一样看（turn 对 draft 只报 draft，不报冲突和要求修改，所以这里不看 turn）。 */
 const blocking = (p: ProgressPr): boolean => p.ci === "failing" || prChangesRequested(p) || p.mergeable === "conflicting" || p.mergeState === "dirty";
 
 /** 汇总条的格子：按顺序判断（定义见设计文档第 4 节）。prs 是这个 ticket 读到过的 PR。 */
@@ -136,7 +136,7 @@ export function buildStacks(prs: ProgressPr[]): ProgressStackRepo[] {
   return out;
 }
 
-/** 进度页的全部数据。filter 里给了 feature 就只看这个 feature；给了 epic 就只看这个 epic 下的 feature；都没给看全部（含不属于 feature 的 ticket）。 */
+/** progress_overview 的全部数据。filter 里给了 feature 就只看这个 feature；给了 epic 就只看这个 epic 下的 feature；都没给看全部（含不属于 feature 的 ticket）。 */
 export function buildProgress(input: ProgressInput, filter: ProgressFilter = {}): ProgressView {
   const epicId = filter.epicId ?? null;
   const featureId = filter.featureId ?? null;
@@ -240,7 +240,7 @@ const prRef = (p: ProgressPr): string => `${p.slug ?? p.repo}#${p.number}`;
 
 /**
  * progress_overview 的结果：同一份 ProgressView，但时间写成 ISO 字符串，featureId / epicId 旁边带上名字，
- * 每个 PR 的完整字段只在 prs 里出现一次，卡在谁、叠放树、分组里用"仓库#号"引用（省得同一个 PR 重复好几遍）。
+ * 每个 PR 的完整字段只在 prs 里出现一次，stuck、叠放树、分组里用"仓库#号"引用（省得同一个 PR 重复好几遍）。
  */
 export function progressOverview(v: ProgressView): object {
   const featureName = new Map(v.features.map((f) => [f.id, f.name]));

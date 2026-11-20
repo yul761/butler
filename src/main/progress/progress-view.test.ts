@@ -92,6 +92,14 @@ describe("buildProgress", () => {
     expect(v.groups.byLabel.flatMap((g) => g.prs).find((p) => p.number === 2)?.turn).toBeNull();
   });
 
+  it("asks for each PR's turn with its own ticket, and leaves out an open PR the board has no turn for", () => {
+    const asked: [string, string][] = [];
+    const v = buildProgress({ ...base, turnOf: (url, key) => (asked.push([url, key]), url.endsWith("/3") ? null : (turns.get(url) ?? null)) });
+    expect(asked).toContainEqual(["https://github.com/o/app/pull/3", "B"]);
+    expect(asked).toContainEqual(["https://github.com/o/app/pull/1", "A"]);
+    expect(v.stuck.map((s) => s.pr?.number ?? null)).toEqual([1, null]);
+  });
+
   it("builds a stack from base/head branches and keeps singles apart", () => {
     const v = buildProgress(base);
     expect(v.stacks).toHaveLength(1);

@@ -44,7 +44,7 @@ export interface FeatureRunnerDeps extends HeadlessExecDeps {
   /** Butler 实时读到的这个 ticket 的 PR（PrWatcher.statusOf，ws-b）：汇总的 prompt 用它，PR 状态变化也算新活动。 */
   livePrs?: (ticketKey: string) => WatchedPr[];
   /** 实时 PR 轮到谁（TurnService.prTurns：一次算好，按链接查），写进汇总 prompt；不给就不写。 */
-  prTurns?: () => (url: string) => Turn | null;
+  prTurns?: () => (url: string, ticketKey?: string) => Turn | null;
 }
 
 type Exec = { ok: true; value: unknown; rawText: string } | { ok: false; outcome: FeatureHandoffOutcome };
@@ -76,7 +76,7 @@ export class FeatureSummaryRunner {
    * 最新有效汇总之后有没有已经捕获到的新活动：总控 session 的 transcript 晚于汇总，
    * 或者下面有 ticket 在汇总覆盖到的时间之后捕获了新的 handoff（不算 refresh 和 degraded），
    * 或者下面有 ticket 的 PR 状态（state、review、CI、draft、合并状态、reviewer）在汇总读 PR 之后变过（ws-b）。
-   * 进度页、list_features 的"过期"也用它。
+   * progress_overview、list_features 的"过期"也用它。
    */
   hasNewActivity(id: number): boolean {
     const last = this.d.featureHandoffs.latestValid(id);

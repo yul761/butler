@@ -1345,7 +1345,7 @@ async function bootstrap(): Promise<void> {
     transcriptMtime,
     // prWatcher、turnService 在下面才建：只在生成汇总、判断过期时（启动之后）才调。
     livePrs: (key): WatchedPr[] => prWatcher.statusOf(key),
-    prTurns: (): ((url: string) => Turn | null) => turnService.prTurns(),
+    prTurns: (): ((url: string, ticketKey?: string) => Turn | null) => turnService.prTurns(),
     now: Date.now,
     newRunId: randomUUID,
     projectMcp,
