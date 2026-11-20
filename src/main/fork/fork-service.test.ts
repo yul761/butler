@@ -827,6 +827,24 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     expect(s.repo.get(forkId)!.costSeenTotal).toBe(0.03);
   });
 
+  it("中间一轮 CLI 没报累计、按价格表估了：下一轮不再取差（差值里有估过的那一轮），按份额拆", async () => {
+    const registry: RegistryModel[] = [{ name: "opus", tier: "high", enabled: true, account: "a", priceIn: 1, priceOut: 1, note: "" }];
+    const s = setup({ head: { waitingForInput: false }, registry });
+    const est = (10 + 2 * 20 + 0.1 * 1000 + 30) / 1e6;
+    s.queue.push(ok({ costUsd: 0.01 }), ok({ costUsd: null }), ok({ costUsd: 0.06, usageRaw, modelUsage: cumulative(3) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.01 + est, 12);
+    expect(s.repo.get(forkId)!.costSeenTotal).toBeNull();
+    s.svc.ask("root-1", forkId, "q3");
+    await s.svc.idle();
+    // 第三轮占累计的 1/3：0.02，不是 0.06 − 0.01 = 0.05。
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.01 + est + 0.02, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ costSeenTotal: 0.06, costPartial: false });
+  });
+
   it("中间一轮没有结果：累计不变、费用不全；下一轮按上次见到的累计取差", async () => {
     const s = setup({ head: { waitingForInput: false } });
     s.queue.push(ok({ costUsd: 0.01 }), { ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null }, ok({ costUsd: 0.05 }));

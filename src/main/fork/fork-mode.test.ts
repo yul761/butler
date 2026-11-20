@@ -148,8 +148,16 @@ describe("turnCost", () => {
   it("a resumed fork with no total seen yet falls back to the estimate", () => {
     expect(turnCost(run(5.02), "resumed", null, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: 5.02 });
   });
-  it("without a CLI total: estimate (or unknown) and keep the last total seen", () => {
-    expect(turnCost(run(null), "resumed", 0.04, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: 0.04 });
+  // 估过的这一轮还在 CLI 的累计里：留着上次的累计，下一轮的差值会把它再算一遍。所以忘掉上次的累计，下一轮按份额拆。
+  it("without a CLI total but estimated: forget the last total seen so the next turn doesn't count this one again", () => {
+    expect(turnCost(run(null), "resumed", 0.04, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: null });
+  });
+  it("without a CLI total and nothing charged: keep the last total seen (the next difference covers this turn)", () => {
     expect(turnCost({ costUsd: null, usage: null, model: "opus" }, "resumed", 0.04, registry)).toEqual({ usd: null, partial: true, cli: null, seenTotal: 0.04 });
+  });
+  // fresh、forked 开的是新 session：之前见过的累计是别的 session 的（比如第一轮失败后丢掉的那个），不能留给下一轮去减。
+  it("a new session (fresh or forked) without a CLI total: the total seen before was another session's, so forget it", () => {
+    expect(turnCost({ costUsd: null, usage: null, model: "opus" }, "forked", 5.02, registry)).toMatchObject({ seenTotal: null });
+    expect(turnCost(run(null), "fresh", 0.01, registry)).toMatchObject({ usd: 22.5, seenTotal: null });
   });
 });

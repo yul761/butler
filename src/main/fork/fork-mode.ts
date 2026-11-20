@@ -67,7 +67,8 @@ const TOTAL_EPS = 1e-9;
  * 定不下模型而且累计里有好几个模型时按全部模型的权重拆，标 partial），没有再按价格表估。
  * resumed 取差之前先看 CLI 有没有读回费用状态：total 比上次见到的小，或者累计里只有这一轮（cumulativeIsThisRun），说明它从 0 记起了，
  * 差值是错的（会悄悄记成 0 或少算），改按份额拆（拆不出再估），标 partial。
- * cli：从 CLI 金额算出的这一轮（精确、差值或份额；估出来的为 null）；seenTotal：这一轮之后该记下的累计，CLI 没给金额就不变。
+ * cli：从 CLI 金额算出的这一轮（精确、差值或份额；估出来的为 null）；seenTotal：这一轮之后该记下的累计，null 是不知道（下一轮按份额拆）。
+ * CLI 没给金额时：续的这一轮什么都没记就不变，估了价、或者是新 session，就是 null。
  * failed：这一轮的结果是出错的。出错的结果不把见过的累计往回拉（启动就出错时 CLI 可能报 0，记下来下一轮的差值就成了整个累计）；往上走的照记。
  */
 export function turnCost(
@@ -89,7 +90,12 @@ function turnCostOf(
 ): TurnCost {
   const total = r.costUsd;
   const estimate = () => costOf({ ...r, costUsd: null }, registry);
-  if (total === null) return { ...estimate(), cli: null, seenTotal };
+  if (total === null) {
+    // 没有累计可记。估了价的话，这一轮仍在 CLI 的累计里：留着上次的，下一轮的差值会把它再算一遍，所以忘掉（下一轮按份额拆）；
+    // 什么都没记就留着，下一轮的差值正好补上这一轮。fresh、forked 是新 session，之前见过的是别的 session 的（比如第一轮失败后丢掉的那个），也忘掉。
+    const est = estimate();
+    return { ...est, cli: null, seenTotal: start === "resumed" && est.usd === null ? seenTotal : null };
+  }
   if (start === "fresh") return { usd: total, partial: false, cli: total, seenTotal: total };
   const share = runCostFromCumulative(total, r.usageRaw, r.modelUsage, r.model);
   if (start === "resumed" && seenTotal !== null) {

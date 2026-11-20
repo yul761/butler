@@ -136,7 +136,7 @@ describe("ForkDiscussionsRepo", () => {
     expect(row.summarySentAt).toBe(60);
   });
 
-  it("finish records the CLI's cumulative total only when given; leaving it out keeps the last one", () => {
+  it("finish records the CLI's cumulative total only when given; leaving it out keeps the last one, null forgets it", () => {
     const { repo } = setup();
     const { id } = repo.create(base);
     expect(repo.get(id)!.costSeenTotal).toBeNull();
@@ -146,6 +146,9 @@ describe("ForkDiscussionsRepo", () => {
     expect(repo.get(id)!.costSeenTotal).toBe(0.01);
     repo.finish(id, { at: 3, addCost: 0.02, partial: false, seenTotal: 0.03 });
     expect(repo.get(id)).toMatchObject({ costSeenTotal: 0.03, costUsd: 0.03 });
+    // null 是忘掉它（下一轮按份额拆，不取差）。
+    repo.finish(id, { at: 4, addCost: 0.01, partial: false, seenTotal: null });
+    expect(repo.get(id)).toMatchObject({ costSeenTotal: null, costUsd: 0.04 });
   });
 
   it("failRunning only touches running rows and counts them", () => {

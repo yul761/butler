@@ -80,7 +80,7 @@ export interface ForkFinish {
   /** 这一轮的费用；算不出来传 null。 */
   addCost: number | null;
   partial: boolean;
-  /** 这一轮之后 CLI 报的累计 total_cost_usd；不传（或 null）就留着上一次的。 */
+  /** 这一轮之后 CLI 报的累计 total_cost_usd：不传就留着上一次的；null 是忘掉它（下一轮不能再拿它取差）。 */
   seenTotal?: number | null;
   error?: { code: ForkErrorCode; resetAt: number | null } | null;
 }
@@ -127,12 +127,12 @@ export class ForkDiscussionsRepo {
            fork_session_id = COALESCE(?, fork_session_id),
            cost_usd = CASE WHEN ? IS NULL THEN cost_usd ELSE COALESCE(cost_usd, 0) + ? END,
            cost_partial = MAX(cost_partial, ?),
-           cost_seen_total = COALESCE(?, cost_seen_total),
+           cost_seen_total = CASE WHEN ? THEN ? ELSE cost_seen_total END,
            error_code = ?, error_reset_at = ?
          WHERE id = ?`,
       )
       .run(
-        o.error ? "failed" : "idle", o.at, o.forkSessionId ?? null, o.addCost, o.addCost, o.partial ? 1 : 0, o.seenTotal ?? null,
+        o.error ? "failed" : "idle", o.at, o.forkSessionId ?? null, o.addCost, o.addCost, o.partial ? 1 : 0, o.seenTotal !== undefined ? 1 : 0, o.seenTotal ?? null,
         o.error?.code ?? null, o.error?.resetAt ?? null, id,
       );
   }

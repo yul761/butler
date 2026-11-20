@@ -14,7 +14,7 @@ import type { UsageReport } from "../handoff/headless-exec";
 import { MAIN_STRINGS, M } from "../strings";
 import { continueArgs, devForkArgs, forkSettings, strictForkArgs, type DevLaunch } from "./fork-args";
 import type { FullForkPlan } from "./fork-cache";
-import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS, chooseMode, fullBlock, runStart, turnCost } from "./fork-mode";
+import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS, chooseMode, fullBlock, runStart, turnCost, type TurnCost } from "./fork-mode";
 
 /** 用量和限额里的 job 名（成本统计、效果页按它汇总）。 */
 export const FORK_JOB = "fork discussion";
@@ -412,7 +412,9 @@ export class ForkService {
     }
     // 失败的那一轮也照记已经算出的费用（记答案出错时也不丢）；什么都没算出来就当一部分不知道。
     // CLI 的 total_cost_usd 是累计的：按这一轮怎么起的、上次见到的累计算出这一轮自己的（turnCost）。
-    let cost: { usd: number | null; partial: boolean; cli: number | null; seenTotal: number | null } = { usd: null, partial: true, cli: null, seenTotal: null };
+    // 还没算出来就出错：费用不全，见过的累计不动（seenTotal 为 null 会把它忘掉）。
+    const unknown: TurnCost = { usd: null, partial: true, cli: null, seenTotal: null };
+    let cost = unknown;
     try {
       const at = this.d.now();
       const r = out.result;
@@ -450,7 +452,7 @@ export class ForkService {
     } catch (e) {
       this.d.log(`fork ${row.id}: recording the answer failed`, e);
       try {
-        this.d.repo.finish(row.id, { at: this.d.now(), addCost: cost.usd, partial: cost.partial, seenTotal: cost.seenTotal, error: failure("bad_output") });
+        this.d.repo.finish(row.id, { at: this.d.now(), addCost: cost.usd, partial: cost.partial, ...(cost !== unknown && { seenTotal: cost.seenTotal }), error: failure("bad_output") });
         this.hook("changed", () => this.d.changed(row.rootSessionId));
       } catch (e2) {
         this.d.log(`fork ${row.id}: marking it failed failed too`, e2);
