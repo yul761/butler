@@ -811,6 +811,22 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     expect(s.deps.onUsage).not.toHaveBeenCalled();
   });
 
+  // CLI 启动就出错时结果里的累计可能是 0（CLI 的说明："crash/startup-error results may carry zeroed values"）。
+  it("中间一轮出错、结果里的累计是 0：见过的累计不往回拉，下一轮照样只记它自己的差", async () => {
+    const s = setup({ head: { waitingForInput: false } });
+    const zeroed: HeadlessOutcome = { ok: false, reason: "claude_error", message: "boom", limit: null, stderr: "", result: result({ isError: true, costUsd: 0, usage: null }) };
+    s.queue.push(ok({ costUsd: 0.01 }), zeroed, ok({ costUsd: 0.03 }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ costSeenTotal: 0.01, costPartial: true });
+    s.svc.ask("root-1", forkId, "q3");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.03, 10);
+    expect(s.repo.get(forkId)!.costSeenTotal).toBe(0.03);
+  });
+
   it("中间一轮没有结果：累计不变、费用不全；下一轮按上次见到的累计取差", async () => {
     const s = setup({ head: { waitingForInput: false } });
     s.queue.push(ok({ costUsd: 0.01 }), { ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null }, ok({ costUsd: 0.05 }));

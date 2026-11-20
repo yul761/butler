@@ -52,6 +52,11 @@ export function runStart(args: readonly string[]): RunStart {
   return args.includes("--fork-session") ? "forked" : "resumed";
 }
 
+/** turnCost 要的那部分结果。 */
+type TurnRun = { costUsd: number | null; usage: UsageCounts | null; model: string | null; usageRaw?: unknown; modelUsage?: unknown };
+/** 一轮的花费（见 turnCost）。 */
+export type TurnCost = { usd: number | null; partial: boolean; cli: number | null; seenTotal: number | null };
+
 /** total 比上次见到的小多少算浮点误差。 */
 const TOTAL_EPS = 1e-9;
 
@@ -63,13 +68,25 @@ const TOTAL_EPS = 1e-9;
  * resumed 取差之前先看 CLI 有没有读回费用状态：total 比上次见到的小，或者累计里只有这一轮（cumulativeIsThisRun），说明它从 0 记起了，
  * 差值是错的（会悄悄记成 0 或少算），改按份额拆（拆不出再估），标 partial。
  * cli：从 CLI 金额算出的这一轮（精确、差值或份额；估出来的为 null）；seenTotal：这一轮之后该记下的累计，CLI 没给金额就不变。
+ * failed：这一轮的结果是出错的。出错的结果不把见过的累计往回拉（启动就出错时 CLI 可能报 0，记下来下一轮的差值就成了整个累计）；往上走的照记。
  */
 export function turnCost(
-  r: { costUsd: number | null; usage: UsageCounts | null; model: string | null; usageRaw?: unknown; modelUsage?: unknown },
+  r: TurnRun,
   start: RunStart,
   seenTotal: number | null,
   registry: readonly RegistryModel[],
-): { usd: number | null; partial: boolean; cli: number | null; seenTotal: number | null } {
+  failed = false,
+): TurnCost {
+  const c = turnCostOf(r, start, seenTotal, registry);
+  return failed && seenTotal !== null && c.seenTotal !== null && c.seenTotal < seenTotal ? { ...c, seenTotal } : c;
+}
+
+function turnCostOf(
+  r: TurnRun,
+  start: RunStart,
+  seenTotal: number | null,
+  registry: readonly RegistryModel[],
+): TurnCost {
   const total = r.costUsd;
   const estimate = () => costOf({ ...r, costUsd: null }, registry);
   if (total === null) return { ...estimate(), cli: null, seenTotal };

@@ -417,7 +417,7 @@ export class ForkService {
       const at = this.d.now();
       const r = out.result;
       const seen = this.d.repo.get(row.id)?.costSeenTotal ?? null;
-      cost = r ? turnCost(r, runStart(o.args), seen, this.d.registry()) : { ...noResultCost(out), cli: null, seenTotal: seen };
+      cost = r ? turnCost(r, runStart(o.args), seen, this.d.registry(), !out.ok) : { ...noResultCost(out), cli: null, seenTotal: seen };
       const sid = r?.sessionId ?? null;
       // 返回的就是 --resume 的那个开发 session：CLI 没分叉出来，这一轮写进了开发 session 自己的对话。不记成 headless、不存成分叉 id
       // （否则接着问会直接续上正在用的开发 session）。跑成功的这一轮记 not_forked；本来就失败的保留真正的原因（限额的 resetAt 也在）。

@@ -138,6 +138,10 @@ describe("turnCost", () => {
     expect(r.usd).toBeCloseTo(1.04 / 50, 12);
     expect(r).toMatchObject({ partial: true, seenTotal: 1.04 });
   });
+  it("a failed run never pulls the total seen back (a start-up error may report 0); one that went up still moves it", () => {
+    expect(turnCost({ costUsd: 0, usage: null, model: null }, "resumed", 5.02, registry, true)).toEqual({ usd: null, partial: true, cli: null, seenTotal: 5.02 });
+    expect(turnCost(run(5.03), "resumed", 5.02, registry, true)).toMatchObject({ partial: false, seenTotal: 5.03 });
+  });
   it("modelUsage with nothing in it falls back to the estimate", () => {
     expect(turnCost({ ...run(5), usageRaw: raw, modelUsage: {} }, "forked", null, registry)).toEqual({ usd: 22.5, partial: false, cli: null, seenTotal: 5 });
   });
