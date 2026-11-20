@@ -55,10 +55,16 @@ export function onCollapsedChange(listener: (id: string, on: boolean) => void): 
   return () => void collapsedListeners.delete(listener);
 }
 
-export const isCollapsed = (id: string) => collapsedIds().includes(id);
-export function setCollapsed(id: string, on: boolean): void {
-  const rest = collapsedIds().filter((x) => x !== id);
-  const next = on ? [...rest, id] : rest;
+/** 默认收起的区块（设置 › 高级的分组）反过来记：列表里存 `open:<id>` 表示用户展开过。 */
+const openEntry = (id: string) => `open:${id}`;
+
+export const isCollapsed = (id: string, defaultCollapsed = false): boolean =>
+  defaultCollapsed ? !collapsedIds().includes(openEntry(id)) : collapsedIds().includes(id);
+export function setCollapsed(id: string, on: boolean, defaultCollapsed = false): void {
+  const entry = defaultCollapsed ? openEntry(id) : id;
+  const present = defaultCollapsed ? !on : on;
+  const rest = collapsedIds().filter((x) => x !== entry);
+  const next = present ? [...rest, entry] : rest;
   set(COLLAPSED_KEY, next.length > 0 ? JSON.stringify(next) : null);
   for (const listener of collapsedListeners) listener(id, on);
 }

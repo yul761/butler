@@ -4,7 +4,8 @@ import { api } from "../api";
 import { S } from "../strings";
 import { PrivacySettings } from "./PrivacySettings";
 import { ExternalActionSettings } from "./ExternalActionSettings";
-import { GeneralSettings } from "./GeneralSettings";
+import { BasicSettings } from "./BasicSettings";
+import { SessionPerfSettings } from "./SessionPerfSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
 import { LessonsSettings } from "./LessonsSettings";
 import { ClaudeAvailability } from "./ClaudeAvailability";
@@ -144,7 +145,8 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
         <button className="primary" disabled={busy || report.hooks === "settings_invalid"} onClick={() => void run(api.installHooks)}>{S.installHooks}</button>
         <button disabled={busy || report.hooks === "missing"} onClick={() => void run(api.uninstallHooks)}>{S.uninstallHooks}</button>
       </div>
-      <GeneralSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} />
+      <BasicSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} />
+      <SessionPerfSettings />
       <ScheduleSettings />
       <PrivacySettings />
       <LessonsSettings />
