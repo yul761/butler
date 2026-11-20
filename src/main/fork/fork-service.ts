@@ -14,7 +14,7 @@ import type { UsageReport } from "../handoff/headless-exec";
 import { MAIN_STRINGS, M } from "../strings";
 import { continueArgs, devForkArgs, forkSettings, strictForkArgs, type DevLaunch } from "./fork-args";
 import type { FullForkPlan } from "./fork-cache";
-import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS, chooseMode, costOf, fullBlock } from "./fork-mode";
+import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS, chooseMode, fullBlock, runStart, turnCost } from "./fork-mode";
 
 /** 用量和限额里的 job 名（成本统计、效果页按它汇总）。 */
 export const FORK_JOB = "fork discussion";
@@ -411,20 +411,25 @@ export class ForkService {
       return { ok: false };
     }
     // 失败的那一轮也照记已经算出的费用（记答案出错时也不丢）；什么都没算出来就当一部分不知道。
-    let cost: { usd: number | null; partial: boolean } = { usd: null, partial: true };
+    // CLI 的 total_cost_usd 是累计的：按这一轮怎么起的、上次见到的累计算出这一轮自己的（turnCost）。
+    let cost: { usd: number | null; partial: boolean; cli: number | null; seenTotal: number | null } = { usd: null, partial: true, cli: null, seenTotal: null };
     try {
       const at = this.d.now();
       const r = out.result;
-      cost = r ? costOf(r, this.d.registry()) : noResultCost(out);
+      const seen = this.d.repo.get(row.id)?.costSeenTotal ?? null;
+      cost = r ? turnCost(r, runStart(o.args), seen, this.d.registry()) : { ...noResultCost(out), cli: null, seenTotal: seen };
       const sid = r?.sessionId ?? null;
       // 返回的就是 --resume 的那个开发 session：CLI 没分叉出来，这一轮写进了开发 session 自己的对话。不记成 headless、不存成分叉 id
       // （否则接着问会直接续上正在用的开发 session）。跑成功的这一轮记 not_forked；本来就失败的保留真正的原因（限额的 resetAt 也在）。
       // 它的用量也在开发 session 的 transcript 里、由用量扫描记在开发 session 名下：不再记一行 headless 用量（否则记两遍），费用标成不全。
       const unforked = sid !== null && sid === forkedFrom(o.args);
-      if (unforked) cost = { ...cost, partial: true };
+      // 那个累计是开发 session 的，也不记成这个分叉见过的。
+      if (unforked) cost = { ...cost, partial: true, seenTotal: seen };
       if (r?.usage && !unforked) {
         const usage = r.usage;
-        this.hook("onUsage", () => this.d.onUsage({ runId: o.runId, label: FORK_JOB, at, model: r.model, usage, costUsd: r.costUsd, ticketKey: row.ticketKey }));
+        // 用量行记这一轮自己的金额；估出来的不带（null），由用量统计按价格表估。
+        const costUsd = cost.cli;
+        this.hook("onUsage", () => this.d.onUsage({ runId: o.runId, label: FORK_JOB, at, model: r.model, usage, costUsd, ticketKey: row.ticketKey }));
       }
       if (!out.ok && out.limit) {
         const hit = out.limit;
@@ -439,13 +444,13 @@ export class ForkService {
       }
       const error = !out.ok ? failure(out.reason, out.limit?.resetsAt ?? null) : unforked ? failure("not_forked") : text ? null : failure("no_answer");
       if (!out.ok) this.d.log(`fork ${row.id}: ${out.reason}: ${out.message.slice(0, 500)}`);
-      this.d.repo.finish(row.id, { at, ...(out.ok && sid && !unforked ? { forkSessionId: sid } : {}), addCost: cost.usd, partial: cost.partial, error });
+      this.d.repo.finish(row.id, { at, ...(out.ok && sid && !unforked ? { forkSessionId: sid } : {}), addCost: cost.usd, partial: cost.partial, seenTotal: cost.seenTotal, error });
       this.hook("changed", () => this.d.changed(row.rootSessionId));
       return text ? { ok: true, text } : { ok: false };
     } catch (e) {
       this.d.log(`fork ${row.id}: recording the answer failed`, e);
       try {
-        this.d.repo.finish(row.id, { at: this.d.now(), addCost: cost.usd, partial: cost.partial, error: failure("bad_output") });
+        this.d.repo.finish(row.id, { at: this.d.now(), addCost: cost.usd, partial: cost.partial, seenTotal: cost.seenTotal, error: failure("bad_output") });
         this.hook("changed", () => this.d.changed(row.rootSessionId));
       } catch (e2) {
         this.d.log(`fork ${row.id}: marking it failed failed too`, e2);

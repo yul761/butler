@@ -228,7 +228,7 @@ describe("ForkService 新分叉（完整）", () => {
     const { forkId } = s.svc.ask("root-1", null, "第一问");
     await s.svc.idle();
     const first = s.repo.get(forkId)!.launchArgs;
-    s.queue.push(ok({ resultText: "第二答" }));
+    s.queue.push(ok({ resultText: "第二答", costUsd: 0.08 }));
     expect(s.svc.ask("head-2", forkId, "第二问")).toEqual({ forkId });
     await s.svc.idle();
     expect(s.calls[1].args).toEqual(continueArgs(first, "fork-1"));
@@ -237,7 +237,9 @@ describe("ForkService 新分叉（完整）", () => {
     expect(s.msgs.filter((m) => m.forkId === forkId).map((m) => [m.role, m.text])).toEqual([
       ["user", "第一问"], ["assistant", "因为要兼容旧数据。"], ["user", "第二问"], ["assistant", "第二答"],
     ]);
-    expect(s.repo.get(forkId)).toMatchObject({ status: "idle", costUsd: 0.1 });
+    // 第一轮的 total 带着开发 session 以前的花费、价格表又没有这个模型：不知道；第二轮按累计取差（0.08 − 0.05）。
+    expect(s.repo.get(forkId)).toMatchObject({ status: "idle", costPartial: true, costSeenTotal: 0.08 });
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.03, 10);
     expect(s.svc.list("root-1")).toHaveLength(1);
   });
 });
@@ -403,7 +405,8 @@ describe("ForkService 连点", () => {
 
 describe("ForkService 失败", () => {
   it("撞限额：failed + resetAt，报给 availability，费用照记，问题还在，没有回答", async () => {
-    const s = setup();
+    // 精简（全新 session）：CLI 的 total 就是这一轮的。
+    const s = setup({ head: { waitingForInput: false } });
     const limit = { kind: "rate_limit" as const, resetsAt: 123, message: "limit" };
     s.queue.push({ ok: false, reason: "rate_limited", message: "limit", limit, stderr: "", result: result({ costUsd: 0.01, isError: true, resultText: "limit" }) });
     const { forkId } = s.svc.ask("root-1", null, "q");
@@ -460,7 +463,7 @@ describe("ForkService 失败", () => {
   });
 
   it("没有结果的一轮：超时之类可能花了钱，记成 partial；起不来、被限额挡住的不算", async () => {
-    const s = setup();
+    const s = setup({ head: { waitingForInput: false } });
     const { forkId } = s.svc.ask("root-1", null, "q");
     await s.svc.idle();
     s.queue.push({ ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null });
@@ -530,7 +533,7 @@ describe("ForkService 失败", () => {
   });
 
   it("记回答出错：已经算出的费用照记，行标 bad_output", async () => {
-    const s = setup();
+    const s = setup({ head: { waitingForInput: false } });
     s.deps.conv.append.mockImplementationOnce((m) => ({ ...m, id: 1 })).mockImplementationOnce(() => {
       throw new Error("disk");
     });
@@ -553,7 +556,7 @@ describe("ForkService 失败", () => {
   });
 
   it("跑完但回答是空的：no_answer，不写 assistant 消息", async () => {
-    const s = setup();
+    const s = setup({ head: { waitingForInput: false } });
     s.queue.push(ok({ resultText: "  " }));
     const { forkId } = s.svc.ask("root-1", null, "q");
     await s.svc.idle();
@@ -734,6 +737,68 @@ describe("ForkService 费用", () => {
     const row = s.repo.get(forkId)!;
     expect(row.costPartial).toBe(false);
     expect(row.costUsd).toBeGreaterThan(0);
+  });
+});
+
+describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
+  it("精简分叉接着问两轮（累计 0.01 → 0.03 → 0.04）：分叉费用 0.04，用量行逐轮 0.01、0.02、0.01", async () => {
+    const s = setup({ head: { waitingForInput: false } });
+    s.queue.push(ok({ costUsd: 0.01 }), ok({ costUsd: 0.03 }), ok({ costUsd: 0.04 }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.mode).toBe("light");
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    s.svc.ask("root-1", forkId, "q3");
+    await s.svc.idle();
+    const row = s.repo.get(forkId)!;
+    expect(row.costUsd).toBeCloseTo(0.04, 10);
+    expect(row).toMatchObject({ costPartial: false, costSeenTotal: 0.04 });
+    const perRun = s.deps.onUsage.mock.calls.map(([u]) => u.costUsd as number);
+    expect(perRun).toHaveLength(3);
+    [0.01, 0.02, 0.01].forEach((v, i) => expect(perRun[i]).toBeCloseTo(v, 10));
+  });
+
+  it("完整分叉第一轮：total 带着开发 session 以前的全部花费（5.00），按 usage 估；接着问取差", async () => {
+    const registry: RegistryModel[] = [{ name: "opus", tier: "high", enabled: true, account: "a", priceIn: 1, priceOut: 1, note: "" }];
+    const s = setup({ registry });
+    // 10 输入 + 20×2 写缓存 1h + 1000×0.1 读缓存 + 30 输出 = 180 token，按 1 美元每百万。
+    const est = (10 + 2 * 20 + 0.1 * 1000 + 30) / 1e6;
+    s.queue.push(ok({ costUsd: 5 }), ok({ costUsd: 5.02 }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.mode).toBe("full");
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(est, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costSeenTotal: 5 });
+    // 估的那一轮用量行不带金额（由用量统计按价格表估），绝不写成 5.00。
+    expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeNull();
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(est + 0.02, 10);
+    expect(s.deps.onUsage.mock.calls[1][0].costUsd).toBeCloseTo(0.02, 10);
+  });
+
+  it("中间一轮没有结果：累计不变、费用不全；下一轮按上次见到的累计取差", async () => {
+    const s = setup({ head: { waitingForInput: false } });
+    s.queue.push(ok({ costUsd: 0.01 }), { ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null }, ok({ costUsd: 0.05 }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ costSeenTotal: 0.01, costPartial: true });
+    s.svc.ask("root-1", forkId, "q3");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.05, 10);
+    expect(s.repo.get(forkId)!.costSeenTotal).toBe(0.05);
+  });
+
+  it("要结论那一轮也按累计取差", async () => {
+    const s = setup({ head: { waitingForInput: false } });
+    s.queue.push(ok({ costUsd: 0.01 }), ok({ costUsd: 0.015, resultText: "结论" }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(await s.svc.conclusion(forkId)).toEqual({ ok: true, text: "结论" });
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.015, 10);
   });
 });
 

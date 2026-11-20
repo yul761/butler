@@ -32,7 +32,7 @@ export function fullBlock(i: { transcriptExists: boolean; devIdle: boolean }): "
   return null;
 }
 
-/** 一轮的花费：CLI 给了 total_cost_usd 用它；否则按价格表估；都没有 → { usd: null, partial: true }。 */
+/** 按 CLI 给的金额，否则按价格表估；都没有 → { usd: null, partial: true }。金额是不是这一轮的由 turnCost 判断。 */
 export function costOf(
   r: { costUsd: number | null; usage: UsageCounts | null; model: string | null },
   registry: readonly RegistryModel[],
@@ -41,4 +41,29 @@ export function costOf(
   if (!r.usage) return { usd: null, partial: true };
   const est = usdOf({ ...r.usage, sessionId: null, at: 0, model: r.model, task: null, source: "headless", costUsd: null }, registry);
   return est.partial ? { usd: null, partial: true } : { usd: est.usd, partial: false };
+}
+
+/** 一轮怎么起的：fresh 没带 --resume（全新 session）；forked 带 --fork-session（从别的 session 分出来）；resumed 续分叉自己的 session。 */
+export type RunStart = "fresh" | "forked" | "resumed";
+
+export function runStart(args: readonly string[]): RunStart {
+  if (!args.includes("--resume")) return "fresh";
+  return args.includes("--fork-session") ? "forked" : "resumed";
+}
+
+/**
+ * 一轮的花费。CLI 的 total_cost_usd 是被续的那个 session 的累计（--fork-session 时还带着被分叉 session 以前的全部花费），usage 才是这一轮的：
+ * fresh 的 total 就是这一轮；forked 的基数不知道，按 usage 估；resumed 知道上次见到的累计就取差（不小于 0），不知道也按 usage 估。
+ * cli：从 CLI 金额算出的这一轮（估出来的为 null）；seenTotal：这一轮之后该记下的累计，CLI 没给金额就不变。
+ */
+export function turnCost(
+  r: { costUsd: number | null; usage: UsageCounts | null; model: string | null },
+  start: RunStart,
+  seenTotal: number | null,
+  registry: readonly RegistryModel[],
+): { usd: number | null; partial: boolean; cli: number | null; seenTotal: number | null } {
+  const total = r.costUsd;
+  const cli = total === null ? null : start === "fresh" ? total : start === "resumed" && seenTotal !== null ? Math.max(0, total - seenTotal) : null;
+  if (cli !== null) return { usd: cli, partial: false, cli, seenTotal: total };
+  return { ...costOf({ ...r, costUsd: null }, registry), cli: null, seenTotal: total ?? seenTotal };
 }

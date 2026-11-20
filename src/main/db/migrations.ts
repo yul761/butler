@@ -1407,4 +1407,9 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX fork_discussions_root ON fork_discussions(root_session_id, started_at);
   `,
+  // UI 重做第 5 层：CLI 上次报的 total_cost_usd。续 session 时它是那个 session 的累计（--fork-session 时还带着被分叉 session 以前的花费），
+  // 这一轮的费用按它取差。
+  `
+  ALTER TABLE fork_discussions ADD COLUMN cost_seen_total REAL;
+  `,
 ];

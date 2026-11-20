@@ -18,7 +18,19 @@ describe("fork_discussions 表", () => {
     expect(cols).toEqual([
       "id", "root_session_id", "fork_session_id", "mode", "cost_usd", "cost_partial", "started_at", "last_at", "summary_sent_at",
       "ticket_key", "feature_id", "cwd", "launch_args", "status", "error_code", "error_reset_at", "conclusion", "conclusion_at", "reask_of",
+      "cost_seen_total",
     ]);
+  });
+
+  it("adds cost_seen_total to an existing fork_discussions table without touching its rows", () => {
+    const n = MIGRATIONS.findIndex((m) => m.includes("ADD COLUMN cost_seen_total"));
+    expect(n).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes("CREATE TABLE fork_discussions")));
+    const db = new DatabaseSync(":memory:");
+    for (let i = 0; i < n; i++) db.exec(MIGRATIONS[i]);
+    db.exec(`PRAGMA user_version = ${n}`);
+    db.prepare("INSERT INTO fork_discussions (root_session_id, mode, cost_usd, started_at, last_at, cwd, launch_args) VALUES ('r', 'light', 0.5, 1, 1, '/w', '[]')").run();
+    migrate(db);
+    expect(new ForkDiscussionsRepo(db).get(1)).toMatchObject({ costUsd: 0.5, costSeenTotal: null });
   });
 
   it("upgrades an old database without losing data", () => {
@@ -122,6 +134,18 @@ describe("ForkDiscussionsRepo", () => {
     expect(row.conclusion).toBe("do X");
     expect(row.conclusionAt).toBe(50);
     expect(row.summarySentAt).toBe(60);
+  });
+
+  it("finish records the CLI's cumulative total only when given; leaving it out keeps the last one", () => {
+    const { repo } = setup();
+    const { id } = repo.create(base);
+    expect(repo.get(id)!.costSeenTotal).toBeNull();
+    repo.finish(id, { at: 1, addCost: 0.01, partial: false, seenTotal: 0.01 });
+    expect(repo.get(id)!.costSeenTotal).toBe(0.01);
+    repo.finish(id, { at: 2, addCost: null, partial: true });
+    expect(repo.get(id)!.costSeenTotal).toBe(0.01);
+    repo.finish(id, { at: 3, addCost: 0.02, partial: false, seenTotal: 0.03 });
+    expect(repo.get(id)).toMatchObject({ costSeenTotal: 0.03, costUsd: 0.03 });
   });
 
   it("failRunning only touches running rows and counts them", () => {

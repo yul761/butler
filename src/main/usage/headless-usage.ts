@@ -3,7 +3,7 @@ import { jobOf, type UsageReport } from "../handoff/headless-exec";
 
 /**
  * 一次 headless 运行（handoff、feature 汇总、卡住判断、分叉讨论）的用量行。
- * 走路由的（有 task）带任务、档位、降级来源；costUsd 只要给了就写（分叉讨论不走路由，也要记 CLI 报的金额）。
+ * 走路由的（有 task）带任务、档位、降级来源；costUsd 只要给了就写（分叉讨论不走路由，也要记金额：它传的是这一轮自己的，不是 CLI 的累计 total）。
  */
 export function headlessUsageRow({ runId, label, at, model, usage, task, requestedTier, fallbackFrom, costUsd, ticketKey }: UsageReport): UsageRow {
   return {
