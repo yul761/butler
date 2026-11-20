@@ -142,6 +142,20 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     expect(openOf("Butler 对话页为什么是空的？")).toBe("user");
     expect(openOf("Butler is slow, why?")).toBe("user");
     expect(openOf("【回顾】这周做了什么？")).toBe("user");
+    // PR #60 re-review I2 / M1：只像开头、后面的固定段对不上的，是用户的话。
+    expect(openOf("Butler 对 CI 的判断对吗？")).toBe("user");
+    expect(openOf("Butler pre-review of what exactly?")).toBe("user");
+    expect(openOf("【回复】一下 amy 的评论")).toBe("user");
+    expect(openOf("[Reply] to amy")).toBe("user");
+    expect(openOf("ticket BTL-1 为什么还没开工？")).toBe("user");
+    expect(openOf("Ticket BTL-1 is blocked, why?")).toBe("user");
+  });
+
+  it("intake asking the coordinator to clarify a ticket is silent (PR #60 re-review M2)", () => {
+    setLang(lang);
+    const m = M();
+    expect(openOf(m.intakeClarify("BTL-1 (https://x/BTL-1)", JSON.stringify("加个按钮"), "- 放在哪？", false))).toBe("silent");
+    expect(openOf(m.intakeClarify("BTL-1", JSON.stringify("Add a button"), "- where?", true))).toBe("silent");
   });
 
   it("plain speech is user", () => {

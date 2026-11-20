@@ -141,6 +141,8 @@ export class ConvIngester {
       }
       if (this.stopped) return;
       // 终端还开着的不结束：一次工具调用可以跑很久，中间一句话都没有（PR #60 review 5）。关掉以后下一次 sweep 再结束。
+      // 取舍：最后一轮没有 end_turn（比如按 Esc 打断后就放着）时，终端开多久这一轮就挂多久；开了超过 CONV_JUDGE_MAX_AGE_MS
+      // 的，关掉后规则判不了就直接记 no / old，不问模型。
       const open = new Set(this.d.openHeads());
       this.d.repo.endStale(this.d.now() - CONV_STALE_TURN_MS, [...open]);
       // 没开着的 session 不会再交错写入，uuid → 轮的映射不用留在内存里（14 天的补读会碰到上百段）。

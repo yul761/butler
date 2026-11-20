@@ -21,7 +21,8 @@ import { MAIN_STRINGS } from "../strings";
  *  6. relay（存成 user 消息，但这一轮不判问答）：以 inboxAnswersIntro 开头，Butler 转给 agent 的用户回答。
  *  7. silent（不存，开一轮 qa=no；agent 的话照存）：其他斜杠命令（含 <command-name>）；Butler：/Butler: 开头的通知；
  *     换新的恢复提示（refreshResume）、转来的汇报（inboxReportsIntro）、每日巡检（butlerPatrolMessage），中英各取前 16 个字符；
- *     总控发来的消息、别的 session 的回复、花费上限后的「接着做」、预审结果：取整段固定开头（见 SILENT_HEADS）。
+ *     总控发来的消息、花费上限后的「接着做」取整段固定开头（SILENT_HEADS）；别的 session 的回复、预审结果、进件缺信息时
+ *     让总控去问，开头和占位符之间的固定段都要对上（SILENT_SHAPES）。
  *  8. 其余都是 user。
  *  9. assistant：只取 text 块（不要 thinking），用 \n\n 连起来，放在第一个 text 块的位置；每个 tool_use 一个 tool entry；
  *     stop = stop_reason === "end_turn"，只挂在这一行的最后一个 entry 上。
@@ -77,21 +78,43 @@ const isSingleRelay = (t: string): boolean => RELAY_SINGLE.some(({ pre, mid }) =
 /** 模板里第一个占位符之前的那段（占位符用 \u0000 代入）。 */
 const before0 = (t: string): string => t.split("\u0000")[0];
 /**
- * Butler 往终端里打的其它固定开头（「Butler：」开头的通知另由 BUTLER_NOTICE 认）：总控发来的消息、别的 session 的回复、
- * 每日巡检、花费上限后的「接着做」、预审结果。都取整段固定开头，免得用户自己说「Butler 对话页……」被当成通知。
+ * 模板（占位符代入 \u0000、\u0001）第一行的固定段：文本要以第一段开头，后面各段按顺序出现才算。
+ * 只认开头太容易误伤用户自己的话（「Butler 对 CI 的判断对吗？」「【回复】一下 amy 的评论」）。
  */
-const PREREVIEW_HEADS = (["zh", "en"] as const).flatMap((lang) =>
-  (["error", "clean", "violations"] as const).map((verdict) => before0(deliveryText({ shortSha: "\u0000", verdict, violations: [], gaps: [], error: null, lang }))),
-);
+type Shape = string[];
+const shapeOf = (template: string): Shape => template.split("\n")[0].split("\u0000").flatMap((p) => p.split("\u0001"));
+const fits = (shape: Shape, text: string): boolean => {
+  if (!text.startsWith(shape[0])) return false;
+  let at = shape[0].length;
+  for (const piece of shape.slice(1)) {
+    if (!piece) continue;
+    const i = text.indexOf(piece, at);
+    if (i < 0) return false;
+    at = i + piece.length;
+  }
+  return true;
+};
+const shapes = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string): Shape[] => Object.values(MAIN_STRINGS).map((s) => shapeOf(pick(s)));
+/**
+ * Butler 往终端里打的其它固定格式（「Butler：」开头的通知另由 BUTLER_NOTICE 认）：别的 session 的回复、预审结果、
+ * 进件缺信息时让总控去问。开头加上占位符之间的固定段一起认。
+ */
+const SILENT_SHAPES: Shape[] = [
+  ...shapes((s) => s.butlerReplyLine("\u0000", ["\u0001"], "")),
+  ...shapes((s) => s.intakeClarify("\u0000", "\u0001", "", false)),
+  ...shapes((s) => s.intakeClarify("\u0000", "\u0001", "", true)),
+  ...(["zh", "en"] as const).flatMap((lang) =>
+    (["error", "clean", "violations"] as const).map((verdict) => shapeOf(deliveryText({ shortSha: "\u0000", verdict, violations: [], gaps: [], error: "\u0001", lang }))),
+  ),
+];
+/** 总控发来的消息、每日巡检、花费上限后的「接着做」：固定开头本身就够长。 */
 const SILENT_HEADS = [
   ...heads((s) => s.refreshResume("ticket", "X-1", null), 16),
   ...heads((s) => s.inboxReportsIntro, 16),
   ...heads((s) => s.butlerMessagePrefix, Number.MAX_SAFE_INTEGER),
-  ...heads((s) => before0(s.butlerReplyLine("\u0000", [], "")), Number.MAX_SAFE_INTEGER),
   ...heads((s) => s.butlerPatrolMessage, 16),
   ...heads((s) => before0(s.cost.continueAfterDowngrade("\u0000")), Number.MAX_SAFE_INTEGER),
   ...heads((s) => before0(s.cost.continueAfterRaise("\u0000")), Number.MAX_SAFE_INTEGER),
-  ...PREREVIEW_HEADS,
 ];
 
 /** 去掉提醒和 IDE 上下文块，再 trim。 */
@@ -113,7 +136,9 @@ export function userOpenOf(content: unknown, cleaned: string): UserOpen | "noise
   if (!cleaned || NOISE_HEAD.test(cleaned)) return "noise";
   if (isHandoffInvocation(content) || HANDOFF_HEADS.some((h) => cleaned.startsWith(h))) return "handoff";
   if (RELAY_HEADS.some((h) => cleaned.startsWith(h)) || isSingleRelay(cleaned)) return "relay";
-  if (COMMAND_NAME.test(cleaned) || BUTLER_NOTICE.test(cleaned) || SILENT_HEADS.some((h) => cleaned.startsWith(h))) return "silent";
+  if (COMMAND_NAME.test(cleaned) || BUTLER_NOTICE.test(cleaned) || SILENT_HEADS.some((h) => cleaned.startsWith(h)) || SILENT_SHAPES.some((sh) => fits(sh, cleaned))) {
+    return "silent";
+  }
   return "user";
 }
 

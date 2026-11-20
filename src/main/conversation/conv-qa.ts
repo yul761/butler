@@ -46,10 +46,13 @@ export function ruleQa(t: { asked: boolean; mutated: boolean; otherTools: boolea
 }
 
 /**
- * true / false：模型的结论；"paused"：一时判不了（花费熔断、限流、超时……），这一轮留着以后再判（太旧了调用方记 no / old）；
- * null：模型的答案不能用（bad_output、校验没过），调用方记 no / judge_failed。
+ * true / false：模型的结论；"paused"：一时判不了（LATER 里的几种），这一轮留着以后再判（太旧了调用方记 no / old）；
+ * null：其余失败和模型的答案不能用（bad_output、校验没过），调用方记 no / judge_failed。
  */
 export type ConvQaVerdict = boolean | "paused" | null;
+
+/** 一时的失败：花费熔断、限流、超时、还没装 claude、退出时中断。 */
+const LATER: ReadonlySet<string> = new Set(["cost_paused", "rate_limited", "timeout", "claude_missing", "aborted"]);
 
 const AnswerSchema = z.object({ qa: z.boolean() });
 const QA_JSON_SCHEMA = toCliJsonSchema(AnswerSchema);
@@ -101,8 +104,8 @@ export async function judgeConvQa(d: HeadlessExecDeps, turn: { question: string;
     cwd,
     ticketKey,
   });
-  // 只有模型给的答案不能用才算判不了；其余失败（熔断、限流、超时、没装 claude、退出时中断……）都是一时的，留到以后再判。
-  if (!r.ok) return r.reason === "bad_output" ? null : "paused";
+  // 白名单：只有这几种是一时的，留到以后再判。claude_error、exit_nonzero 这类对同一个输入多半还会重现，再判就是每次都付钱，记 judge_failed。
+  if (!r.ok) return LATER.has(r.reason) ? "paused" : null;
   const v = validate(AnswerSchema, r.value);
   return v.ok ? v.value.qa : null;
 }

@@ -65,10 +65,17 @@ describe("judgeConvQa", () => {
     expect(await judgeConvQa(deps({ ok: false, reason: "bad_output", message: "x", result: null, limit: null, stderr: "" }), { question: "q", answer: "a" }, "/r")).toBeNull();
   });
 
-  it.each(["timeout", "rate_limited", "model_unavailable", "aborted", "spawn_failed", "exit_nonzero", "claude_error"] as const)(
+  it.each(["timeout", "rate_limited", "aborted"] as const)(
     "a passing failure (%s) leaves the turn for later instead of giving up (PR #60 review 3)",
     async (reason) => {
       expect(await judgeConvQa(deps({ ok: false, reason, message: "x", result: null, limit: null, stderr: "" }), { question: "q", answer: "a" }, "/r")).toBe("paused");
+    },
+  );
+
+  it.each(["claude_error", "exit_nonzero", "model_unavailable", "spawn_failed", "bad_output"] as const)(
+    "a failure that would come back on the same input (%s) gives up instead of paying again (PR #60 re-review I1)",
+    async (reason) => {
+      expect(await judgeConvQa(deps({ ok: false, reason, message: "x", result: null, limit: null, stderr: "" }), { question: "q", answer: "a" }, "/r")).toBeNull();
     },
   );
 
