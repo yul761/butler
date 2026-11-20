@@ -233,6 +233,12 @@ describe("runningRows", () => {
     expect(new Set(rows.map((r) => r.key)).size).toBe(3);
   });
 
+  it("says when the ticket has other PRs too (spec §5.1)", () => {
+    const i = it0({ owner: "external", kind: "awaiting_review", names: ["amy"] }, { others: 2 });
+    expect(runningRows([i], S, 2000)[0].sentence).toBe(`${turnSentence(i.turn, i, S)} · ${S.lay.morePrs(2)}`);
+    expect(runningRows([{ ...i, others: 0 }], S, 2000)[0].sentence).toBe(turnSentence(i.turn, i, S));
+  });
+
   it("names a waiting merge queue as others", () => {
     expect(runningRows([it0({ owner: "external", kind: "merge_queue", names: [] })], S, 2000)[0].who).toBe(S.hm.whoExternal);
   });

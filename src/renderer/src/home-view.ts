@@ -220,7 +220,7 @@ export function ticketNowText(items: TurnItem[], scope: ScopeTurnRow | null, tic
 
 export interface RunningRow { key: string; ticketKey: string | null; owner: "agent" | "external"; who: string; sentence: string; age: string }
 
-/** 「进行中」：agent 和外部在推进的项，等得久的在前。 */
+/** 「进行中」：agent 和外部在推进的项，等得久的在前。ticket 还有别的 PR 时那句话后面加「另有 N 个 PR」（spec §5.1）。 */
 export function runningRows(items: TurnItem[], S: UiStrings, now: number): RunningRow[] {
   const rows: { since: number; row: RunningRow }[] = [];
   for (const i of items) {
@@ -230,7 +230,7 @@ export function runningRows(items: TurnItem[], S: UiStrings, now: number): Runni
     const pr = i.pr ? `${i.pr.repo}#${i.pr.number}` : "";
     rows.push({ since: i.since, row: {
       key: `${i.ticketKey ?? ""}|${pr}|${t.kind}`, ticketKey: i.ticketKey, owner: t.owner, who,
-      sentence: turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
+      sentence: i.others > 0 ? `${turnSentence(t, i, S)} · ${S.lay.morePrs(i.others)}` : turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
     } });
   }
   return rows.sort((a, b) => a.since - b.since).map((r) => r.row);
