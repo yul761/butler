@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { F1, F2, T1, T2, T3 } from "./__fixtures__/cli-cost";
-import { cumulativeWeight, runCostFromCumulative, runWeight } from "./run-cost";
+import { cumulativeWeight, runCostFromCumulative, runModel, runWeight } from "./run-cost";
 
 // 实测的 t2 的 usage 去掉 cache_creation 分档（CLI 不知道这些写入活多久的那种回复）
 const T2_USAGE = { input_tokens: 2, cache_read_input_tokens: 15039, cache_creation_input_tokens: 10649, output_tokens: 3 };
@@ -69,5 +69,31 @@ describe("runCostFromCumulative", () => {
     expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, undefined)).toBeNull();
     expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, {})).toBeNull();
     expect(runCostFromCumulative(T2.total_cost_usd, T2.usage, { m: { inputTokens: 0 } })).toBeNull();
+  });
+});
+
+describe("runModel", () => {
+  const u = { input_tokens: 2, cache_creation_input_tokens: 63, cache_read_input_tokens: 25701, output_tokens: 3 };
+  const big = { inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 100_000, cacheCreationInputTokens: 100 };
+  it("the only model is this run's (live f1)", () => {
+    expect(runModel(F1.modelUsage, F1.usage, null)).toBe("claude-haiku-5-5");
+  });
+  it("only one model's running totals can hold this run's usage → that one, whatever the hint says", () => {
+    expect(runModel({ small: { inputTokens: 2, outputTokens: 3, cacheReadInputTokens: 25700, cacheCreationInputTokens: 63 }, "claude-opus-5-5": big }, u, "haiku")).toBe("claude-opus-5-5");
+  });
+  it("several can: the hint picks one by full id, by alias or with a [1m] suffix; none or two match → null", () => {
+    const mu = { "claude-haiku-5-5": big, "claude-opus-5-5": big };
+    expect(runModel(mu, u, "claude-opus-5-5")).toBe("claude-opus-5-5");
+    expect(runModel(mu, u, "opus")).toBe("claude-opus-5-5");
+    expect(runModel(mu, u, "OPUS[1m]")).toBe("claude-opus-5-5");
+    expect(runModel(mu, u, "sonnet")).toBeNull();
+    expect(runModel(mu, u, null)).toBeNull();
+    expect(runModel({ "claude-opus-5": big, "claude-opus-5-5": big }, u, "opus")).toBeNull();
+  });
+  it("no usage to compare: one model or the hint; nothing → null", () => {
+    expect(runModel({ "claude-opus-5-5": {} }, null, null)).toBe("claude-opus-5-5");
+    expect(runModel({ "claude-haiku-5-5": {}, "claude-opus-5-5": {} }, null, "opus")).toBe("claude-opus-5-5");
+    expect(runModel({}, u, "opus")).toBeNull();
+    expect(runModel(null, u, "opus")).toBeNull();
   });
 });

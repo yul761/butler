@@ -50,6 +50,39 @@ export function cumulativeWeight(modelUsage: unknown): number | null {
   return sum;
 }
 
+/** modelUsage 某个模型的写缓存总数：cacheCreationInputTokens 和分档之和里大的那个。 */
+const writeTotal = (m: Record<string, unknown>): number =>
+  Math.max(num(m.cacheCreationInputTokens), num(m.cacheCreationEphemeral1hInputTokens) + num(m.cacheCreationEphemeral5mInputTokens));
+
+/** 这个模型的累计装得下这一轮的 usage（每一类 token 都不比这一轮少）。这一轮的主模型一定装得下：累计里有这一轮。 */
+const holds = (m: Record<string, unknown>, u: Record<string, unknown>): boolean =>
+  num(m.inputTokens) >= num(u.input_tokens) && num(m.outputTokens) >= num(u.output_tokens) &&
+  num(m.cacheReadInputTokens) >= num(u.cache_read_input_tokens) && writeTotal(m) >= num(u.cache_creation_input_tokens);
+
+const bare = (s: string): string => s.toLowerCase().replace(/\[[^\]]*\]$/, "");
+
+/** 启动参数里的模型名（全名、带 [1m] 的、或 opus 这样的别名）是不是 modelUsage 的这个键。 */
+function sameModel(hint: string, key: string): boolean {
+  const h = bare(hint);
+  const k = bare(key);
+  if (h === k || k.startsWith(`${h}-`)) return true;
+  return /^[a-z]+$/.test(h) && (k.startsWith(`${h}-`) || k.includes(`-${h}-`) || k.endsWith(`-${h}`));
+}
+
+/**
+ * 这一轮的主模型在 modelUsage 里的键。结果里没有直接写这一轮用的是哪个模型，只能推：
+ * 累计装得下这一轮 usage 的模型只有一个，就是它（主模型一定装得下）；有好几个时用 hint（这一轮的 --model）在它们里面挑，正好对上一个才算。
+ * usage 不是对象时所有模型都算装得下。定不下来 → null，不猜（续 session 时第一个键是那个 session 最早用的模型）。
+ */
+export function runModel(modelUsage: unknown, runUsage: unknown, hint: string | null): string | null {
+  if (!isObj(modelUsage)) return null;
+  const keys = Object.keys(modelUsage).filter((k) => isObj(modelUsage[k]));
+  const fits = isObj(runUsage) ? keys.filter((k) => holds(modelUsage[k] as Record<string, unknown>, runUsage)) : keys;
+  if (fits.length === 1) return fits[0];
+  const named = hint ? fits.filter((k) => sameModel(hint, k)) : [];
+  return named.length === 1 ? named[0] : null;
+}
+
 /** 这一轮的权重比累计还大多少算浮点误差。 */
 const OVER = 1e-9;
 
