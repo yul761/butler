@@ -43,6 +43,8 @@ export interface ForkDeps {
   send: (anyId: string, text: string) => Promise<DevSendResult>;
   /** 写进记忆（MemoryService.rememberText）。 */
   remember: (scope: string, text: string) => Promise<Exclude<RememberResult, "busy" | "no_conclusion">>;
+  /** 记忆功能整体开着（关着时 remember 直接 disabled，不为它花一轮要结论）。 */
+  memoryEnabled: () => boolean;
   /** 推 fork:changed。 */
   changed: (rootSessionId: string) => void;
   /** FULL_FORK。 */
@@ -204,11 +206,22 @@ export class ForkService {
     try {
       const row = this.d.repo.get(forkId);
       if (!row) return { ok: false, reason: "not_found" };
-      const c = await this.conclusion(forkId);
+      let c: Awaited<ReturnType<ForkService["conclusion"]>>;
+      try {
+        c = await this.conclusion(forkId);
+      } catch (e) {
+        this.d.log(`fork ${forkId}: getting the conclusion threw`, e);
+        return { ok: false, reason: "no_conclusion" };
+      }
       if (!c.ok) return { ok: false, reason: c.reason };
       const r = await this.d.send(row.rootSessionId, M().fork.conclusionForDev(c.text));
       if (r.ok) {
-        this.d.repo.markSent(forkId, r.at);
+        // 文字已经贴进去了：记不下发送时间也要返回成功，不然用户再点一次会发两遍。
+        try {
+          this.d.repo.markSent(forkId, r.at);
+        } catch (e) {
+          this.d.log(`fork ${forkId}: markSent failed`, e);
+        }
         this.hook("changed", () => this.d.changed(row.rootSessionId));
       }
       return r;
@@ -220,6 +233,7 @@ export class ForkService {
   /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有就不记（disabled）。 */
   async remember(forkId: number): Promise<RememberResult> {
     if (this.remembering.has(forkId)) return "busy";
+    if (!this.d.memoryEnabled()) return "disabled";
     this.remembering.add(forkId);
     try {
       const row = this.d.repo.get(forkId);

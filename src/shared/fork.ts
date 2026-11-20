@@ -37,6 +37,7 @@ export class ForkError extends Error {
 }
 
 /** 发给开发 session 被挡下的原因：DeliveryBlock 的取值加上 refreshing、投递结果和本层自己的几种。 */
+/** refreshing 留着给以后：现在真正的 DeliveryGuard 把换新中报成 busy。 */
 export type DevSendBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused"
   | "refreshing" | "exited" | "timeout" | "blocked" | "in_flight" | "fork_busy" | "no_conclusion" | "not_found";
 export type DevSendResult = { ok: true; at: number } | { ok: false; reason: DevSendBlock };

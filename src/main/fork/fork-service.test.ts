@@ -84,6 +84,7 @@ function setup(o: { plan?: FullForkPlan; launch?: boolean; lastTurnAgo?: number 
     changed: vi.fn(),
     send: vi.fn<ForkDeps["send"]>(async () => ({ ok: true, at: 5 })),
     remember: vi.fn<ForkDeps["remember"]>(async () => "written"),
+    memoryEnabled: vi.fn<ForkDeps["memoryEnabled"]>(() => true),
     plan: o.plan ?? PLAN,
     now,
     newRunId: () => `run-${++runN}`,
@@ -725,10 +726,18 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     const s = setup();
     const forkId = await withFork(s);
     s.queue.push(ok({ resultText: "结论：改 A。" }));
-    s.deps.send.mockResolvedValueOnce({ ok: false, reason: "draft" });
+    // 要结论那一轮自己会推 changed；只看递之后有没有再推。
+    let changedAtSend = -1;
+    s.deps.send.mockImplementationOnce(async () => {
+      changedAtSend = s.deps.changed.mock.calls.length;
+      return { ok: false, reason: "draft" };
+    });
+    const markSent = vi.spyOn(s.repo, "markSent");
     expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "draft" });
     expect(s.repo.get(forkId)!.summarySentAt).toBeNull();
     expect(s.repo.get(forkId)!.conclusion).toBe("结论：改 A。");
+    expect(s.deps.changed.mock.calls.length).toBe(changedAtSend);
+    expect(markSent).not.toHaveBeenCalled();
     const runs = s.deps.run.mock.calls.length;
     expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
     expect(s.deps.run).toHaveBeenCalledTimes(runs);
@@ -798,11 +807,54 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     expect(n.deps.remember).not.toHaveBeenCalled();
   });
 
-  it("remember：没有结论 no_conclusion；分叉在跑 fork_busy 也算没有结论", async () => {
+  it("remember：要结论失败：no_conclusion，不写记忆", async () => {
     const s = setup();
     const forkId = await withFork(s);
     s.queue.push({ ok: false, reason: "exit_nonzero", message: "", limit: null, stderr: "", result: null });
     expect(await s.svc.remember(forkId)).toBe("no_conclusion");
     expect(s.deps.remember).not.toHaveBeenCalled();
+  });
+
+  it("remember：分叉在跑 busy；不认识的分叉 failed", async () => {
+    const s = setup();
+    s.queue.push("hold");
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    expect(await s.svc.remember(forkId)).toBe("busy");
+    expect(await s.svc.remember(999)).toBe("failed");
+    await tick();
+    s.held[0].release(ok());
+    await s.svc.idle();
+  });
+
+  it("remember：记忆整体关着：disabled，不要结论也不写", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.deps.memoryEnabled.mockReturnValue(false);
+    const runs = s.deps.run.mock.calls.length;
+    expect(await s.svc.remember(forkId)).toBe("disabled");
+    expect(s.deps.run).toHaveBeenCalledTimes(runs);
+    expect(s.deps.remember).not.toHaveBeenCalled();
+  });
+
+  it("sendConclusion：要结论抛错 -> no_conclusion 并写日志", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.deps.claude.mockImplementation(() => {
+      throw new Error("boom");
+    });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "no_conclusion" });
+    expect(s.deps.log).toHaveBeenCalled();
+    expect(s.deps.send).not.toHaveBeenCalled();
+  });
+
+  it("sendConclusion：markSent 抛错：写日志，仍返回已送到", async () => {
+    const s = setup();
+    const forkId = await withFork(s);
+    s.queue.push(ok({ resultText: "c" }));
+    vi.spyOn(s.repo, "markSent").mockImplementation(() => {
+      throw new Error("db");
+    });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("markSent"), expect.any(Error));
   });
 });
