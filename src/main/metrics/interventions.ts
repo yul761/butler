@@ -138,6 +138,8 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.preReviewRun, IPC.briefPost,
   // 自动接活（工作流 N）：「现在拉一次」、手动开工、重试、允许并行、选仓库推动工作；「跳过」不算（recordInvoke 里按 op 分）。
   IPC.intakePoll, IPC.intakeAct,
+  // 「谁该动」（UI 重做第 1 层）：从看板上把 CI 结论或评论送给 agent，和 ciResend 一样推动工作；被拒（ok: false）不算。
+  IPC.turnSendToAgent,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答、「不用了」是 needs_you_answer。 */
@@ -158,7 +160,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
   IPC.prAssessment, IPC.prPolicyGet, IPC.reviewEffect, IPC.reviewQueue,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,
-  IPC.interruptsState, IPC.profilesGet,
+  IPC.interruptsState, IPC.profilesGet, IPC.turnBoard,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive, IPC.featuresMove,
@@ -224,6 +226,7 @@ export function recordInvoke(record: RecordEvent, channel: string, args: readonl
   let ticketKey = TICKET_ARG.has(channel) ? shortString(first) : undefined;
   if (channel === IPC.sessionsOpen && first && typeof first === "object") ticketKey = shortString((first as { ticketKey?: unknown }).ticketKey);
   if (channel === IPC.intakeAct && first && typeof first === "object") ticketKey = shortString((first as { key?: unknown }).key);
+  if (channel === IPC.turnSendToAgent && first && typeof first === "object") ticketKey = shortString((first as { ticketKey?: unknown }).ticketKey);
   let resumedSession: string | undefined;
   if (channel === IPC.costResume && first && typeof first === "object") {
     // 熔断的对象是 ticket（key）或 session（链的根 id）。

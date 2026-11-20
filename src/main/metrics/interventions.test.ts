@@ -255,6 +255,15 @@ describe("manual_trigger recording (successful invokes)", () => {
     expect(repo.events(0).map((e) => [e.sessionId, e.ticketKey])).toEqual([[null, "T-3"], ["root-1", null]]);
   });
 
+  it("counts a turn-board send to the agent on its ticket, not a refused one or reading the board", () => {
+    const { repo, record } = rec();
+    const target = { ticketKey: "T-4", pr: { repo: "acme/app", number: 7 } };
+    expect(recordInvoke(record, IPC.turnSendToAgent, [target], { ok: true })).toBe(true);
+    expect(recordInvoke(record, IPC.turnSendToAgent, [target], { ok: false, reason: "not_sendable" })).toBe(false);
+    expect(recordInvoke(record, IPC.turnBoard, [null], { items: [] })).toBe(false);
+    expect(repo.events(0).map((e) => [e.ticketKey, e.data])).toEqual([["T-4", { channel: IPC.turnSendToAgent }]]);
+  });
+
   it("counts sending or re-replying a comment, not recategorising or dismissing it", () => {
     const { repo, record } = rec();
     const view = { id: 1 };
