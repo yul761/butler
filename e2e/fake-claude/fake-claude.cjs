@@ -46,6 +46,7 @@
 //     回「分叉回答：<prompt 的最后一行>」，最后一行提到「结论」（conclusionAsk）时回「结论：把 X 改成 Y」；
 //     --fork-session 或者没有 --resume 时 session_id 是新的，只有 --resume X 时就是 X；usage 读了缓存，每一轮花 0.02；
 //     total_cost_usd 和真的 CLI 一样是累计的：续 X 时是 X 的累计加 0.02，--fork-session 还带着被分叉 session 以前的花费（开发 session 当它花过 1.00）；
+//     modelUsage 也是累计的，和 total 对得上（每 0.02 一轮 FORK_USAGE 的 token），按份额拆出来每一轮正好 0.02；
 //     FAKE_CLAUDE_FORK=limit[:<秒级时间戳>] 时照复盘分析 limit: 的写法回撞额度（没给时间就是一小时后），退出 1。
 "use strict";
 const fs = require("node:fs");
@@ -229,6 +230,21 @@ const FORK_RUN_COST = 0.02;
 const FORK_PARENT_SPEND = 1;
 /** 每个 session 的累计 total_cost_usd，记在运行记录旁边（每次分叉讨论是一个新进程）。 */
 const forkTotalsFile = () => (process.env.FAKE_CLAUDE_LOG ? `${process.env.FAKE_CLAUDE_LOG}.fork-totals.json` : null);
+/** 累计 total 对应的累计 modelUsage：每 FORK_RUN_COST 算一轮 FORK_USAGE 的 token（开发 session 以前的 1.00 就是 50 轮）。 */
+function forkModelUsage(total) {
+  const n = Math.round(total / FORK_RUN_COST);
+  return {
+    "claude-fake-fork": {
+      inputTokens: FORK_USAGE.input_tokens * n,
+      outputTokens: FORK_USAGE.output_tokens * n,
+      cacheReadInputTokens: FORK_USAGE.cache_read_input_tokens * n,
+      cacheCreationInputTokens: 0,
+      cacheCreationEphemeral5mInputTokens: 0,
+      cacheCreationEphemeral1hInputTokens: 0,
+      costUSD: total,
+    },
+  };
+}
 function forkTotals() {
   const f = forkTotalsFile();
   try {
@@ -266,7 +282,7 @@ function forkRun(input) {
   if (forkTotalsFile()) fs.writeFileSync(forkTotalsFile(), JSON.stringify(totals));
   const last = input.trimEnd().split("\n").pop().trim();
   const result = /结论|conclusion/i.test(last) ? FORK_CONCLUSION : `分叉回答：${last}`;
-  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result, usage: FORK_USAGE, total_cost_usd: total, permission_denials: [] })}\n`);
+  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result, usage: FORK_USAGE, total_cost_usd: total, modelUsage: forkModelUsage(total), permission_denials: [] })}\n`);
 }
 
 function headless() {

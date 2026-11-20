@@ -103,10 +103,11 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
     await expect(box.locator(".msg-a")).toHaveText(["分叉回答：为什么？"]);
     expect(forkRuns(s)).toHaveLength(1);
     const run1 = forkRuns(s)[0];
-    // 花费：CLI 的 total_cost_usd 是累计的。精简的第一轮是全新 session，就是这一轮的 0.02；完整的（--fork-session）带着开发 session
-    // 以前的花费（假 claude 当它花过 1.00），只能按用量估，e2e 的价格表里没有这个模型 → 费用未知。绝不能显示成 $1.02。
-    const full = run1.includes("--fork-session");
-    await expect(box.locator(".conv-mode")).toContainText(full ? S.conv.costUnknown : "$0.02");
+    // 花费：CLI 的 total_cost_usd 和 modelUsage 是累计的。精简的第一轮是全新 session，就是这一轮的 0.02；完整的（--fork-session）带着开发 session
+    // 以前的花费（假 claude 当它花过 1.00），按这一轮 usage 占累计 modelUsage 的份额拆出来也正好 0.02。两种都是准数，绝不能显示成 $1.02。
+    await expect(box.locator(".conv-mode")).toContainText("$0.02");
+    await expect(box.locator(".conv-mode")).not.toContainText(S.conv.costUnknown);
+    await expect(box.locator(".conv-mode")).not.toContainText("$1.02");
     expect(run1).not.toContain("--no-session-persistence");
     expect(run1).not.toContain("--json-schema");
     expect(run1).toContain("dontAsk");
@@ -119,7 +120,8 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
     await box.locator(".fork-ask").getByRole("button", { name: S.conv.send, exact: true }).click();
     await expect(box.locator(".msg-a")).toHaveText(["分叉回答：为什么？", "分叉回答：还有呢？"]);
     // 接着问只加这一轮的 0.02（跟上次见到的累计取差），不是 CLI 报的累计。
-    await expect(box.locator(".conv-mode")).toContainText(full ? S.conv.costAtLeast("$0.02") : "$0.04");
+    await expect(box.locator(".conv-mode")).toContainText("$0.04");
+    await expect(box.locator(".conv-mode")).not.toContainText(S.conv.costAtLeast("$0.04"));
     await expect(boxes).toHaveCount(1);
     expect(forkRuns(s)).toHaveLength(2);
     const run2 = forkRuns(s)[1];
