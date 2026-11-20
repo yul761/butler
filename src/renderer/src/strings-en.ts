@@ -386,7 +386,6 @@ export const EN: UiStrings = {
     boardFailed: "Could not load what needs you",
     boardStale: "This may be out of date",
     retry: "Retry",
-    noWork: "No work yet.",
     all: {
       lede: (epics: number, loose: number) => `${epics} ${epics === 1 ? "epic" : "epics"}, ${loose} standalone ${loose === 1 ? "ticket" : "tickets"}.`,
       colName: "Name",

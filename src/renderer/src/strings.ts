@@ -392,7 +392,6 @@ const ZH = {
     boardFailed: "取不到「轮到你」的数据",
     boardStale: "数据可能不是最新的",
     retry: "重试",
-    noWork: "还没有任何工作。",
     all: {
       lede: (epics: number, loose: number) => `${epics} 个 epic、${loose} 个单独的 ticket。`,
       colName: "名字",

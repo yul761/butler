@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../shared/turn";
 import { STRINGS } from "./strings";
 import {
+  firstRunProps,
   homeOpenedSignal,
   ticketNowText,
   HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
@@ -298,5 +299,17 @@ describe("ticketNowText (All work ticket rows)", () => {
   it("nothing known gives a dash", () => {
     expect(ticketNowText([], null, "BTL-1", S)).toBe("—");
     expect(ticketNowText([], s1({ total: 0 }), "BTL-1", S)).toBe("—");
+  });
+});
+
+describe("firstRunProps (home with no work at all)", () => {
+  it("the three create buttons open their dialogs; the settings link lands on Settings › Features", () => {
+    const d = { onNewTicket: vi.fn(), onNewFeature: vi.fn(), onNewEpic: vi.fn(), onGo: vi.fn() };
+    const p = firstRunProps(d);
+    p.onNewTicket(); p.onNewFeature(); p.onNewEpic();
+    expect([d.onNewTicket, d.onNewFeature, d.onNewEpic].map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
+    expect(d.onGo).not.toHaveBeenCalled();
+    p.onOpenSettings();
+    expect(d.onGo).toHaveBeenCalledWith({ page: "settings", section: "features" });
   });
 });

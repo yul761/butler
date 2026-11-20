@@ -3,6 +3,7 @@
 import type { NowNotice, NowTarget } from "../../shared/types";
 import { mostUrgent, YOU_KIND_RANK, type ScopeTurnRow, type Turn, type TurnBoard, type TurnItem, type YouKind } from "../../shared/turn";
 import type { Route } from "./App";
+import type { FirstRunHomeProps } from "./components/FirstRunHome";
 import { formatDuration } from "./components/TicketActivity";
 import type { UiStrings } from "./strings";
 import { turnSentence } from "./turn-text";
@@ -230,4 +231,9 @@ export function homeOpenedSignal(): { observe: (page: string) => boolean } {
       return opened;
     },
   };
+}
+
+/** 一件工作都没有时首页整页放 FirstRunHome（第 6 层的组件）：三个新建按钮开对话框，设置链接去「设置 › 功能」。 */
+export function firstRunProps(d: { onNewTicket: () => void; onNewFeature: () => void; onNewEpic: () => void; onGo: (r: Route) => void }): FirstRunHomeProps {
+  return { onNewTicket: d.onNewTicket, onNewFeature: d.onNewFeature, onNewEpic: d.onNewEpic, onOpenSettings: () => d.onGo({ page: "settings", section: "features" }) };
 }

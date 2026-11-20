@@ -7,7 +7,7 @@ test("first run: the wizard finds claude, installs hooks into the given config d
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  await expect(page.getByTestId("no-work")).toBeVisible();
+  await expect(page.getByTestId("first-run-home")).toBeVisible();
   const settings = readFileSync(join(s.claudeConfigDir, "settings.json"), "utf8");
   expect(settings).toContain("butler-hook");
   expect(readFileSync(join(s.claudeConfigDir, "commands", "handoff.md"), "utf8")).toContain("butler-handoff");
@@ -33,13 +33,13 @@ test("the wizard does not let the user continue without a working claude", async
   await banner.getByRole("button", { name: S.resumeSetup, exact: true }).click();
   await expect(page.getByTestId("wizard")).toBeVisible();
   await page.getByRole("button", { name: S.wizardSkip, exact: true }).click();
-  await expect(page.getByTestId("no-work")).toBeVisible();
+  await expect(page.getByTestId("first-run-home")).toBeVisible();
   // 跳过了第二次，提醒还在；“不再提示”之后消失，刷新、重启都不再出现。
   await expect(banner).toBeVisible();
   await banner.getByRole("button", { name: S.dismissForever, exact: true }).click();
   await expect(banner).toHaveCount(0);
   await page.reload();
-  await expect(page.getByTestId("no-work")).toBeVisible();
+  await expect(page.getByTestId("first-run-home")).toBeVisible();
   await expect(banner).toHaveCount(0);
 });
 
@@ -50,7 +50,7 @@ test("after the wizard is finished, a relaunch goes straight to the Now page", a
   await completeWizard(first.page, s);
   await first.app.close();
   const { page } = await launch(s);
-  await expect(page.getByTestId("no-work")).toBeVisible();
+  await expect(page.getByTestId("first-run-home")).toBeVisible();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
   // 向导是走完的，不是跳过的：没有“还没设置完”的提醒。
   await expect(page.locator(".setup-skipped")).toHaveCount(0);
@@ -68,5 +68,5 @@ test("Settings → rerun shows the wizard again at once, with the saved claude p
   await expect(page.getByPlaceholder(S.generalPlaceholders.claudePath, { exact: true })).toHaveValue(s.claudePath);
   await page.getByRole("button", { name: S.wizardSkip, exact: true }).click();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
-  await expect(page.getByTestId("no-work")).toBeVisible();
+  await expect(page.getByTestId("first-run-home")).toBeVisible();
 });

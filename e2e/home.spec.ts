@@ -109,9 +109,12 @@ test("with nothing for you the title says so and the scope table still lists the
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  // 空工作区：首页只有一句和三个新建按钮（第 6 层的首次使用首页会换掉它）。
-  await expect(page.getByTestId("no-work")).toContainText(S.hm.noWork);
-  await expect(page.getByTestId("no-work").getByRole("button", { name: `+ ${S.newTicket}`, exact: true })).toBeVisible();
+  // 空工作区：首页整页是首次使用首页（FirstRunHome）；「去 设置 › 功能」落在设置的「功能」tab。
+  const firstRun = page.getByTestId("first-run-home");
+  await expect(firstRun).toContainText(S.firstRun.title);
+  await expect(firstRun.getByTestId("first-run-new-ticket")).toBeVisible();
+  await firstRun.getByTestId("first-run-settings-link").click();
+  await expect(page.getByTestId("settings-tab-features")).toHaveAttribute("aria-selected", "true");
 
   await checkoutFeature(page, s, ["HOME-2"]);
   await goHome(page);

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
-import { homeOpenedSignal, isNoWork, type NameCtx } from "./home-view";
+import { firstRunProps, homeOpenedSignal, isNoWork, type NameCtx } from "./home-view";
 import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
@@ -14,7 +14,7 @@ import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { AllWorkPage } from "./components/AllWorkPage";
 import { HomePage } from "./components/HomePage";
-import { NoWorkLine } from "./components/NoWorkLine";
+import { FirstRunHome } from "./components/FirstRunHome";
 import { useTurnBoard } from "./components/useTurnBoard";
 import { EffectPage } from "./components/EffectPage";
 import { SettingsPage } from "./components/SettingsPage";
@@ -45,7 +45,7 @@ export type Route =
   | { page: "all"; section?: "stacks" | "intake" }
   | { page: "unclaimed" }
   | { page: "archived" }
-  /** section：要看的那个 tab 或高级里的分组（「现在」页的提醒跳来时用 health / routing）。 */
+  /** section：要看的那个 tab 或高级里的分组（首页的提醒跳来时用 health / routing）。 */
   | { page: "settings"; section?: SettingsSection }
   | { page: "audit" }
   /** tab：从「现在」页的检查升降级提醒跳来时直接打开检查标签。 */
@@ -213,7 +213,7 @@ export function App() {
             {route.page === "home" && (
               <HomePage
                 state={turn} noWork={isNoWork(allTickets.length + epics.length + features.length, turn.board?.items ?? null, nowView?.notices.length ?? 0)}
-                firstRun={<NoWorkLine onNewTicket={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)} />}
+                firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onNewEpic: () => setShowNewEpic(true), onGo: setRoute })} />}
                 ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
                 onFix={openFix} onOpen={openTarget} onGo={setRoute} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
                 onResumeSetup={() => dispatchOnboarding({ type: "rerun" })}
