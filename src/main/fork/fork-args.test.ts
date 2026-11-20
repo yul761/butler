@@ -20,7 +20,7 @@ describe("devForkArgs", () => {
     const a = devForkArgs(dev, o);
     expect(a).toContain("-p");
     expect(a.join(" ")).toContain("--output-format json");
-    expect(a.join(" ")).toContain("--resume s1 ")
+    expect(a.join(" ")).toContain("--resume s1 ");
     expect(a).toContain("--fork-session");
     expect(a).not.toContain("--session-id");
     expect(after(a, "--settings")).toBe("/fs.json");

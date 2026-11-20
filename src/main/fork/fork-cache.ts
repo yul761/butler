@@ -25,5 +25,7 @@ export interface FullForkPlan {
  *
  * 前提：分叉的环境变量要跟开发 session 一样带上 CLAUDE_EFFORT 之类的 CLAUDE_*（都来自 Butler 自己的 process.env，
  * 生产代码用同一个 baseEnv，自然一致）；参数里不能有 --disallowedTools、--json-schema、--setting-sources、--no-session-persistence。
+ * 没测过的情形：开发参数里没有 --settings 时，devForkArgs 把分叉的 --settings 追加在 --fork-session 之后（readonly hook 靠它）；
+ * Butler 开的 session 平常都带 --settings，只有 mcpSettings 返回 null 时才会走到。
  */
 export const FULL_FORK: FullForkPlan = { cacheOk: true, permissionArgs: true, ownMcpConfig: true };
