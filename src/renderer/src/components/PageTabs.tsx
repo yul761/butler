@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { saveTab, savedTab } from "../local-prefs";
-import { pickTab, resolveTab } from "../page-tabs";
+import { landingKey, pickTab, resolveTab } from "../page-tabs";
 
 export interface PageTab {
   id: string;
@@ -14,19 +14,23 @@ export interface PageTab {
 /**
  * 页面上半部分的 tab：一个 tab 一块，同一时间只显示一块，永远有一个选中，内容多了在自己的框里滚动。
  * 每个页面记着最近停在哪个 tab；forceTab 是落点（比如从「去看看」进来），变化时选中它并记住。
+ * forceSeq：同一个 forceTab 要再落一次时（比如概况里的按钮又点了一次「去终端」），调用方把它加一。
  * actions：放在 tab 条右边、不管停在哪个 tab 都点得到的按钮（新建 ticket、新建 feature）。
  */
-export function PageTabs({ page, tabs, defaultTab, forceTab, actions }: { page: string; tabs: PageTab[]; defaultTab: string; forceTab?: string | null; actions?: ReactNode }) {
+export function PageTabs({ page, tabs, defaultTab, forceTab, forceSeq, actions }: {
+  page: string; tabs: PageTab[]; defaultTab: string; forceTab?: string | null; forceSeq?: number; actions?: ReactNode;
+}) {
   const panelId = `page-tabs-panel-${page.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const ids = tabs.map((t) => t.id);
   const [saved, setSaved] = useState<string | null>(() => resolveTab(savedTab(page), forceTab, ids, defaultTab));
   useEffect(() => setSaved(savedTab(page)), [page]);
+  const land = landingKey(forceTab, forceSeq);
   useEffect(() => {
     if (forceTab != null && ids.includes(forceTab)) {
       saveTab(page, forceTab);
       setSaved(forceTab);
     }
-  }, [page, forceTab]);
+  }, [page, land]);
   // forceTab 只在变化时落点一次（上面的 effect 把它存进 saved），之后用户点哪个就是哪个。
   const current = pickTab(saved, ids, defaultTab);
   const tab = tabs.find((t) => t.id === current);

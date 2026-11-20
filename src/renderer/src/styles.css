@@ -159,8 +159,8 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .card { width: 100%; display: flex; gap: 10px; text-align: left; padding: 10px 12px; }
 
 .ticket-page { display: flex; flex-direction: column; height: 100%; }
-/* 空间不够时只有概览（feature、epic、Butler 页的 tab，ticket 的 follow-up 面板）缩小、自己滚动；标题、仓库、session 栏保持原高。 */
-.ticket-page > :not(.page-tabs):not(.overview) { flex-shrink: 0; }
+/* 空间不够时只有页签（feature、epic、Butler、ticket 页的 tab）缩小、自己滚动；标题栏保持原高。 */
+.ticket-page > :not(.page-tabs) { flex-shrink: 0; }
 .ticket-header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .ticket-header h2 { margin: 0; font-size: 15px; }
 .ticket-header .muted { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -193,6 +193,11 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .notice { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 /* 上面的内容再多，终端（claude code session）也至少占窗口一半高；上面能缩的部分（feature 概览）自己滚动。 */
 .terminals { flex: 1 0 50vh; min-height: 50vh; display: flex; }
+/* ticket「终端」页签：仓库条、session 条贴边（自带边距和分隔线），下面终端占满；内容超出时整个页签滚动，各条不被压扁。 */
+.page-tabs-panel.tab-panel-terminal { display: flex; flex-direction: column; padding: 0; }
+.tab-panel-terminal > * { flex-shrink: 0; }
+/* ticket「PR 详情」页签：阶段、CI · review · 风险 · 就绪、未处理的评论上下排。 */
+.ticket-pr section + section { margin-top: 12px; }
 .terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; overflow: clip; }
 /* Chromium 默认会把 ，。（ 等标点量窄，实际却占满一格，后面的字和拼音框就错位；space-all 让它们按整格量。 */
 .terminal { flex: 1; min-height: 0; padding: 4px; text-spacing-trim: space-all; }
@@ -309,10 +314,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .day-list { margin: 4px 0 10px; padding-left: 20px; }
 textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; resize: vertical; }
 .mono { font-family: Menlo, Consolas, "Cascadia Mono", monospace; font-size: 12px; }
-.overview { flex: 0 1 auto; min-height: 0; overflow-y: auto; border-bottom: 1px solid var(--border); }
-.overview-bar { display: flex; gap: 8px; align-items: center; padding: 6px 16px; flex-wrap: wrap; }
-.overview-bar .active { border-color: var(--accent); color: var(--accent); }
-.overview-panel { max-height: 40vh; overflow-y: auto; padding: 4px 16px 10px; }
+/* ticket「记录」页签：待跟进、交接记录、记忆三个小节并排，窄了改成上下。 */
+.ticket-log { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 900px) { .ticket-log { grid-template-columns: 1fr; } }
 .followup { display: flex; gap: 10px; align-items: center; padding: 4px 0; }
 .followup .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .followup.closed .text { color: var(--muted); text-decoration: line-through; }

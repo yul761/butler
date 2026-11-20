@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickTab, resolveTab } from "./page-tabs";
+import { landingKey, pickTab, resolveTab } from "./page-tabs";
 
 describe("page tabs", () => {
   const ids = ["progress", "tickets", "reports", "decisions"];
@@ -36,5 +36,20 @@ describe("forceTab is a one-shot landing", () => {
     expect(pickTab(saved, ids, "progress")).toBe("reports");
     saved = "archived"; // user clicks another tab; PageTabs renders with pickTab only
     expect(pickTab(saved, ids, "progress")).toBe("archived");
+  });
+});
+
+describe("landingKey (forceSeq re-fires the same tab)", () => {
+  it("is null without a landing", () => {
+    expect(landingKey(null)).toBeNull();
+    expect(landingKey(undefined, 3)).toBeNull();
+  });
+  it("changes when the sequence bumps, even for the same tab", () => {
+    expect(landingKey("terminal", 1)).not.toBe(landingKey("terminal", 2));
+    expect(landingKey("terminal", 1)).toBe(landingKey("terminal", 1));
+  });
+  it("without a sequence it only changes with the tab (existing callers)", () => {
+    expect(landingKey("pr")).toBe(landingKey("pr"));
+    expect(landingKey("pr")).not.toBe(landingKey("log"));
   });
 });

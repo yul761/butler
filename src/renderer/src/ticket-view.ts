@@ -78,3 +78,14 @@ export function clipSaid(text: string, max = 280): string {
   const chars = Array.from(text);
   return chars.length <= max ? text : `${chars.slice(0, max).join("")}…`;
 }
+
+/**
+ * 落在终端页签时顺手打开 turn 所在的 session：它的终端已经开着就切过去，没开就恢复它；turn 不带 session 就什么都不做。
+ * 落点取自 landingTab：answer、stuck、unattended(agent_stopped) 会落到终端，它们都可能带 sessionId。
+ */
+export function terminalLanding(turn: Turn, sessions: Pick<SessionView, "id" | "termId">[], panes: readonly string[]): { activate: string } | { open: string } | null {
+  const sessionId = "sessionId" in turn ? turn.sessionId : null;
+  if (sessionId === null) return null;
+  const termId = sessions.find((s) => s.id === sessionId)?.termId ?? null;
+  return termId !== null && panes.includes(termId) ? { activate: termId } : { open: sessionId };
+}

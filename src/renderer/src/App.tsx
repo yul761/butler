@@ -226,6 +226,8 @@ export function App() {
                 ticket={current}
                 initialOpen={pendingOpen?.ticketKey === current.key ? pendingOpen : null}
                 onInitialOpenDone={() => setPendingOpen(null)}
+                landing={route.landing}
+                onFix={openFix}
                 onArchived={() => setRoute({ page: "home" })}
                 feature={featureOf(current)}
                 onOpenFeature={(id) => setRoute({ page: "feature", id })}

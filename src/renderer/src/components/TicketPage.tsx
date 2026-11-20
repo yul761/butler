@@ -1,151 +1,72 @@
 import { useEffect, useRef, useState } from "react";
-import { TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketRepo, type TicketStatus, type TicketView } from "../../../shared/types";
-import { api, ButlerError } from "../api";
+import { TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
+import { api } from "../api";
 import { reportError } from "../errors";
-import { repoName, repoWhere, sessionPlace } from "../repos";
-import { sessionLabel, splitSessions } from "../sessions";
+import { repoWhere } from "../repos";
+import { ticketRows } from "../scope-view";
 import { S, STATUS_LABEL } from "../strings";
+import { landingTab, type TicketTab } from "../ticket-tabs";
+import { conversationSessions, terminalLanding } from "../ticket-view";
+import { ConversationPlaceholder } from "./ConversationPlaceholder";
 import { PageTabs } from "./PageTabs";
-import { TicketComments } from "./TicketComments";
-import { TicketReview } from "./TicketReview";
-import { TicketPrStages } from "./PrStages";
-import { RepoDialog } from "./RepoDialog";
-import { EndSessionButton } from "./EndSessionButton";
-import { NoChecksMark } from "./NoChecksMark";
-import { HibernateBadges, hibernationOf, isHibernated, PinButton, sessionTitle } from "./HibernateParts";
-import { CloseIdleButton, DeleteHiddenButton } from "./SessionCleanupButtons";
-import { RefreshSessionButton } from "./RefreshSessionButton";
-import { SessionLimit } from "./SessionLimit";
-import { SessionCost } from "./SessionCost";
-import { TerminalPane } from "./TerminalPane";
-import { TicketOverview } from "./TicketOverview";
+import { TicketHomeTab } from "./TicketHome";
+import { TicketLogTab } from "./TicketLogTab";
+import { TicketPrTab } from "./TicketPrTab";
+import { TicketTerminalTab, useTicketTerminals } from "./TicketTerminalTab";
 import { TitleDialog } from "./TitleDialog";
-
-const VISIBLE_SESSIONS = 3;
-
-function formatShort(ms: number): string {
-  return new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-interface Mismatch {
-  req: OpenSessionRequest;
-  repoId: number;
-  current: string;
-  expected: string;
-  dirty: boolean;
-  busyBy?: { ticket: string; branch: string };
-}
-
-interface OldWorkdir {
-  req: OpenSessionRequest;
-  cwd: string;
-  current: string;
-  expected: string;
-}
+import { useStateRefetch } from "./useStateRefetch";
+import { useTurnBoard } from "./useTurnBoard";
 
 interface Props {
   ticket: TicketView;
   onArchived: () => void;
-  /** 从别的页面跳进来时要执行的打开请求。 */
+  /** 从别的页面跳进来时要执行的打开请求（落在「终端」页签）。 */
   initialOpen?: OpenSessionRequest | null;
   onInitialOpenDone?: () => void;
+  /** 从「去看看」进来：按这个 ticket 轮到谁落到对应的页签，只在第一次拿到 turn 时落一次。 */
+  landing?: boolean;
+  /** 开修复 session（同首页 TurnCard）。 */
+  onFix: (featureId: number, stuckSessionId: string) => void;
   /** ticket 属于的 feature（设计文档 2026-10-26）。 */
   feature?: Pick<Feature, "id" | "name"> | null;
   onOpenFeature?: (id: number) => void;
 }
 
-export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOpenDone, feature = null, onOpenFeature }: Props) {
-  const openTerms = ticket.sessions.flatMap((s) => (s.termId ? [s.termId] : []));
-  // panes 里保留已退出但还没关闭的终端，方便看到 claude 的报错输出。
-  const [panes, setPanes] = useState<string[]>(openTerms);
-  const panesRef = useRef(panes);
-  panesRef.current = panes;
-  const [active, setActive] = useState<string | null>(openTerms[0] ?? null);
-  const [mismatch, setMismatch] = useState<Mismatch | null>(null);
-  const [oldWorkdir, setOldWorkdir] = useState<OldWorkdir | null>(null);
-  const [showAllSessions, setShowAllSessions] = useState(false);
-  const [showHidden, setShowHidden] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+/** ticket 页（UI 重做第 3 层，spec §5.3）：标题栏下五个页签——概况、对话、终端、PR 详情、记录。 */
+export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOpenDone, landing = false, onFix, feature = null, onOpenFeature }: Props) {
+  // 终端状态留在页面里：切到别的页签再回来，终端从快照重建，不丢。
+  const term = useTicketTerminals(ticket);
   const [editingTitle, setEditingTitle] = useState(false);
-  /** 打开的仓库对话框：null 关闭，"new" 添加，否则编辑这个仓库。 */
-  const [repoDialog, setRepoDialog] = useState<TicketRepo | "new" | null>(null);
-  const [removing, setRemoving] = useState<TicketRepo | null>(null);
-  /** 多仓库 ticket 新 session 开在哪个仓库里（默认第一个）。 */
-  const [newRepoId, setNewRepoId] = useState<number | null>(null);
-  const pickedRepo = ticket.repos.find((r) => r.id === newRepoId) ?? ticket.repos[0];
+  /** 页签落点：n 递增，同一个页签也能再落一次。 */
+  const [force, setForce] = useState<{ tab: TicketTab; n: number } | null>(() => (initialOpen ? { tab: "terminal", n: 0 } : null));
+  const goTab = (tab: TicketTab) => setForce((f) => ({ tab, n: (f?.n ?? 0) + 1 }));
+  const { board } = useTurnBoard({ ticketKey: ticket.key });
+  const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
+  /** 落点只算一次：之后用户自己切页签不再被拉回；带着打开请求进来时落在终端，不再看 turn。 */
+  const landed = useRef(false);
 
-  const openKey = openTerms.join(",");
-  useEffect(() => {
-    const ids = openKey ? openKey.split(",") : [];
-    setPanes((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
-  }, [openKey]);
-
-  // 从别的页面跳进来时的打开请求：恢复 session 并预填提示，只执行一次。
+  // 从别的页面跳进来时的打开请求：恢复 session 并预填提示，切到终端页签，只执行一次。
   useEffect(() => {
     if (!initialOpen) return;
+    landed.current = true;
     onInitialOpenDone?.();
-    void open(initialOpen);
+    goTab("terminal");
+    void term.open(initialOpen);
   }, [initialOpen]);
 
-  async function open(req: OpenSessionRequest) {
-    setError(null);
-    setMismatch(null);
-    setOldWorkdir(null);
-    try {
-      const r = await api.openSession(req);
-      if (r.ok) {
-        // /clear 之后续接：终端换成了新的 session id，旧的（已退出的）面板原地换成新的，不再多出一个。
-        const replaced = req.sessionId && req.sessionId !== r.termId ? req.sessionId : null;
-        setPanes((prev) => {
-          if (prev.includes(r.termId)) return replaced ? prev.filter((p) => p !== replaced) : prev;
-          return replaced && prev.includes(replaced) ? prev.map((p) => (p === replaced ? r.termId : p)) : [...prev, r.termId];
-        });
-        setActive(r.termId);
-      } else if (r.reason === "branch_mismatch") {
-        setMismatch({ req, repoId: r.repoId, current: r.current, expected: r.expected, dirty: r.dirty, busyBy: r.busyBy });
-      } else if (r.reason === "old_workdir") {
-        setOldWorkdir({ req, cwd: r.cwd, current: r.current, expected: r.expected });
-      } else {
-        setError(S.openErrors[r.reason]);
-      }
-    } catch (e) {
-      setError(e instanceof ButlerError ? e.message : (e as Error).message);
-    }
-  }
+  useEffect(() => {
+    if (!landing || landed.current || row === null) return;
+    landed.current = true;
+    const tab = landingTab(row.turn);
+    goTab(tab);
+    if (tab !== "terminal") return;
+    // 落在终端：顺手切到（或恢复）轮到你的那个 session。
+    const to = terminalLanding(row.turn, ticket.sessions, term.panesRef.current);
+    if (to === null) return;
+    if ("activate" in to) term.setActive(to.activate);
+    else void term.open({ ticketKey: ticket.key, sessionId: to.open });
+  }, [landing, row]);
 
-  async function switchAndOpen(m: Mismatch) {
-    try {
-      await api.switchBranch(m.repoId);
-      await open(m.req);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  async function removeRepo(r: TicketRepo) {
-    setRemoving(null);
-    try {
-      await api.removeRepo(r.id);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  /** 旧目录提示里的“新 session”：开在那个 session 的仓库里。 */
-  function newSessionLike(req: OpenSessionRequest) {
-    const s = ticket.sessions.find((x) => x.id === req.sessionId);
-    void open(s?.coordinator ? { ticketKey: ticket.key, coordinator: true } : { ticketKey: ticket.key, repoId: s?.repoId ?? pickedRepo?.id });
-  }
-
-  function closePane(id: string) {
-    // 用最新的面板列表选下一个（连续关闭时 panes 闭包可能已经过时）。
-    const rest = panesRef.current.filter((p) => p !== id);
-    panesRef.current = rest;
-    setPanes(rest);
-    setActive((cur) => (cur === id ? (rest[0] ?? null) : cur));
-  }
-
-  const sessionSplit = splitSessions(ticket.sessions, VISIBLE_SESSIONS);
   const statusValue = ticket.statusManual ?? "auto";
 
   return (
@@ -169,160 +90,34 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         </div>
       )}
       {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
-      {repoDialog && (
-        <RepoDialog
-          ticketKey={ticket.key}
-          repo={repoDialog === "new" ? undefined : repoDialog}
-          hasSessions={ticket.sessions.length > 0}
-          onClose={() => setRepoDialog(null)}
-        />
-      )}
-
-      <div className="repos-bar">
-        <span className="label">{S.repos}</span>
-        {ticket.repos.length === 0 && <span className="muted">{S.noRepos}</span>}
-        {ticket.repos.map((r) => (
-          <span key={r.id} className="repo" title={repoWhere(r)}>
-            <span className="name">{repoName(r)}</span>
-            <span className="muted">{r.workMode === "worktree" ? S.worktree : r.branch}</span>
-            {r.worktreeRemovedAt !== null && <span className="muted">{S.worktreeRemoved}</span>}
-            <button onClick={() => setRepoDialog(r)}>{S.edit}</button>
-            <button onClick={() => setRemoving(r)}>{S.removeRepo}</button>
-          </span>
-        ))}
-        <button onClick={() => setRepoDialog("new")}>+ {S.addRepo}</button>
-      </div>
-      {ticket.repos.filter((r) => r.cleanupBlocked).map((r) => (
-        <div key={r.id} className="notice">
-          <p>{S.cleanupBlocked(repoName(r), r.cleanupBlocked!)}</p>
-          <div className="actions">
-            <button onClick={() => api.recheckCleanup(ticket.key).catch(reportError)}>{S.recheckCleanup}</button>
-          </div>
-        </div>
-      ))}
-      {removing && (
-        <div className="notice">
-          <p>{S.removeRepoConfirm(repoName(removing))}</p>
-          <div className="actions">
-            <button onClick={() => void removeRepo(removing)}>{S.confirmRemove}</button>
-            <button onClick={() => setRemoving(null)}>{S.cancel}</button>
-          </div>
-        </div>
-      )}
 
       <PageTabs
         page={`ticket:${ticket.key}`}
-        defaultTab="stages"
+        defaultTab="overview"
+        forceTab={force?.tab ?? null}
+        forceSeq={force?.n}
         tabs={[
-          { id: "stages", label: S.prStagesTab, content: <TicketPrStages ticketKey={ticket.key} /> },
-          { id: "comments", label: S.lp.tab, content: <TicketComments ticketKey={ticket.key} /> },
-          { id: "review", label: S.rv.tab, content: <TicketReview ticketKey={ticket.key} /> },
+          {
+            id: "overview", label: S.lay.tabOverview, className: row?.turn.owner === "you" ? "attention" : undefined,
+            content: <TicketHomeTab ticket={ticket} onGoTab={goTab} onFix={onFix} />,
+          },
+          {
+            id: "conversation", label: S.lay.tabConversation,
+            content: <ConversationSlot ticket={ticket} />,
+          },
+          { id: "terminal", label: S.lay.tabTerminal, content: <TicketTerminalTab ticket={ticket} term={term} /> },
+          { id: "pr", label: S.lay.tabPr, content: <TicketPrTab ticketKey={ticket.key} /> },
+          { id: "log", label: S.lay.tabLog, content: <TicketLogTab ticketKey={ticket.key} /> },
         ]}
       />
-
-      <TicketOverview ticketKey={ticket.key} />
-
-      <div className="sessions-bar">
-        {ticket.sessions.length === 0 && <span className="muted">{S.noSessions}</span>}
-        {(showAllSessions ? ticket.sessions : sessionSplit.shown).map((s) => (
-          <span key={s.id} className="session-wrap">
-            <button
-              className={s.termId && s.termId === active ? "session active" : isHibernated(s) ? "session hibernated" : "session"}
-              title={sessionTitle(s)}
-              onClick={() => (s.termId ? setActive(s.termId) : void open({ ticketKey: ticket.key, sessionId: s.id }))}
-            >
-              {s.waitingForInput && <span className="badge">●</span>}
-              {sessionPlace(s, ticket.repos, S.coordinator) && <span className="place">{sessionPlace(s, ticket.repos, S.coordinator)}</span>}
-              {s.spawnedBy && <span className="muted" title={S.spawnedByCoordinator}>↳</span>}
-              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
-              <NoChecksMark reason={s.checksAbsent} />
-              <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
-              <HibernateBadges s={s} />
-              <span className="action">{s.termId ? S.switchTo : isHibernated(s) ? S.hib.open : S.open}</span>
-            </button>
-            <PinButton s={s} label={sessionLabel(s, S.untitledSession)} />
-            <SessionCost sessionId={s.id} ticketKey={s.ticketKey} />
-            {/* 正在运行的终端不能隐藏，只能结束（×点两次）；结束之后才能隐藏。 */}
-            {s.termId ? (
-              <>
-                {/* 修复 session 不换新（计划 16）。 */}
-                <SessionLimit sessionId={s.id} />
-                {s.fixesSession === null && <RefreshSessionButton sessionId={s.id} label={sessionLabel(s, S.untitledSession)} />}
-                <EndSessionButton termId={s.termId} label={sessionLabel(s, S.untitledSession)} onEnded={() => closePane(s.termId!)} />
-              </>
-            ) : (
-              <button className="session-hide" title={S.hideSession} aria-label={S.hideSessionNamed(sessionLabel(s, S.untitledSession))} onClick={() => api.hideSession(s.id).catch(reportError)}>
-                ×
-              </button>
-            )}
-          </span>
-        ))}
-        {sessionSplit.hidden.length > 0 && (
-          <button className="session more" onClick={() => setShowAllSessions(!showAllSessions)}>
-            {showAllSessions ? S.collapseSessions : S.olderSessions(sessionSplit.hidden.length)}
-          </button>
-        )}
-        {ticket.hiddenSessions.length > 0 && (
-          <button className="session more" onClick={() => setShowHidden(!showHidden)}>{S.hiddenSessions(ticket.hiddenSessions.length)}</button>
-        )}
-        <CloseIdleButton sessionIds={ticket.sessions.filter((s) => s.termId !== null).map((s) => s.id)} />
-        {ticket.repos.length > 1 && (
-          <select aria-label={S.pickRepo} value={pickedRepo?.id} onChange={(e) => setNewRepoId(Number(e.target.value))}>
-            {ticket.repos.map((r) => <option key={r.id} value={r.id}>{repoName(r)}</option>)}
-          </select>
-        )}
-        {pickedRepo && <button className="primary" onClick={() => void open({ ticketKey: ticket.key, repoId: pickedRepo.id })}>+ {S.newSession}</button>}
-        <button title={S.coordinatorHint} onClick={() => void open({ ticketKey: ticket.key, coordinator: true })}>+ {S.newCoordinator}</button>
-      </div>
-
-      {showHidden && ticket.hiddenSessions.length > 0 && (
-        <div className="notice hidden-sessions">
-          <p className="muted">{S.hiddenSessionsHint}</p>
-          {ticket.hiddenSessions.map((s) => (
-            <div key={s.id} className="row">
-              <span className="label">{sessionLabel(s, S.untitledSession)}</span>
-              <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
-              <button onClick={() => api.unhideSession(s.id).catch(reportError)}>{S.unhideSession}</button>
-            </div>
-          ))}
-          <div className="actions">
-            <DeleteHiddenButton sessionIds={ticket.hiddenSessions.map((s) => s.id)} />
-          </div>
-        </div>
-      )}
-      {error && <p className="error">{error}</p>}
-      {mismatch && (
-        <div className="notice">
-          <p>{S.branchMismatch(mismatch.current, mismatch.expected)}</p>
-          {mismatch.busyBy && <p className="error">{S.branchBusy(mismatch.busyBy.ticket, mismatch.busyBy.branch)}</p>}
-          {mismatch.dirty && <p className="error">{S.dirtyWarning}</p>}
-          <div className="actions">
-            <button disabled={mismatch.dirty} onClick={() => void switchAndOpen(mismatch)}>{S.switchAndOpen}</button>
-            <button onClick={() => void open({ ...mismatch.req, force: true })}>{S.openAnyway}</button>
-            <button onClick={() => setMismatch(null)}>{S.cancel}</button>
-          </div>
-        </div>
-      )}
-
-      {oldWorkdir && (
-        <div className="notice">
-          <p>{S.oldWorkdir(oldWorkdir.cwd, oldWorkdir.current, oldWorkdir.expected)}</p>
-          <div className="actions">
-            <button onClick={() => void open({ ...oldWorkdir.req, force: true })}>{S.openAnyway}</button>
-            <button onClick={() => newSessionLike(oldWorkdir.req)}>+ {S.newSession}</button>
-            <button onClick={() => setOldWorkdir(null)}>{S.cancel}</button>
-          </div>
-        </div>
-      )}
-
-      <div className="terminals">
-        {panes.map((id) => (
-          <TerminalPane
-            key={id} termId={id} visible={id === active} hibernated={hibernationOf(ticket.sessions, id)}
-            onClose={() => closePane(id)} onResume={() => void open({ ticketKey: ticket.key, sessionId: id })}
-          />
-        ))}
-      </div>
     </div>
   );
+}
+
+/** 「对话」页签：只在停在这个页签时取链根。第 5 层把 ConversationPlaceholder 换成 ConversationTab，props 一致，只改这一行。 */
+function ConversationSlot({ ticket }: { ticket: TicketView }) {
+  const glance = useStateRefetch(`glance:${ticket.key}`, () => api.ticketGlance(ticket.key));
+  if (glance === null) return null;
+  const rootSessionId = glance.rootSessionId;
+  return rootSessionId ? <ConversationPlaceholder rootSessionId={rootSessionId} sessions={conversationSessions(ticket.sessions, S)} /> : <p className="muted">{S.lay.convNoSession}</p>;
 }

@@ -3,7 +3,7 @@ import type { PrStageCell, PrStagesView } from "../../shared/pr-stages";
 import type { Turn } from "../../shared/turn";
 import type { SessionView } from "../../shared/types";
 import { STRINGS } from "./strings";
-import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession } from "./ticket-view";
+import { clipSaid, contextLine, conversationSessions, mainActions, prStageLine, primarySession, terminalLanding } from "./ticket-view";
 
 const S = STRINGS.zh;
 const ids = (t: Turn, o = { hasPr: true, canFix: false }) => mainActions(t, o, S).map((a) => a.id);
@@ -119,5 +119,26 @@ describe("clipSaid", () => {
   it("counts characters, not UTF-16 units", () => {
     const c = clipSaid("😀".repeat(10), 4);
     expect(Array.from(c)).toEqual([..."😀😀😀😀", "…"]);
+  });
+});
+
+describe("terminalLanding", () => {
+  const answer: Turn = { owner: "you", kind: "answer", question: "q", options: [], askId: 1, sessionId: "s1" };
+  const running = [sess("s1", { termId: "t1" }), sess("s2")];
+  it("switches to the turn's terminal when it is already open", () => {
+    expect(terminalLanding(answer, running, ["t0", "t1"])).toEqual({ activate: "t1" });
+  });
+  it("opens the turn's session when its terminal is not open", () => {
+    expect(terminalLanding(answer, [sess("s1", { termId: null })], [])).toEqual({ open: "s1" });
+    expect(terminalLanding(answer, running, ["t0"])).toEqual({ open: "s1" });
+    expect(terminalLanding({ ...answer, sessionId: "gone" }, running, ["t1"])).toEqual({ open: "gone" });
+  });
+  it("stuck and stopped-agent turns carry their session too", () => {
+    expect(terminalLanding({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s2" }, running, [])).toEqual({ open: "s2" });
+    expect(terminalLanding({ owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s1" }, running, ["t1"])).toEqual({ activate: "t1" });
+  });
+  it("does nothing without a session", () => {
+    expect(terminalLanding({ owner: "you", kind: "stuck", source: "ticket_blocked", detail: null, sessionId: null }, running, [])).toBeNull();
+    expect(terminalLanding({ owner: "you", kind: "merge", risk: null }, running, ["t1"])).toBeNull();
   });
 });

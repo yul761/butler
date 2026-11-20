@@ -12,3 +12,8 @@ export function resolveTab(saved: string | null, forced: string | null | undefin
   if (forced != null && ids.includes(forced)) return forced;
   return pickTab(saved, ids, fallback);
 }
+
+/** 落点什么时候再触发一次：tab 变了，或者调用方把 seq 加一（同一个 tab 也能再落一次）。没有落点为 null。 */
+export function landingKey(forced: string | null | undefined, seq?: number): string | null {
+  return forced == null ? null : `${forced}#${seq ?? 0}`;
+}
