@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { NowNotice, NowTarget } from "../../../shared/types";
 import { api } from "../api";
-import { ciReasonText, noticeText, type NoticeAction } from "../availability-view";
+import { ciReasonText, noticeText, openCommentsNotice, type NoticeAction } from "../availability-view";
 import { btError } from "../backtest-view";
 import { costAmount } from "../cost-view";
 import { reportError } from "../errors";
@@ -35,9 +35,8 @@ export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; no
       setResult(null);
       void api.ciResend(n.ci.item).then((r) => setResult(r === "sent" || r === "delivered" ? S.ciResendSent : r === "busy_delivering" ? S.ciResendBusy : S.ciResendNot(ciReasonText(r, S))), reportError);
     } else if (a === "comments" && n.kind === "comments_waiting") {
-      // 打开 ticket 时直接停在「评论」标签。
-      saveTab(`ticket:${n.waiting.ticketKey}`, "comments");
-      onOpen(n.target);
+      // 打开 ticket 时直接停在「PR 详情」页签（评论在那里）。
+      openCommentsNotice(n, { saveTab, onOpen });
     } else if (n.kind === "check_promoted" || n.kind === "check_demoted") {
       // 撤销：恢复成升降级之前的模式（提醒随之消失）；知道了：只关提醒。
       if (a === "checks") onGo({ page: "lessons", tab: "checks" });
