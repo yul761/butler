@@ -9,6 +9,7 @@ import { dotKey, type Dot } from "../sidebar-view";
 import { S } from "../strings";
 import { AllWorkBody, type AllWorkBodyProps } from "./AllWorkPage";
 import { HomeMore } from "./HomeMore";
+import { HomeBody, type HomeBodyProps } from "./HomePage";
 import { NoWorkLine } from "./NoWorkLine";
 import { Notice, noticeKey } from "./Notice";
 import { Sidebar } from "./Sidebar";
@@ -146,6 +147,15 @@ describe("AllWorkBody", () => {
     expect(render()).toContain("Epic 1");
   });
 
+  it("a single ticket's row says where its most urgent item stands", () => {
+    const turn: Turn = { owner: "external", kind: "ci_running", names: [] };
+    const it9: TurnItem = { ticketKey: "BTL-9", pr: null, epicId: null, featureId: null, turn, since: 1, others: 0 };
+    const html = render({ board: { ...board([scope("ticket", "BTL-9", { total: 1, merged: 0 })]), items: [it9] } });
+    const row = /<tr[^>]*all-work-row-ticket-BTL-9(?:(?!<\/tr>).)*<\/tr>/.exec(html)![0];
+    expect(row).toContain(turnSentence(turn, it9, S));
+    expect(row).not.toContain(S.hm.scopeLine(1, 0, null));
+  });
+
   it("says so when there is no work, keeping the create buttons", () => {
     const html = render({ epics: [], tickets: [] });
     expect(html).toContain(S.hm.all.empty);
@@ -226,5 +236,75 @@ describe("TurnCard", () => {
       item: item({ owner: "you", kind: "merge", risk: null }), ctx: { ...ctx, epics: new Map([[1, long]]) }, now: 1, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onChanged: () => {},
     }));
     expect(html).toContain(`title="${long} › Feature名 › BTL-1"`);
+  });
+});
+
+describe("HomeBody", () => {
+  const ctx: NameCtx = { epics: new Map(), features: new Map(), tickets: new Map() };
+  const you = (n: number): TurnItem => ({ ticketKey: `BTL-${n}`, pr: null, epicId: null, featureId: null, turn: { owner: "you", kind: "merge", risk: null }, since: 1, others: 0 });
+  const busy = (n: number): TurnItem => ({ ticketKey: `RUN-${n}`, pr: null, epicId: null, featureId: null, turn: { owner: "agent", kind: "working", sessionId: "s" }, since: 1, others: 0 });
+  const scope = (id: number, o: Partial<ScopeTurnRow> = {}): ScopeTurnRow => ({
+    kind: "epic", id, name: `Epic ${id}`, total: 4, merged: 1, bar: { done: 1, agent: 1, you: 2, external: 0, idle: 0 }, youCount: 0, slowest: null, ...o,
+  });
+  const counts = { you: 0, agent: 2, external: 1, mergedToday: 3 };
+  const board = (items: TurnItem[], scopes: ScopeTurnRow[] = [scope(1, { youCount: 2 })]): TurnBoard => ({ items, counts, scopes, generatedAt: 1 });
+  const nowView: NowView = { notices: [], needsYou: [], decisions: [], epics: [], butler: null, running: 0, memory: [], merges: [], mem: { lines: [], updatedAt: 1 } as unknown as NowView["mem"] };
+  const render = (o: Partial<HomeBodyProps> = {}) => renderToStaticMarkup(createElement(HomeBody, {
+    board: null, error: null, noWork: false, firstRun: createElement("div", { "data-testid": "first-run" }), ctx, now: 10_000, nowView,
+    liveTickets: new Set<string>(), onRetry: () => {}, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onOpenTicket: () => {}, onChanged: () => {}, onResumeSetup: () => {}, ...o,
+  }));
+  const cards = (html: string) => html.split('data-testid="turn-card"').length - 1;
+
+  it("shows the title, lede, cards, the scope table and a folded running list", () => {
+    const html = render({ board: board([you(1), you(2), you(3), busy(1), busy(2)]) });
+    expect(html).toContain(S.hm.title(3));
+    expect(html).toContain(S.hm.lede(2, 1, 3));
+    expect(cards(html)).toBe(3);
+    expect(html).toContain(S.hm.scopeLine(4, 1, null));
+    expect(html).toContain('<div class="turn-bar">');
+    expect(html).toContain(S.hm.whoYou(2));
+    expect(html).toContain(S.hm.running(2));
+    expect(html).not.toContain("RUN-1");
+  });
+
+  it("with nothing for you still shows the scope table", () => {
+    const html = render({ board: board([busy(1)]) });
+    expect(html).toContain(S.hm.titleZero);
+    expect(cards(html)).toBe(0);
+    expect(html).toContain(S.hm.scopesHeading);
+  });
+
+  it("caps the cards at 20 and the scopes at 8", () => {
+    const html = render({ board: board(Array.from({ length: 25 }, (_, i) => you(i)), Array.from({ length: 12 }, (_, i) => scope(i))) });
+    expect(cards(html)).toBe(20);
+    expect(html).toContain(S.hm.showAll(25));
+    expect(html.split('class="home-scope"').length - 1).toBe(8);
+    expect(html).toContain(S.hm.scopeMore(12));
+  });
+
+  it("shows a failure with retry, a stale note, or loading", () => {
+    const failed = render({ error: "boom" });
+    expect(failed).toContain(S.hm.boardFailed);
+    expect(failed).toContain(S.hm.retry);
+    expect(failed).not.toContain(S.hm.titleZero);
+    const stale = render({ board: board([you(1)]), error: "boom" });
+    expect(stale).toContain(S.hm.boardStale);
+    expect(cards(stale)).toBe(1);
+    expect(render()).toContain(S.loading);
+  });
+
+  it("renders only the first-run node when there is no work", () => {
+    const html = render({ board: board([you(1)]), noWork: true });
+    expect(html).toContain('data-testid="first-run"');
+    expect(html).not.toContain(S.hm.title(1));
+  });
+
+  it("puts a long scope name in a title and keeps run status folded", () => {
+    const long = "y".repeat(200);
+    const html = render({ board: board([], [scope(1, { name: long })]) });
+    expect(html).toContain(`title="${long}"`);
+    expect(html).toContain(S.hm.moreHeading);
+    expect(html).not.toContain("now-mem-card");
+    expect(html).not.toContain(S.liveTitle);
   });
 });

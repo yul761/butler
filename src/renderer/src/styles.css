@@ -726,3 +726,16 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-card .where .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .turn-card .where .age { flex-shrink: 0; }
 .turn-card > .actions { flex-shrink: 0; }
+
+/* 首页「轮到你」（UI 重做第 2 层）。 */
+.home-top h2 { margin-bottom: 2px; }
+.home-top p { margin-top: 0; }
+.home-failed { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.home-cards { margin: 12px 0 20px; }
+.home-scopes, .home-running, .home-more-fold { margin-top: 16px; }
+.home-scope { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) minmax(80px, 1fr) auto; align-items: center; gap: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.home-scope > button.name { background: transparent; border: none; padding: 0; text-align: left; font-weight: 600; cursor: pointer; }
+.home-scope .name, .home-scope .line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.home-run { display: grid; grid-template-columns: 90px auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 4px 8px; background: transparent; border: none; border-radius: 0; }
+.home-run .sentence { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+@media (max-width: 640px) { .home-scope { grid-template-columns: minmax(0, 1fr) 80px; } .home-scope .line, .home-scope .who { display: none; } }

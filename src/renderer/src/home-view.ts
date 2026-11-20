@@ -140,16 +140,16 @@ export interface RunningRow { key: string; ticketKey: string | null; owner: "age
 
 /** 「进行中」：agent 和外部在推进的项，等得久的在前。 */
 export function runningRows(items: TurnItem[], S: UiStrings, now: number): RunningRow[] {
-  const rows: (RunningRow & { since: number })[] = [];
+  const rows: { since: number; row: RunningRow }[] = [];
   for (const i of items) {
     const t = i.turn;
     if (t.owner !== "agent" && t.owner !== "external") continue;
     const who = t.owner === "agent" ? S.hm.whoAgent : t.names.length > 0 ? t.names.join(", ") : t.kind === "ci_running" ? S.hm.whoCi : S.hm.whoExternal;
     const pr = i.pr ? `${i.pr.repo}#${i.pr.number}` : "";
-    rows.push({
+    rows.push({ since: i.since, row: {
       key: `${i.ticketKey ?? ""}|${pr}|${t.kind}`, ticketKey: i.ticketKey, owner: t.owner, who,
-      sentence: turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "", since: i.since,
-    });
+      sentence: turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
+    } });
   }
-  return rows.sort((a, b) => a.since - b.since).map(({ since: _s, ...r }) => r);
+  return rows.sort((a, b) => a.since - b.since).map((r) => r.row);
 }

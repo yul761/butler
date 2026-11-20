@@ -4,7 +4,8 @@ import { useState } from "react";
 import type { ScopeTurnRow, TurnBoard } from "../../../shared/turn";
 import type { EpicView, FeatureView, TicketView } from "../../../shared/types";
 import type { Route } from "../App";
-import { barSegments, scopeLine, scopeRoute, scopeWho } from "../home-view";
+import { barSegments, scopeLine, scopeRoute, scopeWho, topItem } from "../home-view";
+import { turnSentence } from "../turn-text";
 import { S } from "../strings";
 import { featuresOutsideEpics } from "./epic-row";
 import { GroupToggle } from "./HomeMore";
@@ -47,6 +48,14 @@ function rowsOf(p: AllWorkBodyProps): Row[] {
 export function AllWorkBody(p: AllWorkBodyProps) {
   const [moreOpen, setMoreOpen] = useState(p.focusMore !== undefined);
   const rows = rowsOf(p);
+  /** 单独的 ticket 写它最急的那一项的一句话；epic、feature 写合了几个、最慢的是谁。 */
+  const nowText = (r: Row, s: ScopeTurnRow | null): string => {
+    if (r.kind === "ticket" && p.board) {
+      const top = topItem(p.board.items, String(r.id));
+      if (top) return turnSentence(top.turn, top, S);
+    }
+    return s ? scopeLine(s, S) : DASH;
+  };
   const open = (r: Row) => (r.kind === "ticket" ? p.onOpenTicket(String(r.id)) : p.onGo(scopeRoute({ kind: r.kind, id: r.id } as ScopeTurnRow)));
   return (
     <div className="page all-work">
@@ -76,7 +85,7 @@ export function AllWorkBody(p: AllWorkBodyProps) {
                 <tr key={`${r.kind}:${r.id}`} data-testid={`all-work-row-${r.kind}-${r.id}`}>
                   <td className="name"><button className="row-name" title={r.name} onClick={() => open(r)}>{r.name}</button></td>
                   <td>{who ? <span className={`turn-tag turn-${who.tone ?? "idle"}`}>{who.text}</span> : DASH}</td>
-                  <td>{s ? scopeLine(s, S) : DASH}</td>
+                  <td>{nowText(r, s)}</td>
                   <td>
                     {s && bar.length > 0 ? (
                       <div className="turn-bar">{bar.map((b) => <i key={b.tone} className={`turn-${b.tone}`} style={{ width: `${b.pct}%` }} />)}</div>

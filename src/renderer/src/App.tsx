@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { EpicView, FeatureView, NowTarget, NowView, OpenSessionRequest, TicketView } from "../../shared/types";
 import { api } from "./api";
 import { onError, reportError } from "./errors";
-import { needsYouTotal } from "./now-view";
+import type { NameCtx } from "./home-view";
 import { routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
@@ -13,11 +13,13 @@ import { NewEpicDialog } from "./components/NewEpicDialog";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
 import { AllWorkPage } from "./components/AllWorkPage";
-import { NowPage } from "./components/NowPage";
+import { HomePage } from "./components/HomePage";
+import { NoWorkLine } from "./components/NoWorkLine";
+import { useTurnBoard } from "./components/useTurnBoard";
 import { EffectPage } from "./components/EffectPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
-import type { Dot } from "./sidebar-view";
+import { scopeDots } from "./sidebar-view";
 import { TicketPage } from "./components/TicketPage";
 import { LessonsPage } from "./components/LessonsPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
@@ -49,9 +51,6 @@ export type Route =
   /** tab：从「现在」页的检查升降级提醒跳来时直接打开检查标签。 */
   | { page: "lessons"; tab?: "checks" };
 
-/** 第 1 层的 turn:board 接上之前侧栏没有状态点。 */
-const NO_DOTS = new Map<string, Dot>();
-
 export function App() {
   const [route, setRoute] = useState<Route>({ page: "home" });
   /** 单独的 ticket；feature 下的 ticket 在 features[].tickets 里。 */
@@ -70,6 +69,8 @@ export function App() {
   const [pendingOpen, setPendingOpen] = useState<OpenSessionRequest | null>(null);
 
   const [onboarding, dispatchOnboarding] = useReducer(onboardingReducer, null);
+  /** 首页、侧栏、全部工作共用的一份「谁该动」（第 1 层的 turn:board）。 */
+  const turn = useTurnBoard();
 
   useEffect(() => onError(setError), []);
   // 防休眠开关：托盘菜单里改了、或者合上盖子自动关掉，主进程都会通知。
@@ -167,10 +168,25 @@ export function App() {
   const goFeature = (id: number) => void refresh().then(() => setRoute({ page: "feature", id }));
   const goEpic = (id: number) => void refresh().then(() => setRoute({ page: "epic", id }));
 
+  const featureEpic = useMemo(() => new Map(features.map((f) => [f.id, f.epicId] as const)), [features]);
+  const dots = useMemo(() => scopeDots(turn.board?.items ?? [], featureEpic), [turn.board, featureEpic]);
+  const ctx: NameCtx = {
+    epics: new Map(epics.map((e) => [e.id, e.name])),
+    features: new Map(features.map((f) => [f.id, f.name])),
+    tickets: new Map(allTickets.map((t) => [t.key, t.title])),
+  };
+  /** 首页「开修复 session」：开好了去 feature 页（修复 session 在那里），失败报到全局错误条。 */
+  const openFix = (featureId: number, stuckSessionId: string) => {
+    api.openFixSession({ featureId, stuckSessionId }).then((r) => {
+      if (r.ok) setRoute({ page: "feature", id: featureId });
+      else reportError(new Error(S.openErrors[r.reason] ?? r.reason));
+    }, reportError);
+  };
+
   return (
     <div className="app">
       <Sidebar
-        tickets={tickets} features={features} epics={epics} youCount={needsYouTotal(nowView)} dots={NO_DOTS} route={route} onNavigate={setRoute}
+        tickets={tickets} features={features} epics={epics} youCount={turn.board?.counts.you ?? null} dots={dots} route={route} onNavigate={setRoute}
         keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
       />
       <main className="main">
@@ -189,7 +205,15 @@ export function App() {
           />
         ) : (
           <>
-            {route.page === "home" && <NowPage view={nowView} onOpen={openTarget} onOpenTicket={(key) => openTicket(key)} liveTickets={new Set(allTickets.map((t) => t.key))} onResumeSetup={() => dispatchOnboarding({ type: "rerun" })} onGo={setRoute} />}
+            {route.page === "home" && (
+              <HomePage
+                state={turn} noWork={allTickets.length + epics.length + features.length === 0}
+                firstRun={<NoWorkLine onNewTicket={() => setShowNew(true)} onNewFeature={() => setShowNewFeature(true)} onNewEpic={() => setShowNewEpic(true)} />}
+                ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
+                onFix={openFix} onOpen={openTarget} onGo={setRoute} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
+                onResumeSetup={() => dispatchOnboarding({ type: "rerun" })}
+              />
+            )}
             {route.page === "ticket" && current && (
               <TicketPage
                 key={current.key}
@@ -227,7 +251,7 @@ export function App() {
             {route.page === "all" && (
               <AllWorkPage
                 key={route.section ?? ""}
-                board={null}
+                board={turn.board}
                 epics={epics}
                 features={features}
                 tickets={tickets}
