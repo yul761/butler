@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
 
 const fakeLog = (s: Sandbox) => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
 
@@ -32,7 +32,7 @@ test("with the shared MCP on, a new session reaches butler-sessions through the 
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  await page.getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsGroup(page, "sessions");
   const box = page.getByLabel(S.perf.sharedMcp, { exact: true });
   await expect(box).not.toBeChecked();
   await box.click();

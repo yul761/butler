@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, openSettingsTab, type Sandbox, terminalText, test } from "./fixtures";
 
 /**
  * 上下文换新（计划 16 任务 7）：假 claude 的每条回复都带 usage（上下文是 FAKE_CLAUDE_CONTEXT_TOKENS，/clear 之后从头算），
@@ -68,13 +68,13 @@ function refreshButton(page: Page) {
 
 /** 设置 → 常规：自动换新的阈值。 */
 async function setThreshold(page: Page, tokens: string): Promise<void> {
-  await page.getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsTab(page, "basic");
   const input = page.locator(".field").filter({ hasText: S.refreshThreshold }).locator("input");
   await input.fill(tokens);
   await input.blur();
   // 存下来以后草稿清掉，显示的就是存下的值；重新打开设置页还是它。
   await page.reload();
-  await page.getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsTab(page, "basic");
   await expect(page.locator(".field").filter({ hasText: S.refreshThreshold }).locator("input")).toHaveValue(tokens);
 }
 

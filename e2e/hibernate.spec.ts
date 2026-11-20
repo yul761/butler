@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const fakeLog = (s: Sandbox) => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
@@ -34,13 +34,13 @@ test("a hibernated coordinator wakes for a report, gets it, and still has its co
   await completeWizard(page, s);
 
   // 设置 → 常规：打开休眠；存下来以后重新打开还是开着。
-  await page.getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsGroup(page, "sessions");
   // 开关跟着存下的值走：点完等它存好。
   await page.getByLabel(S.hib.settings.enabled, { exact: true }).click();
   await expect(page.getByLabel(S.hib.settings.enabled, { exact: true })).toBeChecked();
   await expect(page.getByLabel(S.hib.settings.pressure, { exact: true })).not.toBeChecked();
   await page.reload();
-  await page.getByRole("button", { name: S.settings, exact: true }).click();
+  await openSettingsGroup(page, "sessions");
   await expect(page.getByLabel(S.hib.settings.enabled, { exact: true })).toBeChecked();
 
   // ticket 带一个 worktree 仓库：一个总控、一个普通 session。

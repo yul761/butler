@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 import { S, type UiStrings } from "../src/renderer/src/strings";
+import type { AdvancedGroupId, SettingsTabId } from "../src/shared/settings-layout";
 
 export const ROOT = resolve(__dirname, "..");
 
@@ -483,13 +484,28 @@ export async function newTicket(page: Page, key: string, repo: string, other: st
   await expect(page.getByRole("heading", { name: key, exact: true })).toBeVisible();
 }
 
+/** 侧栏进设置 → 高级 → 展开分组 group（已展开就不点）。 */
+export async function openSettingsGroup(page: Page, group: AdvancedGroupId): Promise<void> {
+  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
+  await page.getByTestId("settings-tab-advanced").click();
+  const head = page.getByTestId(`adv-group-${group}`);
+  if ((await head.getAttribute("aria-expanded")) !== "true") await head.click();
+  await expect(page.getByTestId(`adv-body-${group}`)).toBeVisible();
+}
+
+/** 侧栏进设置 → 某个 tab。 */
+export async function openSettingsTab(page: Page, tab: SettingsTabId): Promise<void> {
+  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
+  await page.getByTestId(`settings-tab-${tab}`).click();
+  await expect(page.getByTestId(`settings-tab-${tab}`)).toHaveAttribute("aria-selected", "true");
+}
+
 /**
  * 设置 →「评论与 CI」（工作流 I）：在全局这一层把 values 里的键设上（布尔、枚举是下拉框，其余是输入框），保存；
  * external 里的对外动作开关一并打开。
  */
 export async function setLoopPolicy(page: Page, values: Record<string, string>, external: readonly string[] = []): Promise<void> {
-  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
-  await page.getByTestId("settings-tab-loop").click();
+  await openSettingsGroup(page, "loop");
   const editor = page.getByTestId("loop-policy-editor");
   await expect(editor.getByTestId("loop-row-comments.enabled")).toBeVisible();
   for (const [key, v] of Object.entries(values)) {

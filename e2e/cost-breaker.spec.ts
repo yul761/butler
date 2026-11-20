@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test } from "./fixtures";
+import { completeWizard, expect, openSettingsGroup, terminalText, test } from "./fixtures";
 
 /**
  * 成本熔断（工作流 L）：在设置页「花费与后台」给 session 设一个很小的 token 上限；
@@ -17,8 +17,7 @@ test("cost breaker: a session over its cap is paused, and continue-and-raise cle
   await completeWizard(page, s);
 
   // 1. 设置 → 花费与后台：全局一层，每个 session 100 token。
-  await sidebar(page, S.settings).click();
-  await page.getByTestId("settings-tab-cost").click();
+  await openSettingsGroup(page, "cost");
   await expect(page.getByTestId("cost-caps")).toBeVisible();
   await page.getByTestId("cost-input-sessionCap").fill("100");
   await page.getByTestId("cost-input-unit").selectOption("tokens");
@@ -54,8 +53,7 @@ test("cost breaker: a session over its cap is paused, and continue-and-raise cle
   await expect(notice).toBeVisible();
 
   // 6. 设置页的「最近的记录」里有暂停和解除。
-  await sidebar(page, S.settings).click();
-  await page.getByTestId("settings-tab-cost").click();
+  await openSettingsGroup(page, "cost");
   await expect(page.getByTestId("cost-events")).toContainText(S.cs.event.pause!);
   await expect(page.getByTestId("cost-events")).toContainText(S.cs.event.resume!);
 });

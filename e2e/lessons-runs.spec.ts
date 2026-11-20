@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { RESUME_SLACK_MS } from "../src/main/claude/availability";
 import { limitLine, resetClock } from "../src/renderer/src/availability-view";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, unsupportedGhCalls, type FakeGhFixture, type Launched, type PrViewFixture, type Sandbox } from "./fixtures";
+import { completeWizard, expect, type FakeGhFixture, type Launched, openSettingsTab, type PrViewFixture, type Sandbox, terminalText, test, unsupportedGhCalls } from "./fixtures";
 
 /**
  * 复盘的分析记录和 Claude 限额（计划 2026-11-16 lessons-visibility 任务 13）：
@@ -75,15 +75,6 @@ const runPill = (page: Page, queueId: number) => runRow(page, queueId).locator("
 /** 键值表（dl.kv）里名字正好是 term 的那一行的值。 */
 const kv = (scope: Locator, term: string) =>
   scope.locator("dt").filter({ hasText: new RegExp(`^${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).locator("xpath=following-sibling::dd[1]");
-
-/** 设置页的滚动容器（.page）滚了多少，以及这一块的顶边离容器顶边多远。 */
-function settingsScroll(block: Locator): Promise<{ scrollTop: number; offset: number }> {
-  return block.evaluate((el) => {
-    const scroller = el.closest(".page");
-    if (!scroller) throw new Error("no .page scroll container");
-    return { scrollTop: scroller.scrollTop, offset: el.getBoundingClientRect().top - scroller.getBoundingClientRect().top };
-  });
-}
 
 /** 展开详情里的一段日志（<details>），返回它的正文。 */
 async function openLog(detail: Locator, testid: string): Promise<Locator> {
@@ -205,21 +196,15 @@ test("a session that hits a limit shows the badge, the notice and the Health ent
   await expect(butler.locator(".terminal-wrap:visible")).toHaveCount(1);
   await expect.poll(() => terminalText(page)).toContain("hit your limit");
 
-  // 3. 账号受限的提醒（session_limited 只有“打开会话”）点“查看状态”：设置页滚到 Claude 可用性，状态受限，来源是会话。
-  //    这个窗口大小下可用性一块本来就在视口里，光看 toBeInViewport 证明不了滚过：
-  //    看滚动容器（.page）——从侧栏直接进设置页是 0，从提醒跳来要滚到这一块顶边贴着容器顶边。
+  // 3. 账号受限的提醒（session_limited 只有“打开会话”）点“查看状态”：跳到设置 › 健康检查（可用性一块在这个 tab 里，
+  //    不用滚就看得到），状态受限，来源是会话。先从侧栏进一次「基本」：上次停在别的 tab 也要跳到健康检查。
   const block = page.getByTestId("claude-availability");
-  await page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true }).click();
-  await expect(block).toBeVisible();
-  const fresh = await settingsScroll(block);
-  expect(fresh.scrollTop).toBe(0);
-  expect(fresh.offset).toBeGreaterThan(50);
+  await openSettingsTab(page, "basic");
+  await expect(block).toHaveCount(0);
   await homeButton(page).click();
   await page.getByTestId("now-notice-claude_limited").getByRole("button", { name: S.noticeHealth, exact: true }).click();
+  await expect(page.getByTestId("settings-tab-health")).toHaveAttribute("aria-selected", "true");
   await expect(block).toBeInViewport();
-  await expect.poll(async () => (await settingsScroll(block)).scrollTop).toBeGreaterThan(0);
-  // 下面几块设置可能比这一块晚出来：页面变长以后这一块还得贴着顶（只滚一次的话会停在离顶几百像素处）。
-  await expect.poll(async () => Math.abs((await settingsScroll(block)).offset)).toBeLessThanOrEqual(1);
   await expect(block.locator("h3")).toHaveText(S.availabilityTitle);
   await expect(kv(block, S.availabilityStateLabel)).toHaveText(S.availabilityState.limited);
   await expect(kv(block, S.availabilityCurrent)).toContainText(S.availabilitySource("session", null));

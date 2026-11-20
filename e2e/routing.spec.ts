@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, openSettingsGroup, type Sandbox, terminalText, test } from "./fixtures";
 
 /**
  * 模型路由（3.0）的设置页和交互 session 撞限后换模型：
@@ -9,11 +9,9 @@ import { completeWizard, expect, terminalText, test, type Sandbox } from "./fixt
  * Butler 总控 session 撞限后，session 行上出现「换到 X 继续」，点了用 --resume + --model 重开。
  */
 
-const settingsButton = (page: Page) => page.locator(".sidebar").getByRole("button", { name: S.settings, exact: true });
 
 async function openRouting(page: Page): Promise<void> {
-  await settingsButton(page).click();
-  await page.getByTestId("settings-tab-routing").click();
+  await openSettingsGroup(page, "routing");
   await expect(page.getByTestId("routing-settings")).toBeVisible();
 }
 

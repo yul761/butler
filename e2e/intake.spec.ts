@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, openSettingsGroup, type Sandbox, test } from "./fixtures";
 
 const sidebar = (page: Page, name: string) => page.locator(".sidebar").getByRole("button", { name, exact: true });
 
@@ -38,20 +38,19 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await completeWizard(page, s);
 
   // 1. 登记两个模型（档位映射到哪个模型由路由决定），预审打开（自动开工要它）。
-  await sidebar(page, S.settings).click();
-  await page.getByTestId("settings-tab-routing").click();
+  await openSettingsGroup(page, "routing");
   for (const [name, tier] of [["claude-fake-high", "high"], ["claude-fake-mid", "mid"]] as const) {
     await page.getByTestId("new-model-name").fill(name);
     await page.getByTestId("new-model-tier").selectOption(tier);
     await page.getByRole("button", { name: S.rt.addModel, exact: true }).click();
     await expect(page.getByTestId("registry-row").filter({ hasText: name })).toHaveCount(1);
   }
-  await page.getByTestId("settings-tab-review").click();
+  await openSettingsGroup(page, "review");
   await page.getByTestId("review-enabled").check();
   await expect(page.getByTestId("review-enabled")).toBeChecked();
 
   // 2. 「自动接活」：先配来源和仓库映射，总开关还关着——什么都不拉、不开 session、进度页没有队列（工作流 R）。
-  await page.getByTestId("settings-tab-intake").click();
+  await openSettingsGroup(page, "intake");
   await expect(page.getByTestId("intake-policy")).toBeVisible();
   await expect(page.getByTestId("intake-effective-enabled")).toHaveText(S.policyBool(false));
   const map = page.getByTestId("setting-intakeRepoMap");
@@ -69,8 +68,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   expect(interactiveModels(s)).toEqual([]);
 
   // 3. 再打开总开关（全局，最多 1 个）：一保存就拉一次。
-  await sidebar(page, S.settings).click();
-  await page.getByTestId("settings-tab-intake").click();
+  await openSettingsGroup(page, "intake");
   await page.getByTestId("intake-input-enabled").selectOption("true");
   await page.getByTestId("intake-input-maxParallel").fill("1");
   await page.getByTestId("intake-policy-save").click();

@@ -47,6 +47,40 @@ describe("collapsed sections", () => {
     expect(() => setCollapsed("sidebar:f1", true)).not.toThrow();
   });
 
+  it("is collapsed by default when asked, and an explicit open is remembered", () => {
+    expect(isCollapsed("g", true)).toBe(true);
+    setCollapsed("g", false, true);
+    expect(isCollapsed("g", true)).toBe(false);
+    setCollapsed("g", true, true);
+    expect(isCollapsed("g", true)).toBe(true);
+    expect(localStorage.getItem("butler.collapsed")).toBeNull();
+  });
+
+  it("keeps the old default (expanded) for ids that do not ask", () => {
+    expect(isCollapsed("x")).toBe(false);
+    setCollapsed("x", true);
+    expect(isCollapsed("x")).toBe(true);
+  });
+
+  it("keeps default-collapsed opens apart from plain collapsed ids", () => {
+    setCollapsed("same", true);
+    expect(isCollapsed("same", true)).toBe(true);
+    setCollapsed("same", false, true);
+    expect(isCollapsed("same", true)).toBe(false);
+    expect(isCollapsed("same")).toBe(true);
+    setCollapsed("same", false);
+    expect(isCollapsed("same")).toBe(false);
+    expect(isCollapsed("same", true)).toBe(false);
+  });
+
+  it("tells listeners the collapsed state of default-collapsed ids", () => {
+    const seen: [string, boolean][] = [];
+    const off = onCollapsedChange((id, on) => seen.push([id, on]));
+    setCollapsed("g", false, true);
+    off();
+    expect(seen).toEqual([["g", false]]);
+  });
+
   it("tells listeners what changed until they stop listening", () => {
     const seen: [string, boolean][] = [];
     const off = onCollapsedChange((id, on) => seen.push([id, on]));
