@@ -803,31 +803,61 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
     expect(s.deps.onUsage.mock.calls[1][0].costUsd).toBeCloseTo(0.02, 10);
   });
 
-  // BTL-239：分叉前读开发 session transcript 最后一条 cost-state 的 totalCostUSD（base），第一轮 = T1 − base，是准数。
+  // BTL-239：分叉前读开发 session transcript 最后一条 cost-state（base），第一轮 = T1 − base，是准数；跑完再读一次核对没变。
+  const base = (totalUsd: number, turns: number) => ({ totalUsd, weight: turns * runW });
+
   it("完整分叉第一轮读得到开发 session 存的累计（5.00）：记 T1 − 5.00，是准数；接着问取差，整个分叉都是准数", async () => {
     const s = setup();
-    s.deps.costBase.mockResolvedValue(5);
+    s.deps.costBase.mockResolvedValue(base(5, 250));
     s.queue.push(ok({ costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }), ok({ costUsd: 5.05, usageRaw, modelUsage: cumulative(252) }));
     const { forkId } = s.svc.ask("root-1", null, "q1");
     await s.svc.idle();
     expect(s.repo.get(forkId)!.mode).toBe("full");
-    // 读的是被分叉的那个（--resume 后面的 head），在起跑之前。
-    expect(s.deps.costBase).toHaveBeenCalledWith("head-2");
+    // 读的是被分叉的那个（--resume 后面的 head），起跑前一次、跑完核对一次。
+    expect(s.deps.costBase.mock.calls).toEqual([["head-2"], ["head-2"]]);
     expect(s.deps.costBase.mock.invocationCallOrder[0]).toBeLessThan(s.deps.run.mock.invocationCallOrder[0]);
+    expect(s.deps.costBase.mock.invocationCallOrder[1]).toBeGreaterThan(s.deps.run.mock.invocationCallOrder[0]);
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.02, 12);
     expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: false, costSeenTotal: 5.02 });
     expect(s.deps.onUsage.mock.calls[0][0].costUsd).toBeCloseTo(0.02, 12);
     s.svc.ask("root-1", forkId, "q2");
     await s.svc.idle();
     // 接着问是续分叉自己的 session，不再读开发 session 的。
-    expect(s.deps.costBase).toHaveBeenCalledTimes(1);
+    expect(s.deps.costBase).toHaveBeenCalledTimes(2);
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.05, 10);
     expect(s.repo.get(forkId)).toMatchObject({ costPartial: false, costApprox: false, costSeenTotal: 5.05 });
   });
 
+  it("没有完整的启动参数（严格参数续开发 session）也读 head 的累计", async () => {
+    const s = setup({ plan: { ...PLAN, cacheOk: false } });
+    s.deps.costBase.mockResolvedValue(base(5, 250));
+    // 缓存不可用时自动选精简；用完整上下文重问才会用严格参数续开发 session。
+    s.queue.push(ok({ costUsd: 0.01 }), ok({ costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }));
+    const light = s.svc.ask("root-1", null, "q1").forkId;
+    await s.svc.idle();
+    expect(s.deps.costBase).not.toHaveBeenCalled();
+    s.svc.reaskFull(light);
+    await tick();
+    await s.svc.idle();
+    expect(s.calls[1].args).toEqual(expect.arrayContaining(["--resume", "head-2", "--fork-session"]));
+    expect(s.deps.costBase).toHaveBeenCalledWith("head-2");
+  });
+
+  // 起跑前读完到 CLI 读之间开发 session 退出（关终端、休眠、刷新重启），写下新的一条：CLI 从新的接着记，减旧的会把开发 session 这段全算进分叉。
+  it("跑的时候开发 session 存下了新的累计：不减，退回按份额拆、标约数，记日志", async () => {
+    const s = setup();
+    s.deps.costBase.mockResolvedValueOnce(base(4, 200)).mockResolvedValueOnce(base(5, 250));
+    s.queue.push(ok({ costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(5.02 / 251, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ costApprox: true, costSeenTotal: 5.02 });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("changed during the run"));
+  });
+
   it("开发 session 存的累计比 T1 还大：对不上，退回按份额拆，标约数", async () => {
     const s = setup();
-    s.deps.costBase.mockResolvedValue(9);
+    s.deps.costBase.mockResolvedValue(base(9, 249));
     s.queue.push(ok({ costUsd: 5, usageRaw, modelUsage: cumulative(250) }));
     const { forkId } = s.svc.ask("root-1", null, "q1");
     await s.svc.idle();
@@ -856,14 +886,41 @@ describe("ForkService 费用（CLI 的 total_cost_usd 是累计的）", () => {
 
   it("第一轮失败后重跑：再读一次开发 session 的累计（重跑之前它可能又花了）", async () => {
     const s = setup();
-    s.deps.costBase.mockResolvedValueOnce(5).mockResolvedValueOnce(5.5);
+    s.deps.costBase.mockResolvedValueOnce(base(5, 250)).mockResolvedValue(base(5.5, 259));
     s.queue.push({ ok: false, reason: "timeout", message: "t", limit: null, stderr: "", result: null }, ok({ costUsd: 5.52, usageRaw, modelUsage: cumulative(260) }));
     const { forkId } = s.svc.ask("root-1", null, "q1");
     await s.svc.idle();
+    // 没有结果的那一轮不用核对。
+    expect(s.deps.costBase).toHaveBeenCalledTimes(1);
     s.svc.ask("root-1", forkId, "q2");
     await s.svc.idle();
-    expect(s.deps.costBase).toHaveBeenCalledTimes(2);
+    expect(s.deps.costBase).toHaveBeenCalledTimes(3);
     expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.02, 10);
+  });
+
+  it("第一轮带着结果出错（T1 5.01）：记 T1 − base，重跑再记它自己的，两轮加起来", async () => {
+    const s = setup();
+    s.deps.costBase.mockResolvedValueOnce(base(5, 250)).mockResolvedValueOnce(base(5, 250)).mockResolvedValue(base(5.5, 259));
+    const failedRun: HeadlessOutcome = { ok: false, reason: "claude_error", message: "boom", limit: null, stderr: "", result: result({ isError: true, costUsd: 5.01, usageRaw, modelUsage: cumulative(251) }) };
+    s.queue.push(failedRun, ok({ costUsd: 5.53, usageRaw, modelUsage: cumulative(260) }));
+    const { forkId } = s.svc.ask("root-1", null, "q1");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.01, 12);
+    expect(s.repo.get(forkId)).toMatchObject({ status: "failed", costApprox: false });
+    s.svc.ask("root-1", forkId, "q2");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)!.costUsd).toBeCloseTo(0.04, 10);
+    expect(s.repo.get(forkId)).toMatchObject({ costApprox: false, costSeenTotal: 5.53 });
+  });
+
+  it("CLI 没分叉（读得到开发 session 的累计也一样）：费用标不全，累计不动，不记用量行", async () => {
+    const s = setup();
+    s.deps.costBase.mockResolvedValue(base(5, 250));
+    s.queue.push(ok({ sessionId: "head-2", costUsd: 5.02, usageRaw, modelUsage: cumulative(251) }));
+    const { forkId } = s.svc.ask("root-1", null, "q");
+    await s.svc.idle();
+    expect(s.repo.get(forkId)).toMatchObject({ errorCode: "not_forked", costPartial: true, costSeenTotal: null });
+    expect(s.deps.onUsage).not.toHaveBeenCalled();
   });
 
   it("CLI 没分叉但带 modelUsage：费用按份额记、仍标不全，累计不动，不记用量行", async () => {

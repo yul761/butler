@@ -1847,7 +1847,7 @@ async function bootstrap(): Promise<void> {
     devLaunchOf: (id) => sessionService.devLaunchOf(id),
     transcriptExists,
     // 分叉第一轮的准数：被分叉的开发 session 存下的累计（BTL-239）。
-    costBase: (id) => readCostBase(findTranscript(paths.claudeProjects, id)),
+    costBase: (id) => readCostBase(findTranscript(paths.claudeProjects, id), id),
     // 开着终端（gateTerm 按 head 找终端，/clear 之后也找得到）；休眠的没有终端，不算在跑。
     devRunning: (id) => gateTerm(id) !== null,
     lastTurnAt: (id) => usageRepo.lastSessionTurnAt(id),

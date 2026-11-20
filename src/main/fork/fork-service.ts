@@ -13,6 +13,7 @@ import type { ForkDiscussionsRepo, ForkRow } from "../db/fork-discussions-repo";
 import type { UsageReport } from "../handoff/headless-exec";
 import { MAIN_STRINGS, M } from "../strings";
 import { continueArgs, devForkArgs, forkSettings, strictForkArgs, type DevLaunch } from "./fork-args";
+import { sameBase, type CostBase } from "./cost-base";
 import type { FullForkPlan } from "./fork-cache";
 import { LIGHT_QA_CHARS, LIGHT_RECALL_CHARS, chooseMode, fullBlock, runStart, turnCost, type TurnCost } from "./fork-mode";
 
@@ -27,10 +28,10 @@ export interface ForkDeps {
   devLaunchOf: (sessionId: string) => DevLaunch | null;
   transcriptExists: (sessionId: string) => boolean;
   /**
-   * 这个 session 存下的累计花费（transcript 最后一条 cost-state 的 totalCostUSD，readCostBase）；读不到为 null。
-   * 分叉第一轮起跑前读被分叉的那个，第一轮记 T1 − 它（准数）；读不到才按份额拆、标约数。
+   * 这个 session 存下的累计花费（transcript 里它最后一条 cost-state，readCostBase）；读不到为 null。
+   * 分叉第一轮起跑前读被分叉的那个、跑完再读一次核对，第一轮记 T1 − 它（准数）；读不到或者变了才按份额拆、标约数。
    */
-  costBase: (sessionId: string) => Promise<number | null>;
+  costBase: (sessionId: string) => Promise<CostBase | null>;
   /** 这个 head 开着终端在跑（休眠的、终端退出了的都不算）。不在跑的开发 session 不会和分叉抢，跟停在输入框一样算空着。 */
   devRunning: (headId: string) => boolean;
   lastTurnAt: (sessionId: string) => number | null;
@@ -403,14 +404,15 @@ export class ForkService {
     // 分叉别的 session 的那一轮（完整分叉的第一轮、它失败后的重跑）：起跑前读被分叉的 session 存下的累计，跑完记 T1 − 它。
     // 每次起跑都重读：重跑之前开发 session 可能又花了。读出错不挡这一轮，只是退回按份额拆。
     const from = forkedFrom(o.args);
-    let base: number | null = null;
-    if (from) {
+    const readBase = async (): Promise<CostBase | null> => {
       try {
-        base = await this.d.costBase(from);
+        return from ? await this.d.costBase(from) : null;
       } catch (e) {
         this.d.log(`fork ${row.id}: reading the cost base of ${from} failed`, e);
+        return null;
       }
-    }
+    };
+    let base = await readBase();
     try {
       const prompt = await o.prompt();
       out = await this.d.run({
@@ -425,6 +427,15 @@ export class ForkService {
     if (!out.ok && out.reason === "aborted" && this.d.signal?.aborted) {
       this.d.log(`fork ${row.id}: aborted by quit`);
       return { ok: false };
+    }
+    // 起跑前读到的累计要跟 CLI 读的是同一条：开发 session 恰好在这中间退出（关终端、休眠、刷新重启）会写下新的一条，CLI 从新的接着记，
+    // 减掉旧的就把开发 session 这段的花费全算到分叉头上。跑完再读一次，变了就不用（退回按份额拆、标约数）。
+    if (base !== null && out.result) {
+      const after = await readBase();
+      if (!sameBase(base, after)) {
+        this.d.log(`fork ${row.id}: the cost base of ${from} changed during the run, splitting by share instead`);
+        base = null;
+      }
     }
     // 失败的那一轮也照记已经算出的费用（记答案出错时也不丢）；什么都没算出来就当一部分不知道。
     // CLI 的 total_cost_usd 是累计的：按这一轮怎么起的、上次见到的累计（分叉第一轮是开发 session 存下的 base）算出这一轮自己的（turnCost）。
