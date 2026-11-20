@@ -2924,6 +2924,7 @@ async function bootstrap(): Promise<void> {
     conv,
     fork: forkService,
     devSend: devSender,
+    forkReady: () => healthReady,
     keepAwake: keepAwakeSwitch,
     onArchived: (key) => {
       removeTicketMcpConfigs(paths.mcp, key);

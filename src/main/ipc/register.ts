@@ -249,6 +249,8 @@ export interface IpcDeps {
   fork: Pick<ForkService, "ask" | "reaskFull" | "list" | "sendConclusion" | "remember">;
   /** 对话 tab 的输入框选「开发 session」时发进去（和送结论同一个 DevSender）。 */
   devSend: Pick<DevSender, "send">;
+  /** 启动健康检查（healthReady）：分叉要用的 claude 路径和 butler-hook 在它之后才知道。 */
+  forkReady: () => Promise<void>;
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   /** 防休眠开关（只在内存里，启动时是关的）。 */
   keepAwake: { isOn(): boolean; set(on: boolean): void };
@@ -841,7 +843,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.convList, cv.list);
   handle(IPC.convSearch, cv.search);
   // 对话 tab（UI 重做第 5 层）：分叉讨论、送结论、发给开发 session。
-  const fk = forkHandlers({ fork: d.fork, devSend: d.devSend });
+  const fk = forkHandlers({ fork: d.fork, devSend: d.devSend, ready: d.forkReady });
   handle(IPC.forkAsk, fk.ask);
   handle(IPC.forkSendConclusion, fk.sendConclusion);
   handle(IPC.forkReaskFull, fk.reaskFull);
