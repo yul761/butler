@@ -1,7 +1,11 @@
-import type { ConvRepo, TurnKind } from "../db/conv-repo";
+import { stat } from "node:fs/promises";
+import type { Session } from "../../shared/types";
+import type { ConvRepo, ConvTurn, QaBy, TurnKind } from "../db/conv-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
+import { WATCH_DEBOUNCE_MS } from "../sessions/activity-monitor";
+import { DebouncedWatch, type WatchFn } from "../sessions/transcript-watch";
 import { capText, convEntriesOf, type ConvEntry, type UserOpen } from "./conv-parse";
-import { isQuestionLike } from "./conv-qa";
+import { isQuestionLike, ruleQa, type ConvQaVerdict } from "./conv-qa";
 import { readChunk } from "./jsonl-reader";
 
 /**
@@ -11,6 +15,22 @@ import { readChunk } from "./jsonl-reader";
 
 /** 每个 session 记住最近这么多个 entry 属于哪一轮（只在内存里；重启以后靠游标里的 openTurnId 接上）。 */
 export const PARENT_MAP_MAX = 2000;
+/** 启动补读：多久以内活动过的 target。 */
+export const CONV_BACKFILL_MS = 14 * 24 * 3600_000;
+export const CONV_SWEEP_MS = 10 * 60_000;
+/** 开着的 head：确认监视在、顺便比一下文件大小（fs.watch 会漏事件）。 */
+export const CONV_TICK_MS = 10_000;
+/** 结束超过这么久的轮不判，记 no / old。 */
+export const CONV_JUDGE_MAX_AGE_MS = 24 * 3600_000;
+/** 一直没 stop 的轮，静止这么久算结束。 */
+export const CONV_STALE_TURN_MS = 30 * 60_000;
+const JUDGE_BATCH = 20;
+
+/** 和 SessionsRepo.listConvTargets 的条件一致（不看活动时间）。 */
+export function isConvTarget(s: Session | null): boolean {
+  if (!s || s.replacedBy !== null || s.lessonRunId !== null) return false;
+  return s.origin === "butler" || s.ticketKey !== null || s.featureId !== null || s.epicId !== null || s.butler;
+}
 
 export interface ConvIngesterDeps {
   repo: ConvRepo;
@@ -21,6 +41,12 @@ export interface ConvIngesterDeps {
   chunkBytes?: number;
   maxLineBytes?: number;
   log?: (msg: string) => void;
+  /** 终端开着的 head。 */
+  openHeads: () => string[];
+  /** 规则判不了的轮问模型（judgeConvQa）。 */
+  judge: (turn: { question: string; answer: string }, session: { cwd: string; ticketKey: string | null }) => Promise<ConvQaVerdict>;
+  watch?: WatchFn;
+  timers?: { setInterval: typeof setInterval; clearInterval: typeof clearInterval };
 }
 
 const KIND_OF: Record<UserOpen, TurnKind> = { user: "user", relay: "silent", silent: "silent", handoff: "handoff" };
@@ -28,11 +54,166 @@ const KIND_OF: Record<UserOpen, TurnKind> = { user: "user", relay: "silent", sil
 export class ConvIngester {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly parents = new Map<string, Map<string, number>>();
+  private readonly watches = new Map<string, { file: string; w: DebouncedWatch }>();
+  private intervals: ReturnType<typeof setInterval>[] = [];
+  private stopped = false;
+  private judging = false;
+  private sweeping: Promise<void> | null = null;
 
   constructor(private readonly d: ConvIngesterDeps) {}
 
+  /** 马上 sweep 一次，然后起 tick 和 sweep 两个定时器。 */
+  start(): void {
+    if (this.stopped) return;
+    void this.sweep();
+    const t = this.d.timers ?? { setInterval, clearInterval };
+    this.intervals.push(
+      t.setInterval(() => void this.tick(), CONV_TICK_MS),
+      t.setInterval(() => void this.sweep(), CONV_SWEEP_MS),
+    );
+  }
+
+  /** 关掉所有监视和定时器；之后的 ingest / judge 直接返回，不碰数据库。 */
+  stop(): void {
+    this.stopped = true;
+    const t = this.d.timers ?? { setInterval, clearInterval };
+    for (const iv of this.intervals) t.clearInterval(iv);
+    this.intervals = [];
+    for (const { w } of this.watches.values()) w.close();
+    this.watches.clear();
+  }
+
+  /** 开着的 target head：挂上监视（重命名以后会掉，ensure 重新挂上），文件大小和游标对不上就读；已经关掉的 head 撤掉监视。 */
+  async tick(): Promise<void> {
+    if (this.stopped) return;
+    const heads = new Set(this.d.openHeads().filter((h) => isConvTarget(this.d.sessions.get(h))));
+    for (const [h, { w }] of this.watches) {
+      if (!heads.has(h)) {
+        w.close();
+        this.watches.delete(h);
+      }
+    }
+    for (const h of heads) {
+      if (this.stopped) return;
+      const file = this.d.transcriptOf(h);
+      if (!file) continue;
+      let entry = this.watches.get(h);
+      if (entry && entry.file !== file) {
+        entry.w.close();
+        entry = undefined;
+      }
+      if (!entry) {
+        entry = { file, w: new DebouncedWatch(file, { delayMs: WATCH_DEBOUNCE_MS, onChange: () => void this.ingest(h), watch: this.d.watch, log: (m) => this.d.log?.(m) }) };
+        this.watches.set(h, entry);
+      }
+      entry.w.ensure();
+      let st;
+      try {
+        st = await stat(file);
+      } catch {
+        continue;
+      }
+      const c = this.d.repo.cursor(h);
+      if (!c || c.file !== file || c.ino !== st.ino || c.offset !== st.size) await this.ingest(h);
+    }
+  }
+
+  /** 所有 target 的整条链逐个 ingest（旧段在前），然后把一直没 stop 的旧轮结束掉、跑判断队列。正在跑时返回正在跑的那一次。 */
+  sweep(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    this.sweeping ??= this.doSweep().finally(() => {
+      this.sweeping = null;
+    });
+    return this.sweeping;
+  }
+
+  private async doSweep(): Promise<void> {
+    try {
+      for (const s of this.d.sessions.listConvTargets(this.d.now() - CONV_BACKFILL_MS)) {
+        for (const id of this.d.sessions.chainOf(s.id).reverse()) {
+          if (this.stopped) return;
+          await this.ingest(id);
+        }
+      }
+      if (this.stopped) return;
+      this.d.repo.endStale(this.d.now() - CONV_STALE_TURN_MS);
+    } catch (e) {
+      this.d.log?.(`conv sweep: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    await this.runJudges();
+  }
+
+  /** 这个 id 所在整条链 ingest 到最新（换新前用）。 */
+  async syncNow(sessionId: string): Promise<void> {
+    const head = this.d.sessions.head(sessionId)?.id ?? sessionId;
+    const chain = this.d.sessions.chainOf(head);
+    for (const id of chain.length > 0 ? chain.reverse() : [sessionId]) await this.ingest(id);
+  }
+
+  /** 判断队列：串行，一次一个；正在跑就直接返回。花费熔断暂停时这一轮留着，下次再试。 */
+  async runJudges(): Promise<void> {
+    if (this.stopped || this.judging) return;
+    this.judging = true;
+    try {
+      for (;;) {
+        const batch = this.d.repo.pendingEnded(JUDGE_BATCH);
+        if (batch.length === 0) return;
+        for (const t of batch) {
+          if (this.stopped) return;
+          if ((await this.judgeOne(t)) === "paused") return;
+        }
+      }
+    } catch (e) {
+      this.d.log?.(`conv judge: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      this.judging = false;
+    }
+  }
+
+  private async judgeOne(t: ConvTurn): Promise<"done" | "paused"> {
+    const { repo } = this.d;
+    if ((t.endedAt ?? 0) < this.d.now() - CONV_JUDGE_MAX_AGE_MS) return this.verdict(t.id, "no", "old");
+    const msgs = repo.turnMessages(t.id);
+    const question = msgs.filter((m) => m.role === "user").map((m) => m.text).join("\n\n");
+    const answer = msgs.filter((m) => m.role === "assistant").map((m) => m.text).join("\n\n");
+    const rule = ruleQa({ asked: t.asked, mutated: t.mutated, otherTools: t.otherTools, answerChars: [...answer].length });
+    if (rule !== "judge") return this.verdict(t.id, rule, "rule");
+    const s = this.d.sessions.get(t.sessionId);
+    if (!s) return this.verdict(t.id, "no", "judge_failed");
+    let v: ConvQaVerdict;
+    try {
+      v = await this.d.judge({ question, answer }, { cwd: s.cwd, ticketKey: s.ticketKey });
+    } catch (e) {
+      this.d.log?.(`conv judge ${t.id}: ${e instanceof Error ? e.message : String(e)}`);
+      v = null;
+    }
+    if (this.stopped || v === "paused") return "paused";
+    // 等模型的时候这一轮可能又读进了改动，或者别处已经判过了：以现在的状态为准。
+    const now = repo.turn(t.id);
+    if (!now || now.qa !== "pending") return "done";
+    if (now.mutated) return this.verdict(t.id, "no", "rule");
+    return v === null ? this.verdict(t.id, "no", "judge_failed") : this.verdict(t.id, v ? "yes" : "no", "judge");
+  }
+
+  private verdict(turnId: number, qa: "yes" | "no", by: QaBy): "done" {
+    if (this.d.repo.setQa(turnId, qa, by)) {
+      const root = this.d.repo.turn(turnId)?.rootSessionId;
+      if (root) this.appended(root);
+    }
+    return "done";
+  }
+
+  private appended(root: string): void {
+    try {
+      this.d.onAppended(root);
+    } catch (e) {
+      this.d.log?.(`conv onAppended ${root}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   /** 把这个 session 的 transcript 读到最新（同一个 session 串行：前一次没完就排在它后面）。出错只记日志。 */
   ingest(sessionId: string): Promise<void> {
+    if (this.stopped) return Promise.resolve();
     const prev = this.chains.get(sessionId) ?? Promise.resolve();
     const next = prev.then(() => this.run(sessionId));
     this.chains.set(sessionId, next);
@@ -43,6 +224,7 @@ export class ConvIngester {
   }
 
   private async run(id: string): Promise<void> {
+    if (this.stopped) return;
     const touched = new Set<string>();
     try {
       await this.readAll(id, touched);
@@ -50,13 +232,8 @@ export class ConvIngester {
       this.parents.delete(id);
       this.d.log?.(`conv ingest ${id}: ${e instanceof Error ? e.message : String(e)}`);
     }
-    for (const root of touched) {
-      try {
-        this.d.onAppended(root);
-      } catch (e) {
-        this.d.log?.(`conv onAppended ${root}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
+    for (const root of touched) this.appended(root);
+    void this.runJudges();
   }
 
   private async readAll(id: string, touched: Set<string>): Promise<void> {
@@ -74,8 +251,9 @@ export class ConvIngester {
     let openTurnId = cursor?.openTurnId ?? null;
     let from = { ino: cursor?.ino ?? null, offset: cursor?.offset ?? 0 };
     for (;;) {
+      if (this.stopped) return;
       const chunk = await readChunk(file, from, { chunkBytes: this.d.chunkBytes, maxLineBytes: this.d.maxLineBytes });
-      if (!chunk) return;
+      if (!chunk || this.stopped) return;
       if (chunk.skipped > 0) this.d.log?.(`conv ingest ${id}: skipped ${chunk.skipped} line(s) over the size limit at byte ${chunk.start}`);
       if (chunk.lines.length === 0 && chunk.skipped === 0) return;
       let changed = false;
