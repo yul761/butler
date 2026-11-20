@@ -12,19 +12,23 @@ const URL52 = "https://github.com/acme/app/pull/52";
 const B1 = "feature/E2E-1";
 const B2 = "feature/E2E-2";
 
-const pr = (n: number, url: string, head: string, base: string, sha: string, o: { draft: boolean; merged?: boolean }): PrViewFixture => ({
-  number: n, url, state: o.merged ? "MERGED" : "OPEN", headRefName: head, baseRefName: base, headRefOid: sha, isDraft: o.draft,
-  title: head, body: "", labels: [], createdAt: "2026-11-18T08:00:00Z", mergedAt: o.merged ? "2026-11-18T09:00:00Z" : null, closedAt: null,
+// 时间按运行时算，不能写死：PR watcher 不给「链接时已经合并一天多」的 PR 跑 onMerged（MERGED_RECENT_MS），
+// 写死的 mergedAt 过了一天，这条合并就被当成回填的旧 PR，栈不会 rebase。
+const CREATED_AT = new Date(Date.now() - 60 * 60_000).toISOString();
+const pr = (n: number, url: string, head: string, base: string, sha: string, o: { draft: boolean; mergedAt?: string }): PrViewFixture => ({
+  number: n, url, state: o.mergedAt ? "MERGED" : "OPEN", headRefName: head, baseRefName: base, headRefOid: sha, isDraft: o.draft,
+  title: head, body: "", labels: [], createdAt: CREATED_AT, mergedAt: o.mergedAt ?? null, closedAt: null,
   reviewDecision: "", author: { login: "dev" }, reviews: [], comments: [], commits: [], statusCheckRollup: [],
 });
-const fixture = (sha1: string, sha2: string, merged: boolean): FakeGhFixture => {
-  const p51 = pr(51, URL51, B1, "main", sha1, { draft: false, merged });
+/** mergedAt 是 #51 合并的时间（ISO），没合并传 null。 */
+const fixture = (sha1: string, sha2: string, mergedAt: string | null): FakeGhFixture => {
+  const p51 = pr(51, URL51, B1, "main", sha1, { draft: false, mergedAt: mergedAt ?? undefined });
   const p52 = pr(52, URL52, B2, B1, sha2, { draft: true });
   const row = ({ number, url, state, headRefName, createdAt, mergedAt, closedAt }: PrViewFixture) => ({ number, url, state, headRefName, createdAt, mergedAt, closedAt });
   return {
     branches: { [B1]: [row(p51)], [B2]: [row(p52)] },
     prs: { [URL51]: p51, [URL52]: p52 },
-    open: merged ? [p52] : [p51, p52],
+    open: mergedAt ? [p52] : [p51, p52],
   };
 };
 
@@ -78,7 +82,7 @@ test("when the bottom of a stack merges, the stack is rebased and the next layer
   git(repo, "checkout", "-q", "main");
   const sha1 = git(repo, "rev-parse", B1);
   const sha2 = git(repo, "rev-parse", B2);
-  s.setGh(fixture(sha1, sha2, false));
+  s.setGh(fixture(sha1, sha2, null));
   s.env = { BUTLER_STACKS_TICK_MS: "2000" };
 
   const { page } = await launch(s);
@@ -105,7 +109,7 @@ test("when the bottom of a stack merges, the stack is rebased and the next layer
   git(hub, "commit", "-q", "-m", "E2E-1 work (#51)");
   git(hub, "push", "-q", "origin", "main");
   const main = git(hub, "rev-parse", "HEAD");
-  s.setGh(fixture(sha1, sha2, true));
+  s.setGh(fixture(sha1, sha2, new Date().toISOString()));
   // E2E-1 的 session 说完一轮（跑 Stop hook）。
   await page.locator(".sidebar .ticket .key").getByText("E2E-1", { exact: true }).click();
   await page.locator(".terminal-wrap:visible .xterm").click();
