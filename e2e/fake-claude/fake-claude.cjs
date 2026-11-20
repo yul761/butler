@@ -44,7 +44,8 @@
 //     FAKE_CLAUDE_SUMMARY_GATE 指向的文件存在时，feature 汇总等到文件被删掉才回答：e2e 用它控制归档前要等多久。
 //   -p 不带 --json-schema：分叉讨论（UI 重做第 5 层）。运行记录写 fork-run <参数 JSON> 和 fork-session <回的 id>；
 //     回「分叉回答：<prompt 的最后一行>」，最后一行提到「结论」（conclusionAsk）时回「结论：把 X 改成 Y」；
-//     --fork-session 或者没有 --resume 时 session_id 是新的，只有 --resume X 时就是 X；usage 读了缓存，total_cost_usd 0.02；
+//     --fork-session 或者没有 --resume 时 session_id 是新的，只有 --resume X 时就是 X；usage 读了缓存，每一轮花 0.02；
+//     total_cost_usd 和真的 CLI 一样是累计的：续 X 时是 X 的累计加 0.02，--fork-session 还带着被分叉 session 以前的花费（开发 session 当它花过 1.00）；
 //     FAKE_CLAUDE_FORK=limit[:<秒级时间戳>] 时照复盘分析 limit: 的写法回撞额度（没给时间就是一小时后），退出 1。
 "use strict";
 const fs = require("node:fs");
@@ -223,12 +224,26 @@ function lessonsAnalysis() {
 
 /** 分叉讨论的用量：一轮读了开发 session 的缓存。 */
 const FORK_USAGE = { input_tokens: 100, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0, output_tokens: 50 };
+/** 分叉讨论每一轮自己的花费；开发 session（fake claude 没记过它的累计）当它以前花过 FORK_PARENT_SPEND。 */
+const FORK_RUN_COST = 0.02;
+const FORK_PARENT_SPEND = 1;
+/** 每个 session 的累计 total_cost_usd，记在运行记录旁边（每次分叉讨论是一个新进程）。 */
+const forkTotalsFile = () => (process.env.FAKE_CLAUDE_LOG ? `${process.env.FAKE_CLAUDE_LOG}.fork-totals.json` : null);
+function forkTotals() {
+  const f = forkTotalsFile();
+  try {
+    return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : {};
+  } catch {
+    return {};
+  }
+}
 /** 分叉讨论里要结论（prompt 的最后一行提到「结论」，即 conclusionAsk）时的回答。 */
 const FORK_CONCLUSION = "结论：把 X 改成 Y";
 
 /**
  * 分叉讨论（-p 不带 --json-schema）：运行记录写 fork-run <参数 JSON> 和 fork-session <回的 id>。
  * --fork-session 或者没有 --resume：一个新 id；只有 --resume X：接着 X（和真的 CLI 一样）。
+ * total_cost_usd 也和真的 CLI 一样是累计的：没有 --resume 从 0 起；--resume X（带不带 --fork-session）从 X 的累计起，再加这一轮的 FORK_RUN_COST。
  * FAKE_CLAUDE_FORK=limit[:<秒级时间戳>]：照复盘分析 limit: 的写法回撞额度（没给时间就是一小时后），退出 1。
  */
 function forkRun(input) {
@@ -244,9 +259,14 @@ function forkRun(input) {
   }
   const sessionId = has("--fork-session") || !has("--resume") ? randomUUID() : flag("--resume");
   log(`fork-session ${sessionId}`);
+  const totals = forkTotals();
+  const from = has("--resume") ? (totals[flag("--resume")] ?? FORK_PARENT_SPEND) : 0;
+  const total = Math.round((from + FORK_RUN_COST) * 1e6) / 1e6;
+  totals[sessionId] = total;
+  if (forkTotalsFile()) fs.writeFileSync(forkTotalsFile(), JSON.stringify(totals));
   const last = input.trimEnd().split("\n").pop().trim();
   const result = /结论|conclusion/i.test(last) ? FORK_CONCLUSION : `分叉回答：${last}`;
-  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result, usage: FORK_USAGE, total_cost_usd: 0.02, permission_denials: [] })}\n`);
+  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result, usage: FORK_USAGE, total_cost_usd: total, permission_denials: [] })}\n`);
 }
 
 function headless() {
