@@ -1,7 +1,7 @@
-// 范围页（epic / feature）的纯函数（UI 重做第 3 层）：ticket 一行、按 feature 分组、进度那一句、谁该动的字。
+// 范围页（feature）的纯函数（UI 重做第 3 层）：ticket 一行、进度那一句、谁该动的字。
 // 状态一律取自第 1 层：ticket 的轮次是主进程标了 ticketLevel 的那条，这里不重新判断任何 PR 或 ticket 的状态。
 import type { ScopeTurnRow, Turn, TurnItem } from "../../shared/turn";
-import type { TicketView } from "../../shared/types";
+import type { Block, TicketView } from "../../shared/types";
 import { runningRows, ticketItem, youCards, type RunningRow } from "./home-view";
 import type { UiStrings } from "./strings";
 import { externalWho } from "./turn-text";
@@ -45,7 +45,7 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
     const mine = items.filter((i) => i.ticketKey === t.key);
     const { turn, others, item: picked } = ticketPick(t.key, mine);
     const item: TurnItem = picked ?? {
-      ticketKey: t.key, pr: null, epicId: null, featureId: t.featureId, since: 0, others,
+      ticketKey: t.key, pr: null, featureId: t.featureId, since: 0, others,
       turn: t.effectiveStatus === "done" ? { owner: "done", kind: "merged" } : turn,
     };
     const seen = new Map<string, { repo: string; number: number }>();
@@ -58,7 +58,7 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
 }
 
 /**
- * epic / feature 页的「轮到你」卡片、概况页签的标红和「进行中」：和首页、全部 ticket 表格、进度那一句同一口径（spec「不并存两套状态算法」）。
+ * feature 页的「轮到你」卡片、概况页签的标红和「进行中」：和首页、全部 ticket 表格、进度那一句同一口径（spec「不并存两套状态算法」）。
  * 每个 ticket 一条（主进程标了 ticketLevel 的那条，带着别的 PR 个数）；再加这个 ticket 多出来的没回答的提问（首页也各出一张），
  * 和不属于 ticket 的（总控 session、Butler 提醒）。被 ticket 级口径排除的 session 级那条（有 PR 时 session 停着）不出。
  */
@@ -82,24 +82,36 @@ export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { 
 /** 一组里合了几个。 */
 const mergedOf = (rows: TicketRow[]): number => rows.filter((r) => r.turn.owner === "done").length;
 
-/** 按传入的 feature 顺序分组；没有 feature 的行忽略；feature 下没有 ticket 也返回该组。 */
-export function groupByFeature(rows: TicketRow[], features: { id: number; name: string }[]): { feature: { id: number; name: string }; rows: TicketRow[]; merged: number }[] {
-  return features.map((feature) => {
-    const mine = rows.filter((r) => r.featureId === feature.id);
-    return { feature, rows: mine, merged: mergedOf(mine) };
-  });
-}
-
 /** 不分组（feature 页）：一组、没有组名；没有行时没有组（表格显示空状态）。 */
 export function flatGroup(rows: TicketRow[]): { name: null; merged: number; total: number; rows: TicketRow[] }[] {
   return rows.length === 0 ? [] : [{ name: null, merged: mergedOf(rows), total: rows.length, rows }];
 }
 
-/** 范围自己那一行（epic / feature 的总数）；看板里没有时把它下面的行（feature / ticket）加起来，最慢的不算。 */
-export function scopeTotal(scopes: ScopeTurnRow[], kind: "epic" | "feature", id: number): ScopeTurnRow {
+/** name 为 null：不分组（epic 里还没有 feature）。 */
+export interface BlockGroup { id: number | null; name: string | null; description: string | null; merged: number; total: number; rows: TicketRow[] }
+
+/**
+ * epic 页按 feature（内部叫 block，BTL-246）分组：按 position 一组一个（没有 ticket 的 feature 也出），
+ * 最后是不在任何 feature 里的（blockId 为空或指向不存在的 feature；没有就不出这一组）。epic 里还没有 feature 时不分组（同 flatGroup）。
+ */
+export function blockGroups(blocks: Block[], tickets: Pick<TicketView, "key" | "blockId">[], rows: TicketRow[], S: UiStrings): BlockGroup[] {
+  if (blocks.length === 0) return flatGroup(rows).map((g) => ({ ...g, id: null, description: null }));
+  const blockOf = new Map(tickets.map((t) => [t.key, t.blockId ?? null]));
+  const known = new Set(blocks.map((b) => b.id));
+  const group = (id: number | null, name: string, description: string | null, mine: TicketRow[]): BlockGroup =>
+    ({ id, name, description, merged: mergedOf(mine), total: mine.length, rows: mine });
+  const out = [...blocks].sort((a, b) => a.position - b.position || a.id - b.id)
+    .map((b) => group(b.id, b.name, b.description, rows.filter((r) => blockOf.get(r.key) === b.id)));
+  const loose = rows.filter((r) => { const b = blockOf.get(r.key) ?? null; return b === null || !known.has(b); });
+  if (loose.length > 0) out.push(group(null, S.lay.notInAFeature, null, loose));
+  return out;
+}
+
+/** 范围自己那一行（feature 的总数）；看板里没有时把它下面的 ticket 行加起来，最慢的不算。 */
+export function scopeTotal(scopes: ScopeTurnRow[], kind: "feature", id: number): ScopeTurnRow {
   const own = scopes.find((r) => r.kind === kind && r.id === id);
   if (own) return own;
-  const child = kind === "epic" ? "feature" : "ticket";
+  const child = "ticket";
   const sum: ScopeTurnRow = { kind, id, name: "", total: 0, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, youCount: 0, slowest: null };
   for (const r of scopes) {
     if (r.kind !== child) continue;

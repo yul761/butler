@@ -186,7 +186,7 @@ describe("TicketPrsRepo", () => {
     const stages = new PrStageRepo(db);
     const closed = prs.link(link({ url: "u/1", number: 1, repoId, headBranch: "old", state: "closed" })).pr;
     stages.add(
-      { ticketKey: "T-1", repoId, prId: closed.id, branch: "old", featureId: null, epicId: null, sessionId: null, kind: "closed", at: 5, data: { number: 1 } },
+      { ticketKey: "T-1", repoId, prId: closed.id, branch: "old", featureId: null, sessionId: null, kind: "closed", at: 5, data: { number: 1 } },
       "closed:1",
     );
     expect(prs.pruneStale(repoId, "feat")).toBe(0);

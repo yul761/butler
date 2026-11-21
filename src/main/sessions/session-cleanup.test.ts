@@ -12,7 +12,7 @@ const NOW = 10_000_000_000;
 const base = (o: Partial<Session> = {}): Session => ({
   id: "x", ticketKey: null, cwd: "/r", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
+  featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 
 const act = (o: Partial<SessionActivity> = {}): SessionActivity => ({
@@ -43,7 +43,6 @@ function setup(o: { minutes?: number } = {}) {
     open: new Set<string>(),
     chains: {} as Record<string, string[]>,
     tickets: {} as Record<number, string[]>,
-    features: {} as Record<number, number[]>,
     tailFails: false,
   };
   const terms: Term[] = [];
@@ -60,7 +59,6 @@ function setup(o: { minutes?: number } = {}) {
     lastUserInputAt: (termId) => terms.find((t) => t.termId === termId)?.typedAt ?? 0,
     openedAt: (termId) => terms.find((t) => t.termId === termId)?.openedAt ?? 0,
     ticketsOfFeature: (f) => state.tickets[f] ?? [],
-    featuresOfEpic: (e) => state.features[e] ?? [],
     askUserPending: (id) => state.askUser.has(id),
     waitingOnButler: (id) => state.waiting.has(id),
     refresher: {
@@ -185,26 +183,22 @@ describe("SessionCleanup idle close (BTL-190 item 8)", () => {
     expect(t.closes.map((x) => x.id)).toEqual(["ok"]);
   });
 
-  it("does not close a ticket coordinator while a session of its ticket is working", () => {
+  it("no ticket session manages another one (the ticket coordinator is gone, BTL-246)", () => {
     const t = setup();
-    t.add("coord", { session: { coordinator: true } });
-    const child = t.add("child", { activity: act({ kind: "edit" }) });
-    t.add("other-ticket", { session: { ticketKey: "BTL-2" }, activity: act({ kind: "edit" }) });
-    // 子 session 自己关不关由换新那边看（这里的假换新都放行）；总控等着。
+    // 迁移以前的 ticket 总控：迁移把 coordinator 清掉了，就算还带着也不再当总控。
+    t.add("old-coord", { session: { coordinator: true } });
+    t.add("child", { activity: act({ kind: "edit" }) });
     t.c.tick();
-    expect(t.closes.map((x) => x.id)).not.toContain("coord");
-    child.activity = act({ kind: "waiting" });
-    t.closes.length = 0;
-    t.c.tick();
-    expect(t.closes.map((x) => x.id)).toContain("coord");
+    expect(t.closes.map((x) => x.id)).toContain("old-coord");
   });
 
   it("counts a child whose activity is not known yet as working", () => {
     const t = setup();
-    t.add("coord", { session: { coordinator: true } });
+    t.state.tickets[5] = ["BTL-1"];
+    t.add("feat", { session: { ticketKey: null, featureId: 5, coordinator: true } });
     t.add("child", { activity: null });
     t.c.tick();
-    expect(t.closes.map((x) => x.id)).not.toContain("coord");
+    expect(t.closes.map((x) => x.id)).not.toContain("feat");
   });
 
   it("does not close a feature coordinator while one of its tickets' sessions or its fix sessions is working", () => {
@@ -225,26 +219,6 @@ describe("SessionCleanup idle close (BTL-190 item 8)", () => {
     t.closes.length = 0;
     t.c.tick();
     expect(t.closes.map((x) => x.id)).toContain("feat");
-  });
-
-  it("does not close an epic session while a session of its features is working", () => {
-    const t = setup();
-    t.state.features[3] = [5];
-    t.state.tickets[5] = ["BTL-1"];
-    t.add("epic", { session: { ticketKey: null, epicId: 3 } });
-    const feat = t.add("feat", { session: { ticketKey: null, featureId: 5 }, activity: act({ kind: "thinking" }) });
-    t.add("elsewhere", { session: { ticketKey: null, featureId: 6 }, activity: act({ kind: "thinking" }) });
-    t.c.tick();
-    expect(t.closes.map((x) => x.id)).not.toContain("epic");
-    feat.activity = act({ kind: "waiting" });
-    const ticket = t.add("ticket", { activity: act({ kind: "edit" }) });
-    t.closes.length = 0;
-    t.c.tick();
-    expect(t.closes.map((x) => x.id)).not.toContain("epic");
-    ticket.activity = act({ kind: "idle" });
-    t.closes.length = 0;
-    t.c.tick();
-    expect(t.closes.map((x) => x.id)).toContain("epic");
   });
 
   it("a plain ticket session does not wait for other sessions of its ticket", () => {
@@ -334,7 +308,7 @@ describe("SessionCleanup with the real repository (BTL-190 item 8)", () => {
     const tails: string[] = [];
     const c = new SessionCleanup({
       idleMinutes: () => 0, terminals: () => [], activity: () => null, lastUserInputAt: () => 0, openedAt: () => 0,
-      ticketsOfFeature: () => [], featuresOfEpic: () => [],
+      ticketsOfFeature: () => [],
       refresher: { precheckClose: () => null, close: async () => "done" },
       hiddenBefore: (before) => repo.listHiddenBefore(before),
       head: (id) => repo.get(id), terminalOpen: () => false,

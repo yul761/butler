@@ -1,9 +1,9 @@
-// 范围页（epic / feature）共用的展示件：只吃 props，不调 api。
+// 范围页（epic，内部是 feature）的展示件：只吃 props，不调 api。
 import { Fragment, useState, type ReactNode } from "react";
 import { isCollapsed, setCollapsed } from "../local-prefs";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
 import { barSegments, cardKey, type RunningRow } from "../home-view";
-import { progressLine, scopeRowLine, slowestLine, whoLabel, type TicketRow } from "../scope-view";
+import { progressLine, scopeRowLine, slowestLine, whoLabel, type BlockGroup, type TicketRow } from "../scope-view";
 import { S } from "../strings";
 import { turnSentence } from "../turn-text";
 import { turnTone } from "../turn-tone";
@@ -33,10 +33,13 @@ export function RunRow({ row, onOpenTicket }: { row: RunningRow; onOpenTicket: (
 }
 
 export function ScopeOverview(p: {
-  rows: ScopeTurnRow[]; total: ScopeTurnRow | null; youItems: TurnItem[]; kind: "epic" | "feature"; emptyText: string;
+  rows: ScopeTurnRow[]; total: ScopeTurnRow | null; youItems: TurnItem[]; kind: "feature"; emptyText: string;
   cards: Omit<TurnCardProps, "item">; onOpenRow?: (id: number | string) => void; onCreate?: () => void;
   /** feature 页：有 PR 的 ticket（ticketsWithPr）。没有 PR 的 ticket 行写「还没开 PR」，不写「0/1 合了」。 */
   ticketsWithPr?: ReadonlySet<string>;
+  /** epic 页：epic 里的 feature（blockGroups）。有 feature 时按 feature 一组一行，代替 ticket 行。 */
+  blocks?: BlockGroup[];
+  onOpenTicket?: (key: string) => void;
 }) {
   const you = (
     <section className="scope-you">
@@ -44,13 +47,13 @@ export function ScopeOverview(p: {
       {p.youItems.length === 0 ? <p className="muted">{S.lay.noYouHere}</p> : p.youItems.map((item) => <TurnCard key={cardKey(item)} item={item} {...p.cards} />)}
     </section>
   );
-  // 有 feature 但还没有 ticket 时 total 是 0，feature 行仍要显示。
+  // 下面的行还没有统计时 total 是 0，行仍要显示。
   // 还没有 ticket 也可能轮到你（总控问了一句）：页签标着要你看，卡片就得在这里。
   if (p.total === null || (p.total.total === 0 && p.rows.length === 0)) {
     return (
       <div className="scope-overview">
         <p className="muted">{p.emptyText}</p>
-        {p.onCreate && <button className="primary" onClick={p.onCreate}>{p.kind === "epic" ? S.newFeature : S.newTicket}</button>}
+        {p.onCreate && <button className="primary" onClick={p.onCreate}>{S.newTicket}</button>}
         {p.youItems.length > 0 && you}
       </div>
     );
@@ -60,9 +63,10 @@ export function ScopeOverview(p: {
       <p className="scope-progress">{progressLine(p.total, S)}</p>
       <p className="muted">{slowestLine(p.total.slowest, S)}</p>
       {you}
-      {p.rows.length > 0 && (
+      {p.blocks && p.blocks.some((g) => g.id !== null) ? (
+        <ScopeBlocks groups={p.blocks} onOpenTicket={p.onOpenTicket ?? (() => {})} />
+      ) : p.rows.length > 0 && (
         <section className="scope-rows">
-          {p.kind === "epic" && <h3>{S.lay.featuresHeading}</h3>}
           {p.rows.map((r) => (
             <div key={`${r.kind}:${r.id}`} className="scope-row">
               <button className="name" title={r.name} onClick={() => p.onOpenRow?.(r.id)}>{r.name}</button>
@@ -73,6 +77,26 @@ export function ScopeOverview(p: {
         </section>
       )}
     </div>
+  );
+}
+
+/** epic 里的 feature：按顺序一行一个，可以展开看它的 ticket（同「全部 ticket」的列）。第一个还没合完的默认展开。 */
+export function ScopeBlocks(p: { groups: BlockGroup[]; onOpenTicket: (key: string) => void }) {
+  const firstOpen = p.groups.find((g) => g.id !== null && g.merged < g.total) ?? null;
+  return (
+    <section className="scope-blocks">
+      <h3>{S.lay.featuresHeading}</h3>
+      <p className="muted">{S.lay.featuresHint}</p>
+      {p.groups.map((g) => (
+        <details key={g.id ?? "none"} className="scope-block" data-block={g.id ?? "none"} open={g === firstOpen || undefined}>
+          <summary title={g.description ?? undefined}>
+            <span className="name">{g.name}</span>
+            <span className="line muted">{S.lay.featureCard(g.merged, g.total)}</span>
+          </summary>
+          <ScopeTicketTable groups={[{ ...g, name: null }]} onOpenTicket={p.onOpenTicket} emptyText={S.lay.noTicketsInGroup} />
+        </details>
+      ))}
+    </section>
   );
 }
 

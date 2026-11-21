@@ -40,7 +40,7 @@ const backgroundDone = (taskId: string) => ({
 const flush = () => new Promise((r) => setImmediate(r));
 const row = (id: string, over: Partial<Session> = {}): Session => ({
   id, ticketKey: "DMS-1", cwd: "/work", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...over,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...over,
 });
 
 /** 假的依赖：session、ticket、feature 是内存表，transcript 和输出文件是真的临时文件。 */
@@ -535,16 +535,7 @@ describe("ActivityMonitor stuck detection scope", () => {
     await judgedOnce(h, "s1");
     h.judgeResults[0]({ stuck: true, reason: "the hook hangs", action: "kill it" });
     await flush();
-    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: null, featureId: 7, epicId: null, reason: "the hook hangs" }]);
-  });
-
-  it("checks an epic session and reports its epic", async () => {
-    const h = harness();
-    h.openSession("s1", { ticketKey: null, epicId: 3 });
-    await judgedOnce(h, "s1");
-    h.judgeResults[0]({ stuck: true, reason: "the hook hangs", action: "kill it" });
-    await flush();
-    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: null, featureId: null, epicId: 3, reason: "the hook hangs" }]);
+    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: null, featureId: 7, reason: "the hook hangs" }]);
   });
 
   it("checks a ticket coordinator", async () => {
@@ -1056,7 +1047,7 @@ describe("ActivityMonitor stuck detection", () => {
     h.judgeResults[0]({ stuck: true, reason: "the hook hangs", action: "kill it" });
     await flush();
     expect(h.monitor.get("s1")).toMatchObject({ kind: "command", stuck: true, reason: "the hook hangs", action: "kill it" });
-    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: "DMS-1", featureId: 7, epicId: null, reason: "the hook hangs" }]);
+    expect(h.stuckInfos).toEqual([{ sessionId: "s1", ticketKey: "DMS-1", featureId: 7, reason: "the hook hangs" }]);
     expect(h.notifications()).toBe(before + 1);
 
     await h.checks(4);

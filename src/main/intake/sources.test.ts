@@ -18,6 +18,16 @@ describe("normalizeIncoming", () => {
     expect(normalizeIncoming({ key: "X-1", title: "t", url: "https://tracker.example/X-1", storyPoints: 3 })).toMatchObject({ url: "https://tracker.example/X-1", storyPoints: 3 });
   });
 
+  it("takes the parent epic as { key, title } or a bare key, and leaves it out when there is none (BTL-246 §7)", () => {
+    expect(normalizeIncoming({ key: "A-1", title: "t", epic: { key: " SHOP-9 ", title: " Checkout\nrevamp " } })).toMatchObject({ epic: { key: "SHOP-9", title: "Checkout revamp" } });
+    expect(normalizeIncoming({ key: "A-1", title: "t", epic: { key: "SHOP-9", summary: "Checkout" } })).toMatchObject({ epic: { key: "SHOP-9", title: "Checkout" } });
+    expect(normalizeIncoming({ key: "A-1", title: "t", epic: "SHOP-9" })).toMatchObject({ epic: { key: "SHOP-9", title: null } });
+    // 和 ticket 的 key 一样按大写去重：一次给 shop-9、一次给 SHOP-9 也是同一个 epic。
+    expect(normalizeIncoming({ key: "A-1", title: "t", epic: " shop-9" })).toMatchObject({ epic: { key: "SHOP-9" } });
+    // 没有 epic、给错了：不带这个字段（以前存的 payload 和这一样，内容哈希不变）。
+    for (const epic of [undefined, null, "", { title: "x" }, 7, ["SHOP-9"]]) expect(normalizeIncoming({ key: "A-1", title: "t", epic })).not.toHaveProperty("epic");
+  });
+
   it("dedupes by key", () => {
     expect(normalizeList([{ key: "A-1", title: "x" }, { key: "A-1", title: "y" }, { key: "A-2", title: "z" }]).map((t) => t.title)).toEqual(["x", "z"]);
   });

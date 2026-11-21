@@ -1451,4 +1451,50 @@ export const MIGRATIONS: string[] = [
   DELETE FROM sensitive_terms;
   DELETE FROM llm_audit;
   `,
+  // BTL-246 层级 A′（docs/superpowers/specs/2026-11-20-btl-246-epic-hierarchy-design.md）：界面上的 epic 就是 features 这张表，
+  // epic 里的 feature 是新的 blocks（名字、可选说明、顺序，没有总控和工作区）。features.jira_epic_key：从 Jira 接进来的 epic 按它去重。
+  // epic_memory_archive：epic 记忆里挤不下的旧笔记（和旧 epic 记忆里搬过来的笔记），Butler 渲染进 epic 记忆的 handoff。
+  // 旧 epic：它的 feature 各自成为独立的 epic，旧 epic 的规划追加进每个 feature 的 brief；旧 epic 行归档，工作区不删。
+  // 旧 epic session 和 ticket 总控隐藏成历史；还等着送给旧 epic session 的汇报（epic 里 feature 总控发的）、它们自己的汇报不再送。
+  // 旧 epic session 的提问也收掉（再也没有终端能收到回答）；ticket 总控的提问留着，它按普通 ticket session 恢复。
+  // epic 里 ticket session 的汇报照常等着送给 feature 总控（现在的 epic 总控），inbox_items.epic_id 不作判断依据。
+  `
+  CREATE TABLE blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_id INTEGER NOT NULL REFERENCES features(id),
+    name TEXT NOT NULL,
+    description TEXT,
+    position INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (feature_id, name)
+  );
+  CREATE INDEX idx_blocks_feature ON blocks (feature_id, position);
+  ALTER TABLE tickets ADD COLUMN block_id INTEGER REFERENCES blocks(id);
+  ALTER TABLE features ADD COLUMN jira_epic_key TEXT;
+  CREATE UNIQUE INDEX idx_features_jira_epic ON features (jira_epic_key) WHERE jira_epic_key IS NOT NULL AND archived_at IS NULL;
+  CREATE TABLE epic_memory_archive (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_id INTEGER NOT NULL REFERENCES features(id),
+    text TEXT NOT NULL,
+    source TEXT NOT NULL,
+    noted_at INTEGER NOT NULL,
+    archived_at INTEGER NOT NULL
+  );
+  CREATE INDEX idx_epic_memory_archive ON epic_memory_archive (feature_id, archived_at);
+  UPDATE features SET brief =
+    CASE WHEN brief IS NULL OR trim(brief) = '' THEN '' ELSE brief || char(10) || char(10) END
+    || '[' || (SELECT name FROM epics WHERE epics.id = features.epic_id) || ']' || char(10)
+    || (SELECT plan FROM epics WHERE epics.id = features.epic_id)
+  WHERE epic_id IN (SELECT id FROM epics WHERE plan IS NOT NULL AND trim(plan) <> '');
+  UPDATE epics SET archived_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE archived_at IS NULL;
+  UPDATE sessions SET dismissed = 1, dismissed_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE dismissed = 0 AND (epic_id IS NOT NULL OR (coordinator = 1 AND ticket_key IS NOT NULL));
+  UPDATE inbox_items SET status = 'dismissed', resolved_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE kind = 'report' AND status = 'pending' AND session_id IN (
+      SELECT id FROM sessions WHERE epic_id IS NOT NULL OR (coordinator = 1 AND ticket_key IS NOT NULL)
+        OR (coordinator = 1 AND ticket_key IS NULL AND feature_id IN (SELECT id FROM features WHERE epic_id IS NOT NULL)));
+  UPDATE inbox_items SET status = 'dismissed', resolved_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE kind = 'decision' AND status = 'pending' AND session_id IN (SELECT id FROM sessions WHERE epic_id IS NOT NULL);
+  UPDATE sessions SET coordinator = 0 WHERE ticket_key IS NOT NULL AND coordinator = 1;
+  `,
 ];

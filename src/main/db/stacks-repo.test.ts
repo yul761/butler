@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
 import { StacksRepo } from "./stacks-repo";
 
-const base = { repoPath: "/r", repoSlug: "acme/app", trunk: "main", remote: "origin", name: "s", epicId: null, featureId: 3, source: "mcp" as const };
+const base = { repoPath: "/r", repoSlug: "acme/app", trunk: "main", remote: "origin", name: "s", featureId: 3, source: "mcp" as const };
 
 describe("StacksRepo", () => {
   it("creates a stack with ordered layers and finds a branch", () => {

@@ -95,7 +95,7 @@ export function derivePrStages(i: DeriveInput): DerivedStages {
   // since：这个时间或之后已经有这种事件就不补（关了、重开、又关了，第二次关闭没有事件时也补）；null = 有一条就不补。
   const synthetic = (kind: "merged" | "closed", since: number | null, at: number, id: number) => {
     if (i.pr && !events.some((e) => e.kind === kind && (since === null || e.at >= since))) {
-      events.push({ id, ticketKey: i.ticketKey, repoId: i.repoId, prId: null, branch: i.branch, featureId: i.featureId, epicId: null, sessionId: null, kind, at, data: { number: i.pr.number } });
+      events.push({ id, ticketKey: i.ticketKey, repoId: i.repoId, prId: null, branch: i.branch, featureId: i.featureId, sessionId: null, kind, at, data: { number: i.pr.number } });
     }
   };
   if (i.pr?.state === "merged") synthetic("merged", null, rowAt(i.pr.mergedAt, i.pr.checkedAt), Number.MAX_SAFE_INTEGER);

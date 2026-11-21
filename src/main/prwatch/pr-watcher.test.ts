@@ -957,7 +957,7 @@ describe("PrWatcher: stages", () => {
 
   it("dedupes against events recorded before the migration (same repo-scoped keys)", async () => {
     const s = setup();
-    s.stages.add({ ticketKey: "BTL-1", repoId: s.repoId, prId: null, branch: "b", featureId: null, epicId: null, sessionId: null, kind: "pr_opened", at: 1, data: { number: 7 } }, `${s.repoId}:opened:b:7`);
+    s.stages.add({ ticketKey: "BTL-1", repoId: s.repoId, prId: null, branch: "b", featureId: null, sessionId: null, kind: "pr_opened", at: 1, data: { number: 7 } }, `${s.repoId}:opened:b:7`);
     s.link();
     s.gh.prStatus.mockResolvedValue(pr());
     await s.w.check();

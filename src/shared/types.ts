@@ -45,44 +45,21 @@ export interface Feature {
   repos: FeatureRepo[];
   createdAt: number;
   archivedAt: number | null;
-  /** 属于哪个 epic（null：不属于任何 epic）。 */
-  epicId: number | null;
-  /** epic session 建 feature 时给的规划（null：没有）。 */
+  /** 规划（null：没有）：以前 epic session 建 feature 时给的，和旧 epic 的规划（BTL-246 迁移并进来）。 */
   brief: string | null;
   /** 规划发给总控的时间（null：还没发过）。 */
   briefSentAt: number | null;
+  /** 从 Jira 按 epic 接进来时对应的 Jira epic（BTL-246 §7）；省略或 null：不是从 Jira epic 来的。 */
+  jiraEpicKey?: string | null;
 }
 
-export interface EpicRepo {
-  id: number;
-  epicId: number;
-  repoPath: string;
-}
+export type FeatureStatus = "stuck" | "waiting" | "not_started" | "active" | "archived";
 
-/** epic：一组 feature 加一个规划用的工作区目录。 */
-export interface Epic {
+/** 一个 feature 的状态和最新汇总里的进度（Butler 总控的 list_features 用）。 */
+export interface FeatureStatusRow {
   id: number;
   name: string;
-  workspaceDir: string;
-  createdAt: number;
-  archivedAt: number | null;
-  repos: EpicRepo[];
-  /** epic session 用 set_epic_plan 写的整体规划；还没有为 null。 */
-  plan: string | null;
-  /**
-   * 规划这一栏最后一次定下的时间：建 epic、set_epic_plan、老数据迁移。
-   * null：升级前建的 epic，规划还在 epic 记忆的 handoff 里没迁过来（见 MemoryService.syncEpicNow）。
-   */
-  planAt: number | null;
-}
-
-export type EpicFeatureStatus = "stuck" | "waiting" | "not_started" | "active" | "archived";
-
-/** epic 页一行：一个 feature 的状态和最新汇总里的进度。 */
-export interface EpicFeatureRow {
-  id: number;
-  name: string;
-  status: EpicFeatureStatus;
+  status: FeatureStatus;
   archivedAt: number | null;
   /** 最新汇总的时间；还没有汇总为 null。 */
   summaryAt: number | null;
@@ -104,8 +81,25 @@ export interface Ticket {
   statusManual: TicketStatus | null;
   createdAt: number;
   archivedAt: number | null;
-  /** 属于哪个 feature（null：单独的 ticket）。 */
+  /** 属于哪个 epic（内部还叫 feature，null：单独的 ticket）。 */
   featureId: number | null;
+  /** 在 epic 里属于哪个 feature（内部叫 block，见 BTL-246；null 或省略：不属于任何 feature）。 */
+  blockId?: number | null;
+}
+
+/**
+ * epic 里的一个 feature（BTL-246 层级 A′）：一个名字、可选的说明、顺序和一组 ticket。没有总控、没有工作区。
+ * 内部叫 block：界面上的 epic 是 features 表（见 docs/superpowers/specs/2026-11-20-btl-246-epic-hierarchy-design.md §2）。
+ */
+export interface Block {
+  id: number;
+  /** 属于哪个 epic（features 表的 id）。 */
+  featureId: number;
+  name: string;
+  description: string | null;
+  /** 从 0 开始，越小越靠前。 */
+  position: number;
+  createdAt: number;
 }
 
 export type SessionOrigin = "butler" | "discovered";
@@ -132,11 +126,9 @@ export interface Session {
   featureId: number | null;
   /** 修复 session：为了解决哪个卡住的 session 开的（null：不是修复 session）。 */
   fixesSession: string | null;
-  /** epic session 属于哪个 epic（这时 ticketKey 和 featureId 都是 null）。 */
-  epicId: number | null;
   /** 开出来时用的模型（别名或模型路由里的名字；换模型后是新的那个）；null：没指定，恢复时也不传 --model。 */
   model: string | null;
-  /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature、epic 都是 null。 */
+  /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature 都是 null。 */
   butler: boolean;
   /** 复盘分析 session：为了看哪一次复盘运行开的（null：不是）。没有 Butler 的工具，不判断卡住、不换新。 */
   lessonRunId: number | null;
@@ -178,6 +170,8 @@ export interface TicketView extends Ticket {
 /** feature 页和侧边栏用：feature 加上它的 ticket 和 feature 级 session（总控和修复 session，设计文档 2026-10-26）。 */
 export interface FeatureView extends Feature {
   tickets: TicketView[];
+  /** epic 里的 feature（BTL-246，内部叫 block），按顺序；ticket 属于哪个看 TicketView.blockId。 */
+  blocks: Block[];
   sessions: SessionView[];
   hiddenSessions: SessionView[];
   /** feature 总控或者它的任何一个 ticket 在等用户输入。 */
@@ -188,17 +182,6 @@ export interface FeatureView extends Feature {
   ticketPrs: Record<string, Pr[]>;
   /** 键是 ticket 号：这个 ticket 运行中的 session 里最需要注意的那个；没有运行中的 session 就没有这个键。 */
   activity: Record<string, SessionActivity>;
-}
-
-/** epic 页和侧边栏用：epic 加上它的 session 和下面各 feature 的情况。 */
-export interface EpicView extends Epic {
-  sessions: SessionView[];
-  hiddenSessions: SessionView[];
-  /** epic session 或者它下面的 feature 在等用户输入。 */
-  waiting: boolean;
-  /** 下面有 feature 卡住了。 */
-  stuck: boolean;
-  features: EpicFeatureRow[];
 }
 
 /** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录，以及复盘分析 session。 */
@@ -238,14 +221,6 @@ export interface CreateFeatureInput {
   workspaceDir?: string;
 }
 
-export interface CreateEpicInput {
-  name: string;
-  /** 仓库根目录（或仓库里的目录）；至少一个。 */
-  repoPaths: string[];
-  /** 省略：<仓库的上一层>-epics/<名字>。 */
-  workspaceDir?: string;
-}
-
 export interface AddRepoInput {
   ticketKey: string;
   repoPath: string;
@@ -268,10 +243,8 @@ export interface UpdateRepoInput {
 
 export interface OpenSessionRequest {
   ticketKey: string;
-  /** 新 session 开在哪个仓库里。省略时：ticket 只有一个仓库就用它，否则必须指定（或者开总控）。 */
+  /** 新 session 开在哪个仓库里。省略时：ticket 只有一个仓库就用它，否则必须指定。 */
   repoId?: number;
-  /** 新开总控 session（工作区目录 + 每个仓库一个 --add-dir）。 */
-  coordinator?: boolean;
   /** 省略表示新建 session；给出时恢复该 session（会沿 replacedBy 链找到最新的）。 */
   sessionId?: string;
   /** 打开后预填到输入框的文本，不回车。 */
@@ -283,13 +256,6 @@ export interface OpenSessionRequest {
 /** 打开 feature 总控：新开，或者恢复 sessionId。 */
 export interface OpenFeatureSessionRequest {
   featureId: number;
-  sessionId?: string;
-  prefill?: string;
-}
-
-/** 打开 epic session：新开，或者恢复 sessionId。 */
-export interface OpenEpicSessionRequest {
-  epicId: number;
   sessionId?: string;
   prefill?: string;
 }
@@ -513,11 +479,10 @@ export interface PrDetail {
   slug: string;
 }
 
-/** 「现在」页一行点开去哪：ticket 页、feature 页、epic 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
+/** 「现在」页一行点开去哪：ticket 页、feature 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
 export type NowTarget =
   | { page: "ticket"; key: string; sessionId: string | null }
   | { page: "feature"; id: number; sessionId: string | null }
-  | { page: "epic"; id: number; sessionId: string | null }
   | { page: "butler"; sessionId: string | null };
 
 /** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。close：闲置关闭（BTL-190 第 8 点），写 handoff 之后结束终端。 */
@@ -539,7 +504,7 @@ export interface NowRow {
   /** 一个 ticket 开了几个仓库的 session 时才填（仓库目录名）。 */
   repo: string | null;
   coordinator: boolean;
-  /** 实况卡片上写的地方（BTL-190 第 7 点）：ticket 的 session 是仓库目录名，feature、epic 的 session 是 feature、epic 的名字；不知道为 null。 */
+  /** 实况卡片上写的地方（BTL-190 第 7 点）：ticket 的 session 是仓库目录名，feature 的 session 是 feature 的名字；不知道为 null。 */
   where: string | null;
   activity: SessionActivity | null;
   /** 正在干活：思考中、跑工具、后台命令（shared/activity 的 isWorking）。停着、等确认的不算。 */
@@ -583,19 +548,10 @@ export interface NowFeature {
   counts: NowCounts;
 }
 
-/** id 为 null：「无 epic」这一组（name 为空串，界面上显示自己的文案）。rows 是 epic 总控的行。 */
-export interface NowEpic {
-  id: number | null;
-  name: string;
-  rows: NowRow[];
-  features: NowFeature[];
-  counts: NowCounts;
-}
-
 /** 「待你决定」一条的状态（BTL-190 第 2+3 点）。 */
 export type InboxStatus = "pending" | "answered" | "dismissed" | "superseded";
-/** 提问 / 汇报的是哪种 session：ticket 的 session、ticket 总控、feature 总控、修复 session、epic session、Butler 总控（BTL-190 第 5 点）。 */
-export type InboxRole = "ticket" | "ticket_coordinator" | "feature_coordinator" | "fix" | "epic" | "butler";
+/** 提问 / 汇报的是哪种 session：ticket 的 session、feature 总控、修复 session、Butler 总控（BTL-190 第 5 点）。 */
+export type InboxRole = "ticket" | "feature_coordinator" | "fix" | "butler";
 
 /** 界面上的一条「待你决定」或汇报。 */
 export interface InboxItemView {
@@ -606,7 +562,6 @@ export interface InboxItemView {
   role: InboxRole;
   ticketKey: string | null;
   featureId: number | null;
-  epicId: number | null;
   /** ticket 开了几个仓库时才填（仓库目录名）。 */
   repo: string | null;
   /** decision 是问题，report 是汇报正文。 */
@@ -622,14 +577,14 @@ export interface InboxItemView {
   target: NowTarget;
 }
 
-/** feature 页、epic 页上面的两栏：未决的「待你决定」（从早到晚）和最近的汇报（从新到旧）。 */
+/** feature 页上面的两栏：未决的「待你决定」（从早到晚）和最近的汇报（从新到旧）。 */
 export interface InboxView {
   decisions: InboxItemView[];
   reports: InboxItemView[];
 }
 
-/** 收件箱看哪一块：一个 feature（含它的 ticket）、一个 epic（含它的 feature 和 ticket），或者全部。 */
-export type InboxScope = { featureId: number } | { epicId: number } | { all: true };
+/** 收件箱看哪一块：一个 feature（含它的 ticket），或者全部。 */
+export type InboxScope = { featureId: number } | { all: true };
 
 /** 「现在」页顶上的一条提醒（Claude 限额、复盘暂停或失败、某个 session 撞了限额）。 */
 /** 一条 CI 结论：一个 PR 行（ticket_prs 的 id）或一个仓库的分支行（branch_watch 的 repoId）。 */
@@ -686,7 +641,8 @@ export type NowNotice =
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */
   notices: NowNotice[];
-  epics: NowEpic[];
+  /** 按 feature 分组；最后一组 id 为 null，是不属于任何 feature 的 ticket。 */
+  features: NowFeature[];
   /** 开着终端的 Butler 总控（BTL-190 第 5 点）的一行；没开为 null。在干活也算进 running。 */
   butler: NowRow | null;
   /** 正在干活的 session 数（NowRow.working）。 */

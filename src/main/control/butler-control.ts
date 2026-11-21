@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import { type ButlerControlRequest, type ControlResult, type InboxControlOp, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { Turn } from "../../shared/turn";
-import { effectiveStatus, type Epic, type EpicFeatureRow, type EpicView, type Feature, type OpenSessionResult, type Session, type Ticket, type WatchedPr } from "../../shared/types";
+import { effectiveStatus, type Block, type Feature, type FeatureStatusRow, type OpenSessionResult, type Session, type Ticket, type WatchedPr } from "../../shared/types";
 import { roleOf, type InboxService } from "../inbox/inbox-service";
 import { progressOverview } from "../progress/progress-view";
 import type { MetricsOverview } from "../../shared/metrics";
@@ -13,10 +13,8 @@ import type { ControlHandlerDeps } from "./control-handler";
 
 /** Butler 总控（BTL-190 第 5 点）要的数据：index.ts 从 SessionService、PrWatcher、「需要你」和收件箱拿。 */
 export interface ButlerControlDeps {
-  /** 未归档的 epic（SessionService.epicViews）。 */
-  epicViews: () => Pick<EpicView, "id" | "name" | "sessions" | "waiting" | "stuck" | "features">[];
-  /** 所有未归档 feature 的一行情况（含不属于 epic 的），带上 epicId。 */
-  featureRows: () => (EpicFeatureRow & { epicId: number | null })[];
+  /** 所有未归档 feature 的一行情况。 */
+  featureRows: () => FeatureStatusRow[];
   /** Butler 在盯的所有 PR（PrWatcher.statusOf）。 */
   prs: () => WatchedPr[];
   /** 每个 PR 轮到谁，按链接查（TurnService.prTurns，和看板同一套算法）；没有为 null。 */
@@ -67,7 +65,7 @@ const fail = (error: string): ControlResult => ({ v: 1, ok: false, error });
 
 /**
  * Butler 总控的请求（BTL-190 第 5 点）：全部只读，加上 send_message 和 refresh_session。不建、不删、不结束。
- * 只有 send_message 会开 session：目标 feature 总控或 epic session 的终端关着（比如闲置时自动关掉了）时，接着它最近的那个再把消息交进去。
+ * 只有 send_message 会开 session：目标 feature 总控的终端关着（比如闲置时自动关掉了）时，接着它最近的那个再把消息交进去。
  * 请求文件谁都能写：往终端里写东西的 send_message 和换新别人的 refresh_session 要求 from 是开着终端的 Butler 总控自己。
  */
 export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (req: Exclude<ButlerControlRequest, { op: InboxControlOp["op"] }>) => Promise<ControlResult> {
@@ -80,7 +78,7 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
     return byId ?? list.find((x) => x.name.trim().toLowerCase() === w.toLowerCase());
   };
 
-  /** 正在给这个 feature、epic 开 session（send_message 打开关着的终端）：同时来的第二条不再开第二个，等它开好排进同一个信箱。值是开好的 head，没开成为 null。 */
+  /** 正在给这个 epic 开 session（send_message 打开关着的终端）：同时来的第二条不再开第二个，等它开好排进同一个信箱。值是开好的 head，没开成为 null。 */
   const opening = new Map<string, Promise<string | null>>();
 
   return async (req) => {
@@ -88,57 +86,55 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
     if (!b) return fail(M().ctlButlerOff);
     const features = d.features?.list() ?? [];
     const featureById = new Map(features.map((f) => [f.id, f]));
-    // 未归档的 epic；已归档的只在给别的东西标归属时按 id 查名字。
-    const epics = b.epicViews();
-    const epicById = new Map(epics.map((e) => [e.id, e]));
     const named = (x: { id: number; name: string } | undefined | null): Named => (x ? { id: x.id, name: x.name } : null);
     const featureOf = (id: number | null): Feature | undefined => (id === null ? undefined : featureById.get(id));
-    const epicOf = (id: number | null | undefined) => (id == null ? null : named(epicById.get(id) ?? d.epics?.get(id)));
-    const ticketOwners = (t: Ticket) => {
-      const f = featureOf(t.featureId);
-      return { feature: named(f), epic: epicOf(f?.epicId) };
+    const live = features.filter((f) => f.archivedAt === null);
+    /** 名字或 id 找一个未归档的 epic（内部是 feature）；找不到时是给总控看的错误。 */
+    const pickEpic = (wanted: string): Feature | { error: string } =>
+      pick(live, wanted) ?? { error: M().ctlNoSuchEpic(wanted, live.map((x) => x.name).join(", ") || M().ctlNoEpics) };
+    /** epic 里的 feature（内部是 block，BTL-246），按 epic 取一次。 */
+    const blocksOf = new Map<number, Block[]>();
+    const blocksIn = (epicId: number): Block[] => {
+      let list = blocksOf.get(epicId);
+      if (!list) blocksOf.set(epicId, (list = d.blocks?.list(epicId) ?? []));
+      return list;
     };
-    /** 一个 session 属于哪个 ticket、feature、epic。 */
+    const blockOf = (t: Ticket): Named => (t.featureId === null || t.blockId == null ? null : named(blocksIn(t.featureId).find((x) => x.id === t.blockId)));
+    const ticketOwners = (t: Ticket) => ({ epic: named(featureOf(t.featureId)), feature: blockOf(t) });
+    /** 一个 session 属于哪个 ticket、epic。 */
     const owners = (s: Session) => {
       if (s.ticketKey !== null) {
         const t = d.tickets.get(s.ticketKey);
-        return { ticket: s.ticketKey, ...(t ? ticketOwners(t) : { feature: null, epic: null }), repo: t?.repos.find((r) => r.id === s.repoId) ?? null };
+        return { ticket: s.ticketKey, ...(t ? ticketOwners(t) : { epic: null, feature: null }), repo: t?.repos.find((r) => r.id === s.repoId) ?? null };
       }
-      const f = featureOf(s.featureId);
-      return { ticket: null, feature: named(f), epic: epicOf(f ? f.epicId : s.epicId), repo: null };
+      return { ticket: null, epic: named(featureOf(s.featureId)), feature: null, repo: null };
+    };
+    /** 一个 epic 里每个 feature 的进度（顺序同 position）。 */
+    const blockProgress = (epicId: number) => {
+      const own = d.tickets.listByFeature(epicId);
+      return blocksIn(epicId).map((x, i) => {
+        const mine = own.filter((t) => t.blockId === x.id);
+        return { id: x.id, name: x.name, position: i + 1, merged: mine.filter((t) => effectiveStatus(t) === "done").length, total: mine.length, mine };
+      });
     };
     const self = req.from ? (d.sessions.head(req.from) ?? null) : null;
     /** 往别的 session 里写东西、换新别的 session 的请求：from 必须是开着终端的 Butler 总控（请求文件谁都能写）。 */
     const fromOpenButler = !!self?.butler && !!d.sessionService.termIdOf(self.id);
 
-    type Target = { kind: "feature"; feature: Feature; session: Session | null } | { kind: "epic"; epic: Epic; session: Session | null };
-    /** send_message 的目标：给的 session 换成它的 feature 或 epic（ticket 和修复 session 不行）；feature、epic 按名字或 id 找，已归档的不算。 */
-    const resolveTarget = (r: { session?: string; feature?: string; epic?: string }): Target | { error: string } => {
-      const live = features.filter((f) => f.archivedAt === null);
-      if (r.feature !== undefined) {
-        const f = pick(live, r.feature);
-        return f ? { kind: "feature", feature: f, session: null } : { error: M().ctlNoSuchFeatureAll(r.feature, live.map((x) => x.name).join(", ") || M().ctlNoFeatures) };
-      }
+    type Target = { feature: Feature; session: Session | null };
+    /** send_message 的目标：给的 session 换成它的 epic（ticket 和修复 session 不行）；epic 按名字或 id 找，已归档的不算。 */
+    const resolveTarget = (r: { session?: string; epic?: string }): Target | { error: string } => {
       if (r.epic !== undefined) {
-        const e = pick(epics, r.epic);
-        const full = e ? d.epics?.get(e.id) : undefined;
-        return full ? { kind: "epic", epic: full, session: null } : { error: M().ctlNoSuchEpic(r.epic, epics.map((x) => x.name).join(", ") || M().ctlNoEpics) };
+        const f = pickEpic(r.epic);
+        return "error" in f ? f : { feature: f, session: null };
       }
       const wanted = r.session ?? "";
       const t = d.sessions.head(wanted);
       if (!t || t.id === self?.id || t.dismissed) return { error: M().ctlNoSuchSession(wanted) };
-      const role = roleOf(t);
-      if (role === "epic" && t.epicId !== null && epicById.has(t.epicId)) {
-        const full = d.epics?.get(t.epicId);
-        if (full) return { kind: "epic", epic: full, session: t };
-      }
-      const f = role === "feature_coordinator" && t.featureId !== null ? featureById.get(t.featureId) : undefined;
-      if (f && f.archivedAt === null) return { kind: "feature", feature: f, session: t };
+      const f = roleOf(t) === "feature_coordinator" && t.featureId !== null ? featureById.get(t.featureId) : undefined;
+      if (f && f.archivedAt === null) return { feature: f, session: t };
       return { error: M().ctlSendWrongTarget(t.id) };
     };
-    /** epic 正在跑的 epic session（链上最新的那个）。 */
-    const runningEpicSession = (epicId: number): Session | null =>
-      d.sessions.listByEpic(epicId).find((x) => x.replacedBy === null && !!d.sessionService.termIdOf(x.id)) ?? null;
     const mailbox = d.mailbox;
     /** 排进目标的信箱（BTL-245）：在忙的下一次工具调用时读到，停着的直接输入；从不因为它在忙而拒绝。 */
     const enqueue = (sessionId: string, text: string, featureId: number | null, interrupt: boolean, hold = false) =>
@@ -147,31 +143,18 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       ok({ queued: true, sessionId: d.sessions.head(sessionId)?.id ?? sessionId, requestId: r.id, state: r.state, ...extra, note: `${M().mailboxSendNote(r.state)}${M().mailboxReplyNote}` });
     /**
      * 终端关着（闲置时自动关掉了、Butler 重启过）：和用户点开一样接着最近的那个（给的 session 没隐藏就接着它），
-     * 排着的消息当作它的第一条输入（submit 等输入框就绪）。feature 从没开过总控时新开一个；但属于 epic、规划还没发过的，要 epic session 用 start_feature 开工。
+     * 排着的消息当作它的第一条输入（submit 等输入框就绪）。epic 从没开过总控时新开一个。
      * 正在打开（同时来的第二条）、打开失败：消息照样排在接着的那个 session 的信箱里，下次打开时送；没有可接着的才报错。
      */
     const openAndSend = async (target: Target, text: string, featureId: number | null, interrupt: boolean): Promise<ControlResult> => {
       const svc = d.sessionService;
-      const key = target.kind === "feature" ? `f${target.feature.id}` : `e${target.epic.id}`;
-      let resume: Session | undefined;
-      let open: () => Promise<OpenSessionResult>;
-      if (target.kind === "feature") {
-        const f = target.feature;
-        if (!svc.openFeature) return fail(M().ctlStartUnavailable);
-        const given = target.session && target.session.coordinator && target.session.replacedBy === null ? target.session : undefined;
-        resume = given ?? d.sessions.listFeatureCoordinators(f.id).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
-        if (!resume && f.epicId !== null && f.brief?.trim() && f.briefSentAt === null) {
-          return fail(M().ctlSendNotStarted(f.name, epicOf(f.epicId)?.name ?? String(f.epicId)));
-        }
-        const openFeature = svc.openFeature.bind(svc);
-        open = () => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
-      } else {
-        const e = target.epic;
-        if (!svc.openEpic) return fail(M().ctlStartUnavailable);
-        resume = target.session && target.session.replacedBy === null ? target.session : d.sessions.listByEpic(e.id).find((x) => x.replacedBy === null && !x.dismissed);
-        const openEpic = svc.openEpic.bind(svc);
-        open = () => openEpic({ epicId: e.id, ...(resume && { sessionId: resume.id }) });
-      }
+      const f = target.feature;
+      const key = `f${f.id}`;
+      if (!svc.openFeature) return fail(M().ctlStartUnavailable);
+      const given = target.session && target.session.coordinator && target.session.replacedBy === null ? target.session : undefined;
+      const resume = given ?? d.sessions.listFeatureCoordinators(f.id).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
+      const openFeature = svc.openFeature.bind(svc);
+      const open = (): Promise<OpenSessionResult> => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
       // 先排进接着的那个的信箱：打开时一起送；打不开也不丢。
       // hold：马上就要打开它（或交给 opened），不让信箱再去唤醒一次，免得两边同时 --resume 同一个 session。
       const early = resume ? enqueue(resume.id, text, featureId, false, true) : null;
@@ -213,30 +196,37 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
 
     switch (req.op) {
       case "list_epics":
-        return ok(b.epicViews().map((e) => ({
-          id: e.id, name: e.name, features: e.features.filter((r) => r.archivedAt === null).length,
-          sessionRunning: e.sessions.some((s) => s.termId !== null), session: e.sessions.find((s) => s.termId !== null)?.id ?? null, waiting: e.waiting, stuck: e.stuck,
-        })));
-      case "list_features":
         return ok(b.featureRows().map((r) => ({
-          id: r.id, name: r.name, epic: epicOf(r.epicId), status: r.status,
+          id: r.id, name: r.name, status: r.status, jiraEpic: featureById.get(r.id)?.jiraEpicKey ?? null,
+          // epic 里的 feature 和各自合了几个（BTL-246），顺序就是推进的顺序。
+          features: blockProgress(r.id).map((x) => ({ id: x.id, name: x.name, position: x.position, merged: x.merged, total: x.total })),
           coordinatorRunning: !!d.sessionService.runningCoordinator?.(r.id), coordinatorSession: d.sessionService.runningCoordinator?.(r.id)?.id ?? null,
           summary: r.summary === null ? null : r.summary.slice(0, SUMMARY_LIMIT), summaryAt: r.summaryAt === null ? null : new Date(r.summaryAt).toISOString(),
           // 汇总读 PR 状态的时间（总控 /handoff 交上来的汇总没有，按 summaryAt 算）；stale：之后有新活动，含 PR 状态变化（ws-b）。
           prStatusAt: iso(b.summaries?.prStatusAt(r.id) ?? r.summaryAt), stale: b.summaries?.stale(r.id) ?? null,
           blockers: r.blockers,
         })));
+      case "list_features": {
+        let epics = live;
+        if (req.epic !== undefined) {
+          const f = pickEpic(req.epic);
+          if ("error" in f) return fail(f.error);
+          epics = [f];
+        }
+        return ok(epics.flatMap((f) => {
+          const desc = new Map(blocksIn(f.id).map((x) => [x.id, x.description]));
+          return blockProgress(f.id).map(({ mine, ...x }) => ({
+            epic: named(f), ...x, description: desc.get(x.id) ?? null,
+            tickets: mine.map((t) => ({ key: t.key, title: t.title, status: effectiveStatus(t) })),
+          }));
+        }));
+      }
       case "list_tickets": {
         let list = d.tickets.list();
-        if (req.feature !== undefined) {
-          const f = pick(features, req.feature);
-          if (!f) return fail(M().ctlNoSuchFeatureAll(req.feature, features.map((x) => x.name).join(", ") || M().ctlNoFeatures));
-          list = list.filter((t) => t.featureId === f.id);
-        }
         if (req.epic !== undefined) {
-          const e = pick(epics, req.epic);
-          if (!e) return fail(M().ctlNoSuchEpic(req.epic, epics.map((x) => x.name).join(", ") || M().ctlNoEpics));
-          list = list.filter((t) => featureOf(t.featureId)?.epicId === e.id);
+          const f = pick(features, req.epic);
+          if (!f) return fail(M().ctlNoSuchEpic(req.epic, features.map((x) => x.name).join(", ") || M().ctlNoEpics));
+          list = list.filter((t) => t.featureId === f.id);
         }
         return ok(list.map((t) => ({
           key: t.key, title: t.title, status: effectiveStatus(t), ...ticketOwners(t),
@@ -254,7 +244,7 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
           return {
             prId: p.prId,
             ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
-            checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { feature: null, epic: null }),
+            checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { epic: null, feature: null }),
             // ws-b：叠放、轮到谁要的字段。分支行（还没有 PR）没有。
             ...(x && p.checkedAt > 0 && {
               title: x.title, headBranch: p.branch || null, baseBranch: x.baseBranch, draft: x.isDraft, author: x.author, labels: x.labels,
@@ -297,26 +287,20 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         if ("error" in target) return fail(target.error);
         if (!mailbox) return fail(M().ctlStartUnavailable);
         const text = sanitizeTask(`${M().butlerMessagePrefix}\n${req.text}`);
-        const running = target.kind === "feature" ? d.sessionService.runningCoordinator?.(target.feature.id) ?? null : runningEpicSession(target.epic.id);
-        const featureId = target.kind === "feature" ? target.feature.id : null;
+        const running = d.sessionService.runningCoordinator?.(target.feature.id) ?? null;
+        const featureId = target.feature.id;
         if (running) return queued(enqueue(running.id, text, featureId, req.interrupt === true), running.id);
         return openAndSend(target, text, featureId, req.interrupt === true);
       }
       case "progress_overview": {
         if (!b.progress) return fail(M().ctlProgressUnavailable);
         let featureId: number | null = null;
-        let epicId: number | null = null;
-        if (req.feature !== undefined) {
-          const f = pick(features.filter((x) => x.archivedAt === null), req.feature);
-          if (!f) return fail(M().ctlNoSuchFeatureAll(req.feature, features.filter((x) => x.archivedAt === null).map((x) => x.name).join(", ") || M().ctlNoFeatures));
+        if (req.epic !== undefined) {
+          const f = pickEpic(req.epic);
+          if ("error" in f) return fail(f.error);
           featureId = f.id;
         }
-        if (req.epic !== undefined) {
-          const e = pick(epics, req.epic);
-          if (!e) return fail(M().ctlNoSuchEpic(req.epic, epics.map((x) => x.name).join(", ") || M().ctlNoEpics));
-          epicId = e.id;
-        }
-        return ok(progressOverview(b.progress({ featureId, epicId })));
+        return ok(progressOverview(b.progress({ featureId })));
       }
       case "metrics_overview": {
         if (!b.metrics) return fail(M().ctlMetricsUnavailable);
@@ -330,20 +314,19 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         // 改本地分支、可能推送：和 refresh_session 一样只接受开着的 Butler 总控自己发的。
         if (!fromOpenButler) return fail(M().ctlInboxNotYours);
         return d.stacks ? d.stacks.handle({ kind: "butler" }, req) : fail(M().ctlStacksOff);
-      case "refresh_feature_summary": {
+      case "refresh_epic_summary": {
         // 会花额度：和 refresh_session 一样只接受开着的 Butler 总控自己发的。
         if (!fromOpenButler) return fail(M().ctlInboxNotYours);
         const s = b.summaries;
         if (!s) return fail(M().ctlSummaryUnavailable);
-        const live = features.filter((x) => x.archivedAt === null);
-        const f = pick(live, req.feature);
-        if (!f) return fail(M().ctlNoSuchFeatureAll(req.feature, live.map((x) => x.name).join(", ") || M().ctlNoFeatures));
-        const feature = { id: f.id, name: f.name };
-        if (s.running(f.id)) return ok({ started: false, running: true, feature, note: M().ctlSummaryRunning });
+        const f = pickEpic(req.epic);
+        if ("error" in f) return fail(f.error);
+        const epic = { id: f.id, name: f.name };
+        if (s.running(f.id)) return ok({ started: false, running: true, epic, note: M().ctlSummaryRunning });
         const row = b.featureRows().find((r) => r.id === f.id);
         const stale = s.stale(f.id);
         s.refresh(f.id);
-        return ok({ started: true, feature, lastSummaryAt: iso(row?.summaryAt), stale, note: M().ctlSummaryStarted });
+        return ok({ started: true, epic, lastSummaryAt: iso(row?.summaryAt), stale, note: M().ctlSummaryStarted });
       }
     }
   };

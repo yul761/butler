@@ -6,12 +6,12 @@ import { repoRoot } from "./git";
 import { samePath, TicketError } from "./ticket-service";
 import { M } from "../strings";
 
-/** feature 和 epic 共用的工作区路径、名字、仓库校验。 */
+/** feature 的工作区路径、名字、仓库校验。 */
 
-/** 默认放在仓库上一层的旁边：~/Code/shop/frontend → ~/Code/shop-<suffix>/<名字>（suffix 是 features 或 epics）。 */
-export function defaultWorkspaceDir(repoPaths: string[], name: string, suffix: "features" | "epics"): string {
+/** 默认放在仓库上一层的旁边：~/Code/shop/frontend → ~/Code/shop-features/<名字>。 */
+export function defaultWorkspaceDir(repoPaths: string[], name: string): string {
   const parent = dirname(repoPaths[0]);
-  return join(dirname(parent), `${basename(parent)}-${suffix}`, featureDirName(name));
+  return join(dirname(parent), `${basename(parent)}-features`, featureDirName(name));
 }
 
 /**

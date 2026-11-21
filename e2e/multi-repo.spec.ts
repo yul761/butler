@@ -1,22 +1,19 @@
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, terminalText, test, newButton, openTicketTab } from "./fixtures";
 
 /**
- * 设计文档 2026-10-23（多仓库 ticket）：不带仓库建 ticket → 添加两个仓库 → 各自开 session → 总控看得到两个仓库（第一步）
- * → 总控的 butler-sessions MCP server 开一个子 session，任务被输进去（第二步）。假 claude 不会调用 MCP 工具，
- * 所以这里按 mcp 配置文件里的命令直接启动那个 server，像 claude 一样经 stdio 调用它。
+ * 设计文档 2026-10-23（多仓库 ticket）：不带仓库建 ticket → 添加两个仓库 → 各自开 session，按钮上标着仓库名。
+ * ticket 总控在 BTL-246 去掉了：派 session 的是 feature 总控（features.spec）。
  */
-test("a ticket over two repos: a session per repo and a coordinator that sees both", async ({ makeSandbox, launch }) => {
+test("a ticket over two repos: a session per repo, and no ticket coordinator", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   await completeWizard(page, s);
 
-  // 1. 不填仓库建 ticket：只能开总控。
+  // 1. 不填仓库建 ticket：什么都开不了。
   await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("FULL-1");
   await page.getByRole("button", { name: S.create, exact: true }).click();
@@ -46,52 +43,12 @@ test("a ticket over two repos: a session per repo and a coordinator that sees bo
   await expect.poll(fakeLog).toContain(`cwd=${s.apiRepo} adddirs= guide=`);
   await expect(page.locator(".sessions-bar .session .place")).toHaveText(["api"]);
 
-  // 4. 总控：在工作区目录里，两个仓库都用 --add-dir 加进去。
-  await page.getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
-  const worktree = join(`${s.repo}-worktrees`, "FULL-1");
-  const workspace = join(s.butlerHome, "workspaces", "FULL-1");
-  await expect.poll(fakeLog).toContain(`cwd=${workspace} adddirs=${worktree}|${s.apiRepo} guide=`);
-  await expect(page.locator(".sessions-bar .session .place")).toHaveText([S.coordinator, "api"]);
-
-  // 5. 总控的 mcp 配置里有 butler-sessions；按配置启动它，调用 start_session。普通 session 也挂 butler-sessions
-  //    （BTL-190 第 2+3 点：只有 ask_user、report），所以总控按工作区目录认。
-  const coordinatorLine = new RegExp(`interactive new (\\S+) mcp=\\S*butler-sessions\\S* cwd=${workspace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} `);
-  await expect.poll(fakeLog).toMatch(coordinatorLine);
-  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "tickets", "coordinator", "FULL-1.json"), "utf8")) as {
-    mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
-  };
-  const server = config.mcpServers["butler-sessions"];
-  // claude 会把自己的环境变量（包括 Butler 给的 BUTLER_SESSION）传给 MCP server：这里按总控的 session id 补上。
-  const coordinatorId = coordinatorLine.exec(fakeLog())![1];
-  const child = spawn(server.command, server.args, {
-    env: { ...server.env, BUTLER_SESSION: coordinatorId, PATH: process.env.PATH ?? "" },
-    stdio: ["pipe", "pipe", "inherit"],
-  });
-  try {
-    const replies = createInterface({ input: child.stdout });
-    const next = () => new Promise<{ id: number; result: { content: { text: string }[]; isError?: boolean } }>((r) => replies.once("line", (l) => r(JSON.parse(l))));
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } })}\n`);
-    await next();
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "start_session", arguments: { repo: "repo", task: "boss-says-build-the-ui" } } })}\n`);
-    const reply = await next();
-    expect(reply.result.isError).toBeUndefined();
-    const started = JSON.parse(reply.result.content[0].text) as { sessionId: string; repo: string };
-    expect(started.repo).toBe("repo");
-
-    // 子 session 出现在同一个 ticket 下，开在 repo 的 worktree 里，任务作为第一条消息提交。
-    await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-sessions cwd=${worktree} adddirs= guide=`);
-    const childButton = page.locator(".sessions-bar .session").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
-    await expect(childButton).toBeVisible();
-    await expect(childButton).toHaveAttribute("title", /^总控 session 交给你的任务：[\n ]+boss-says-build-the-ui[\n ]+开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。/);
-    await expect(childButton.locator(".place")).toHaveText("repo");
-    await childButton.click();
-    // 任务带着固定的开头、作为一条消息提交（多行粘贴没有被逐行回车；Windows 上压成一行）。
-    await expect.poll(() => terminalText(page)).toContain("收到：总控 session 交给你的任务：");
-    await expect.poll(() => terminalText(page)).toContain("boss-says-build-the-ui");
-    expect(await terminalText(page)).not.toContain("收到：boss-says-build-the-ui");
-  } finally {
-    child.kill();
-  }
+  // 4. ticket 没有总控了（BTL-246）：页面上没有开总控的按钮；在 repo 仓库也开一个 session（worktree）。
+  await expect(page.getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true })).toHaveCount(0);
+  await page.getByRole("combobox", { name: S.pickRepo }).selectOption({ label: "repo" });
+  await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
+  await expect.poll(fakeLog).toContain(`cwd=${join(`${s.repo}-worktrees`, "FULL-1")} adddirs= guide=`);
+  await expect(page.locator(".sessions-bar .session .place")).toHaveText(["repo", "api"]);
 
   // 6. 多余的 session 可以从列表里隐藏（终端先退出），之后还能恢复。
   const apiButton = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(".place", { hasText: /^api$/ }) });

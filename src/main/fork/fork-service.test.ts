@@ -25,7 +25,7 @@ const ok = (over: Partial<ClaudeResult> = {}): HeadlessOutcome => ({ ok: true, r
 
 const session = (id: string, over: Partial<Session> = {}): Session => ({
   id, ticketKey: "BTL-1", cwd: "/repo", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: "opus",
+  dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: "opus",
   butler: false, lessonRunId: null, ...over,
 });
 
@@ -1120,7 +1120,7 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     expect(await s.svc.remember(forkId)).toBe("full");
   });
 
-  it("remember：连点 busy；没有 ticket 也没有 feature（Butler、epic 页面）：no_scope，不要结论也不写", async () => {
+  it("remember：连点 busy；没有 ticket 也没有 feature（Butler 页面）：no_scope，不要结论也不写", async () => {
     const s = setup();
     const forkId = await withFork(s);
     s.queue.push(ok({ resultText: "c" }));

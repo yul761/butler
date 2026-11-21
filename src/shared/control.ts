@@ -9,7 +9,7 @@ import { isModelName, isTier } from "./model-routing";
 export const CONTROL_VERSION = 1;
 /**
  * 现在还能再开几个 session（工作流 W：按内存决定，不再有每 ticket、每 feature、每 epic 的固定上限）。单位都是 MB。
- * start_session、start_feature 和 list_sessions 的结果带上它，sessions-server 把它写成一行给总控看。
+ * start_session 和 list_sessions 的结果带上它，sessions-server 把它写成一行给总控看。
  */
 export interface SessionCapacity {
   /** 按可用内存和硬上限算，还能再开几个；读不到内存又没开硬上限时为 null（不限）。 */
@@ -75,7 +75,7 @@ export type InboxControlOp =
 export const MAX_STACK_LAYERS = 1000;
 
 /**
- * 栈式 PR（工作流 K）：feature 总控和 Butler 总控有全部四个，epic session 只有 list_stacks。
+ * 栈式 PR（工作流 K）：feature 总控和 Butler 总控有全部四个。
  * stack_define 的 branches 从下到上，每一项是分支名或 ticket 号；stack 给了就整个换掉那个栈的层。
  */
 export type StackControlOp =
@@ -84,33 +84,21 @@ export type StackControlOp =
   | { op: "stack_rebase"; stack: number }
   | { op: "stack_layer_mode"; stack: number; branch: string; mode: "draft" | "branch" };
 
-/** ticket 总控的请求（设计文档 2026-10-23）。 */
+/** ticket 的 session 的请求（ticket 总控 BTL-246 起没有了，只剩 ask_user、report 和下面两个）。 */
 export type TicketControlRequest =
   | ({ v: 1; ticketKey: string; from: string | null } & InboxControlOp)
-  | { v: 1; ticketKey: string; from: string | null; op: "list_repos" }
-  | { v: 1; ticketKey: string; from: string | null; op: "list_sessions" }
-  | { v: 1; ticketKey: string; from: string | null; op: "session_activity"; session: string }
-  | { v: 1; ticketKey: string; from: string | null; op: "start_session"; repo: string; task: string; model?: StartModel }
-  /** 结束一个停下来在等输入的 session（和用户点 × 一样，之后能恢复）。 */
-  | { v: 1; ticketKey: string; from: string | null; op: "end_session"; session: string; reason: string }
-  /** 让 Butler 给一个停下来的 session 换新上下文（计划 16）：handoff → /clear → 从记忆里接上。 */
-  | { v: 1; ticketKey: string; from: string | null; op: "refresh_session"; session: string }
   /** 开发 session 交完成证据（工作流 G）：参数原样带过来，主进程按 parseSubmitEvidence 验。 */
   | { v: 1; ticketKey: string; from: string | null; op: "submit_evidence"; evidence: Record<string, unknown> }
   /** 开发 session 取自己最近一次预审的结果（工作流 G）。只读。 */
   | { v: 1; ticketKey: string; from: string | null; op: "pre_review_result" };
 
-/** epic session 建 feature 时 brief 最多这么多字符，超出直接拒绝。 */
-export const BRIEF_LIMIT = 4000;
 /**
- * epic 的整体规划（set_epic_plan）最多这么多字符，超出直接拒绝。epic 记忆的 handoff 里规划也最多占这么多：
- * 规划优先，但总要给最新的 feature 留位置，否则 ticket 的 session recall 时什么进度都读不到。
+ * feature 的规划（features.brief；界面上叫 epic）在 feature 记忆的 handoff 里最多占这么多字符：规划优先，但总要给约定和进度留位置，
+ * 否则 ticket 的 session recall 时什么都读不到。
  */
 export const EPIC_PLAN_MAX_CHARS = 6000;
-/** list_features、epic_context 里每个 feature 的 summary 最多这么多字符（超出截断）。 */
+/** list_features 里每个 feature 的 summary 最多这么多字符（超出截断）。 */
 export const SUMMARY_LIMIT = 1000;
-/** start_feature 的 instructions 最多这么多字符，超出直接拒绝。 */
-export const START_INSTRUCTIONS_LIMIT = 2000;
 
 /** create_ticket 最多一次挂几个仓库。 */
 export const MAX_CREATE_REPOS = 20;
@@ -124,75 +112,72 @@ export type FeatureControlRequest =
   | ({ v: 1; featureId: number; from: string | null } & StackControlOp)
   | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
   | { v: 1; featureId: number; from: string | null; op: "list_repos" }
-  | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string; stack_on?: string }
+  | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string; stack_on?: string; feature?: string }
+  /**
+   * epic 里的 feature（BTL-246 层级 A′，内部叫 block）：feature 是名字或 id（统一成字符串）。
+   * reorder_features 的 order 要把这个 epic 的每个 feature 正好列一次；set_ticket_feature 的 feature 为 null 时移出所有 feature。
+   */
+  | { v: 1; featureId: number; from: string | null; op: "list_features" }
+  | { v: 1; featureId: number; from: string | null; op: "create_feature"; name: string; description?: string; before?: string }
+  | { v: 1; featureId: number; from: string | null; op: "reorder_features"; order: string[] }
+  | { v: 1; featureId: number; from: string | null; op: "set_ticket_feature"; ticket: string; feature: string | null }
   | { v: 1; featureId: number; from: string | null; op: "list_sessions" }
   | { v: 1; featureId: number; from: string | null; op: "session_activity"; session: string }
   | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string; model?: StartModel }
-  /** feature 属于 epic 时：epic 名字和同一 epic 下其他 feature 的情况。 */
-  | { v: 1; featureId: number; from: string | null; op: "epic_context" }
   | { v: 1; featureId: number; from: string | null; op: "end_session"; session: string; reason: string }
   | { v: 1; featureId: number; from: string | null; op: "refresh_session"; session: string }
   /** 给这个 feature 的 ticket session 或修复 session 发一条（排进它的信箱，BTL-245）；interrupt 先按 Esc 叫停。 */
   | { v: 1; featureId: number; from: string | null; op: "send_message"; session: string; text: string; interrupt?: boolean };
 
-/**
- * epic session 的请求（设计文档 2026-11-01）：create_feature 在 epic 下建 feature，epic 只有一个仓库时 repos 可以省略。
- * start_feature（BTL-190 第 4 点）：打开 feature 的总控，让它按规划开工；feature 是名字或 id（list_features 里的）。create_feature 带 start 时建完直接开工。
- */
-export type EpicControlRequest =
-  | ({ v: 1; epicId: number; from: string | null } & InboxControlOp)
-  | { v: 1; epicId: number; from: string | null; op: "list_stacks" }
-  | { v: 1; epicId: number; from: string | null; op: "list_features" }
-  | { v: 1; epicId: number; from: string | null; op: "list_repos" }
-  | { v: 1; epicId: number; from: string | null; op: "create_feature"; name: string; repos?: string[]; brief: string; start?: true }
-  | { v: 1; epicId: number; from: string | null; op: "start_feature"; feature: string; instructions?: string }
-  /** 规划定下来或者改了：整份换掉 epics.plan，再重新渲染 epic 的 handoff。 */
-  | { v: 1; epicId: number; from: string | null; op: "set_epic_plan"; plan: string }
-  /** epic 下各 feature 的 session：feature 级的（总控、修复）和 ticket 的。 */
-  | { v: 1; epicId: number; from: string | null; op: "list_sessions" }
-  | { v: 1; epicId: number; from: string | null; op: "session_activity"; session: string }
-  | { v: 1; epicId: number; from: string | null; op: "end_session"; session: string; reason: string }
-  | { v: 1; epicId: number; from: string | null; op: "refresh_session"; session: string };
+/** epic 里 feature（block）名字、说明的上限，和一次 reorder_features 最多列几个。 */
+export const BLOCK_NAME_LIMIT = 100;
+export const BLOCK_DESCRIPTION_LIMIT = 2000;
+export const BLOCK_ORDER_MAX = 200;
 
 /** Butler 总控 send_message 的正文最多这么多字符，超出直接拒绝。 */
 export const MESSAGE_LIMIT = 4000;
 
 /**
- * Butler 总控的请求（BTL-190 第 5 点）：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session，但什么都不建、不删、不结束，
- * 也不开 ticket 的 session。send_message 只能发给 epic session 或 feature 总控（排进它的信箱，BTL-245）：session、feature、epic 给且只给一个，
- * feature、epic 是名字或 id；interrupt 先按 Esc 叫停再送。目标的终端关着时 Butler 接着它最近的那个 session（feature 从没开过总控时新开一个）再把消息交进去。
- * list_tickets 的 feature / epic 是名字或 id（list_features、list_epics 里的），可以都不给。
+ * 全局总控的请求（内部叫 Butler 总控，BTL-190 第 5 点）：全局只有一个，看得到所有 epic、ticket、PR 和 session，但什么都不建、不删、不结束，
+ * 也不开 ticket 的 session。send_message 只能发给 epic 总控（排进它的信箱，BTL-245）：session、epic 给且只给一个，
+ * epic 是名字或 id；interrupt 先按 Esc 叫停再送。目标的终端关着时 Butler 接着它最近的那个 session（epic 从没开过总控时新开一个）再把消息交进去。
+ * list_tickets、list_features、progress_overview 的 epic 是名字或 id（list_epics 里的），可以不给。
  */
-/** send_message 发给谁：一个 session，或者一个 feature（它的总控）、一个 epic（它的 epic session）。 */
-export type ButlerMessageTarget = { session: string; feature?: undefined; epic?: undefined } | { feature: string; session?: undefined; epic?: undefined } | { epic: string; session?: undefined; feature?: undefined };
+/** send_message 发给谁：一个 session，或者一个 epic（它的总控；BTL-246 以前叫 feature）。 */
+export type ButlerMessageTarget = { session: string; epic?: undefined } | { epic: string; session?: undefined };
 
 export type ButlerControlRequest =
   | ({ v: 1; butler: true; from: string | null } & InboxControlOp)
   | ({ v: 1; butler: true; from: string | null } & StackControlOp)
+  /** epic（内部是 features 表）和它们里面 feature 的进度（BTL-246）。 */
   | { v: 1; butler: true; from: string | null; op: "list_epics" }
-  | { v: 1; butler: true; from: string | null; op: "list_features" }
-  | { v: 1; butler: true; from: string | null; op: "list_tickets"; feature?: string; epic?: string }
+  /** epic 里的 feature（内部是 block），可以只看一个 epic。 */
+  | { v: 1; butler: true; from: string | null; op: "list_features"; epic?: string }
+  | { v: 1; butler: true; from: string | null; op: "list_tickets"; epic?: string }
   | { v: 1; butler: true; from: string | null; op: "list_prs" }
   | { v: 1; butler: true; from: string | null; op: "list_sessions" }
   | { v: 1; butler: true; from: string | null; op: "session_activity"; session: string }
   | { v: 1; butler: true; from: string | null; op: "list_inbox" }
   | ({ v: 1; butler: true; from: string | null; op: "send_message"; text: string; interrupt?: boolean } & ButlerMessageTarget)
   | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string }
-  /** 后台给一个 feature 重新生成汇总（ws-b）：立刻返回，生成完 list_features 能看到新的 summaryAt。 */
-  | { v: 1; butler: true; from: string | null; op: "refresh_feature_summary"; feature: string }
-  /** 进度总览（ws-b）：buildProgress 的聚合，PR 轮到谁和看板同一套算法，可以按 epic / feature 过滤。只读。 */
-  | { v: 1; butler: true; from: string | null; op: "progress_overview"; feature?: string; epic?: string }
+  /** 后台给一个 epic 重新生成汇总（ws-b）：立刻返回，生成完 list_epics 能看到新的 summaryAt。 */
+  | { v: 1; butler: true; from: string | null; op: "refresh_epic_summary"; epic: string }
+  /** 进度总览（ws-b）：buildProgress 的聚合，PR 轮到谁和看板同一套算法，可以按 epic 过滤。只读。 */
+  | { v: 1; butler: true; from: string | null; op: "progress_overview"; epic?: string }
   /** 效果总览（ws-h）：和「效果」页同一份 MetricsOverview。只读。 */
   | { v: 1; butler: true; from: string | null; op: "metrics_overview"; days?: number }
   /** 一个 PR 的就绪条件、风险理由、预审和简报（ws-g）。pr 是 ticket_prs 的 id 或 PR 链接。只读。 */
   | { v: 1; butler: true; from: string | null; op: "pr_assessment"; pr: string };
 
-export type ControlRequest = TicketControlRequest | FeatureControlRequest | EpicControlRequest | ButlerControlRequest;
+export type ControlRequest = TicketControlRequest | FeatureControlRequest | ButlerControlRequest;
 
 export type ControlResult = { v: 1; ok: true; value: unknown; capacity?: SessionCapacity } | { v: 1; ok: false; error: string };
 
 const okTask = (t: unknown): t is string => typeof t === "string" && t.trim().length > 0 && t.length <= TASK_LIMIT;
 const okName = (x: unknown, max: number): x is string => typeof x === "string" && x.length > 0 && x.length <= max;
+/** block 的引用：名字或 id；数字 id 统一成字符串，不合规为 null。 */
+const blockRef = (x: unknown): string | null =>
+  typeof x === "number" ? (Number.isSafeInteger(x) && x > 0 ? String(x) : null) : okName(x, 200) && x.trim() ? x : null;
 const okReason = (r: unknown): r is string => typeof r === "string" && r.trim().length > 0 && r.length <= REASON_LIMIT;
 
 /** 三种请求共用的 session_activity、end_session、refresh_session（list_sessions 各自处理）。 */
@@ -269,33 +254,8 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   if (!o || typeof o !== "object" || o.v !== CONTROL_VERSION) return null;
   const from = typeof o.from === "string" && o.from.length > 0 && o.from.length <= 100 ? o.from : null;
   if ("butler" in o) return parseButlerRequest(o, from);
-  if ("epicId" in o) {
-    if ("ticketKey" in o || "featureId" in o || !Number.isSafeInteger(o.epicId) || (o.epicId as number) <= 0) return null;
-    const base = { v: 1 as const, epicId: o.epicId as number, from };
-    if (isInboxOp(o.op)) return inboxOp(base, o);
-    if (o.op === "list_features") return { ...base, op: "list_features" };
-    if (o.op === "list_stacks") return { ...base, op: "list_stacks" };
-    if (o.op === "list_repos") return { ...base, op: "list_repos" };
-    if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
-    if (isSessionOp(o.op)) return sessionOp(base, o);
-    if (o.op === "create_feature") {
-      if (!okName(o.name, 500) || typeof o.brief !== "string" || o.brief.length > BRIEF_LIMIT) return null;
-      if (o.repos !== undefined && (!Array.isArray(o.repos) || o.repos.length > MAX_CREATE_REPOS || !o.repos.every((r) => okName(r, 4096)))) return null;
-      if (o.start !== undefined && typeof o.start !== "boolean") return null;
-      return { ...base, op: "create_feature", name: o.name, brief: o.brief, ...(o.repos !== undefined && { repos: o.repos as string[] }), ...(o.start === true && { start: true as const }) };
-    }
-    if (o.op === "start_feature") {
-      if (!okName(o.feature, 500)) return null;
-      if (o.instructions !== undefined && (typeof o.instructions !== "string" || o.instructions.length > START_INSTRUCTIONS_LIMIT)) return null;
-      const instructions = typeof o.instructions === "string" && o.instructions.trim() ? o.instructions : undefined;
-      return { ...base, op: "start_feature", feature: o.feature, ...(instructions !== undefined && { instructions }) };
-    }
-    if (o.op === "set_epic_plan") {
-      if (typeof o.plan !== "string" || !o.plan.trim() || o.plan.length > EPIC_PLAN_MAX_CHARS) return null;
-      return { ...base, op: "set_epic_plan", plan: o.plan };
-    }
-    return null;
-  }
+  // 以前的 epic session（BTL-246 去掉了）：它的 MCP server 可能还在跑，请求一律不认。
+  if ("epicId" in o) return null;
   if ("featureId" in o) {
     if ("ticketKey" in o || !Number.isSafeInteger(o.featureId) || (o.featureId as number) <= 0) return null;
     const base = { v: 1 as const, featureId: o.featureId as number, from };
@@ -303,7 +263,6 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.op === "list_tickets") return { ...base, op: "list_tickets" };
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
-    if (o.op === "epic_context") return { ...base, op: "epic_context" };
     if (o.op === "send_message") {
       if (!okName(o.session, 200) || typeof o.text !== "string" || !o.text.trim() || o.text.length > MESSAGE_LIMIT) return null;
       if (o.interrupt !== undefined && typeof o.interrupt !== "boolean") return null;
@@ -317,13 +276,36 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
       if (o.branch !== undefined && !okName(o.branch, 250)) return null;
       if (o.stack_on !== undefined && !okName(o.stack_on, 200)) return null;
       if (o.repos !== undefined && (!Array.isArray(o.repos) || o.repos.length > MAX_CREATE_REPOS || !o.repos.every((r) => okName(r, 4096)))) return null;
+      const feature = o.feature === undefined ? undefined : blockRef(o.feature);
+      if (feature === null) return null;
       return {
         ...base, op: "create_ticket", ticket: o.ticket,
         ...(o.title !== undefined && { title: o.title as string }),
         ...(o.repos !== undefined && { repos: o.repos as string[] }),
         ...(o.branch !== undefined && { branch: o.branch as string }),
         ...(o.stack_on !== undefined && { stack_on: o.stack_on as string }),
+        ...(feature !== undefined && { feature }),
       };
+    }
+    if (o.op === "list_features") return { ...base, op: "list_features" };
+    if (o.op === "create_feature") {
+      if (typeof o.name !== "string" || !o.name.trim() || o.name.trim().length > BLOCK_NAME_LIMIT) return null;
+      if (o.description !== undefined && (typeof o.description !== "string" || o.description.length > BLOCK_DESCRIPTION_LIMIT)) return null;
+      const before = o.before === undefined ? undefined : blockRef(o.before);
+      if (before === null) return null;
+      const description = typeof o.description === "string" && o.description.trim() ? o.description.trim() : undefined;
+      return { ...base, op: "create_feature", name: o.name.trim(), ...(description !== undefined && { description }), ...(before !== undefined && { before }) };
+    }
+    if (o.op === "reorder_features") {
+      if (!Array.isArray(o.order) || o.order.length === 0 || o.order.length > BLOCK_ORDER_MAX) return null;
+      const order = o.order.map(blockRef);
+      return order.every((x): x is string => x !== null) ? { ...base, op: "reorder_features", order } : null;
+    }
+    if (o.op === "set_ticket_feature") {
+      if (!okName(o.ticket, 200) || !("feature" in o)) return null;
+      const feature = o.feature === null ? null : blockRef(o.feature);
+      if (o.feature !== null && feature === null) return null;
+      return { ...base, op: "set_ticket_feature", ticket: o.ticket, feature };
     }
     if (o.op === "start_session") {
       if (!okName(o.ticket, 200) || !okTask(o.task)) return null;
@@ -339,18 +321,11 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   if (!okName(o.ticketKey, 200)) return null;
   const base = { v: 1 as const, ticketKey: o.ticketKey, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
-  if (o.op === "list_repos") return { ...base, op: "list_repos" };
-  if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
-  if (isSessionOp(o.op)) return sessionOp(base, o);
   if (o.op === "pre_review_result") return { ...base, op: "pre_review_result" };
   if (o.op === "submit_evidence") {
     const e = o.evidence;
     if (!e || typeof e !== "object" || Array.isArray(e)) return null;
     return { ...base, op: "submit_evidence", evidence: e as Record<string, unknown> };
-  }
-  if (o.op === "start_session") {
-    if (!okName(o.repo, 4096) || !okTask(o.task) || !okModel(o.model)) return null;
-    return { ...base, op: "start_session", repo: o.repo, task: o.task, ...(o.model !== undefined && { model: o.model as StartModel }) };
   }
   return null;
 }
@@ -361,13 +336,12 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
   const base = { v: 1 as const, butler: true as const, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
   if (isStackOp(o.op)) return stackOp(base, o);
-  if (o.op === "list_epics" || o.op === "list_features" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
+  if (o.op === "list_epics" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
     return { ...base, op: o.op };
   }
-  if (o.op === "list_tickets" || o.op === "progress_overview") {
-    if (o.feature !== undefined && !okName(o.feature, 500)) return null;
+  if (o.op === "list_features" || o.op === "list_tickets" || o.op === "progress_overview") {
     if (o.epic !== undefined && !okName(o.epic, 500)) return null;
-    return { ...base, op: o.op, ...(o.feature !== undefined && { feature: o.feature as string }), ...(o.epic !== undefined && { epic: o.epic as string }) };
+    return { ...base, op: o.op, ...(o.epic !== undefined && { epic: o.epic as string }) };
   }
   if (o.op === "metrics_overview") {
     if (o.days === undefined) return { ...base, op: "metrics_overview" };
@@ -378,9 +352,9 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
     if (!okName(o.pr, 500)) return null;
     return { ...base, op: "pr_assessment", pr: o.pr };
   }
-  if (o.op === "refresh_feature_summary") {
-    if (!okName(o.feature, 500)) return null;
-    return { ...base, op: "refresh_feature_summary", feature: o.feature };
+  if (o.op === "refresh_epic_summary") {
+    if (!okName(o.epic, 500)) return null;
+    return { ...base, op: "refresh_epic_summary", epic: o.epic };
   }
   if (o.op === "session_activity" || o.op === "refresh_session") {
     if (!okName(o.session, 200)) return null;
@@ -388,7 +362,8 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
   }
   if (o.op === "send_message") {
     if (typeof o.text !== "string" || !o.text.trim() || o.text.length > MESSAGE_LIMIT) return null;
-    const given = (["session", "feature", "epic"] as const).filter((k) => o[k] !== undefined);
+    if (o.feature !== undefined) return null;
+    const given = (["session", "epic"] as const).filter((k) => o[k] !== undefined);
     if (given.length !== 1) return null;
     const key = given[0];
     if (!okName(o[key], key === "session" ? 200 : 500)) return null;
@@ -423,7 +398,7 @@ export function taskMessage(task: string, lang: Lang, memory: "feature" | "ticke
   // 记忆关着（null）：没有可以 recall 的东西，不提（R36）。
   if (memory === null) return `${TASK_PREFIX[en ? "en" : "zh"]}\n${task}`;
   // 背景和约定放在记忆里；feature 总控开的 session 读 feature 记忆，ticket 总控开的读 ticket 记忆。
-  const featureMemory = en ? "feature memory (butler-feature)" : "feature 记忆（butler-feature）";
+  const featureMemory = en ? "epic memory (butler-feature)" : "epic 记忆（butler-feature）";
   const ticketMemory = en ? "ticket memory (butler-memory)" : "ticket 记忆（butler-memory）";
   const where = memory === "feature" ? featureMemory : ticketMemory;
   const hint = en ? `Read the background and agreements from the ${where} with recall before you start.` : `开始之前先用 recall 读一下 ${where}里的背景和约定。`;

@@ -47,7 +47,7 @@ async function create(page: Page, open: Locator, label: string, name: string, di
 }
 
 /**
- * 信箱（BTL-245）：Butler 总控给一个正在干活的 feature 总控发消息，不再被「对方在忙，稍后再试」挡回来；
+ * 信箱（BTL-245）：Butler 总控给一个正在干活的 epic 总控发消息，不再被「对方在忙，稍后再试」挡回来；
  * 消息排进它的信箱，它下一次调用工具时由 PostToolUse hook 作为 additionalContext 带进去，两条合成一次。界面上的消息列表记成已送达。
  */
 test("a busy coordinator gets queued messages at its next tool call, merged into one", async ({ makeSandbox, launch }) => {
@@ -77,7 +77,7 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.waitForTimeout(1500);
   for (const text of ["接口改成 v2 了", "先别合 PR"]) {
-    const sent = await callTool(page, s, "send_message", { feature: "payment", text });
+    const sent = await callTool(page, s, "send_message", { epic: "payment", text });
     expect(sent.error).toBe(false);
     expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: coordinator, state: "busy" });
   }
@@ -101,7 +101,7 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   await page.waitForTimeout(500);
   expect(contexts(s)).toHaveLength(1);
 
-  // feature 页「总控」tab 也列着这两条，记成已送达（工具调用的间隙送到）。
+  // epic 页「总控」tab 也列着这两条，记成已送达（工具调用的间隙送到）。
   const featureList = page.locator(".feature-page .messages-box");
   await featureList.locator("> summary").click();
   await expect(featureList.locator('[data-status="delivered"]')).toHaveCount(2);
@@ -109,7 +109,7 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
 });
 
 /**
- * feature 总控的 send_message 只发给自己管的 session（BTL-245）；总控存进 feature 记忆的约定推给同一个 feature 里别的 session，不推给自己。
+ * epic 总控的 send_message 只发给自己管的 session（BTL-245）；总控存进 epic 记忆的约定推给同一个 epic 里别的 session，不推给自己。
  * 子 session 停着：两条都经安全输入送进去。
  */
 test("a coordinator messages its ticket session, and its convention reaches the session but not itself", async ({ makeSandbox, launch }) => {
@@ -123,7 +123,7 @@ test("a coordinator messages its ticket session, and its convention reaches the 
   makeGitRepo(join(shop, "backend"));
   await create(page, await newButton(page, "newFeature"), S.featureName, "payment", shop);
   const workspace = join(s.dir, "shop-features", "payment");
-  // feature 下建一个 ticket（只用 frontend）。
+  // epic 下建一个 ticket（只用 frontend）。
   await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("PAY-1");
   await page.locator(".modal").getByRole("checkbox", { name: "backend", exact: true }).uncheck();
@@ -156,7 +156,7 @@ test("a coordinator messages its ticket session, and its convention reaches the 
   // 总控存一条约定：推给子 session，自己的下一次工具调用不带。
   await typeLine(page, '/fake-tool mcp__butler-feature__remember {"text":"金额一律用分"}');
   await expect.poll(childGot, { timeout: 30_000 }).toContain("金额一律用分");
-  expect(childGot()).toContain("【约定 · feature payment 的总控】");
+  expect(childGot()).toContain("【约定 · epic payment 的总控】");
   await typeLine(page, '/fake-tool Read {"file_path":"a.ts"}');
   await expect.poll(() => terminalText(page)).toContain("tool Read");
   await page.waitForTimeout(800);

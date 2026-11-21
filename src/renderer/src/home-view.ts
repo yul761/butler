@@ -19,7 +19,7 @@ export const HOME_SCOPE_CAP = 8;
 const youRank = (t: Turn) => (t.owner === "you" ? YOU_KIND_RANK[t.kind] : 99);
 
 /**
- * 工作区里什么都没有（ticket、feature、epic 都是 0），轮到你的板上也空着，也没有别的 Butler 提醒：首页只放空状态。
+ * 工作区里什么都没有（ticket、feature 都是 0），轮到你的板上也空着，也没有别的 Butler 提醒：首页只放空状态。
  * 板上有 Butler 自己的提醒、或者有只是告知的提醒（noticeCount，放在「运行情况」里）时照常显示。
  */
 export function isNoWork(workCount: number, items: TurnItem[] | null, noticeCount = 0): boolean {
@@ -115,18 +115,17 @@ function sessionOf(t: Turn): string | null {
 
 /**
  * 「去看看」落到哪里：有 ticket 就去 ticket 页（带 session 时落在它的终端）；
- * 没有 ticket 的提问来自 feature、epic 的总控或者全局总控，落到那一页的那个 session。
+ * 没有 ticket 的提问来自 feature 的总控或者全局总控，落到那一页的那个 session。
  */
 export function lookTarget(item: TurnItem): NowTarget | null {
   const sessionId = sessionOf(item.turn);
   if (item.ticketKey !== null) return { page: "ticket", key: item.ticketKey, sessionId };
   if (sessionId === null) return null;
   if (item.featureId !== null) return { page: "feature", id: item.featureId, sessionId };
-  if (item.epicId !== null) return { page: "epic", id: item.epicId, sessionId };
   return { page: "butler", sessionId };
 }
 
-export interface NameCtx { epics: Map<number, string>; features: Map<number, string>; tickets: Map<string, string | null> }
+export interface NameCtx { features: Map<number, string>; tickets: Map<string, string | null> }
 
 /** path 是整行（放进 title）；显示时 scope 可以省略，key（ticket 号）单独放、不省略。 */
 export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrings): { path: string; scope: string; key: string | null; age: string } {
@@ -138,11 +137,9 @@ export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrin
     return { path, scope: path, key: null, age: d === null ? "" : S.hm.reviewAgo(d) };
   }
   const parts: string[] = [];
-  const epic = item.epicId === null ? undefined : ctx.epics.get(item.epicId);
   const feature = item.featureId === null ? undefined : ctx.features.get(item.featureId);
-  if (epic) parts.push(epic);
   if (feature) parts.push(feature);
-  if (parts.length === 0 && item.ticketKey === null && item.epicId === null && item.featureId === null) parts.push(S.butlerNav);
+  if (parts.length === 0 && item.ticketKey === null && item.featureId === null) parts.push(S.butlerNav);
   const scope = parts.join(" › ");
   const key = item.ticketKey;
   const age = d === null ? "" : S.hm.ago(d);
@@ -169,14 +166,14 @@ export function barSegments(bar: ScopeTurnRow["bar"], total: number): { tone: Tu
 
 export function scopeRoute(row: ScopeTurnRow): Route {
   if (row.kind === "ticket") return { page: "ticket", key: String(row.id) };
-  return row.kind === "epic" ? { page: "epic", id: Number(row.id) } : { page: "feature", id: Number(row.id) };
+  return { page: "feature", id: Number(row.id) };
 }
 
 export function scopeLine(row: ScopeTurnRow, S: UiStrings): string {
   return row.total === 0 ? S.hm.scopeEmpty : S.hm.scopeLine(row.total, row.merged, row.slowest);
 }
 
-/** epic、feature 汇总行的「谁该动」（看 scope 行的计数）。单独的 ticket 不用它：ticket 行的 bar 按 PR 计，看不出 session 在干活，用 ticketWhoTurn。 */
+/** feature 汇总行的「谁该动」（看 scope 行的计数）。单独的 ticket 不用它：ticket 行的 bar 按 PR 计，看不出 session 在干活，用 ticketWhoTurn。 */
 export function scopeWho(row: ScopeTurnRow, S: UiStrings): { tone: TurnTone | null; text: string } {
   if (row.youCount > 0) return { tone: "ask", text: S.hm.whoYou(row.youCount) };
   if (row.bar.agent > 0) return { tone: "agent", text: S.hm.whoAgent };
@@ -229,7 +226,7 @@ export function runningRows(items: TurnItem[], S: UiStrings, now: number): Runni
     const who = t.owner === "agent" ? S.hm.whoAgent : externalWho(t, S);
     const pr = i.pr ? `${i.pr.repo}#${i.pr.number}` : "";
     rows.push({ since: i.since, row: {
-      // 不属于 ticket 的（epic、feature 的总控）同页可以有好几个在干活：key 带上 session。
+      // 不属于 ticket 的（feature 的总控）同页可以有好几个在干活：key 带上 session。
       key: `${i.ticketKey ?? ""}|${pr}|${t.kind}${i.ticketKey === null ? `|${sessionOf(t) ?? ""}` : ""}`, ticketKey: i.ticketKey, owner: t.owner, who,
       sentence: i.others > 0 ? `${turnSentence(t, i, S)} · ${S.lay.morePrs(i.others)}` : turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
     } });
@@ -254,6 +251,6 @@ export function homeOpenedSignal(): { observe: (page: string) => boolean } {
 }
 
 /** 一件工作都没有时首页整页放 FirstRunHome（第 6 层的组件）：三个新建按钮开对话框，设置链接去「设置 › 功能」。 */
-export function firstRunProps(d: { onNewTicket: () => void; onNewFeature: () => void; onNewEpic: () => void; onGo: (r: Route) => void }): FirstRunHomeProps {
-  return { onNewTicket: d.onNewTicket, onNewFeature: d.onNewFeature, onNewEpic: d.onNewEpic, onOpenSettings: () => d.onGo({ page: "settings", section: "features" }) };
+export function firstRunProps(d: { onNewTicket: () => void; onNewFeature: () => void; onGo: (r: Route) => void }): FirstRunHomeProps {
+  return { onNewTicket: d.onNewTicket, onNewFeature: d.onNewFeature, onOpenSettings: () => d.onGo({ page: "settings", section: "features" }) };
 }

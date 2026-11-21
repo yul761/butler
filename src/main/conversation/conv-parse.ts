@@ -16,8 +16,8 @@ import { MAIN_STRINGS } from "../strings";
  *     content 是数组时 text 块用 \n\n 连起来，每个 image 块记成 [image]。
  *  4. 清洗后以 <local-command-stdout|stderr|caveat>、<bash-input|stdout|stderr>、<task-notification> 开头，
  *     或者以 [Request interrupted by user 开头：noise。
- *  5. handoff（不存，这一轮 agent 的话也不存）：/handoff 调用；Butler 的 epic handoff 请求（refreshEpicHandoff、
- *     idleCloseEpicHandoff，中英各取前 24 个字符）。
+ *  5. handoff（不存，这一轮 agent 的话也不存）：/handoff 调用；以前 Butler 发给 epic session 的 handoff 请求
+ *     （换新、闲置关闭，中英各取前 24 个字符，见 LEGACY_EPIC_HANDOFF_HEADS）。
  *  6. relay（存成 user 消息，但这一轮不判问答）：以 inboxAnswersIntro 开头，Butler 转给 agent 的用户回答；
  *     信箱直接输入（mailboxIntro 开头）里有一段是转来的回答也算。其余信箱直接输入是 silent。
  *  7. silent（不存，开一轮 qa=no；agent 的话照存）：其他斜杠命令（含 <command-name>）；Butler：/Butler: 开头的通知；
@@ -68,7 +68,12 @@ const COMMAND_NAME = /<command-name>/;
 const BUTLER_NOTICE = /^Butler(：|: )/;
 
 const heads = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string, n: number): string[] => Object.values(MAIN_STRINGS).map((s) => pick(s).slice(0, n));
-const HANDOFF_HEADS = [...heads((s) => s.refreshEpicHandoff, 24), ...heads((s) => s.idleCloseEpicHandoff, 24)];
+/**
+ * 以前 Butler 让 epic session 写进度的两句话（换新、闲置关闭；中英）的前 24 个字符。epic session BTL-246 去掉了，
+ * 这两句文案也从 strings.ts 删了；老 transcript 里还有，照旧认成 handoff，写死在这里。
+ */
+const LEGACY_EPIC_HANDOFF_HEADS = ["Butler 要清空这个 session 的上下", "这个 session 闲置很久了，Butler ", "Butler is about to clear", "This session has been id"];
+const HANDOFF_HEADS = LEGACY_EPIC_HANDOFF_HEADS;
 const RELAY_HEADS = heads((s) => s.inboxAnswersIntro, Number.MAX_SAFE_INTEGER);
 /** 只转一条回答时没有 intro，整条就是 inboxAnswer(问题, 回答)：认开头和中间「用户的回答」那一段。 */
 const RELAY_SINGLE = Object.values(MAIN_STRINGS).map((s) => {
@@ -107,6 +112,8 @@ const SILENT_SHAPES: Shape[] = [
   ...shapes((s) => s.butlerReplyLine("\u0000", ["\u0001"], "")),
   ...shapes((s) => s.intakeClarify("\u0000", "\u0001", "", false)),
   ...shapes((s) => s.intakeClarify("\u0000", "\u0001", "", true)),
+  ...shapes((s) => s.intakeEpicTickets("\u0000", "\u0001", "")),
+  ...shapes((s) => s.intakeEpicTickets("\u0000", null, "")),
   ...(["zh", "en"] as const).flatMap((lang) =>
     (["error", "clean", "violations"] as const).map((verdict) => shapeOf(deliveryText({ shortSha: "\u0000", verdict, violations: [], gaps: [], error: "\u0001", lang }))),
   ),

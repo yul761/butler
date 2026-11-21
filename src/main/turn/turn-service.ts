@@ -7,7 +7,7 @@ import {
   noticeNeedsYou, prTurn, sessionTurn,
   type CiSendSkip, type TimedTurn, type Turn, type TurnBoard, type TurnFilter, type TurnSendReason,
 } from "../../shared/turn";
-import type { CiItemRef, CiUndelivered, EpicView, FeatureView, NowNotice, NowTarget, Session, SessionView, TicketView, WatchedPr } from "../../shared/types";
+import type { CiItemRef, CiUndelivered, FeatureView, NowNotice, NowTarget, Session, SessionView, TicketView, WatchedPr } from "../../shared/types";
 import type { InboxItem } from "../db/inbox-repo";
 import type { ReviewRequestRow } from "../db/review-requests-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
@@ -22,11 +22,10 @@ export interface TurnServiceDeps {
   /** sessionService.ticketViews()：单独的 ticket。feature 下的从 features() 里取。 */
   tickets(): TicketView[];
   features(): FeatureView[];
-  epics(): EpicView[];
   /** 休眠着的 head（ticket 的 session 列表里可能没有）。 */
   hibernatedHeads(): Session[];
-  /** feature / epic 总控和 Butler 总控的 head，各带页面 target。 */
-  coordinators(): { session: Session; featureId: number | null; epicId: number | null; target: NowTarget; title: string | null }[];
+  /** feature 总控和 Butler 总控的 head，各带页面 target。 */
+  coordinators(): { session: Session; featureId: number | null; target: NowTarget; title: string | null }[];
   head(id: string): Session | null;
   /** prWatcher.statusOf */
   prs(ticketKey: string): WatchedPr[];
@@ -303,7 +302,7 @@ export class TurnService {
     const orphanAsk = (a: InboxItem, sessionId: string) => {
       const bt = a.ticketKey !== null ? board.get(a.ticketKey) : undefined;
       if (bt) bt.moreAsks.push(askTurn(a, sessionId));
-      else loose.push({ ...askTurn(a, sessionId), featureId: a.featureId, epicId: a.epicId });
+      else loose.push({ ...askTurn(a, sessionId), featureId: a.featureId });
     };
     for (const [h, list] of asks) if (!known.has(h)) for (const a of list) orphanAsk(a, h);
 
@@ -311,7 +310,7 @@ export class TurnService {
     const placeNotice = (n: NowNotice, tt: TimedTurn, key: string | null, target: NowTarget | null) => {
       const bt = key !== null ? board.get(key) : undefined;
       if (bt) bt.others.push(tt);
-      else loose.push({ ...tt, featureId: target?.page === "feature" ? target.id : null, epicId: target?.page === "epic" ? target.id : null });
+      else loose.push({ ...tt, featureId: target?.page === "feature" ? target.id : null });
     };
     const prNotices: { n: NowNotice; tt: TimedTurn; key: string | null; target: NowTarget | null }[] = [];
     for (const n of this.d.notices()) {
@@ -374,8 +373,8 @@ export class TurnService {
       const [first, ...rest] = asks.get(c.session.id) ?? [];
       const tt = this.sessionInput(c.session, c.target, c.title, first ?? null, null, snap);
       // 总控停在提示符等输入是常态，不算要你动手：只有问你、卡住和 Butler 提醒进 loose。
-      if (tt.turn.owner === "you" && tt.turn.kind !== "unattended") loose.push({ ...tt, featureId: c.featureId, epicId: c.epicId });
-      for (const a of rest) loose.push({ ...askTurn(a, c.session.id), featureId: c.featureId, epicId: c.epicId });
+      if (tt.turn.owner === "you" && tt.turn.kind !== "unattended") loose.push({ ...tt, featureId: c.featureId });
+      for (const a of rest) loose.push({ ...askTurn(a, c.session.id), featureId: c.featureId });
     }
 
     const registered = new Set(this.d.registeredSlugs().map((x) => x.toLowerCase()));
@@ -384,8 +383,7 @@ export class TurnService {
     }));
 
     return {
-      epics: this.d.epics().filter((e) => e.archivedAt === null).map((e) => ({ id: e.id, name: e.name })),
-      features: features.map((f) => ({ id: f.id, name: f.name, epicId: f.epicId })),
+      features: features.map((f) => ({ id: f.id, name: f.name })),
       tickets: [...board.values()],
       loose,
       reviews,

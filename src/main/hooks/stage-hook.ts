@@ -25,27 +25,25 @@ function skillName(p: Record<string, unknown>): string | null {
   return null;
 }
 
-type Owner = { ticketKey: string | null; repoId: number | null; featureId: number | null; epicId: number | null };
+type Owner = { ticketKey: string | null; repoId: number | null; featureId: number | null };
 
-/** 事件归到哪一层：ticket（加仓库）、feature、epic；归不了为 null。 */
+/** 事件归到哪一层：ticket（加仓库）、feature；归不了为 null。 */
 function ownerOf(s: Session, sessions: Pick<SessionsRepo, "get">): Owner | null {
   if (s.butler) return null;
   if (s.fixesSession) {
     // 修复 session 的工作算在被修的那个 session 上。
     const t = sessions.get(s.fixesSession);
     if (!t || t.butler) return null;
-    if (t.ticketKey) return { ticketKey: t.ticketKey, repoId: t.repoId, featureId: null, epicId: null };
-    if (t.featureId !== null) return { ticketKey: null, repoId: null, featureId: t.featureId, epicId: null };
-    if (t.epicId !== null) return { ticketKey: null, repoId: null, featureId: null, epicId: t.epicId };
+    if (t.ticketKey) return { ticketKey: t.ticketKey, repoId: t.repoId, featureId: null };
+    if (t.featureId !== null) return { ticketKey: null, repoId: null, featureId: t.featureId };
     return null;
   }
-  if (s.ticketKey) return { ticketKey: s.ticketKey, repoId: s.repoId, featureId: null, epicId: null };
-  if (s.featureId !== null) return { ticketKey: null, repoId: null, featureId: s.featureId, epicId: null };
-  if (s.epicId !== null) return { ticketKey: null, repoId: null, featureId: null, epicId: s.epicId };
+  if (s.ticketKey) return { ticketKey: s.ticketKey, repoId: s.repoId, featureId: null };
+  if (s.featureId !== null) return { ticketKey: null, repoId: null, featureId: s.featureId };
   return null;
 }
 
-/** PostToolUse 且 tool_name=Skill（tool_input.skill）或 review 类的 Agent/Task，或者 UserPromptSubmit 且 prompt 是 /skill；归不了类、归不到 ticket/feature/epic、headless 的 → null。 */
+/** PostToolUse 且 tool_name=Skill（tool_input.skill）或 review 类的 Agent/Task，或者 UserPromptSubmit 且 prompt 是 /skill；归不了类、归不到 ticket/feature、headless 的 → null。 */
 export function stageEventFromHook(env: HookEnvelope, sessions: Pick<SessionsRepo, "get">): Observation | null {
   if (isHeadlessEnvelope(env)) return null;
   const p = env.payload && typeof env.payload === "object" ? (env.payload as Record<string, unknown>) : {};

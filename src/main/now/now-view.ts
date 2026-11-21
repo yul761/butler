@@ -1,11 +1,10 @@
 import { isWorking, type ActivityEvent, type SessionActivity } from "../../shared/activity";
 import type { MemorySnapshot, SessionMemory } from "../../shared/mem-usage";
-import type { EpicView, FeatureView, InboxItemView, MergeEvent, NowCounts, NowEpic, NowFeature, NowNotice, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
+import type { FeatureView, InboxItemView, MergeEvent, NowCounts, NowFeature, NowNotice, NowRow, NowTarget, NowView, RefreshStep, SessionView, TicketView, WatchedPr } from "../../shared/types";
 
 export interface NowInput {
   tickets: TicketView[];
   features: FeatureView[];
-  epics: EpicView[];
   /** 开着的 Butler 总控的 head（SessionService.runningButler 加上终端 id）；没开为 null。 */
   butler: SessionView | null;
   activity: (sessionId: string) => SessionActivity | null;
@@ -49,18 +48,18 @@ interface RowBase {
   title: string | null;
   repo: string | null;
   coordinator: boolean;
-  /** 实况卡片上写的地方：仓库目录名，feature、epic 的 session 写 feature、epic 的名字。 */
+  /** 实况卡片上写的地方：仓库目录名，feature 的 session 写 feature 的名字。 */
   where: string | null;
   prs: WatchedPr[];
   target: NowTarget;
 }
 
-/** 总控所管的范围：这个 ticket、这个 feature 或这个 epic 里别的 session 提的「待你决定」，它的 Haiku 行就不出现（多半在转述同一件事）。 */
-type Scope = { ticketKey: string } | { featureId: number } | { epicId: number } | null;
+/** 总控所管的范围：这个 ticket 或这个 feature 里别的 session 提的「待你决定」，它的 Haiku 行就不出现（多半在转述同一件事）。 */
+type Scope = { ticketKey: string } | { featureId: number } | null;
 
 function childDecision(i: NowInput, s: SessionView, scope: Scope): boolean {
   if (scope === null) return false;
-  return i.decisions.some((d) => d.sessionId !== s.id && ("ticketKey" in scope ? d.ticketKey === scope.ticketKey : "featureId" in scope ? d.featureId === scope.featureId : d.epicId === scope.epicId));
+  return i.decisions.some((d) => d.sessionId !== s.id && ("ticketKey" in scope ? d.ticketKey === scope.ticketKey : d.featureId === scope.featureId));
 }
 
 /**
@@ -148,16 +147,9 @@ function countRows(rows: NowRow[]): NowCounts {
 
 const nowFeature = (id: number | null, name: string, rows: NowRow[]): NowFeature => ({ id, name, rows, counts: countRows(rows) });
 
-function nowEpic(id: number | null, name: string, rows: NowRow[], features: NowFeature[]): NowEpic | null {
-  const kept = features.filter((f) => f.rows.length > 0);
-  if (rows.length === 0 && kept.length === 0) return null;
-  return { id, name, rows, features: kept, counts: countRows([...rows, ...kept.flatMap((f) => f.rows)]) };
-}
-
-/** 把 ticket、feature、epic 和各自的活动、PR、合并排队拼成「现在」页：epic → feature → 行，「无 epic」和「无 feature」的 id 为 null、放在最后。 */
+/** 把 ticket、feature 和各自的活动、PR、合并排队拼成「现在」页：feature → 行，没有行的 feature 不出现；「无 feature」的 id 为 null、放在最后。 */
 export function buildNowView(i: NowInput): NowView {
   const featureIds = new Set(i.features.map((f) => f.id));
-  const epicIds = new Set(i.epics.map((e) => e.id));
   // feature 里的 ticket 为准；tickets 里重复出现的跳过，feature 不在输入里的归到「无 feature」。
   const seen = new Set<string>();
   const ticketsOf = new Map<number | null, TicketView[]>();
@@ -169,26 +161,16 @@ export function buildNowView(i: NowInput): NowView {
   for (const f of i.features) for (const t of f.tickets) add(f.id, t);
   for (const t of i.tickets) add(t.featureId !== null && featureIds.has(t.featureId) ? t.featureId : null, t);
 
-  const featureOf = (f: FeatureView): NowFeature =>
-    nowFeature(f.id, f.name, [...featureSessionRows(i, f), ...(ticketsOf.get(f.id) ?? []).flatMap((t) => ticketRows(i, t))]);
-  const epics: NowEpic[] = [];
-  for (const e of i.epics) {
-    const rows = e.sessions.filter(live).map((s) =>
-      sessionRow(i, s, { ticketKey: null, title: null, repo: null, where: e.name, coordinator: true, prs: [], target: { page: "epic", id: e.id, sessionId: s.id } }, { epicId: e.id }),
-    );
-    const g = nowEpic(e.id, e.name, rows, i.features.filter((f) => f.epicId === e.id).map(featureOf));
-    if (g) epics.push(g);
-  }
-  const loose = i.features.filter((f) => f.epicId === null || !epicIds.has(f.epicId)).map(featureOf);
-  const standalone = nowFeature(null, "", (ticketsOf.get(null) ?? []).flatMap((t) => ticketRows(i, t)));
-  const none = nowEpic(null, "", [], [...loose, standalone]);
-  if (none) epics.push(none);
+  const features = [
+    ...i.features.map((f) => nowFeature(f.id, f.name, [...featureSessionRows(i, f), ...(ticketsOf.get(f.id) ?? []).flatMap((t) => ticketRows(i, t))])),
+    nowFeature(null, "", (ticketsOf.get(null) ?? []).flatMap((t) => ticketRows(i, t))),
+  ].filter((f) => f.rows.length > 0);
 
-  // Butler 总控：不属于任何 epic，单独一行。它的 Haiku 判断不因为子 session 有待决条目就不算：它被判成需要你时，送给它的报告和巡检都在等。
+  // Butler 总控：不属于任何 feature，单独一行。它的 Haiku 判断不因为子 session 有待决条目就不算：它被判成需要你时，送给它的报告和巡检都在等。
   const butler = i.butler && live(i.butler)
     ? sessionRow(i, i.butler, { ticketKey: null, title: null, repo: null, where: null, coordinator: true, prs: [], target: { page: "butler", sessionId: i.butler.id } })
     : null;
-  const all = [...(butler ? [butler] : []), ...epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])];
+  const all = [...(butler ? [butler] : []), ...features.flatMap((f) => f.rows)];
   const limited: NowNotice[] = all.flatMap((r) => (r.activity?.limit ? [{ kind: "session_limited" as const, target: r.target, title: r.title, limit: r.activity.limit }] : []));
-  return { notices: [...i.notices, ...limited], epics, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null, ...(i.sharedMcp !== undefined && { sharedMcp: i.sharedMcp }) };
+  return { notices: [...i.notices, ...limited], features, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null, ...(i.sharedMcp !== undefined && { sharedMcp: i.sharedMcp }) };
 }

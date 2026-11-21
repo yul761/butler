@@ -11,7 +11,6 @@ export interface StackRow {
   trunk: string;
   remote: string;
   name: string;
-  epicId: number | null;
   featureId: number | null;
   source: StackSource;
   mergeMethod: "squash" | "merge" | null;
@@ -91,7 +90,6 @@ export interface NewStack {
   trunk: string;
   remote: string;
   name: string;
-  epicId: number | null;
   featureId: number | null;
   source: StackSource;
 }
@@ -116,7 +114,7 @@ const str = (v: unknown): string | null => (v === null || v === undefined ? null
 function toStack(r: Raw): StackRow {
   return {
     id: Number(r.id), repoPath: String(r.repo_path), repoSlug: str(r.repo_slug), trunk: String(r.trunk), remote: String(r.remote),
-    name: String(r.name), epicId: num(r.epic_id), featureId: num(r.feature_id), source: r.source as StackSource,
+    name: String(r.name), featureId: num(r.feature_id), source: r.source as StackSource,
     mergeMethod: (r.merge_method as StackRow["mergeMethod"]) ?? null, trunkSha: str(r.trunk_sha), overviewNumber: num(r.overview_number),
     overviewUrl: str(r.overview_url), overviewHash: str(r.overview_hash), lastDailyAt: num(r.last_daily_at),
     createdAt: Number(r.created_at), updatedAt: Number(r.updated_at), removedAt: num(r.removed_at),
@@ -150,7 +148,7 @@ function toRun(r: Raw): RunRow {
 }
 
 const STACK_COLS: Record<string, string> = {
-  repoSlug: "repo_slug", trunk: "trunk", remote: "remote", name: "name", epicId: "epic_id", featureId: "feature_id", mergeMethod: "merge_method",
+  repoSlug: "repo_slug", trunk: "trunk", remote: "remote", name: "name", featureId: "feature_id", mergeMethod: "merge_method",
   trunkSha: "trunk_sha", overviewNumber: "overview_number", overviewUrl: "overview_url", overviewHash: "overview_hash", lastDailyAt: "last_daily_at",
 };
 const LAYER_COLS: Record<string, string> = {
@@ -184,9 +182,9 @@ export class StacksRepo {
       const id = Number(
         this.db
           .prepare(
-            `INSERT INTO stacks (repo_path, repo_slug, trunk, remote, name, epic_id, feature_id, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO stacks (repo_path, repo_slug, trunk, remote, name, feature_id, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(s.repoPath, s.repoSlug, s.trunk, s.remote, s.name, s.epicId, s.featureId, s.source, at, at).lastInsertRowid,
+          .run(s.repoPath, s.repoSlug, s.trunk, s.remote, s.name, s.featureId, s.source, at, at).lastInsertRowid,
       );
       layers.forEach((l, i) => this.insertLayer(id, i, l, at));
       return id;

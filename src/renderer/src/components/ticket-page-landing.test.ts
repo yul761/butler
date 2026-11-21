@@ -49,7 +49,7 @@ const ticket = {
   effectiveStatus: "active", hiddenSessions: [], waiting: false, sessions: [{ id: "s1", termId: "t1" } as SessionView],
 } as unknown as TicketView;
 const board: TurnBoard = {
-  items: [{ ticketKey: "K-1", epicId: null, featureId: null, pr: null, turn: stopped, since: 0, others: 0, ticketLevel: true }],
+  items: [{ ticketKey: "K-1", featureId: null, pr: null, turn: stopped, since: 0, others: 0, ticketLevel: true }],
   scopes: [], stats: { mergedToday: 0, ciFixedToday: 0, staleCount: 0 },
 } as unknown as TurnBoard;
 

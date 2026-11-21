@@ -19,7 +19,7 @@ export interface CostSessionInfo {
   title: string;
   /** 链上所有 id：用量按它们汇总。 */
   chainIds: string[];
-  /** 解析上限用的仓库（ticket 的仓库；feature / epic / Butler 总控为空，按全局）。 */
+  /** 解析上限用的仓库（ticket 的仓库；feature / Butler 总控为空，按全局）。 */
   repos: string[];
   model: string | null;
   /** 终端开着。 */

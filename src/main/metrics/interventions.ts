@@ -126,7 +126,7 @@ export function promptOnTerminalChain(headOf: (id: string) => string | null, hoo
 export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.ticketsSetStatus, IPC.ticketsSwitchBranch, IPC.ticketsRecheckCleanup,
   IPC.sessionsOpen, IPC.sessionOpenFix, IPC.sessionsRefresh, IPC.sessionsWake, IPC.sessionsSwitchModel, IPC.sessionsCloseIdle,
-  IPC.activityDismiss, IPC.ptyKill, IPC.handoffsRun, IPC.featuresSummaryRun, IPC.featuresOpenSession, IPC.epicsOpenSession,
+  IPC.activityDismiss, IPC.ptyKill, IPC.handoffsRun, IPC.featuresSummaryRun, IPC.featuresOpenSession,
   IPC.butlerOpenSession, IPC.jobsRunNightly, IPC.ciResend, IPC.followupsSetStatus, IPC.lessonsRun, IPC.availabilityAct,
   // 熔断停下的「继续并提高上限」（工作流 L）
   IPC.costResume,
@@ -150,7 +150,7 @@ export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer])
 /** 不算人介入：只读的、配置和整理（搭环境，不是推动一次工作）。 */
 export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   // 只读
-  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.epicsList, IPC.epicsArchived, IPC.butlerView,
+  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.butlerView,
   IPC.messagesList, IPC.metricsView, IPC.sessionsUnclaimed, IPC.usageSummary, IPC.ptySnapshot, IPC.healthGet, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsRuns, IPC.lessonsPending, IPC.lessonsBatches,
   IPC.lessonsBatch, IPC.policiesGet, IPC.checksView, IPC.checksHits, IPC.configStatus, IPC.availabilityGet, IPC.routingView,
@@ -169,8 +169,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.turnHomeOpened,
   // 建立、整理、归档
   IPC.ticketsCreate, IPC.ticketsArchive, IPC.ticketsUpdate, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
-  IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive, IPC.featuresMove,
-  IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsUnarchive, IPC.reposScan,
+  IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive, IPC.featuresUnarchive,
+  IPC.reposScan,
   IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsDeleteHidden, IPC.sessionsPin, IPC.sessionsDismissLimit,
   // 配置、复盘和检查的整理
   IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.lessonsAct, IPC.policiesSet, IPC.checksAct, IPC.checksDraft,

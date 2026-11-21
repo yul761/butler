@@ -101,7 +101,7 @@ export function ghCalls(s: Sandbox): string[][] {
 
 /**
  * 用假 gh 的测试给仓库设的 origin（makeGitRepo 的第二个参数，slug acme/app）：fixture 里的 PR 链接都在这个仓库。
- * 不设在沙盒自带的 repo 上：feature、epic 的工作区建在所选上层目录的旁边（<目录>-features），上层目录要是沙盒里的子目录，不能是沙盒本身。
+ * 不设在沙盒自带的 repo 上：feature 的工作区建在所选上层目录的旁边（<目录>-features），上层目录要是沙盒里的子目录，不能是沙盒本身。
  */
 export const FAKE_GH_ORIGIN = "https://github.com/acme/app.git";
 
@@ -420,7 +420,7 @@ export const test = base.extend<{ e2eCleanup: Tracker; makeSandbox: (opts?: Sand
 export { expect };
 
 /**
- * 页面上面的 tab（ticket、feature、epic、效果、复盘、审计页）：名字开头是 name 的那个（后面跟着数量和记号）。
+ * 页面上面的 tab（ticket、feature、效果、复盘、审计页）：名字开头是 name 的那个（后面跟着数量和记号）。
  * tab 永远有一个选中，页面记着上次停在哪个；openTab 已选中就不点，点完等它选中。
  */
 export const pageTab = (page: Page, name: string) =>
@@ -436,7 +436,7 @@ const TICKET_TAB_LABEL = {
   overview: S.lay.tabOverview, conversation: S.lay.tabConversation, terminal: S.lay.tabTerminal, pr: S.lay.tabPr, log: S.lay.tabLog,
 } as const;
 export async function openTicketTab(page: Page, tab: keyof typeof TICKET_TAB_LABEL): Promise<void> {
-  await expect(page.locator(".ticket-page:not(.feature-page):not(.epic-page)")).toBeVisible();
+  await expect(page.locator(".ticket-page:not(.feature-page)")).toBeVisible();
   await openTab(page, TICKET_TAB_LABEL[tab]);
 }
 
@@ -508,8 +508,8 @@ export async function openAllWork(page: Page, T: UiStrings = S): Promise<void> {
   await expect(page.locator(".all-work").getByRole("heading", { name: T.allWork, exact: true })).toBeVisible();
 }
 
-/** 先去全部工作页，再返回「+ 新建 ticket / feature / epic」按钮（给 create() 用，或者直接 click）。 */
-export async function newButton(page: Page, which: "newTicket" | "newFeature" | "newEpic", T: UiStrings = S): Promise<Locator> {
+/** 先去全部工作页，再返回「+ 新建 ticket / feature」按钮（给 create() 用，或者直接 click）。 */
+export async function newButton(page: Page, which: "newTicket" | "newFeature", T: UiStrings = S): Promise<Locator> {
   await openAllWork(page, T);
   return page.locator(".all-work").getByRole("button", { name: `+ ${T[which]}`, exact: true });
 }
@@ -528,7 +528,7 @@ export async function openArchived(page: Page, T: UiStrings = S): Promise<void> 
   await page.locator(".all-work").getByRole("button", { name: T.archived, exact: true }).click();
 }
 
-/** 点 open 打开新建对话框（epic 或 feature），选上一层目录，下面的两个仓库都用。建好后停在新页面上。 */
+/** 点 open 打开新建 feature 的对话框，选上一层目录，下面的两个仓库都用。建好后停在新页面上。 */
 export async function create(page: Page, open: Locator, label: string, name: string, dir: string, T: UiStrings = S): Promise<void> {
   await open.click();
   await page.getByLabel(label, { exact: true }).fill(name);

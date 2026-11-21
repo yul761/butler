@@ -20,6 +20,9 @@ const LIMIT_KINDS = ["usage_limit", "rate_limit", "overloaded", "model_unavailab
 const RULE_KINDS = ["regex", "status", "field", "reset"] as const;
 const MODEL_NAME = z.string().max(200).refine(isModelName, "invalid model name");
 const PRICE = z.number().finite().min(0).nullable();
+/** 以前有、现在没有的任务（epic_digest：旧 epic 层，BTL-246 去掉了）：旧文件里的这些路由照样能读进来，预览和导入时丢掉。 */
+const RETIRED_TASKS = ["epic_digest"] as const;
+const isRetired = (it: ModelsItem): boolean => it.kind === "task" && (RETIRED_TASKS as readonly string[]).includes(it.task);
 
 const ModelItem = z.object({
   kind: z.literal("model"), name: MODEL_NAME, tier: z.enum(TIERS as [Tier, ...Tier[]]), account: z.string().max(100), priceIn: PRICE, priceOut: PRICE, note: z.string().max(500),
@@ -27,7 +30,7 @@ const ModelItem = z.object({
 const ChainItem = z.object({ kind: z.literal("chain"), tier: z.enum(TIERS as [Tier, ...Tier[]]), models: z.array(MODEL_NAME).max(50) });
 const TaskItem = z.object({
   kind: z.literal("task"),
-  task: z.enum(TASK_IDS as unknown as [string, ...string[]]),
+  task: z.enum([...TASK_IDS, ...RETIRED_TASKS] as unknown as [string, ...string[]]),
   tier: z.enum(TIERS as [Tier, ...Tier[]]).nullable(),
   minTier: z.enum(TIERS as [Tier, ...Tier[]]).nullable(),
   policy: z.enum(POLICIES as unknown as [string, ...string[]]).nullable(),
@@ -161,7 +164,7 @@ export const modelsSection: ConfigSection<ModelsItem> = {
     const local = new Map(localItems(new RoutingRepo(ctx.db)).map((it) => [modelsFingerprint(it), it]));
     const rows: PreviewRow[] = [];
     const seen = new Set<string>();
-    for (const it of ctx.items) {
+    for (const it of ctx.items.filter((i) => !isRetired(i))) {
       const fp = modelsFingerprint(it);
       if (seen.has(fp)) continue;
       seen.add(fp);
@@ -190,7 +193,7 @@ export const modelsSection: ConfigSection<ModelsItem> = {
   apply(ctx) {
     const counts = emptyCounts();
     const repo = new RoutingRepo(ctx.db);
-    const incoming = new Map(ctx.items.map((i) => [modelsFingerprint(i), i]));
+    const incoming = new Map(ctx.items.filter((i) => !isRetired(i)).map((i) => [modelsFingerprint(i), i]));
     const local = new Map(localItems(repo).map((it) => [modelsFingerprint(it), it]));
     for (const row of ctx.rows) {
       if ((row.status === "removed") !== (ctx.phase === "remove")) continue;

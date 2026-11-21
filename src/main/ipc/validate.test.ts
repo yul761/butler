@@ -10,7 +10,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, openButlerArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("memory IPC arguments", () => {
   it("accepts a ticket key and a StateCore fact id, nothing else", () => {
@@ -105,38 +105,7 @@ describe("feature IPC arguments (design 2026-10-26)", () => {
   });
 });
 
-describe("epic IPC arguments (design 2026-11-01)", () => {
-  it("accepts an epic with a bounded name and 1–20 repo paths", () => {
-    expect(createEpicArg({ name: "结账改版", repoPaths: ["/c/shop/frontend"] })).toEqual({ name: "结账改版", repoPaths: ["/c/shop/frontend"], workspaceDir: undefined });
-    expect(createEpicArg({ name: "x", repoPaths: ["/a"], workspaceDir: "/w", extra: 1 })).toEqual({ name: "x", repoPaths: ["/a"], workspaceDir: "/w" });
-    for (const bad of [
-      null, "x", { name: "", repoPaths: ["/a"] }, { name: "x".repeat(101), repoPaths: ["/a"] }, { name: 3, repoPaths: ["/a"] }, { name: "x" }, { name: "x", repoPaths: [] },
-      { name: "x", repoPaths: Array(21).fill("/a") }, { name: "x", repoPaths: [""] }, { name: "x", repoPaths: "/a" }, { name: "x", repoPaths: ["/a"], workspaceDir: 5 },
-    ]) {
-      expect(() => createEpicArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
-    }
-  });
-
-  it("accepts only positive integers as an epic id", () => {
-    expect(epicIdArg(3)).toBe(3);
-    for (const bad of [0, -1, 1.5, "3", null, undefined]) expect(() => epicIdArg(bad)).toThrow();
-  });
-
-  it("reports a blank or overlong name as invalid_name, which the page words for an epic", () => {
-    expect(epicNameArg("结账改版")).toBe("结账改版");
-    for (const bad of ["", "   ", "x".repeat(101), 5, null]) {
-      expect(() => epicNameArg(bad), String(bad).slice(0, 20)).toThrow(expect.objectContaining({ code: "invalid_name" }));
-    }
-  });
-
-  it("checks the epic session request", () => {
-    expect(openEpicArg({ epicId: 1, sessionId: "abc-1", prefill: "hi", extra: 1 })).toEqual({ epicId: 1, sessionId: "abc-1", prefill: "hi" });
-    expect(openEpicArg({ epicId: 1 })).toEqual({ epicId: 1 });
-    for (const bad of [null, {}, { epicId: 0 }, { epicId: 1, sessionId: "../x" }, { epicId: 1, prefill: 3 }, { epicId: 1, prefill: "x".repeat(100_001) }]) {
-      expect(() => openEpicArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
-    }
-  });
-
+describe("session request IPC arguments", () => {
   it("checks the Butler 总控 session request (BTL-190 5)", () => {
     expect(openButlerArg({ sessionId: "abc-1", prefill: "hi", extra: 1 })).toEqual({ sessionId: "abc-1", prefill: "hi" });
     expect(openButlerArg({})).toEqual({});
@@ -145,11 +114,6 @@ describe("epic IPC arguments (design 2026-11-01)", () => {
     }
   });
 
-  it("moves a feature into an epic or out with null, but a missing target is not a move out", () => {
-    expect(moveTargetArg(4)).toBe(4);
-    expect(moveTargetArg(null)).toBeNull();
-    for (const bad of [undefined, 0, -1, 1.5, "4", ""]) expect(() => moveTargetArg(bad), String(bad)).toThrow();
-  });
 });
 
 describe("inbox IPC arguments (BTL-190 2+3)", () => {
@@ -162,16 +126,14 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(messageScopeArg({ butler: true })).toEqual({ butler: true });
     expect(messageScopeArg({ featureId: 4 })).toEqual({ featureId: 4 });
     for (const bad of [null, {}, { butler: 1 }, { featureId: -1 }, { epicId: 1 }]) expect(() => messageScopeArg(bad)).toThrow();
-    expect(inboxScopeArg({ epicId: 3 })).toEqual({ epicId: 3 });
     expect(inboxScopeArg({ all: true })).toEqual({ all: true });
-    for (const bad of [null, {}, { all: 1 }, { featureId: 0 }, { epicId: "3" }, "all"]) expect(() => inboxScopeArg(bad), JSON.stringify(bad)).toThrow();
+    for (const bad of [null, {}, { all: 1 }, { featureId: 0 }, { epicId: 3 }, "all"]) expect(() => inboxScopeArg(bad), JSON.stringify(bad)).toThrow();
   });
 
   it("validates a PR stages scope", () => {
     expect(prStagesScopeArg({ ticketKey: "A-1" })).toEqual({ ticketKey: "A-1" });
     expect(prStagesScopeArg({ featureId: 1 })).toEqual({ featureId: 1 });
-    expect(prStagesScopeArg({ epicId: 2 })).toEqual({ epicId: 2 });
-    for (const bad of [{}, null, "A-1", { featureId: "x" }, { epicId: 0 }, { ticketKey: "" }]) expect(() => prStagesScopeArg(bad), JSON.stringify(bad)).toThrow();
+    for (const bad of [{}, null, "A-1", { featureId: "x" }, { epicId: 2 }, { ticketKey: "" }]) expect(() => prStagesScopeArg(bad), JSON.stringify(bad)).toThrow();
   });
 
   it("validates a PR url to open: a string of at most 2000 chars", () => {
@@ -516,16 +478,16 @@ describe("turn args (UI redesign layer 1)", () => {
   it("turnFilterArg: null for nothing, one key at most", () => {
     expect(turnFilterArg(undefined)).toBeNull();
     expect(turnFilterArg(null)).toBeNull();
-    expect(turnFilterArg({ epicId: 2 })).toEqual({ epicId: 2 });
+    // 以前的 epic 范围（BTL-246 去掉了）：别的键一样不看。
+    expect(turnFilterArg({ epicId: 2 })).toBeNull();
     expect(turnFilterArg({ featureId: 5 })).toEqual({ featureId: 5 });
     expect(turnFilterArg({ ticketKey: "BTL-1" })).toEqual({ ticketKey: "BTL-1" });
-    // 和 TurnFilter 类型、normTurnFilter 一致：值为 undefined 的键不算；几个都给时按 ticketKey > featureId > epicId 取一个；别的键不看
-    expect(turnFilterArg({ ticketKey: "BTL-1", epicId: undefined })).toEqual({ ticketKey: "BTL-1" });
-    expect(turnFilterArg({ epicId: 1, featureId: 2 })).toEqual({ featureId: 2 });
-    expect(turnFilterArg({ epicId: 1, featureId: 2, ticketKey: "K" })).toEqual({ ticketKey: "K" });
+    // 和 TurnFilter 类型、normTurnFilter 一致：值为 undefined 的键不算；都给时按 ticketKey > featureId 取一个；别的键不看
+    expect(turnFilterArg({ ticketKey: "BTL-1", featureId: undefined })).toEqual({ ticketKey: "BTL-1" });
+    expect(turnFilterArg({ featureId: 2, ticketKey: "K" })).toEqual({ ticketKey: "K" });
     expect(turnFilterArg({ foo: 1 })).toBeNull();
-    expect(turnFilterArg({ epicId: undefined })).toBeNull();
-    for (const bad of [{ epicId: 0 }, { epicId: 1.5 }, { ticketKey: "K", epicId: "x" }, { ticketKey: "" }, { ticketKey: "x".repeat(201) }, [], "x", 3]) {
+    expect(turnFilterArg({ featureId: undefined })).toBeNull();
+    for (const bad of [{ featureId: 0 }, { featureId: 1.5 }, { ticketKey: "K", featureId: "x" }, { ticketKey: "" }, { ticketKey: "x".repeat(201) }, [], "x", 3]) {
       expect(() => turnFilterArg(bad), JSON.stringify(bad)).toThrow();
     }
   });

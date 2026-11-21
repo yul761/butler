@@ -24,7 +24,7 @@ export interface LessonsServiceDeps {
   runs: LessonRunsRepo;
   availability: Pick<ClaudeAvailability, "lessonsGate" | "pauseLessons" | "resumeLessons">;
   runner: Pick<LessonRunner, "backfill" | "cancel" | "retry" | "retryFailed" | "runNow" | "running">;
-  /** Butler 知道的所有仓库根路径（ticket_repos、feature_repos、epic_repos 的 repo_path 去重）。 */
+  /** Butler 知道的所有仓库根路径（未归档的 ticket_repos、feature_repos 的 repo_path 去重）。 */
   knownRepoPaths: () => string[];
   /** 每个 ticket 和每个 feature 的仓库根路径，一组一个数组，给归组建议用。 */
   repoGroups: () => string[][];

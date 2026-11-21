@@ -19,7 +19,7 @@ const pr = (ticketKey: string, n: number, o: Partial<WatchedPr> = {}, d: Partial
 
 const waiting: Turn = { owner: "external", kind: "awaiting_review", names: [] };
 const input = (o: Partial<ProgressInput> = {}): ProgressInput => ({
-  now: 1000, tickets: [], features: [], epics: [], prs: [], summary: () => null, started: () => false, turnOf: () => waiting, ...o,
+  now: 1000, tickets: [], features: [], prs: [], summary: () => null, started: () => false, turnOf: () => waiting, ...o,
 });
 
 describe("firstSentence", () => {
@@ -56,7 +56,7 @@ describe("bucketOf", () => {
 });
 
 describe("buildProgress", () => {
-  const features = [{ id: 1, name: "Login", epicId: 10 }, { id: 2, name: "Billing", epicId: null }];
+  const features = [{ id: 1, name: "Login" }, { id: 2, name: "Billing" }];
   const tickets = [ticket("A", { featureId: 1 }), ticket("B", { featureId: 1 }), ticket("C", { featureId: 2 }), ticket("D"), ticket("E", { featureId: 1, status: "blocked" })];
   const prs = [
     pr("A", 1, { review: "pending" }, { reviewRequests: [{ kind: "user", name: "alice" }], statusChangedAt: 300, labels: ["ui"], title: "[auth] login" }),
@@ -73,7 +73,7 @@ describe("buildProgress", () => {
     ["https://github.com/o/app/pull/3", { owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" }],
   ]);
   const base = input({
-    tickets, features, epics: [{ id: 10, name: "Q4" }], prs, started: (k) => k === "C", turnOf: (url) => turns.get(url) ?? null,
+    tickets, features, prs, started: (k) => k === "C", turnOf: (url) => turns.get(url) ?? null,
     summary: (id) => (id === 1 ? { summary: "Login works. Signup next.", at: 50, prStatusAt: 60, stale: true } : null),
   });
 
@@ -137,17 +137,17 @@ describe("buildProgress", () => {
     expect(v.freshness.readErrors).toBe(1);
   });
 
-  it("filters by epic and by feature", () => {
-    const byEpic = buildProgress(base, { epicId: 10 });
-    expect(byEpic.counts.total).toBe(3);
-    expect(byEpic.featureGroups.map((g) => g.id)).toEqual([1]);
+  it("filters by feature", () => {
+    const login = buildProgress(base, { featureId: 1 });
+    expect(login.counts.total).toBe(3);
+    expect(login.featureGroups.map((g) => g.id)).toEqual([1]);
     const byFeature = buildProgress(base, { featureId: 2 });
     expect(byFeature.featureGroups.map((g) => g.id)).toEqual([2]);
     expect(byFeature.counts).toMatchObject({ total: 1, in_progress: 1 });
     expect(byFeature.stuck).toEqual([]);
     // 下拉用的列表不受过滤影响。
     expect(byFeature.features).toHaveLength(2);
-    expect(byFeature.filter).toEqual({ epicId: null, featureId: 2 });
+    expect(byFeature.filter).toEqual({ featureId: 2 });
   });
 });
 
@@ -180,14 +180,15 @@ interface Overview {
 describe("progressOverview", () => {
   it("writes times as ISO, names next to ids, and each PR once with owner/repo#number references", () => {
     const v = buildProgress(input({
-      tickets: [ticket("A", { featureId: 1 })], features: [{ id: 1, name: "Login", epicId: 10 }], epics: [{ id: 10, name: "Q4" }],
+      tickets: [ticket("A", { featureId: 1 })], features: [{ id: 1, name: "Login" }],
       prs: [pr("A", 1, {}, { reviewRequests: [{ kind: "user", name: "bob" }], labels: ["ui"], statusChangedAt: 86_400_000 }), pr("A", 2, {}, { baseBranch: "b1" })],
     }));
     const o = progressOverview(v) as unknown as Overview;
     expect(o.stuck[1]).toMatchObject({ pr: "o/app#1", since: "1970-01-02T00:00:00.000Z", featureId: 1, feature: "Login" });
     expect(o.stacks[0].stacks).toEqual([{ pr: "o/app#1", children: [{ pr: "o/app#2" }] }]);
     expect(o.groups.byLabel[0]).toEqual({ key: "ui", prs: ["o/app#1"] });
-    expect(o.features[0]).toMatchObject({ id: 1, epicId: 10, epic: "Q4" });
+    expect(o.features[0]).toMatchObject({ id: 1, name: "Login" });
+    expect(o.features[0]).not.toHaveProperty("epic");
     expect(o.prs.map((p) => p.number).sort()).toEqual([1, 2]);
     expect(o.prs[0]).not.toHaveProperty("prId");
     expect(o.freshness.generatedAt).toBe(new Date(1000).toISOString());

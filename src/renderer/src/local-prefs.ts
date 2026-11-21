@@ -70,7 +70,7 @@ export function setCollapsed(id: string, on: boolean, defaultCollapsed = false):
 }
 
 /**
- * 页面上半部分的 tab（feature、epic、Butler 总控页）：每个页面记着最近停在哪个 tab。
+ * 页面上半部分的 tab（feature、Butler 总控页）：每个页面记着最近停在哪个 tab。
  * 没有记录时返回 null，用页面自己的默认 tab。
  */
 const tabKey = (page: string) => `butler.tab:${page}`;

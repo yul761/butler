@@ -34,7 +34,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
   const { path, scope, key, age } = locationOf(item, ctx, now, S);
   const butler = t.kind === "butler";
   // 不挂在任何地方的 Butler 提醒没有位置可写。
-  const where = butler && item.ticketKey === null && item.epicId === null && item.featureId === null ? "" : path;
+  const where = butler && item.ticketKey === null && item.featureId === null ? "" : path;
   const target = lookTarget(item);
   const actions = cardActions(item).filter((a) => a.id !== "look" || target !== null);
 

@@ -252,12 +252,10 @@ describe("execHeadlessJson routing", () => {
     const { d, argv, reports } = routed([], () => ({ ok: true, result: result() }));
     await execHeadlessJson(d, { ...lo, task: "needs_you" });
     await execHeadlessJson(d, { ...lo, task: "handoff_refresh" });
-    await execHeadlessJson(d, { ...lo, task: "epic_digest" });
     await execHeadlessJson(d, lo);
     await execHeadlessJson(d, { ...o, args: ["-p"] });
     expect(argv).toEqual([
       ["-p", "--model", "haiku", "--output-format", "json"],
-      ["-p", "--model", "sonnet", "--output-format", "json"],
       ["-p", "--model", "sonnet", "--output-format", "json"],
       ["-p", "--output-format", "json"],
       ["-p"],

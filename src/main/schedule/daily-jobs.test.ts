@@ -80,13 +80,12 @@ describe("daily jobs", () => {
       expect(calls).toEqual(["runNightly", "features"]);
     });
 
-    it("a feature batch that rejects or throws only logs: the epic digest still starts, and the job is partial", async () => {
+    it("a feature batch that rejects or throws only logs, and the job is partial", async () => {
       for (const fail of ["reject", "throw"] as const) {
         const { d, calls } = deps();
         const logs: [string, unknown][] = [];
         d.runner = okTickets(calls);
         d.log = (msg, err) => void logs.push([msg, err]);
-        d.epicDigest = { weekly: async () => void calls.push("weekly") };
         const boom = new Error("db locked");
         d.features = {
           runNightly: () => {
@@ -97,7 +96,7 @@ describe("daily jobs", () => {
         };
         expect(await nightlyJob(d)).toBe("partial");
         await Promise.resolve();
-        expect(calls).toEqual(["runNightly", "features", "weekly"]);
+        expect(calls).toEqual(["runNightly", "features"]);
         expect(logs).toEqual([["nightly feature summaries failed", boom]]);
       }
     });
@@ -114,46 +113,6 @@ describe("daily jobs", () => {
       const { d, calls } = deps();
       d.runner = okTickets(calls);
       expect(await nightlyJob(d)).toBe("ok");
-      expect(calls).toEqual(["runNightly"]);
-    });
-  });
-
-  describe("weekly epic digest (plan 16 task 6, R32)", () => {
-    it("asks for the weekly digest after every nightly run on a working day (the runner decides which epics are due)", async () => {
-      for (const working of [true, false]) {
-        const { d, calls } = deps({ isWorkingDay: () => working });
-        d.epicDigest = { weekly: async () => void calls.push("weekly") };
-        await nightlyJob(d);
-        expect(calls, String(working)).toEqual(working ? ["runNightly", "weekly"] : ["runNightly"]);
-      }
-    });
-
-    it("does not wait for it, and a failure only logs", async () => {
-      for (const fail of ["reject", "throw"] as const) {
-        const { d, calls } = deps();
-        const logs: [string, unknown][] = [];
-        d.log = (msg, err) => void logs.push([msg, err]);
-        const boom = new Error("boom");
-        let finish: () => void = () => undefined;
-        d.epicDigest = {
-          weekly: () => {
-            calls.push("weekly");
-            if (fail === "throw") throw boom;
-            return new Promise<void>((_, reject) => (finish = () => reject(boom)));
-          },
-        };
-        expect(await nightlyJob(d)).toBe("partial");
-        expect(calls).toEqual(["runNightly", "weekly"]);
-        finish();
-        await new Promise((r) => setTimeout(r, 0));
-        expect(logs).toEqual([["weekly epic digest failed", boom]]);
-      }
-    });
-
-    it("is not started once quitting has begun", async () => {
-      const { d, calls } = deps({ aborted: () => true });
-      d.epicDigest = { weekly: async () => void calls.push("weekly") };
-      await nightlyJob(d);
       expect(calls).toEqual(["runNightly"]);
     });
   });

@@ -5,7 +5,7 @@ import { derivePrStages, type DeriveInput, type DerivedStages } from "./pr-stage
 
 let nextId = 1;
 const ev = (kind: StageEventKind, at: number, data: Record<string, unknown> = {}): StageEvent => ({
-  id: nextId++, ticketKey: "BTL-1", repoId: 1, prId: null, branch: kind === "skill" ? null : "b", featureId: null, epicId: null,
+  id: nextId++, ticketKey: "BTL-1", repoId: 1, prId: null, branch: kind === "skill" ? null : "b", featureId: null,
   sessionId: null, kind, at, data,
 });
 const design = (at: number) => ev("skill", at, { name: "superpowers:brainstorming", category: "design" });

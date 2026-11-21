@@ -13,7 +13,10 @@ const count = (db: DatabaseSync, sql: string) => (db.prepare(sql).get() as { n: 
 describe("remove-LLM migration (BTL-243)", () => {
   it("is appended after everything that was there before", () => {
     expect(R).toBeGreaterThan(0);
-    expect(R).toBe(MIGRATIONS.length - 1);
+    // 后面合进来的迁移（BTL-246 的层级迁移）追加在它后面，它不一定是最后一条。
+    const hierarchy = MIGRATIONS.findIndex((m) => m.includes("CREATE TABLE blocks"));
+    expect(hierarchy).toBeGreaterThan(R);
+    expect(MIGRATIONS.length - 1 - R).toBe(MIGRATIONS.length - hierarchy);
   });
 
   it("deletes the API key, the LLM settings, the terms and the LLM audit, and keeps the rest", () => {

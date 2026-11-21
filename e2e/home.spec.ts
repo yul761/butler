@@ -172,7 +172,7 @@ test("the All work page has the create buttons, the entries and every piece of w
   await completeWizard(page, s);
   await openAllWork(page);
   const all = page.locator(".all-work");
-  for (const name of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`, S.archived]) {
+  for (const name of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, S.archived]) {
     await expect(all.getByRole("button", { name, exact: true })).toBeVisible();
   }
   // 「显示 Butler 之外开的 session」默认关：没有未认领入口（BTL-244）。

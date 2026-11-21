@@ -1,14 +1,13 @@
-// epic / feature 页整页的渲染（renderToStaticMarkup，不调 api）：看板换成固定的一份，看页面把它接到哪里。
+// feature 页整页的渲染（renderToStaticMarkup，不调 api）：看板换成固定的一份，看页面把它接到哪里。
 // 只测接线：页签标红、概况里的卡片跟 ticket 级的轮次走（scopeBoardView），「总控」页签上面有那句说明。
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Turn, TurnBoard, TurnFilter } from "../../../shared/turn";
-import type { EpicView, FeatureView, SessionView, TicketView } from "../../../shared/types";
+import type { FeatureView, SessionView, TicketView } from "../../../shared/types";
 import { buildTurnBoard, type BoardTicket } from "../../../main/turn/turn-board";
 import type { NameCtx } from "../home-view";
 import { S } from "../strings";
-import { EpicPage } from "./EpicPage";
 import { FeaturePage } from "./FeaturePage";
 
 const mock = vi.hoisted(() => ({ board: null as TurnBoard | null, filters: [] as unknown[] }));
@@ -25,47 +24,37 @@ vi.mock("./SessionCost", () => ({ SessionCost: () => null }));
 const NOW = 1_000_000;
 const review: Turn = { owner: "external", kind: "awaiting_review", names: ["amy"] };
 const stopped: Turn = { owner: "you", kind: "unattended", why: "agent_stopped", canSend: false, sessionId: "s1" };
-/** 主进程按这个 filter 取的看板：K-1 在 feature 10（epic 1）下，session 停着；withPr 时还有一个在等 amy review 的 PR。 */
+/** 主进程按这个 filter 取的看板：K-1 在 feature 10 下，session 停着；withPr 时还有一个在等 amy review 的 PR。 */
 const boardFor = (filter: TurnFilter, withPr: boolean): TurnBoard => {
   const k1: BoardTicket = {
     key: "K-1", name: "K-1", featureId: 10, moreAsks: [], others: [{ turn: stopped, since: NOW - 5 }],
     prs: withPr ? [{ repo: "acme/app", number: 5, title: "t", url: "u", turn: review, since: NOW - 9, mergedAt: null }] : [],
   };
-  return buildTurnBoard({ epics: [{ id: 1, name: "E" }], features: [{ id: 10, name: "F", epicId: 1 }], tickets: [k1], loose: [], reviews: [], dayStart: 0, now: NOW }, filter);
+  return buildTurnBoard({ features: [{ id: 10, name: "F" }], tickets: [k1], loose: [], reviews: [], dayStart: 0, now: NOW }, filter);
 };
 
 const session = (id: string, o: Partial<SessionView> = {}): SessionView => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
   replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: true, spawnedBy: null, featureId: null, fixesSession: null,
-  epicId: null, model: null, termId: null, rootId: id, ...o,
+  model: null, termId: null, rootId: id, ...o,
 } as SessionView);
 const ticket = { key: "K-1", title: "one", repos: [], status: "active", statusManual: null, createdAt: 0, archivedAt: null, featureId: 10, effectiveStatus: "active", sessions: [], hiddenSessions: [], waiting: false } as unknown as TicketView;
 const feature = (o: Partial<FeatureView> = {}): FeatureView => ({
-  id: 10, name: "F", workspaceDir: "/w/f", repos: [], createdAt: 0, archivedAt: null, epicId: 1, brief: null, briefSentAt: null,
-  tickets: [ticket], sessions: [], hiddenSessions: [], waiting: false, summary: null, ticketPrs: {}, activity: {}, ...o,
+  id: 10, name: "F", workspaceDir: "/w/f", repos: [], createdAt: 0, archivedAt: null, brief: null, briefSentAt: null,
+  tickets: [ticket], blocks: [], sessions: [], hiddenSessions: [], waiting: false, summary: null, ticketPrs: {}, activity: {}, ...o,
 });
-const epic = (o: Partial<EpicView> = {}): EpicView => ({
-  id: 1, name: "E", workspaceDir: "/w/e", createdAt: 0, archivedAt: null, repos: [], plan: null, planAt: null,
-  sessions: [], hiddenSessions: [], waiting: false, stuck: false,
-  features: [{ id: 10, name: "F", status: "active", archivedAt: null, summaryAt: null } as EpicView["features"][number]], ...o,
-});
-const ctx: NameCtx = { epics: new Map([[1, "E"]]), features: new Map([[10, "F"]]), tickets: new Map([["K-1", "one"]]) };
+const ctx: NameCtx = { features: new Map([[10, "F"]]), tickets: new Map([["K-1", "one"]]) };
 const noop = () => {};
 
-const epicPage = (o: { focusSession?: string; sessions?: SessionView[] } = {}) => renderToStaticMarkup(createElement(EpicPage, {
-  epic: epic({ sessions: o.sessions ?? [] }), features: [feature()], onOpenFeature: noop, onOpenTicket: noop, onFeatureCreated: noop,
-  focusSession: o.focusSession ?? null, onOpenTarget: noop, ctx, onFix: noop, onGo: noop,
-}));
-const featurePage = (o: { landing?: "control" } = {}) => renderToStaticMarkup(createElement(FeaturePage, {
-  feature: feature(), epics: [], onOpenTicket: noop, onTicketCreated: noop, landing: o.landing, onOpenTarget: noop, ctx, onFix: noop, onGo: noop,
+const featurePage = (o: { landing?: "control"; feature?: FeatureView } = {}) => renderToStaticMarkup(createElement(FeaturePage, {
+  feature: o.feature ?? feature(), onOpenTicket: noop, onTicketCreated: noop, landing: o.landing, onOpenTarget: noop, ctx, onFix: noop, onGo: noop,
 }));
 /** 「概况」页签按钮的 class。 */
 const overviewTab = (html: string) => /<button[^>]*class="([^"]*tab-overview[^"]*)"/.exec(html)![1];
 
-describe.each([
-  { page: "epic", filter: { epicId: 1 }, render: () => epicPage() },
-  { page: "feature", filter: { featureId: 10 }, render: () => featurePage() },
-])("$page page overview wiring", ({ filter, render }) => {
+describe("feature page overview wiring", () => {
+  const filter: TurnFilter = { featureId: 10 };
+  const render = () => featurePage();
   it("a PR waiting for review and a stopped session: the overview tab is not flagged and has no card", () => {
     mock.board = boardFor(filter, true);
     mock.filters = [];
@@ -83,17 +72,20 @@ describe.each([
   });
 });
 
-describe("the control tab's lede on both scope pages", () => {
-  it("epic page", () => {
-    mock.board = boardFor({ epicId: 1 }, true);
-    const html = epicPage({ focusSession: "e1", sessions: [session("e1", { epicId: 1 })] });
+describe("the control tab's lede on the feature page", () => {
+  it("feature page", () => {
+    mock.board = boardFor({ featureId: 10 }, true);
+    const html = featurePage({ landing: "control", feature: feature({ sessions: [session("f1", { featureId: 10 })] }) });
     expect(html).toContain("tab-panel-control");
     expect(html).toContain(`<p class="muted control-lede">${S.lay.ctlLede}</p>`);
   });
-  it("feature page", () => {
+});
+
+describe("feature page header", () => {
+  it("has no move-to picker any more: only rename and archive", () => {
     mock.board = boardFor({ featureId: 10 }, true);
-    const html = featurePage({ landing: "control" });
-    expect(html).toContain("tab-panel-control");
-    expect(html).toContain(`<p class="muted control-lede">${S.lay.ctlLede}</p>`);
+    const html = featurePage();
+    expect(html).not.toContain("<select");
+    expect(html).toContain(S.archiveFeature);
   });
 });

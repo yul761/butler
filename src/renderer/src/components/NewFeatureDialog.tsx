@@ -16,7 +16,7 @@ interface FormProps {
   onCreated: (id: number) => void;
 }
 
-/** 新建 feature 和新建 epic 共用的对话框：名字、仓库（可以选上一层目录）、工作区目录（留空用默认位置）。 */
+/** 新建 feature 的对话框：名字、仓库（可以选上一层目录）、工作区目录（留空用默认位置）。 */
 export function WorkspaceDialog({ title, nameLabel, namePlaceholder, workspaceHint, create, errorText, onClose, onCreated }: FormProps) {
   const [name, setName] = useState("");
   const [repoPaths, setRepoPaths] = useState<string[]>([]);
@@ -55,8 +55,6 @@ export function WorkspaceDialog({ title, nameLabel, namePlaceholder, workspaceHi
 }
 
 interface Props {
-  /** 从 epic 页新建：建好后移进这个 epic（epic 没有的仓库自动加入）。 */
-  epicId?: number;
   onClose: () => void;
   onCreated: (id: number) => void;
 }
@@ -64,12 +62,8 @@ interface Props {
 const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
 
 /** 新建 feature（设计文档 2026-10-26）。 */
-export function NewFeatureDialog({ epicId, onClose, onCreated }: Props) {
-  async function create(input: CreateFeatureInput) {
-    const f = await api.createFeature(input);
-    if (epicId !== undefined) await api.moveFeature(f.id, epicId);
-    return f.id;
-  }
+export function NewFeatureDialog({ onClose, onCreated }: Props) {
+  const create = (input: CreateFeatureInput) => api.createFeature(input).then((f) => f.id);
 
   return (
     <WorkspaceDialog

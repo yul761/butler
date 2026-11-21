@@ -3,7 +3,7 @@
 export const PR_STAGES = ["design", "dev", "self_review", "ci", "peer_review", "merge"] as const;
 export type PrStageId = (typeof PR_STAGES)[number];
 
-/** feature_level：设计在 feature 总控或 epic session 里做过。unknown：hook 不是当前版本，看不到 skill 调用。 */
+/** feature_level：设计在 feature 总控里做过。unknown：hook 不是当前版本，看不到 skill 调用。 */
 export type PrStageState =
   | "todo"
   | "active"
@@ -74,7 +74,7 @@ export interface PrStagesView {
 export interface PrStagesTicket {
   ticketKey: string;
   title: string | null;
-  /** 没有行（没有仓库）的 ticket 也知道自己在哪个 feature 下：epic 按它分组。 */
+  /** 没有行（没有仓库）的 ticket 也知道自己在哪个 feature 下。 */
   featureId: number | null;
   archived: boolean;
   /** 整个 ticket 算已合并（D-6）：PR 都合并或关闭且至少一个合并，或者状态是 merged_pending_followup / done。 */
@@ -83,7 +83,7 @@ export interface PrStagesTicket {
   rows: PrStagesView[];
 }
 
-export type PrStagesScope = { ticketKey: string } | { featureId: number } | { epicId: number };
+export type PrStagesScope = { ticketKey: string } | { featureId: number };
 
 export type SkillCategory = "design" | "review";
 

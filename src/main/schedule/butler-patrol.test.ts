@@ -12,7 +12,7 @@ const at = (h: number, m = 0) => atTime(DAY, h, m);
 
 const butler = (id: string): Session => ({
   id, ticketKey: null, cwd: "/b", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: true, lessonRunId: null,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: true, lessonRunId: null,
 });
 
 /** 巡检 9:00；running 是正在跑的 Butler 总控，block 是 guard 的结果。 */

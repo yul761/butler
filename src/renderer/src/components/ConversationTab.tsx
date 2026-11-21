@@ -127,7 +127,7 @@ export function ConversationTab(p: {
   focusKey?: number;
   /** 放在输入框上面（总控页的 ButlerReplies）。 */
   footer?: ReactNode;
-  /** 分叉的结论有没有 ticket 或 feature 可记；不给当有（ticket 页）。Butler 页和 epic 页传 false，不出「记进记忆」。 */
+  /** 分叉的结论有没有 ticket 或 feature 可记；不给当有（ticket 页）。Butler 页传 false，不出「记进记忆」。 */
   canRemember?: boolean;
 }) {
   // 选中的 session 只在两种时候变：用户点了切换条；或者它从列表里没了（回到默认）。

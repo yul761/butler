@@ -15,7 +15,7 @@ export function featureScope(id: number): string {
   return `feature:${id}`;
 }
 
-/** 每个 epic 一个 scope（设计文档 2026-11-01）：epic 下所有层的 session 共用。 */
+/** 旧 epic 层的 scope（设计文档 2026-11-01，BTL-246 去掉了）：只在升级后读一次，把笔记抄进各 feature 的记忆归档。 */
 export function epicScope(id: number): string {
   return `epic:${id}`;
 }

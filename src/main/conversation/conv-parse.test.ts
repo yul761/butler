@@ -97,9 +97,17 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     return e.kind === "user" ? e.open : e.kind;
   };
 
-  it("handoff requests", () => {
-    expect(openOf(M().refreshEpicHandoff)).toBe("handoff");
-    expect(openOf(M().idleCloseEpicHandoff)).toBe("handoff");
+  it("the old epic handoff requests in old transcripts (BTL-246 removed them from strings.ts)", () => {
+    const old = lang === "zh"
+      ? [
+        "Butler 要清空这个 session 的上下文。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+        "这个 session 闲置很久了，Butler 要把它关掉（以后可以恢复）。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+      ]
+      : [
+        "Butler is about to clear this session's context. First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+        "This session has been idle for a long time, so Butler is about to close it (it can be resumed later). First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+      ];
+    for (const text of old) expect(openOf(text)).toBe("handoff");
   });
 
   it("notices and resume prompts are silent", () => {
@@ -165,6 +173,9 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     const m = M();
     expect(openOf(m.intakeClarify("BTL-1 (https://x/BTL-1)", JSON.stringify("加个按钮"), "- 放在哪？", false))).toBe("silent");
     expect(openOf(m.intakeClarify("BTL-1", JSON.stringify("Add a button"), "- where?", true))).toBe("silent");
+    // 半自动档拉完交给 epic 总控的名单（BTL-246）。
+    expect(openOf(m.intakeEpicTickets("SHOP-1", JSON.stringify("Checkout"), "- BTL-1 \"a\"\n- BTL-2 \"b\""))).toBe("silent");
+    expect(openOf(m.intakeEpicTickets("SHOP-1", null, "- BTL-1 \"a\""))).toBe("silent");
   });
 
   it("plain speech is user", () => {

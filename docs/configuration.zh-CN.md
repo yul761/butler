@@ -16,7 +16,7 @@ Butler 没有配置文件。所有设置都在 **设置** 页里改，存在 `~/
 
 设置页顶上还有四个标签：**模型路由**（见[模型路由](#模型路由)）、**评论与 CI**（见[评论与 CI](#评论与-ci)）、**打断与通知**（见[打断与通知](#打断与通知)）和 **栈**（见[栈](#栈)）。
 
-合并总控，以及给总控 session 用的 `end_session` 工具，见[合并总控](#合并总控)和 [README](../README.zh-CN.md)，两者都没有设置项。
+合并总控，以及给 epic 总控用的 `end_session` 工具，见[合并总控](#合并总控)和 [README](../README.zh-CN.md)，两者都没有设置项。
 
 审计记录在侧边栏单独的 **审计** 页里。**效果** 页也没有设置项，见[效果页](#效果页)。
 
@@ -74,7 +74,7 @@ Butler 还会把正则和分支名模板放在一起检查。如果正则接受�
 
 ## 同时开几个 session
 
-能同时开几个 session 只看这台电脑的内存，没有写死的数。Butler 为 `start_session`、`start_feature`，或者 Butler 总控给关着的总控发消息而新开终端之前，会用现在可用的内存减去一个新 session 的预估占用，剩下的不少于下面的保留量才开。最近两分钟里刚开的 session 还没长起来，每个也按预估占用先扣掉。macOS 报告内存压力为「严重」时不开新的。不放行时总控会看到现在可用多少、再开一个要多少、要留多少；`start_session`、`start_feature` 和 `list_sessions` 的结果会多一行「现在还能再开几个」。读不到内存时照样放行（只看下面可选的上限），并记日志。
+能同时开几个 session 只看这台电脑的内存，没有写死的数。Butler 为 `start_session`、全局总控给关着的 epic 总控发消息，或者自动接活把新的 Jira ticket 交给关着的 epic 总控而新开终端之前，会用现在可用的内存减去一个新 session 的预估占用，剩下的不少于下面的保留量才开。最近两分钟里刚开的 session 还没长起来，每个也按预估占用先扣掉。macOS 报告内存压力为「严重」时不开新的。不放行时总控会看到现在可用多少、再开一个要多少、要留多少；`start_session` 和 `list_sessions` 的结果会多一行「现在还能再开几个」。读不到内存时照样放行（只看下面可选的上限），并记日志。
 
 macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量减去 wired、压缩器占用和匿名页（扣掉可清除的部分），文件缓存算可用。这里不用 `os.freemem()`，因为它只算空闲页，几十 GB 空余的机器上也常常只有几 GB。`vm_stat` 读不到时用 `memory_pressure -Q` 的空闲百分比，再不行才用 `os.freemem()`。Windows 上 `os.freemem()` 就是可用物理内存（空闲加 standby），Linux 上是 `MemAvailable`，都直接用。
 
@@ -92,7 +92,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 |------|----|--------|----------------|
 | 把 handoff 的进度、决策、follow-up 和经验写进 StateCore，并在 Butler 打开的 session 里挂上记忆 | `memoryEnabled` | `1`（开） | `1` 或 `0`。关掉后，Butler 不往 StateCore 写任何东西，启动 session 时也不挂记忆 MCP server。已有的记忆会保留。重新打开后，Butler 会把漏掉的 ticket 补上。 |
 | 上下文超过多少 token 时自动换新（0 = 关） | `refreshThresholdTokens` | `150000` | `0` 表示关掉自动换新，否则填一个 token 整数（最多 7 位）。当 Butler 的某个 session 已经停下、没在等你，而且上一轮的上下文至少有这么长时，Butler 会输入 `/handoff`，等记忆真的存好 handoff，把最近几轮对话存到 `~/.butler/refresh/<session>.md`（不调用模型），再输入 `/clear`，然后让 session recall 那份 handoff、读这个文件，接着做换新前在做的事（如果当时在等你、等 CI 或等子 session，就说一句在等什么并继续等）。需要打开记忆。运行中的 session 旁边的 ↻ 按钮，以及总控的 `refresh_session`，可以随时手动换新，不受这项设置影响。 |
-| session 闲置多少分钟后自动关闭（0 = 关） | `idleCloseMinutes` | `180` | `0` 表示关掉自动关闭，否则填一个不小于 10 的分钟整数（最多 5 位）。当 Butler 的某个 session 开着终端、停下超过这个时间（电脑睡着的时间不算），没有要你决定的事、没有后台任务、没在等合并或 CI、不在换新中，如果是总控、它管的子 session 也都没在干活时，Butler 会先让它写 handoff（`/handoff`，epic session 用 handoff 工具），等记忆写完，再像 `end_session` 一样结束终端，以后可以恢复。记忆关着时 ticket 和 feature session 照样写 `/handoff`（Butler 自己存着，每日简报要用）。你隐藏的 session 超过 14 天会从 Butler 里删掉，transcript 留在磁盘上。session 栏的 **清理闲置** 会立刻对那里停下至少 5 分钟的 session 做同样的事，不受这项设置影响。 |
+| session 闲置多少分钟后自动关闭（0 = 关） | `idleCloseMinutes` | `180` | `0` 表示关掉自动关闭，否则填一个不小于 10 的分钟整数（最多 5 位）。当 Butler 的某个 session 开着终端、停下超过这个时间（电脑睡着的时间不算），没有要你决定的事、没有后台任务、没在等合并或 CI、不在换新中，如果是总控、它管的子 session 也都没在干活时，Butler 会先让它写 handoff（`/handoff`），等记忆写完，再像 `end_session` 一样结束终端，以后可以恢复。记忆关着时 ticket 的 session 和 epic 总控照样写 `/handoff`（Butler 自己存着，每日简报要用）。你隐藏的 session 超过 14 天会从 Butler 里删掉，transcript 留在磁盘上。session 栏的 **清理闲置** 会立刻对那里停下至少 5 分钟的 session 做同样的事，不受这项设置影响。 |
 
 这一节还显示：
 
@@ -125,7 +125,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 | 降低看不见又停着的 session 的优先级 | `backgroundPriority` | `0`（关） | `1` 或 `0`。macOS 上，不在屏幕上、又停着的 session，整棵进程树被设成后台（`taskpolicy -b`）。Windows 上，看不见的 session 设成 `BelowNormal`，又停着的再打开 EcoQoS。终端出现在屏幕上、你在里面打字、或者 session 又开始干活，马上恢复；退出 Butler 时全部恢复。macOS 上正在干活的 session 不降：后台优先级会把编译和测试拖得很慢。 |
 | 清理 session 留下的孤儿进程 | `orphanCleanup` | `1`（开） | `1` 或 `0`。Butler 记着它在每个 session 下面见过哪些进程（`~/.butler/procs/owned.json`，带启动时间和命令行）。session 的终端结束 5 秒后，其中还活着、又不在任何开着的 session 下面的，会被结束：先正常结束，5 秒后还在就强制结束（Windows 上先 `taskkill`，再 `taskkill /F`；每个进程单独核对、单独结束，不用 `/T`）。启动时也会清掉 Butler 上次异常退出留下的。启动时间或命令行对不上的（比如 pid 被别的程序重用了）绝不碰。每结束一个都写进日志。 |
 | claude 进程超过多少 MB 就换新（0 = 关） | `refreshMemoryMb` | `0` | 默认关，session 只按 `refreshThresholdTokens` 换新，和 2.1.0 一样；想打开的话 `2048` 是个合适的值。`0` 关掉，否则是不小于 256 的整数 MB（最多 6 位）。只算 claude 进程自己，不算它的 MCP server 和别的子进程。超过以后，Butler 在这个 session 下一次停下来的时候换新，检查和步骤和 `refreshThresholdTokens` 一样（所以要开着记忆）。换新以后 claude 还在阈值的 80% 以上，Butler 写进日志；6 小时以后再试。 |
-| 停着的 session 休眠 | `hibernateEnabled` | `0`（关） | `1` 或 `0`。Butler 开的 session 停够了下面的分钟数，Butler 就结束它的整棵进程树（claude、MCP server、shell，`hibernateEndWatchers` 开着时还有 watcher），只留下对话记录，按钮上显示「休眠」。有东西要送进去时它用 `claude --resume` 醒来，原来的对话都在：CI 的结论、合并通知、给总控的汇报、你对 `ask_user` 的回答。点开它、切到它的终端也会唤醒。下面这些情况不休眠：正在干活或者有后台命令、屏幕上有权限确认或对话框、输入框里有草稿、30 秒内在终端里打过字、正在换新或者正在给它递东西、是你正在看的终端、是总控而它管的子 session 在干活、2 分钟内刚打开或者 10 分钟内刚唤醒、没有对话记录、被钉住（按钮上的 📌）。修复 session 和复盘分析 session 不休眠。休眠的 session 照样算进每个 ticket、每个 feature 的 session 上限，照样显示在「轮到你」页，照样算在等你。唤醒失败的，按钮上有个 **!**（原因在悬停提示里），并且一直留在「轮到你」页，直到你点开或者隐藏它。会过去的失败（ticket 正忙、找不到 claude、仓库在别的分支上）保留休眠，10 分钟后再自动唤醒；别的失败（claude 还没起来就退出了，或者 60 秒没起来）变成普通的关着的 session。你自己点开总会再试一次。不限制同时开的 session 数。 |
+| 停着的 session 休眠 | `hibernateEnabled` | `0`（关） | `1` 或 `0`。Butler 开的 session 停够了下面的分钟数，Butler 就结束它的整棵进程树（claude、MCP server、shell，`hibernateEndWatchers` 开着时还有 watcher），只留下对话记录，按钮上显示「休眠」。有东西要送进去时它用 `claude --resume` 醒来，原来的对话都在：CI 的结论、合并通知、给总控的汇报、你对 `ask_user` 的回答。点开它、切到它的终端也会唤醒。下面这些情况不休眠：正在干活或者有后台命令、屏幕上有权限确认或对话框、输入框里有草稿、30 秒内在终端里打过字、正在换新或者正在给它递东西、是你正在看的终端、是总控而它管的子 session 在干活、2 分钟内刚打开或者 10 分钟内刚唤醒、没有对话记录、被钉住（按钮上的 📌）。修复 session 和复盘分析 session 不休眠。休眠的 session 照样显示在「轮到你」页，照样算在等你。唤醒失败的，按钮上有个 **!**（原因在悬停提示里），并且一直留在「轮到你」页，直到你点开或者隐藏它。会过去的失败（ticket 正忙、找不到 claude、仓库在别的分支上）保留休眠，10 分钟后再自动唤醒；别的失败（claude 还没起来就退出了，或者 60 秒没起来）变成普通的关着的 session。你自己点开总会再试一次。不限制同时开的 session 数。 |
 | 等你的 session 多少分钟后休眠 | `hibernateYouMinutes` | `30` | `0`（不休眠）或不小于 `5` 的整数（最多 5 位）。「等你」是「轮到你」页说它需要你，或者有没回答的 `ask_user`。 |
 | 等 CI 的 session 多少分钟后休眠 | `hibernateCiMinutes` | `20` | 同上。等 CI：它的 PR（或者分支）的 CI 在跑，或者排在合并总控里。 |
 | 等 review 的 session 多少分钟后休眠 | `hibernateReviewMinutes` | `30` | 同上。PR 开着、CI 跑完了、review 还没批准。 |
@@ -146,7 +146,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 | 设置 | 键 | 默认值 | 可填的值和说明 |
 |------|----|--------|----------------|
 | 晚间 handoff 时间 | `nightlyTime` | `16:00` | `HH:MM`，本地时间。如果到点时 Butler 没开、电脑在睡眠或锁屏，会在下次启动、唤醒或解锁时补跑，排在早间刷新之前。 |
-| 每天几点让 Butler 总控巡检一次 | `butlerPatrolTime` | 空（关） | `HH:MM`，本地时间；空 = 关。到点时 Butler 打开（或接着用最近的）Butler 总控，让它看一遍 PR、CI 和未决的提问，用 `ask_user` 列出要你亲自做的事。Butler 总控正忙就等它停下来；到点时电脑在睡眠或 Butler 没开，当天醒来、解锁或启动时补一次，过了零点不补。如果在当天的巡检时间过了之后才打开这项设置，会马上巡检一次。巡检每天最多开一次 session。上一次巡检列出的提问还没处理时，下一次会等你处理完。Butler 总控不会被自动换新，也不会因为闲置被自动关闭。 |
+| 每天几点让全局总控巡检一次 | `butlerPatrolTime` | 空（关） | `HH:MM`，本地时间；空 = 关。到点时 Butler 打开（或接着用最近的）全局总控，让它看一遍 PR、CI 和未决的提问，用 `send_message` 提醒该跟进的 epic 总控，用 `ask_user` 列出要你亲自做的事。全局总控正忙就等它停下来；到点时电脑在睡眠或 Butler 没开，当天醒来、解锁或启动时补一次，过了零点不补。如果在当天的巡检时间过了之后才打开这项设置，会马上巡检一次。巡检每天最多开一次 session。上一次巡检列出的提问还没处理时，下一次会等你处理完。全局总控不会被自动换新，也不会因为闲置被自动关闭。 |
 | 工作日（只在这些天跑晚间 handoff） | `workingDays` | `1,2,3,4,5`（周一到周五） | 界面上是复选框。存的值是用逗号分隔的 `0`–`6`，`0` 是周日。晚间 handoff 和早间刷新只在这些天运行。 |
 | tracker MCP 工具（handoff 只能调用这些，一行一个） | `trackerTools` | 空 | 一行一个 MCP 工具名，格式是 `mcp__<server>__<tool>`。只写 `mcp__<server>` 会放开这个 server 的所有工具，除非 server 是只读的，否则别这么写。其他内容，例如 `Bash(...)` 规则或命令行参数，都会被拒绝。handoff 和刷新可以调用这些工具，加上 `Read`、`Grep`、`Glob`、`gh pr view`、`gh pr checks`、`git log` 和 `git status`，再加上你用户级或托管（policy）的 Claude Code 设置允许的工具（见下文）。 |
 | 后台 handoff 也加载本地级的 MCP… | `headlessProjectMcp` | `0`（关） | `1` 或 `0`。见[接入你的 tracker](#接入你的-tracker)。 |
@@ -155,7 +155,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 
 这一节还有 **立即运行晚间 handoff** 按钮。
 
-晚间运行做完 ticket 之后，还会为每个自上次汇总以来总控 session 或 ticket 有新动静的 feature 写一份汇总。有总控 session 时，它会 fork 这个 session，并使用和 handoff 相同的只读参数。如果 ticket 那一轮被限流了，当晚不写 feature 汇总，留给早上的补跑。feature 页上还有 **立即更新**，它先为这个 feature 里有动静的 ticket 跑 handoff，再写汇总。上次汇总之后 PR 的状态、CI、review 或能不能合并有变化，也算新动静，所以就算没人打字，汇总也会标成过时。每份汇总都写着读 PR 的时间（"PR 状态截至"）。在总控 session 里运行 `/handoff`，会直接根据对话本身写汇总。
+晚间运行做完 ticket 之后，还会为每个自上次汇总以来总控 session 或 ticket 有新动静的 epic 写一份汇总。有总控 session 时，它会 fork 这个 session，并使用和 handoff 相同的只读参数。如果 ticket 那一轮被限流了，当晚不写 epic 汇总，留给早上的补跑。epic 页上还有 **立即更新**，它先为这个 epic 里有动静的 ticket 跑 handoff，再写汇总。上次汇总之后 PR 的状态、CI、review 或能不能合并有变化，也算新动静，所以就算没人打字，汇总也会标成过时。每份汇总都写着读 PR 的时间（"PR 状态截至"）。在总控 session 里运行 `/handoff`，会直接根据对话本身写汇总。
 
 handoff 和刷新用这些参数启动 `claude`：
 
@@ -198,7 +198,7 @@ Butler 自己从不和你的 tracker 通信。handoff 通过公司 Claude Code �
 
 几个 ticket 改同一个仓库时，合并总控让它们的合并不互相撞车。它是 Butler 的一部分，没有设置项。它不问模型，两个分支冲不冲突由 git 自己判断。
 
-**它审查什么。** 只审查两类命令，而且只限 Butler 打开的 session（epic session、feature 总控或任何 ticket session，不管属于哪个 epic 或 feature）：
+**它审查什么。** 只审查两类命令，而且只限 Butler 打开的 session（epic 总控或任何 ticket session，不管属于哪个 epic）：
 
 - 合并进目标分支：`gh pr merge`（包括 `--auto`，目标是 PR 的 base 分支）、在目标分支上 `git merge`，以及 `git push` 到目标分支。带显式 `src:dst` refspec 的 push，检查的是 `src` 分支（`HEAD` 指当前分支）。不带 refspec 的 `git push origin main` 推的是本地 `main`，不管你在哪个分支上，所以算作推目标分支本身，不审查。推你自己的分支也不审查。`cd` 和 `git -C` 里的目录可以写成 Windows 路径（`"C:\Users\me\repo"`）、Git Bash 路径（`/c/Users/me/repo`）或带 `~`。
 - 在共用文件夹里切分支（`git checkout`、`git switch`）。共用文件夹指"分支"工作模式下、另一个有打开 session 的 ticket 也在用的仓库文件夹。在你自己的 worktree 里切分支不审查。
@@ -227,9 +227,9 @@ Butler 自己从不和你的 tracker 通信。handoff 通过公司 Claude Code �
 
 ## 模型路由
 
-Butler 在后台用 `claude -p` 做一些事：「需要你」和卡住判断、handoff、feature 汇总、epic 摘要、复盘分析。**设置 → 模型路由**决定每一种调用用哪个模型，以及模型撞到限额时怎么办。
+Butler 在后台用 `claude -p` 做一些事：「需要你」和卡住判断、handoff、epic 汇总、复盘分析。**设置 → 模型路由**决定每一种调用用哪个模型，以及模型撞到限额时怎么办。
 
-**什么都不登记就什么都不变。** 在你登记至少一个启用的模型之前，每个调用都和 Butler 2.1.0 用同一个模型（「需要你」和卡住判断用 haiku，handoff 刷新和 epic 摘要用 sonnet，其余用你的默认模型）。限额照旧处理：整个账号暂停。下面说的通用信号只记在页面上。
+**什么都不登记就什么都不变。** 在你登记至少一个启用的模型之前，每个调用都和 Butler 2.1.0 用同一个模型（「需要你」和卡住判断用 haiku，handoff 刷新用 sonnet，其余用你的默认模型）。限额照旧处理：整个账号暂停。下面说的通用信号只记在页面上。
 
 **档位和链。** 每个登记的模型有一个档位：`high`、`mid` 或 `low`。模型名可以是别名（`opus`）、完整名字（`claude-opus-5-5`），或者你的网关认识的名字；Butler 原样传给 `--model`。每一档有一条链，也就是试这一档模型的顺序。默认按登记的顺序。**账号**标签相同的模型共用一个订阅或网关：其中一个撞到账号级限额时，同账号同档和更高档的模型也一起标上。
 
@@ -243,7 +243,7 @@ Butler 在后台用 `claude -p` 做一些事：「需要你」和卡住判断、
 - **wait（等待）**：先试同一档的其他模型，都不行就等其中一个恢复。不会丢掉。
 - **escalate（上报）**：第一次撞限就停下并报出来。
 
-handoff 和 feature 汇总沿用 session 自己的模型（换模型会让 prompt 缓存整个失效）。
+handoff 和 epic 汇总沿用 session 自己的模型（换模型会让 prompt 缓存整个失效）。
 
 比任务要的档位低的结果会在用量、复盘运行详情和事件记录里标成降级。在低档跑的复盘分析会排队，等它自己的档位恢复后重跑一次；页面上的**现在重跑**会马上做。
 
@@ -270,7 +270,7 @@ session 撞到限额时，它那一行显示限额和**换下一档继续**按�
 
 ## 效果页
 
-**效果** 页（在侧栏「Butler 自己」一组里，**复盘与规矩** 下面）显示 Butler 做的 PR 要你付出多少、和之前比怎么样。Butler 总控的 `metrics_overview` 返回同一份数据，可以看 1 到 365 天（默认 30 天）。没有要设置的。
+**效果** 页（在侧栏「Butler 自己」一组里，**复盘与规矩** 下面）显示 Butler 做的 PR 要你付出多少、和之前比怎么样。全局总控的 `metrics_overview` 返回同一份数据，可以看 1 到 365 天（默认 30 天）。没有要设置的。
 
 - **四张卡**：每个合并了的 Butler PR 平均的周期（开 PR → 合并，以及 ticket 开始 → 合并）、评论（人和 Copilot，以及复盘标成可避免的有几条）、人介入（以及 session 等了你多久）和花费（加权 token；也折成美元，用 Claude Code 报的金额，没有的按模型登记的价格估）。周期和评论和基线比；另外两张没有可比的，写"之前 —"。
 - **基线**：Butler 每天从 GitHub 读一次你自己开的、在第一个 Butler session 之前 180 天里合并的 PR（每个仓库最多 100 个，链接到 ticket 的不算），记下周期和评论数。bot 的评论不算，和 Butler 的 PR 一样。这些 PR 的"ticket 开始"用第一个 commit 的时间近似。截止点在第一个 Butler session 出现时定下，之后不再变。还没读到这样的 PR 时（比如 gh 用不了），页面上写还没有基线。
@@ -504,7 +504,7 @@ Butler 可以替你判待确认的规矩。判的时候，对一个仓库、一�
 
 ## 预审、就绪和风险
 
-Butler 能在你 review 之前先把一遍关。默认全是关着的或只读的：什么都不配置时，只在 ticket 页和 feature、epic 页看到每个 PR 的就绪情况和风险。
+Butler 能在你 review 之前先把一遍关。默认全是关着的或只读的：什么都不配置时，只在 ticket 页和 epic 页看到每个 PR 的就绪情况和风险。
 
 | 设置 | 键 | 默认 | 取值和说明 |
 |------|-----|------|-----------|
@@ -534,7 +534,7 @@ Butler 能在你 review 之前先把一遍关。默认全是关着的或只读�
 | 发 issue | `externalIssuePost` | `0`（关） | 在 tracker 或 GitHub 上建 issue、发评论。 |
 | 推送通知 | `externalPushNotification` | `0`（关） | 往外部服务（比如手机推送、聊天工具）发通知。 |
 | 贴 review 简报 | `externalPrBriefPost` | `0`（关） | 每次预审完成后把 review 简报写进 PR 描述。「贴到 PR」按钮不受这个开关影响，照样记进审计。 |
-| 自动接活：到 tracker 提问 | `externalIntakeTrackerComment` | `0`（关） | [自动接活](#自动接活)发现 ticket 缺信息时，让 session 或总控在 tracker 的 ticket 上留言问。 |
+| 自动接活：到 tracker 提问 | `externalIntakeTrackerComment` | `0`（关） | [自动接活](#自动接活)发现 ticket 缺信息时，让 session 或全局总控在 tracker 的 ticket 上留言问。 |
 | 自动接活：改 ticket 状态 | `externalIntakeTrackerStatus` | `0`（关） | 自动接活开的 session 先把 tracker 上的 ticket 改成进行中。 |
 
 每个开关填 `1` 或 `0`。
@@ -664,7 +664,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 |------|----|--------|------|
 | 选推荐项 | `interruptChoiceRule` | `0`（关） | 告诉 ticket session 和总控：有一个推荐项，又没有特别情况（不可撤销或对外的动作、花费、超出 ticket、你说过的偏好）时，就选它，继续做，并用 `report(kind: "choice")` 记下来。 |
 | 默认答案 | `interruptChoiceDefaults` | `0`（关） | 带选项的问题里出现你设的关键词时，马上用你的答案（或 session 推荐的那个选项）回答。session 会被告知这是你的默认答案。 |
-| 先查再问 | `interruptSelfServe` | `0`（关） | 问你要信息之前，session 先查：通过 tracker 查 ticket、代码和文档、记忆，ticket session 还会问自己的总控。 |
+| 先查再问 | `interruptSelfServe` | `0`（关） | 问你要信息之前，session 先查：通过 tracker 查 ticket、代码和文档、记忆，epic 里的 ticket session 还会问 epic 总控。 |
 
 这样做出的每个选择都列在 **替你做的选择** 里，新的在前，直到你标为看过。在 **效果** 页上它不算人介入，算一次自动解决的打断。
 
@@ -695,7 +695,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 栈是同一个仓库里一串互相依赖的 Butler 分支：栈底基于 trunk，往上每一层基于下面那层。只有栈底开 PR 给人 review；上面的层在轮到它当栈底之前都只是分支，所以 reviewer 一次只看一个小 PR。
 
-栈由总控建。feature 总控调用 `create_ticket` 时带上 `stack_on`，新 ticket 的分支就从另一个 ticket 的分支开出来，并接到那个 ticket 所在栈的顶上（它不在栈里就新建一个）；也可以用 `stack_define` 把已有的分支定成栈。`list_stacks` 看栈，`stack_rebase` 马上 rebase 一次，`stack_layer_mode` 在上面某层要跑 CI 时把它开成 draft PR，或者把 draft 关掉。feature 总控看得到有一层是它的 ticket 的栈，但只能改属于它这个 feature、或者没合并的层都是它的 ticket 的栈。Butler 总控也有这几个工具，但只接受它自己开着的终端发来的改动；epic session 只有 `list_stacks`。
+栈由 epic 总控建。epic 总控调用 `create_ticket` 时带上 `stack_on`，新 ticket 的分支就从另一个 ticket 的分支开出来，并接到那个 ticket 所在栈的顶上（它不在栈里就新建一个）；也可以用 `stack_define` 把已有的分支定成栈。`list_stacks` 看栈，`stack_rebase` 马上 rebase 一次，`stack_layer_mode` 在上面某层要跑 CI 时把它开成 draft PR，或者把 draft 关掉。epic 总控看得到有一层是它的 ticket 的栈，但只能改属于它这个 epic、或者没合并的层都是它的 ticket 的栈。全局总控也有这几个工具，但只接受它自己开着的终端发来的改动。
 
 栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动（或者会被新顶端覆盖的未跟踪文件）、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，等那一层 ticket 的 session 空下来时把冲突文件和要执行的 `git rebase --onto` 命令交给它；只有「强推」开着时才让 session 把结果推上去。下一次 rebase 接着 session 解好的结果做。冲突 30 分钟没交出去、或者 rebase 卡住或回滚了一天，「轮到你」页会提醒。
 
@@ -737,7 +737,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 | 从哪里拉 | `intakeSource` | `none` | `none`、`tracker` 或 `file`。 |
 | tracker 查询 | `intakeTrackerQuery` | 空 | `tracker` 时必填（空着不拉）：列什么：一句话或 tracker 的查询语法，例如「分给我的、待办状态的 ticket」。Butler 跑一个后台 `claude -p`，只能用 `trackerTools` 里的只读工具；Butler 自己不连 tracker。 |
 | 在哪个仓库里查 | `intakeTrackerDir` | 空 | `tracker` 时查询在哪个绝对路径里跑，这样能找到你项目级的 tracker MCP。空着用仓库映射的第一个路径。 |
-| JSON 文件 | `intakeFilePath` | 空 | `file` 时文件的绝对路径，内容是 `{"tickets": [...]}` 或一个数组。每个 ticket 要有 `key` 和 `title`，可以有 `description`、`type`、`labels`、`priority`、`url`、`storyPoints`、`components`、`subtasks`（`[{key, title}]`）和 `repo`（绝对路径）。可以配合你自己的导出脚本用。 |
+| JSON 文件 | `intakeFilePath` | 空 | `file` 时文件的绝对路径，内容是 `{"tickets": [...]}` 或一个数组。每个 ticket 要有 `key` 和 `title`，可以有 `description`、`type`、`labels`、`priority`、`url`、`storyPoints`、`components`、`subtasks`（`[{key, title}]`）、`repo`（绝对路径）和 `epic`，即上级 Jira epic（`{key, title}`，或者只写 key）。可以配合你自己的导出脚本用。 |
 | 每隔几分钟拉 | `intakePollMinutes` | `15` | 两次拉取之间的分钟数，5–1440。队列上的「现在拉一次」立刻拉。后台任务暂停时不拉。 |
 | 仓库映射 | `intakeRepoMap` | 空 | 每行一条 `匹配 => /绝对/路径`，先匹配的算：`PROJ`（号的前缀）、`label:前端`、`component:文档` 或 `*`。ticket 自己带的 `repo` 优先于映射。哪条都对不上的等你选仓库。 |
 
@@ -762,11 +762,16 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 自动开工还要求预审开着（`preReviewEnabled`）。关着时只分类、搁着，你可以在队列里手动开工。
 
+**按 Jira epic 归组。** 来源是 `tracker` 时，Butler 还会问每个 ticket 的上级 epic（key 和标题）；来源是 `file` 时读 ticket 的 `epic`。有上级 epic 的 ticket 进关联这个 Jira epic 的 Butler epic。没有未归档的 epic 关联它时，Butler 用 Jira epic 的 key 和标题新建一个，工作区放在默认位置（文件夹被占用时依次加 `-2`、`-3`），并加上这个 ticket 的仓库；已归档的 epic 不会拿来再用。epic 还没有的仓库会加进去。没有上级 epic 的 ticket 照样单独放。栈的各层放进拆出它们的那个 ticket 所在的 epic。接下来怎样，看 `autoStart`：
+
+- **关。** 每个有 epic 的 ticket 马上建进那个 epic，不开 session，在队列里继续搁着。不会给 epic 总控发消息：你准备好了，就让它把这些 ticket 分进 feature。已经在 Butler 里的 ticket、栈的各层和没有仓库的 ticket 不会建。
+- **开。** ticket 照常开工，放在自己的 epic 里。每次拉取之后，Butler 给每个 epic 的总控发一条消息，列出新拉来、在排队、在等或已开工的 ticket，让它用 `create_feature` 和 `set_ticket_feature` 把它们分进 feature，用 `reorder_features` 排好顺序，再往前推。总控没在跑时，内存够了 Butler 就打开它（接着它最近的对话）；在跑时，等它停下来、你也没在打字再送。送不了（内存不够、输入框不空）就跳过并记日志，下一次给这个 epic 加了 ticket 的拉取再试。
+
 ### 什么时候叫你
 
 只有这几种，每个 ticket 每进入一次这种状态叫一次：分类拿不准、缺信息、不知道是哪个仓库、建不成 ticket、和别的工作改同样的路径在排队。它们是**轮到你**页上的一张卡片，开了通知时还是 `intake_decision` 事件。其余的（已开工、排队、等名额或内存、搁着、拆成栈）不打扰你，在**轮到你**页「运行情况」的「自动接活」里留 24 小时，在「全部工作」页「栈与自动接活」的队列里能看到。
 
-`clarifyMode` 设成 `session` 或 `coordinator` 时，Butler 让一个小 session 或总控到 tracker 上问缺的信息，这要[对外动作](#对外动作)里的「自动接活：到 tracker 提问」开着；关着时只告诉你。
+`clarifyMode` 设成 `session` 或 `coordinator` 时，Butler 让一个小 session 或正在跑的全局总控到 tracker 上问缺的信息，这要[对外动作](#对外动作)里的「自动接活：到 tracker 提问」开着；关着时只告诉你。
 
 ### 策略
 
@@ -775,7 +780,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 | 键 | 默认 | 取值 | 作用 |
 |----|------|------|------|
 | `enabled` | `false` | `true` / `false` | 映射到这一层的 ticket 的总开关 |
-| `autoStart` | `true` | `true` / `false` | 自动开工；关着时只分类、搁着等你 |
+| `autoStart` | `true` | `true` / `false` | 自动开工；关着时只分类、搁着等你（在 Jira epic 下的 ticket 会先建进它的 Butler epic，见 **按 Jira epic 归组**） |
 | `maxSize` | `large` | `small` / `medium` / `large` | 自动开工的最大规模 |
 | `maxRisk` | `high` | `low` / `medium` / `high` | 自动开工的最高风险 |
 | `maxParallel` | `2` | 整数 1–50 | 由接活开的、session 还开着的 ticket 最多几个 |

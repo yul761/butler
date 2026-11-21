@@ -17,7 +17,7 @@ export interface SessionSwitchDeps {
   kill: (termId: string) => void;
   /** 终端还开着吗。 */
   running: (termId: string) => boolean;
-  /** 按 session 的种类（ticket / feature / epic / Butler）用 --resume 重新打开。 */
+  /** 按 session 的种类（ticket / feature / Butler）用 --resume 重新打开。 */
   reopen: (head: Session) => Promise<OpenSessionResult>;
   /** 这个模型之后用哪个（RoutingService.nextModel）；没有为 null。 */
   nextModel: (current: string | null) => string | null;

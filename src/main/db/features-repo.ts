@@ -8,9 +8,9 @@ interface FeatureRow {
   workspace_dir: string;
   created_at: number;
   archived_at: number | null;
-  epic_id: number | null;
   brief: string | null;
   brief_sent_at: number | null;
+  jira_epic_key: string | null;
 }
 
 interface FeatureRepoRow {
@@ -35,16 +35,16 @@ export class FeaturesRepo {
       repos: repos.map(toRepo),
       createdAt: r.created_at,
       archivedAt: r.archived_at,
-      epicId: r.epic_id === null ? null : Number(r.epic_id),
       brief: r.brief,
       briefSentAt: r.brief_sent_at,
+      jiraEpicKey: r.jira_epic_key,
     };
   }
 
-  insert(f: { name: string; workspaceDir: string; createdAt: number; epicId?: number | null; brief?: string | null }): number {
+  insert(f: { name: string; workspaceDir: string; createdAt: number; brief?: string | null }): number {
     const res = this.db
-      .prepare(`INSERT INTO features (name, workspace_dir, created_at, epic_id, brief) VALUES (?, ?, ?, ?, ?)`)
-      .run(f.name, f.workspaceDir, f.createdAt, f.epicId ?? null, f.brief ?? null);
+      .prepare(`INSERT INTO features (name, workspace_dir, created_at, brief) VALUES (?, ?, ?, ?)`)
+      .run(f.name, f.workspaceDir, f.createdAt, f.brief ?? null);
     return Number(res.lastInsertRowid);
   }
 
@@ -59,6 +59,22 @@ export class FeaturesRepo {
     return rows.map((r) => this.toFeature(r));
   }
 
+  /** 从 Jira 接进来、对应这个 Jira epic 的未归档 epic（BTL-246 §7）。 */
+  byJiraEpic(key: string): Feature | null {
+    const row = this.db.prepare(`SELECT * FROM features WHERE jira_epic_key = ? AND archived_at IS NULL`).get(key) as FeatureRow | undefined;
+    return row ? this.toFeature(row) : null;
+  }
+
+  setJiraEpic(id: number, key: string | null): void {
+    this.db.prepare(`UPDATE features SET jira_epic_key = ? WHERE id = ?`).run(key, id);
+  }
+
+  /** 以前属于某个旧 epic 的未归档 epic（BTL-246 §3：只有一次性搬旧 epic 记忆时读 epic_id）。 */
+  legacyEpics(): { featureId: number; epicId: number }[] {
+    const rows = this.db.prepare(`SELECT id, epic_id FROM features WHERE archived_at IS NULL AND epic_id IS NOT NULL ORDER BY id`).all() as { id: number; epic_id: number }[];
+    return rows.map((r) => ({ featureId: Number(r.id), epicId: Number(r.epic_id) }));
+  }
+
   /** 已归档的 feature，最近归档的在前。 */
   listArchived(): Feature[] {
     const rows = this.db.prepare(`SELECT * FROM features WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id`).all() as unknown as FeatureRow[];
@@ -68,22 +84,6 @@ export class FeaturesRepo {
   /** 工作区就是这个目录的未归档 feature（Windows 不分大小写）。 */
   byWorkspace(dir: string): Feature | null {
     return this.list().find((f) => samePath(f.workspaceDir, dir)) ?? null;
-  }
-
-  /** 某个 epic 下的 feature（默认不含已归档）。 */
-  listByEpic(epicId: number, opts: { includeArchived?: boolean } = {}): Feature[] {
-    const where = opts.includeArchived ? "" : "AND archived_at IS NULL";
-    const rows = this.db.prepare(`SELECT * FROM features WHERE epic_id = ? ${where} ORDER BY created_at DESC, id`).all(epicId) as unknown as FeatureRow[];
-    return rows.map((r) => this.toFeature(r));
-  }
-
-  /** 只改归属，不动工作区；null 表示移出 epic。 */
-  setEpic(id: number, epicId: number | null): void {
-    this.db.prepare(`UPDATE features SET epic_id = ? WHERE id = ?`).run(epicId, id);
-  }
-
-  setBriefSentAt(id: number, at: number): void {
-    this.db.prepare(`UPDATE features SET brief_sent_at = ? WHERE id = ?`).run(at, id);
   }
 
   setName(id: number, name: string): void {
@@ -109,7 +109,11 @@ export class FeaturesRepo {
     this.db.prepare(`UPDATE features SET archived_at = ? WHERE id = ?`).run(at, id);
   }
 
+  /** 同一个 Jira epic 已经有新的未归档 epic 时（归档后又接进来过），恢复出来的这个不再对应它。 */
   unarchive(id: number): void {
+    this.db
+      .prepare(`UPDATE features SET jira_epic_key = NULL WHERE id = ? AND jira_epic_key IN (SELECT jira_epic_key FROM features WHERE archived_at IS NULL AND jira_epic_key IS NOT NULL)`)
+      .run(id);
     this.db.prepare(`UPDATE features SET archived_at = NULL WHERE id = ?`).run(id);
   }
 }

@@ -20,7 +20,7 @@ import { prUrlKey, prUrlParts } from "../../shared/pr-url";
 
 /**
  * 栈式 PR（工作流 K，设计 2026-11-17-ws-k-stacks-design）：维护本地栈表，整栈自动 rebase，栈底合并后提升新栈底，
- * 管 draft 层、提醒、epic 总览。所有改本地分支的事要 autoRebase 开着；所有对外的事走 ExternalActions。
+ * 管 draft 层、提醒、栈的总览 issue。所有改本地分支的事要 autoRebase 开着；所有对外的事走 ExternalActions。
  */
 
 /** 分支属于哪个 Butler ticket。 */
@@ -73,8 +73,6 @@ export interface StackServiceDeps {
   record?(kind: string, data: Record<string, string | number | boolean | null>, dedupeKey?: string): void;
   /** 栈或提醒变了（推给界面）。 */
   onChange?(): void;
-  /** epic 名（总览标题用）。 */
-  epicName?(id: number): string | null;
   /** 每日任务的记录（jobs 表）。 */
   jobs?: Pick<JobsRepo, "get" | "record">;
   /** 自动检测栈的仓库（Butler 管的仓库）。 */
@@ -87,7 +85,6 @@ export interface DefineInput {
   repoPath: string;
   branches: string[];
   name?: string | null;
-  epicId?: number | null;
   featureId?: number | null;
   source: "mcp" | "ticket" | "detected";
   /** 已有的栈：整个换掉它的层。 */
@@ -191,7 +188,7 @@ export class StackService {
     const remote = await remoteFor(repoPath, trunk);
     const name = i.name?.trim() || layers.map((l) => l.ticketKey ?? l.branch).join(" → ");
     const id = this.d.repo.create(
-      { repoPath, repoSlug: slug, trunk, remote, name, epicId: i.epicId ?? null, featureId: i.featureId ?? null, source: i.source },
+      { repoPath, repoSlug: slug, trunk, remote, name, featureId: i.featureId ?? null, source: i.source },
       layers,
     );
     this.d.log(`stacks: defined stack ${id} (${name}) in ${repoPath}`);
@@ -200,10 +197,10 @@ export class StackService {
   }
 
   /** create_ticket 的 stack_on：新分支接到 parent 分支所在栈的顶上（没有栈就新建两层的栈）。 */
-  async stackOn(p: { repoPath: string; parentBranch: string; branch: string; featureId: number | null; epicId: number | null }): Promise<StackActionResult & { stackId?: number }> {
+  async stackOn(p: { repoPath: string; parentBranch: string; branch: string; featureId: number | null }): Promise<StackActionResult & { stackId?: number }> {
     const repoPath = resolve(p.repoPath);
     const hit = this.d.repo.findBranch(repoPath, p.parentBranch);
-    if (!hit) return this.define({ repoPath, branches: [p.parentBranch, p.branch], featureId: p.featureId, epicId: p.epicId, source: "ticket" });
+    if (!hit) return this.define({ repoPath, branches: [p.parentBranch, p.branch], featureId: p.featureId, source: "ticket" });
     const layers = this.d.repo.layers(hit.stack.id);
     const top = layers[layers.length - 1]!;
     if (top.branch !== p.parentBranch) return { ok: false, message: T().errors.notTop(p.parentBranch) };
@@ -1006,7 +1003,7 @@ export class StackService {
     }
   }
 
-  // ---------------------------------------------------------------- epic 总览
+  // ---------------------------------------------------------------- 总览 issue
 
   async syncOverview(s: StackRow): Promise<void> {
     if (this.policyOf(s).overview !== "issue") return;
@@ -1014,7 +1011,7 @@ export class StackService {
     const body = overviewBody(await this.graph(s, all));
     const hash = simpleHash(body);
     if (hash === s.overviewHash) return;
-    const title = T().overviewTitle(s.name, s.epicId ? (this.d.epicName?.(s.epicId) ?? null) : null);
+    const title = T().overviewTitle(s.name);
     const scope = { repoSlug: s.repoSlug };
     try {
       if (s.overviewNumber) {
@@ -1108,7 +1105,6 @@ export class StackService {
     const stacks: StackView[] = [];
     for (const s of this.d.repo.list()) {
       if (filter.featureId !== null && s.featureId !== filter.featureId) continue;
-      if (filter.epicId !== null && s.epicId !== filter.epicId) continue;
       const p = this.policyOf(s);
       const lr = this.d.repo.lastRun(s.id);
       const restorable = this.d.repo.lastRestorable(s.id);
@@ -1121,7 +1117,7 @@ export class StackService {
         lastRebaseAt: l.lastRebaseAt, draftSince: l.draftSince, mergedAt: l.mergedAt, unpushed: unpushed.has(l.branch) || l.remoteOkSha !== null,
       }));
       stacks.push({
-        id: s.id, name: s.name, repoPath: s.repoPath, repoSlug: s.repoSlug, trunk: s.trunk, epicId: s.epicId, featureId: s.featureId, source: s.source,
+        id: s.id, name: s.name, repoPath: s.repoPath, repoSlug: s.repoSlug, trunk: s.trunk, featureId: s.featureId, source: s.source,
         mergeMethod: s.mergeMethod, autoRebase: p.autoRebase, overviewUrl: s.overviewUrl, layers, lastRun: lr ? runView(lr) : null, restorable: restorable ? runView(restorable) : null,
       });
     }

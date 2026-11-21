@@ -18,7 +18,7 @@ const fork = (id: number, startedAt: number, over: Partial<ForkView> = {}): Fork
   summarySentAt: null, conclusion: null, reaskOf: null, error: null, messages: [], ...over,
 });
 const report = (id: number, createdAt: number, reportKind: InboxItemView["reportKind"] = "done"): InboxItemView => ({
-  id, kind: "report", sessionId: "s1", role: "ticket", ticketKey: null, featureId: null, epicId: null, repo: null,
+  id, kind: "report", sessionId: "s1", role: "ticket", ticketKey: null, featureId: null, repo: null,
   text: `r${id}`, options: [], context: null, reportKind, answer: null, createdAt, open: true, target: {} as never,
 });
 const input = (over: Partial<TimelineInput> = {}): TimelineInput => ({
@@ -175,10 +175,10 @@ describe("sendBlockText / rememberText / refusalText", () => {
       expect(texts.every((x) => x !== "")).toBe(true);
       expect(new Set(texts).size).toBe(all.length);
     }
-    expect(rememberText("no_scope", T)).toBe("这里的结论没有 ticket 或 feature 可记");
-    expect(rememberText("no_scope", STRINGS.en)).toBe("There's no ticket or feature here to remember this under");
+    expect(rememberText("no_scope", T)).toBe("这里的结论没有 ticket 或 epic 可记");
+    expect(rememberText("no_scope", STRINGS.en)).toBe("There's no ticket or epic here to remember this under");
   });
-  it("only disabled (memory off) turns the remember button off; no_scope (Butler / epic pages) does not say memory is off", () => {
+  it("only disabled (memory off) turns the remember button off; no_scope (the Butler page) does not say memory is off", () => {
     expect(refusesMemory("disabled")).toBe(true);
     for (const r of ["no_scope", "written", "full", "failed", "busy", "no_conclusion"] as const) expect(refusesMemory(r), r).toBe(false);
   });
@@ -315,9 +315,8 @@ describe("latestOnly", () => {
 });
 
 describe("canRememberIn", () => {
-  it("only a feature's control page has something to remember under; Butler and epic pages don't", () => {
+  it("only a feature's control page has something to remember under; the Butler page doesn't", () => {
     expect(canRememberIn({ featureId: 3 })).toBe(true);
-    expect(canRememberIn({ epicId: 2 })).toBe(false);
     expect(canRememberIn({ all: true })).toBe(false);
   });
 });

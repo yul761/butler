@@ -1,22 +1,20 @@
 import type { ReactElement } from "react";
 import { S } from "../strings";
 
-/** 第 2 层（首页）渲染它、接四个回调；组件不判断有没有工作，不认识路由，也不自己开对话框。 */
+/** 第 2 层（首页）渲染它、接三个回调；组件不判断有没有工作，不认识路由，也不自己开对话框。 */
 export interface FirstRunHomeProps {
   onNewTicket(): void;
   onNewFeature(): void;
-  onNewEpic(): void;
   /** 接线方 setRoute({ page: "settings", section: "features" })。 */
   onOpenSettings(): void;
 }
 
 /** 纯视图：没有 hook、没有请求（测试直接调用它取按钮的 onClick）。 */
-export function FirstRunHomeView({ onNewTicket, onNewFeature, onNewEpic, onOpenSettings }: FirstRunHomeProps): ReactElement {
+export function FirstRunHomeView({ onNewTicket, onNewFeature, onOpenSettings }: FirstRunHomeProps): ReactElement {
   const t = S.firstRun;
   const steps = [
     { id: "ticket", step: t.stepTicket, label: S.newTicket, onClick: onNewTicket },
     { id: "feature", step: t.stepFeature, label: S.newFeature, onClick: onNewFeature },
-    { id: "epic", step: t.stepEpic, label: S.newEpic, onClick: onNewEpic },
   ];
   return (
     <section className="first-run" data-testid="first-run-home">
@@ -49,7 +47,7 @@ export function FirstRunHomeView({ onNewTicket, onNewFeature, onNewEpic, onOpenS
   );
 }
 
-/** 首页空状态（UI 重做 spec §5.5）：一句话说 Butler 做什么、三种开工方式、主流程、默认不对外。 */
+/** 首页空状态（UI 重做 spec §5.5）：一句话说 Butler 做什么、两种开工方式、主流程、默认不对外。 */
 export function FirstRunHome(props: FirstRunHomeProps): ReactElement {
   return <FirstRunHomeView {...props} />;
 }

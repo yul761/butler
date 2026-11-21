@@ -31,7 +31,7 @@ export interface StackPolicy {
   behindCommits: number;
   /** 栈底落后 trunk 最早的那个提交超过这么多天就提醒。 */
   behindDays: number;
-  /** epic 总览贴到哪儿（issue 还要 issue_post 开关）。 */
+  /** 栈的总览贴到哪儿（issue 还要 issue_post 开关）。 */
   overview: StackOverview;
   /** draft 层打的 label。 */
   draftLabel: string;
@@ -217,7 +217,6 @@ export interface StackView {
   repoPath: string;
   repoSlug: string | null;
   trunk: string;
-  epicId: number | null;
   featureId: number | null;
   source: StackSource;
   mergeMethod: "squash" | "merge" | null;
@@ -231,7 +230,6 @@ export interface StackView {
 }
 
 export interface StacksFilter {
-  epicId: number | null;
   featureId: number | null;
 }
 

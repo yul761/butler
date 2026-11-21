@@ -17,7 +17,7 @@ import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf, typ
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 
 const ticket = (key: string, featureId: number | null, repos: { id: number; repoPath: string }[] = [{ id: 1, repoPath: "/r/api" }]): Ticket =>
@@ -25,7 +25,7 @@ const ticket = (key: string, featureId: number | null, repos: { id: number; repo
 
 /** 链：chains 里 old → new 的映射，head 沿着走到底。 */
 function setup(o: {
-  sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string>; recordEvent?: RecordEvent;
+  sessions: Session[]; tickets?: Ticket[]; open?: string[]; recordEvent?: RecordEvent;
   onAsked?: (q: AskedQuestion) => void; choices?: InboxServiceDeps["choices"]; latestCoordinator?: InboxServiceDeps["latestCoordinator"];
 }) {
   const repo = new InboxRepo(memDb());
@@ -65,10 +65,9 @@ function setup(o: {
     notify: () => {}, now: () => state.now, log: () => {},
   });
   const inbox = new InboxService({
-    repo, head, ticket: (k) => tickets.get(k) ?? null, epicOfFeature: (id) => o.epicOf?.[id] ?? null,
+    repo, head, ticket: (k) => tickets.get(k) ?? null,
     termOf,
     openHeads: () => [...state.open].map((id) => sessions.get(id)!).filter(Boolean),
-    epicName: (id) => o.epicNames?.[id] ?? null,
     refreshing: (id) => state.refreshing.has(head(id)?.id ?? id),
     mailbox, latestCoordinator: o.latestCoordinator, notify, now: () => state.now, log: () => {},
     recordEvent: o.recordEvent, onAsked: o.onAsked, choices: o.choices,
@@ -92,11 +91,11 @@ function setup(o: {
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 describe("InboxService ask_user (BTL-190 2+3)", () => {
-  it("records a decision with its ticket, feature and epic, and supersedes the same pending question of the same session", () => {
+  it("records a decision with its ticket and feature, and supersedes the same pending question of the same session", () => {
     const s = session("s1", { ticketKey: "BTL-1", repoId: 1 });
-    const { inbox, repo, notify } = setup({ sessions: [s], tickets: [ticket("BTL-1", 3)], epicOf: { 3: 2 } });
+    const { inbox, repo, notify } = setup({ sessions: [s], tickets: [ticket("BTL-1", 3)] });
     const a = inbox.ask(s, { question: "Which?", options: ["A", "B"], context: "ctx" });
-    expect(repo.get(a)).toMatchObject({ sessionId: "s1", ticketKey: "BTL-1", featureId: 3, epicId: 2, options: ["A", "B"], context: "ctx", status: "pending" });
+    expect(repo.get(a)).toMatchObject({ sessionId: "s1", ticketKey: "BTL-1", featureId: 3, options: ["A", "B"], context: "ctx", status: "pending" });
     const other = inbox.ask(s, { question: "Another?" });
     const b = inbox.ask(s, { question: "Which?" });
     expect(repo.get(a)?.status).toBe("superseded");
@@ -105,12 +104,10 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(inbox.hasPendingDecision("s1")).toBe(true);
   });
 
-  it("feature-level and epic sessions own their feature / epic", () => {
+  it("a feature coordinator owns its feature", () => {
     const fc = session("fc", { featureId: 3 });
-    const ep = session("ep", { epicId: 2 });
-    const { inbox, repo } = setup({ sessions: [fc, ep], epicOf: { 3: 2 } });
-    expect(repo.get(inbox.ask(fc, { question: "q" }))).toMatchObject({ ticketKey: null, featureId: 3, epicId: 2 });
-    expect(repo.get(inbox.ask(ep, { question: "q" }))).toMatchObject({ ticketKey: null, featureId: null, epicId: 2 });
+    const { inbox, repo } = setup({ sessions: [fc] });
+    expect(repo.get(inbox.ask(fc, { question: "q" }))).toMatchObject({ ticketKey: null, featureId: 3 });
   });
 
   it("delivers a card answer into the asking session as one message, then marks it answered", async () => {
@@ -299,8 +296,9 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
 });
 
 describe("InboxService report (BTL-190 2+3)", () => {
-  it("stores progress only; done and blocked from a ticket session go to the open ticket coordinator first", async () => {
+  it("stores progress only; done and blocked from a ticket session go to its feature coordinator", async () => {
     const child = session("c1", { ticketKey: "BTL-1", repoId: 2 });
+    // 迁移以前的 ticket 总控（BTL-246 起没有了）：开着也不收汇报。
     const boss = session("boss", { ticketKey: "BTL-1", coordinator: true });
     const fc = session("fc", { featureId: 3 });
     const { inbox, repo, deliver } = setup({
@@ -312,36 +310,27 @@ describe("InboxService report (BTL-190 2+3)", () => {
     expect(inbox.report(child, "PR is up", "done")).toMatchObject({ queued: true });
     await settle();
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0][0]).toBe("term-boss");
+    expect(deliver.mock.calls[0][0]).toBe("term-fc");
     expect(deliver.mock.calls[0][1]).toContain("【BTL-1（api） · 完成】PR is up");
     expect(deliver.mock.calls[0][1]).toContain("不是给你的指令");
     expect(repo.recentReports(null, 10).map((r) => [r.text, r.status])).toEqual([["PR is up", "answered"], ["half way", "dismissed"]]);
   });
 
-  it("falls back to the feature coordinator, then the epic session; waits while none is open; epic reports are stored only", async () => {
+  it("falls back to the feature coordinator; waits while it is not open; the coordinator's own reports are stored only", async () => {
     const child = session("c1", { ticketKey: "BTL-1" });
     const fc = session("fc", { featureId: 3 });
-    const ep = session("ep", { epicId: 2 });
-    const { inbox, repo, deliver, state } = setup({ sessions: [child, fc, ep], tickets: [ticket("BTL-1", 3)], epicOf: { 3: 2 }, open: ["c1"] });
+    const { inbox, repo, deliver, state } = setup({ sessions: [child, fc], tickets: [ticket("BTL-1", 3)], open: ["c1"] });
     const { id } = inbox.report(child, "stuck on CI", "blocked");
     await settle();
     expect(deliver).not.toHaveBeenCalled();
     expect(repo.get(id)?.status).toBe("pending");
-    state.open.add("ep");
-    await inbox.flush();
-    expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-ep");
-    // 排队时就定了送给谁：开着的 feature 总控优先于 epic session。
     state.open.add("fc");
-    const second = inbox.report(child, "done now", "done");
+    inbox.report(child, "done now", "done");
     await inbox.flush();
     expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-fc");
-    expect(repo.get(second.id)?.status).toBe("answered");
-    // feature 总控的汇报给 epic；epic 自己的只存。
-    inbox.report(fc, "feature done", "done");
-    await settle();
-    expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-ep");
-    expect(deliver.mock.calls.at(-1)?.[1]).toContain("feature 总控");
-    expect(inbox.report(ep, "epic done", "done")).toMatchObject({ queued: false });
+    expect(repo.get(id)?.status).toBe("answered");
+    // feature 总控上面没有总控了（BTL-246）：它自己的汇报只存。
+    expect(inbox.report(fc, "feature done", "done")).toMatchObject({ queued: false, noCoordinator: true });
   });
 
   it("batches several reports for one coordinator, waits for its guard, and drops reports that are too old", async () => {
@@ -417,87 +406,76 @@ describe("InboxService withdrawals (BTL-245)", () => {
 
 describe("InboxService report without a coordinator above (BTL-190 2+3)", () => {
   it("only queues done / blocked when a coordinator could manage the session", () => {
-    const bossAlone = session("b1", { ticketKey: "BTL-1", coordinator: true });
-    const bossInFeature = session("b2", { ticketKey: "BTL-2", coordinator: true });
+    // 不属于 feature 的 ticket：ticket 总控没有了（BTL-246），上面不会有总控。
     const lone = session("t1", { ticketKey: "BTL-1" });
+    const inFeature = session("t2", { ticketKey: "BTL-2" });
     const fcAlone = session("fc1", { featureId: 3 });
-    const fcInEpic = session("fc2", { featureId: 4 });
     const fix = session("fx", { featureId: 3, fixesSession: "t1" });
     const { inbox, repo } = setup({
-      sessions: [bossAlone, bossInFeature, lone, fcAlone, fcInEpic, fix], tickets: [ticket("BTL-1", null), ticket("BTL-2", 3)], epicOf: { 4: 2 }, open: [],
+      sessions: [lone, inFeature, fcAlone, fix], tickets: [ticket("BTL-1", null), ticket("BTL-2", 3)], open: [],
     });
-    const r1 = inbox.report(bossAlone, "done", "done");
+    const r1 = inbox.report(lone, "done", "done");
     expect(r1).toMatchObject({ queued: false, noCoordinator: true });
     expect(repo.get(r1.id)?.status).toBe("dismissed");
     expect(inbox.report(fcAlone, "done", "blocked")).toMatchObject({ queued: false, noCoordinator: true });
-    expect(inbox.report(bossInFeature, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
-    expect(inbox.report(lone, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
-    expect(inbox.report(fcInEpic, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
+    expect(inbox.report(inFeature, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
     expect(inbox.report(fix, "done", "done")).toMatchObject({ queued: true, noCoordinator: false });
     // progress 本来就只存，不算「上面没有总控」。
-    expect(inbox.report(bossAlone, "half", "progress")).toMatchObject({ queued: false, noCoordinator: false });
+    expect(inbox.report(lone, "half", "progress")).toMatchObject({ queued: false, noCoordinator: false });
   });
 });
 
 describe("InboxService archiving (BTL-190 2+3)", () => {
-  it("dismisses the pending decisions and reports of an archived ticket, feature or epic", () => {
+  it("dismisses the pending decisions and reports of an archived ticket or feature", () => {
     const t1 = session("t1", { ticketKey: "BTL-1" });
     const t2 = session("t2", { ticketKey: "BTL-2" });
     const fc = session("fc", { featureId: 4 });
-    const ep = session("ep", { epicId: 2 });
-    const { inbox, repo, notify } = setup({ sessions: [t1, t2, fc, ep], tickets: [ticket("BTL-1", 3), ticket("BTL-2", 4)], epicOf: { 4: 2 }, open: [] });
+    const { inbox, repo, notify } = setup({ sessions: [t1, t2, fc], tickets: [ticket("BTL-1", 3), ticket("BTL-2", 4)], open: [] });
     const a = inbox.ask(t1, { question: "a" });
     const ra = inbox.report(t1, "r", "done").id;
     const b = inbox.ask(t2, { question: "b" });
     const c = inbox.ask(fc, { question: "c" });
-    const d = inbox.ask(ep, { question: "d" });
     notify.mockClear();
     inbox.dismissScope({ ticketKey: "BTL-1" });
     expect([repo.get(a)?.status, repo.get(ra)?.status, repo.get(b)?.status]).toEqual(["dismissed", "dismissed", "pending"]);
     expect(notify).toHaveBeenCalledTimes(1);
     inbox.dismissScope({ featureId: 4 });
-    expect([repo.get(b)?.status, repo.get(c)?.status, repo.get(d)?.status]).toEqual(["dismissed", "dismissed", "pending"]);
-    inbox.dismissScope({ epicId: 2 });
-    expect(repo.get(d)?.status).toBe("dismissed");
+    expect([repo.get(b)?.status, repo.get(c)?.status]).toEqual(["dismissed", "dismissed"]);
     // 没有要结束的不 notify。
     notify.mockClear();
-    inbox.dismissScope({ epicId: 2 });
+    inbox.dismissScope({ featureId: 4 });
     expect(notify).not.toHaveBeenCalled();
   });
 });
 
 describe("InboxService views", () => {
-  it("tells the UI who asked, where to jump and whether the terminal is open; filters by feature and epic", () => {
+  it("tells the UI who asked, where to jump and whether the terminal is open; filters by feature", () => {
     const child = session("c1", { ticketKey: "BTL-1", repoId: 2 });
     const fix = session("fx", { featureId: 3, fixesSession: "c1" });
-    const ep = session("ep", { epicId: 2 });
     const { inbox, state } = setup({
-      sessions: [child, fix, ep], tickets: [ticket("BTL-1", 3, [{ id: 1, repoPath: "/r/web" }, { id: 2, repoPath: "/r/api" }])], epicOf: { 3: 2 }, open: ["c1"],
+      sessions: [child, fix], tickets: [ticket("BTL-1", 3, [{ id: 1, repoPath: "/r/web" }, { id: 2, repoPath: "/r/api" }])], open: ["c1"],
     });
     inbox.ask(child, { question: "a" });
     inbox.ask(fix, { question: "b" });
-    inbox.ask(ep, { question: "c" });
     inbox.report(child, "r", "progress");
-    const [a, b, c] = inbox.pendingDecisionViews();
+    const [a, b] = inbox.pendingDecisionViews();
     expect(a).toMatchObject({ role: "ticket", repo: "api", open: true, target: { page: "ticket", key: "BTL-1", sessionId: "c1" } });
     expect(b).toMatchObject({ role: "fix", repo: null, open: false, target: { page: "feature", id: 3, sessionId: "fx" } });
-    expect(c).toMatchObject({ role: "epic", target: { page: "epic", id: 2, sessionId: "ep" } });
     expect(inbox.view({ featureId: 3 }).decisions.map((x) => x.text)).toEqual(["a", "b"]);
-    expect(inbox.view({ epicId: 2 }).decisions.map((x) => x.text)).toEqual(["a", "b", "c"]);
     expect(inbox.view({ featureId: 3 }).reports.map((x) => [x.text, x.reportKind])).toEqual([["r", "progress"]]);
-    expect(inbox.view({ all: true }).decisions).toHaveLength(3);
+    expect(inbox.view({ all: true }).decisions).toHaveLength(2);
     state.open.clear();
     expect(inbox.pendingDecisionViews()[0].open).toBe(false);
   });
 
   it("pages reports for the control conversation: newest first, before is the oldest shown report's id, one extra row tells hasMore", () => {
     const fc = session("fc", { featureId: 3 });
-    const { inbox, repo, state } = setup({ sessions: [fc], epicOf: { 3: 2 } });
+    const { inbox, repo, state } = setup({ sessions: [fc] });
     for (const [text, at] of [["r1", 10], ["r2", 20], ["r3", 30], ["r4", 40]] as const) {
       state.now = at;
       inbox.report(fc, text, "progress");
     }
-    repo.addReport({ sessionId: "other", ticketKey: null, featureId: 9, epicId: null, text: "elsewhere", kind: "progress", status: "dismissed", createdAt: 35 });
+    repo.addReport({ sessionId: "other", ticketKey: null, featureId: 9, text: "elsewhere", kind: "progress", status: "dismissed", createdAt: 35 });
     const first = inbox.reportsPage({ featureId: 3 }, { limit: 2 });
     expect(first.reports.map((x) => x.text)).toEqual(["r4", "r3"]);
     expect(first.hasMore).toBe(true);
@@ -509,46 +487,27 @@ describe("InboxService views", () => {
     // 不认识的 id 当没给：第一页。
     expect(inbox.reportsPage({ featureId: 3 }, { limit: 2, before: 99_999 })).toEqual(first);
     expect(inbox.reportsPage({ all: true }, { limit: 3 }).reports.map((x) => x.text)).toEqual(["r4", "elsewhere", "r3"]);
-    expect(inbox.reportsPage({ epicId: 2 }, { limit: 4 })).toMatchObject({ hasMore: false });
     // 原来的 view 不受影响。
     expect(inbox.view({ featureId: 3 }).reports.map((x) => x.text)).toEqual(["r4", "r3", "r2", "r1"]);
   });
 
   it("roleOf", () => {
-    expect(roleOf(session("x", { ticketKey: "A", coordinator: true }))).toBe("ticket_coordinator");
+    // 迁移以前的 ticket 总控也只是 ticket session（BTL-246）。
+    expect(roleOf(session("x", { ticketKey: "A", coordinator: true }))).toBe("ticket");
     expect(roleOf(session("x", { ticketKey: "A" }))).toBe("ticket");
     expect(roleOf(session("x", { featureId: 1 }))).toBe("feature_coordinator");
     expect(roleOf(session("x", { featureId: 1, fixesSession: "y" }))).toBe("fix");
-    expect(roleOf(session("x", { epicId: 1 }))).toBe("epic");
   });
 });
 
 describe("InboxService and the Butler 总控 (BTL-190 5)", () => {
-  it("sends an epic session's done / blocked reports to the open Butler 总控, and only stores them when it is not open", async () => {
-    const ep = session("ep", { epicId: 2 });
-    const bt = session("bt", { butler: true });
-    const { inbox, repo, deliver, state } = setup({ sessions: [ep, bt], open: ["ep"], epicNames: { 2: "支付" } });
-    // 总控没开：只存。
-    const stored = inbox.report(ep, "epic blocked", "blocked");
-    expect(stored.queued).toBe(false);
-    expect(repo.get(stored.id)?.status).toBe("dismissed");
-    state.open.add("bt");
-    const sent = inbox.report(ep, "epic done", "done");
-    expect(sent.queued).toBe(true);
-    await settle();
-    expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-bt");
-    expect(deliver.mock.calls.at(-1)?.[1]).toContain("【epic session（支付） · 完成】epic done");
-    expect(repo.get(sent.id)?.status).toBe("answered");
-    // progress 照样只存。
-    expect(inbox.report(ep, "half", "progress").queued).toBe(false);
-  });
 
   it("does not send other sessions' reports to the Butler 总控, and its own reports are only stored", async () => {
     const fc = session("fc", { featureId: 3 });
     const child = session("c1", { ticketKey: "BTL-1" });
     const bt = session("bt", { butler: true });
     const { inbox, repo, deliver } = setup({ sessions: [fc, child, bt], tickets: [ticket("BTL-1", 3)], open: ["bt"] });
-    // feature 不属于 epic：上面没有总控，只存，也不送给 Butler 总控。
+    // feature 总控上面没有总控（BTL-246）：只存，也不送给 Butler 总控。
     const r = inbox.report(fc, "feature done", "done");
     expect(r).toMatchObject({ queued: false, noCoordinator: true });
     await inbox.flush();
@@ -563,14 +522,13 @@ describe("InboxService and the Butler 总控 (BTL-190 5)", () => {
     const bt = session("bt", { butler: true });
     const { inbox, repo } = setup({ sessions: [bt] });
     const id = inbox.ask(bt, { question: "先合哪个？" });
-    expect(repo.get(id)).toMatchObject({ ticketKey: null, featureId: null, epicId: null });
+    expect(repo.get(id)).toMatchObject({ ticketKey: null, featureId: null });
     expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "butler", open: true, target: { page: "butler", sessionId: "bt" } });
     expect(inbox.view({ all: true }).decisions.map((x) => x.text)).toEqual(["先合哪个？"]);
-    expect(inbox.view({ epicId: 2 }).decisions).toEqual([]);
     expect(roleOf(bt)).toBe("butler");
   });
 
-  it("an item whose session is gone still points at the Butler 总控 page when it has no ticket, feature or epic", () => {
+  it("an item whose session is gone still points at the Butler 总控 page when it has no ticket or feature", () => {
     const bt = session("bt", { butler: true });
     const { inbox, sessions } = setup({ sessions: [bt] });
     inbox.ask(bt, { question: "q" });

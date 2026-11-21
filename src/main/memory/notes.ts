@@ -67,8 +67,8 @@ export function desiredNotes(handoffs: HandoffRecord[], followups: Followup[]): 
 }
 
 /**
- * 一个 feature scope 里应该有的 Butler 条目（设计文档 2026-10-28）：最新一份有效汇总里的决策。
- * 汇总每次都重述整个 feature 的约定，所以只看最新那份：不在里面的 key 就 forget。同一个 key 写了两次的，取后一句。
+ * epic 记忆 handoff 里的「约定」（BTL-246 §5，以前写成 feature scope 的笔记）：最新一份有效汇总里的决策。
+ * 汇总每次都重述整个 epic 的约定，所以只看最新那份。同一个 key 写了两次的，取后一句。
  */
 export function featureDecisionNotes(decisions: { key: string; statement: string }[]): ButlerNote[] {
   const byId = new Map<string, ButlerNote>();

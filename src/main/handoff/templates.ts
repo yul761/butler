@@ -218,13 +218,13 @@ export function parseHandoffCommand(text: string): { body: string } | null {
  * /handoff 正文开头给 feature 总控的一段（设计文档 2026-10-28）：只有总控 session 挂了 butler-sessions MCP，
  * 能调用它的 list_tickets 就说明是总控，改写 butler-feature-handoff 代码块；采集端仍以 Butler 的记录为准。
  */
-const FEATURE_COORDINATOR_SECTION = `先看你能不能调用 butler-sessions 的 \`list_tickets\` 工具（mcp__butler-sessions__list_tickets）。能调用的话，这个 session 是 feature 总控，不属于某个 ticket，要写的是 feature 汇总：
-- 先用 \`list_tickets\` 看这个 feature 下各 ticket 的情况，再结合这个 session 的完整对话来写。
+const FEATURE_COORDINATOR_SECTION = `先看你能不能调用 butler-sessions 的 \`list_tickets\` 工具（mcp__butler-sessions__list_tickets）。能调用的话，这个 session 是 epic 总控，不属于某个 ticket，要写的是 epic 汇总：
+- 先用 \`list_tickets\` 看这个 epic 下各 ticket 的情况，再结合这个 session 的完整对话来写。
 - 只写跨 ticket 的整体情况：整体进展、卡在哪、接下来先做什么、ticket 之间的约定（接口、错误码等）。提到 ticket 时只写 ticket 号；不要写完成百分比。
 - 只读：不要修改文件，不要提交或推送。
 - 最后输出一个 ${FENCE}butler-feature-handoff 代码块，里面只有一个 JSON 对象；代码块之后不要再写任何内容。不要输出 butler-handoff 代码块，后面 ticket handoff 的说明也不用管。
 
-feature 汇总的字段如下：
+epic 汇总的字段如下：
 ${featureHandoffSchemaDoc("zh")}
 
 示例：
@@ -236,14 +236,14 @@ ${FENCE}
 
 `;
 
-const FEATURE_COORDINATOR_SECTION_EN = `First check whether you can call the \`list_tickets\` tool of butler-sessions (mcp__butler-sessions__list_tickets). If you can, this session is a feature coordinator, it belongs to no single ticket, and what you write is a feature summary:
-- First look at the tickets of this feature with \`list_tickets\`, then write the summary from them and from this session's whole conversation.
+const FEATURE_COORDINATOR_SECTION_EN = `First check whether you can call the \`list_tickets\` tool of butler-sessions (mcp__butler-sessions__list_tickets). If you can, this session is an epic coordinator, it belongs to no single ticket, and what you write is an epic summary:
+- First look at the tickets of this epic with \`list_tickets\`, then write the summary from them and from this session's whole conversation.
 - Only write about the picture across tickets: overall progress, what is in the way, what to do first, and agreements between tickets (APIs, error codes and so on). Refer to a ticket only by its id; don't write a completion percentage.
 - Read only: don't change files, don't commit or push.
 - Write every text field in English.
 - Finish with one ${FENCE}butler-feature-handoff code block that contains a single JSON object; write nothing after the code block. Don't output a butler-handoff code block, and ignore the ticket handoff instructions below.
 
-Fields of the feature summary:
+Fields of the epic summary:
 ${featureHandoffSchemaDoc("en")}
 
 Example:
@@ -259,7 +259,7 @@ export const featureCoordinatorSection = (l: Lang): string => (l === "en" ? FEAT
 
 /** 当前版本的命令正文（不含标记行）。 */
 export const HANDOFF_COMMAND_BODY = `---
-description: 生成 Butler handoff（当前 ticket 的进度摘要；在 feature 总控里是 feature 汇总）
+description: 生成 Butler handoff（当前 ticket 的进度摘要；在 epic 总控里是 epic 汇总）
 ---
 ${FEATURE_COORDINATOR_SECTION}请为当前 session 对应的 ticket 生成一份 handoff，供之后的 session 和记忆使用。
 
@@ -285,7 +285,7 @@ $ARGUMENTS
 export const HANDOFF_COMMAND_MD = renderHandoffCommand(HANDOFF_COMMAND_BODY);
 
 export const HANDOFF_COMMAND_BODY_EN = `---
-description: Write a Butler handoff (a progress summary of the current ticket; in a feature coordinator, of the feature)
+description: Write a Butler handoff (a progress summary of the current ticket; in an epic coordinator, of the epic)
 ---
 ${FEATURE_COORDINATOR_SECTION_EN}Write a handoff for the ticket of this session, for later sessions and memory.
 

@@ -4,7 +4,7 @@ import type { NowNotice } from "../../shared/types";
 import { S, setUiLang } from "./strings";
 import { turnSentence } from "./turn-text";
 
-const item = (turn: Turn): TurnItem => ({ ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, turn, since: 0, others: 0 });
+const item = (turn: Turn): TurnItem => ({ ticketKey: "BTL-1", pr: null, featureId: null, turn, since: 0, others: 0 });
 const say = (turn: Turn) => turnSentence(turn, item(turn), S);
 const butler = (notice: NowNotice): Turn => ({ owner: "you", kind: "butler", notice });
 const T = { page: "butler", sessionId: null } as const;

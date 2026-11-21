@@ -14,7 +14,7 @@ const STATE_PILL: Record<string, string> = { branch_only: "none", draft: "pendin
 
 /** 全部工作页「更多」里的「栈」区块（工作流 K）：Butler 管的栈，从下到上每一层，最近一次 rebase，和几个按钮。 */
 export function ManagedStacks({ filter, onOpenTicket }: { filter: StacksFilter; onOpenTicket: (key: string) => void }) {
-  const view = useStateRefetch(`stacks:${filter.epicId ?? ""}:${filter.featureId ?? ""}`, () => api.stacks(filter));
+  const view = useStateRefetch(`stacks:${filter.featureId ?? ""}`, () => api.stacks(filter));
   if (!view) return null;
   return (
     <section className="managed-stacks" data-testid="managed-stacks">

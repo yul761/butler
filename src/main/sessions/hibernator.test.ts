@@ -18,7 +18,7 @@ const FULL = table(L.claude, L.mcp, L.shell, L.vite, L.esbuild);
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: "h", ticketKey: "T-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: "hi", lastActivityAt: 0, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false,
+  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false,
   lessonRunId: null, hibernatedAt: null, hibernateReason: null, pinned: false, wakeError: null, wakeErrorAt: null, ...over,
 });
 

@@ -4,8 +4,8 @@ import { S } from "../src/renderer/src/strings";
 import { type BranchPrFixture, completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newButton, newTicket, openAllWork, openSettingsGroup, openTab, type PrViewFixture, test, unsupportedGhCalls } from "./fixtures";
 
 /**
- * 设置里的「对外动作」十个开关默认全关、改了能存住；审计页有「对外动作」一节；Butler 页右栏有折起的「总控发出的消息」。
- * 进度页在 UI 重做第 2 层拆掉了：原来这里对它每一块的断言一起删掉（PR 表、feature 分组由第 3 层并进 epic、feature 页）。
+ * 设置里的「对外动作」十个开关默认全关、改了能存住；审计页有「对外动作」一节；全局总控页右栏有折起的「消息」。
+ * 进度页在 UI 重做第 2 层拆掉了：原来这里对它每一块的断言一起删掉（PR 表、feature 分组由第 3 层并进 feature 页）。
  * 不用 gh，Windows 上也跑。
  */
 test("outward actions are off by default; the audit page and Butler replies are there", async ({ makeSandbox, launch }) => {

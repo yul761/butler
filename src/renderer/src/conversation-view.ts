@@ -119,7 +119,7 @@ export function rememberText(r: RememberResult, t: UiStrings): string {
   }
 }
 
-/** 总控页上分叉的结论有没有地方记：只有 feature 总控页有 feature；Butler 页和 epic 页没有 ticket 也没有 feature，不出「记进记忆」。 */
+/** 总控页上分叉的结论有没有地方记：只有 feature 总控页有 feature；Butler 页没有 ticket 也没有 feature，不出「记进记忆」。 */
 export function canRememberIn(scope: InboxScope): boolean {
   return "featureId" in scope;
 }

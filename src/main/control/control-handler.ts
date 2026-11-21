@@ -1,14 +1,11 @@
 import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
-  BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, sanitizeTask, SUMMARY_LIMIT, taskMessage,
-  type ControlRequest, type SessionCapacity, type ControlResult, type EpicControlRequest, type FeatureControlRequest, type InboxControlOp, type StartModel,
+  sanitizeTask, taskMessage,
+  type ControlRequest, type SessionCapacity, type ControlResult, type FeatureControlRequest, type InboxControlOp, type StartModel,
 } from "../../shared/control";
-import { effectiveStatus, type Epic, type EpicFeatureRow, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
-import type { EpicHistoryEntry } from "../db/epic-history-repo";
-import type { EpicsRepo } from "../db/epics-repo";
-import { epicStartMessage } from "../epics/epic-brief";
-import { EPIC_HISTORY_BRIEF_CHARS, renderHistory } from "../epics/epic-history-view";
+import { effectiveStatus, type Block, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
+import type { BlocksRepo } from "../db/blocks-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
@@ -21,11 +18,9 @@ import { admitOrRefuse, type AdmissionGate } from "./admission";
 import type { StackControl } from "./stack-control";
 import { butlerControl, type ButlerControlDeps } from "./butler-control";
 import type { InboxService } from "../inbox/inbox-service";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
 import { startRefresh, type SessionRefresher } from "../sessions/session-refresher";
-import { FEATURE_NAME_LIMIT, type FeatureService } from "../tickets/feature-service";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
 import type { Mailbox } from "../mailbox/mailbox";
@@ -34,20 +29,11 @@ export interface ControlHandlerDeps {
   tickets: TicketsRepo;
   sessions: SessionsRepo;
   ticketService: Pick<TicketService, "workDir" | "create">;
-  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning" | "termIdOf"> & Partial<Pick<SessionService, "featureTerminalCount" | "openFeature" | "openEpic" | "runningCoordinator">>;
+  sessionService: Pick<SessionService, "open" | "openTerminalCount" | "isRunning" | "termIdOf"> & Partial<Pick<SessionService, "featureTerminalCount" | "openFeature" | "runningCoordinator">>;
   /** feature 总控的请求（设计文档 2026-10-26）；不给就拒绝。 */
   features?: FeaturesRepo;
-  /** epic session 的请求（设计文档 2026-11-01）和 feature 总控的 epic_context；不给就拒绝。 */
-  epics?: Pick<EpicsRepo, "get" | "setPlan">;
-  featureService?: Pick<FeatureService, "create">;
-  /** epic 下每个 feature 的情况（含已归档），直接读库，不经过 epic 记忆。 */
-  epicRows?: (epicId: number) => EpicFeatureRow[];
-  /** epic 的长期记忆（epic_history，最新的在前）：epic_context 的 history。不给时是空的。 */
-  epicHistory?: (epicId: number) => EpicHistoryEntry[];
-  /** 重新渲染 epic 的 handoff（排进记忆的同步队列，不等它）。 */
-  syncEpic?: (epicId: number) => void;
-  /** 后台给 epic 下有新活动的 feature 生成汇总（FeatureSummaryRunner.refreshEpic），不等它。这时打开总控，规划会等它（SessionService.sendBrief）。 */
-  refreshEpic?: (epicId: number, exceptFeatureId?: number) => void;
+  /** epic 里的 feature（BTL-246，内部叫 block）：list_features、create_feature、reorder_features、set_ticket_feature 和 create_ticket 的 feature。不给就拒绝。 */
+  blocks?: BlocksRepo;
   /** session 此刻的活动；监控还没看到它时为 null。 */
   activity?: (sessionId: string) => SessionActivity | null;
   /** session 当前命令输出的末尾（上限 4KB）。 */
@@ -66,12 +52,6 @@ export interface ControlHandlerDeps {
   memoryEnabled?: () => boolean;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
   submit: (termId: string, message: string) => Promise<DeliverResult>;
-  /**
-   * start_feature（BTL-190 第 4 点）给已经在跑的总控补充说明：先过 guard（和递汇报同一道），过了再 deliver（粘贴前用 recheck 再看一遍）。
-   * 不给时只告诉 epic 总控在跑，什么都不发。
-   */
-  guard?: Pick<DeliveryGuard, "check" | "recheckAfter">;
-  deliver?: (termId: string, text: string, recheck: () => boolean) => Promise<DeliverResult>;
   notify: () => void;
   /**
    * 信箱（BTL-245）：Butler 总控和 feature 总控的 send_message 一律排队，不再因为对方在忙被拒。不给时 send_message 报「没开」。
@@ -88,15 +68,13 @@ export interface ControlHandlerDeps {
   };
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
-  /** set_epic_plan 记下的时间（不给用 Date.now）。 */
-  now?: () => number;
   /**
    * start_session 的 model（档位或名字）→ 实际用的模型（RoutingService.sessionModel）。
    * 不给时原样传（2.1.0 的行为）。
    */
   sessionModel?: (requested: string) => SessionModelChoice;
   /**
-   * 开新终端前按内存放行（工作流 W，取代每 ticket、每 feature、每 epic 的固定上限）：start_session、start_feature、
+   * 开新终端前按内存放行（工作流 W，取代每 ticket、每 feature 的固定上限）：start_session、
    * Butler 总控打开关着的总控都先问它；list_sessions 带上还能再开几个。不给时一律放行。
    */
   admission?: AdmissionGate;
@@ -144,13 +122,6 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (byName.length === 1) return byName[0];
     const names = t.repos.map(name).join(", ") || M().ctlNoRepos;
     return byName.length > 1 ? M().ctlRepoAmbiguous(wanted, t.repos.map((r) => d.ticketService.workDir(r)).join(", ")) : M().ctlNoSuchRepo(wanted, names);
-  };
-
-  /** from 必须是这个 ticket 的总控 session，才记成子 session 的开启者。 */
-  const spawner = (t: Ticket, from: string | null): string | null => {
-    if (!from) return null;
-    const h = d.sessions.head(from);
-    return h && h.ticketKey === t.key && h.coordinator ? from : null;
   };
 
   /** 在 ticket 的这个仓库里开子 session，把任务交给它。开之前按内存放行（工作流 W）。 */
@@ -296,6 +267,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
    * 仓库按名字或路径从 feature 的仓库里选；feature 只有一个仓库时可以不写。
    */
   const createTicket = async (f: Feature, req: Extract<FeatureControlRequest, { op: "create_ticket" }>): Promise<ControlResult> => {
+    // 要放进的 feature（block）先核对：不对就什么都不建。
+    let block: Block | null = null;
+    if (req.feature !== undefined) {
+      const b = findBlock(f, req.feature);
+      if (typeof b === "string") return fail(b);
+      block = b;
+    }
     const names = f.repos.map(name).join(", ");
     if (f.repos.length === 0) return fail(M().ctlFeatureNoRepos);
     let picked: FeatureRepo[];
@@ -333,191 +311,79 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       d.log?.(`control: create_ticket ${req.ticket} failed`, e);
       return fail((e as Error).message);
     }
+    if (block) d.tickets.setBlock(t.key, block.id);
     const stackProblems = startPoints && d.stacks ? await d.stacks.finishStackOn(f, t, startPoints).catch((e: unknown) => [(e as Error).message]) : [];
     d.notify();
     return ok({
       key: t.key, title: t.title,
       repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
+      ...(block && { feature: block.name }),
       note: M().ctlTicketCreated,
       ...(startPoints && { stacked: stackProblems.length === 0, ...(stackProblems.length > 0 && { stackProblems }) }),
     });
   };
 
-  /** 一个 feature 的情况交给模型：summary 超长时截断（汇总是数据，不是指令，这里只截长度）。 */
-  const rowOut = (r: EpicFeatureRow): EpicFeatureRow => ({ ...r, summary: r.summary === null ? null : r.summary.slice(0, SUMMARY_LIMIT) });
+  /** epic 里的 feature（block）：数字先当 id，再按名字（不分大小写）；找不到返回给总控看的原因。 */
+  const findBlock = (f: Feature, wanted: string): Block | string => {
+    if (!d.blocks) return M().ctlBlocksOff;
+    const list = d.blocks.list(f.id);
+    const hit = (/^\d+$/.test(wanted) ? list.find((b) => b.id === Number(wanted)) : undefined) ?? d.blocks.byName(f.id, wanted);
+    return hit ?? M().ctlNoSuchBlock(wanted, list.map((b) => b.name).join(", ") || M().ctlNoBlocks);
+  };
 
-  /**
-   * epic session 在 epic 下建 feature：复用 FeatureService.create（工作区、仓库校验和界面上建一样），再写上 epic_id 和 brief。
-   * 不开总控：用户点进 feature 自己开，或者 epic 用 start_feature（带 start 时建完马上开，见 createAndStart），开的时候 brief 才发出去。
-   * 名字、仓库、brief 全部核对通过才建，出错什么都不留下。
-   */
-  const createFeature = async (e: Epic, req: Extract<EpicControlRequest, { op: "create_feature" }>): Promise<ControlResult> => {
-    const featureName = req.name.trim();
-    if (!featureName || featureName.length > FEATURE_NAME_LIMIT) return fail(M().featureNameInvalid(FEATURE_NAME_LIMIT));
-    // 名字会变成工作区目录名：不能带路径分隔符，也不能是 . 或 ..
-    if (/[\\/]/.test(featureName) || /^\.+$/.test(featureName)) return fail(M().ctlFeatureNameBad);
-    const taken = (d.features?.list({ includeArchived: true }) ?? []).some((f) => f.name.trim().toLowerCase() === featureName.toLowerCase());
-    if (taken) return fail(M().ctlFeatureNameTaken(featureName));
-    const brief = req.brief.trim();
-    if (!brief || req.brief.length > BRIEF_LIMIT) return fail(M().ctlBriefInvalid(BRIEF_LIMIT));
-
-    const names = e.repos.map(name).join(", ");
-    if (e.repos.length === 0) return fail(M().ctlEpicNoRepos);
-    let picked: typeof e.repos;
-    if (req.repos === undefined || req.repos.length === 0) {
-      if (e.repos.length > 1) return fail(M().ctlPickEpicRepos(names));
-      picked = e.repos;
-    } else {
-      picked = [];
-      for (const wanted of req.repos) {
-        const byPath = e.repos.find((r) => samePath(wanted, r.repoPath));
-        const byName = e.repos.filter((r) => name(r).toLowerCase() === wanted.trim().toLowerCase());
-        const r = byPath ?? (byName.length === 1 ? byName[0] : null);
-        if (!r) return fail(byName.length > 1 ? M().ctlRepoAmbiguous(wanted, byName.map((x) => x.repoPath).join(", ")) : M().ctlNoSuchEpicRepo(wanted, names));
-        if (!picked.includes(r)) picked.push(r);
+  /** list_features、create_feature、reorder_features、set_ticket_feature（BTL-246）。 */
+  const blockRequest = (f: Feature, own: Ticket[], req: Extract<FeatureControlRequest, { op: "list_features" | "create_feature" | "reorder_features" | "set_ticket_feature" }>): ControlResult => {
+    const blocks = d.blocks;
+    if (!blocks) return fail(M().ctlBlocksOff);
+    if (req.op === "list_features") {
+      const row = (t: Ticket) => ({ key: t.key, title: t.title, status: effectiveStatus(t) });
+      const features = blocks.list(f.id).map((b, i) => {
+        const mine = own.filter((t) => t.blockId === b.id);
+        return {
+          id: b.id, name: b.name, description: b.description, position: i + 1,
+          tickets: mine.map(row), merged: mine.filter((t) => effectiveStatus(t) === "done").length, total: mine.length,
+        };
+      });
+      const known = new Set(features.map((b) => b.id));
+      return ok({ features, notInAFeature: own.filter((t) => t.blockId == null || !known.has(t.blockId)).map(row) });
+    }
+    if (req.op === "create_feature") {
+      const same = blocks.byName(f.id, req.name);
+      if (same) return fail(M().ctlBlockExists(same.name));
+      let before: number | null = null;
+      if (req.before !== undefined) {
+        const b = findBlock(f, req.before);
+        if (typeof b === "string") return fail(b);
+        before = b.id;
       }
+      const id = blocks.insert({ featureId: f.id, name: req.name, description: req.description ?? null, createdAt: Date.now(), before });
+      d.notify();
+      return ok({ id, name: req.name });
     }
-    if (!d.featureService) return fail(M().ctlEpicGone);
-    let f: Feature;
-    try {
-      f = await d.featureService.create({ name: featureName, repoPaths: picked.map((r) => r.repoPath), epicId: e.id, brief });
-    } catch (err) {
-      if (err instanceof TicketError) return fail(err.message);
-      d.log?.(`control: create_feature ${featureName} failed`, err);
-      return fail((err as Error).message);
+    if (req.op === "reorder_features") {
+      const list = blocks.list(f.id);
+      const picked: Block[] = [];
+      for (const wanted of req.order) {
+        const b = findBlock(f, wanted);
+        if (typeof b === "string" || picked.some((p) => p.id === b.id)) return fail(M().ctlReorderMismatch(list.map((x) => x.name).join(", ") || M().ctlNoBlocks));
+        picked.push(b);
+      }
+      if (picked.length !== list.length) return fail(M().ctlReorderMismatch(list.map((x) => x.name).join(", ")));
+      blocks.reorder(picked.map((b) => b.id));
+      d.notify();
+      return ok({ order: picked.map((b) => b.name) });
     }
+    const t = own.find((x) => x.key === req.ticket.trim().toUpperCase());
+    if (!t) return fail(M().ctlNoSuchTicket(req.ticket, own.map((x) => x.key).join(", ") || M().ctlNoTickets));
+    let block: Block | null = null;
+    if (req.feature !== null) {
+      const b = findBlock(f, req.feature);
+      if (typeof b === "string") return fail(b);
+      block = b;
+    }
+    d.tickets.setBlock(t.key, block?.id ?? null);
     d.notify();
-    // 新 feature 要出现在 epic 的 handoff 里；其他 feature 趁这时更新汇总，下一个 feature 才读得到新鲜的进度。都不等，失败只记日志，不影响返回。
-    try {
-      d.syncEpic?.(e.id);
-      d.refreshEpic?.(e.id, f.id);
-    } catch (err) {
-      d.log?.(`control: refreshing epic ${e.id} after create_feature ${featureName} failed`, err);
-    }
-    return ok({ id: f.id, name: f.name, repos: f.repos.map(name), note: M().ctlFeatureCreated });
-  };
-
-  /** epic session 定下或改了规划（计划 16）：整份换掉 epics.plan，再重新渲染 epic 的 handoff（不等它）。 */
-  const setEpicPlan = (e: Epic, raw: string): ControlResult => {
-    const plan = raw.trim();
-    if (!plan || raw.length > EPIC_PLAN_MAX_CHARS) return fail(M().ctlPlanInvalid(EPIC_PLAN_MAX_CHARS));
-    // e 就是从 d.epics 读出来的，这里一定有。
-    d.epics?.setPlan(e.id, plan, (d.now ?? Date.now)());
-    try {
-      d.syncEpic?.(e.id);
-    } catch (err) {
-      d.log?.(`control: syncing epic ${e.id} after set_epic_plan failed`, err);
-    }
-    return ok({ note: M().ctlPlanSaved });
-  };
-
-  /** start_feature 正在打开总控的 feature（openFeature 还没返回）：同一个不开两次。 */
-  const starting = new Set<number>();
-
-  /** epic 下未归档的 feature：数字先按 id 找，再按名字（不分大小写）。 */
-  const epicFeature = (e: Epic, wanted: string): Feature | string => {
-    const list = d.features?.listByEpic(e.id) ?? [];
-    const w = wanted.trim();
-    const byId = /^\d+$/.test(w) ? list.find((f) => f.id === Number(w)) : undefined;
-    const f = byId ?? list.find((x) => x.name.trim().toLowerCase() === w.toLowerCase());
-    return f ?? M().ctlNoSuchEpicFeature(w, list.map((x) => x.name).join(", ") || M().ctlNoFeatures);
-  };
-
-  /** 总控已经在跑：不开第二个。没有 instructions 什么都不发；有就过 guard 发给它，现在不能发就说明原因。 */
-  const handOver = (e: Epic, f: Feature, sessionId: string, instructions: string | null): ControlResult => {
-    const base = { feature: f.name, id: f.id, sessionId };
-    if (!instructions || !d.guard || !d.deliver) return ok({ ...base, started: "already_running", note: M().ctlStartAlreadyRunning });
-    const g = d.guard.check(sessionId);
-    if (!g.ok) return fail(M().ctlStartBlocked(f.name, M().ctlStartBlock[g.block]));
-    const message = epicStartMessage({ feature: f.name, epic: e.name, brief: f.brief, instructions, running: true }, currentLang());
-    // 不等它送到：deliver 要等输入框就绪，最多一分钟。
-    d.deliver(g.termId, message, d.guard.recheckAfter(sessionId, g)).then(
-      (res) => res === "sent" || d.log?.(`control: instructions for feature ${f.id} not delivered (${res})`),
-      (err: unknown) => d.log?.(`control: instructions for feature ${f.id} failed`, err),
-    );
-    return ok({ ...base, started: "sent", note: M().ctlStartSent });
-  };
-
-  /**
-   * epic session 让 feature 开工（BTL-190 第 4 点）：打开 feature 的总控（恢复最近一个没隐藏的总控，没有就新开），
-   * 第一条消息是开工版的规划和 instructions（SessionService.sendBrief）。总控已经在跑就不再开。
-   * 能开几个 feature 的总控只看内存（工作流 W），不再有每 epic 4 个的上限。
-   */
-  const startFeature = async (e: Epic, f: Feature, rawInstructions: string | undefined): Promise<ControlResult> => {
-    const svc = d.sessionService;
-    if (!svc.openFeature || !svc.runningCoordinator) return fail(M().ctlStartUnavailable);
-    const instructions = rawInstructions?.trim() || null;
-    if (starting.has(f.id)) return ok({ feature: f.name, id: f.id, started: "starting", note: M().ctlStartStarting });
-    const running = svc.runningCoordinator(f.id);
-    if (running) return handOver(e, f, running.id, instructions);
-    if (!f.brief?.trim() && !instructions) return fail(M().ctlStartNoBrief(f.name));
-    // 和用户点进 feature 一样接着最近的总控（包括闲置时自动关掉的），它记得之前做到哪了。
-    const resume = d.sessions.listFeatureCoordinators(f.id).find((s) => s.coordinator && s.replacedBy === null && !s.dismissed);
-    starting.add(f.id);
-    let r: OpenSessionResult;
-    let room: Awaited<ReturnType<typeof admitOrRefuse>> | null = null;
-    try {
-      room = await admitOrRefuse(d.admission, `start_feature ${f.id}`);
-      if (!room.ok) return fail(room.error);
-      r = await svc.openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) }, { start: { instructions } });
-    } catch (err) {
-      if (room?.ok) room.release();
-      d.log?.(`control: start_feature ${f.id} failed`, err);
-      return fail((err as Error).message);
-    } finally {
-      starting.delete(f.id);
-    }
-    if (!r.ok || r.alreadyOpen) room.release();
-    if (!r.ok) return fail(r.reason === "claude_missing" ? M().ctlClaudeMissing : M().ctlOpenFailed(r.reason));
-    d.notify();
-    // 查过没在跑、打开时却已经开着（和用户同时点开）：什么都没发，和在跑一样处理。
-    if (r.alreadyOpen) return handOver(e, f, resume?.id ?? r.termId, instructions);
-    return okCap({ feature: f.name, id: f.id, sessionId: r.termId, started: resume ? "resumed" : "opened", note: M().ctlFeatureStarted }, room.capacity);
-  };
-
-  /** create_feature 带 start：建好再开工。开不了也算建好了（feature 已经在），把原因告诉 epic。 */
-  const createAndStart = async (e: Epic, req: Extract<EpicControlRequest, { op: "create_feature" }>): Promise<ControlResult> => {
-    const created = await createFeature(e, req);
-    if (!req.start || !created.ok) return created;
-    const value = created.value as { id: number; name: string; repos: string[] };
-    const f = d.features?.get(value.id);
-    const started = f ? await startFeature(e, f, undefined) : fail(M().ctlFeatureGone);
-    if (!started.ok) return ok({ ...value, started: false, note: M().ctlFeatureCreatedNotStarted(started.error) });
-    const { sessionId, started: how } = started.value as { sessionId?: string; started: string };
-    return okCap({ ...value, sessionId, started: how, note: M().ctlFeatureCreatedStarted }, started.capacity);
-  };
-
-  /** epic session（设计文档 2026-11-01）：epic 在这里重新核对，已归档的全部拒绝。 */
-  const epicRequest = async (req: NonInbox<EpicControlRequest>): Promise<ControlResult> => {
-    const e = d.epics?.get(req.epicId);
-    if (!e || e.archivedAt !== null) return fail(M().ctlEpicGone);
-    if (req.op === "list_repos") return ok(e.repos.map((r) => ({ name: name(r), path: r.repoPath })));
-    if (req.op === "list_features") return ok((d.epicRows?.(e.id) ?? []).map(rowOut));
-    if (req.op === "list_stacks") return d.stacks ? d.stacks.handle({ kind: "epic", epicId: e.id }, req) : fail(M().ctlStacksOff);
-    if (req.op === "create_feature") return createAndStart(e, req);
-    if (req.op === "set_epic_plan") return setEpicPlan(e, req.plan);
-    if (req.op === "start_feature") {
-      const f = epicFeature(e, req.feature);
-      return typeof f === "string" ? fail(f) : startFeature(e, f, req.instructions);
-    }
-    // 下面这些只看未归档的 feature：feature 级的 session（总控、修复）和这些 feature 下 ticket 的 session。
-    const own = (d.features?.listByEpic(e.id) ?? []).map((f) => ({ f, tickets: d.tickets.listByFeature(f.id) }));
-    if (req.op === "list_sessions") return listed(own.flatMap(({ f, tickets }) => featureSessionRows(f, tickets).map((r) => ({ ...r, feature: f.name }))));
-    const featureIds = new Set(own.map(({ f }) => f.id));
-    const keys = new Set(own.flatMap(({ tickets }) => tickets.map((t) => t.key)));
-    const belongs = (s: Session) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId !== null && featureIds.has(s.featureId));
-    if (req.op === "session_activity") return sessionActivity(req.session, belongs);
-    if (req.op === "refresh_session") return refreshSession(req, belongs);
-    return endSession(req, belongs);
-  };
-
-  /** feature 总控查同一 epic 下别的 feature（不含自己），和 epic 的"以往的决定"（和第一条消息里的同一个上限）。 */
-  const epicContext = (f: Feature): ControlResult => {
-    const e = f.epicId === null ? null : d.epics?.get(f.epicId);
-    if (!e) return fail(M().ctlNoEpic);
-    if (e.archivedAt !== null) return fail(M().ctlEpicGone);
-    const history = renderHistory(d.epicHistory?.(e.id) ?? [], currentLang(), EPIC_HISTORY_BRIEF_CHARS);
-    return ok({ epic: e.name, features: (d.epicRows?.(e.id) ?? []).filter((r) => r.id !== f.id).map(rowOut), history });
+    return ok({ ticket: t.key, feature: block?.name ?? null });
   };
 
   /** feature 总控（设计文档 2026-10-26）：feature 和 ticket 都在这里重新核对，ticket 必须属于这个 feature 且未归档。 */
@@ -542,12 +408,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   const featureRequest = async (req: NonInbox<FeatureControlRequest>): Promise<ControlResult> => {
     const f = d.features?.get(req.featureId);
     if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
-    if (req.op === "epic_context") return epicContext(f);
     const own = d.tickets.listByFeature(f.id);
 
     if (req.op === "list_tickets") {
+      const blockName = new Map((d.blocks?.list(f.id) ?? []).map((b) => [b.id, b.name]));
       return ok(own.map((t) => ({
-        key: t.key, title: t.title, status: effectiveStatus(t),
+        key: t.key, title: t.title, status: effectiveStatus(t), feature: (t.blockId != null && blockName.get(t.blockId)) || null,
         repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
       })));
     }
@@ -557,6 +423,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     }
 
     if (req.op === "create_ticket") return createTicket(f, req);
+    if (req.op === "list_features" || req.op === "create_feature" || req.op === "reorder_features" || req.op === "set_ticket_feature") return blockRequest(f, own, req);
     if (req.op === "list_stacks" || req.op === "stack_define" || req.op === "stack_rebase" || req.op === "stack_layer_mode") {
       return d.stacks ? d.stacks.handle({ kind: "feature", featureId: f.id }, req) : fail(M().ctlStacksOff);
     }
@@ -591,7 +458,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /**
-   * ask_user、report（BTL-190 第 2+3 点）：调用的 session 必须认得出来（from），而且属于请求的作用域（ticket、feature、epic、Butler 总控），
+   * ask_user、report（BTL-190 第 2+3 点）：调用的 session 必须认得出来（from），而且属于请求的作用域（ticket、feature、Butler 总控），
    * 免得别的进程冒充一个 session 提问。
    */
   const inboxRequest = (req: ControlRequest & InboxControlOp): ControlResult => {
@@ -599,15 +466,11 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const h = req.from ? d.sessions.head(req.from) : null;
     if (!h) return fail(M().ctlInboxNoSession);
     const mine = "butler" in req ? h.butler && h.ticketKey === null
-      : "epicId" in req ? h.epicId === req.epicId && h.featureId === null && h.ticketKey === null
       : "featureId" in req ? h.featureId === req.featureId && h.ticketKey === null
       : h.ticketKey === req.ticketKey;
     if (!mine) return fail(M().ctlInboxNotYours);
-    // 归档了的 ticket、feature、epic 不再收：归档时 Butler 已经把它们未决的条目收起来，新的没人会看。
-    if ("epicId" in req) {
-      const e = d.epics?.get(req.epicId);
-      if (!e || e.archivedAt !== null) return fail(M().ctlEpicGone);
-    } else if ("featureId" in req) {
+    // 归档了的 ticket、feature 不再收：归档时 Butler 已经把它们未决的条目收起来，新的没人会看。
+    if ("featureId" in req) {
       const f = d.features?.get(req.featureId);
       if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
     } else if ("ticketKey" in req) {
@@ -642,30 +505,9 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   return async (req) => {
     if (req.op === "ask_user" || req.op === "report") return inboxRequest(req);
     if ("butler" in req) return butlerRequest(req);
-    if ("epicId" in req) return epicRequest(req);
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
-    if (req.op === "submit_evidence" || req.op === "pre_review_result") return preReviewRequest(req, t);
-    // 这些请求本该只有这个 ticket 的总控发（BTL-190 第 2+3 点，加固）。先只记一笔、照常处理：没有 BUTLER_SESSION 的调用 from 是 null，
-    // 总控终端里 /resume 到别的 session 以后 head 也不再是总控，直接拒绝会误伤。
-    const caller = req.from ? d.sessions.head(req.from) : null;
-    if (!(caller && caller.ticketKey === t.key && caller.coordinator)) {
-      d.log?.(`control: ${req.op} on ticket ${t.key} from ${req.from ?? "(no session)"}, which is not its coordinator; handled anyway`);
-    }
-
-    if (req.op === "list_repos") {
-      return ok(t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), workMode: r.workMode, branch: r.branch })));
-    }
-
-    if (req.op === "list_sessions") return listed(visible(d.sessions.listByTicket(t.key)).map((s) => sessionRow(t, s)));
-
-    if (req.op === "session_activity") return sessionActivity(req.session, (s) => s.ticketKey === t.key);
-    if (req.op === "end_session") return endSession(req, (s) => s.ticketKey === t.key);
-    if (req.op === "refresh_session") return refreshSession(req, (s) => s.ticketKey === t.key);
-
-    const repo = findRepo(t, req.repo);
-    if (typeof repo === "string") return fail(repo);
-    return start(t, repo, req.task, spawner(t, req.from), req.model, "ticket");
+    return preReviewRequest(req, t);
   };
 }

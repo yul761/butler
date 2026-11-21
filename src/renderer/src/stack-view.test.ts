@@ -8,7 +8,7 @@ const layer = (id: number, state: StackLayerView["state"]): StackLayerView => ({
   prNumber: null, prUrl: null, behind: null, lastRebaseAt: null, draftSince: null, mergedAt: null, unpushed: false,
 });
 const stack = (layers: StackLayerView[]): StackView => ({
-  id: 1, name: "s", repoPath: "/r", repoSlug: null, trunk: "main", epicId: null, featureId: null, source: "mcp", mergeMethod: null,
+  id: 1, name: "s", repoPath: "/r", repoSlug: null, trunk: "main", featureId: null, source: "mcp", mergeMethod: null,
   autoRebase: true, overviewUrl: null, layers, lastRun: null, restorable: null,
 });
 

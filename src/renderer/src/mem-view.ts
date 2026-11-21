@@ -74,7 +74,7 @@ export const HEAVY_MCP_KB = 200 * 1024;
 
 /** 所有行的最大进程里、你自己装的 MCP 按名字加起来超过 HEAVY_MCP_KB 的，从大到小（最多 3 个）。 */
 export function heavyMcp(view: NowView): string[] {
-  const rows = [...(view.butler ? [view.butler] : []), ...view.epics.flatMap((e) => [...e.rows, ...e.features.flatMap((f) => f.rows)])];
+  const rows = [...(view.butler ? [view.butler] : []), ...view.features.flatMap((f) => f.rows)];
   const by = new Map<string, number>();
   for (const r of rows) for (const p of r.mem?.top ?? []) if (p.cls === "mcp_other") by.set(p.name, (by.get(p.name) ?? 0) + p.rssKb);
   return [...by].filter(([, kb]) => kb >= HEAVY_MCP_KB).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n]) => n);

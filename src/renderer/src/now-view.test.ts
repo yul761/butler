@@ -78,18 +78,18 @@ describe("usageLine", () => {
 
 describe("inbox helpers (BTL-190 2+3)", () => {
   const item = (over: Partial<InboxItemView> = {}): InboxItemView => ({
-    id: 1, kind: "decision", sessionId: "s1", role: "ticket", ticketKey: "BTL-1", featureId: 2, epicId: null, repo: null, text: "用哪个？",
+    id: 1, kind: "decision", sessionId: "s1", role: "ticket", ticketKey: "BTL-1", featureId: 2, repo: null, text: "用哪个？",
     options: [], context: null, reportKind: null, answer: null, createdAt: NOW, open: true, target: { page: "ticket", key: "BTL-1", sessionId: "s1" }, ...over,
   });
 
   it("names who asked or reported", () => {
     expect(inboxWho(item(), S)).toBe("BTL-1");
     expect(inboxWho(item({ repo: "api" }), S)).toBe("BTL-1（api）");
-    expect(inboxWho(item({ role: "ticket_coordinator" }), S)).toBe("BTL-1 总控");
-    expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("feature 总控");
-    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe("Butler 总控");
+    expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("epic 总控");
+    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe("全局总控");
     setUiLang("en");
-    expect(inboxWho(item({ role: "epic", ticketKey: null }), S)).toBe("Epic session");
+    expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("Epic coordinator");
+    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe("Global control");
   });
 
 });
@@ -99,7 +99,7 @@ describe("the live window (BTL-190 7)", () => {
   const counts = { active: 0, needsYou: 0, stuck: 0 };
   const view = (rows: NowRow[], featureRows: NowRow[] = [], butler: NowRow | null = null): NowView => ({
     butler, running: 0, merges: [], memory: [], notices: [],
-    epics: [{ id: 1, name: "e", rows, counts, features: [{ id: 2, name: "f", rows: featureRows, counts }] }],
+    features: [{ id: 1, name: "e", rows, counts }, { id: 2, name: "f", rows: featureRows, counts }],
   });
 
   it("shows sessions that are working or waiting for you, and leaves out stopped ones and PR-only rows", () => {

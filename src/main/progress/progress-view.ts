@@ -1,5 +1,5 @@
 // 总控 progress_overview 的聚合（设计文档 2026-11-17 ws-b 第 4 节）：纯函数，输入是已经读好的数据。
-// 每个 PR 轮到谁取自 turn 模型（TurnService.prTurns），和首页、epic/feature/ticket 页同一套算法。
+// 每个 PR 轮到谁取自 turn 模型（TurnService.prTurns），和首页、feature/ticket 页同一套算法。
 import {
   PROGRESS_BUCKETS, titlePrefix, type ProgressBucket, type ProgressFeature, type ProgressFilter, type ProgressPr, type ProgressPrGroup,
   type ProgressStackNode, type ProgressStackRepo, type ProgressStuck, type ProgressTicket, type ProgressView,
@@ -20,9 +20,7 @@ export interface ProgressInput {
   /** 未归档的 ticket。 */
   tickets: Ticket[];
   /** 未归档的 feature。 */
-  features: { id: number; name: string; epicId: number | null }[];
-  /** 未归档的 epic。 */
-  epics: { id: number; name: string }[];
+  features: { id: number; name: string }[];
   /** Butler 在盯的 PR（PrWatcher.statusOf），分支行（prId null）会被跳过。 */
   prs: WatchedPr[];
   summary: (featureId: number) => ProgressSummary | null;
@@ -136,16 +134,11 @@ export function buildStacks(prs: ProgressPr[]): ProgressStackRepo[] {
   return out;
 }
 
-/** progress_overview 的全部数据。filter 里给了 feature 就只看这个 feature；给了 epic 就只看这个 epic 下的 feature；都没给看全部（含不属于 feature 的 ticket）。 */
+/** progress_overview 的全部数据。filter 里给了 feature 就只看这个 feature；没给看全部（含不属于 feature 的 ticket）。 */
 export function buildProgress(input: ProgressInput, filter: ProgressFilter = {}): ProgressView {
-  const epicId = filter.epicId ?? null;
   const featureId = filter.featureId ?? null;
   const featureById = new Map(input.features.map((f) => [f.id, f]));
-  const inScope = (fid: number | null): boolean => {
-    if (featureId !== null) return fid === featureId;
-    if (epicId !== null) return fid !== null && featureById.get(fid)?.epicId === epicId;
-    return true;
-  };
+  const inScope = (fid: number | null): boolean => featureId === null || fid === featureId;
   const tickets = input.tickets.filter((t) => inScope(t.featureId));
   const keys = new Set(tickets.map((t) => t.key));
   const watched = input.prs.filter((p) => keys.has(p.ticketKey) && p.prId !== null);
@@ -201,12 +194,12 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
     const c = emptyCounts();
     for (const r of list) c[r.bucket] += 1;
     return {
-      id: fid, name: f?.name ?? null, epicId: f?.epicId ?? null, line: firstSentence(s?.summary ?? null), summaryAt: s?.at ?? null,
+      id: fid, name: f?.name ?? null, line: firstSentence(s?.summary ?? null), summaryAt: s?.at ?? null,
       prStatusAt: s?.prStatusAt ?? null, stale: s?.stale ?? false, counts: c, tickets: list,
     };
   };
   for (const f of input.features) if (inScope(f.id)) featureGroups.push(groupOf(f.id));
-  if (featureId === null && epicId === null && tickets.some((t) => t.featureId === null || !featureById.has(t.featureId))) {
+  if (featureId === null && tickets.some((t) => t.featureId === null || !featureById.has(t.featureId))) {
     const g = groupOf(null);
     // 属于已归档 feature 的 ticket（ticket 本身没归档）也放进"不属于 feature"这一组。
     g.tickets = [...ticketRows.values()].filter((r) => r.featureId === null || !featureById.has(r.featureId));
@@ -217,9 +210,8 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
 
   const checked = read.map((p) => p.checkedAt);
   return {
-    filter: { epicId, featureId },
-    epics: input.epics.map((e) => ({ id: e.id, name: e.name })),
-    features: input.features.map((f) => ({ id: f.id, name: f.name, epicId: f.epicId })),
+    filter: { featureId },
+    features: input.features.map((f) => ({ id: f.id, name: f.name })),
     counts, stuck, stacks: buildStacks(unique), groups, featureGroups,
     freshness: {
       generatedAt: input.now,
@@ -239,12 +231,11 @@ const TIME_KEYS = new Set(["at", "since", "checkedAt", "statusChangedAt", "summa
 const prRef = (p: ProgressPr): string => `${p.slug ?? p.repo}#${p.number}`;
 
 /**
- * progress_overview 的结果：同一份 ProgressView，但时间写成 ISO 字符串，featureId / epicId 旁边带上名字，
+ * progress_overview 的结果：同一份 ProgressView，但时间写成 ISO 字符串，featureId 旁边带上名字，
  * 每个 PR 的完整字段只在 prs 里出现一次，stuck、叠放树、分组里用"仓库#号"引用（省得同一个 PR 重复好几遍）。
  */
 export function progressOverview(v: ProgressView): object {
   const featureName = new Map(v.features.map((f) => [f.id, f.name]));
-  const epicName = new Map(v.epics.map((e) => [e.id, e.name]));
   const prs = new Map<string, ProgressPr>();
   const ref = (p: ProgressPr): string => {
     prs.set(p.url, p);
@@ -271,7 +262,6 @@ export function progressOverview(v: ProgressView): object {
       for (const [k, val] of Object.entries(x)) {
         o[k] = walk(val, k);
         if (k === "featureId" && typeof val === "number") o.feature = featureName.get(val) ?? null;
-        if (k === "epicId" && typeof val === "number") o.epic = epicName.get(val) ?? null;
       }
       return o;
     }

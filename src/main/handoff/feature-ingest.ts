@@ -24,7 +24,7 @@ export interface FeatureIngestDeps {
   tickets: TicketsRepo;
   featureHandoffs: FeatureHandoffsRepo;
   now: () => number;
-  /** 存下一份有效（非 degraded）汇总之后调用：让 feature 所在的 epic 重新渲染 handoff。 */
+  /** 存下一份有效（非 degraded）汇总之后调用。 */
   onValidStored?: (featureId: number) => void;
 }
 

@@ -47,7 +47,7 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
     const fork = block("const forkMcpConfig = (dev: DevLaunch, runId: string)", "\n  };");
     expect(fork).toContain("const termId = null;");
     expect(fork).not.toMatch(/sharedMcpConfig|mcpHub|writeTerminalMcpConfig/);
-    for (const name of ["memoryMcpConfig", "featureMcpConfig", "epicMcpConfig", "butlerMcpConfig"]) {
+    for (const name of ["memoryMcpConfig", "featureMcpConfig", "butlerMcpConfig"]) {
       expect(fork, name).toMatch(new RegExp(`\\b${name}\\([^\\n]*termId\\)`));
       // 每个配置函数都经 placeMcp 决定写到哪。
       expect(block(`const ${name} = (`, "\n  };"), name).toMatch(/return placeMcp\(termId, servers, /);
@@ -66,7 +66,7 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
     }
   });
 
-  it("interactive sessions (ticket, feature, epic, fix all go through mcpSettings) pre-allow ask_user and report (BTL-190 2+3)", () => {
+  it("interactive sessions (ticket, feature, fix all go through mcpSettings) pre-allow ask_user and report (BTL-190 2+3)", () => {
     const at = indexSource.indexOf("mcpSettings: (dirs, sessionId) =>");
     expect(at).toBeGreaterThan(0);
     const block = indexSource.slice(at, indexSource.indexOf("checksAbsence,", at));

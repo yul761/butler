@@ -6,7 +6,7 @@ import { controlHandler, type ControlHandlerDeps } from "./control-handler";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
   id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 
 const VIEW: PreReviewView = {

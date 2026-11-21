@@ -376,8 +376,8 @@ describe("TicketService with several repos", () => {
     // worktree 模式仓库的主目录也算这个仓库。
     expect(service.repoForCwd(t, web)?.id).toBe(t.repos[0].id);
     expect(service.repoForCwd(t, `${api}-other`)).toBeNull();
-    expect(service.placement("MULTI-4", join(api, "x"))).toEqual({ repoId: t.repos[1].id, coordinator: false });
-    expect(service.placement("MULTI-4", service.workspacePath("MULTI-4"))).toEqual({ repoId: null, coordinator: true });
+    expect(service.placement("MULTI-4", join(api, "x"))).toEqual({ repoId: t.repos[1].id });
+    expect(service.placement("MULTI-4", service.workspacePath("MULTI-4"))).toEqual({ repoId: null });
   });
 
   it("runs background claude in the first repo with the others added, or in the workspace when there is none", async () => {

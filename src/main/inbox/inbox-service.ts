@@ -6,7 +6,7 @@ import type { RecordEvent } from "../metrics/events";
 import { MAILBOX_BODY_LIMIT, type Mailbox } from "../mailbox/mailbox";
 import { M } from "../strings";
 
-/** feature 页、epic 页上最多显示这么多条最近的汇报。 */
+/** feature 页上最多显示这么多条最近的汇报。 */
 export const RECENT_REPORTS_LIMIT = 30;
 /** 汇报这么久还找不到总控（一个总控 session 都没有）就不送了：过时的「做完了」只会误导总控。排进了信箱的不受这个限制。 */
 export const REPORT_DELIVERY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -23,21 +23,14 @@ export interface InboxServiceDeps {
   /** Butler 正在给这个 session（链上任何一个 id）换新：/handoff 和接着做的话引起的 UserPromptSubmit 不是用户在回答。 */
   refreshing(sessionId: string): boolean;
   ticket(key: string): Ticket | null;
-  /** feature 属于哪个 epic；不属于或者找不到为 null。 */
-  epicOfFeature(featureId: number): number | null;
   /** 跑着这个 session（链上任何一个 id）的终端；没有为 null。 */
   termOf(sessionId: string): string | null;
   /** 开着终端的 Butler session 的 head。 */
   openHeads(): Session[];
-  /** epic 的名字（送给 Butler 总控的汇报里写是哪个 epic，BTL-190 第 5 点）；不给或者找不到就不写。 */
-  epicName?(epicId: number): string | null;
   /** 信箱（BTL-245）：回答和汇报都排进去，送达后在 on("answer") / on("report") 里结束条目。 */
   mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
-  /**
-   * 终端关着时汇报送给谁：这一类总控最近的那个（没隐藏的 head）。ticket：这个 ticket 的总控；feature、epic：它们的总控、epic session；
-   * butler：Butler 总控。没有为 null。不给时只送给开着的总控。
-   */
-  latestCoordinator?(where: { ticket: string } | { feature: number } | { epic: number } | { butler: true }): string | null;
+  /** 终端关着时汇报送给谁：这个 epic（内部是 feature）最近的那个总控（没隐藏的 head）。没有为 null。不给时只送给开着的总控。 */
+  latestCoordinator?(where: { feature: number }): string | null;
   notify(): void;
   now(): number;
   log(msg: string, err?: unknown): void;
@@ -64,23 +57,18 @@ export interface AskedQuestion {
 }
 
 /** 提问 / 汇报的是哪种 session。 */
-export function roleOf(s: Pick<Session, "ticketKey" | "coordinator" | "featureId" | "fixesSession" | "epicId"> & { butler?: boolean }): InboxRole {
-  if (s.ticketKey !== null) return s.coordinator ? "ticket_coordinator" : "ticket";
+export function roleOf(s: Pick<Session, "ticketKey" | "coordinator" | "featureId" | "fixesSession">): InboxRole {
+  if (s.ticketKey !== null) return "ticket";
   if (s.featureId !== null) return s.fixesSession !== null ? "fix" : "feature_coordinator";
-  // Butler 总控（BTL-190 第 5 点）：ticket、feature、epic 都是空的。
-  if (s.butler) return "butler";
-  return "epic";
+  // Butler 总控（BTL-190 第 5 点）：ticket、feature 都是空的。以前的 epic session（BTL-246 去掉了）留下的条目也归到这里。
+  return "butler";
 }
 
 /**
- * 上面可能有管它的总控（汇报才有地方送）：ticket session 一直可能（ticket 总控随时能开）；ticket 总控、修复 session 要属于 feature 或 epic；
- * feature 总控要属于 epic；epic session 和 Butler 总控这里都算没有（epic 的另看 Butler 总控开没开）。
+ * 上面可能有管它的总控（汇报才有地方送）：ticket session、修复 session 要属于 feature；feature 总控和 Butler 总控上面都没有。
  */
-function mayHaveCoordinator(role: InboxRole, o: Pick<InboxOwner, "featureId" | "epicId">): boolean {
-  if (role === "ticket") return true;
-  if (role === "ticket_coordinator" || role === "fix") return o.featureId !== null || o.epicId !== null;
-  if (role === "feature_coordinator") return o.epicId !== null;
-  return false;
+function mayHaveCoordinator(role: InboxRole, o: Pick<InboxOwner, "featureId">): boolean {
+  return (role === "ticket" || role === "fix") && o.featureId !== null;
 }
 
 const repoName = (path: string): string => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
@@ -121,14 +109,10 @@ export class InboxService {
     else this.answering.delete(head);
   }
 
-  /** 这个 session 拥有的 ticket、feature、epic：ticket 的 session 从 ticket 往上找。 */
+  /** 这个 session 拥有的 ticket、feature：ticket 的 session 从 ticket 往上找。 */
   private owner(s: Session): InboxOwner {
-    if (s.ticketKey !== null) {
-      const featureId = this.d.ticket(s.ticketKey)?.featureId ?? null;
-      return { sessionId: s.id, ticketKey: s.ticketKey, featureId, epicId: featureId === null ? null : this.d.epicOfFeature(featureId) };
-    }
-    if (s.featureId !== null) return { sessionId: s.id, ticketKey: null, featureId: s.featureId, epicId: this.d.epicOfFeature(s.featureId) };
-    return { sessionId: s.id, ticketKey: null, featureId: null, epicId: s.epicId };
+    if (s.ticketKey !== null) return { sessionId: s.id, ticketKey: s.ticketKey, featureId: this.d.ticket(s.ticketKey)?.featureId ?? null };
+    return { sessionId: s.id, ticketKey: null, featureId: s.featureId };
   }
 
   private headId(sessionId: string): string {
@@ -161,15 +145,14 @@ export class InboxService {
 
   /**
    * report：存下来。queued：会送给总控（done / blocked，而且这个 session 上面可能有总控）。
-   * noCoordinator：done / blocked，但上面不可能有总控（没有 feature 的 ticket 总控、不属于 epic 的 feature 总控、Butler 总控自己，
-   * 以及 Butler 总控没开着时的 epic session），只存。
+   * noCoordinator：done / blocked，但上面不可能有总控（没有 feature 的 ticket、feature 总控、Butler 总控自己），只存。
    */
   report(s: Session, text: string, kind: ReportKind): { id: number; queued: boolean; noCoordinator: boolean } {
     // choice（ws-j）：不进汇报、不送总控，存进「替你做的选择」。没接选择服务时当 progress 存。
     if (kind === "choice" && this.d.choices) return { id: this.d.choices.recordRule({ sessionId: s.id, ticketKey: s.ticketKey }, text), queued: false, noCoordinator: false };
     if (kind === "choice") kind = "progress";
     const owner = this.owner(s);
-    const noCoordinator = kind !== "progress" && !this.hasCoordinator(s, owner);
+    const noCoordinator = kind !== "progress" && !mayHaveCoordinator(roleOf(s), owner);
     const queued = kind !== "progress" && !noCoordinator;
     const id = this.d.repo.addReport({ ...owner, text, kind, status: queued ? "pending" : "dismissed", createdAt: this.d.now() });
     this.d.notify();
@@ -177,7 +160,7 @@ export class InboxService {
     return { id, queued, noCoordinator };
   }
 
-  /** ticket、feature、epic 归档了：这个范围里还未决的「待你决定」和汇报都记成 dismissed（不再显示、不再送）。 */
+  /** ticket、feature 归档了：这个范围里还未决的「待你决定」和汇报都记成 dismissed（不再显示、不再送）。 */
   dismissScope(scope: InboxArchiveScope): void {
     if (this.d.repo.dismissPending(scope, this.d.now()) > 0) this.d.notify();
     this.withdrawSettled();
@@ -191,13 +174,6 @@ export class InboxService {
         if (!item || item.status !== "pending") this.d.mailbox.withdraw(ref);
       }
     }
-  }
-
-  /** 这个 session 上面有没有能收汇报的总控：epic session 只有 Butler 总控开着时才有（BTL-190 第 5 点，没开就只存），别的看 mayHaveCoordinator。 */
-  private hasCoordinator(s: Session, owner: Pick<InboxOwner, "featureId" | "epicId">): boolean {
-    const role = roleOf(s);
-    if (role === "epic") return this.d.openHeads().some((h) => h.butler);
-    return mayHaveCoordinator(role, owner);
   }
 
   /** 用户在卡片上回答（选项或者打的字）：记下答案，能送就马上送。条目已经不是未决的返回 false。 */
@@ -319,49 +295,23 @@ export class InboxService {
   }
 
   /**
-   * 汇报送给谁（head id）：管这个 session 的总控，开着的优先，其次是这一类里最近的那个（关着的读信箱要等打开）。
-   * ticket 的 session → 同一个 ticket 的总控 → feature 总控 → epic session；ticket 总控、修复 session → feature 总控 → epic session；
-   * feature 总控 → epic session；epic session → Butler 总控。
+   * 汇报送给谁（head id）：管这个 session 的 epic 总控（内部是 feature 总控），开着的优先，其次是最近的那个（关着的读信箱要等打开）。
+   * ticket 的 session、修复 session → epic 总控；epic 总控和全局总控上面都没有。
    */
   private reportTarget(item: InboxItem, author: Session): string | null {
-    const open = this.d.openHeads();
-    const role = roleOf(author);
-    const pick = (ok: (h: Session) => boolean): string | null => open.find((h) => h.id !== author.id && ok(h))?.id ?? null;
-    const latest = (where: Parameters<NonNullable<InboxServiceDeps["latestCoordinator"]>>[0]): string | null => {
-      const id = this.d.latestCoordinator?.(where) ?? null;
-      return id === null || this.headId(id) === author.id ? null : this.headId(id);
-    };
-    // 先在开着的里面按顺序找，都没有再找最近的那个（关着的）。
-    const chain: { open: (h: Session) => boolean; latest: Parameters<typeof latest>[0] }[] = [];
-    if (role === "ticket" && item.ticketKey !== null) {
-      const key = item.ticketKey;
-      chain.push({ open: (h) => h.ticketKey === key && h.coordinator, latest: { ticket: key } });
-    }
-    if (role !== "feature_coordinator" && role !== "epic" && item.featureId !== null) {
-      const f = item.featureId;
-      chain.push({ open: (h) => h.ticketKey === null && h.featureId === f && h.fixesSession === null, latest: { feature: f } });
-    }
-    if (role !== "epic" && item.epicId !== null) {
-      const e = item.epicId;
-      chain.push({ open: (h) => h.ticketKey === null && h.featureId === null && h.epicId === e, latest: { epic: e } });
-    }
-    // epic session → Butler 总控（BTL-190 第 5 点）。
-    if (role === "epic") chain.push({ open: (h) => h.butler, latest: { butler: true } });
-    for (const c of chain) {
-      const t = pick(c.open);
-      if (t !== null) return t;
-    }
-    for (const c of chain) {
-      const t = latest(c.latest);
-      if (t !== null) return t;
-    }
-    return null;
+    if (!mayHaveCoordinator(roleOf(author), item) || item.featureId === null) return null;
+    const f = item.featureId;
+    const ok = (h: Session) => h.id !== author.id && h.ticketKey === null && h.featureId === f && h.fixesSession === null;
+    const open = this.d.openHeads().find(ok)?.id ?? null;
+    if (open !== null) return open;
+    const id = this.d.latestCoordinator?.({ feature: f }) ?? null;
+    return id === null || this.headId(id) === author.id ? null : this.headId(id);
   }
 
   /** 给总控看的「谁」：ticket 号（ticket 有几个仓库时加仓库名）、总控、修复 session。 */
   private whoOf(s: Session): string {
     const role = roleOf(s);
-    return M().inboxWho(role, s.ticketKey, role === "ticket" ? this.repoOf(s) : null, role === "epic" && s.epicId !== null ? this.d.epicName?.(s.epicId) : null);
+    return M().inboxWho(role, s.ticketKey, role === "ticket" ? this.repoOf(s) : null);
   }
 
   /** ticket 有不止一个仓库时，这个 session 的仓库目录名。 */
@@ -377,14 +327,14 @@ export class InboxService {
   itemView(item: InboxItem): InboxItemView {
     const s = this.d.head(item.sessionId);
     const sessionId = s?.id ?? item.sessionId;
-    const role: InboxRole = s ? roleOf(s) : item.ticketKey !== null ? "ticket" : item.featureId !== null ? "feature_coordinator" : item.epicId !== null ? "epic" : "butler";
+    const role: InboxRole = s ? roleOf(s) : item.ticketKey !== null ? "ticket" : item.featureId !== null ? "feature_coordinator" : "butler";
+    // 以前的 epic session（BTL-246 去掉了）留下的条目没有 ticket、feature：跳到 Butler 页。
     const target: NowTarget =
       item.ticketKey !== null ? { page: "ticket", key: item.ticketKey, sessionId }
       : s?.featureId != null || (s === null && item.featureId !== null) ? { page: "feature", id: (s?.featureId ?? item.featureId) as number, sessionId }
-      : role === "butler" ? { page: "butler", sessionId }
-      : { page: "epic", id: item.epicId ?? 0, sessionId };
+      : { page: "butler", sessionId };
     return {
-      id: item.id, kind: item.kind, sessionId, role, ticketKey: item.ticketKey, featureId: item.featureId, epicId: item.epicId,
+      id: item.id, kind: item.kind, sessionId, role, ticketKey: item.ticketKey, featureId: item.featureId,
       repo: s && role === "ticket" ? this.repoOf(s) : null,
       text: item.text, options: item.options, context: item.context, reportKind: item.reportKind,
       answer: item.status === "pending" ? item.answer : null, createdAt: item.createdAt,
@@ -397,7 +347,7 @@ export class InboxService {
     return this.d.repo.pendingDecisions().map((x) => this.itemView(x));
   }
 
-  /** feature 页、epic 页（以后 Butler 总控页用 all）上面的两栏。 */
+  /** feature 页（Butler 总控页用 all）上面的两栏。 */
   view(scope: InboxScope): InboxView {
     const filter: InboxFilter = "all" in scope ? null : scope;
     return {

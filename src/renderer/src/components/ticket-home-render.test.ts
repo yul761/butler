@@ -18,7 +18,7 @@ const pr = { repo: "r", number: 52, title: "t", url: "https://x/pr/52" };
 const merge: TicketItemTurn = { owner: "you", kind: "merge", risk: null };
 type TicketItemTurn = TurnItem["turn"];
 const mkRow = (turn: TicketItemTurn = merge, others = 0): TicketRow => {
-  const item: TurnItem = { ticketKey: "BTL-1", pr, epicId: null, featureId: null, turn, since: 0, others };
+  const item: TurnItem = { ticketKey: "BTL-1", pr, featureId: null, turn, since: 0, others };
   return { key: "BTL-1", title: "T", featureId: null, turn, others, item, since: 0, prs: [{ tag: "#52", number: 52, repo: "r" }], asks: [] };
 };
 const stageRow: PrStagesView = {
@@ -128,7 +128,7 @@ describe("TicketHome", () => {
     expect(opened).toEqual(["https://github.com/acme/api/pull/52"]);
   });
   it("an orphan question shows under the ticket's own state, with a way to answer it", async () => {
-    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, featureId: null, since: 0, others: 0,
       turn: { owner: "you", kind: "answer", question: "用哪个库？", options: ["zod", "valibot"], askId: 3, sessionId: "s" } };
     const row = { ...mkRow(), asks: [ask] };
     const h = html({ row });
@@ -149,7 +149,7 @@ describe("TicketHome", () => {
     expect(went).toEqual([]);
   });
   it("a question answered here but not yet delivered says so instead of offering the options again", () => {
-    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, featureId: null, since: 0, others: 0,
       turn: { owner: "you", kind: "answer", question: "用哪个库？", options: ["zod", "valibot"], askId: 3, sessionId: "s" } };
     const row = { ...mkRow(), asks: [ask] };
     const h = html({ row, answered: { 3: "zod" } });
@@ -159,14 +159,14 @@ describe("TicketHome", () => {
     expect(() => findButton(TicketHome({ ...props({ row, answered: { 4: "x" } }) }), "valibot")).not.toThrow();
   });
   it("the question buttons are disabled while an answer is on its way", () => {
-    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, featureId: null, since: 0, others: 0,
       turn: { owner: "you", kind: "answer", question: "q", options: ["a"], askId: 3, sessionId: "s" } };
     const row = { ...mkRow(), asks: [ask] };
     expect(findButton(TicketHome({ ...props({ row, busy: true }) }), "a").props.disabled).toBe(true);
     expect(findButton(TicketHome({ ...props({ row }) }), "a").props.disabled).toBe(false);
   });
   it("an answer that no longer exists says so and reloads the board", async () => {
-    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, featureId: null, since: 0, others: 0,
       turn: { owner: "you", kind: "answer", question: "q", options: ["a"], askId: 3, sessionId: "s" } };
     let reloaded = 0;
     const deps = { answerInbox: async () => false, onGoTab: noop, onChanged: () => void reloaded++ };
@@ -174,7 +174,7 @@ describe("TicketHome", () => {
     expect(reloaded).toBe(1);
   });
   it("a question without options only offers a look, landing where the home card would", async () => {
-    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, since: 0, others: 0,
+    const ask: TurnItem = { ticketKey: "BTL-1", pr: null, featureId: null, since: 0, others: 0,
       turn: { owner: "you", kind: "answer", question: "q", options: [], askId: 3, sessionId: "s" } };
     const clicked: CardAction[] = [];
     const el = TicketHome({ ...props({ row: { ...mkRow(), asks: [ask] } }), onAsk: (a) => clicked.push(a) });

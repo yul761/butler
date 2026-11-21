@@ -137,8 +137,8 @@ export class HandoffRunner {
     const dirs = this.d.dirs(t);
     const cwd = session?.cwd || dirs.cwd;
     const prompt = buildPrompt(this.d.settings.get("handoffPrompt"), this.context(t));
-    // 总控 session 在工作区目录里：项目级 MCP 按第一个仓库找，每个仓库都加进来。
-    const mcpCwd = session?.coordinator ? dirs.cwd : cwd;
+    // 开在工作区目录里的旧 session（以前的 ticket 总控，没有仓库）：项目级 MCP 按第一个仓库找。
+    const mcpCwd = session && session.repoId === null && session.cwd && !dirs.repoDirs.includes(session.cwd) ? dirs.cwd : cwd;
     const addDirs = dirs.repoDirs.filter((d) => d !== cwd);
     const args = headlessArgs({
       schema: HANDOFF_JSON_SCHEMA, resumeSessionId: session?.id, allowedTools: this.allowedTools(), mcpConfigs: this.mcpConfigs(mcpCwd), addDirs,

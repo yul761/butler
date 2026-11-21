@@ -46,7 +46,7 @@ export interface MergeGateDeps {
   notify(e: MergeEvent): void;
   now(): number;
   log(msg: string, err?: unknown): void;
-  /** 文案里的“谁”：`ticket 号（feature 名）`、`ticket 号（epic 名 / feature 名）`、独立 ticket 只有号码，没有 ticket 时是 branch 名。index.ts 用 tickets / features / epics 仓库拼。 */
+  /** 文案里的“谁”：`ticket 号（feature 名）`、独立 ticket 只有号码，没有 ticket 时是 branch 名。index.ts 用 tickets / features 仓库拼。 */
   whoOf(ticketKey: string | null, branch: string): string;
   /** post 阶段之后让 HoldWatcher（Task 7）尽快检查一轮。 */
   checkSoon(): void;

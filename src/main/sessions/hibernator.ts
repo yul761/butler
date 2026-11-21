@@ -67,7 +67,7 @@ export interface HibernatorDeps {
   /** 休眠时留下的 watcher：孤儿清理先别动，唤醒或结束时放开（release 以后它们按普通孤儿清理）。 */
   spare(owner: string, procs: OwnedProc[]): void;
   release(owner: string): void;
-  /** 按 session 自己的种类恢复（ticket、feature 总控、epic、Butler 总控），都是 --resume。 */
+  /** 按 session 自己的种类恢复（ticket、feature 总控、Butler 总控），都是 --resume。 */
   open(head: Session): Promise<{ ok: true; termId: string } | { ok: false; reason: string }>;
   notify(): void;
   now(): number;

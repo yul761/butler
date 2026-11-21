@@ -1,31 +1,25 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Epic, Feature, Ticket } from "../../shared/types";
+import type { Feature, Ticket } from "../../shared/types";
 import { setLang } from "../i18n";
 import { makeWhoOf } from "./who";
 
 const ticket = (key: string, featureId: number | null) => ({ key, featureId }) as Ticket;
-const feature = (id: number, name: string, epicId: number | null) => ({ id, name, epicId }) as Feature;
-const epic = (id: number, name: string) => ({ id, name }) as Epic;
+const feature = (id: number, name: string) => ({ id, name }) as Feature;
 
 function whoOf() {
   const tickets = [ticket("DMS-1", 1), ticket("DMS-2", 2), ticket("DMS-3", null), ticket("DMS-4", 9)];
-  const features = [feature(1, "支付", 7), feature(2, "登录", null)];
-  const epics = [epic(7, "结算改版")];
+  const features = [feature(1, "支付"), feature(2, "登录")];
   return makeWhoOf({
     tickets: { get: (k) => tickets.find((t) => t.key === k) ?? null },
     features: { get: (id) => features.find((f) => f.id === id) ?? null },
-    epics: { get: (id) => epics.find((e) => e.id === id) ?? null },
   });
 }
 
 describe("whoOf", () => {
   afterEach(() => setLang("zh"));
 
-  it("names the epic and the feature of a ticket in an epic", () => {
-    expect(whoOf()("DMS-1", "dms-1")).toBe("DMS-1（结算改版 / 支付）");
-  });
-
-  it("names the feature of a ticket in a feature without an epic", () => {
+  it("names the feature of a ticket in a feature", () => {
+    expect(whoOf()("DMS-1", "dms-1")).toBe("DMS-1（支付）");
     expect(whoOf()("DMS-2", "dms-2")).toBe("DMS-2（登录）");
   });
 
@@ -41,6 +35,6 @@ describe("whoOf", () => {
 
   it("uses half-width parentheses in English", () => {
     setLang("en");
-    expect(whoOf()("DMS-1", "dms-1")).toBe("DMS-1 (结算改版 / 支付)");
+    expect(whoOf()("DMS-1", "dms-1")).toBe("DMS-1 (支付)");
   });
 });

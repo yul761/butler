@@ -40,7 +40,6 @@ import {
 } from "../../shared/types";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
-import type { EpicService } from "../epics/epic-service";
 import type { MemoryService } from "../memory/memory-service";
 import { JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
@@ -84,8 +83,8 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
+  addRepoArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
+  openButlerArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
@@ -98,7 +97,6 @@ export interface IpcDeps {
   tickets: TicketsRepo;
   ticketService: TicketService;
   featureService: FeatureService;
-  epicService: EpicService;
   sessionService: SessionService;
   activity: Pick<ActivityMonitor, "dismiss">;
   usage: Pick<UsageRepo, "since">;
@@ -360,10 +358,9 @@ export function registerIpc(d: IpcDeps): void {
     d.featureService.removeRepo(repoIdArg(featureRepoId));
     d.notify();
   });
-  handle(IPC.featuresArchive, async (raw: unknown) => {
+  handle(IPC.featuresArchive, (raw: unknown) => {
     const id = featureIdArg(raw);
-    // epic 下的 feature 要先生成汇总，最多等两分钟。
-    await d.featureService.archive(id, { terminalsOpen: () => d.sessionService.hasFeatureTerminal(id) });
+    d.featureService.archive(id, { terminalsOpen: () => d.sessionService.hasFeatureTerminal(id) });
     d.onFeatureArchived?.(id);
     d.notify();
   });
@@ -377,52 +374,6 @@ export function registerIpc(d: IpcDeps): void {
     d.notify();
     return r;
   });
-  handle(IPC.featuresMove, (id: unknown, target: unknown) => {
-    d.epicService.moveFeature(featureIdArg(id), moveTargetArg(target));
-    d.notify();
-  });
-
-  // epic（设计文档 2026-11-01）
-  handle(IPC.epicsList, () => d.sessionService.epicViews());
-  handle(IPC.epicsCreate, async (raw: unknown) => {
-    const e = await d.epicService.create(createEpicArg(raw));
-    d.notify();
-    return e;
-  });
-  handle(IPC.epicsRename, (id: unknown, name: unknown) => {
-    const e = d.epicService.rename(epicIdArg(id), epicNameArg(name));
-    d.notify();
-    return e;
-  });
-  handle(IPC.epicsAddRepo, async (id: unknown, path: unknown) => {
-    const r = await d.epicService.addRepo(epicIdArg(id), dirArg(path));
-    d.notify();
-    return r;
-  });
-  handle(IPC.epicsRemoveRepo, (epicRepoId: unknown) => {
-    d.epicService.removeRepo(repoIdArg(epicRepoId));
-    d.notify();
-  });
-  handle(IPC.epicsArchive, async (raw: unknown) => {
-    const id = epicIdArg(raw);
-    // 下面的 feature 要先生成汇总，最多等两分钟。终端查两次（等之前、等之后），所以传函数。
-    await d.epicService.archive(id, {
-      terminalsOpen: () => d.sessionService.hasEpicTerminal(id),
-      featureTerminalsOpen: (featureId) => d.sessionService.hasFeatureTerminal(featureId),
-    });
-    d.notify();
-  });
-  handle(IPC.epicsArchived, () => d.epicService.listArchived());
-  handle(IPC.epicsUnarchive, (raw: unknown) => {
-    d.epicService.unarchive(epicIdArg(raw));
-    d.notify();
-  });
-  handle(IPC.epicsOpenSession, async (raw: unknown) => {
-    const r = await d.sessionService.openEpic(openEpicArg(raw));
-    d.notify();
-    return r;
-  });
-
   handle(IPC.butlerView, () => d.sessionService.butlerView());
   handle(IPC.messagesList, (raw: unknown): MessageView[] => d.messages(messageScopeArg(raw)));
   handle(IPC.metricsView, (raw: unknown): MetricsOverview => d.metrics(typeof raw === "number" ? raw : undefined));

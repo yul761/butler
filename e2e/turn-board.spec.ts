@@ -29,7 +29,7 @@ test("a PR someone asked you to review shows up on the turn board", async ({ mak
   await expect.poll(async () => (await board(page)).value.items.find((i) => i.turn.kind === "review")?.pr?.url, { timeout: 20_000 }).toBe(url);
   const b = (await board(page)).value;
   const review = b.items.find((i) => i.turn.kind === "review")!;
-  expect(review).toMatchObject({ ticketKey: null, epicId: null, featureId: null, turn: { owner: "you", kind: "review", author: "amy", title: "Fix parser", url } });
+  expect(review).toMatchObject({ ticketKey: null, featureId: null, turn: { owner: "you", kind: "review", author: "amy", title: "Fix parser", url } });
   expect(b.counts.you).toBe(b.items.filter((i) => i.turn.owner === "you").length);
   expect((await board(page, { ticketKey: "E2E-7" })).value.items.some((i) => i.turn.kind === "review")).toBe(false);
   expect(unsupportedGhCalls(s)).toEqual([]);

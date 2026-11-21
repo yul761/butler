@@ -1,16 +1,12 @@
-import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import type { RememberWriteResult } from "../../shared/fork";
 import type { Handoff } from "../../shared/handoff";
+import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import {
   epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, plainNoteBody, ticketScope, truncateUnits, WORKSPACE_SCOPE,
-  type ButlerNote, type MemoryItem, type MemoryView, type WhyEntry,
+  type ButlerNote, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
-import type { EpicFeatureRow } from "../../shared/types";
-import {
-  carriedEpicPlan, carriedEpicProgress, EPIC_PROGRESS_MAX_CHARS, fitEpicPlan, fitEpicProgress, renderedByButler, renderEpicHandoff,
-} from "../epics/epic-info";
 import { currentLang } from "../i18n";
-import type { EpicsRepo } from "../db/epics-repo";
+import type { EpicArchiveEntry, EpicArchiveRepo } from "../db/epic-archive-repo";
 import type { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
@@ -19,6 +15,34 @@ import type { MemorySyncRepo } from "../db/memory-sync-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { desiredNotes, featureDecisionNotes, handoffSummaryFor, isFull, planReconcile } from "./notes";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
+
+/**
+ * epic 记忆（内部是 feature scope，BTL-246 §5）：StateCore 每个 scope 只有 30 个笔记位。
+ * 看得见的笔记到 EPIC_ARCHIVE_AT 条时，Butler 把最旧的挪进存档，留 EPIC_ARCHIVE_KEEP 条，给下一轮留几个空位；
+ * 存档只留最新的 EPIC_ARCHIVE_MAX 条，渲染进 handoff 的「以前的约定」。
+ */
+export const EPIC_ARCHIVE_AT = 26;
+export const EPIC_ARCHIVE_KEEP = 20;
+export const EPIC_ARCHIVE_MAX = 40;
+/** 只有 StateCore 的 Notes 分组算笔记位（statecore.ts 的 NOTES_GROUP）。 */
+const NOTES_GROUP = "Notes";
+
+const epicHeads = () =>
+  currentLang() === "en"
+    ? { plan: "Plan:", conventions: "Conventions:", earlier: "Earlier conventions (older notes moved out of the epic memory; to change one, remember the new version):" }
+    : { plan: "规划：", conventions: "约定：", earlier: "以前的约定（从 epic 记忆里挪出来的旧笔记；要改哪一条，用 remember 记下新版本）：" };
+
+/** epic 记忆 handoff 的正文：汇总，然后是规划、约定（汇总里的决策）和以前的约定（存档）；都没有时是空串。 */
+function epicHandoffSummary(summary: string | null, brief: string | null, decisions: string[], archive: EpicArchiveEntry[]): string {
+  const h = epicHeads();
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  return [
+    summary?.trim() || null,
+    brief ? `${h.plan}\n${brief}` : null,
+    decisions.length ? `${h.conventions}\n${decisions.map((d) => `- ${d}`).join("\n")}` : null,
+    archive.length ? `${h.earlier}\n${archive.map((e) => `- [${day(e.notedAt)}] ${e.text}`).join("\n")}` : null,
+  ].filter((x): x is string => x !== null).join("\n\n");
+}
 
 /** 一个 ticket 第一次同步（或积压很多）时最多回放多少条 handoff 的 learnings：workspace 的 notes 上限本来就是 30。 */
 export const BACKFILL_HANDOFFS = 20;
@@ -29,11 +53,10 @@ export interface MemoryServiceDeps {
   tickets: Pick<TicketsRepo, "get" | "list">;
   handoffs: Pick<HandoffsRepo, "listByTicket">;
   followups: Pick<FollowupsRepo, "listByTicket">;
-  features: Pick<FeaturesRepo, "get" | "list">;
-  epics: Pick<EpicsRepo, "get" | "list" | "migratePlan">;
-  /** epic 下各 feature 的情况（含已归档）：渲染 epic handoff 用。 */
-  epicRows: (epicId: number) => EpicFeatureRow[];
+  features: Pick<FeaturesRepo, "get" | "list" | "legacyEpics">;
   featureHandoffs: Pick<FeatureHandoffsRepo, "listByFeature">;
+  /** epic 记忆的溢出存档（BTL-246 §5）；不给就不挪笔记、不搬旧 epic 记忆。 */
+  epicArchive?: Pick<EpicArchiveRepo, "add" | "list" | "has" | "trim">;
   sync: MemorySyncRepo;
   /** 设置里的记忆开关（memoryEnabled）。 */
   enabled: () => boolean;
@@ -50,9 +73,6 @@ export function handoffSummary(p: Handoff): string {
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const noteKey = (n: { kind: string; id: string }): string => `${n.kind}:${n.id}`;
-
-/** epic scope 里唯一一条由 Butler 维护的 note：epic 历史的滚动 note（计划 16 任务 6）。 */
-const EPIC_DIGEST_NOTE: Pick<ButlerNote, "kind" | "id"> = { kind: "decision", id: "epic-digest" };
 
 /**
  * 写入的先后（PF2）：位置不够时先写的才写得进去。未完成的 followup 优先，然后是决策；各自新的在前。
@@ -159,58 +179,12 @@ export class MemoryService {
   }
 
   /**
-   * 把 epic 下各 feature 的情况渲染成 epic scope 的一份 handoff（设计文档 2026-11-01）。排队、合并的规则同 syncFeature。
-   * 只写 handoff：不碰笔记，也不走 reconcile（那会删掉 epic session 自己写的规划笔记）。
-   */
-  syncEpic(epicId: number): Promise<void> {
-    const key = epicScope(epicId);
-    const waiting = this.pending.get(key);
-    if (waiting) return waiting;
-    const p = this.enqueue(
-      `memory sync ${key}`,
-      async () => {
-        this.pending.delete(key);
-        await this.syncEpicNow(epicId);
-      },
-      undefined,
-    );
-    this.pending.set(key, p);
-    return p;
-  }
-
-  /**
-   * 写或覆盖 epic scope 里 id 为 epic-digest 的那一条 note（epic 历史的滚动 note，计划 16 任务 6）。
-   * 只比对这一条：epic session 自己写的笔记（哪怕碰巧用了 Butler 的前缀格式）一律不动；syncEpic 只写 handoff，也不会动这一条。
-   * 正文过 plainNoteBody（压掉多余空白、截到 NOTE_BODY_LIMIT；不过 NFKC，全角的“；”不会变成半角）。正文为空时 forget 它。
-   * 记忆关着时什么都不做。排进写入队列，永不 reject。
-   */
-  setEpicDigestNote(epicId: number, text: string): Promise<void> {
-    const key = epicScope(epicId);
-    return this.enqueue(
-      `memory epic digest note ${key}`,
-      async () => {
-        if (!this.d.enabled()) return;
-        const body = plainNoteBody(text);
-        const note: ButlerNote = { ...EPIC_DIGEST_NOTE, body };
-        const only = noteKey(note);
-        await withScope({ dataDir: this.d.dataDir, scope: key }, (s) => this.reconcile(key, s, body ? [note] : [], (k) => k === only));
-        try {
-          this.d.onSynced?.(key);
-        } catch (e) {
-          this.log("memory onSynced callback failed", e);
-        }
-      },
-      undefined,
-    );
-  }
-
-  /**
-   * 所有未归档的 ticket、feature 和 epic（启动时补齐：老数据、上次退出时没写完的）。
-   * epic 排在最前面：升级前的老 epic 要在它的 epic session 写进度之前迁好规划（见 syncEpicNow），否则那份进度会被当成规划迁走。
+   * 所有未归档的 ticket 和 feature（启动时补齐：老数据、上次退出时没写完的）。
+   * 先把旧 epic 的记忆搬进它下面每个 epic 的存档（只搬一次），epic 的同步才渲染得出来。
    */
   async syncAll(): Promise<void> {
+    await this.enqueue("memory: copying old epic notes", () => this.copyLegacyEpics(), undefined);
     await Promise.all([
-      ...this.d.epics.list().map((e) => this.syncEpic(e.id)),
       ...this.d.tickets.list().map((t) => this.syncTicket(t.key)),
       ...this.d.features.list().map((f) => this.syncFeature(f.id)),
     ]);
@@ -268,26 +242,86 @@ export class MemoryService {
   }
 
   /**
-   * 同步一个 feature：交接是最新一份有效汇总（summary、next_steps 的文字、open_questions），决策按 key 写成 note。
-   * 汇总没有 followups 和 learnings，不写 workspace。还没有有效汇总时不打开 scope。
+   * 旧 epic 的记忆（BTL-246 §3）：每个旧 epic:<id> scope 里 Claude 写的笔记，复制进它下面每个 epic 的存档（source 记 epic:<id>，所以只搬一次）。
+   * 旧 scope 本身不动；没有笔记的也记一条空的，下次不再打开它。
+   */
+  private async copyLegacyEpics(): Promise<void> {
+    const archive = this.d.epicArchive;
+    if (!archive || !this.d.enabled()) return;
+    const todo = this.d.features.legacyEpics().filter((x) => !archive.has(x.featureId, epicScope(x.epicId)));
+    const notesOf = new Map<number, { text: string; at: number }[]>();
+    const now = this.d.now();
+    for (const { featureId, epicId } of todo) {
+      let notes = notesOf.get(epicId);
+      if (!notes) {
+        notes = await withScope({ dataDir: this.d.dataDir, scope: epicScope(epicId) }, async (s) =>
+          (await s.facts()).filter((i) => i.group === NOTES_GROUP && parseNote(i.text) === null)
+            .map((i) => ({ text: i.text, at: (i.createdAt && Date.parse(i.createdAt)) || now })));
+        notesOf.set(epicId, notes);
+      }
+      const source = epicScope(epicId);
+      if (notes.length === 0) archive.add({ featureId, text: "", source, notedAt: now, archivedAt: now });
+      for (const n of notes) archive.add({ featureId, text: n.text, source, notedAt: n.at, archivedAt: now });
+      this.trimArchive(featureId);
+      if (notes.length > 0) this.log(`memory ${featureScope(featureId)}: copied ${notes.length} note(s) of the old ${source}`);
+    }
+  }
+
+  private trimArchive(featureId: number): void {
+    const dropped = this.d.epicArchive?.trim(featureId, EPIC_ARCHIVE_MAX) ?? [];
+    if (dropped.length > 0) this.log(`memory ${featureScope(featureId)}: archive full, dropped ${dropped.length} oldest note(s): ${dropped.map((e) => JSON.stringify(e.text.slice(0, 80))).join(", ")}`);
+  }
+
+  /**
+   * 笔记位快满时（EPIC_ARCHIVE_AT 条），把最旧的 Claude 笔记挪进存档、在 StateCore 里 forget（审计链里还在），留 EPIC_ARCHIVE_KEEP 条。
+   * Butler 自己的条目（[decision:…] 这类）不挪：同步时已经 forget 了。返回挪了几条。
+   */
+  private async archiveOverflow(featureId: number, s: ScopeHandle): Promise<number> {
+    const archive = this.d.epicArchive;
+    if (!archive) return 0;
+    const notes = (await s.facts()).filter((i) => i.group === NOTES_GROUP);
+    if (notes.length < EPIC_ARCHIVE_AT) return 0;
+    const now = this.d.now();
+    const at = (i: { createdAt: string | null }) => (i.createdAt && Date.parse(i.createdAt)) || now;
+    const oldest = notes.filter((i) => parseNote(i.text) === null).sort((a, b) => at(a) - at(b)).slice(0, notes.length - EPIC_ARCHIVE_KEEP);
+    for (const i of oldest) {
+      archive.add({ featureId, text: i.text, source: "notes", notedAt: at(i), archivedAt: now });
+      await s.forget(i.factKey);
+    }
+    this.trimArchive(featureId);
+    return oldest.length;
+  }
+
+  /**
+   * 同步一个 epic（内部是 feature）：交接是最新一份有效汇总（summary、next_steps 的文字、open_questions），
+   * summary 后面接规划（brief）、约定（汇总里的决策）和以前的约定（存档）（BTL-246 §5）。
+   * Butler 不再占这个 scope 的笔记位：以前写的决策笔记一律 forget；笔记快满时先把最旧的挪进存档（每次 Stop 和启动时都会同步）。
+   * 汇总没有 followups 和 learnings，不写 workspace。什么都没有可写时不写交接。
    * 不用 memory_sync 的游标：那张表的 key 引用 tickets(key)（外键开着），feature 写不进去。
    * 改用 StateCore 自己的记录判断“这份汇总写过没有”：handoff 的 retryAfter 传汇总的 createdAt，
    * 正文相同、又是在这份汇总生成之后写的，就不再写；正文不同（新汇总、数据被删过）就写。
    * 所以没有新汇总时不会重复写，内容相同的新汇总也照样记一个版本（同 ticket 的 N1）。
    */
   private async syncFeatureNow(featureId: number): Promise<void> {
-    if (!this.d.enabled() || !this.d.features.get(featureId)) return;
+    const feature = this.d.enabled() ? this.d.features.get(featureId) : null;
+    if (!feature) return;
     const latest = this.d.featureHandoffs.listByFeature(featureId, HANDOFF_SCAN).find((h) => h.payload !== null && !h.degraded);
-    const p = latest?.payload;
-    if (!latest || !p) return;
+    const p = latest?.payload ?? null;
+    const brief = feature.brief?.trim() ? truncateUnits(feature.brief.trim(), EPIC_PLAN_MAX_CHARS) : null;
     const key = featureScope(featureId);
-    await withScope({ dataDir: this.d.dataDir, scope: key }, async (s) => {
-      await s.handoff(
-        { summary: p.summary, nextSteps: p.next_steps.map((n) => n.text), openQuestions: p.open_questions },
-        latest.createdAt,
-      );
-      await this.reconcile(key, s, featureDecisionNotes(p.decisions));
+    const touched = await withScope({ dataDir: this.d.dataDir, scope: key }, async (s) => {
+      await this.reconcile(key, s, []);
+      const moved = await this.archiveOverflow(featureId, s);
+      const archive = this.d.epicArchive?.list(featureId) ?? [];
+      const decisions = featureDecisionNotes(p?.decisions ?? []).map((n) => n.body);
+      const summary = epicHandoffSummary(p?.summary ?? null, brief, decisions, archive);
+      if (!summary && !p) return moved > 0;
+      // 同一份内容写过就不再写：汇总的时间和最后一次挪进存档的时间里取晚的（见 ScopeHandle.handoff 的 retryAfter）。
+      const stamp = Math.max(latest?.createdAt ?? 0, ...archive.map((e) => e.archivedAt));
+      await s.handoff({ summary, nextSteps: p?.next_steps.map((n) => n.text) ?? [], openQuestions: p?.open_questions ?? [] }, stamp);
+      return true;
     });
+    if (!touched) return;
     try {
       this.d.onSynced?.(key);
     } catch (e) {
@@ -295,61 +329,9 @@ export class MemoryService {
     }
   }
 
-  /**
-   * 渲染好的正文和 StateCore 里当前的一字不差时不再写（retryAfter 传 0：只比正文）。
-   * 一个 feature 都没有时也要写（移出最后一个 feature 后，旧内容不能留着）。
-   * 规划来自 epics.plan（set_epic_plan 写的）。当前生效的 handoff 里有 epic session 的进度时带上它（见 carriedEpicProgress），
-   * 否则进度就被这次同步冲掉了。
-   * 升级前的老 epic（planAt 为 null）第一次同步时，先把记忆里的规划迁进 epics.plan（见 carriedEpicPlan）：
-   * 那时 epic session 自己写的整份交接就是规划，不再当作进度。迁过之后渲染出来的和老版本的一字不差。
-   */
-  private async syncEpicNow(epicId: number): Promise<void> {
-    if (!this.d.enabled() || !this.d.epics.get(epicId)) return;
-    const key = epicScope(epicId);
-    const rows = this.d.epicRows(epicId);
-    await withScope({ dataDir: this.d.dataDir, scope: key }, async (s) => {
-      const content = (await s.activeHandoff())?.content ?? "";
-      // 读完 StateCore 再读 epic：中间可能来过一次 set_epic_plan。
-      const epic = this.d.epics.get(epicId);
-      if (!epic) return;
-      let plan = epic.plan;
-      let progress = carriedEpicProgress(content);
-      // 迁进来的是 handoff 里放得下的那一份：老版本同步时也是截成这样带着走的。
-      const migrating = epic.planAt === null;
-      const old = migrating ? carriedEpicPlan(content) : null;
-      const migrated = old === null ? null : fitEpicPlan(old) || null;
-      if (migrating) {
-        if (old !== null && migrated !== null && old.length > EPIC_PLAN_MAX_CHARS) {
-          this.log(`memory ${key}: the epic plan was cut from ${old.length} to ${migrated.length} characters when it moved out of memory`);
-        }
-        plan ??= migrated;
-        if (!renderedByButler(content)) progress = null;
-      }
-      if (progress && progress.length > EPIC_PROGRESS_MAX_CHARS) {
-        this.log(`memory ${key}: the epic session's progress was cut from ${progress.length} to ${EPIC_PROGRESS_MAX_CHARS} characters`);
-      }
-      await s.handoff({ summary: renderEpicHandoff(rows, currentLang(), plan, progress), nextSteps: [], openQuestions: [] }, 0);
-      // 写进 StateCore 之后才记下迁过：写失败的话下次同步还按老数据认，epic session 的整份交接不会既当规划又当进度。
-      if (migrating) this.d.epics.migratePlan(epicId, migrated, this.d.now());
-    });
-    try {
-      this.d.onSynced?.(key);
-    } catch (e) {
-      this.log("memory onSynced callback failed", e);
-    }
-  }
-
-  /** only：只比对 key（kind:id）满足它的 Butler 条目，别的一律当作看不见（epic scope 用它只管 epic-digest 那一条）。 */
-  private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[], only?: (noteKey: string) => boolean): Promise<void> {
-    const mine = (items: MemoryItem[]): MemoryItem[] =>
-      only
-        ? items.filter((i) => {
-            const p = parseNote(i.text);
-            return p !== null && only(noteKey(p));
-          })
-        : items;
+  private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[]): Promise<void> {
     const slots = slotGuard(s);
-    const before = mine(await s.facts());
+    const before = await s.facts();
     const plan = planReconcile(before, desired);
     // 先 forget 再 remember（设计文档 13.1）：新文本是旧文本的修订时，StateCore 把它们串成一条 why 链。
     // statecore-mcp 1.1 起 forget 会释放位置（没登记的条目也一样），不再需要先登记再 forget。
@@ -357,7 +339,7 @@ export class MemoryService {
     // 按现状重新比对一次再写（claude 里的 MCP 可能同时在写）。
     const after = await s.facts();
     const wanted = new Map(desired.map((n) => [noteKey(n), n]));
-    const queue = byPriority(planReconcile(mine(after), desired).write).map((note) => ({ note, from: 1 }));
+    const queue = byPriority(planReconcile(after, desired).write).map((note) => ({ note, from: 1 }));
     const visible = new Set(after.map((i) => i.text));
     // 每次重写都用更长的区分词，几轮之内必然分开；预算只是防止意外的死循环。
     let budget = desired.length * MAX_NOTE_VARIANT;
@@ -480,27 +462,6 @@ export class MemoryService {
       },
       "failed",
     );
-  }
-
-  /**
-   * epic scope 里 epic session 写的进度（计划 16 R29：epic 总控换新时，等它用 butler-epic 的 handoff 写完进度）。
-   * 当前生效的 handoff 是 Butler 渲染的就取里面的进度那一段；不是的就是 epic session 自己写的整份，按 Butler 渲染时的截法
-   * 去分隔符、截到 EPIC_PROGRESS_MAX_CHARS（fitEpicProgress）。这样 Butler 之后重新渲染、把它带进进度那一段，读出来还是一样的，
-   * 只有 epic session 写了新的进度才会变。
-   * 还没有 handoff、没有进度、记忆关着、读失败（记日志）时为 null；永不 reject。和 view 一样只读，不进写入队列。
-   */
-  async epicProgress(epicId: number): Promise<string | null> {
-    if (!this.d.enabled()) return null;
-    try {
-      return await withScope({ dataDir: this.d.dataDir, scope: epicScope(epicId) }, async (s) => {
-        const active = await s.activeHandoff();
-        if (!active) return null;
-        return renderedByButler(active.content) ? carriedEpicProgress(active.content) : fitEpicProgress(active.content) || null;
-      });
-    } catch (e) {
-      this.log(`memory epicProgress ${epicId} failed`, e);
-      return null;
-    }
   }
 
   /** 一条记忆（或交接）的版本链。 */
