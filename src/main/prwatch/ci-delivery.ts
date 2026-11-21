@@ -1,7 +1,7 @@
 import type { BranchWatchRepo } from "../db/branch-watch-repo";
+import type { SessionMessage } from "../db/session-messages-repo";
 import type { TicketPrsRepo } from "../db/ticket-prs-repo";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
-import type { DeliverResult } from "../sessions/pty-manager";
+import type { Mailbox } from "../mailbox/mailbox";
 import type { CiCheck } from "../tickets/gh";
 import type { TriageDecision } from "../loop/ci-triage";
 import type { CiItemRef, CiUndelivered, CiUndeliveredReason, Session } from "../../shared/types";
@@ -18,18 +18,23 @@ export interface CiDeliveryDeps {
   branches: Pick<BranchWatchRepo, "get" | "all" | "setDelivered">;
   /** ticket 仓库记着的分支；仓库没了为 null。 */
   currentBranch(repoId: number): string | null;
-  guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
   /** 这个 ticket 这个仓库这个分支上的结论递给谁（pickRecipient）。 */
   recipient(ticketKey: string, repoId: number, branch: string): Recipient;
-  /** recheck 在粘贴前调用（I2）：不通过就什么都不写，返回 blocked。 */
-  deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
+  /**
+   * 结论排进收件人的信箱（BTL-248，kind ci，ref `ci:pr:<id>` / `ci:branch:<repoId>`）：在忙的下一次调用工具时读到，停着的直接输入，
+   * 关着、休眠着的打开或醒来时读到。送到了由送达回调记 delivered。
+   */
+  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
+  /** 换新链上的 head（比较排着的收件人和现在该收的是不是同一个）；没有就当 id 本身就是 head。 */
+  headOf?(id: string): string;
   /** CI 失败分类（工作流 I）：递之前问一下，hold 就先不递（不算没递出去），note 附在通知后面。没有就原样递。 */
   triage?: { decide(item: CiItem, row: { headSha: string | null; ci: string; failed: CiCheck[] }): TriageDecision };
-  /** 正在递的 session，和评论闭环共用（同一个 session 同时只递一条）。没有就自己建一个。 */
-  busy?: Set<string>;
   now(): number;
   log(msg: string, err?: unknown): void;
 }
+
+/** 这次不递的原因；queued 时 at 是重新挑收件人要用的 ticket、仓库和分支。 */
+type Skip = { skip: CiSkipReason | "queued"; label: string; at?: { ticketKey: string; repoId: number; branch: string } };
 
 /** 一个 PR 行（ticket_prs 的 id）或一个仓库的分支行（branch_watch）。 */
 export type CiItem = CiItemRef;
@@ -72,7 +77,7 @@ export function pickRecipient(i: { owner: string | null; ownerOpen: boolean; ope
 
 /**
  * CI 结论递给谁（index.ts 的 recipient）：pickRecipient，加上休眠着的 session（WS-M B）。
- * 选中休眠的也没关系：递之前 DeliveryGuard.check 会叫醒它（返回 hibernated），醒来以后 flush 再递一次。
+ * 选中休眠的也没关系：排进它的信箱，信箱叫醒它，醒来停下时送进去。
  *
  * 先后：分支的归属者（开着或者休眠着都算）> 开着终端的 > 休眠着的。
  * 开着的能选出来就不看休眠的：多一个休眠的候选不能让本来认得出的分支变成「认不出是谁的」。
@@ -119,35 +124,87 @@ export function ciRecipient(i: {
 /** 为什么没递（日志和「现在」页的提醒用）。delivered 是已经递过（resend 的返回值），不是失败。 */
 export type CiSkipReason = CiSendSkip;
 
-/** 递一条要用的：哪个 ticket 的哪个仓库哪个分支、通知里写什么、递完记到哪。 */
-interface Pending { ticketKey: string; repoId: number; branch: string; number: number | null; label: string; key: string; text: () => string; mark: (sessionId: string, at: number) => void }
+/** 递一条要用的：哪个 ticket 的哪个仓库哪个分支、通知里写什么、triage 的回调。 */
+interface Pending { ticketKey: string; repoId: number; branch: string; number: number | null; label: string; key: string; text: () => string; onSent?: () => void }
 
-/** 还没递出去的一条：从什么时候起、最近一次为什么没递、本来要递给谁。 */
+/** 还没排进信箱的一条：从什么时候起、最近一次为什么没排、本来要递给谁。 */
 interface Waiting { key: string; since: number; reason: CiUndeliveredReason; notify: boolean; sessionId: string | null; ticketKey: string; number: number | null; branch: string }
 
+/** 排进信箱时记在 meta 里的：送到时按它记 delivered（只认这一条的 key）。 */
+interface CiMeta { item: CiItem; key: string }
+
 /**
- * 有人在等、重发可能有用的才提醒：认出了要递给谁只是现在递不进去，或者 ticket 分支上的认不出是谁的（Recipient.promised）。
- * 归属的终端关了、根本没有 session、别的分支上认不出是谁的不提醒（重发也还是一样，只记日志）。
+ * 排进信箱以后就算交出去了，等着的状态在消息列表里看得到；没排进去只剩认不出收件人这一种：ticket 分支上认不出是谁的
+ * （Recipient.promised）才提醒。归属的终端关了、根本没有 session、别的分支上认不出是谁的只记日志。
  */
-const NOTIFY = (r: CiUndeliveredReason): boolean => r !== "no_session" && r !== "owner_closed" && r !== "unowned" && r !== "no_repo" && r !== "no_sha";
+const NOTIFY = (r: CiUndeliveredReason): boolean => r === "failed";
 
 const itemId = (item: CiItem): string => (item.kind === "pr" ? `pr:${item.id}` : `branch:${item.repoId}`);
+/** 信箱里的 ref。 */
+export const ciRef = (item: CiItem): string => `ci:${itemId(item)}`;
 
 /**
- * 把 CI 的结论递给 PR 所属的 session（pickRecipient）：现在不能递就留着，等 flush。去重全在这里（PrWatcher 可能对同一个结论多次调用）。
+ * 把 CI 的结论排进 PR 所属的 session（pickRecipient）的信箱（BTL-248）。去重全在这里（PrWatcher 可能对同一个结论多次调用）：
+ * 同一个结论已经排着就不再排；结论变了（又在跑、合并了、新 commit）就撤回排着的旧结论，或者用新的换掉它。
  * 每个 ticket 的 PR 行各递各的：两个 ticket 链接同一个 PR，各自的 session 都收到。分支行只递 ticket 仓库现在分支上的。
- * 每个不递的原因都记日志（同一条结论同一个原因只记一次）；递不出去超过 CI_UNDELIVERED_MS 的由 undelivered() 给「现在」页。
+ * 认不出收件人时等 flush 再试，每个原因记一次日志；有人在等的超过 CI_UNDELIVERED_MS 由 undelivered() 给「现在」页。
  */
 export class CiDelivery {
-  /** 正在递的 session：同一个 session 同时只递一条。 */
-  private readonly busy: Set<string>;
   /** 每一条上一次记日志的 `${deliveryKey}|${reason}`：原因没变不再记。 */
   private readonly logged = new Map<string, string>();
-  /** 还没递出去的结论，键 itemId。只在内存里：重启后第一轮会再递一次，递不出去再从头计时。 */
+  /** 还没排进信箱的结论，键 itemId。只在内存里：重启后第一轮会再试一次，排不进再从头计时。 */
   private readonly waiting = new Map<string, Waiting>();
+  /**
+   * 排着的结论送到时要告诉 triage 的（onSent 是闭包，存不进库），键 ref。只在内存里：排队和送到之间 Butler 重启过的，
+   * 这一次就不告诉 triage 了（只影响 triage 那一行的状态，不影响送达）。
+   */
+  private readonly onSent = new Map<string, { key: string; fn: () => void }>();
 
   constructor(private readonly d: CiDeliveryDeps) {
-    this.busy = d.busy ?? new Set();
+    d.mailbox.on("ci", (m) => this.delivered(m));
+  }
+
+  /** 信箱送到了一条 CI 结论：记 delivered（PR 行还记送给了谁、什么时候），告诉 triage。 */
+  private delivered(m: SessionMessage): void {
+    const meta = m.meta as CiMeta | null;
+    if (!meta || typeof meta.key !== "string" || !meta.item) return;
+    const at = m.deliveredAt ?? this.d.now();
+    if (meta.item.kind === "pr") this.d.prs.setDelivered(meta.item.id, meta.key, { sessionId: m.toSession, at });
+    else this.d.branches.setDelivered(meta.item.repoId, meta.key);
+    const ref = m.ref ?? ciRef(meta.item);
+    const cb = this.onSent.get(ref);
+    if (cb && cb.key === meta.key) {
+      this.onSent.delete(ref);
+      try {
+        cb.fn();
+      } catch (e) {
+        this.d.log("ci delivery: triage onSent failed", e);
+      }
+    }
+    this.d.log(`ci delivery ${ref} (${meta.key}): delivered to ${m.toSession} via ${m.via ?? "?"}`);
+  }
+
+  /** 排着的这条结论的 key；没有排着的为 null。 */
+  private queuedKey(item: CiItem): string | null {
+    const m = this.d.mailbox.queuedByRef(ciRef(item));
+    const meta = m?.meta as CiMeta | null | undefined;
+    return meta && typeof meta.key === "string" ? meta.key : null;
+  }
+
+  /** 排着的结论现在该给别的 session 了：按归属重新挑出来的收件人不是排着的那个。挑不出来的留在原地。 */
+  private moved(item: CiItem, at: Skip["at"]): boolean {
+    const q = this.d.mailbox.queuedByRef(ciRef(item));
+    if (!q || !at) return false;
+    const to = this.d.recipient(at.ticketKey, at.repoId, at.branch);
+    const head = this.d.headOf ?? ((x: string) => x);
+    return to.ok && head(to.sessionId) !== head(q.toSession);
+  }
+
+  /** 不该再递了：撤回排着的旧结论。 */
+  private withdraw(item: CiItem): void {
+    const ref = ciRef(item);
+    this.onSent.delete(ref);
+    if (this.d.mailbox.queuedByRef(ref)) this.d.mailbox.withdraw(ref);
   }
 
   async settled(item: CiItem): Promise<void> {
@@ -168,11 +225,17 @@ export class CiDelivery {
         await this.tryDeliver({ kind: "branch", repoId: r.repoId });
       }
     }
-    // 合并了、关闭了、CI 又在跑的：不再等着递。
+    // 合并了、关闭了、CI 又在跑的：不再等着递，排着的撤回。
     for (const id of [...this.waiting.keys()]) if (!seen.has(id)) this.forget(id);
+    for (const ref of this.d.mailbox.queuedRefs("ci")) {
+      const id = ref.slice(3);
+      if (seen.has(id)) continue;
+      const item: CiItem | null = id.startsWith("pr:") ? { kind: "pr", id: Number(id.slice(3)) } : id.startsWith("branch:") ? { kind: "branch", repoId: Number(id.slice(7)) } : null;
+      if (item) this.withdraw(item);
+    }
   }
 
-  /** 递不出去超过 CI_UNDELIVERED_MS、而且有人在等的结论（「现在」页的提醒），早的在前。 */
+  /** 排不进信箱超过 CI_UNDELIVERED_MS、而且有人在等的结论（「现在」页的提醒），早的在前。 */
   undelivered(): CiUndelivered[] {
     const now = this.d.now();
     const out: CiUndelivered[] = [];
@@ -184,7 +247,7 @@ export class CiDelivery {
     return out.sort((a, b) => a.since - b.since);
   }
 
-  /** 用户点了重发：马上再试一次（照样过 guard），返回结果；sent 是递出去了。 */
+  /** 用户点了重发：马上再试一次，返回结果；sent 是排进了信箱（或者已经排着）。 */
   async resend(item: CiItem): Promise<"sent" | CiSkipReason> {
     this.logged.delete(itemId(item));
     return this.tryDeliver(item);
@@ -195,8 +258,8 @@ export class CiDelivery {
     this.logged.delete(id);
   }
 
-  /** 重新读一遍：别处可能刚递过，或者 CI 又变了。不该递时是原因。 */
-  private pending(item: CiItem): Pending | { skip: CiSkipReason; label: string } {
+  /** 重新读一遍：别处可能刚递过，或者 CI 又变了。不该递时是原因；同一个结论已经排着为 queued。 */
+  private pending(item: CiItem, requeue = false): Pending | Skip {
     if (item.kind === "pr") {
       const r = this.d.prs.get(item.id);
       if (!r) return { skip: "not_open", label: `pr ${item.id}` };
@@ -207,11 +270,12 @@ export class CiDelivery {
       if (key === r.deliveredKey) return { skip: "delivered", label };
       if (r.headSha === null) return { skip: "no_sha", label };
       if (r.repoId === null || r.headBranch === null) return { skip: "no_repo", label };
+      if (!requeue && this.queuedKey(item) === key) return { skip: "queued", label, at: { ticketKey: r.ticketKey, repoId: r.repoId, branch: r.headBranch } };
       const t = this.triage(item, r);
       if (!t) return { skip: "triage", label };
       return {
         ticketKey: r.ticketKey, repoId: r.repoId, branch: r.headBranch, number: r.number, label, key,
-        text: () => withNote(notice(r, M().ciWherePr(r.number)), t.note), mark: (sessionId, at) => (this.d.prs.setDelivered(r.id, key, { sessionId, at }), t.onSent?.()),
+        text: () => withNote(notice(r, M().ciWherePr(r.number)), t.note), onSent: t.onSent,
       };
     }
     const r = this.d.branches.get(item.repoId);
@@ -223,11 +287,12 @@ export class CiDelivery {
     const key = deliveryKey(r);
     if (key === r.deliveredKey) return { skip: "delivered", label };
     if (r.headSha === null) return { skip: "no_sha", label };
+    if (!requeue && this.queuedKey(item) === key) return { skip: "queued", label, at: { ticketKey: r.ticketKey, repoId: r.repoId, branch: r.branch } };
     const t = this.triage(item, r);
     if (!t) return { skip: "triage", label };
     return {
       ticketKey: r.ticketKey, repoId: r.repoId, branch: r.branch, number: null, label, key,
-      text: () => withNote(notice(r, M().ciWhereBranch(r.branch)), t.note), mark: () => (this.d.branches.setDelivered(r.repoId, key), t.onSent?.()),
+      text: () => withNote(notice(r, M().ciWhereBranch(r.branch)), t.note), onSent: t.onSent,
     };
   }
 
@@ -243,10 +308,12 @@ export class CiDelivery {
     }
   }
 
-  /** 没递：记日志（原因变了才记），有人在等的记进 waiting。 */
-  private skipped(id: string, label: string, key: string, reason: CiSkipReason, p: Pending | null, sessionId: string | null, notify?: boolean): CiSkipReason {
+  /** 没递：记日志（原因变了才记），有人在等的记进 waiting。结论已经不该递了的撤回排着的旧结论。 */
+  private skipped(item: CiItem, label: string, key: string, reason: CiSkipReason, p: Pending | null, sessionId: string | null, notify?: boolean): CiSkipReason {
+    const id = itemId(item);
     if (reason === "delivered" || reason === "not_open" || reason === "not_settled" || reason === "triage") {
       this.forget(id);
+      this.withdraw(item);
       return reason;
     }
     const sig = `${key}|${reason}`;
@@ -264,31 +331,32 @@ export class CiDelivery {
 
   private async tryDeliver(item: CiItem): Promise<"sent" | CiSkipReason> {
     const id = itemId(item);
-    const p = this.pending(item);
-    if ("skip" in p) return this.skipped(id, p.label, "", p.skip, null, null);
-    const to = this.d.recipient(p.ticketKey, p.repoId, p.branch);
-    if (!to.ok) return this.skipped(id, p.label, p.key, to.reason, p, null, to.reason === "unowned" ? to.promised : undefined);
-    const sessionId = to.sessionId;
-    if (this.busy.has(sessionId)) return this.skipped(id, p.label, p.key, "busy_delivering", p, sessionId);
-    const gate = this.d.guard.check(sessionId);
-    if (!gate.ok) return this.skipped(id, p.label, p.key, `guard:${gate.block}`, p, sessionId);
-    this.busy.add(sessionId);
-    try {
-      // 粘贴前再看一遍（I2）：等输入框就绪的这段时间里用户可能开始输入、换新可能开始了。blocked 和 timeout 一样留到下一次 flush。
-      const result = await this.d.deliver(gate.termId, sanitizeTask(p.text()), this.d.guard.recheckAfter(sessionId, gate));
-      // 只有真的递出去才记；递的过程中如果结论变了，标记的还是递出去的那一条。
-      if (result === "sent") {
-        p.mark(sessionId, this.d.now());
+    let p = this.pending(item);
+    if ("skip" in p && p.skip === "queued") {
+      if (!this.moved(item, p.at)) {
         this.forget(id);
-        this.d.log(`ci delivery ${p.label}: sent to ${sessionId} (${to.via})`);
         return "sent";
       }
-      return this.skipped(id, p.label, p.key, `deliver:${result}`, p, sessionId);
+      // 排着的收件人走了（关了、换了 session）：按现在的归属重新排，同一个 ref 换掉旧的那条。
+      p = this.pending(item, true);
+    }
+    if ("skip" in p) return this.skipped(item, p.label, "", p.skip as CiSkipReason, null, null);
+    const to = this.d.recipient(p.ticketKey, p.repoId, p.branch);
+    if (!to.ok) return this.skipped(item, p.label, p.key, to.reason, p, null, to.reason === "unowned" ? to.promised : undefined);
+    const ref = ciRef(item);
+    try {
+      // 回调先记上：假信箱、停着的目标都可能马上就送到。同一个 ref 排着旧结论时，信箱用新的换掉它。
+      if (p.onSent) this.onSent.set(ref, { key: p.key, fn: p.onSent });
+      else this.onSent.delete(ref);
+      const meta: CiMeta = { item, key: p.key };
+      const { state } = this.d.mailbox.send({ kind: "ci", from: null, to: to.sessionId, featureId: null, body: sanitizeTask(p.text()), ref, meta });
+      this.forget(id);
+      this.d.log(`ci delivery ${p.label}: queued for ${to.sessionId} (${to.via}, ${state})`);
+      return "sent";
     } catch (e) {
+      this.onSent.delete(ref);
       this.d.log(`ci delivery ${p.label} failed`, e);
-      return this.skipped(id, p.label, p.key, "failed", p, sessionId);
-    } finally {
-      this.busy.delete(sessionId);
+      return this.skipped(item, p.label, p.key, "failed", p, to.sessionId);
     }
   }
 }

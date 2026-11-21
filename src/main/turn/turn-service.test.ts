@@ -374,8 +374,8 @@ describe("TurnService.sendToAgent", () => {
       expect(d.comments.sendAll).not.toHaveBeenCalled();
     }
     // 递送路径自己拒绝
-    const refused = failingPr({ ciResend: vi.fn(async () => "busy_delivering" as const) });
-    expect(await new TurnService(refused).sendToAgent(target)).toEqual({ ok: false, reason: "busy_delivering" });
+    const refused = failingPr({ ciResend: vi.fn(async () => "failed" as const) });
+    expect(await new TurnService(refused).sendToAgent(target)).toEqual({ ok: false, reason: "failed" });
     // 评论没有可送的
     const none = failingPr({
       prs: () => [watched({ ci: "passing", review: "changes_requested" })],

@@ -93,10 +93,10 @@ describe("availabilityRows", () => {
 
 describe("ci_undelivered notice", () => {
   it("names the PR or branch, how long it has waited and why, with resend and open", () => {
-    const ci = { item: { kind: "pr" as const, id: 3 }, ticketKey: "T-1", number: 34, branch: "feat/a", reason: "guard:typing" as const, since: 0, sessionId: "s1" };
+    const ci = { item: { kind: "pr" as const, id: 3 }, ticketKey: "T-1", number: 34, branch: "feat/a", reason: "owner_closed" as const, since: 0, sessionId: "s1" };
     const target = { page: "ticket" as const, key: "T-1", sessionId: "s1" };
     expect(noticeText({ kind: "ci_undelivered", ci, target, title: null }, S, 35 * 60_000)).toEqual({
-      text: "CI 结果未能送达：T-1 PR #34（feat/a），已等 35 分钟（你正在终端里输入）", actions: ["resend", "open"],
+      text: "CI 结果未能送达：T-1 PR #34（feat/a），已等 35 分钟（推这个分支的会话已关闭）", actions: ["resend", "open"],
     });
     expect(noticeText({ kind: "ci_undelivered", ci: { ...ci, number: null, item: { kind: "branch", repoId: 2 }, reason: "unowned" }, target, title: null }, S, 31 * 60_000).text).toBe(
       "CI 结果未能送达：T-1 分支 feat/a，已等 31 分钟（认不出是哪个会话的）",
@@ -104,10 +104,11 @@ describe("ci_undelivered notice", () => {
   });
 
   it("every reason has words; unknown ones pass through", () => {
-    for (const r of ["unowned", "busy_delivering", "failed", "no_repo", "no_sha", "no_session", "owner_closed", "guard:busy", "guard:typing", "guard:draft", "guard:screen", "guard:needs_you", "guard:closed", "guard:hibernated", "deliver:timeout", "deliver:blocked", "deliver:exited"]) {
+    for (const r of ["unowned", "failed", "no_repo", "no_sha", "no_session", "owner_closed", "not_open", "not_settled"]) {
       expect(ciReasonText(r, S)).not.toContain("原因：");
     }
-    expect(ciReasonText("guard:new_thing", S)).toBe("原因：guard:new_thing");
+    // 4.0 之前的原因（guard:*）已经不会再出现，出现了也原样带过。
+    expect(ciReasonText("guard:typing", S)).toBe("原因：guard:typing");
     expect(ciReasonText("toString", S)).toBe("原因：toString");
   });
 });

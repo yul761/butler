@@ -1717,11 +1717,10 @@ async function bootstrap(): Promise<void> {
       const t = gateTerm(headId);
       return t ? pty.lastUserInputAt(t) : 0;
     },
+    // 排进信箱（BTL-248）：同一条链新的一句换掉还没送的旧的。暂停中的 deliveryGuard 照样挡（cost_paused），也不叫醒。
     nudge: async (headId, text) => {
-      const g = deliveryGuard.check(headId);
-      if (!g.ok) return false;
-      const r = await pty.deliver(g.termId, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck: deliveryGuard.recheckAfter(headId, g) });
-      return r === "sent";
+      mailbox.send({ kind: "cost", from: null, to: headId, featureId: null, body: sanitizeTask(text), ref: `cost:${sessions.rootOf(headId) ?? headId}` });
+      return true;
     },
     scheduler: bgScheduler,
     texts: () => ({ continueAfterDowngrade: M().cost.continueAfterDowngrade, continueAfterRaise: M().cost.continueAfterRaise }),
@@ -1800,8 +1799,15 @@ async function bootstrap(): Promise<void> {
         return false;
       }),
     memoryEnabled: () => memoryOn(settings),
-    // 和递 CI 结果一样最多等 1 分钟：session 是停着的，输入框应该很快就绪。斜杠命令粘贴进去照样会执行（R26 用真的 claude 验证过）。
+    // /handoff 和 /clear：最多等 1 分钟，session 是停着的，输入框应该很快就绪。斜杠命令粘贴进去照样会执行（R26 用真的 claude 验证过）。
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    // 「接着做」排进新 head 的信箱（BTL-248）；换新期间信箱不投影（held），开始和结束时让它重新看这个终端。
+    queueResume: (headId, text) => void mailbox.send({ kind: "refresh", from: null, to: headId, featureId: sessions.head(headId)?.featureId ?? null, body: text }),
+    mailboxSync: (termId) => {
+      mailbox.syncTerm(termId);
+      const h = sessions.head(termId);
+      if (h) void mailbox.flush(h.id);
+    },
     sessions: openButlerHeads,
     lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
     openedAt: (termId) => pty.openedAt(termId),
@@ -1830,8 +1836,7 @@ async function bootstrap(): Promise<void> {
     pendingDecision: (id) => inboxService.hasPendingDecision(id),
     log: logger,
   });
-  // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
-  // 递用户自己的话（卡片上的回答、对话 tab 发给开发 session 的话和分叉的结论）共用这一道：在换新的挡，「需要你」不挡。
+  // 信箱直接输入 ask_user 的回答用这一道（BTL-190 第 2+3 点）：未决的 ask_user 本身就算「需要你」，所以不看它；在换新的照样挡。
   const answerGuard = new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) });
   // 信箱（BTL-245）：session 之间的消息一律排队存库；在忙的下一次工具调用时由 PostToolUse hook 带进去，停着的直接输入。
   // 回答（ask_user 的）过 answerGuard（不看「需要你」），别的过 deliveryGuard。inboxService 在下面才建好：回调里才用到。
@@ -1860,6 +1865,12 @@ async function bootstrap(): Promise<void> {
       return () => pty.isOpen(termId) && pty.lastUserInputAt(termId) <= at && !pty.screenNeedsUser(termId);
     },
     lastReply: (id) => activityMonitor.lastReplyOf(id),
+    // 正在换新的不往 hook 投影（BTL-248）：/handoff 那一轮带进去的消息会被紧接着的 /clear 清掉。
+    held: (id) => refresher.isRefreshing(id),
+    featureOf: (id) => {
+      const h = sessions.head(id);
+      return h ? (h.featureId ?? (h.ticketKey === null ? null : (tickets.get(h.ticketKey)?.featureId ?? null))) : null;
+    },
     nameOf: mailboxName,
     typing: (h, phase) => inboxService.butlerTyping(h, phase),
     // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；熔断压着的不叫。
@@ -1902,16 +1913,8 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
-  // 对话 tab（UI 重做第 5 层）：发给开发 session（输入框、分叉的结论），和卡片上的回答同一道 guard、同一种投递。
-  const devSender = new DevSender({
-    sessions,
-    guard: answerGuard,
-    deliver: (termId, text, o) => pty.deliver(termId, text, o),
-    sanitize: sanitizeTask,
-    platform: process.platform,
-    now: Date.now,
-    log: logger,
-  });
+  // 对话 tab（UI 重做第 5 层）：发给开发 session（输入框、分叉的结论）。BTL-248 起排进信箱（kind user），停着的原样直接输入。
+  const devSender = new DevSender({ sessions, mailbox, sanitize: sanitizeTask, now: Date.now, log: logger });
   /**
    * 完整分叉自己的 --mcp-config：跟开发 session 打开时同一个配置函数、同一组 server，但 termId 是 null——
    * 分叉从不走共享 MCP 的 hub，总是写 mcp/forks/ 下自己的 stdio 文件（见 placeMcp、writeForkMcpConfig；Task 8 review I1）。
@@ -2036,7 +2039,7 @@ async function bootstrap(): Promise<void> {
     waitTracker.sync();
     if (terminalMeter.keys(termId, data)) setTimeout(() => waitTracker.sync(), 1500).unref?.();
   };
-  // Butler 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Butler 总控，发巡检消息；开着的先过 guard，忙就等下一次 check。
+  // Butler 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Butler 总控，发巡检消息。BTL-248 起排进它的信箱。
   const butlerPatrol = new ButlerPatrol({
     time: () => settings.get("butlerPatrolTime"),
     jobs,
@@ -2044,9 +2047,9 @@ async function bootstrap(): Promise<void> {
     running: () => sessionService.runningButler(),
     latest: () => sessionService.latestButler(),
     open: (req) => sessionService.openButler(req),
-    guard: deliveryGuard,
-    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
-    submit: submitTask,
+    mailbox,
+    headOf: (termId) => sessions.head(termId)?.id ?? termId,
+    opened: (id, termId) => mailbox.opened(id, termId, submitTask),
     message: () => M().butlerPatrolMessage,
     onChange: notify,
     log: logger,
@@ -2089,19 +2092,12 @@ async function bootstrap(): Promise<void> {
   const givenUpPrs = (k: string): ReadonlySet<string> => new Set(ticketPrs.byTicket(k).filter(prGivenUp).map((p) => p.url));
   const branchWatch = new BranchWatchRepo(db);
   const prLinker = new PrLinker({ prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), now: Date.now });
+  // 合并通知排进等待者的信箱（BTL-248）：在忙的下一次调用工具读到，关着的下次打开时读到，休眠的信箱叫它醒。
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
-    // 休眠的也算开着：guard 叫它醒，醒来以后 Stop 再递。
-    isOpen: (id) => gateTerm(id) !== null || isHibernated(id),
-    guard: deliveryGuard,
-    refreshActivity: refreshActivityOf,
+    mailbox: { send: (x) => mailbox.send({ ...x, body: sanitizeTask(x.body) }) },
     // PrWatcher 刚查过的 PR 不用再问 gh。prWatcher 在后面才建好：回调里才用到。
     cachedByUrl: (url) => prWatcher.cachedByUrl(url),
-    // 最多等 1 分钟：session 是停着的，输入框应该很快就绪；等不到下一轮再发。
-    deliver: async (id, text, recheck) => {
-      const t = gateTerm(id);
-      return t ? pty.deliver(t, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }) : "exited";
-    },
     whoOf, now: Date.now, log: logger,
   });
   // 分支是谁的（工作流 W）：hook 看到的 git push / gh pr create 记下来，CI 的结论按它递。
@@ -2119,9 +2115,6 @@ async function bootstrap(): Promise<void> {
       ticketBranch: tickets.getRepo(repoId)?.branch ?? null,
     });
   };
-  const loopDeliver = (termId: string, text: string, recheck: () => boolean) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck });
-  /** 正在递的 session：CI 和评论共用，同一个 session 同时只递一条。 */
-  const deliveringTo = new Set<string>();
   // 评论闭环和 CI 分类（工作流 I）：三层策略（契约 4.2），模型经路由（comment_classify / ci_classify），对外动作过 4.8 的开关。
   const loopPolicies = new LoopPolicies({ db, products: { productsOf: (slug) => lessonsRepo.productsOf(slug), product: (id) => lessonsRepo.product(id) }, now: Date.now });
   /** 仓库的三层策略；给了 ticket 且它所在 epic 自己选了自动化档位时，受管的键按那一档（BTL-247）。 */
@@ -2177,18 +2170,16 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
-  // CI 的结论递给 PR 所属的 session（pickRecipient：推这个分支的、启动时就在这个分支上的、ticket 分支上的第一个）：
-  // 和合并通知走同一道 guard，最多等 1 分钟。
+  // CI 的结论排进 PR 所属的 session 的信箱（pickRecipient：推这个分支的、启动时就在这个分支上的、ticket 分支上的第一个；
+  // 休眠着的也算，信箱叫它醒）。BTL-248 起不再自己等它停下。
   const ciDelivery = new CiDelivery({
     prs: ticketPrs,
     branches: branchWatch,
     currentBranch: (repoId) => tickets.getRepo(repoId)?.branch ?? null,
-    guard: deliveryGuard,
-    // 休眠着的（WS-M B）也算：guard 叫它醒，醒来以后 sessionStopped 里的 flushCi 再递。
+    mailbox,
+    headOf: (id) => sessions.head(id)?.id ?? id,
     recipient: loopRecipient,
-    deliver: loopDeliver,
     triage: ciTriage,
-    busy: deliveringTo,
     now: Date.now,
     log: logger,
   });
@@ -2248,20 +2239,14 @@ async function bootstrap(): Promise<void> {
     gateHeld: (repoPath, branch) => gateRepo.activeHold(repoPath, branch) !== null,
     trunkBusy: (repoPath, trunk, ignore) => gateRepo.activeHolds().some((h) => samePath(h.repoPath, repoPath) && h.target === trunk && !ignore.includes(h.branch)),
     awaitingCheck: (url): boolean => ticketPrs.byUrl(url).some((r): boolean => commentLoop.awaitingCheck(r.id)),
-    // 和 CI、评论走同一个收件人、同一道 guard，同一个 session 同时只递一条。
+    // 和 CI、评论同一个收件人；排进它的信箱（BTL-248），同一层新的冲突换掉还没送的旧的。认不出收件人时返回 false。
     deliver: async (to, text) => {
       const repoId = to.ticketRepoId ?? tickets.listRepos(to.ticketKey).find((r) => r.branch === to.branch)?.id ?? null;
       if (repoId === null) return false;
       const rcpt = loopRecipient(to.ticketKey, repoId, to.branch);
-      if (!rcpt.ok || deliveringTo.has(rcpt.sessionId)) return false;
-      const gate = deliveryGuard.check(rcpt.sessionId);
-      if (!gate.ok) return false;
-      deliveringTo.add(rcpt.sessionId);
-      try {
-        return (await loopDeliver(gate.termId, sanitizeTask(text), deliveryGuard.recheckAfter(rcpt.sessionId, gate))) === "sent";
-      } finally {
-        deliveringTo.delete(rcpt.sessionId);
-      }
+      if (!rcpt.ok) return false;
+      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: `stack:${to.ticketKey}:${to.branch}` });
+      return true;
     },
     record: recordEvent,
     onChange: () => notify(),
@@ -2560,11 +2545,12 @@ async function bootstrap(): Promise<void> {
     createTicket: async (i) => {
       try {
         // 有父 epic 的建进对应的 Butler epic（按 Jira epic key 去重，没有就新建，BTL-246 §7）。
-        const featureId = i.epic ? await featureService.ensureJiraEpic(i.epic, i.repoPath) : null;
-        if (featureId !== null) notify();
-        const t = await ticketService.create({
-          key: i.key, title: i.title, repoPath: i.repoPath, workMode: "worktree", ...(featureId !== null && { featureId }), ...(i.startPoint && { startPoints: [{ repoPath: i.repoPath, ref: i.startPoint }] }),
-        });
+        // ticket 建不出来时，这次新建的 epic 要是还空着就一起删掉，不留空壳（BTL-248）。
+        const create = (featureId: number | null) =>
+          ticketService.create({
+            key: i.key, title: i.title, repoPath: i.repoPath, workMode: "worktree", ...(featureId !== null && { featureId }), ...(i.startPoint && { startPoints: [{ repoPath: i.repoPath, ref: i.startPoint }] }),
+          });
+        const t = i.epic ? await featureService.withJiraEpic(i.epic, i.repoPath, create).finally(() => notify()) : await create(null);
         const r = t.repos[0];
         if (!r) return { ok: false, exists: false, message: "no repo" };
         notify();
@@ -2605,12 +2591,12 @@ async function bootstrap(): Promise<void> {
       allowed: (kind, scope) => externalActions.allowed(kind, scope),
       record: (kind, r) => void externalActions.record(kind, { scope: r.scope, target: r.target, summary: r.summary, outcome: r.outcome, error: r.error ?? null }),
     },
+    // 全局总控开着就排进它的信箱（BTL-248）；没开返回 false，退回成通知。
     toCoordinator: async (text) => {
       const b = sessionService.runningButler();
       if (!b) return false;
-      const g = deliveryGuard.check(b.id);
-      if (!g.ok) return false;
-      return (await pty.deliver(g.termId, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck: deliveryGuard.recheckAfter(b.id, g) })) === "sent";
+      mailbox.send({ kind: "butler", from: null, to: b.id, featureId: null, body: sanitizeTask(text) });
+      return true;
     },
     // Jira epic 对应的 Butler epic 自己选了档位：它的 ticket 接进来以后整理还是开工按它（BTL-247 接 BTL-246 §7）。
     epicLevel: (epicKey) => {
@@ -2689,11 +2675,10 @@ async function bootstrap(): Promise<void> {
 
   /**
    * 一个 session 停下来等输入了（Stop hook、终端重新打开、全新启动，或者 transcript 显示这一轮没经过 Stop 就结束了）：
-   * 有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
-   * 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
+   * 合并通知和 CI 结论一般早就排进信箱了（BTL-248），这里接住排队时出错的，并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
    */
   const sessionStopped = (stopped: string): void => {
-    void holdWatcher.sessionIdle(stopped);
+    holdWatcher.sessionIdle(stopped);
     // 权限档案省掉了几次确认（ws-j）：只读 transcript 新增的部分。
     void profileHits.sessionStopped(stopped).catch((e: unknown) => logger("permission profile: counting hits failed", e));
     // 熔断压着的「接着做」（降档、提高上限以后）趁现在递（工作流 L）。

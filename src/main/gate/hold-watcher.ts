@@ -1,7 +1,6 @@
 import type { MergeGateRepo, MergeHold } from "../db/merge-gate-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
-import type { DeliverResult } from "../sessions/pty-manager";
+import type { Mailbox } from "../mailbox/mailbox";
 import { M } from "../strings";
 import type { prInfo } from "../tickets/gh";
 import type * as Git from "../tickets/git";
@@ -17,33 +16,28 @@ const PR_GRACE_MS = 30_000;
 /** gh 和 fetch 各给 2 秒：一轮检查不能拖太久。 */
 const PR_TIMEOUT_MS = 2000;
 const FETCH_TIMEOUT_MS = 2000;
-/** 等待者的终端关着时，通知最多留多久（等它重新打开）；过了就丢掉（最终审查 3）。 */
+/**
+ * 释放了这么久还没排进信箱的通知就不发了（最终审查 3）。BTL-248 起一释放就排进信箱，只有升级前留下的、或者 Butler
+ * 关了很久才查到的会碰到。
+ */
 export const NOTICE_KEEP_MS = 24 * 60 * 60_000;
-/** 打过字之后多久之内不贴通知：现在由 DeliveryGuard 判断，这里接着导出给原来的用法。 */
-export { USER_TYPING_QUIET_MS } from "../sessions/delivery-guard";
 /** soon() 等这么久再查：合并多次调用，也给 GitHub 一点时间。 */
 const SOON_MS = 1000;
 
 type Outcome = "merged" | "cancelled" | "expired";
-const NOT_SENT: Record<Exclude<DeliverResult, "sent">, string> = {
-  timeout: "timed out", exited: "found its terminal closed", blocked: "was held back right before the paste",
-};
 type Notice = ReturnType<MergeGateRepo["pendingNotices"]>[number];
 
 export interface HoldWatcherDeps {
   repo: MergeGateRepo;
   prInfo: typeof prInfo;
   git: Pick<typeof Git, "isAncestor" | "fetchQuiet" | "upstreamRef">;
-  /** sessionId 是等待者的 BUTLER_SESSION（打开终端时的 id）。关着就把通知留着，等它重新打开。 */
-  isOpen(sessionId: string): boolean;
-  /** 现在能不能往这个 session 的终端里贴：停着等输入、用户没在打字、没有草稿……（所有自动输入共用一个）。 */
-  guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
-  /** Stop 到的时候先重读这个 session 的活动：guard 看的活动是上一次刷新的，那时它多半还在忙。 */
-  refreshActivity?: (sessionId: string) => Promise<void>;
+  /**
+   * 通知排进等待者的信箱（BTL-248，kind merge，ref `merge:<waiterId>`）。等待者记的是 BUTLER_SESSION（打开终端时的 id），
+   * 信箱按 head 链找现在的 session：在忙的下一次调用工具时读到，停着的直接输入，关着的下次打开时读到。
+   */
+  mailbox: Pick<Mailbox, "send">;
   /** PrWatcher 60 秒内读成功的这个 PR（cachedByUrl）：已合并、已关闭就不用再问 gh。没有时每次都问 gh。 */
   cachedByUrl?: (url: string) => Pick<TicketPr, "state"> | null;
-  /** recheck 在粘贴前调用（I2）：不通过就什么都不写，返回 blocked。 */
-  deliver(sessionId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
   /** 和 MergeGate 用同一个函数。 */
   whoOf(ticketKey: string | null, branch: string): string;
   now(): number;
@@ -59,8 +53,6 @@ export class HoldWatcher {
   private running: Promise<void> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private soonTimer: ReturnType<typeof setTimeout> | null = null;
-  /** 正在发的通知（deliver 可能要等一会儿）：一轮检查和 Stop 同时到时不发两遍。 */
-  private readonly delivering = new Set<number>();
 
   constructor(private readonly d: HoldWatcherDeps) {}
 
@@ -72,19 +64,10 @@ export class HoldWatcher {
     return this.running;
   }
 
-  /**
-   * Stop hook 到了：有停下来的 session 就把待发的通知过一遍（每条仍然只发给开着、停着等输入的 session）。
-   * 不只发给 sessionId：Butler 重开过的终端用的是链上最新的 id，和等待者记下的 BUTLER_SESSION 可能对不上。
-   */
-  async sessionIdle(sessionId: string): Promise<void> {
+  /** Stop hook 到了：把待发的通知过一遍（一般早就排进信箱了；这里接住排队时出错的）。 */
+  sessionIdle(sessionId: string): void {
     try {
-      await this.d.refreshActivity?.(sessionId);
-    } catch (e) {
-      // 读不到就用上一次的活动：最坏是等下一轮检查再发。
-      this.d.log(`merge gate: re-reading the activity of ${sessionId} failed`, e);
-    }
-    try {
-      await this.sendNotices();
+      this.sendNotices();
     } catch (e) {
       this.d.log(`merge gate: sending notices after ${sessionId} stopped failed`, e);
     }
@@ -119,7 +102,7 @@ export class HoldWatcher {
     try {
       // 并行：每个 PR 的 gh 最多 2 秒，逐个查占位多时一轮会很长。
       await Promise.all(this.d.repo.activeHolds().map((h) => this.settle(h)));
-      await this.sendNotices();
+      this.sendNotices();
     } catch (e) {
       this.d.log("merge gate: checking holds failed", e);
     }
@@ -168,39 +151,27 @@ export class HoldWatcher {
     return age > (h.kind === "local" ? LOCAL_HOLD_MAX_MS : HOLD_MAX_MS) ? "expired" : null;
   }
 
-  private async sendNotices(): Promise<void> {
-    for (const n of this.d.repo.pendingNotices()) await this.notice(n);
+  private sendNotices(): void {
+    for (const n of this.d.repo.pendingNotices()) this.notice(n);
   }
 
   /**
    * 发一条“X 已经合完”或“X 没有合完，可以再试”：gateWait 让等着的 session 别再试、等 Butler 告诉它，所以合没合成都要说。
-   * 终端关着就留着，重新打开（按 head 找回来）、停着等输入时再发，最多留 24 小时；在忙就等它的 Stop（sessionIdle）。
+   * 排进它的信箱就记 notified（信箱存在库里，Butler 重启也照样送）。
    */
-  private async notice(n: Notice): Promise<void> {
-    if (this.delivering.has(n.waiterId)) return;
-    // 名单是这一轮开始时取的：前面某条 deliver 慢的时候，Stop（sessionIdle）可能已经把这条发掉了。从数据库重查一次再发。
-    if (!this.d.repo.pendingNotices().some((p) => p.waiterId === n.waiterId)) return;
+  private notice(n: Notice): void {
     if (this.d.now() - n.releasedAt > NOTICE_KEEP_MS) {
       this.d.repo.markNotified(n.waiterId, this.d.now());
-      this.d.log(`merge gate: session ${n.sessionId} was not reachable for 24 h; dropping the notice about ${n.otherBranch}`);
+      this.d.log(`merge gate: the notice about ${n.otherBranch} for session ${n.sessionId} is older than 24 h; dropping it`);
       return;
     }
-    // 关着、在忙、用户在打字或者有草稿：下一轮（或下一次 Stop）再发。
-    if (!this.d.isOpen(n.sessionId)) return;
-    const gate = this.d.guard.check(n.sessionId);
-    if (!gate.ok) return;
-    this.delivering.add(n.waiterId);
     try {
       const who = this.d.whoOf(n.otherTicket, n.otherBranch);
-      // 粘贴前再看一遍（I2）：deliver 等输入框就绪最多 1 分钟，这期间用户可能开始输入、别的自动输入可能先贴了进去。
-      const res = await this.d.deliver(n.sessionId, n.outcome === "merged" ? M().gateMergedNotice(who) : M().gateNotMerged(who), this.d.guard.recheckAfter(n.sessionId, gate));
-      // exited：终端在发的时候关了，和关着一样留到重新打开。timeout、blocked：下一轮再试。
-      if (res === "sent") this.d.repo.markNotified(n.waiterId, this.d.now());
-      else this.d.log(`merge gate: telling session ${n.sessionId} about ${n.otherBranch} (${n.outcome}) ${NOT_SENT[res]}; trying again later`);
+      const body = n.outcome === "merged" ? M().gateMergedNotice(who) : M().gateNotMerged(who);
+      this.d.mailbox.send({ kind: "merge", from: null, to: n.sessionId, featureId: null, body, ref: `merge:${n.waiterId}` });
+      this.d.repo.markNotified(n.waiterId, this.d.now());
     } catch (e) {
-      this.d.log(`merge gate: telling session ${n.sessionId} about ${n.otherBranch} (${n.outcome}) failed`, e);
-    } finally {
-      this.delivering.delete(n.waiterId);
+      this.d.log(`merge gate: queueing the notice about ${n.otherBranch} (${n.outcome}) for session ${n.sessionId} failed`, e);
     }
   }
 }

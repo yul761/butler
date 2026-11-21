@@ -4,6 +4,7 @@ import { BranchWatchRepo } from "../db/branch-watch-repo";
 import { CiTriageRepo } from "../db/ci-triage-repo";
 import { TicketPrsRepo } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
+import { fakeMailbox } from "../mailbox/fake-mailbox";
 import { CiDelivery, pickRecipient } from "../prwatch/ci-delivery";
 import type { RunInfo } from "../tickets/gh-loop";
 import { LOOP_POLICY_DEFAULTS } from "../../shared/loop-policy";
@@ -34,7 +35,7 @@ function world() {
   let info = run(1, false);
   const reruns: number[] = [];
   const events: string[] = [];
-  const deliver = vi.fn(async () => "sent" as const);
+  const deliver = vi.fn<(to: string, body: string) => void>();
   const box: { ci: CiDelivery | null } = { ci: null };
   const triage = new CiTriage({
     repo, policy: () => ({ ...LOOP_POLICY_DEFAULTS, "ci.enabled": true }),
@@ -50,9 +51,9 @@ function world() {
   });
   const ci = new CiDelivery({
     prs, branches: new BranchWatchRepo(db), currentBranch: () => "b",
-    guard: { check: () => ({ ok: true, termId: "t1", headId: "h1" }), recheckAfter: () => () => true },
+    mailbox: fakeMailbox({ canDeliver: () => true, deliver, now: () => t }),
     recipient: (key, rid, branch) => pickRecipient({ owner: "h1", ownerOpen: true, open: [], ticketBranch: "b", branch }),
-    deliver, triage, now: () => t, log: () => undefined,
+    triage, now: () => t, log: () => undefined,
   });
   box.ci = ci;
   /** PrWatcher 读到一个结论。 */

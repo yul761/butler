@@ -1,7 +1,6 @@
 import type { OpenButlerSessionRequest, OpenSessionResult, Session } from "../../shared/types";
 import { JOB_PATROL, type JobsRepo } from "../db/jobs-repo";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
-import type { DeliverResult } from "../sessions/pty-manager";
+import type { Mailbox } from "../mailbox/mailbox";
 import { parseTime } from "../settings/settings-values";
 import { atTime, localDate } from "./calendar";
 
@@ -15,11 +14,12 @@ export interface ButlerPatrolDeps {
   /** 最近用过、没隐藏的 Butler 总控 session：没有在跑的时恢复它。 */
   latest: () => Session | null;
   open: (req: OpenButlerSessionRequest) => Promise<OpenSessionResult>;
-  guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
-  /** 往开着的终端里贴（pty.deliver，带 guard 的 recheck）。 */
-  deliver: (termId: string, text: string, recheck: () => boolean) => Promise<DeliverResult>;
-  /** 刚开的终端：当第一条消息交过去（等输入框就绪）。 */
-  submit: (termId: string, text: string) => Promise<DeliverResult>;
+  /** 巡检排进全局总控的信箱（BTL-248，kind patrol，ref `patrol:<时刻>`）。 */
+  mailbox: Pick<Mailbox, "send" | "withdraw">;
+  /** 终端现在的 session（head）id。 */
+  headOf: (termId: string) => string;
+  /** 刚为巡检打开的终端：信箱里排着的当第一条输入交进去（Mailbox.opened 加 submitTask）。返回送到没有。 */
+  opened: (sessionId: string, termId: string) => Promise<boolean>;
   /** 巡检消息（按当前语言）。 */
   message: () => string;
   onChange?: () => void;
@@ -30,19 +30,15 @@ export interface ButlerPatrolDeps {
 const CLOCK_SKEW_MS = 86_400_000;
 
 /**
- * Butler 总控的每日巡检（BTL-190 第 5 点）。不放进 Scheduler：那边是串行跑完就记结果的任务，巡检可能要等 session 停下来，
- * 等的时候不能挡住晚间 handoff。复用的是 Scheduler 的触发时机（启动、唤醒、解锁、每分钟的 tick）、jobs 表和日历工具。
+ * Butler 总控的每日巡检（BTL-190 第 5 点）。不放进 Scheduler：那边是串行跑完就记结果的任务。复用的是 Scheduler 的触发时机
+ * （启动、唤醒、解锁、每分钟的 tick）、jobs 表和日历工具。
  *
  * 到期：今天的巡检时刻已过，而 jobs 里记的上次巡检早于这个时刻（从没跑过也算）。睡过了的话醒来以后当天补，过了零点就不补昨天的。
- * Butler 总控开着：过 DeliveryGuard，忙就不记，下一次 check（下一分钟的 tick、Stop hook）再试。
- * 没开：恢复最近的 Butler 总控（没有就新开），把巡检当第一条消息交过去；一天最多开一次，开的 session 没收到就被关了，当天放弃。
+ * 排进全局总控的信箱就算当天跑过（BTL-248）：开着的在忙时下一次调用工具读到，停着的直接输入。
+ * 没开：先排进要接着用的那个 session 的信箱（hold），再恢复它（没有就新开），排着的当第一条消息交过去；开不了当天记失败，排着的撤回。
  */
 export class ButlerPatrol {
   private inflight: Promise<void> | null = null;
-  /** 为哪一天的巡检开过 session（时刻的毫秒数）：一天只开一次。 */
-  private openedFor: number | null = null;
-  /** 哪一天的巡检已经在日志里记过“在等”：不每分钟记一行。 */
-  private loggedWait: number | null = null;
 
   constructor(private readonly d: ButlerPatrolDeps) {}
 
@@ -67,38 +63,37 @@ export class ButlerPatrol {
     return slot;
   }
 
+  private send(slot: number, to: string, hold = false): void {
+    this.d.mailbox.send({ kind: "patrol", from: null, to, featureId: null, body: this.d.message(), ref: `patrol:${slot}`, hold });
+  }
+
   private async run(): Promise<void> {
     const slot = this.dueSlot(this.d.now());
     if (slot === null) return;
     const running = this.d.running();
-    if (running) return this.deliver(slot, running);
-    if (this.openedFor === slot) return this.record("failed", "closed before the patrol was delivered");
-    this.openedFor = slot;
+    if (running) {
+      this.send(slot, running.id);
+      return this.record("ok", null);
+    }
     const latest = this.d.latest();
+    // 先排进接着的那个的信箱：hold，马上要打开它，不让信箱再去唤醒一次。
+    if (latest) this.send(slot, latest.id, true);
     const r = await this.d.open(latest ? { sessionId: latest.id } : {});
-    if (!r.ok) return this.record("failed", r.reason);
-    // 刚好别处（例如用户点开）先开了它：那个终端可能正有人在用，不直接贴，下一次 check 走 guard 再送。
+    if (!r.ok) {
+      this.d.mailbox.withdraw(`patrol:${slot}`);
+      return this.record("failed", r.reason);
+    }
+    const head = this.d.headOf(r.termId);
+    // 刚好别处（例如用户点开）先开了它：照常排队（不 hold），在忙走 hook、停着直接输入。
     if (r.alreadyOpen) {
-      this.openedFor = null;
-      return;
+      this.send(slot, head);
+      return this.record("ok", null);
     }
     this.d.onChange?.();
-    const res = await this.d.submit(r.termId, this.d.message());
-    if (res === "sent") return this.record("ok", null);
-    // 没送到但终端还开着：下一次 check 走 guard 再送；关了就当天放弃（见上面）。
-    this.d.log?.(`butler patrol: first message not delivered (${res}), will retry`);
-  }
-
-  private async deliver(slot: number, running: Session): Promise<void> {
-    const g = this.d.guard.check(running.id);
-    if (!g.ok) {
-      if (this.loggedWait !== slot) this.d.log?.(`butler patrol: waiting, butler session ${running.id} is ${g.block}`);
-      this.loggedWait = slot;
-      return;
-    }
-    const res = await this.d.deliver(g.termId, this.d.message(), this.d.guard.recheckAfter(running.id, g));
-    if (res === "sent") return this.record("ok", null);
-    this.d.log?.(`butler patrol: not delivered (${res}), will retry`);
+    if (!latest) this.send(slot, head, true);
+    this.record("ok", null);
+    // 没交进去也还排着：在忙的 hook 送，停下来时信箱再送。
+    if (!(await this.d.opened(head, r.termId))) this.d.log?.("butler patrol: first message not typed in yet; it stays queued");
   }
 
   private record(status: "ok" | "failed", error: string | null): void {

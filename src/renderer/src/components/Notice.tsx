@@ -33,7 +33,7 @@ export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; no
       void api.costResume(n.breaker.subjectKind, n.breaker.subjectId).then((r) => setResult(r.ok ? S.cs.raised(costAmount(r.cap, n.breaker.unit, S)) : S.cs.raiseGone), reportError);
     } else if (a === "resend" && n.kind === "ci_undelivered") {
       setResult(null);
-      void api.ciResend(n.ci.item).then((r) => setResult(r === "sent" || r === "delivered" ? S.ciResendSent : r === "busy_delivering" ? S.ciResendBusy : S.ciResendNot(ciReasonText(r, S))), reportError);
+      void api.ciResend(n.ci.item).then((r) => setResult(r === "sent" || r === "delivered" ? S.ciResendSent : S.ciResendNot(ciReasonText(r, S))), reportError);
     } else if (a === "comments" && n.kind === "comments_waiting") {
       // 打开 ticket 时直接停在「PR 详情」页签（评论在那里）。
       openCommentsNotice(n, { saveTab, onOpen });

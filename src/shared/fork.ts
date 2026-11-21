@@ -40,11 +40,13 @@ export class ForkError extends Error {
   }
 }
 
-/** 发给开发 session 被挡下的原因：DeliveryBlock 的取值加上 refreshing、投递结果和本层自己的几种。 */
-/** refreshing 留着给以后：现在真正的 DeliveryGuard 把换新中报成 busy。 */
-export type DevSendBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused"
-  | "refreshing" | "exited" | "timeout" | "blocked" | "in_flight" | "fork_busy" | "no_conclusion" | "not_found";
-export type DevSendResult = { ok: true; at: number } | { ok: false; reason: DevSendBlock };
+/**
+ * 发给开发 session 没排上的原因（BTL-248 起走信箱，不再有「正忙、在打字」这类 guard 的原因）：
+ * not_found 找不到 session；failed 排队失败；in_flight 同一个结论还在发；fork_busy、no_conclusion 是分叉自己的。
+ */
+export type DevSendBlock = "not_found" | "failed" | "in_flight" | "fork_busy" | "no_conclusion";
+/** state：排队那一刻目标的状态（在忙：下一次调用工具时送；停着：马上送；关着：打开后送）。 */
+export type DevSendResult = { ok: true; at: number; state: "busy" | "idle" | "closed" } | { ok: false; reason: DevSendBlock };
 /** disabled：记忆关着；no_scope：这个 session 没有 ticket 也没有 feature（Butler 总控），没处可记。 */
 export type RememberResult = "written" | "full" | "disabled" | "failed" | "busy" | "no_conclusion" | "no_scope";
 /** 真去写记忆（MemoryService.rememberText）时可能的结果。 */

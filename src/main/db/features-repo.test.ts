@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { insertTicket, memDb } from "../test-utils";
 import { migrate } from "./database";
 import { MIGRATIONS } from "./migrations";
-import { FeaturesRepo } from "./features-repo";
+import { FEATURE_REFS, FeaturesRepo } from "./features-repo";
 import { SessionsRepo } from "./sessions-repo";
 import { TicketsRepo } from "./tickets-repo";
 
@@ -13,7 +13,7 @@ const columns = (db: DatabaseSync, table: string) =>
 describe("migration 6", () => {
   it("adds features, feature_repos and the new columns", () => {
     const db = memDb();
-    expect(columns(db, "features")).toEqual(["id", "name", "workspace_dir", "created_at", "archived_at", "epic_id", "brief", "brief_sent_at", "jira_epic_key", "automation_level"]);
+    expect(columns(db, "features")).toEqual(["id", "name", "workspace_dir", "created_at", "archived_at", "epic_id", "brief", "jira_epic_key", "automation_level"]);
     expect(columns(db, "feature_repos")).toEqual(["id", "feature_id", "repo_path", "created_at"]);
     expect(columns(db, "tickets")).toContain("feature_id");
     expect(columns(db, "sessions")).toContain("feature_id");
@@ -105,5 +105,29 @@ describe("tickets and sessions in a feature", () => {
 
     sessions.setFeature("s2", f);
     expect(sessions.get("s2")?.featureId).toBe(f);
+  });
+});
+
+describe("FeaturesRepo.deleteIfEmpty (BTL-248)", () => {
+  it("deletes an epic nothing points at, and keeps one any table with a feature_id points at", () => {
+    const db = memDb();
+    const features = new FeaturesRepo(db);
+    const make = () => {
+      const id = features.insert({ name: `e${Math.random()}`, workspaceDir: `/w/${Math.random()}`, createdAt: 1 });
+      features.addRepo(id, "/r", 1);
+      return id;
+    };
+    const empty = make();
+    expect(features.deleteIfEmpty(empty)).toBe(true);
+    expect(features.get(empty)).toBeNull();
+    const tables = (db.prepare(`SELECT m.name AS t FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table' AND p.name = 'feature_id'`).all() as { t: string }[])
+      .map((r) => r.t)
+      .filter((t) => t !== "feature_repos");
+    // 新加了带 feature_id 的表就要加进 deleteIfEmpty 的检查。
+    expect([...FEATURE_REFS].sort()).toEqual(tables.sort());
+    const used = make();
+    db.prepare(`INSERT INTO inbox_items (kind, session_id, feature_id, text, created_at) VALUES ('report', 's1', ?, 'hi', 1)`).run(used);
+    expect(features.deleteIfEmpty(used)).toBe(false);
+    expect(features.get(used)).not.toBeNull();
   });
 });

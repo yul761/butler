@@ -1501,4 +1501,38 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE features ADD COLUMN automation_level TEXT CHECK (automation_level IS NULL OR automation_level IN ('manual', 'semi'));
   `,
+  // BTL-248：剩下的送达路径（CI 结论、合并通知、栈冲突、每日巡检、花费提醒、换新后的「接着做」、对话 tab 里用户的话）也走信箱，
+  // kind 的 CHECK 放宽。SQLite 改不了 CHECK：建新表、拷数据、换名，索引重建。
+  `
+  CREATE TABLE session_messages_new (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('instruction','report','answer','butler','reply','review','comments','convention','ci','merge','stack','patrol','cost','refresh','user')),
+    from_session TEXT,
+    to_session TEXT NOT NULL,
+    feature_id INTEGER,
+    body TEXT NOT NULL,
+    interrupt INTEGER NOT NULL DEFAULT 0,
+    ref TEXT,
+    meta TEXT,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','delivered','replied')),
+    via TEXT CHECK (via IN ('hook','input')),
+    expects_reply INTEGER NOT NULL DEFAULT 0,
+    base_reply_id TEXT,
+    reply_text TEXT,
+    queued_at INTEGER NOT NULL,
+    delivered_at INTEGER,
+    replied_at INTEGER
+  );
+  INSERT INTO session_messages_new SELECT id, kind, from_session, to_session, feature_id, body, interrupt, ref, meta, status, via,
+    expects_reply, base_reply_id, reply_text, queued_at, delivered_at, replied_at FROM session_messages ORDER BY rowid;
+  DROP TABLE session_messages;
+  ALTER TABLE session_messages_new RENAME TO session_messages;
+  CREATE INDEX session_messages_status ON session_messages (status, to_session);
+  CREATE INDEX session_messages_queued_at ON session_messages (queued_at);
+  CREATE UNIQUE INDEX session_messages_queued_ref ON session_messages (ref) WHERE ref IS NOT NULL AND status = 'queued';
+  `,
+  // BTL-248：features.brief_sent_at 是旧 epic 层交计划时记的，那条路 BTL-246 删了以后没人写也没人读。
+  `
+  ALTER TABLE features DROP COLUMN brief_sent_at;
+  `,
 ];

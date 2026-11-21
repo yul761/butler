@@ -107,6 +107,11 @@ export function sendBlockText(r: DevSendBlock, t: UiStrings): string {
   return t.conv.block[r];
 }
 
+/** 排进信箱以后给用户的一句话（BTL-248）：停着的马上送进去，不用提示；在忙、关着的说一下什么时候送到。 */
+export function queuedText(state: "busy" | "idle" | "closed", t: UiStrings): string | null {
+  return state === "idle" ? null : t.conv.queued[state];
+}
+
 export function rememberText(r: RememberResult, t: UiStrings): string {
   switch (r) {
     case "written": return t.conv.remembered;

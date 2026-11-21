@@ -48,8 +48,6 @@ export interface Feature {
   archivedAt: number | null;
   /** 规划（null：没有）：以前 epic session 建 feature 时给的，和旧 epic 的规划（BTL-246 迁移并进来）。 */
   brief: string | null;
-  /** 规划发给总控的时间（null：还没发过）。 */
-  briefSentAt: number | null;
   /** 从 Jira 按 epic 接进来时对应的 Jira epic（BTL-246 §7）；省略或 null：不是从 Jira epic 来的。 */
   jiraEpicKey?: string | null;
   /** 自动化档位（BTL-247）：这个 epic 自己选的；null = 跟随全局。 */
@@ -594,13 +592,10 @@ export type InboxScope = { featureId: number } | { all: true };
 export type CiItemRef = { kind: "pr"; id: number } | { kind: "branch"; repoId: number };
 
 /**
- * CI 结论为什么没递出去（工作流 W）。no_repo：PR 不在 ticket 的仓库里；no_sha：gh 没给 commit；no_session：没有开着的 session；
- * owner_closed：推这个分支的 session 终端关了；unowned：开着的 session 认不出是谁的；busy_delivering：那个 session 正在收别的；
- * guard:*：递送守卫拦着（在输入、有草稿、在等你……）；deliver:*：粘贴没成功；failed：出错。
+ * CI 结论为什么没排进信箱（工作流 W；BTL-248 起排进信箱就算交出去了）。no_repo：PR 不在 ticket 的仓库里；no_sha：gh 没给 commit；
+ * no_session：没有开着的 session；owner_closed：推这个分支的 session 终端关了；unowned：开着的 session 认不出是谁的；failed：出错。
  */
-export type CiUndeliveredReason =
-  | "no_repo" | "no_sha" | "no_session" | "owner_closed" | "unowned" | "busy_delivering" | "failed"
-  | `guard:${string}` | `deliver:${string}`;
+export type CiUndeliveredReason = "no_repo" | "no_sha" | "no_session" | "owner_closed" | "unowned" | "failed";
 
 /** 递不出去太久的一条 CI 结论。sessionId：本来要递给的 session（还没认出是谁的为 null）。 */
 export interface CiUndelivered {
@@ -662,7 +657,12 @@ export interface NowView {
 }
 
 /** 信箱（BTL-245）：消息的种类。 */
-export type MessageKind = "instruction" | "report" | "answer" | "butler" | "reply" | "review" | "comments" | "convention";
+/**
+ * ci：CI 结论；merge：合并占位放开了；stack：栈 rebase 冲突；patrol：每日巡检；cost：花费上限后的「接着做」；
+ * refresh：换新后的「接着做」；user：用户在对话 tab 里发给开发 session 的话、分叉的结论（BTL-248）。
+ */
+export type MessageKind = "instruction" | "report" | "answer" | "butler" | "reply" | "review" | "comments" | "convention"
+  | "ci" | "merge" | "stack" | "patrol" | "cost" | "refresh" | "user";
 /** 信箱消息的状态：已排队、已送达、已回复。 */
 export type MessageStatus = "queued" | "delivered" | "replied";
 

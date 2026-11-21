@@ -2,15 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { BranchWatchRepo } from "../db/branch-watch-repo";
 import { TicketPrsRepo, type TicketPrPatch } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
-import { DeliveryGuard } from "../sessions/delivery-guard";
-import { deliveryNeedsYou, NeedsYouTracker, type NeedsYouVerdict } from "../sessions/needs-you";
+import { fakeMailbox } from "../mailbox/fake-mailbox";
 import { memDb } from "../test-utils";
 import type { Session } from "../../shared/types";
-import { CI_UNDELIVERED_MS, CiDelivery, ciRecipient, deliveryKey, pickRecipient, type CiDeliveryDeps, type RecipientCandidate } from "./ci-delivery";
+import { CI_UNDELIVERED_MS, CiDelivery, ciRecipient, ciRef, deliveryKey, pickRecipient, type CiDeliveryDeps, type RecipientCandidate } from "./ci-delivery";
 
-type Deliver = (term: string, text: string, recheck: () => boolean) => Promise<"sent" | "exited" | "timeout" | "blocked">;
+const flushPromises = () => new Promise((r) => setTimeout(r, 0));
 
-function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard["check"]>; deliver?: Deliver; guardImpl?: CiDeliveryDeps["guard"]; recipient?: CiDeliveryDeps["recipient"]; triage?: CiDeliveryDeps["triage"] } = {}) {
+function setup(opts: { session?: string | null; recipient?: CiDeliveryDeps["recipient"]; triage?: CiDeliveryDeps["triage"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   for (const key of ["BTL-1", "BTL-2"]) tickets.insert({ key, title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
@@ -19,26 +18,28 @@ function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard
   const prs = new TicketPrsRepo(db);
   const branches = new BranchWatchRepo(db);
   const state = {
-    guard: opts.guard ?? ({ ok: true, termId: "t1", headId: "h1" } as ReturnType<DeliveryGuard["check"]>),
+    /** 假信箱现在送不送得到（目标在忙、关着时为 false：留着排队）。 */
+    canDeliver: true,
     /** 开着的 session（ticket 仓库的 head）；session: null 时一个都没有。 */
     open: (opts.session === null ? [] : [{ id: opts.session ?? "h1", gitBranch: null, coordinator: false }]) as RecipientCandidate[],
     /** 记下的分支归属：`${ticket}:${repoId}:${branch}` → head id。 */
     owners: new Map<string, string>(),
     closed: new Set<string>(),
-    recheck: true,
     now: 1,
   };
-  const deliver = vi.fn(opts.deliver ?? (async () => "sent" as const));
+  /** 送到了的：[收件 session, 正文]。 */
+  const deliver = vi.fn<(to: string, body: string) => void>();
+  const mailbox = fakeMailbox({ canDeliver: () => state.canDeliver, deliver, now: () => state.now });
   const log = vi.fn();
   const d = new CiDelivery({
     prs, branches,
     currentBranch: (id) => tickets.getRepo(id)?.branch ?? null,
-    guard: opts.guardImpl ?? { check: () => state.guard, recheckAfter: () => () => state.recheck },
+    mailbox,
     recipient: opts.recipient ?? ((key, rid, branch) => {
       const owner = state.owners.get(`${key}:${rid}:${branch}`) ?? null;
       return pickRecipient({ owner, ownerOpen: owner !== null && !state.closed.has(owner), open: state.open, ticketBranch: tickets.getRepo(rid)?.branch ?? null, branch });
     }),
-    deliver, now: () => state.now, log, triage: opts.triage,
+    now: () => state.now, log, triage: opts.triage,
   });
   /** 一个读过的 PR 行。 */
   const pr = (o: TicketPrPatch & { ticketKey?: string; repoId?: number | null; number?: number } = {}) => {
@@ -47,7 +48,16 @@ function setup(opts: { session?: string | null; guard?: ReturnType<DeliveryGuard
     prs.update(row.id, { ci: "failing", headSha: "abcdef1234567", checkedAt: 1, ...patch });
     return prs.get(row.id)!;
   };
-  return { db, tickets, prs, branches, repoId, otherRepo, state, deliver, log, d, pr };
+  /** settled / flush 以后假信箱在微任务里送：等它送完。 */
+  const settled = async (item: Parameters<CiDelivery["settled"]>[0]) => {
+    await d.settled(item);
+    await flushPromises();
+  };
+  const flush = async () => {
+    await d.flush();
+    await flushPromises();
+  };
+  return { db, tickets, prs, branches, repoId, otherRepo, state, deliver, mailbox, log, d, pr, settled, flush };
 }
 
 describe("CiDelivery", () => {
@@ -55,10 +65,10 @@ describe("CiDelivery", () => {
     const s = setup();
     const lines = Array.from({ length: 100 }, (_, i) => `line${i}`).join("\n");
     const r = s.pr({ failed: [{ name: "test", state: "failing", runId: 1, log: lines }, { name: "lint", state: "failing", runId: 1 }] });
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect(s.deliver).toHaveBeenCalledTimes(1);
     const [term, text] = s.deliver.mock.calls[0] as unknown as [string, string];
-    expect(term).toBe("t1");
+    expect(term).toBe("h1");
     expect(text).toContain("PR #7");
     expect(text).toContain("abcdef1");
     expect(text).not.toContain("abcdef12");
@@ -73,7 +83,7 @@ describe("CiDelivery", () => {
     const s = setup({ session: "h9" });
     s.state.now = 77;
     const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect(s.prs.get(r.id)).toMatchObject({ deliveredKey: "abcdef1234567:failing", deliveredTo: "h9", deliveredAt: 77 });
   });
 
@@ -82,11 +92,11 @@ describe("CiDelivery", () => {
     const r = s.pr({ ci: "passing" });
     // ticket 换了分支：旧分支 PR 的 CI 不递给现在的 session。
     s.tickets.updateRepo({ id: s.repoId, workMode: "branch", worktreePath: null, branch: "other" });
-    await s.d.settled({ kind: "pr", id: r.id });
-    await s.d.flush();
+    await s.settled({ kind: "pr", id: r.id });
+    await s.flush();
     expect(s.deliver).not.toHaveBeenCalled();
     s.tickets.updateRepo({ id: s.repoId, workMode: "branch", worktreePath: null, branch: "b" });
-    await s.d.flush();
+    await s.flush();
     expect(s.deliver).toHaveBeenCalledTimes(1);
     expect(s.prs.get(r.id)!.deliveredKey).toBe(deliveryKey(r));
   });
@@ -95,9 +105,9 @@ describe("CiDelivery", () => {
     const s = setup();
     const slugOnly = s.pr({ repoId: null, number: 8 });
     const merged = s.pr({ number: 9, state: "merged" });
-    await s.d.settled({ kind: "pr", id: slugOnly.id });
-    await s.d.settled({ kind: "pr", id: merged.id });
-    await s.d.flush();
+    await s.settled({ kind: "pr", id: slugOnly.id });
+    await s.settled({ kind: "pr", id: merged.id });
+    await s.flush();
     expect(s.deliver).not.toHaveBeenCalled();
   });
 
@@ -107,7 +117,7 @@ describe("CiDelivery", () => {
     const a = s.pr({ ci: "passing" });
     const b = s.pr({ ci: "passing", ticketKey: "BTL-2", repoId: s.otherRepo });
     s.tickets.updateRepo({ id: s.otherRepo, workMode: "branch", worktreePath: null, branch: "b" });
-    await s.d.flush();
+    await s.flush();
     expect(seen).toEqual([["BTL-1", s.repoId], ["BTL-2", s.otherRepo]]);
     expect(s.deliver).toHaveBeenCalledTimes(2);
     expect([s.prs.get(a.id)!.deliveredKey, s.prs.get(b.id)!.deliveredKey]).toEqual(["abcdef1234567:passing", "abcdef1234567:passing"]);
@@ -116,7 +126,7 @@ describe("CiDelivery", () => {
   it("branch rows deliver with ciWhereBranch", async () => {
     const s = setup();
     s.branches.upsert({ repoId: s.repoId, ticketKey: "BTL-1", branch: "b", ci: "passing", headSha: "abcdef1234567", failed: [], readError: false, checkedAt: 1 });
-    await s.d.settled({ kind: "branch", repoId: s.repoId });
+    await s.settled({ kind: "branch", repoId: s.repoId });
     expect(s.deliver).toHaveBeenCalledTimes(1);
     const text = (s.deliver.mock.calls[0] as unknown as [string, string])[1];
     expect(text).toContain("b");
@@ -124,77 +134,98 @@ describe("CiDelivery", () => {
     expect(s.branches.get(s.repoId)!.deliveredKey).toBe("abcdef1234567:passing");
     // 分支行是旧分支的：不递。
     s.branches.upsert({ repoId: s.otherRepo, ticketKey: "BTL-2", branch: "old", ci: "failing", headSha: "f1", failed: [], readError: false, checkedAt: 1 });
-    await s.d.flush();
+    await s.flush();
     expect(s.deliver).toHaveBeenCalledTimes(1);
   });
 
   it("a log containing a fence cannot break out", async () => {
     const s = setup();
     const r = s.pr({ failed: [{ name: "t", state: "failing", runId: 1, log: "a\n```\nb" }] });
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect((s.deliver.mock.calls[0] as unknown as [string, string])[1]).toContain("````\na\n```\nb\n````");
   });
 
-  it("queues until the session stops", async () => {
-    const s = setup({ guard: { ok: false, block: "busy" } });
+  it("moves a queued result to the session that owns the branch now when its first recipient went away", async () => {
+    const s = setup();
+    s.state.canDeliver = false;
     const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
-    expect(s.deliver).not.toHaveBeenCalled();
-    expect(s.prs.get(r.id)!.deliveredKey).toBeNull();
-    s.state.guard = { ok: true, termId: "t1", headId: "h1" };
-    await s.d.flush();
+    await s.settled({ kind: "pr", id: r.id });
+    expect(s.mailbox.queued.get(`ci:pr:${r.id}`)?.toSession).toBe("h1");
+    // h1 关了，同一个分支上开了 h2：排着的结论改投 h2，不留给 h1 等它重开。
+    s.state.open = [{ id: "h2", gitBranch: null, coordinator: false }];
+    await s.flush();
+    expect(s.mailbox.queued.get(`ci:pr:${r.id}`)?.toSession).toBe("h2");
+    s.state.canDeliver = true;
+    s.mailbox.deliverQueued();
+    await flushPromises();
     expect(s.deliver).toHaveBeenCalledTimes(1);
+    expect(s.deliver.mock.calls[0][0]).toBe("h2");
   });
 
-  it("passes a recheck to deliver and keeps the result when it is held back right before the paste (I2)", async () => {
-    const s = setup({ deliver: async (_t, _x, recheck) => (recheck() ? "sent" : "blocked") });
+  it("keeps it queued while the session cannot take it, marks it once it arrives, and does not queue it twice", async () => {
+    const s = setup();
+    s.state.canDeliver = false;
     const r = s.pr();
-    s.state.recheck = false;
-    await s.d.settled({ kind: "pr", id: r.id });
-    expect(s.deliver).toHaveBeenCalledTimes(1);
+    await s.settled({ kind: "pr", id: r.id });
+    await s.flush();
+    expect(s.deliver).not.toHaveBeenCalled();
     expect(s.prs.get(r.id)!.deliveredKey).toBeNull();
-    s.state.recheck = true;
-    await s.d.flush();
-    expect(s.deliver).toHaveBeenCalledTimes(2);
+    expect([...s.mailbox.queued.keys()]).toEqual([ciRef({ kind: "pr", id: r.id })]);
+    expect(s.mailbox.queued.get(ciRef({ kind: "pr", id: r.id }))!.kind).toBe("ci");
+    // 排着的时候点重发：已经排着，就算交出去了。
+    expect(await s.d.resend({ kind: "pr", id: r.id })).toBe("sent");
+    expect(s.mailbox.queued.size).toBe(1);
+    s.state.canDeliver = true;
+    s.mailbox.deliverQueued();
+    expect(s.deliver).toHaveBeenCalledTimes(1);
     expect(s.prs.get(r.id)!.deliveredKey).toBe(deliveryKey(r));
+  });
+
+  it("withdraws a queued result once CI runs again or the PR is merged; a new commit replaces it", async () => {
+    const s = setup();
+    s.state.canDeliver = false;
+    const r = s.pr();
+    const ref = ciRef({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
+    s.prs.update(r.id, { headSha: "fedcba9876543", ci: "passing" });
+    await s.flush();
+    expect(s.mailbox.queued.get(ref)!.body).toContain("fedcba9");
+    expect((s.mailbox.queued.get(ref)!.meta as { key: string }).key).toBe("fedcba9876543:passing");
+    s.prs.update(r.id, { ci: "pending" });
+    await s.flush();
+    expect(s.mailbox.queued.has(ref)).toBe(false);
+    s.prs.update(r.id, { ci: "failing" });
+    await s.flush();
+    expect(s.mailbox.queued.has(ref)).toBe(true);
+    s.prs.update(r.id, { state: "merged" });
+    await s.flush();
+    expect(s.mailbox.queued.has(ref)).toBe(false);
+    expect(s.deliver).not.toHaveBeenCalled();
   });
 
   it("does not deliver twice for the same key", async () => {
     const s = setup();
     const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
-    await s.d.settled({ kind: "pr", id: r.id });
-    await s.d.flush();
-    expect(s.deliver).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not mark when deliver fails", async () => {
-    const s = setup({ deliver: async () => "timeout" });
-    const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
-    expect(s.prs.get(r.id)!.deliveredKey).toBeNull();
+    await s.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
+    await s.flush();
     expect(s.deliver).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing when the repo has no open session", async () => {
     const s = setup({ session: null });
     const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
-    await s.d.flush();
+    await s.settled({ kind: "pr", id: r.id });
+    await s.flush();
     expect(s.deliver).not.toHaveBeenCalled();
     expect(s.prs.get(r.id)!.deliveredKey).toBeNull();
   });
 
-  it("skips pending rows in flush and sends one at a time per session", async () => {
-    let release!: () => void;
-    const s = setup({ deliver: () => new Promise((res) => { release = () => res("sent"); }) });
-    const r = s.pr();
+  it("skips pending rows in flush", async () => {
+    const s = setup();
+    s.pr();
     s.pr({ number: 8, ci: "pending" });
-    const p1 = s.d.settled({ kind: "pr", id: r.id });
-    const p2 = s.d.flush();
-    await Promise.resolve();
-    release();
-    await Promise.all([p1, p2]);
+    await s.flush();
     expect(s.deliver).toHaveBeenCalledTimes(1);
   });
 });
@@ -205,24 +236,21 @@ describe("CiDelivery picks the session the PR belongs to (workstream W)", () => 
     // 子 session 在自己的 worktree 里开 feat/ws-a，ticket 仓库的分支还是 b。
     const r = s.pr({ ci: "passing", headBranch: "feat/ws-a" });
     s.state.owners.set(`BTL-1:${s.repoId}:feat/ws-a`, "h1");
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect(s.deliver).toHaveBeenCalledTimes(1);
     expect(s.prs.get(r.id)!.deliveredKey).toBe(deliveryKey(r));
   });
 
   it("with several sessions on one repo, each gets only the PR on its own branch", async () => {
-    const terms: Record<string, string> = { ha: "ta", hb: "tb", hc: "tc" };
-    const s = setup({
-      guardImpl: { check: (id) => ({ ok: true, termId: terms[id], headId: id }), recheckAfter: () => () => true },
-    });
+    const s = setup();
     s.state.open = [{ id: "hc", gitBranch: "b", coordinator: false }, { id: "ha", gitBranch: "b", coordinator: false }, { id: "hb", gitBranch: "b", coordinator: false }];
     const a = s.pr({ number: 1, ci: "passing", headBranch: "feat/a" });
     const b = s.pr({ number: 2, ci: "failing", headBranch: "feat/b" });
     s.state.owners.set(`BTL-1:${s.repoId}:feat/a`, "ha");
     s.state.owners.set(`BTL-1:${s.repoId}:feat/b`, "hb");
-    await s.d.flush();
+    await s.flush();
     const sent = s.deliver.mock.calls.map((c) => [c[0], (c[1] as string).match(/PR #(\d+)/)?.[1]]);
-    expect(sent.sort()).toEqual([["ta", "1"], ["tb", "2"]]);
+    expect(sent.sort()).toEqual([["ha", "1"], ["hb", "2"]]);
     expect([s.prs.get(a.id)!.deliveredKey, s.prs.get(b.id)!.deliveredKey]).toEqual([deliveryKey(a), deliveryKey(b)]);
   });
 
@@ -232,7 +260,7 @@ describe("CiDelivery picks the session the PR belongs to (workstream W)", () => 
     const r = s.pr({ ci: "passing", headBranch: "b" });
     s.state.owners.set(`BTL-1:${s.repoId}:b`, "h1");
     s.state.closed.add("h1");
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect(s.deliver).not.toHaveBeenCalled();
     expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/BTL-1#7 .*not delivered: owner_closed/));
   });
@@ -243,7 +271,7 @@ describe("CiDelivery picks the session the PR belongs to (workstream W)", () => 
     const r = s.pr({ ci: "passing", headBranch: "b" });
     s.state.owners.set(`BTL-1:${s.repoId}:b`, "h1");
     s.state.closed.add("h1");
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect(s.deliver).toHaveBeenCalledTimes(1);
   });
 
@@ -251,7 +279,7 @@ describe("CiDelivery picks the session the PR belongs to (workstream W)", () => 
     const s = setup();
     s.state.open = [{ id: "h2", gitBranch: "feat/x", coordinator: false }, { id: "h3", gitBranch: "feat/y", coordinator: false }];
     const r = s.pr({ ci: "passing", headBranch: "feat/related" });
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect(s.deliver).not.toHaveBeenCalled();
     expect(s.log).toHaveBeenCalledWith(expect.stringMatching(/not delivered: unowned/));
     s.state.now = CI_UNDELIVERED_MS + 10;
@@ -259,65 +287,64 @@ describe("CiDelivery picks the session the PR belongs to (workstream W)", () => 
   });
 
   it("logs every reason it does not deliver, once per reason", async () => {
-    const s = setup({ guard: { ok: false, block: "typing" } });
-    const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
-    await s.d.flush();
-    await s.d.flush();
-    const lines = () => s.log.mock.calls.map((c) => c[0] as string).filter((m) => m.startsWith("ci delivery"));
-    expect(lines()).toEqual([expect.stringMatching(/BTL-1#7 \(abcdef1:failing\) not delivered: guard:typing/)]);
-    s.state.guard = { ok: false, block: "draft" };
-    await s.d.flush();
-    expect(lines()).toHaveLength(2);
-    // 没有 sha、没有开着的 session、PR 不在 ticket 仓库：都记一笔。
-    const noSha = s.pr({ number: 8, headSha: null });
-    const elsewhere = s.pr({ number: 9, repoId: null });
-    s.state.guard = { ok: true, termId: "t1", headId: "h1" };
+    const s = setup();
     s.state.open = [];
-    const other = s.pr({ number: 10, headBranch: "feat/x" });
-    await s.d.flush();
-    for (const [n, reason] of [[8, "no_sha"], [9, "no_repo"], [10, "no_session"], [7, "no_session"]] as const) {
+    const r = s.pr();
+    await s.settled({ kind: "pr", id: r.id });
+    await s.flush();
+    await s.flush();
+    const lines = () => s.log.mock.calls.map((c) => c[0] as string).filter((m) => m.startsWith("ci delivery") && m.includes("not delivered"));
+    expect(lines()).toEqual([expect.stringMatching(/BTL-1#7 \(abcdef1:failing\) not delivered: no_session/)]);
+    // 没有 sha、PR 不在 ticket 仓库、别的分支：都记一笔。
+    s.pr({ number: 8, headSha: null });
+    s.pr({ number: 9, repoId: null });
+    s.pr({ number: 10, headBranch: "feat/x" });
+    await s.flush();
+    for (const [n, reason] of [[8, "no_sha"], [9, "no_repo"], [10, "no_session"]] as const) {
       expect(lines().some((m) => m.includes(`BTL-1#${n} `) && m.endsWith(`not delivered: ${reason}`))).toBe(true);
     }
     // 两个开着的 session、PR 不在 ticket 分支上、没有归属：认不出是谁的。
     s.state.open = [{ id: "h1", gitBranch: "b", coordinator: false }, { id: "h2", gitBranch: "b", coordinator: false }];
-    await s.d.flush();
+    await s.flush();
     expect(lines().some((m) => m.includes("BTL-1#10 ") && m.endsWith("not delivered: unowned"))).toBe(true);
-    void noSha; void elsewhere; void other;
   });
 
-  it("lists results stuck for 30 minutes and resends them on request", async () => {
-    const s = setup({ guard: { ok: false, block: "busy" } });
+  it("lists results nobody could be found for on the ticket branch after 30 minutes, and resends them on request", async () => {
+    const s = setup();
+    // ticket 分支上两个 session 都没记分支：认不出是谁的，本来有人等着（promised）。
+    s.state.open = [{ id: "h1", gitBranch: null, coordinator: false }, { id: "h2", gitBranch: null, coordinator: false }];
     const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     expect(s.d.undelivered()).toEqual([]);
     s.state.now = 1 + CI_UNDELIVERED_MS;
-    await s.d.flush();
+    await s.flush();
     expect(s.d.undelivered()).toEqual([
-      expect.objectContaining({ item: { kind: "pr", id: r.id }, ticketKey: "BTL-1", number: 7, branch: "b", reason: "guard:busy", since: 1, sessionId: "h1" }),
+      expect.objectContaining({ item: { kind: "pr", id: r.id }, ticketKey: "BTL-1", number: 7, branch: "b", reason: "unowned", since: 1, sessionId: null }),
     ]);
-    // 归属的终端关了、没有 session：没人在等，不提醒。
+    // 归属的终端关了：没人在等，不提醒。
     const owned = s.pr({ number: 8, headBranch: "feat/o" });
     s.state.owners.set(`BTL-1:${s.repoId}:feat/o`, "hx");
     s.state.closed.add("hx");
-    await s.d.flush();
+    await s.flush();
     s.state.now += CI_UNDELIVERED_MS;
-    await s.d.flush();
+    await s.flush();
     expect(s.d.undelivered().map((u) => u.number)).toEqual([7]);
-    s.state.guard = { ok: true, termId: "t1", headId: "h1" };
+    s.state.open = [{ id: "h1", gitBranch: "b", coordinator: false }];
     expect(await s.d.resend({ kind: "pr", id: r.id })).toBe("sent");
+    await flushPromises();
     expect(s.d.undelivered()).toEqual([]);
     expect(await s.d.resend({ kind: "pr", id: r.id })).toBe("delivered");
     expect(await s.d.resend({ kind: "pr", id: owned.id })).toBe("owner_closed");
   });
 
   it("a new commit restarts the undelivered clock", async () => {
-    const s = setup({ guard: { ok: false, block: "busy" } });
+    const s = setup();
+    s.state.open = [{ id: "h1", gitBranch: null, coordinator: false }, { id: "h2", gitBranch: null, coordinator: false }];
     const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     s.state.now = CI_UNDELIVERED_MS;
     s.prs.update(r.id, { headSha: "fedcba9876543" });
-    await s.d.flush();
+    await s.flush();
     s.state.now = CI_UNDELIVERED_MS + 10;
     expect(s.d.undelivered()).toEqual([]);
   });
@@ -348,40 +375,6 @@ describe("pickRecipient", () => {
     expect(pick(null, false, [c("k", null, true), c("a")], "main")).toEqual({ ok: true, sessionId: "a", via: "ticket" });
     expect(pick(null, false, [c("a"), c("b")], "main")).toEqual({ ok: false, reason: "unowned", candidates: ["a", "b"], promised: true });
     expect(pick(null, false, [c("k", null, true)], "main")).toEqual({ ok: false, reason: "no_session" });
-  });
-});
-
-describe("CiDelivery with the real guard and needs-you tracker (I1)", () => {
-  it("a Stop whose new reply is not judged yet does not get the CI result; the flush after a 'not needed' verdict does", async () => {
-    const head = {
-      id: "h1", ticketKey: "BTL-1", cwd: "/r", origin: "butler", gitBranch: "b", firstPrompt: null, lastActivityAt: null, waitingForInput: true,
-      replacedBy: null, dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null,
-    } as Session;
-    const pending: ((v: NeedsYouVerdict | null) => void)[] = [];
-    const tracker = new NeedsYouTracker({
-      judge: () => new Promise((r) => pending.push(r)),
-      sessions: () => [{ id: "h1", cwd: "/r", waiting: true, kind: "waiting", reply: { id: "m2", text: "要我把改动拆成两个 PR 吗？" } }],
-      notify: () => undefined,
-    });
-    const guard = new DeliveryGuard({
-      termOf: () => "t1", head: () => head,
-      activity: () => ({ sessionId: "h1", kind: "waiting", detail: null, background: false, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, lastOutput: [] }),
-      pty: { lastUserInputAt: () => 0, screenNeedsUser: () => false, hasDraft: () => false, autoInputInFlight: () => false },
-      needsYou: (id) => deliveryNeedsYou(tracker, id),
-      now: () => 1_000_000,
-    });
-    const s = setup({ guardImpl: guard, recipient: () => ({ ok: true, sessionId: "h1", via: "ticket" }) });
-    const r = s.pr();
-    // Stop：新回复排进判断，结论还没出。
-    tracker.update();
-    await s.d.flush();
-    expect(s.deliver).not.toHaveBeenCalled();
-    expect(s.prs.get(r.id)!.deliveredKey).toBeNull();
-    // 判断说不需要你：下一次 flush（PrWatcher 的 roundDone）递出去。
-    pending[0]({ needsYou: false, reason: "" });
-    await new Promise((res) => setTimeout(res, 0));
-    await s.d.flush();
-    expect(s.deliver).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -441,51 +434,26 @@ describe("ciRecipient (pickRecipient plus hibernated sessions, workstream M)", (
 });
 
 describe("CiDelivery to a hibernated session", () => {
-  it("records guard:hibernated while it wakes, delivers once after it is back, and never again for the same result", async () => {
-    const s = { asleep: true, term: null as string | null, now: 1 };
-    const wake = vi.fn(() => {
-      s.asleep = false;
-      s.term = "t-new";
+  it("queues it for the hibernated owner (the mailbox wakes it), delivers once, and never again for the same result", async () => {
+    const t = setup({
+      recipient: (key, rid, branch) => {
+        const asleepHead = { id: "o", ticketKey: "BTL-1", repoId: t.repoId, gitBranch: "b", coordinator: false } as Session;
+        return ciRecipient({ ticketKey: key, repoId: rid, branch, ticketBranch: "b", ownerSessionId: "o", headOf: () => asleepHead, ownerTermOpen: false, openHeads: [], hibernatedHeads: [asleepHead] });
+      },
     });
-    // DeliveryGuard 的样子：没有终端时 wakeIfHibernated 叫醒并返回 hibernated。
-    const check = (): ReturnType<DeliveryGuard["check"]> => {
-      if (s.term) return { ok: true, termId: s.term, headId: "o" };
-      if (s.asleep) wake();
-      return { ok: false, block: "hibernated" };
-    };
-    const t = setup({ guardImpl: { check, recheckAfter: () => () => true } });
-    const asleepHead = { id: "o", ticketKey: "BTL-1", repoId: t.repoId, gitBranch: "b", coordinator: false } as Session;
-    const d = new CiDelivery({
-      prs: t.prs, branches: t.branches, currentBranch: () => "b",
-      guard: { check, recheckAfter: () => () => true },
-      recipient: (key, rid, branch) =>
-        ciRecipient({
-          ticketKey: key, repoId: rid, branch, ticketBranch: "b", ownerSessionId: "o", headOf: () => asleepHead, ownerTermOpen: s.term !== null,
-          openHeads: s.term ? [asleepHead] : [], hibernatedHeads: s.asleep ? [asleepHead] : [],
-        }),
-      deliver: t.deliver, now: () => s.now, log: t.log,
-    });
+    t.state.canDeliver = false;
     const r = t.pr();
-
-    // 结论到的时候它在休眠：叫醒，先不递，记下原因。
-    await d.settled({ kind: "pr", id: r.id });
-    expect(wake).toHaveBeenCalledTimes(1);
-    expect(t.deliver).not.toHaveBeenCalled();
-    expect(t.log).toHaveBeenCalledWith(expect.stringContaining("not delivered: guard:hibernated"));
-    s.now = 1 + CI_UNDELIVERED_MS;
-    expect(d.undelivered().map((u) => u.reason)).toEqual(["guard:hibernated"]);
-
-    // 醒来以后的 flush（sessionStopped）：递给新终端，不再挂着。
-    await d.flush();
+    await t.settled({ kind: "pr", id: r.id });
+    expect(t.mailbox.queued.get(ciRef({ kind: "pr", id: r.id }))!.toSession).toBe("o");
+    t.state.now = 1 + CI_UNDELIVERED_MS;
+    expect(t.d.undelivered()).toEqual([]);
+    // 醒来停下：信箱送进去。
+    t.state.canDeliver = true;
+    t.mailbox.deliverQueued();
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect((t.deliver.mock.calls[0] as unknown as [string])[0]).toBe("t-new");
-    expect(d.undelivered()).toEqual([]);
-
-    // 再 flush、PrWatcher 再报一次同一个结论：都不再递，也不再叫醒。
-    await d.flush();
-    await d.settled({ kind: "pr", id: r.id });
+    await t.flush();
+    await t.settled({ kind: "pr", id: r.id });
     expect(t.deliver).toHaveBeenCalledTimes(1);
-    expect(wake).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -496,31 +464,37 @@ describe("CiDelivery with CI triage (workstream I)", () => {
     const r = s.pr({ failed: [{ name: "test", state: "failing", runId: 1 }] });
     expect(await s.d.resend({ kind: "pr", id: r.id })).toBe("triage");
     s.state.now = CI_UNDELIVERED_MS * 2;
-    await s.d.flush();
+    await s.flush();
     expect(s.deliver).not.toHaveBeenCalled();
     expect(s.d.undelivered()).toEqual([]);
     expect(decide).toHaveBeenCalledWith({ kind: "pr", id: r.id }, expect.objectContaining({ ci: "failing", headSha: "abcdef1234567" }));
   });
 
-  it("appends the note and tells triage once it is sent", async () => {
+  it("appends the note and tells triage once it arrives", async () => {
     const onSent = vi.fn();
     const s = setup({ triage: { decide: () => ({ action: "deliver", note: "可能是 flaky：重跑了 2 次", onSent }) } });
     const r = s.pr({ failed: [{ name: "test", state: "failing", runId: 1 }] });
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
     const text = s.deliver.mock.calls[0][1] as string;
     expect(text).toMatch(/push[\s\S]*可能是 flaky：重跑了 2 次$/);
     expect(onSent).toHaveBeenCalledTimes(1);
   });
 
-  it("does not tell triage when the paste did not go through, and delivers anyway when triage throws", async () => {
+  it("does not tell triage while it is still queued or after it was withdrawn, and delivers anyway when triage throws", async () => {
     const onSent = vi.fn();
-    const s = setup({ deliver: async () => "timeout", triage: { decide: () => ({ action: "deliver", note: null, onSent }) } });
+    const s = setup({ triage: { decide: () => ({ action: "deliver", note: null, onSent }) } });
+    s.state.canDeliver = false;
     const r = s.pr();
-    await s.d.settled({ kind: "pr", id: r.id });
+    await s.settled({ kind: "pr", id: r.id });
+    expect(onSent).not.toHaveBeenCalled();
+    s.prs.update(r.id, { ci: "pending" });
+    await s.flush();
+    s.state.canDeliver = true;
+    s.mailbox.deliverQueued();
     expect(onSent).not.toHaveBeenCalled();
     const t = setup({ triage: { decide: () => { throw new Error("boom"); } } });
     const q = t.pr();
-    await t.d.settled({ kind: "pr", id: q.id });
+    await t.settled({ kind: "pr", id: q.id });
     expect(t.deliver).toHaveBeenCalledTimes(1);
   });
 });

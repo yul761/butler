@@ -67,6 +67,9 @@ function setup(o: { threshold?: number; commandReady?: boolean; noEndTerminal?: 
   const logs: string[] = [];
   /** 闲置关闭结束的终端（endTerminal 收到的参数）。 */
   const ended: Array<{ termId: string; headId: string; at: number }> = [];
+  /** 排进信箱的「接着做」，和 mailboxSync 收到的终端（当时还算不算正在换新）。 */
+  const resumes: Array<{ headId: string; text: string }> = [];
+  const synced: Array<{ termId: string; refreshing: boolean }> = [];
   let notified = 0;
   const events: Array<{ at: number; run: () => void }> = [];
   const later = (ms: number, run: () => void) => events.push({ at: state.now + ms, run });
@@ -119,6 +122,13 @@ function setup(o: { threshold?: number; commandReady?: boolean; noEndTerminal?: 
       if (reaction) later(reaction.ms, reaction.run);
       return t?.deliverResult[text] ?? "sent";
     },
+    // 信箱：排进来就当输入了（和别的输入一样记在 typed 里，termId 是 head 所在终端）。
+    queueResume: (headId, text) => {
+      resumes.push({ headId, text });
+      const t = termOf(headId);
+      typed.push({ termId: t ? t.chain[0] : headId, text: sanitizeTask(text), at: state.now });
+    },
+    mailboxSync: (termId) => void synced.push({ termId, refreshing: r.isRefreshing(termId) }),
     sessions: () => terms.map(headOf),
     lastUserInputAt: (termId) => terms.find((x) => x.chain[0] === termId)?.typedAt ?? 0,
     openedAt: (termId) => terms.find((x) => x.chain[0] === termId)?.openedAt ?? 0,
@@ -176,7 +186,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; noEndTerminal?: 
     await new Promise((res) => setImmediate(res));
   };
   const texts = () => typed.map((x) => x.text);
-  return { r, state, terms, typed, texts, logs, ended, addTerm, settle, later, notified: () => notified };
+  return { r, state, terms, typed, texts, logs, ended, resumes, synced, addTerm, settle, later, notified: () => notified };
 }
 
 /** 测试里 writeTail 默认写到的尾巴文件。 */
@@ -230,15 +240,32 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.logs.some((l) => l.includes("the user typed"))).toBe(true);
   });
 
-  it("stops before the resume message when the user typed after /handoff (I3)", async () => {
+  it("queues the resume message for the new head once the refresh is over, even when the user typed after /clear (BTL-248)", async () => {
     const t = setup();
     const term = t.addTerm("s1", {
       reactions: {
-        "/clear": { ms: 2_000, run: () => { term.chain.push("s1-new"); term.context = null; term.typedAt = t.state.now; } },
+        "/clear": { ms: 2_000, run: () => { term.chain.push("s1-new"); term.context = null; term.typedAt = t.state.now; term.block = "typing"; } },
       },
     });
+    expect(await t.r.refresh("s1", "manual")).toBe("done");
+    // 信箱等用户打完字再送：这里只排队，不看 guard。
+    expect(t.resumes).toEqual([{ headId: "s1-new", text: M().refreshResume("ticket", "DMS-1", tailOf("s1")) }]);
+  });
+
+  it("has the mailbox drop its projection when a refresh starts and look again when it ends without a resume (BTL-248)", async () => {
+    const t = setup();
+    t.addTerm("s1", { reactions: { "/handoff": { ms: 1_000, run: () => undefined } } });
     expect(await t.r.refresh("s1", "manual")).toBe("failed");
-    expect(t.texts()).toEqual(["/handoff", "/clear"]);
+    // 开始时已经算正在换新（Mailbox.held 不投影）；结束时不算了。
+    expect(t.synced).toEqual([{ termId: "s1", refreshing: true }, { termId: "s1", refreshing: false }]);
+    expect(t.resumes).toEqual([]);
+
+    // 成功的换新结束时只排「接着做」（信箱排队时自己会重新投影、能送就送）。
+    const ok = setup();
+    ok.addTerm("s1");
+    expect(await ok.r.refresh("s1", "manual")).toBe("done");
+    expect(ok.synced).toEqual([{ termId: "s1", refreshing: true }]);
+    expect(ok.resumes).toHaveLength(1);
   });
 
   it("input before Butler typed /handoff does not stop the refresh (I3)", async () => {
@@ -413,11 +440,11 @@ describe("SessionRefresher (plan 16)", () => {
     expect(await t2.r.refresh("s1", "manual")).toBe("failed");
     expect(t2.texts()).toEqual(["/handoff"]);
 
-    // 接着做的话之前，用户留了草稿：不输入。
+    // /clear 之前，用户留了草稿：不输入。
     const t3 = setup();
-    const draft = t3.addTerm("s1", { reactions: { "/clear": { ms: 2_000, run: () => { draft.chain.push("s1-b"); draft.block = "draft"; } } } });
+    const draft = t3.addTerm("s1", { reactions: { "/handoff": { ms: 2_000, run: () => { t3.r.handoffStored("s1"); draft.block = "draft"; } } } });
     expect(await t3.r.refresh("s1", "manual")).toBe("failed");
-    expect(t3.texts()).toEqual(["/handoff", "/clear"]);
+    expect(t3.texts()).toEqual(["/handoff"]);
   });
 
   it("gives up when the handoff never arrives", async () => {
@@ -700,18 +727,18 @@ describe("SessionRefresher (plan 16)", () => {
     const t = setup();
     const term = t.addTerm("s1", {
       reactions: {
-        // /clear 之后新 head 的活动还没读到：guard 看到的是忙。读过一次活动才知道它停在空的输入框上。
-        "/clear": { ms: 2_000, run: () => { term.chain.push("s1-b"); term.block = "busy"; } },
+        // handoff 收进来以后的活动还没读到：guard 看到的是忙。读过一次活动才知道它停在空的输入框上。
+        "/handoff": { ms: 30_000, run: () => { t.r.handoffStored("s1"); term.block = "busy"; } },
       },
     });
     t.state.onRefreshActivity = () => {
-      if (term.chain.length === 2) term.block = null;
+      term.block = null;
     };
     expect(await t.r.refresh("s1", "manual")).toBe("done");
     expect(t.texts()).toEqual(["/handoff", "/clear", M().refreshResume("ticket", "DMS-1", tailOf("s1"))]);
-    // 接着做的话没有等满一步的时限：读过活动马上就输入了。
-    expect(t.typed[2].at - t.typed[1].at).toBeLessThan(REFRESH_CLEAR_MS);
-    expect(t.state.activityRefreshes.length).toBeGreaterThanOrEqual(2);
+    // /clear 没有等满一步的时限：读过活动马上就输入了。
+    expect(t.typed[1].at - t.typed[0].at).toBeLessThan(30_000 + REFRESH_CLEAR_MS);
+    expect(t.state.activityRefreshes.length).toBeGreaterThanOrEqual(1);
     expect(t.state.activityRefreshes.every((id) => id === "s1")).toBe(true);
   });
 });
