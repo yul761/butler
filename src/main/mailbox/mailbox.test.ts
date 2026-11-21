@@ -98,6 +98,46 @@ describe("Mailbox", () => {
     expect(w.dirFiles("t1")).toBeNull();
   });
 
+  it("a message being typed into a just-opened terminal is not projected for the hook meanwhile (no second delivery)", async () => {
+    const w = world();
+    w.add("t1", false, false);
+    w.mb.send({ ...msg("t1", "wake up"), kind: "butler", hold: true });
+    let release: (r: "sent") => void = () => {};
+    // 终端刚开，还没登记到 session 上：这时没有投影。
+    const typing = w.mb.opened("t1", "new-term", () => new Promise((res) => (release = res)));
+    expect(w.dirFiles("new-term")).toBeNull();
+    // 等输入框的时候 SessionStart 登记了终端、对一遍投影，tick 也来：不能把这条写出去给 hook。
+    w.terms.set("new-term", "t1");
+    w.sessions.set("new-term", { id: "new-term", replacedBy: "t1" });
+    w.mb.syncTerm("new-term");
+    await w.mb.tick();
+    expect(w.dirFiles("new-term")).toBeNull();
+    release("sent");
+    expect(await typing).toBe(true);
+    expect(w.repo.recent({ featureId: 1 }, 5)[0]).toMatchObject({ status: "delivered", via: "input" });
+    expect(w.dirFiles("new-term")).toBeNull();
+  });
+
+  it("a hook that sent the old body before a same-ref replacement does not count as delivering the new one", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.mb.send({ ...msg("t1", "answer: A"), kind: "answer", ref: "answer:7" });
+    await flushPromises();
+    const run = w.hook("t1"); // 拿着旧的那份
+    expect(JSON.parse(run.out).hookSpecificOutput.additionalContext).toContain("answer: A");
+    w.mb.send({ ...msg("t1", "answer: B"), kind: "answer", ref: "answer:7" });
+    run.commit();
+    w.mb.sweep("t1");
+    const [m] = w.repo.recent({ featureId: 1 }, 5);
+    expect(m).toMatchObject({ status: "queued", body: "answer: B" });
+    // 新的那份又写了出去，下一次工具调用送。
+    const again = w.hook("t1");
+    expect(JSON.parse(again.out).hookSpecificOutput.additionalContext).toContain("answer: B");
+    again.commit();
+    w.mb.sweep("t1");
+    expect(w.repo.recent({ featureId: 1 }, 5)[0]).toMatchObject({ status: "delivered", via: "hook" });
+  });
+
   it("opened types every queued message into a terminal just opened for it, without the guard", async () => {
     const w = world();
     w.add("t1", false);

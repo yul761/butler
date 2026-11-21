@@ -17,6 +17,8 @@ export interface MailboxFile {
   id: string;
   text: string;
   intro: string;
+  /** 写这份文件时正文的版本（主进程用；hook 不看）。按 ref 换了正文以后，hook 送的还是旧的那份，就不算送到新的。 */
+  rev?: string;
 }
 
 /** hook 送完以后写进 hook 收件箱的信封里的 hook_event_name：主进程收到就去清扫这个终端的 .done。 */

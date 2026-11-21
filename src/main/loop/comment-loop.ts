@@ -2,7 +2,7 @@ import type { CommentItem, CommentItemsRepo } from "../db/comment-items-repo";
 import type { TicketPr, TicketPrsRepo } from "../db/ticket-prs-repo";
 import type { ExternalActions } from "../external/actions";
 import type { Recipient } from "../prwatch/ci-delivery";
-import type { Mailbox } from "../mailbox/mailbox";
+import { MAILBOX_BODY_LIMIT, type Mailbox } from "../mailbox/mailbox";
 import type { SessionMessage } from "../db/session-messages-repo";
 import type { PrStatus } from "../tickets/gh";
 import type { GhWrite, ReviewThread } from "../tickets/gh-loop";
@@ -376,21 +376,29 @@ export class CommentLoop {
     }
     if (!to.ok) return Promise.resolve(to.reason);
     // 你可能刚忽略了：按库里现在的状态再挑一遍。
-    const items = queued.map((i) => this.d.items.get(i.id)).filter((i): i is CommentItem => i !== null && i.state === "queued").slice(0, policy["comments.maxPerDelivery"]);
+    let items = queued.map((i) => this.d.items.get(i.id)).filter((i): i is CommentItem => i !== null && i.state === "queued").slice(0, policy["comments.maxPerDelivery"]);
     if (items.length === 0) {
       this.d.mailbox.withdraw(ref);
       return Promise.resolve("nothing");
     }
     const m = M();
-    const lines = items.map((i) => ({
-      where: i.path ? `${i.path}${i.line !== null ? `:${i.line}` : ""}` : m.commentWholePr,
-      who: i.who === "copilot" ? m.commentWhoCopilot : m.commentWhoHuman,
-      body: cut(i.body.trim(), COMMENT_DELIVERY_BODY_CHARS),
-      question: i.category === "question",
-    }));
-    const counts = { copilot: items.filter((i) => i.who === "copilot").length, human: items.filter((i) => i.who !== "copilot").length };
     const note = this.d.stackNote?.(row) ?? null;
-    const body = sanitizeTask(m.commentDelivery(m.ciWherePr(row.number), lines, counts) + (note ? `\n\n${note}` : ""));
+    const render = (list: CommentItem[]): string => {
+      const lines = list.map((i) => ({
+        where: i.path ? `${i.path}${i.line !== null ? `:${i.line}` : ""}` : m.commentWholePr,
+        who: i.who === "copilot" ? m.commentWhoCopilot : m.commentWhoHuman,
+        body: cut(i.body.trim(), COMMENT_DELIVERY_BODY_CHARS),
+        question: i.category === "question",
+      }));
+      const counts = { copilot: list.filter((i) => i.who === "copilot").length, human: list.filter((i) => i.who !== "copilot").length };
+      return sanitizeTask(m.commentDelivery(m.ciWherePr(row.number), lines, counts) + (note ? `\n\n${note}` : ""));
+    };
+    // 一条信箱消息放不下：少带几条，剩下的下一次送（不然截掉的那几条也会被记成送到了）。
+    let body = render(items);
+    while (body.length > MAILBOX_BODY_LIMIT && items.length > 1) {
+      items = items.slice(0, -1);
+      body = render(items);
+    }
     const old = this.d.mailbox.queuedByRef(ref);
     // 和排着的那条一样（每轮 PrWatcher 都调）：不动它。
     if (old && old.body === body && this.d.headOf(old.toSession) === this.d.headOf(to.sessionId)) return Promise.resolve("queued");

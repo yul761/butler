@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fakeMailbox } from "../mailbox/fake-mailbox";
+import { MAILBOX_BODY_LIMIT } from "../mailbox/mailbox";
 import { memDb } from "../test-utils";
 import { CommentItemsRepo } from "../db/comment-items-repo";
 import { TicketPrsRepo } from "../db/ticket-prs-repo";
@@ -338,6 +339,20 @@ describe("CommentLoop", () => {
     for (const it of s.items.byPr(s.row.id)) await s.loop.act({ op: "dismiss", id: it.id });
     await s.loop.flush();
     expect(s.mailbox.queued.size).toBe(0);
+  });
+
+  it("sends only as many long comments as fit in one mailbox message; the rest stay queued for the next one (BTL-245)", async () => {
+    const s = setup({}, { guardOk: false });
+    const long = (n: number) => `Finding ${n}. ${"x".repeat(900)}`;
+    s.setThreads(Array.from({ length: 10 }, (_, n) => thread({ id: `T${n}`, dbId: 200 + n, body: long(n), line: 10 + n })));
+    await s.observe();
+    const [msg] = [...s.mailbox.queued.values()];
+    expect(msg.body.length).toBeLessThanOrEqual(MAILBOX_BODY_LIMIT);
+    const sent = (msg.meta as { items: number[] }).items;
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.length).toBeLessThan(10);
+    // meta 里列的每一条都真的在正文里。
+    for (const id of sent) expect(msg.body).toContain(`Finding ${s.items.get(id)!.body.split(".")[0].slice("Finding ".length)}.`);
   });
 
   it("closes open items when the PR is merged, and skips authors whose policy is off", async () => {

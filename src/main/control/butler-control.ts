@@ -173,7 +173,8 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         open = () => openEpic({ epicId: e.id, ...(resume && { sessionId: resume.id }) });
       }
       // 先排进接着的那个的信箱：打开时一起送；打不开也不丢。
-      const early = resume ? enqueue(resume.id, text, featureId, false) : null;
+      // hold：马上就要打开它（或交给 opened），不让信箱再去唤醒一次，免得两边同时 --resume 同一个 session。
+      const early = resume ? enqueue(resume.id, text, featureId, false, true) : null;
       const pending = opening.get(key);
       if (pending) {
         if (early) return queued(early, resume!.id);

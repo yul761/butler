@@ -32,7 +32,7 @@ export interface InboxServiceDeps {
   /** epic 的名字（送给 Butler 总控的汇报里写是哪个 epic，BTL-190 第 5 点）；不给或者找不到就不写。 */
   epicName?(epicId: number): string | null;
   /** 信箱（BTL-245）：回答和汇报都排进去，送达后在 on("answer") / on("report") 里结束条目。 */
-  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef">;
+  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
   /**
    * 终端关着时汇报送给谁：这一类总控最近的那个（没隐藏的 head）。ticket：这个 ticket 的总控；feature、epic：它们的总控、epic session；
    * butler：Butler 总控。没有为 null。不给时只送给开着的总控。
@@ -150,9 +150,11 @@ export class InboxService {
       this.d.notify();
       this.queueAnswer(id);
       if (supersedes.length > 0) this.d.onSuperseded?.(supersedes);
+      this.withdrawSettled();
       return id;
     }
     this.d.notify();
+    if (supersedes.length > 0) this.withdrawSettled();
     this.d.onAsked?.({ id, sessionId: s.id, ticketKey: s.ticketKey, question: q.question, options: q.options ?? [], context: q.context ?? null, supersedes });
     return id;
   }
@@ -178,6 +180,17 @@ export class InboxService {
   /** ticket、feature、epic 归档了：这个范围里还未决的「待你决定」和汇报都记成 dismissed（不再显示、不再送）。 */
   dismissScope(scope: InboxArchiveScope): void {
     if (this.d.repo.dismissPending(scope, this.d.now()) > 0) this.d.notify();
+    this.withdrawSettled();
+  }
+
+  /** 已经不用送的（被顶掉的提问、归档时 dismissed 的、在终端里答过的）：还在信箱里排队的撤回。 */
+  private withdrawSettled(): void {
+    for (const prefix of ["answer", "report"]) {
+      for (const ref of this.d.mailbox.queuedRefs(prefix)) {
+        const item = this.d.repo.get(Number(ref.slice(prefix.length + 1)));
+        if (!item || item.status !== "pending") this.d.mailbox.withdraw(ref);
+      }
+    }
   }
 
   /** 这个 session 上面有没有能收汇报的总控：epic session 只有 Butler 总控开着时才有（BTL-190 第 5 点，没开就只存），别的看 mayHaveCoordinator。 */
@@ -254,6 +267,7 @@ export class InboxService {
    */
   async flush(): Promise<void> {
     try {
+      this.withdrawSettled();
       for (const x of this.d.repo.pendingDecisions()) if (x.answer !== null && !this.d.mailbox.queuedByRef(`answer:${x.id}`)) this.queueAnswer(x.id);
       const now = this.d.now();
       for (const item of this.d.repo.pendingReports()) {

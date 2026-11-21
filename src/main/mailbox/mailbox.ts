@@ -1,8 +1,8 @@
 // 信箱（BTL-245，设计 docs/superpowers/specs/2026-11-20-btl-245-mailbox-design.md）：session 之间的消息一律排队、存进库里。
 // 在忙的 session 下一次工具调用时由 PostToolUse hook 带进去（磁盘投影 <mailbox>/<终端>/），停着的直接输入，
 // 总控可以先按 Esc 叫停再送。状态只有 queued / delivered / replied。
-import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { MESSAGE_LIMIT, sanitizeTask, TASK_LIMIT } from "../../shared/control";
 import {
@@ -35,6 +35,7 @@ export interface MailboxFs {
   mkdir(dir: string): void;
   readdir(dir: string): string[];
   write(file: string, text: string): void;
+  read(file: string): string;
   rename(from: string, to: string): void;
   unlink(file: string): void;
   rmdir(dir: string): void;
@@ -45,6 +46,7 @@ export const realMailboxFs: MailboxFs = {
   mkdir: (d) => mkdirSync(d, { recursive: true }),
   readdir: (d) => readdirSync(d),
   write: (f, t) => writeFileSync(f, t, { mode: 0o600 }),
+  read: (f) => readFileSync(f, "utf8"),
   rename: (a, b) => renameSync(a, b),
   unlink: (f) => unlinkSync(f),
   rmdir: (d) => rmSync(d, { recursive: true, force: true }),
@@ -109,6 +111,8 @@ export interface SendInput {
 export type TargetState = "busy" | "idle" | "closed";
 
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t).toISOString());
+/** 正文的版本：按 ref 换了正文（回答改了、评论多了）就变。 */
+const revOf = (m: Pick<SessionMessage, "body">): string => createHash("sha1").update(m.body).digest("hex").slice(0, 16);
 const EXPECTS_REPLY: ReadonlySet<MessageKind> = new Set(["instruction", "butler"]);
 
 export class Mailbox {
@@ -117,6 +121,8 @@ export class Mailbox {
   private readonly inputting = new Set<string>();
   /** 正在叫停送进去的消息：不往磁盘上投影（不让 hook 抢走）。 */
   private readonly interrupting = new Set<string>();
+  /** 正在直接输入的消息：等输入框的这段时间里也不往磁盘上投影，不然 hook 会再送一遍。 */
+  private readonly inFlight = new Set<string>();
   /** 送达回调，按 ref 的前缀（`report:12` 的 `report`）。 */
   private readonly handlers = new Map<string, (m: SessionMessage) => void>();
   /** 每个 session（head）最后一次停下来的时间：送达记账晚于它停下来时补查回复。 */
@@ -219,7 +225,7 @@ export class Mailbox {
     try {
       const head = this.d.head(termId);
       const dir = this.dirOf(termId);
-      const want = head ? this.queuedFor(head.id).filter((m) => !this.interrupting.has(m.id)) : [];
+      const want = head ? this.queuedFor(head.id).filter((m) => !this.interrupting.has(m.id) && !this.inFlight.has(m.id)) : [];
       const names = this.list(dir);
       const present = new Set<string>();
       for (const n of names) {
@@ -232,7 +238,7 @@ export class Mailbox {
       if (missing.length > 0) {
         this.fs.mkdir(dir);
         for (const m of missing) {
-          const file: MailboxFile = { id: m.id, text: this.render(m), intro: M().mailboxIntro };
+          const file: MailboxFile = { id: m.id, text: this.render(m), intro: M().mailboxIntro, rev: revOf(m) };
           const name = messageFileName(m.queuedAt, m.id);
           // 先写临时文件再改名：hook 不会读到写了一半的。
           this.fs.write(join(dir, `${name}.tmp`), JSON.stringify(file));
@@ -281,7 +287,8 @@ export class Mailbox {
       const file = join(dir, n);
       if (n.endsWith(DONE_SUFFIX)) {
         const m = this.d.repo.get(id);
-        if (m && m.status === "queued") changed = this.markDelivered(m, "hook", this.fileTime(file, now)) || changed;
+        // hook 认领和写出去时都 touch 过：mtime 就是送到的时间。送的是换正文之前的那份：新正文还没送到，留着排队。
+        if (m && m.status === "queued" && this.fileRev(file) === revOf(m)) changed = this.markDelivered(m, "hook", this.fileTime(file, now)) || changed;
         this.unlink(file);
         continue;
       }
@@ -296,6 +303,16 @@ export class Mailbox {
     }
     this.syncTerm(termId);
     if (changed) this.d.notify();
+  }
+
+  /** 文件里记的正文版本；读不出（旧版本写的）就当是现在的。 */
+  private fileRev(file: string): string | undefined {
+    try {
+      const v = (JSON.parse(this.fs.read(file)) as Partial<MailboxFile>).rev;
+      return typeof v === "string" ? v : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private fileTime(file: string, fallback: number): number {
@@ -327,7 +344,7 @@ export class Mailbox {
     const target = this.headOf(m.toSession);
     // 基线是送达之前的最后一条回复；对方一轮很短时，记账前它已经回完了，那条比送达晚，不能当基线。
     const last = m.expectsReply ? this.d.lastReply(target) : null;
-    const baseReplyId = last && (last.at === null || last.at < at) ? last.id : null;
+    const baseReplyId = last && (last.at === null || last.at <= at) ? last.id : null;
     if (!this.d.repo.delivered(m.id, { at, via, toSession: target, baseReplyId })) return false;
     const prefix = m.ref?.split(":")[0];
     const fn = prefix ? this.handlers.get(prefix) : undefined;
@@ -445,6 +462,7 @@ export class Mailbox {
       const claimed = this.claim(term, fresh);
       files = claimed.files;
       if (claimed.mine.length === 0) return false;
+      for (const m of claimed.mine) this.inFlight.add(m.id);
       // 叫停的那一条排在最前，一定在这一批里。
       const list = forced ? [...claimed.mine.filter((m) => m.id === forced), ...claimed.mine.filter((m) => m.id !== forced)] : claimed.mine;
       const { text, ids } = this.batch(list);
@@ -460,13 +478,20 @@ export class Mailbox {
         this.d.log(`mailbox: input to ${head}: ${result}`);
         return false;
       }
-      for (const m of ids) if (this.markDelivered(m, "input", at)) sent.add(m.id);
+      for (const m of ids) {
+        // 等输入框的时候按 ref 换了正文：送进去的是旧的，新的留着排队。
+        const now = this.d.repo.get(m.id);
+        if (now && revOf(now) !== revOf(m)) continue;
+        if (this.markDelivered(m, "input", at)) sent.add(m.id);
+      }
       this.d.notify();
       return true;
     } catch (e) {
       this.d.log(`mailbox: input to ${head} failed`, e);
       return false;
     } finally {
+      for (const id of files.keys()) this.inFlight.delete(id);
+      for (const m of queued) this.inFlight.delete(m.id);
       this.release(term, files, sent);
       this.inputting.delete(term);
       this.syncTerm(term);
@@ -516,7 +541,8 @@ export class Mailbox {
     let changed = false;
     for (const x of waiting) {
       // resume 之后第一次 Stop 看到的可能是上一次对话的最后一条回复：要比排队的时间晚才算。
-      if (reply.id === x.baseReplyId || (reply.at !== null && reply.at < x.queuedAt)) continue;
+      // 要比送到的时间晚：送到之前它停下来留的那条是上一件事的回复。
+      if (reply.id === x.baseReplyId || (reply.at !== null && (x.deliveredAt !== null ? reply.at <= x.deliveredAt : reply.at < x.queuedAt))) continue;
       const text = reply.text.slice(-MESSAGE_LIMIT);
       if (!this.d.repo.replied(x.id, { text, at: reply.at ?? this.d.now() })) continue;
       changed = true;

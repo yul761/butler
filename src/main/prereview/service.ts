@@ -40,7 +40,7 @@ export interface PreReviewServiceDeps {
   profile(slug: string): RepoProfile | null;
   policy(slug: string): ResolvedPrPolicy;
   /** 信箱（BTL-245）：结果排进 session 的信箱，送到后在 on("prereview") 里记 deliveredAt。 */
-  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef">;
+  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
   lang(): Lang;
   changed(): void;
   now(): number;
@@ -216,6 +216,11 @@ export class PreReviewService {
 
   /** roundDone、启动时：还没送到的再送一次（24 小时为止）。 */
   async flush(): Promise<void> {
+    // 排了 24 小时还没送到（目标一直关着）：撤回，打开时不再送过期的结论。
+    for (const ref of this.d.mailbox.queuedRefs("prereview")) {
+      const row = this.d.repo.get(Number(ref.slice("prereview:".length)));
+      if (!row || (row.finishedAt !== null && this.d.now() - row.finishedAt > PRE_REVIEW_DELIVERY_MS)) this.d.mailbox.withdraw(ref);
+    }
     for (const row of this.d.repo.undelivered(this.d.now() - PRE_REVIEW_DELIVERY_MS)) {
       try {
         await this.deliver(row);

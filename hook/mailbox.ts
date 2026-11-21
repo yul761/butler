@@ -1,6 +1,6 @@
 // butler-hook mailbox <dir>：工具调用的间隙把信箱里排队的消息作为 additionalContext 送进 session（BTL-245）。
 // 只在 PostToolUse / PostToolUseFailure 上跑，而且 settings 里的命令先看过目录在不在：到这里时多半真有消息。
-import { readdirSync, readFileSync, renameSync } from "node:fs";
+import { readdirSync, readFileSync, renameSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import {
   DONE_SUFFIX, MAILBOX_CONTEXT_LIMIT, MAILBOX_EVENT, MSG_SUFFIX, TAKEN_SUFFIX, type MailboxFile,
@@ -11,6 +11,8 @@ export interface MailboxDeps {
   readdir(dir: string): string[];
   read(file: string): string;
   rename(from: string, to: string): void;
+  /** 把文件的 mtime 改成现在：主进程按它算认领了多久、什么时候送到的。 */
+  touch(file: string): void;
   pid: number;
 }
 
@@ -18,6 +20,10 @@ export const realMailboxDeps: MailboxDeps = {
   readdir: (d) => readdirSync(d),
   read: (f) => readFileSync(f, "utf8"),
   rename: (a, b) => renameSync(a, b),
+  touch: (f) => {
+    const now = new Date();
+    utimesSync(f, now, now);
+  },
   pid: process.pid,
 };
 
@@ -50,8 +56,10 @@ export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, 
   if (!sid || !root) return NOTHING;
   let event = "PostToolUse";
   try {
-    const p = JSON.parse(stdin) as { tool_name?: unknown; hook_event_name?: unknown };
+    const p = JSON.parse(stdin) as { tool_name?: unknown; hook_event_name?: unknown; agent_id?: unknown };
     if (typeof p.tool_name === "string" && SKIP_TOOLS.has(p.tool_name)) return NOTHING;
+    // 子 agent 的工具调用：additionalContext 进的是子 agent，主 session 看不到。留给主线程的下一次工具调用或停下来以后的直接输入。
+    if (typeof p.agent_id === "string" && p.agent_id) return NOTHING;
     if (p.hook_event_name === "PostToolUseFailure") event = "PostToolUseFailure";
   } catch {
     // 读不出 stdin 也照样送：消息和这次工具调用是什么无关。
@@ -67,6 +75,13 @@ export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, 
   const parts: string[] = [];
   let intro = "";
   let size = 0;
+  const touch = (file: string) => {
+    try {
+      d.touch(file);
+    } catch {
+      // 改不了 mtime：最多被早一点放回去，再送一次。
+    }
+  };
   const putBack = (claimed: string, name: string) => {
     try {
       d.rename(join(dir, claimed), join(dir, name));
@@ -81,6 +96,7 @@ export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, 
     } catch {
       continue; // 被主进程（直接输入）或者并行的另一个 hook 拿走了。
     }
+    touch(join(dir, claimed));
     let file: MailboxFile | null;
     try {
       file = parse(d.read(join(dir, claimed)));
@@ -106,6 +122,7 @@ export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, 
     commit: () => {
       for (const name of taken) {
         try {
+          touch(join(dir, `${name}${TAKEN_SUFFIX}${d.pid}`));
           d.rename(join(dir, `${name}${TAKEN_SUFFIX}${d.pid}`), join(dir, `${name}${DONE_SUFFIX}`));
         } catch {
           // 留着 .taken：主进程 60 秒后放回去，可能再送一次，但不会丢。

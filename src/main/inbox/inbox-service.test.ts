@@ -395,6 +395,26 @@ describe("InboxService report (BTL-190 2+3)", () => {
   });
 });
 
+describe("InboxService withdrawals (BTL-245)", () => {
+  it("withdraws a queued report or answer once its item is dismissed by archiving", async () => {
+    const a = session("a", { ticketKey: "BTL-1" });
+    const fc = session("fc", { featureId: 3 });
+    const { inbox, repo, mailbox, state } = setup({ sessions: [a, fc], tickets: [ticket("BTL-1", 3)], open: ["a", "fc"] });
+    state.answerGate = { ok: false, block: "busy" };
+    state.reportGate = { ok: false, block: "busy" };
+    const r = inbox.report(a, "PR up", "done");
+    const q = inbox.ask(a, { question: "which?" });
+    inbox.answer(q, "this one");
+    await settle();
+    expect(mailbox.queuedByRef(`report:${r.id}`)).not.toBeNull();
+    expect(mailbox.queuedByRef(`answer:${q}`)).not.toBeNull();
+    inbox.dismissScope({ ticketKey: "BTL-1" });
+    expect(mailbox.queuedByRef(`report:${r.id}`)).toBeNull();
+    expect(mailbox.queuedByRef(`answer:${q}`)).toBeNull();
+    expect(repo.get(r.id)?.status).toBe("dismissed");
+  });
+});
+
 describe("InboxService report without a coordinator above (BTL-190 2+3)", () => {
   it("only queues done / blocked when a coordinator could manage the session", () => {
     const bossAlone = session("b1", { ticketKey: "BTL-1", coordinator: true });

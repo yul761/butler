@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -28,6 +28,24 @@ describe("runMailbox", () => {
     expect(readdirSync(dir).sort()).toEqual([`${messageFileName(1, "a")}.done`, `${messageFileName(2, "b")}.done`]);
     // 再来一次：没有可送的。
     expect(runMailbox(stdin, env, root).out).toBe("");
+  });
+
+  it("a sub-agent's tool call sends nothing: its additionalContext would not reach the main session", () => {
+    const { root, dir } = box([{ at: 1, id: "a", text: "x" }]);
+    expect(runMailbox(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Read", agent_id: "agent-1", agent_type: "Explore" }), env, root).out).toBe("");
+    expect(readdirSync(dir)).toEqual([messageFileName(1, "a")]);
+  });
+
+  it("touches the file when it claims it and when it marks it done, so main can tell when it was delivered", () => {
+    const { root, dir } = box([{ at: 1, id: "a", text: "x" }]);
+    const old = new Date(Date.now() - 3600_000);
+    utimesSync(join(dir, messageFileName(1, "a")), old, old);
+    const before = Date.now() - 1000;
+    const run = runMailbox(stdin, env, root);
+    const [taken] = readdirSync(dir);
+    expect(statSync(join(dir, taken)).mtimeMs).toBeGreaterThan(before);
+    run.commit();
+    expect(statSync(join(dir, `${messageFileName(1, "a")}.done`)).mtimeMs).toBeGreaterThan(before);
   });
 
   it("rollback puts claimed files back", () => {
