@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { blockedText } from "./audit-view";
 import { S, STATUS_LABEL, STRINGS, setUiLang } from "./strings";
 
 /** 递归列出键：值的种类（字符串 / 函数及参数个数 / 对象 / 数组长度）也算进去，两种语言必须一模一样。 */
@@ -49,10 +48,8 @@ describe("UI strings in two languages (design 2026-10-26 i18n)", () => {
   it("uses ASCII punctuation around values in English", () => {
     setUiLang("en");
     expect(S.labelled("Workspace", "/w")).toBe("Workspace: /w");
-    expect(blockedText([{ rule: "url", sample: "https://x" }] as never)).toBe("a URL (https://x)");
     setUiLang("zh");
     expect(S.labelled("工作区", "/w")).toBe("工作区：/w");
-    expect(blockedText([{ rule: "url", sample: "https://x" }] as never)).toBe("网址（https://x）");
   });
 
   it("sets the page language for screen readers", () => {

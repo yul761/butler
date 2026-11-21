@@ -8,13 +8,6 @@ describe("IPC whitelist", () => {
     expect([...listed].sort()).toEqual(Object.values(IPC).sort());
   });
 
-  it("exposes the personal API channels as invoke-only", () => {
-    for (const c of [IPC.llmStatus, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsList, IPC.termsSave, IPC.auditList]) {
-      expect(INVOKE_CHANNELS).toContain(c);
-      expect(EVENT_CHANNELS).not.toContain(c);
-    }
-  });
-
   it("exposes the memory channels as invoke-only", () => {
     for (const c of [IPC.memoryView, IPC.memoryWhy]) {
       expect(INVOKE_CHANNELS).toContain(c);

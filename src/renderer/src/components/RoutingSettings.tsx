@@ -7,7 +7,7 @@ import type { EditableSettingKey, EditableSettings } from "../../../shared/setti
 import { api } from "../api";
 import { reportError } from "../errors";
 import { TONE_PILL, timeText } from "../lesson-runs-view";
-import { formatUsd } from "../privacy-form";
+import { formatUsd } from "../format";
 import { chainText, healthText, HEALTH_TONE, parseChain } from "../routing-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";

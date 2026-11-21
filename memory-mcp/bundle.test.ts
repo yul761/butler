@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { postLoopback, startFakeProvider } from "../src/main/gateway/testing";
+import { postLoopback, startLoopbackRecorder } from "../src/main/testing/loopback-recorder";
 import { memoryServers } from "../src/main/memory/mcp-config";
 import { withScope } from "../src/main/memory/statecore";
 import { tempDir } from "../src/main/test-utils";
@@ -18,7 +18,7 @@ beforeAll(() => {
 
 interface Reply {
   id?: number;
-  result?: { content?: { text: string }[]; tools?: { name: string }[] };
+  result?: { content?: { text: string }[]; tools?: { name: string; description: string }[] };
 }
 
 /** 像 claude 按 --mcp-config 那样启动一个 MCP server：stdio 上的 JSON-RPC，一问一答。 */
@@ -103,9 +103,17 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     // 这里透传开发者自己的环境变量：万一清理失效、shell 里又导出了 key，请求也只会打到本机一个关闭的端口。
     const s = await open({ ...process.env, ...CLOSED_PORT_URLS, STATECORE_SCOPE: "ticket:T-1", LOG_LEVEL: "warn" }, dataDir);
     try {
-      const names = ((await s.call("tools/list")).result?.tools ?? []).map((t) => t.name);
-      expect(names).toEqual(expect.arrayContaining(["remember", "recall", "facts", "why", "forget", "handoff"]));
+      const tools = (await s.call("tools/list")).result?.tools ?? [];
+      expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(["remember", "recall", "facts", "why", "forget", "handoff"]));
+      // Butler 自己的 MemoryServer（BTL-243）：说明里不许诺蒸馏，consolidate 的内容原样留成事件。
+      expect(JSON.stringify(tools)).not.toMatch(/distil/i);
+      expect(tools.find((t) => t.name === "remember")?.description).toContain("kept word for word as an event");
       expect(await s.tool("remember", { text: "Claude 记的：这个仓库用 pnpm" })).toContain('"ok": true');
+      // 长内容走 consolidate：之后的 recall 里原样能看到（作为最近事件）。
+      const long = `讨论记录：${"为什么用 WAL 而不是回滚日志。".repeat(80)}`;
+      expect(JSON.parse(await s.tool("remember", { text: long, consolidate: true }))).toEqual({ ok: true, mode: "event" });
+      const recalled = JSON.parse(await s.tool("recall", {})) as { events: { content: string }[] };
+      expect(recalled.events.map((e) => e.content)).toContain(long);
     } finally {
       await s.close();
     }
@@ -123,7 +131,7 @@ describe("bundled StateCore MCP (design 8.4)", () => {
       tempDir(),
     );
     try {
-      expect(await s.tool("remember", { text: "一段原始对话", consolidate: true })).toContain("no model configured");
+      expect(JSON.parse(await s.tool("remember", { text: "一段原始对话", consolidate: true }))).toEqual({ ok: true, mode: "event" });
     } finally {
       await s.close();
     }
@@ -134,7 +142,7 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     // 这里 claude 的环境里带着用户 shell 导出的各种 key，base URL 全部指向本机一个记录请求的假服务器：
     // 清理一旦失效，这里就会收到请求（绝不会到真实的服务商）。
     const electron = electronBinary();
-    const recorder = await startFakeProvider();
+    const recorder = await startLoopbackRecorder();
     const statecoreDir = tempDir();
     const spec = memoryServers({ launcher: { command: electron, script: bundle }, statecoreDir, ticketKey: "T-3" })["butler-memory"];
     const claudeEnv: NodeJS.ProcessEnv = {
@@ -147,8 +155,8 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     try {
       const s = await connect(spec.command, spec.args, { ...claudeEnv, ...spec.env });
       try {
-        // 带 consolidate 的 remember 要模型来蒸馏；阈值 1 时普通 remember 也会触发后台摘要。
-        expect(await s.tool("remember", { text: "一段原始对话", consolidate: true })).toContain("no model configured");
+        // Butler 不蒸馏（backgroundDigest: false）：consolidate 只存成事件；阈值 1、环境里带着 key 也不会去找模型。
+        expect(JSON.parse(await s.tool("remember", { text: "一段原始对话", consolidate: true }))).toEqual({ ok: true, mode: "event" });
         for (const text of ["决定：用 pnpm", "约束：不能改公共 API"]) expect(await s.tool("remember", { text })).toContain('"ok": true');
         // 给可能的后台摘要留出时间，再确认没有任何请求发出。
         await new Promise((r) => setTimeout(r, 1500));

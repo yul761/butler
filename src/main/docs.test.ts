@@ -77,7 +77,7 @@ describe("open-source docs (design 12)", () => {
   it("tells contributors which toolchain to install, in both languages", () => {
     for (const doc of ["CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md"]) {
       const c = read(doc);
-      for (const s of [".node-version", "pnpm", "Xcode Command Line Tools", "Desktop development with C++", "Git Bash", "pnpm e2e", "PrivacyGateway"]) expect(c, `${doc}: ${s}`).toContain(s);
+      for (const s of [".node-version", "pnpm", "Xcode Command Line Tools", "Desktop development with C++", "Git Bash", "pnpm e2e", "loopback-recorder", "egress-lint.test.ts"]) expect(c, `${doc}: ${s}`).toContain(s);
     }
   });
 

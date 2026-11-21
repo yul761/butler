@@ -12,8 +12,7 @@ The Settings page has these sections, in order:
 2. **General**
 3. **Memory (StateCore)**
 4. **Schedule and handoffs**
-5. **Privacy and personal API**
-6. **Lessons** (automatic backups, the export reminder and the admission policy; see [Lessons: bulk actions, admission policy and import / export](#lessons-bulk-actions-admission-policy-and-import--export))
+5. **Lessons** (automatic backups, the export reminder and the admission policy; see [Lessons: bulk actions, admission policy and import / export](#lessons-bulk-actions-admission-policy-and-import--export))
 
 Four more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)), **Comments & CI** (see [Comments and CI](#comments-and-ci)), **Interruptions & notifications** (see [Interruptions and notifications](#interruptions-and-notifications)) and **Stacks** (see [Stacks](#stacks)).
 
@@ -112,19 +111,9 @@ This section also shows:
   - the handoff's learnings, to the `workspace` scope
 
   Butler also syncs a ticket at startup and when you open a session for it. It syncs again when you complete, ignore or reopen one of the ticket's follow-ups.
-- **The 30-note cap.** StateCore keeps at most 30 live notes per scope. Since statecore-mcp 1.1, a forgotten note (a finished follow-up, a replaced decision) frees its slot, and notes the distillation extracts never push out notes written by Butler or by Claude's `remember`. Before each write, Butler counts the free slots. If none is left, it skips the write rather than let StateCore evict the oldest entry, so Butler never evicts its own notes. When slots are short, open follow-ups go first, then decisions. The skipped entries are still in Butler's own database and on the ticket page, and are written as soon as a slot frees up. In the `workspace` scope, StateCore evicts the oldest learnings once it holds 30 notes.
+- **The 30-note cap.** StateCore keeps at most 30 live notes per scope. Since statecore-mcp 1.1, a forgotten note (a finished follow-up, a replaced decision) frees its slot, and nothing else pushes out notes written by Butler or by Claude's `remember`. Before each write, Butler counts the free slots. If none is left, it skips the write rather than let StateCore evict the oldest entry, so Butler never evicts its own notes. When slots are short, open follow-ups go first, then decisions. The skipped entries are still in Butler's own database and on the ticket page, and are written as soon as a slot frees up. In the `workspace` scope, StateCore evicts the oldest learnings once it holds 30 notes.
 - **The Memory section** of a ticket page's **Log** tab shows the latest handoff, decisions, open follow-ups and other notes. Click **History** on an entry to see its version chain. The section refreshes after each Butler sync. It does not update live while Claude writes to memory inside a session.
-- **Distillation.** This happens only at the **Full** privacy level with **Confirm before sending** off. It runs in the background after every nightly handoff run, including catch-up runs and **Run the nightly handoff now**. For each scope with pending events, StateCore makes one or more calls to your personal API and turns the events into notes. Together the calls send:
-  - the scope name, which for a ticket is the real ticket id (`ticket:<KEY>`)
-  - the scope's recent raw events, including what Claude stored with `remember(consolidate: true)`
-  - the scope's existing memory as JSON: Butler's follow-up and decision notes, Claude's own notes, and the previous summary with its next steps
-  - the text of notes forgotten in that scope, so that the model won't bring them back
-
-  In the `workspace` scope, each learning is tagged with the id of the ticket it came from.
-
-  **None of this is pseudonymized or scanned.** Each call is checked against the monthly budget and refused if it would exceed it. Every sent or over-budget call is audited, and shows as **StateCore memory distillation** on the Audit page. A call refused for any other reason, such as the level changing or no usable key, is only written to the log.
-
-  A run that could not process every event is reported as partial and its ticket is resynced; a run that distilled nothing leaves the events for the next night. The calls are made by Butler's main process, inside the privacy gateway, and no StateCore process ever receives the API key.
+- **Long entries.** When Claude calls `remember` with `consolidate: true`, StateCore keeps the text (up to 2,000 characters) word for word as an event, not a note, so it doesn't count toward the 30 notes. Butler calls no model, so nothing distils events into notes: `recall` returns the most recent events (or, with a query, the most relevant ones) in full next to the notes, within its character budget. The memory tools' descriptions say so, and `remember` answers `{"ok": true, "mode": "event"}`. Events left waiting for distillation by an older version stay events and keep showing up in `recall`.
 
 ## Memory and performance
 
@@ -333,25 +322,6 @@ Background work (lessons analysis and backfills, lesson admission, and the kinds
 
 The table on the page shows each kind, whether it may run now and why not (paused by you, spend breaker, quota, yielding to you, outside the hours), and how many items are queued and running. A kind that opens a session also asks the memory admission check first and waits while it refuses. **Pause** stops one kind until you resume it. Lesson admission covers both automatic admission (`lessonsAutoAdmit`) and the daily principles regroup (`lessonsPrinciples`): while its row may not run, they wait and try again later. A repository scan runs only when you start one (or during setup), so it is not in the table and these settings don't hold it.
 
-## Privacy and personal API
-
-The personal API is optional. It is used only at the **Full** level, to distil StateCore memory. Everything else works without it.
-
-| Setting | Key | Default | Accepted values and notes |
-|---------|-----|---------|---------------------------|
-| Privacy level | `llmLevel` | `metadata` | **`off` Off**, **`metadata` Metadata only** and **`redacted` Redacted text**: the personal API is not called. **`full` Full**: enables StateCore distillation, which sends memory contents unscanned (see [How memory works](#how-memory-works)). |
-| Service URL (base URL of an OpenAI-compatible API) | `llmBaseUrl` | empty | For example `https://api.openai.com/v1`, `https://api.deepseek.com/v1`, `https://openrouter.ai/api/v1`, or `http://localhost:11434/v1` for Ollama. It must be `https://`, except for `localhost`, `127.0.0.1` and `[::1]`. It can't include a user name, password, `?query` or `#fragment`. A trailing `/chat/completions` is removed. Empty means not configured, which works the same as `off`. |
-| Model | `llmModel` | empty | No spaces, at most 200 characters, for example `deepseek-chat`. |
-| API key | — | — | Encrypted with the OS keychain (macOS Keychain / Windows DPAPI) and stored in `app.db`. After saving, at most the last 4 characters are shown, and a key shorter than 12 characters is shown only as `••••`. If OS encryption is unavailable, Butler refuses to save the key. Not needed for a local server. |
-| Monthly budget (USD) | `llmMonthlyBudgetUsd` | `1` | Up to two decimals. Before each call, Butler estimates the cost (input plus the maximum output). If this month's spend plus the estimate would exceed the budget, the call is refused and logged. With a budget of `0`, only a model priced at zero can be called. |
-| Price table (USD per million tokens) | `llmPrices` | `* 15 75` | One rule per line: `model-pattern input-price output-price`. `*` is a wildcard and matching ignores case. The first matching rule wins. Empty lines and lines starting with `#` are ignored. The default is deliberately expensive, so set your provider's real prices, for example `deepseek-chat 0.27 1.1`, or `* 0 0` for a local model. A model with no matching rule is never called. |
-| Confirm before sending | `llmConfirm` | `0` (off) | `1` or `0`. While it is on, StateCore distillation does not run. |
-| Keep audit records (days) | `auditRetentionDays` | `90` | 1 to 3650. The current month is always kept, because the budget check needs it. |
-
-A saved key that can no longer be decrypted, for example after the keychain was reset, is only written to the log. It is not audited.
-
-The personal API is called through Electron's network stack, so it follows your system proxy settings (including PAC scripts).
-
 ## Lessons: bulk actions, admission policy and import / export
 
 ### Bulk actions and batches
@@ -548,7 +518,7 @@ Readiness conditions, evidence requirements and risk rules are a three-layer pol
 
 ## Outward actions
 
-Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**, and [Stacks](#stacks) use **Force push**, **Push branches**, **Open PRs**, **Edit PR titles**, **Edit PR descriptions**, **Add or remove PR labels** and **Post issues**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as `auditRetentionDays`. **Push notifications** is used by [notifications](#notifications).
+Some features let Butler leave something outside your machine on your behalf, such as a reply under a PR comment. Today the repo rule export uses **Push branches** and **Open PRs**, and [Comments and CI](#comments-and-ci) uses **Reply to review comments**, **Resolve comments** and **Rerun CI**, and [Stacks](#stacks) use **Force push**, **Push branches**, **Open PRs**, **Edit PR titles**, **Edit PR descriptions**, **Add or remove PR labels** and **Post issues**; the other switches take effect as later features start using them. Each kind of action has its own switch under **Settings → Outward actions**, and all of them are off by default. While a switch is off Butler doesn't take that action; it only records a skipped entry. Every action taken, failed or skipped is listed under **Outward actions** on the **Audit** page, with the repo, ticket, target and what was sent, and is kept as long as **Keep audit records (days)** (`auditRetentionDays`, below). **Push notifications** is used by [notifications](#notifications).
 
 | Setting | Key | Default | What it allows |
 |---------|-----|---------|----------------|
@@ -568,6 +538,10 @@ Some features let Butler leave something outside your machine on your behalf, su
 | Intake: change ticket status | `externalIntakeTrackerStatus` | `0` (off) | Telling a session that automatic intake started to move its tracker ticket to In Progress first. |
 
 Each switch is `1` or `0`.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Keep audit records (days) | `auditRetentionDays` | `90` | 1 to 3650. How long the outward-action records on the Audit page and the [notification log](#notifications) are kept. Older records are cleared at startup and as new records come in. |
 
 ## Repo baseline: what each repository already checks
 
@@ -694,7 +668,7 @@ Every choice made this way is listed under **Choices made for you**, newest firs
 
 Butler can push to one HTTPS webhook when something needs you: `ntfy`-style topics or a chat tool's incoming webhook. The switch is **Push notifications** (`externalPushNotification`) under outward actions. While it is off, nothing is sent and the notification log stays empty.
 
-- **The address** is stored encrypted, like the API key. Only its host is shown, and it is never exported.
+- **The address** is stored encrypted with the OS keychain (macOS Keychain / Windows DPAPI). Only its host is shown, and it is never exported. If OS encryption is unavailable, Butler refuses to save it.
 - **What is sent.** By default a message names only the kind of event and how many there were, for example "2 things need your decision". Events of the same kind within a minute are sent together. Question text, comment text, paths and repository names are never sent.
 - **Log.** Every message sent, failed, held back by quiet hours or left out is listed under **Notification log** and kept as long as `auditRetentionDays`.
 

@@ -1,6 +1,6 @@
-import { request } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { type LoopbackMcp, type RpcMessage, startLoopbackMcp } from "./loopback-mcp";
+import { loopbackRequest, type LoopbackResponse } from "../src/main/testing/loopback-recorder";
+import { type LoopbackMcp, type RpcMessage, startLoopbackMcp } from "./loopback-http";
 
 const TOKEN = "a".repeat(43);
 let hub: LoopbackMcp | null = null;
@@ -23,20 +23,8 @@ async function start(): Promise<LoopbackMcp> {
   return hub;
 }
 
-function call(port: number, o: { method?: string; path?: string; body?: string; headers?: Record<string, string> }): Promise<{ status: number; body: string; headers: Record<string, unknown> }> {
-  return new Promise((resolve, reject) => {
-    const req = request({
-      host: "127.0.0.1", port, method: o.method ?? "POST", path: o.path ?? `/mcp/${TOKEN}`,
-      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...o.headers },
-    }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (c: string) => (body += c));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
-    });
-    req.on("error", reject);
-    req.end(o.body);
-  });
+function call(port: number, o: { method?: string; path?: string; body?: string; headers?: Record<string, string> }): Promise<LoopbackResponse> {
+  return loopbackRequest(port, { ...o, path: o.path ?? `/mcp/${TOKEN}` });
 }
 
 const rpc = (id: number | undefined, method: string) => JSON.stringify({ jsonrpc: "2.0", ...(id !== undefined && { id }), method });

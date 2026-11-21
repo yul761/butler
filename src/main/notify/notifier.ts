@@ -1,7 +1,7 @@
 import { NOTIFY_EVENTS, type NotifyEvent, type NotifyStatus } from "../../shared/interrupts";
 import type { NotificationLogRepo } from "../db/interrupts-repo";
 import type { ExternalActions } from "../external/actions";
-import type { WebhookRequest, WebhookResult } from "../gateway/webhook";
+import type { WebhookRequest, WebhookResult } from "./webhook";
 import { normalizeNotifyEvents, normalizeQuietHours } from "../settings/settings-values";
 import { M } from "../strings";
 
@@ -20,7 +20,7 @@ export interface NotifierDeps {
   actions: Pick<ExternalActions, "allowed" | "attempt">;
   log: Pick<NotificationLogRepo, "insert" | "prune">;
   webhook: { get(): string | null };
-  /** PrivacyGateway.postWebhook。 */
+  /** sendWebhook（webhook.ts）。 */
   post(r: Omit<WebhookRequest, "fetch">): Promise<WebhookResult>;
   setting(key: NotifySetting): string;
   now(): number;

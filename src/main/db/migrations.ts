@@ -1417,4 +1417,12 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE fork_discussions ADD COLUMN cost_approx INTEGER NOT NULL DEFAULT 0;
   `,
+  // BTL-243：个人 LLM API、隐私档位和记忆蒸馏都拿掉了。清掉存下的 key、这几项设置、敏感词和 LLM 调用的审计（里面是发出去的原文），
+  // 表留着不用。secrets 里的 webhook 地址和 auditRetentionDays（对外动作的审计也用它）不动。
+  `
+  DELETE FROM secrets WHERE name = 'llm_api_key';
+  DELETE FROM settings WHERE key IN ('llmLevel', 'llmBaseUrl', 'llmModel', 'llmMonthlyBudgetUsd', 'llmPrices', 'llmConfirm');
+  DELETE FROM sensitive_terms;
+  DELETE FROM llm_audit;
+  `,
 ];

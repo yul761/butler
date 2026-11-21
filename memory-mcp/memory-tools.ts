@@ -1,13 +1,13 @@
-// 共享 MCP（WS-M H，设计文档 2026-11-17 §8）里的记忆 server：照 statecore-mcp 1.1.0 的工具层复刻，
-// initialize、tools/list 和每个工具的结果都要和它一字不差（hub-contract.test.ts 拿真的 statecore-mcp 比）。
-// 后端（StateCore 的嵌入式后端）由 hub-entry.ts 建好传进来，这里不 import statecore-mcp。
+// Butler 给 claude 的记忆 server（共享 MCP 的 hub 和 stdio 两种挂法都用它，BTL-243）：照 statecore-mcp 1.1.0 的工具层复刻，
+// 再叠上 BUTLER_OVERRIDES 这几处改动（Butler 不蒸馏：consolidate 的长内容作为事件原样留着）。
+// hub-contract.test.ts 拿真的 statecore-mcp 比：上游原文一字不差，差别只有这份清单。
+// 后端（StateCore 的嵌入式后端，backgroundDigest: false）由 hub-entry.ts / entry.ts 建好传进来，这里不 import statecore-mcp。
 
 /** statecore-mcp 的 MemoryBackend 里这里用到的部分。 */
 export interface MemoryBackendLike {
   remember(input: { text: string; consolidate?: boolean }): Promise<unknown>;
   recall(input: { query?: string; maxChars?: number }): Promise<unknown>;
   facts(): Promise<unknown>;
-  pendingEvents?(): Promise<unknown>;
   why(input: { factId: string }): Promise<unknown>;
   forget(input: { factKey: string }): Promise<unknown>;
   handoff(input: { summary?: string; openQuestions?: string[]; nextSteps?: string[]; clear?: boolean }): Promise<unknown>;
@@ -25,7 +25,8 @@ export const STATECORE_MCP_VERSION = "1.1.0";
 /** MCP SDK（statecore-mcp 用的 1.x）认的协议版本：客户端要的在里面就用它，不在就回最新的。 */
 const SUPPORTED_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
 
-export const MEMORY_INSTRUCTIONS = [
+/** statecore-mcp 1.1.0 的 server instructions，原文。 */
+export const UPSTREAM_INSTRUCTIONS = [
   "StateCore is this project's persistent memory across sessions.",
   "At the start of a session — and before relying on past context — call `recall` to load what is already known.",
   "Call `remember` proactively, without being asked, whenever one of these happens:",
@@ -42,7 +43,8 @@ const SCHEMA = "http://json-schema.org/draft-07/schema#";
 const EXECUTION = { taskSupport: "forbidden" };
 const boundedStrings = { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, maxItems: 10 };
 
-export const MEMORY_TOOLS = [
+/** statecore-mcp 1.1.0 的 tools/list，原文。 */
+export const UPSTREAM_TOOLS = [
   {
     name: "remember",
     description: "Store a durable fact about this project or user. Use for preferences, decisions, constraints, and anything worth knowing next session. Deterministic and audit-tracked. Notes (the default path) are capped at 500 characters; pass consolidate=true for longer conversational context, accepted up to 2000 characters and distilled in the background.",
@@ -114,6 +116,93 @@ export const MEMORY_TOOLS = [
     execution: EXECUTION,
   },
 ];
+
+/** 一处改动：where 里的 from 原样换成 to。where 是 instructions、<工具>.description 或 <工具>.<参数>（参数的 description）。 */
+export interface Override {
+  where: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * Butler 对上游文字的全部改动（BTL-243 addendum §4）。Butler 不调用任何模型，没有蒸馏：
+ * consolidate 进来的长内容原样存成事件，recall 作为最近事件返回；facts 也不再报“等待蒸馏的事件数”。
+ */
+export const BUTLER_OVERRIDES: readonly Override[] = [
+  {
+    where: "instructions",
+    from: "pass consolidate: true for longer conversational context.",
+    to: "pass consolidate: true for longer conversational context — it is kept word for word and `recall` returns it among recent events.",
+  },
+  {
+    where: "remember.description",
+    from: "accepted up to 2000 characters and distilled in the background.",
+    to: "accepted up to 2000 characters and kept word for word as an event, not a fact; recall returns recent events.",
+  },
+  {
+    where: "remember.consolidate",
+    from: "true for longer conversational context to be distilled into facts in the background; omit for a single fact.",
+    to: "true for longer conversational context, kept word for word as an event that recall returns among recent events; omit for a single fact.",
+  },
+  {
+    where: "recall.description",
+    from: "Returns the active session handoff, the distilled digest, believed facts (with factIds for why), recent events,",
+    to: "Returns the active session handoff, believed facts (with factIds for why), recent events (including longer context stored with consolidate=true),",
+  },
+  {
+    where: "facts.description",
+    from: ", plus how many captured events are still waiting for distillation.",
+    to: ".",
+  },
+];
+
+type Tool = (typeof UPSTREAM_TOOLS)[number] & { inputSchema: { properties?: Record<string, { description?: string }> } };
+
+function swap(text: string, o: Override): string {
+  // 上游改了措辞（statecore-mcp 升级），这里立刻失败，不会悄悄留下旧说法。
+  if (!text.includes(o.from)) throw new Error(`memory-tools: override for ${o.where} no longer matches statecore-mcp`);
+  return text.replace(o.from, o.to);
+}
+
+/** 把改动叠到上游的 instructions 和工具列表上（不改上游那两份）。 */
+export function applyOverrides(instructions: string, tools: readonly unknown[], overrides: readonly Override[]): { instructions: string; tools: unknown[] } {
+  const out = structuredClone(tools) as Tool[];
+  let ins = instructions;
+  for (const o of overrides) {
+    if (o.where === "instructions") {
+      ins = swap(ins, o);
+      continue;
+    }
+    const [name, field] = o.where.split(".");
+    const tool = out.find((t) => t.name === name);
+    if (!tool) throw new Error(`memory-tools: no tool ${name}`);
+    if (field === "description") tool.description = swap(tool.description, o);
+    else {
+      const prop = tool.inputSchema.properties?.[field];
+      if (!prop?.description) throw new Error(`memory-tools: no parameter ${o.where}`);
+      prop.description = swap(prop.description, o);
+    }
+  }
+  return { instructions: ins, tools: out };
+}
+
+const applied = applyOverrides(UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS, BUTLER_OVERRIDES);
+export const MEMORY_INSTRUCTIONS = applied.instructions;
+export const MEMORY_TOOLS = applied.tools as typeof UPSTREAM_TOOLS;
+
+/**
+ * 工具结果上的改动：remember(consolidate) 不再说“蒸馏推迟了”（StateCore 回的 distillation / reason），
+ * facts 不再带等待蒸馏的事件数（上游的 pending）。其余结果和上游一样。
+ */
+export function overrideResult(tool: string, result: unknown): unknown {
+  if (tool === "remember" && result && typeof result === "object" && (result as { mode?: unknown }).mode === "event") {
+    const rest = { ...(result as Record<string, unknown>) };
+    delete rest.distillation;
+    delete rest.reason;
+    return rest;
+  }
+  return result;
+}
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text", text: t }], ...(isError && { isError: true }) });
 const json = (v: unknown) => text(JSON.stringify(v, null, 2));
@@ -223,14 +312,11 @@ export class MemoryServer {
           if (!a.consolidate && (a.text as string).length > 500) {
             return text("notes are capped at 500 characters; pass consolidate: true for longer conversational content", true);
           }
-          return json(await b.remember(a as { text: string; consolidate?: boolean }));
+          return json(overrideResult("remember", await b.remember(a as { text: string; consolidate?: boolean })));
         case "recall":
           return json(await b.recall({ query: a.query as string | undefined, maxChars: (a.maxChars as number | undefined) ?? 4000 }));
-        case "facts": {
-          const groups = await b.facts();
-          const pending = b.pendingEvents ? await b.pendingEvents() : null;
-          return json(pending ? { groups, pending } : { groups });
-        }
+        case "facts":
+          return json({ groups: await b.facts() });
         case "why":
           return json(await b.why(a as { factId: string }));
         case "forget":

@@ -1,5 +1,6 @@
-// 共享 MCP 的记忆 server 和真的 statecore-mcp 一样吗（WS-M 设计 §8 的契约测试）：
-// 同样的 initialize、同样的工具列表，remember / recall / handoff / facts 的结果形状一样。statecore-mcp 升级改了工具层，这里会失败。
+// Butler 的记忆 server 和真的 statecore-mcp 比（WS-M 设计 §8 的契约测试，BTL-243 改过）：
+// Butler 留的上游原文和真的一字不差；Butler 的 server 和真的之间，差别只有 BUTLER_OVERRIDES 这份清单（和 overrideResult 对结果的改动）。
+// statecore-mcp 升级改了工具层，这里会失败。
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -7,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { MemoryServer, STATECORE_MCP_VERSION } from "./memory-tools";
+import { applyOverrides, BUTLER_OVERRIDES, MemoryServer, overrideResult, STATECORE_MCP_VERSION, UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS } from "./memory-tools";
 
 type Reply = { id?: number; result?: Record<string, unknown>; error?: unknown };
 
@@ -33,7 +34,7 @@ function realServer(dataDir: string) {
   };
 }
 
-const backend = createEmbeddedBackend({ dataDir: tempDir(), scopeName: "contract", env: { LOG_LEVEL: "warn" } });
+const backend = createEmbeddedBackend({ dataDir: tempDir(), scopeName: "contract", env: { LOG_LEVEL: "warn" }, backgroundDigest: false });
 const hub = new MemoryServer(async () => backend);
 let hubNext = 0;
 const hubSend = (method: string, params?: Record<string, unknown>) => hub.handle({ jsonrpc: "2.0", id: ++hubNext, method, ...(params && { params }) }) as Promise<Reply>;
@@ -57,25 +58,46 @@ function shape(v: unknown, key = ""): unknown {
   if (typeof v === "number" && /(At|at|time|Time|ms|Ms|score|Score|confidence|chars|Chars|used|Used)$/.test(key)) return "<number>";
   return v;
 }
-const toolJson = (r: Reply) => {
+const toolJson = (r: Reply, fix: (body: unknown) => unknown = (b) => b) => {
   const res = r.result as { content: { text: string }[]; isError?: boolean };
-  return { isError: res.isError ?? false, body: res.isError ? res.content[0].text : shape(JSON.parse(res.content[0].text)) };
+  return { isError: res.isError ?? false, body: res.isError ? res.content[0].text : shape(fix(JSON.parse(res.content[0].text))) };
+};
+/** 真的 statecore-mcp 的结果在 Butler 这边应该变成什么：remember 走 overrideResult，facts 去掉等待蒸馏的 pending。 */
+const butlerSide = (name: string) => (body: unknown) => {
+  if (name === "facts" && body && typeof body === "object") {
+    const rest = { ...(body as Record<string, unknown>) };
+    delete rest.pending;
+    return rest;
+  }
+  return overrideResult(name, body);
 };
 
 describe("shared MCP memory server vs statecore-mcp", () => {
-  it("answers initialize the same way, for the protocol versions Claude Code asks for", async () => {
+  it("answers initialize the same way, for the protocol versions Claude Code asks for, apart from the overridden instructions", async () => {
     for (const protocolVersion of ["2025-06-18", "2025-03-26", "1999-01-01"]) {
       const params = { protocolVersion, capabilities: {}, clientInfo: { name: "contract", version: "1" } };
       const [a, b] = await Promise.all([real.send("initialize", params), hubSend("initialize", params)]);
-      expect(b.result).toEqual(a.result);
+      const upstream = (a.result as { instructions: string }).instructions;
+      expect(upstream).toBe(UPSTREAM_INSTRUCTIONS);
+      expect(b.result).toEqual({ ...a.result, instructions: applyOverrides(upstream, [], BUTLER_OVERRIDES.filter((o) => o.where === "instructions")).instructions });
     }
     real.notify("notifications/initialized");
     expect(await hub.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
   });
 
-  it("lists the same tools with the same descriptions and schemas", async () => {
+  it("keeps a word-for-word copy of the real tool list, and differs from it only by the named overrides", async () => {
     const [a, b] = await Promise.all([real.send("tools/list"), hubSend("tools/list")]);
-    expect(b.result).toEqual(a.result);
+    const upstream = (a.result as { tools: unknown[] }).tools;
+    expect(upstream).toEqual(UPSTREAM_TOOLS);
+    expect(b.result).toEqual({ tools: applyOverrides("", upstream, BUTLER_OVERRIDES.filter((o) => o.where !== "instructions")).tools });
+    // 说明里不再许诺蒸馏。
+    expect(JSON.stringify(b.result)).not.toMatch(/distil/i);
+  });
+
+  it("fails loudly when an override no longer matches the upstream text", () => {
+    expect(() => applyOverrides(UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS, [{ where: "instructions", from: "no such words", to: "x" }])).toThrow(/no longer matches/);
+    expect(() => applyOverrides(UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS, [{ where: "remember.nope", from: "a", to: "b" }])).toThrow(/no parameter/);
+    for (const o of BUTLER_OVERRIDES) expect(o.to, o.where).not.toBe(o.from);
   });
 
   it("is the statecore-mcp version it was copied from", async () => {
@@ -99,8 +121,22 @@ describe("shared MCP memory server vs statecore-mcp", () => {
     ];
     for (const [name, args] of steps) {
       const [a, b] = await Promise.all([real.send("tools/call", { name, arguments: args }), hubSend("tools/call", { name, arguments: args })]);
-      expect({ name, ...toolJson(b) }).toEqual({ name, ...toolJson(a) });
+      expect({ name, ...toolJson(b) }).toEqual({ name, ...toolJson(a, butlerSide(name)) });
     }
+  });
+
+  it("answers remember(consolidate) as an event and returns a long entry whole in recall (BTL-243)", async () => {
+    const long = `Why we picked WAL over a rollback journal: ${"readers never block the writer, and recovery after a crash is a replay. ".repeat(24)}`;
+    expect(long.length).toBeGreaterThan(1500);
+    const r = toolJson(await hubSend("tools/call", { name: "remember", arguments: { text: long, consolidate: true } }));
+    expect(r).toEqual({ isError: false, body: { ok: true, mode: "event" } });
+    for (const args of [{}, { query: "rollback journal" }]) {
+      const res = (await hubSend("tools/call", { name: "recall", arguments: args })).result as { content: { text: string }[] };
+      const body = JSON.parse(res.content[0].text) as { events: { content: string }[] };
+      expect(body.events.map((e) => e.content)).toContain(long);
+    }
+    const facts = (await hubSend("tools/call", { name: "facts", arguments: {} })).result as { content: { text: string }[] };
+    expect(Object.keys(JSON.parse(facts.content[0].text) as object)).toEqual(["groups"]);
   });
 
   it("returns the same errors for methods it does not have", async () => {

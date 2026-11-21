@@ -1542,29 +1542,3 @@ interface ToolError {
 function toolError(text: string): ToolError {
   return { content: [{ type: "text", text }], isError: true };
 }
-
-/** stdio：每行一条 JSON-RPC 消息，回复也是一行一条。 */
-export function serveStdio(server: SessionsServer, input: NodeJS.ReadableStream, output: NodeJS.WritableStream): void {
-  let buf = "";
-  input.setEncoding("utf8");
-  input.on("data", (chunk: string) => {
-    buf += chunk;
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      let msg: JsonRpcMessage;
-      try {
-        msg = JSON.parse(line) as JsonRpcMessage;
-      } catch {
-        output.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } })}\n`);
-        continue;
-      }
-      void server.handle(msg).then(
-        (r) => r && output.write(`${JSON.stringify(r)}\n`),
-        (e: unknown) => output.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id ?? null, error: { code: -32603, message: String(e) } })}\n`),
-      );
-    }
-  });
-}

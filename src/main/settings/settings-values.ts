@@ -2,7 +2,6 @@ import { renderBranch } from "../../shared/branch";
 import { LANG_SETTINGS } from "../../shared/i18n";
 import { isAbsolute } from "node:path";
 import vm from "node:vm";
-import { PRIVACY_LEVELS, TERM_CATEGORIES, type PrivacyLevel, type SensitiveTerm, type TermCategory } from "../../shared/llm";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { M } from "../strings";
@@ -85,108 +84,9 @@ export function normalizeFlag(value: string): string {
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
-/** URL.hostname 是不是本机（Ollama 之类的本地服务可以用 http、可以不配 key）。 */
+/** URL.hostname 是不是本机（webhook 只有发往本机时可以用 http）。 */
 export function isLoopbackHost(hostname: string): boolean {
   return LOOPBACK_HOSTS.has(hostname.toLowerCase());
-}
-
-/** OpenAI 兼容接口的 base URL：https（本机可以 http），不带账号、查询串和 #；去掉末尾的 / 和 /chat/completions。 */
-export function normalizeBaseUrl(v: string): string {
-  const t = v.trim();
-  if (!t) return "";
-  let u: URL;
-  try {
-    u = new URL(t);
-  } catch {
-    throw new SettingError(M().baseUrlFormat);
-  }
-  if (u.username || u.password) throw new SettingError(M().baseUrlCredentials);
-  if (u.search || u.hash) throw new SettingError(M().baseUrlQuery);
-  if (u.protocol !== "https:" && !(u.protocol === "http:" && isLoopbackHost(u.hostname))) {
-    throw new SettingError(M().baseUrlHttps);
-  }
-  const path = u.pathname.replace(/\/+$/, "").replace(/\/chat\/completions$/, "");
-  return `${u.protocol}//${u.host}${path}`;
-}
-
-export interface PriceRule {
-  /** 模型名，* 匹配任意字符，不区分大小写。 */
-  pattern: string;
-  /** 美元 / 百万 token。 */
-  inputPerMTok: number;
-  outputPerMTok: number;
-}
-
-const PRICE_NUM = /^\d{1,6}(\.\d{1,6})?$/;
-const PRICE_MODEL = /^[A-Za-z0-9._:/@*+-]{1,200}$/;
-
-/** 每行“模型 输入价 输出价”；空行和 # 开头的行忽略。格式不对时抛 SettingError（指出第几行）。 */
-export function parsePriceTable(v: string): PriceRule[] {
-  const rules: PriceRule[] = [];
-  v.split(/\r?\n/).forEach((raw, i) => {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) return;
-    const parts = line.split(/\s+/);
-    if (parts.length !== 3 || !PRICE_MODEL.test(parts[0]) || !PRICE_NUM.test(parts[1]) || !PRICE_NUM.test(parts[2])) {
-      throw new SettingError(M().priceLine(i + 1));
-    }
-    rules.push({ pattern: parts[0], inputPerMTok: Number(parts[1]), outputPerMTok: Number(parts[2]) });
-  });
-  return rules;
-}
-
-/** 线性回溯的通配匹配（只有 *），不区分大小写；不用正则，病态模式也不会指数膨胀。 */
-function globMatch(pattern: string, text: string): boolean {
-  const p = pattern.toLowerCase();
-  const t = text.toLowerCase();
-  let pi = 0;
-  let ti = 0;
-  let star = -1;
-  let mark = 0;
-  while (ti < t.length) {
-    if (pi < p.length && p[pi] === "*") {
-      star = pi++;
-      mark = ti;
-    } else if (pi < p.length && p[pi] === t[ti]) {
-      pi++;
-      ti++;
-    } else if (star >= 0) {
-      pi = star + 1;
-      ti = ++mark;
-    } else return false;
-  }
-  while (pi < p.length && p[pi] === "*") pi++;
-  return pi === p.length;
-}
-
-/** 从上往下第一条匹配的价格；没有匹配时为 null（不会调用）。 */
-export function priceFor(rules: readonly PriceRule[], model: string): PriceRule | null {
-  return rules.find((r) => globMatch(r.pattern, model)) ?? null;
-}
-
-export const TERMS_LIMIT = 500;
-
-/** 设置页提交的敏感词表：NFKC、压缩空白、去掉空项和只差大小写的重复项；太短、太长、太多或格式不对时抛 SettingError。 */
-export function normalizeTerms(input: unknown): SensitiveTerm[] {
-  if (!Array.isArray(input)) throw new SettingError(M().termsFormat);
-  const out: SensitiveTerm[] = [];
-  const seen = new Set<string>();
-  for (const x of input) {
-    const o = x as { term?: unknown; category?: unknown } | null;
-    if (!o || typeof o.term !== "string" || !(TERM_CATEGORIES as readonly string[]).includes(String(o.category))) {
-      throw new SettingError(M().termsFormat);
-    }
-    const term = o.term.normalize("NFKC").replace(/\s+/g, " ").trim();
-    if (!term) continue;
-    if ([...term].length < 2) throw new SettingError(M().termTooShort(term));
-    if (term.length > 100) throw new SettingError(M().termTooLong(term.slice(0, 20)));
-    const k = term.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push({ term, category: o.category as TermCategory });
-  }
-  if (out.length > TERMS_LIMIT) throw new SettingError(M().tooManyTerms(TERMS_LIMIT));
-  return out;
 }
 
 function branchNameBad(name: string): boolean {
@@ -326,28 +226,6 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!value.trim()) throw new SettingError(M().promptEmpty);
       if (value.length > 20_000) throw new SettingError(M().promptTooLong);
       return value;
-    case "llmLevel": {
-      const t = value.trim();
-      if (!(PRIVACY_LEVELS as readonly string[]).includes(t)) throw new SettingError(M().privacyLevel);
-      return t;
-    }
-    case "llmBaseUrl":
-      return normalizeBaseUrl(value);
-    case "llmModel": {
-      const t = value.trim();
-      // eslint-disable-next-line no-control-regex
-      if (t && !/^[^\s\u0000-\u001f\u007f]{1,200}$/.test(t)) throw new SettingError(M().modelName);
-      return t;
-    }
-    case "llmMonthlyBudgetUsd": {
-      const t = value.trim();
-      if (!/^\d{1,6}(\.\d{1,2})?$/.test(t)) throw new SettingError(M().budget);
-      return String(Number(t));
-    }
-    case "llmPrices":
-      return parsePriceTable(value).map((r) => `${r.pattern} ${r.inputPerMTok} ${r.outputPerMTok}`).join("\n");
-    case "llmConfirm":
-      return normalizeFlag(value);
     case "auditRetentionDays": {
       const t = value.trim();
       if (!/^\d{1,4}$/.test(t) || Number(t) < 1 || Number(t) > 3650) throw new SettingError(M().retention);
@@ -700,47 +578,11 @@ export function trackerTools(s: SettingsRepo): string[] {
   return parseToolList(s.get("trackerTools")).filter((t) => TRACKER_TOOL_RE.test(t));
 }
 
-export interface LlmConfig {
-  level: PrivacyLevel;
-  /** 规范化后的 base URL；没配置或存储的值不合法时为 ""。 */
-  baseUrl: string;
-  model: string;
-  budgetUsd: number;
-  prices: PriceRule[];
-  confirm: boolean;
-  retentionDays: number;
-}
-
-/** 与 normalizeSetting 同一个范围：1–3650 的整数，否则回退 90。 */
-function parseRetentionDays(v: string): number {
-  const t = v.trim();
+/** 审计的保留天数（auditRetentionDays，对外动作的审计用）：与 normalizeSetting 同一个范围，1–3650 的整数，否则回退 90。 */
+export function auditRetentionDays(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("auditRetentionDays").trim();
   const n = Number(t);
   return /^\d{1,4}$/.test(t) && n >= 1 && n <= 3650 ? n : 90;
-}
-
-function safely<T>(f: () => T, fallback: T): T {
-  try {
-    return f();
-  } catch {
-    return fallback;
-  }
-}
-
-/** 读取时一律往保守方向回退：档位坏了当作 off，价格表坏了当作空（不会调用），预算坏了当作 0。 */
-export function llmConfig(s: SettingsRepo): LlmConfig {
-  const level = s.get("llmLevel");
-  const baseUrl = safely(() => normalizeBaseUrl(s.get("llmBaseUrl")), "");
-  const prices = safely(() => parsePriceTable(s.get("llmPrices")), []);
-  const budget = Number(s.get("llmMonthlyBudgetUsd"));
-  return {
-    level: (PRIVACY_LEVELS as readonly string[]).includes(level) ? (level as PrivacyLevel) : "off",
-    baseUrl,
-    model: s.get("llmModel").trim(),
-    budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
-    prices,
-    confirm: s.get("llmConfirm") === "1",
-    retentionDays: parseRetentionDays(s.get("auditRetentionDays")),
-  };
 }
 
 const CHECKS_EDIT_RANGE = [1, 30] as const;

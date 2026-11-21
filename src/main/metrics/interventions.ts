@@ -154,8 +154,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.butlerMessages, IPC.metricsView, IPC.sessionsUnclaimed, IPC.usageSummary, IPC.ptySnapshot, IPC.healthGet, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsRuns, IPC.lessonsPending, IPC.lessonsBatches,
   IPC.lessonsBatch, IPC.policiesGet, IPC.checksView, IPC.checksHits, IPC.configStatus, IPC.availabilityGet, IPC.routingView,
-  IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.followupsList, IPC.handoffsList, IPC.settingsGet, IPC.settingsFeaturePolicy, IPC.llmStatus, IPC.termsList,
-  IPC.auditList, IPC.externalAuditList, IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.appAutostartGet, IPC.appKeepAwakeGet,
+  IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.followupsList, IPC.handoffsList, IPC.settingsGet, IPC.settingsFeaturePolicy,
+  IPC.externalAuditList, IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.appAutostartGet, IPC.appKeepAwakeGet,
   IPC.clipboardRead, IPC.admissionState, IPC.wizardEstimate, IPC.calibrationSample, IPC.calibrationStats,
   IPC.costView, IPC.costBreakers, IPC.backgroundStatus,
   IPC.convList, IPC.convSearch,
@@ -175,7 +175,7 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   // 配置、复盘和检查的整理
   IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.lessonsAct, IPC.policiesSet, IPC.checksAct, IPC.checksDraft,
   IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups,
-  IPC.routingAct, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools, IPC.settingsPolicyPatch, IPC.llmKeySave, IPC.llmKeyClear, IPC.termsSave,
+  IPC.routingAct, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools, IPC.settingsPolicyPatch,
   IPC.appAutostartSet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardWrite,
   // 规矩的初始化向导、校准和原则（工作流 D）：和 lessonsAct 一样是整理规矩、搭环境，不是推动一次工作
   IPC.wizardAct, IPC.calibrationAct, IPC.principlesRegroup,

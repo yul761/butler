@@ -34,7 +34,6 @@ import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { headlessEnv } from "./claude/spawn";
-import { AuditRepo } from "./db/audit-repo";
 import { NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
@@ -48,7 +47,6 @@ import { linkedOpen as anyLinkedOpen, prGivenUp, TicketPrsRepo } from "./db/tick
 import { SecretsRepo } from "./db/secrets-repo";
 import { SessionsRepo } from "./db/sessions-repo";
 import { SettingsRepo } from "./db/settings-repo";
-import { TermsRepo } from "./db/terms-repo";
 import { TicketsRepo } from "./db/tickets-repo";
 import { UsageRepo } from "./db/usage-repo";
 import { execHeadlessJson } from "./handoff/headless-exec";
@@ -64,12 +62,10 @@ import { ensureSkillTrackingSince, skillTrackingSince } from "./prwatch/skill-tr
 import { PrLinker } from "./prwatch/pr-links";
 import { PrWatcher } from "./prwatch/pr-watcher";
 import { makeWhoOf } from "./gate/who";
-import { auditCutoff, stalePendingCost } from "./gateway/budget";
-import { PrivacyGateway } from "./gateway/gateway";
-import { KeyStore } from "./gateway/key-store";
 import { autostartState } from "./autostart";
-import { electronSecretBox } from "./gateway/safe-storage";
-import { llmStatus } from "./gateway/status";
+import { electronSecretBox } from "./notify/secret-box";
+import { sendWebhook } from "./notify/webhook";
+import { auditCutoff } from "./external/retention";
 import { captureCommandHandoff, stopFromEnvelope } from "./handoff/capture";
 import { handoffCommandPath, handoffCommandUsable } from "./handoff/command";
 import { ingestFeatureHandoff, type FeatureIngestInput } from "./handoff/feature-ingest";
@@ -103,7 +99,7 @@ import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
 import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, writeForkMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { McpHub, spawnHub } from "./memory/mcp-hub";
-import { MemoryService, nightlyDistill } from "./memory/memory-service";
+import { MemoryService } from "./memory/memory-service";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
@@ -132,7 +128,7 @@ import { registerIpc } from "./ipc/register";
 import { readFeaturePolicy } from "./settings/feature-policy";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
-import { BackgroundRunner, morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
+import { morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { ButlerPatrol } from "./schedule/butler-patrol";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { AdmissionPolicyService } from "./lessons/admission-policies";
@@ -174,7 +170,7 @@ import { turnCoordinators as turnCoordinatorsOf } from "./turn/coordinators";
 import { ReviewRequestsRepo } from "./db/review-requests-repo";
 import { REVIEW_AWAY_IDLE_SECONDS, ReviewRequestPoller, bindFocusCatchUp } from "./prwatch/review-requests";
 import {
-  baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, llmConfig, memoryOn,
+  baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, auditRetentionDays, memoryOn,
   memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
 import { evidenceGuideLines, type GuideRepo } from "./prereview/guide-lines";
@@ -539,7 +535,7 @@ async function bootstrap(): Promise<void> {
   // 度量（ws-h，契约 4.7）：人介入、打断、等人时间记成事件和等待段，每小时汇总进 metrics_daily。
   const metricsRepo = new MetricsRepo(db);
   const recordMetric = new Metrics({ repo: metricsRepo, now: Date.now, log: logger }).recordEvent;
-  // 外部通知（ws-j 设计 7）：熔断（L）、高风险 / 就绪的 PR（G）都是度量事件；记下了（去重后）才推。notifier 在 gateway 建好后才有。
+  // 外部通知（ws-j 设计 7）：熔断（L）、高风险 / 就绪的 PR（G）都是度量事件；记下了（去重后）才推。notifier 在后面建好后才有。
   let notifier: Notifier | null = null;
   const recordEvent: RecordEvent = (kind, refs) => {
     const recorded = recordMetric(kind, refs);
@@ -861,7 +857,7 @@ async function bootstrap(): Promise<void> {
     repo: externalAudit,
     setting: (key) => settings.get(key),
     now: Date.now,
-    cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
+    cutoff: (now) => auditCutoff(now, auditRetentionDays(settings)),
     log: logger,
   });
   // 导出成 lint：写进 <BUTLER_HOME>/exports/<id> 的 worktree 就停；推送和开 PR 只经对外动作开关（契约 4.8），做没做都记进审计。
@@ -1384,29 +1380,20 @@ async function bootstrap(): Promise<void> {
     }
     featureFollowup(featureId, handoffId, sessionId);
   };
-  const audit = new AuditRepo(db);
-  // 审计的启动收尾，先于一切读写审计的代码：上次退出时没发完的请求记为 failed（请求体保留，可能已经发出），
-  // 再按保留期清理一次（不删本月的记录，预算要用；之后 gateway 每次调用前也会清理）。
+  // 外部通知（ws-j 设计 7）：开关是对外动作 push_notification，默认关；地址加密存，只有 notify/webhook.ts 发。
+  const webhookStore = new WebhookStore({ secrets: new SecretsRepo(db), box: electronSecretBox, now: Date.now, log: logger });
+  const notificationLog = new NotificationLogRepo(db);
+  // 审计页两张表的启动收尾：按保留期各清理一次（之后有新记录写入时也会清理）。
   try {
-    const stale = audit.failStalePending(M().auditStalePending, stalePendingCost(llmConfig(settings).prices));
-    if (stale > 0) logger(`marked ${stale} audit row(s) left pending by the previous run as failed`);
-    audit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
-    externalAudit.prune(auditCutoff(Date.now(), llmConfig(settings).retentionDays));
+    const cutoff = auditCutoff(Date.now(), auditRetentionDays(settings));
+    externalAudit.prune(cutoff);
+    notificationLog.prune(cutoff);
   } catch (e) {
     logger("audit housekeeping at startup failed", e);
   }
-  const terms = new TermsRepo(db);
-  const keys = new KeyStore({ secrets: new SecretsRepo(db), box: electronSecretBox, now: Date.now, log: logger });
-  const gateway = new PrivacyGateway({
-    settings, audit, keys, now: Date.now,
-    log: logger,
-  });
-  // 外部通知（ws-j 设计 7）：开关是对外动作 push_notification，默认关；地址加密存，只有 gateway 发。
-  const webhookStore = new WebhookStore({ secrets: new SecretsRepo(db), box: electronSecretBox, now: Date.now, log: logger });
-  const notificationLog = new NotificationLogRepo(db);
   notifier = new Notifier({
-    actions: externalActions, log: notificationLog, webhook: webhookStore, post: (r) => gateway.postWebhook(r),
-    setting: (k) => settings.get(k), now: Date.now, cutoff: (now) => auditCutoff(now, llmConfig(settings).retentionDays),
+    actions: externalActions, log: notificationLog, webhook: webhookStore, post: (r) => sendWebhook(r),
+    setting: (k) => settings.get(k), now: Date.now, cutoff: (now) => auditCutoff(now, auditRetentionDays(settings)),
     changed: notify, logError: logger,
   });
   // 选择（ws-j 设计 3）：session 按规则自己做的选择、按默认答案替你答的，都存着等你事后看。
@@ -1415,13 +1402,6 @@ async function bootstrap(): Promise<void> {
     markEffective: markInterruptEffective, notify,
   });
   const interruptsFacade = new InterruptsFacade({ profiles, choices, webhook: webhookStore, notifier, log: notificationLog });
-  // 同时只跑一次蒸馏；退出时 headlessAbort 让 gateway 拒绝 / 中止调用，蒸馏在下一个 scope 之前停下。
-  const distiller = new BackgroundRunner({
-    name: "memory distill",
-    run: (signal) => nightlyDistill({ memory, gateway, signal, log: logger }),
-    signal: headlessAbort.signal,
-    log: logger,
-  });
   /**
    * epic 的长期记忆（计划 16 任务 6）：每个 epic 每周跟着工作日的晚间任务整理一次，feature 归档时也整理一次。用 Sonnet，不 fork session，
    * 和卡住判断共用 headless 设置（用量记进 session_usage，退出时取消）。
@@ -1445,8 +1425,6 @@ async function bootstrap(): Promise<void> {
     hasTrackerTools: () => trackerTools(settings).length > 0,
     aborted: () => headlessAbort.signal.aborted,
     log: logger,
-    // full 档位的记忆蒸馏：在后台跑，不挡调度链；每次运行都重新向 gateway 要模型（改档位不用重启），模型只经 withScope 交给嵌入式 StateCore。
-    distill: () => distiller.start(),
     epicDigest,
   };
   const scheduler = new Scheduler({
@@ -2989,11 +2967,10 @@ async function bootstrap(): Promise<void> {
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
     tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
-    keys, terms, audit, memory,
+    memory,
     externalAudit,
     metrics: (days) => metricsView(days),
     butlerMessages: () => butlerMessages.recent(),
-    llmStatus: () => llmStatus({ settings, keys, audit, now: Date.now }),
     usage: usageRepo, sessions,
     refreshSession: (id) => {
       const refused = startRefresh(refresher, id, "manual", logger);

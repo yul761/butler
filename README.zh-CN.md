@@ -7,7 +7,7 @@
 
 几个 ticket 可以归成一个 feature，几个 feature 可以归成一个 epic。在 epic session 里商量好怎么拆，它会建出 feature 并附上计划；feature 的总控 session 再替你建 ticket、在每个 ticket 里开 session、派任务。session 之间不直接对话，而是靠本地 StateCore 里分层的共享记忆互通：一个 session 记下的进展和决定，同一个 ticket、feature 或 epic 里的其他 session 都能读到。**轮到你** 页把需要你处理的排在最前面，**全部工作** 页按 epic、feature、ticket 列出每个 session 在做什么。session 有要你拍板的事，会用 `ask_user` 提出来，用 `report` 汇报进展；它们显示在 epic、feature 和 Butler 总控页面的 tab 里。每晚 Butler 还会为有进展的 ticket 写一份交接（handoff）。
 
-**本地优先。** Butler 的数据都存在本地的 SQLite 文件里。数据只会经由两条路离开你的电脑：你自己的 `claude`，以及你配置了的话，一个个人 LLM API。这个 API 只在"完整"隐私档位下用于记忆蒸馏，它收到的每一次调用都记在审计页上。
+**本地优先。** Butler 的数据都存在本地的 SQLite 文件里，自己不调用任何模型。数据只会经由你自己的 `claude` 离开你的电脑，另外还有两条由你自己打开的路：通过你的 `gh` 往 GitHub 写东西（对外动作），以及通知用的 webhook。每一次对外动作都记在 **审计** 页上。
 
 **界面语言。** 界面有中文和英文两种。首次启动时跟随系统语言（中文系统用中文，其他用英文），之后可以在 **设置 → 常规 → 语言 / Language** 或首次运行向导里改。语言也会切换 Butler 发给 `claude` 的默认提示词，所以 handoff 和记忆会用这种语言来写；你自己改过的提示词不变。从 1.2.0 或更早版本升级上来的安装保持中文，直到你手动改。切换之后，在环境检查里点一次 **安装 / 修复**，`/handoff` 命令就会换成新语言。本文引用的是中文界面的标签；[英文 README](README.md) 引用的是英文界面的标签。
 
@@ -142,13 +142,12 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 - **首页。** **轮到你** 页是侧栏的第一项，入口会显示有几件事等你。每件要你处理的事在最上面有一张卡片：等一个确认、一个未决的提问、一条请你决定的回复或真的卡住了的 session，可以合并的 PR、请你 review 的 PR、没人推进的 PR，以及需要你的 Butler 提醒（暂停的花费上限，带 **继续并提高上限**；Claude 限额；30 分钟没送出去的 CI 结果；等你分类的评审评论；栈冲突；要你决定的自动接活）。下面是折叠的 **进行中** 列表，列出每个在跑的 session 在做什么、它的 PR 和 CI，以及已经做了多久；点一行打开它的终端。最下面折叠的 **运行情况** 里有 **Butler 的其他提醒**（只告诉你一声的提醒）、内存卡片、最近合并、最近 24 小时的自动接活记录、用量一行和 **实况**。**实况** 把正在干活的 session 画成 Butler 卡片四周的小终端卡片：每张卡片有 ticket 号、仓库、状态药丸和最近 3 次工具调用，session 写记忆时一个蓝色光点沿虚线流向 Butler，读记忆时一个绿色光点从 Butler 流回 session。在等你的卡片边框变黄并写着 **需要你**。最多画 8 张卡片，没人在干活时会这样写。页面和分组里的"在干活"数字只算真在干活的 session（思考中、跑工具、后台命令）；停下来但开着 PR 的 session 算空闲。动画遵循系统的"减少动态效果"设置。同一个折叠里有一行显示最近 7 天的 token 用量：总量、缓存读取的占比，以及上下文达到 20 万 token 以上的轮次占比。它统计 Butler 开的 session、它们的子 agent，以及 Butler 在后台启动的 `claude` 运行（handoff、feature 汇总、卡住检测），数据读自你本机上 Claude Code 的 transcript。点这一行能看到按类别（**ticket session**、**总控**、**子 agent**、**后台任务**）和按模型的拆分。占比按相对价格加权，只用于比较；Butler 不会换算成钱。
 - **防止休眠。** 想在你离开、盖子开着的时候让 session 继续跑，就勾上侧栏底部或托盘菜单里的 **防止休眠**。开着时电脑空闲也不会睡眠，屏幕保持亮着。取消勾选、电脑睡眠（合上盖子）或 Butler 退出时它会关掉，Butler 每次启动时它都是关的。合上盖子照样会让 Mac 睡眠；Windows 上取决于你的合盖设置。
 - **记忆。** 进展、决定、未完成的跟进和跨 ticket 的经验都存进本地的 [StateCore](https://github.com/yul761/StateCore)。Butler 开的每个 session 都能 `recall` 它们。ticket 页的 **记录** tab 里有一节 **记忆**，能看到每条记录的历史。
-- **可选的个人 LLM API。** 在"完整"隐私档位下，Butler 会在每次晚间任务之后，用一个你自己付费的、兼容 OpenAI 的 API 来蒸馏 StateCore 记忆。每次调用都经过隐私网关，有审计页和每月预算。在你配置服务商并选择"完整"档位之前，什么都不会发出去；见[隐私模型](#隐私模型)。
 
 ## Butler 不会碰的东西
 
 - **你的 Claude Code 配置。** 只有当你点安装 hook 时 Butler 才会改它，要么在首次运行向导里，要么在 **设置 → 环境检查 → 安装 / 修复**。这会往你用户级的 `settings.json` 里加四个 hook 和一个 `/handoff` 命令。你的其他 hook 和命令都会保留。记忆从不通过 `claude mcp add` 注册，而是在 Butler 启动每个 session 时通过命令行参数 `--mcp-config` 传入。
 - **你的 tracker 和代码托管平台。** Butler 自己没有 Jira、GitHub 或 Claude 登录。Jira、Linear、GitLab 或其他 tracker 只由你公司的 Claude Code 通过它自己的 MCP server 读取。PR 由 `claude` 用你的 `gh` 读取。
-- **网络。** Butler 里唯一的网络代码是给可选个人 API 用的隐私网关。有一条 lint 规则强制保证这一点。
+- **网络。** Butler 自己没有网络代码，只有通知 webhook 的发送和共享 MCP 在 127.0.0.1 上的监听。有一条 lint 规则强制保证这一点；见[隐私模型](#隐私模型)。
 
 ## 系统要求
 
@@ -215,7 +214,7 @@ NSIS 安装包目前没有签名（见[代码签名政策](#代码签名政策)�
    - Butler 开的 session 还会通过 hook 额外记录 Skill 调用（只记 skill 名），用来判断设计和自我 review 有没有做。
    - 要移除它们，用 **设置 → 环境检查 → 卸载**。
 3. **tracker 的 MCP 工具。** Butler 列出你的 Claude Code 暴露的 MCP 工具，由你挑出 handoff 可以调用的只读工具。
-4. **隐私档位与个人 API（可选）。**
+4. **权限档案。** Butler 的 session 不问你能做多少事；见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md#权限档案)。
 
 向导可以在设置里重新运行。[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md) 介绍了每一项设置，包括怎么让 Butler 适配别的公司的 tracker 和习惯。
 
@@ -223,7 +222,7 @@ NSIS 安装包目前没有签名（见[代码签名政策](#代码签名政策)�
 
 | 路径 | 内容 |
 |------|------|
-| `~/.butler/app.db` | ticket、session、handoff、跟进事项、设置、LLM 审计日志、review 经验（只存在这里，不会写进你的仓库）和加密后的 API key（SQLite）。旧版本留下的行（早间简报、敏感词列表）还在，但已不再使用。 |
+| `~/.butler/app.db` | ticket、session、handoff、跟进事项、设置、对外动作的审计、review 经验（只存在这里，不会写进你的仓库）和加密后的通知 webhook 地址（SQLite）。旧版本留下的表（早间简报、LLM 调用日志、敏感词列表）还在，但已清空或不再使用。 |
 | `~/.butler/statecore/statecore.db` | StateCore 记忆 |
 | `~/.butler/inbox/` | 等待处理的 hook 报告（读不了的放在 `inbox/bad/`） |
 | `~/.butler/bin/butler-hook` | Claude Code 运行的 hook 程序（Windows 上是 `butler-hook.exe`） |
@@ -253,13 +252,13 @@ Windows 上 `~` 是 `%USERPROFILE%`。设置 `BUTLER_HOME` 可以换一个文件
 
 transcript、输出文件和登记文件都是 Claude Code 的内部文件，更新可能会改变它们。Butler 读不了时，实时状态会退回到只显示命令和它跑了多久。
 
-你的个人 API key 用系统钥匙串加密（macOS 钥匙串 / Windows DPAPI）。保存后，界面最多显示它的最后 4 个字符。短于 12 个字符的 key 只显示为 `••••`。
+通知 webhook 的地址用系统钥匙串加密（macOS 钥匙串 / Windows DPAPI），界面上只显示它的主机名。Butler 只在你保存 webhook 地址、发送通知，以及打开高级设置里的 **打断与通知**（那里显示 webhook 的主机名）时才会用到钥匙串。如果你从没设置过 webhook，Butler 从不碰钥匙串。
 
-Butler 只在你保存 key 时，以及之后需要显示最后 4 个字符或调用你的 API 时才会用到钥匙串。如果你从没保存过 key，Butler 从不碰钥匙串。
+在 macOS 上，可能会弹框问 Butler 能否使用钥匙串里的"butler Safe Storage"（Electron 用 app 的内部名 `butler` 来命名这一项）。点 **始终允许**。这些构建是 ad-hoc 签名，不是 Developer ID 签名，所以 macOS 把每个新版本都当作不同的 app，每次升级后都会再问一次。如果点了 **拒绝**，Butler 读不了已保存的地址；重新输入一次即可。
 
-在 macOS 上，可能会弹框问 Butler 能否使用钥匙串里的"butler Safe Storage"（Electron 用 app 的内部名 `butler` 来命名这一项）。点 **始终允许**。这些构建是 ad-hoc 签名，不是 Developer ID 签名，所以 macOS 把每个新版本都当作不同的 app，每次升级后都会再问一次。如果定时的记忆蒸馏需要 key，这个弹框可能在启动时就出现。你回答之前，Butler 的窗口不会响应。如果点了 **拒绝**，Butler 读不了已保存的 key，设置里会显示为无法读取；重新输入一次即可。
+从 3.x 升级时，`app.db` 里的个人 API key、它的设置、敏感词列表和 LLM 调用日志会被删掉。Butler 已经没有地方显示或清除它们了。
 
-Electron 还有自己的配置文件夹，里面是 Chromium 的缓存和单实例锁：macOS 上是 `~/Library/Application Support/butler`，Windows 上是 `%APPDATA%\butler`。设置了 `BUTLER_HOME` 时，Butler 改用 `<BUTLER_HOME>/electron`。在 Windows 上，这个文件夹还存着保护已保存 API key 的 DPAPI 加密密钥，所以删掉它之后要重新输入 API key。
+Electron 还有自己的配置文件夹，里面是 Chromium 的缓存和单实例锁：macOS 上是 `~/Library/Application Support/butler`，Windows 上是 `%APPDATA%\butler`。设置了 `BUTLER_HOME` 时，Butler 改用 `<BUTLER_HOME>/electron`。在 Windows 上，这个文件夹还存着保护已保存 webhook 地址的 DPAPI 加密密钥，所以删掉它之后要重新输入地址。
 
 ## StateCore 记忆
 
@@ -269,21 +268,19 @@ epic 下的所有东西还有 `butler-epic`，即 epic 的记忆（scope 为 `ep
 
 **不要再另外安装 StateCore 自己的 Claude Code 采集插件。** Butler 已经在它启动的 session 里提供了 StateCore 记忆，两个都装的话记忆会记两遍。设置页发现这个插件时会提醒你。
 
-- **StateCore 拿不到任何模型 key。** Claude Code 启动的记忆 server 不会得到模型 API key：Butler 会从它们的环境变量里去掉模型相关的变量。Butler 自己写入的内容（handoff、决定、跟进事项、经验）是确定性的，不需要模型。
-- **蒸馏，只在"完整"档位。** 当隐私档位是 **完整** 且"发送前确认"关闭时，Butler 通过你的个人 API 运行 StateCore 的蒸馏。调用由 Butler 主进程发起，key 一直留在隐私网关里。每次晚间 handoff 之后都会在后台运行蒸馏，包括补跑和 **立即运行晚间 handoff**。对每个有待处理事件的 scope，调用会发送：
-  - scope 名，对 ticket 来说就是真实的 ticket 号（`ticket:<KEY>`）
-  - 这个 scope 最近的原始事件，包括 Claude 用 `remember(consolidate: true)` 存下的内容
-  - 这个 scope 现有的记忆（JSON）：Butler 的跟进和决定笔记、Claude 自己的笔记，以及上一份摘要和其中的下一步
-  - 这个 scope 里被 forget 的笔记原文，免得模型把它们又带回来
-
-  在 `workspace` scope 里，每条经验都标着它来自哪个 ticket。**这些内容都不做假名化，也不做扫描。** 每次发出的调用都以 **StateCore 记忆蒸馏** 记在审计页上，并计入你的每月预算。
-- **每个 ticket 最多 30 条有效笔记。** StateCore 每个 scope（每个 ticket 一个 scope）最多保留 30 条笔记。从 statecore-mcp 1.1 起，完成的跟进和被替换的决定会让出位置，蒸馏也不会把 Butler 的笔记挤出去。但如果同时有超过 30 条未完成的跟进和决定（Butler 自己最多保留 24 条），或者 Claude 自己写了很多笔记，一个 ticket 仍然可能写满。见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md#记忆是怎么工作的)。
+- **不调用模型，也不联网。** StateCore 只在本机运行，不调用任何模型。Claude Code 启动的记忆 server 不会得到模型 API key：Butler 会从它们的环境变量里去掉模型相关的变量，并关掉 StateCore 的后台摘要。Butler 自己写入的内容（handoff、决定、跟进事项、经验）是确定性的，不需要模型。
+- **长内容原样保留。** Claude 用 `remember(consolidate: true)` 存下的内容（最多 2000 个字符）作为一条事件原样留着，不会被蒸馏成事实；`recall` 把它和笔记一起，作为最近的事件返回。
+- **每个 ticket 最多 30 条有效笔记。** StateCore 每个 scope（每个 ticket 一个 scope）最多保留 30 条笔记。从 statecore-mcp 1.1 起，完成的跟进和被替换的决定会让出位置。但如果同时有超过 30 条未完成的跟进和决定（Butler 自己最多保留 24 条），或者 Claude 自己写了很多笔记，一个 ticket 仍然可能写满。见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md#记忆是怎么工作的)。
 
 ## 隐私模型
 
-公司的工作只经过你公司的 `claude`。可选的个人 API 只用来做一件事：在 **完整** 隐私档位下蒸馏 StateCore 记忆。它会发送真实的 ticket 号、原始对话片段和现有的记忆，不做扫描（见 [StateCore 记忆](#statecore-记忆)）。review 经验的分析是另一回事：它会把 PR 的评论、相关代码改动，以及 Butler 的 handoff 和对话记录摘录交给你自己的 `claude`，不经过个人 LLM API，所以不受隐私档位影响。在 **关闭**、**仅元数据（默认）** 和 **脱敏文本** 档位下，个人 API 从不会被调用。
+Butler 自己不调用任何模型，也没有 API key。所有要用模型的事，包括 handoff、记忆笔记和 review 经验的分析，都交给你自己的 `claude`，用的是你公司的登录和设置。数据只会经由三条路离开你的电脑：
 
-**审计** 页列出每一次发出的调用，以及因超出预算而被拒绝的调用。有些拒绝只写进日志，比如因为档位变了而被拒绝的蒸馏调用，或者已保存的 key 无法再解密。
+- **你的 `claude`。** Butler 启动的 session 和后台任务（handoff、汇总、检查）都是你自己的 Claude Code。它发出什么，由 Claude Code 和你公司的配置决定。
+- **经你的 `gh` 做的对外动作。** 回复 PR 评论、推分支、改 PR 等。每一种都有自己的开关，在 **设置 → 对外动作** 里，默认全部关闭；每一次做了、失败或跳过的动作都列在 **审计** 页上。
+- **通知 webhook。** 默认关闭（**推送通知**）。默认情况下一条消息只说是哪类事件、有几件；见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md#通知)。
+
+有一条 lint 规则保证这一点：任何源文件都不能用网络，只有 webhook 的发送（Electron 的 `net`）、共享 MCP 的监听（只接收，在 127.0.0.1 上）和一个只给测试用的记录器例外。记忆 server 拿不到模型 key。
 
 ## 代码签名政策
 
@@ -305,14 +302,14 @@ epic 下的所有东西还有 `butler-epic`，即 epic 的记忆（scope 为 `ep
 
 - **网络。** Butler 不发送遥测数据，没有账号或许可证检查，也不检查更新。
 - **Claude Code。** Butler 启动的是你自己的 `claude` CLI。这个 CLI 以你的登录和设置连接 Anthropic，或者你公司配置的地址。
-- **个人 API。** 只有你配置了个人 LLM API，Butler 才会调用它，而且只发送你所选隐私档位允许的内容（见[隐私模型](#隐私模型)）。
+- **对外动作和通知。** 只有你打开了的那几类，Butler 才会经你的 `gh` 往 GitHub 写东西，或者往通知 webhook 发消息，每一次都记在审计页上（见[隐私模型](#隐私模型)）。Butler 没有自己的 LLM API。
 - **本地数据。** Butler 存的所有东西都留在你的电脑上（见[数据存放位置](#数据存放位置)）。
 
 ## 已知问题
 
 - 构建没有签名（见上文）。macOS 版只支持 Apple silicon。
 - 没有自动更新。
-- 每次升级后，macOS 都会再问一次能否访问钥匙串里已保存的 API key（因为是 ad-hoc 签名）。没保存 key 就不会弹。
+- 每次升级后，macOS 都会再问一次能否访问钥匙串里已保存的 webhook 地址（因为是 ad-hoc 签名）。没保存 webhook 就不会弹。
 - **实时状态的局限。** 管道接到 `| tail` 的命令在结束前什么都不输出，所以状态里看不到它的输出。在 Windows 上，Butler 不检查子进程的 CPU，也可能找不到命令的输出，所以状态可能只显示命令和它跑了多久。
 - **Windows 上用 npm 安装的 Claude Code。** Butler 不经过 `cmd.exe`，直接启动 npm/pnpm 的 `claude.cmd` shim 指向的目标，可能是原生的 `claude.exe`，也可能是 `node <script>`。
   - 如果 Claude Code 是用 `--ignore-scripts` 安装的，或者缺了原生的可选包，`bin\claude.exe` 只是一个小小的占位文件。
@@ -323,7 +320,7 @@ epic 下的所有东西还有 `butler-epic`，即 epic 的记忆（scope 为 `ep
 
 1. **设置 → 环境检查 → 卸载** 会从 Claude Code 里移除 Butler 的 hook 和 `/handoff` 命令。
 2. 删除 app。macOS 上把 Butler 从"应用程序"里拖出去。Windows 上在 设置 → 应用 → Butler → 卸载。
-3. 如果也要删除数据，删掉 `~/.butler`。以上步骤都不会删除 Electron 的配置文件夹（macOS 上是 `~/Library/Application Support/butler`，Windows 上是 `%APPDATA%\butler`）；要卸载干净，把它也删掉。在 macOS 上，如果你保存过 API key，还可以在"钥匙串访问"里删掉"butler Safe Storage"这一项。
+3. 如果也要删除数据，删掉 `~/.butler`。以上步骤都不会删除 Electron 的配置文件夹（macOS 上是 `~/Library/Application Support/butler`，Windows 上是 `%APPDATA%\butler`）；要卸载干净，把它也删掉。在 macOS 上，如果你保存过 webhook 地址，还可以在"钥匙串访问"里删掉"butler Safe Storage"这一项。
 
 ## 开发
 

@@ -1,7 +1,7 @@
 import type { WebhookState } from "../../shared/interrupts";
 import type { SecretsRepo } from "../db/secrets-repo";
-import type { SecretBox } from "../gateway/key-store";
-import { parseWebhookUrl } from "../gateway/webhook";
+import type { SecretBox } from "./secret-box";
+import { parseWebhookUrl } from "./webhook";
 import { SettingError } from "../settings/settings-values";
 import { M } from "../strings";
 
@@ -15,7 +15,7 @@ export interface WebhookStoreDeps {
 }
 
 /**
- * 通知的 webhook 地址（ws-j 设计 7）：和 API key 一样只以密文落盘。完整地址只给 notifier（get），界面只看得到 host。
+ * 通知的 webhook 地址（ws-j 设计 7）：只以密文落盘（系统钥匙串加密）。完整地址只给 notifier（get），界面只看得到 host。
  * 没保存时不碰系统钥匙串。导出（config-io）不带它。
  */
 export class WebhookStore {

@@ -87,7 +87,7 @@ export interface ReconcilePlan {
 }
 
 /**
- * 现状（StateCore facts()）和期望之间的差异。只看 Butler 前缀的条目，Claude 自己写的和蒸馏出来的一律不动。
+ * 现状（StateCore facts()）和期望之间的差异。只看 Butler 前缀的条目，Claude 自己写的一律不动。
  * 同一个条目：正文相同（宽松比较，任何变体后缀）的留一条，其余的 forget；正文变了就 forget 全部旧的、写新的。
  * 期望里已经没有的条目全部 forget。
  */

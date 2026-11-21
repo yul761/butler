@@ -1,24 +1,19 @@
-import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { startLoopbackRecorder, type LoopbackRecorder, type RecordedHeaders } from "../testing/loopback-recorder";
 import { parseWebhookUrl, sendWebhook } from "./webhook";
 
-let server: Server | null = null;
-afterEach(() => new Promise<void>((r) => (server ? server.close(() => r()) : r())));
+let server: LoopbackRecorder | null = null;
+afterEach(async () => {
+  await server?.close();
+  server = null;
+});
 
-function listen(handler: (body: string, headers: IncomingHttpHeaders) => { status: number; delayMs?: number; location?: string }): Promise<string> {
-  server = createServer((req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => {
-      const r = handler(body, req.headers);
-      setTimeout(() => {
-        res.writeHead(r.status, r.location ? { Location: r.location } : {});
-        res.end("secret response body");
-      }, r.delayMs ?? 0);
-    });
+async function listen(handler: (body: string, headers: RecordedHeaders) => { status: number; delayMs?: number; location?: string }): Promise<string> {
+  server = await startLoopbackRecorder((req) => {
+    const r = handler(req.body, req.headers);
+    return { status: r.status, delayMs: r.delayMs, headers: r.location ? { Location: r.location } : undefined, raw: "secret response body" };
   });
-  return new Promise((r) => server!.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${(server!.address() as AddressInfo).port}/hook`)));
+  return server.url("/hook");
 }
 
 describe("parseWebhookUrl", () => {
@@ -34,7 +29,7 @@ describe("parseWebhookUrl", () => {
 
 describe("sendWebhook", () => {
   it("posts the body with the content type and safe extra headers, and reports the status", async () => {
-    const seen: { body: string; headers: IncomingHttpHeaders }[] = [];
+    const seen: { body: string; headers: RecordedHeaders }[] = [];
     const url = await listen((body, headers) => (seen.push({ body, headers }), { status: 200 }));
     expect(await sendWebhook({ url, body: "hi", contentType: "text/plain", headers: { Title: "Butler", Bad: "x\ny" } })).toEqual({ ok: true, status: 200 });
     expect(seen[0]!.body).toBe("hi");

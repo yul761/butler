@@ -8,8 +8,7 @@ import { currentLang } from "../i18n";
  * 对话另存（UI 重做第 4 层）：一轮对话算不算问答。问答规则只有这一份。
  *
  * 先跑规则（ruleQa），判不了的交给 judgeConvQa（任务 conv_qa，低档模型，没配路由时是 Haiku）。
- * judgeConvQa 是本机 claude 的后台调用：不经过 PrivacyGateway，不进个人 LLM，不写 llm_audit；
- * sensitive_terms 和假名化只作用于网关，这里不适用（和 needs_you 判断一样）。
+ * judgeConvQa 是本机 claude 的后台调用（和 needs_you 判断一样），数据只经过用户自己的 claude。
  * 只拿截断后的问答：问句开头 1500 字、回答结尾 1500 字。用量由 execHeadlessJson 的 onUsage 记进 session_usage，
  * 花费熔断照常生效（conv_qa 不在 EXEMPT_TASKS 里）。
  */

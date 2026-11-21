@@ -7,7 +7,6 @@ import { mergeTools } from "../settings-form";
 import { S } from "../strings";
 import { LanguagePicker } from "./LanguagePicker";
 import { canAdvance, nextStep, prevStep, stepNumber, type WizardStep } from "../wizard";
-import { PrivacySettings } from "./PrivacySettings";
 import { ProfileCandidates } from "./ProfileCandidates";
 import { TrackerToolPicker } from "./TrackerToolPicker";
 
@@ -148,14 +147,6 @@ export function Wizard({ onDone }: { onDone: () => void }) {
           <h3>{S.wizardTrackerTitle}</h3>
           <p className="muted">{S.wizardTrackerHelp}</p>
           <TrackerToolPicker onDetect={() => setMessage(null)} onSave={saveTools} />
-        </section>
-      )}
-
-      {step === "privacy" && (
-        <section className="settings-section">
-          <h3>{S.wizardPrivacyTitle}</h3>
-          <p className="muted">{S.wizardPrivacyHelp}</p>
-          <PrivacySettings />
         </section>
       )}
 

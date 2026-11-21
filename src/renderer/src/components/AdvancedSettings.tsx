@@ -7,7 +7,6 @@ import { IntakeSettings } from "./IntakeSettings";
 import { InterruptSettings } from "./InterruptSettings";
 import { LessonsSettings } from "./LessonsSettings";
 import { LoopSettings } from "./LoopSettings";
-import { PrivacySettings } from "./PrivacySettings";
 import { ReviewSettings } from "./ReviewSettings";
 import { RoutingSettings } from "./RoutingSettings";
 import { ScheduleSettings } from "./ScheduleSettings";
@@ -26,7 +25,6 @@ const GROUP_BODY: Record<AdvancedGroupId, ComponentType> = {
   intake: IntakeSettings,
   interrupts: InterruptSettings,
   lessons: LessonsSettings,
-  privacy: PrivacySettings,
   external: ExternalActionSettings,
 };
 

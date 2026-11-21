@@ -10,11 +10,6 @@ export interface DailyJobDeps {
   /** 配了 tracker 工具（和 HandoffRunner 的 allowedTools 用同一个 trackerTools）。PR 状态由 PrWatcher 跟着，早间刷新只为 tracker 而跑。 */
   hasTrackerTools: () => boolean;
   /**
-   * 批次跑完之后：在后台开始 full 档位的 StateCore 蒸馏（主进程里是 BackgroundRunner.start → nightlyDistill，计划 4 R1）。
-   * 不等它结束，失败不影响晚间任务。
-   */
-  distill?: () => unknown;
-  /**
    * epic 的每周整理（计划 16 任务 6）：工作日的每次晚间任务之后都调用，满 7 天、有新活动的 epic 才真的整理（见 EpicDigestRunner.weekly），
    * 错过了一周的第一个工作日也不会漏掉这一周。不等它，失败只记日志。没有时不跑。
    */
@@ -34,7 +29,7 @@ function safeLog(d: DailyJobDeps, msg: string, err?: unknown): void {
   }
 }
 
-/** 晚间：批量 handoff → feature 汇总 → 记忆蒸馏（full 档位）→ epic 的每周整理（工作日）。 */
+/** 晚间：批量 handoff → feature 汇总 → epic 的每周整理（工作日）。 */
 export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
   // runner 的方法不是 async，可能同步抛错：包一层，让它变成 rejection 由调度器记录。
   const batch = await Promise.resolve().then(() => d.runner.runNightly());
@@ -46,7 +41,7 @@ export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
     const limited = batch.outcomes.some((o) => o.status === "skipped" && o.reason === "rate_limited");
     if (limited) status = "partial";
     else {
-      // feature 批次出错（包括同步抛错）不能挡住记忆蒸馏：记一笔，批次记为 partial，照常往下走。
+      // feature 批次出错（包括同步抛错）不能挡住后面的步骤：记一笔，批次记为 partial，照常往下走。
       try {
         if ((await Promise.resolve().then(() => features.runNightly())).status === "partial") status = "partial";
       } catch (e) {
@@ -54,18 +49,10 @@ export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
         try {
           d.log?.("nightly feature summaries failed", e);
         } catch {
-          // 写日志失败也不能挡住记忆蒸馏。
+          // 写日志失败也不能挡住后面的步骤。
         }
       }
     }
-  }
-  // 最后一步，不 await（审查 I1）：蒸馏可能要很多次 LLM 调用，不能挡住调度的串行链——
-  // 晚间任务的结果要先记下，补跑时紧接着的早间任务不用等整轮蒸馏。失败（包括同步抛错）只到这里为止。
-  if (d.distill && !d.aborted?.()) {
-    const distill = d.distill;
-    void Promise.resolve()
-      .then(() => distill())
-      .catch(() => undefined);
   }
   // epic 的每周整理也不 await：要跑好几次 Sonnet，不能挡住调度链。一周内不会整理两次由它自己保证（见 EpicDigestRunner.weekly）。
   // 判断今天是不是工作日也放进去：读设置出错同样只记日志。
@@ -85,48 +72,4 @@ export async function nightlyJob(d: DailyJobDeps): Promise<"ok" | "partial"> {
 export async function morningJob(d: DailyJobDeps): Promise<void> {
   if (!d.isWorkingDay() || !d.hasTrackerTools()) return;
   await Promise.resolve().then(() => d.runner.refreshForBrief());
-}
-
-/**
- * 不占调度串行链的后台任务（晚间任务之后的记忆蒸馏）。同时只跑一次：上一次还没结束时跳过，记一行日志。
- * signal（退出时 abort）交给任务本身，abort 之后不再开始新的。失败只写日志，start() 返回的 promise 永不 reject。
- */
-export class BackgroundRunner {
-  private current: Promise<void> | null = null;
-
-  constructor(
-    private readonly d: { name: string; run: (signal: AbortSignal) => Promise<unknown>; signal: AbortSignal; log: (msg: string, err?: unknown) => void },
-  ) {}
-
-  private log(msg: string, err?: unknown): void {
-    try {
-      this.d.log(msg, err);
-    } catch {
-      // 写日志失败不能变成未处理的 rejection。
-    }
-  }
-
-  start(): Promise<void> {
-    if (this.d.signal.aborted) return Promise.resolve();
-    if (this.current) {
-      this.log(`${this.d.name} skipped: the previous run is still going`);
-      return this.current;
-    }
-    const p = Promise.resolve()
-      .then(() => this.d.run(this.d.signal))
-      .then(
-        () => undefined,
-        (e: unknown) => this.log(`${this.d.name} failed`, e),
-      )
-      .finally(() => {
-        this.current = null;
-      });
-    this.current = p;
-    return p;
-  }
-
-  /** 正在跑的那一次（handle）；没有时为 null。 */
-  running(): Promise<void> | null {
-    return this.current;
-  }
 }

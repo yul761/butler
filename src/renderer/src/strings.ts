@@ -18,7 +18,6 @@ import type { Lang } from "../../shared/i18n";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
 import type { CheckAbsenceReason, CheckMode, CheckOutcome, CheckSeverity, CheckStage, CheckType, CheckVerdict, ChecksBulkOp } from "../../shared/checks";
-import type { PrivacyLevel } from "../../shared/llm";
 import { EN, EN_STATUS } from "./strings-en";
 import type { ExternalActionKind, ExternalOutcome } from "../../shared/external";
 import type { InterruptCategory } from "../../shared/metrics";
@@ -65,7 +64,6 @@ const ZH = {
       intake: "自动接活",
       interrupts: "打断与通知",
       lessons: "规矩与备份",
-      privacy: "隐私与个人 API",
       external: "对外动作",
     } as Record<AdvancedGroupId, string>,
     feat: {
@@ -411,7 +409,6 @@ const ZH = {
   languageHint: "界面、Butler 的提示和发给 claude 的默认提示词都会切换；你自己改过的提示词不变，以前生成的内容不会翻译。切换之后，设置 → 环境检查里的 /handoff 命令会显示需要更新：点“安装 / 修复”，session 里的 /handoff 也会换成新语言。",
   /** 标签加值：中文用全角冒号，英文用半角。 */
   labelled: (label: string, value: string) => `${label}：${value}`,
-  withSample: (what: string, sample: string) => `${what}（${sample}）`,
   newTicket: "新建 ticket",
   newFeature: "新建 feature",
   // epic（设计文档 2026-11-01）
@@ -874,47 +871,6 @@ const ZH = {
     stale: "需要更新（点“安装 / 修复”）",
     conflict: "已有同名的 handoff.md，不是 Butler 写的，Butler 不会覆盖",
   } as Record<string, string>,
-  privacy: "隐私与个人 API",
-  privacyIntro: "个人 LLM API 只用于一件事：在完整档位下，每次晚间 handoff 之后在后台把 StateCore 记忆蒸馏成要点。蒸馏会把真实的 ticket 号、原始对话片段、已有的记忆（决策、follow-up、笔记、跨 ticket 的经验、上一次的摘要）和已遗忘条目的原文发给服务商，不替换也不扫描。每次调用都记进审计页、计入月预算。其他档位不调用个人 API；不配置时其他功能照常可用。",
-  privacyLevel: "隐私档位",
-  privacyLevels: { off: "关闭", metadata: "仅元数据（默认）", redacted: "脱敏文本", full: "完整" } as Record<PrivacyLevel, string>,
-  privacyLevelHelp: {
-    off: "不调用个人 API。",
-    metadata: "不调用个人 API：记忆蒸馏只在完整档位运行。",
-    redacted: "不调用个人 API：记忆蒸馏只在完整档位运行。",
-    full: "每次晚间 handoff 之后，经个人 API 把 StateCore 记忆蒸馏成要点：发送真实的 ticket 号、claude 记下的原始对话片段、已有的决策、follow-up、笔记、跨 ticket 的经验和上一次的摘要，以及已遗忘条目的原文。不替换也不扫描，记在审计页。只应用于你信任其处理工作内容的服务商。",
-  } as Record<PrivacyLevel, string>,
-  llmFields: {
-    llmBaseUrl: "服务地址（OpenAI 兼容接口的 base URL）",
-    llmModel: "模型",
-    llmMonthlyBudgetUsd: "每月预算（美元）",
-    auditRetentionDays: "审计保留天数",
-    llmPrices: "价格表（美元 / 百万 token）",
-  } as Record<string, string>,
-  llmPlaceholders: {
-    llmBaseUrl: "https://api.deepseek.com/v1",
-    llmModel: "deepseek-chat",
-    llmMonthlyBudgetUsd: "1",
-    auditRetentionDays: "90",
-  } as Record<string, string>,
-  llmPricesHint: "每行“模型 输入价 输出价”，模型名可以用 * 通配，从上往下第一条匹配的生效。默认的 * 15 75 把任何模型都按很贵的价格算，请按你的服务商修改；本机模型可以写 * 0 0。找不到价格的模型不会被调用。",
-  apiKey: "API key",
-  apiKeyNone: "未保存",
-  apiKeyUnreadable: "已保存但无法解密，请重新输入",
-  apiKeyPlaceholder: "粘贴新的 key",
-  apiKeyHint: "key 用系统钥匙串（macOS）或 DPAPI（Windows）加密保存，之后界面上只显示末 4 位。本机服务（localhost）可以不填。",
-  clearKey: "清除",
-  monthSpend: (spent: string, budget: string) => `本月已花 ${spent} / 预算 ${budget}`,
-  llmConfirm: "发送前确认：开着时不做记忆蒸馏（蒸馏在后台运行，没法逐次确认）",
-  llmOff: "个人 API 已关闭：不会做记忆蒸馏。",
-  llmNotFull: "当前档位不调用个人 API：记忆蒸馏只在完整档位运行。",
-  llmNoEncryption: "系统的加密存储不可用：无法保存 API key。",
-  llmKeyUnreadable: "保存的 API key 无法解密（钥匙串被重置或换了电脑），请重新输入。",
-  llmNotConfigured: "还没有配置完：需要服务地址、模型，远程服务还需要 API key。",
-  llmNoPrice: "价格表里没有当前模型的价格：不会调用。",
-  llmZeroBudget: "每月预算是 $0：不会调用个人 API。",
-  llmOverBudget: (spent: string, budget: string) => `本月已花 ${spent}，达到预算 ${budget}：本月不再调用。`,
-  llmFullWarning: "完整档位下，StateCore 记忆蒸馏会把真实的 ticket 号、原始对话片段、已有的记忆（决策、follow-up、笔记、跨 ticket 的经验、上一次的摘要）和已遗忘条目的原文发给服务商，不替换也不做敏感信息扫描，但都记进审计页、计入月预算。",
   lessons: "复盘与规矩",
   lessonsPendingTitle: "待确认",
   /** 复盘规矩页默认收起的一块（BTL-244）。 */
@@ -1584,23 +1540,6 @@ const ZH = {
   lessonRunAttempts: "之前的尝试",
   lessonRunFact: { status: "状态", started: "开始", duration: "用时", model: "模型", cost: "费用", tokens: "token", attempt: "第几次" },
   audit: "审计",
-  auditStatecore: "StateCore 记忆蒸馏",
-  auditIntro: "每次调用个人 LLM API 的记录（完整档位下 StateCore 记忆的蒸馏，以及旧版本留下的记录）：原样发出的内容、响应、token 数和费用；被拦截或超预算的请求只记原因，没有发出任何内容。",
-  auditEmpty: "还没有调用记录。",
-  auditStatus: { pending: "未完成", sent: "已发送", failed: "发送失败", blocked: "已拦截", budget: "超预算", declined: "已拒绝" } as Record<string, string>,
-  auditTokens: (i: number, o: number) => `${i} / ${o} token`,
-  scanRule: {
-    secret: "密钥或令牌", url: "网址", domain: "域名", ip: "IP 地址", email: "邮箱", path: "文件路径", ticket: "未替换的 ticket 号", known: "未替换的原值",
-  } as Record<string, string>,
-  auditBlocked: (why: string) => `拦截原因：${why}`,
-  auditPayload: "发出的内容",
-  auditNothingSent: "（没有发出任何内容）",
-  auditResponse: "响应",
-  loadMore: "更早的记录",
-  auditBodyMaybeSent: "可能已发出的内容",
-  auditMaybeSentNote: "这次调用没有成功完成，下面的内容可能已经发给了服务商。",
-  auditDeclined: "你在确认框里选择了不发送（或确认超时）",
-  auditLoadFailed: "审计记录加载失败。",
   memoryHint: "同一个 ticket 的新 session 里，Claude 会用 recall 读到这些：最新的状态、决策、未完成的 follow-up，以及它自己记下的内容。",
   memoryOff: "记忆已关闭（设置 → 记忆）。",
   memoryEmpty: "这个 ticket 还没有记忆。更新过状态以后，这里会出现进度、决策和未完成的 follow-up。",
@@ -1621,7 +1560,7 @@ const ZH = {
   generalHelp: {
     claudePath: "公司的 claude 不在 PATH 上时填它的绝对路径。改完会重新检测。",
     branchTemplate: "新建分支时用。可用 {key}（ticket 号）、{key_lower}（小写 ticket 号）、{title}（标题，转成小写英文和 -；没有英文时省略），例如 {key_lower}-{title}。",
-    ticketPattern: "用来识别 ticket 号（新建 ticket、认领 session、隐私扫描）。不要写会让匹配卡死的写法，例如 (a+)+。",
+    ticketPattern: "用来识别 ticket 号（新建 ticket、认领 session）。不要写会让匹配卡死的写法，例如 (a+)+。",
   } as Record<string, string>,
   autostart: "开机时自动启动 Butler",
   autostartUnsupported: "只有安装好的 Butler 才能设置开机自启（开发模式下不可用）。",
@@ -1645,7 +1584,7 @@ const ZH = {
   refreshThresholdHelp: "换新：session 停下来以后，Butler 让它写 handoff、清空上下文，再从记忆里接上。需要开着记忆；手动的“换新”按钮不受这个设置影响。",
   idleCloseMinutes: "session 闲置多少分钟后自动关闭（0 = 关）",
   idleCloseMinutesHelp: "开着终端、停下超过这个时间（电脑睡着的时间不算），而且没有要你决定的事、没有后台任务、没在等合并或 CI、它管的子 session 也都停着的 session，Butler 会先让它写 handoff，再结束终端，以后可以恢复。最短 10 分钟。你隐藏的 session 超过 14 天会被删掉（对话记录留着）。session 栏的“清理闲置”不受这个设置影响。",
-  memoryExplain: "StateCore 只在本机。claude 里挂的记忆进程拿不到任何模型 key；只有隐私档位为“完整”时，Butler 才会在每次晚间 handoff 之后，把 claude 记下的原始片段连同已有的记忆经个人 API 蒸馏（不扫描，记在审计页）。",
+  memoryExplain: "StateCore 只在本机，不调用任何模型，也不联网。claude 用 remember 记下的长内容原样留着，之后的 recall 作为最近的记录读回来。",
   statecorePluginWarning: "检测到你另外装了 StateCore 的 Claude Code 捕获插件。Butler 已经覆盖了它的功能，同时开着会重复记录，建议在 Claude Code 里卸掉它。",
   rerunWizard: "重新运行首次启动向导",
   wizardTitle: "欢迎使用 Butler",
@@ -1668,8 +1607,6 @@ const ZH = {
   wizardTrackerTitle: "tracker 的 MCP 工具",
   wizardTrackerHelp: "handoff 会用你在 Claude Code 里配好的 tracker MCP（Jira、Linear、GitLab……）读取 ticket。检测之后勾选只读的查询工具；没有 tracker 也可以跳过。",
   wizardTrackerSaved: "已保存。",
-  wizardPrivacyTitle: "隐私档位与个人 API（可选）",
-  wizardPrivacyHelp: "个人 API 只在完整档位下用来做记忆蒸馏，其他档位不调用。不想用就选“关闭”或者什么都不填。",
   wizardDoneTitle: "准备好了",
   wizardDoneHelp: "点“开始使用”进入首页，从那里选一种方式开始第一件事；3.0 的各个功能在 设置 › 功能 里，默认都关着。每晚 Butler 会为有活动的 ticket 生成 handoff。这些设置之后都能在设置页修改，也可以从设置页重新运行这个向导。",
   prStage: { design: "设计", dev: "开发", self_review: "自我 review", ci: "CI", peer_review: "peer review", merge: "合并" } as Record<PrStageId, string>,
@@ -1922,6 +1859,8 @@ const ZH = {
   featureSummaryPrAsOf: (t: string) => `PR 状态截至 ${t}`,
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
   externalHeading: "对外动作",
+  externalAuditRetention: "审计保留天数",
+  externalAuditRetentionHelp: "审计页上的对外动作记录和外部通知记录保留多少天，1 到 3650，默认 90。更早的记录在启动时和有新记录写入时清掉。",
   externalIntro: "Butler 代你在 GitHub 或别的外部服务上留下东西的动作，每种一个开关，默认全关。关着时 Butler 不会做，只在审计页记一笔“跳过”。现在用到的是导出成仓库规则的「推送分支」和「开 PR」，以及评论与 CI 的「回复 review 评论」「标记评论已解决」和「重跑 CI」；其余的等之后的版本接入时才会生效。",
   /** 栈式 PR（工作流 K）：全部工作页的「栈」区块、设置页「栈」标签、「现在」页的栈提醒。 */
   sk: {
@@ -2368,9 +2307,8 @@ const ZH = {
     lessonsLede: "Butler 从合了的 PR 里总结出来的规矩。确认过的会在以后的 session 里提醒 agent。",
     effectLede: (days: number) => `最近 ${days} 天 Butler 替你省了多少事、花了多少钱。`,
     effectTabs: { overview: "概况", trend: "趋势", spend: "花费明细", rework: "返工", automation: "自动化的效果" },
-    auditLede: "Butler 自己调过的模型和替你做过的对外动作，一条一条可查。",
+    auditLede: "Butler 替你做过的对外动作，一条一条可查。",
     auditEmpty: "Butler 默认不替你对外做任何事（发评论、改 PR 都默认关着），所以这里还没有记录。",
-    auditTabs: { external: "对外动作", llm: "模型调用" },
   },
   /** 回测、影子自动升级、自动降级、阈值复查（工作流 F）。 */
   bt: {

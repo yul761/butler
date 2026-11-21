@@ -1,5 +1,11 @@
 import { safeStorage } from "electron";
-import type { SecretBox } from "./key-store";
+
+/** 系统加密存储。生产环境是 Electron safeStorage（electronSecretBox），测试用 testing/fake-secret-box。webhook 地址只以它的密文落盘。 */
+export interface SecretBox {
+  available(): boolean;
+  encrypt(plain: string): Uint8Array;
+  decrypt(data: Uint8Array): string;
+}
 
 /** Linux 没有钥匙串时 Electron 会退回 "basic_text"（明文），这种情况一律当作不可用。 */
 function isPlaintextBackend(): boolean {

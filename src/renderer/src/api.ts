@@ -28,7 +28,6 @@ import type { MemoryView, WhyEntry } from "../../shared/memory";
 import type { RoutingAction, RoutingView, SessionLimitView, SwitchModelResult } from "../../shared/model-routing";
 import type { BackgroundAction, BackgroundStatusView } from "../../shared/background";
 import type { CostBreakerView, CostPolicyOverrides, CostResumeResult, CostSetResult, CostSubjectKind, CostView } from "../../shared/cost";
-import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { MetricsOverview } from "../../shared/metrics";
 import type { InterruptsAction, InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
@@ -250,13 +249,6 @@ export const api = {
   featurePolicy: () => call<FeaturePolicyState>(IPC.settingsFeaturePolicy),
   /** 改全局那一层的一个功能开关，同层其他覆盖保留。 */
   policyPatch: (p: { family: PolicyFamily; key: string; value: boolean }) => call<void>(IPC.settingsPolicyPatch, p),
-  llmStatus: () => call<LlmStatus>(IPC.llmStatus),
-  /** key 只发这一次；之后界面只能拿到打码形式。 */
-  saveApiKey: (key: string) => call<LlmStatus>(IPC.llmKeySave, key),
-  clearApiKey: () => call<LlmStatus>(IPC.llmKeyClear),
-  terms: () => call<SensitiveTerm[]>(IPC.termsList),
-  saveTerms: (terms: SensitiveTerm[]) => call<SensitiveTerm[]>(IPC.termsSave, terms),
-  audit: (beforeId?: number) => call<AuditPage>(IPC.auditList, beforeId),
   externalAudit: () => call<ExternalActionEntry[]>(IPC.externalAuditList),
   memoryView: (ticketKey: string) => call<MemoryView>(IPC.memoryView, ticketKey),
   autostart: () => call<AutostartState>(IPC.appAutostartGet),
