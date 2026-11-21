@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 import type { Session } from "../../shared/types";
 import type { SessionsRepo } from "../db/sessions-repo";
 import { extractTicketKey } from "../tickets/ticket-key";
+import { perfOp } from "../diag/perf-stats";
 
 export const UNCLAIMED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -217,4 +218,59 @@ export function suggestTicket(s: { gitBranch: string | null; firstPrompt: string
 export function needsDiscovery(s: Session, requested: ReadonlySet<string>): boolean {
   if (s.ticketKey || s.dismissed || requested.has(s.id)) return false;
   return !s.cwd || !s.gitBranch || !s.firstPrompt;
+}
+
+/**
+ * 找对话记录文件的缓存（BTL-242）：findTranscript 每次都 readdir 整个 projects 目录、再挨个目录 existsSync，
+ * 首页和看板一次刷新要找好几十次（Windows 上每次几毫秒）。记住找到过的路径：命中时只 existsSync 那一个文件，
+ * 文件没了（删了、搬了）就当没记过再找一遍。没找到的不记（刚开的 session 过一会儿才有记录文件）。
+ */
+export class TranscriptLocator {
+  private readonly hits = new Map<string, string>();
+
+  constructor(
+    private readonly projectsDir: string,
+    private readonly max = 2000,
+    private readonly exists: (file: string) => boolean = existsSync,
+    private readonly scan: (dir: string, id: string) => string | null = findTranscript,
+    private readonly stateScan: (dir: string, id: string) => TranscriptState = transcriptState,
+  ) {}
+
+  private cached(sessionId: string): string | null {
+    const f = this.hits.get(sessionId);
+    if (f === undefined) return null;
+    this.hits.delete(sessionId);
+    if (!this.exists(f)) return null;
+    this.hits.set(sessionId, f);
+    return f;
+  }
+
+  private remember(sessionId: string, file: string): void {
+    this.hits.delete(sessionId);
+    this.hits.set(sessionId, file);
+    if (this.hits.size > this.max) this.hits.delete(this.hits.keys().next().value as string);
+  }
+
+  find(sessionId: string): string | null {
+    const hit = this.cached(sessionId);
+    if (hit) return hit;
+    const file = perfOp("findTranscript", () => this.scan(this.projectsDir, sessionId));
+    if (file) this.remember(sessionId, file);
+    return file;
+  }
+
+  /** 同 transcriptState：记得的文件还在就是 present，否则照原样查（unknown 和 absent 要分清）。 */
+  state(sessionId: string): TranscriptState {
+    if (this.cached(sessionId)) return "present";
+    const s = perfOp("transcriptState", () => this.stateScan(this.projectsDir, sessionId));
+    if (s === "present") {
+      const file = this.scan(this.projectsDir, sessionId);
+      if (file) this.remember(sessionId, file);
+    }
+    return s;
+  }
+
+  size(): number {
+    return this.hits.size;
+  }
 }

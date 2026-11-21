@@ -6,7 +6,7 @@ import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { insertTicket, memDb, tempDir } from "../test-utils";
-import { extractUserText, findTranscript, needsDiscovery, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered, transcriptState } from "./discovery";
+import { extractUserText, findTranscript, needsDiscovery, readSessionHead, scanClaudeProjects, suggestTicket, syncDiscovered, TranscriptLocator, transcriptState } from "./discovery";
 
 const ID1 = "11111111-1111-4111-8111-111111111111";
 const ID2 = "22222222-2222-4222-8222-222222222222";
@@ -205,5 +205,51 @@ describe("scanClaudeProjects head cache", () => {
     const again = await scanClaudeProjects(root, 0, cache);
     expect(again.find((s) => s.id.startsWith("1111"))?.cwd).toBe("/w");
     expect(again.find((s) => s.id.startsWith("2222"))?.cwd).toBe("/w");
+  });
+});
+
+describe("TranscriptLocator (BTL-242)", () => {
+  function make(max = 2000) {
+    const files = new Set<string>(["/p/a/s1.jsonl", "/p/b/s2.jsonl"]);
+    let scans = 0;
+    const scan = (_dir: string, id: string) => {
+      scans++;
+      return [...files].find((f) => f.endsWith(`/${id}.jsonl`)) ?? null;
+    };
+    const state = (dir: string, id: string) => (scan(dir, id) ? "present" : "absent") as "present" | "absent";
+    const loc = new TranscriptLocator("/p", max, (f) => files.has(f), scan, state);
+    return { loc, files, scans: () => scans };
+  }
+
+  it("scans once, then re-checks only the remembered file", () => {
+    const { loc, scans } = make();
+    expect(loc.find("s1")).toBe("/p/a/s1.jsonl");
+    expect(loc.find("s1")).toBe("/p/a/s1.jsonl");
+    expect(loc.state("s1")).toBe("present");
+    expect(scans()).toBe(1);
+  });
+
+  it("does not remember a miss, and forgets a file that moved", () => {
+    const { loc, files, scans } = make();
+    expect(loc.find("s3")).toBeNull();
+    files.add("/p/c/s3.jsonl");
+    expect(loc.find("s3")).toBe("/p/c/s3.jsonl");
+    files.delete("/p/c/s3.jsonl");
+    files.add("/p/d/s3.jsonl");
+    expect(loc.find("s3")).toBe("/p/d/s3.jsonl");
+    files.delete("/p/d/s3.jsonl");
+    expect(loc.state("s3")).toBe("absent");
+    expect(scans()).toBe(4);
+  });
+
+  it("keeps at most max entries, dropping the least recently used", () => {
+    const { loc, scans } = make(1);
+    loc.find("s1");
+    loc.find("s2");
+    expect(loc.size()).toBe(1);
+    loc.find("s2");
+    expect(scans()).toBe(2);
+    loc.find("s1");
+    expect(scans()).toBe(3);
   });
 });

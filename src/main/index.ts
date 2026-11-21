@@ -167,7 +167,7 @@ import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } fr
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
 import { childrenWorking } from "./sessions/managed-by";
-import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
+import { needsDiscovery, scanClaudeProjects, syncDiscovered, TranscriptLocator, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { fillBranchFromCwd, outsideSessionsOn } from "./sessions/outside-sessions";
 import { defaultReadDeps, memorySnapshotLine, readAvailableMemory } from "./sessions/available-memory";
 import { measuredOpenSessionsKb, MemoryAdmission } from "./sessions/memory-admission";
@@ -557,6 +557,8 @@ async function bootstrap(): Promise<void> {
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger, onHookBinCurrent: seedSkillTracking });
   // 「谁该动」看板（UI 重做第 1 层）跟着 stateChanged 一起防抖推 turn:changed；TurnService 在下面才建好。
   let turnChanged: (() => void) | null = null;
+  // 找对话记录文件（BTL-242）：记住找到过的路径，命中时只看那一个文件还在不在。
+  const transcriptLocator = new TranscriptLocator(paths.claudeProjects);
   // 视图缓存（BTL-242）：界面那边的读（列表、首页、看板）在下一次 notify / 写操作 / 1 秒之前共用一份。主进程自己的逻辑不走它。
   const viewCache = new ViewCache({ now: Date.now });
   // notify 合并（BTL-242）：一小段时间里的多次 notify 合成一次 state:changed（带上范围），turn:changed 跟着同一次发。
@@ -626,7 +628,7 @@ async function bootstrap(): Promise<void> {
   const usageScanner = new UsageScanner({
     repo: usageRepo,
     sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "butler").map((s) => s!.id),
-    transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptFile: (id) => transcriptLocator.find(id),
     // 扫完一遍：成本熔断按新用量看一遍（工作流 L）。
     onScanned: () => costCheckSoon(),
     log: logger,
@@ -1011,7 +1013,7 @@ async function bootstrap(): Promise<void> {
           for (const id of sessions.chainOf(s.id)) {
             if (seen.has(id)) continue;
             seen.add(id);
-            const file = findTranscript(paths.claudeProjects, id);
+            const file = transcriptLocator.find(id);
             if (!file) continue;
             try {
               transcripts.push(await readTailLines(file, TRANSCRIPT_TAIL_BYTES));
@@ -1190,7 +1192,7 @@ async function bootstrap(): Promise<void> {
   });
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
-    transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptFile: (id) => transcriptLocator.find(id),
     judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
@@ -1252,12 +1254,12 @@ async function bootstrap(): Promise<void> {
     workDir: () => paths.home, setting: (k) => settings.get(k), now: Date.now, markEffective: markInterruptEffective, log: logger,
   });
   const profileHits = new ProfileHitCounter({
-    transcriptOf: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptOf: (id) => transcriptLocator.find(id),
     builtIn: SESSIONS_AUTO_ALLOW,
     recordEvent,
   });
   /** 这个 session 有 transcript（SessionService 判断能不能 --resume、ForkService 判断能不能完整分叉共用）。 */
-  const transcriptExists = (id: string): boolean => transcriptState(paths.claudeProjects, id) !== "absent";
+  const transcriptExists = (id: string): boolean => transcriptLocator.state(id) !== "absent";
   const sessionService = new SessionService({
     knownModel: routing.registered,
     tickets, sessions, settings, ticketService, pty, blocks,
@@ -1268,7 +1270,7 @@ async function bootstrap(): Promise<void> {
     dirBusy: (repo): Promise<{ ticket: string; branch: string } | null> => mergeGate.dirBusy(repo),
     ready: () => healthReady,
     transcriptExists,
-    transcriptState: (id) => transcriptState(paths.claudeProjects, id),
+    transcriptState: (id) => transcriptLocator.state(id),
     claude: () => health.claude(),
     newId: randomUUID,
     now: Date.now,
@@ -1345,7 +1347,7 @@ async function bootstrap(): Promise<void> {
   }
 
   const transcriptMtime = (id: string): number | null => {
-    const file = findTranscript(paths.claudeProjects, id);
+    const file = transcriptLocator.find(id);
     if (!file) return null;
     try {
       return statSync(file).mtimeMs;
@@ -1749,7 +1751,7 @@ async function bootstrap(): Promise<void> {
   const conv = new ConversationStore({ repo: convRepo, sessions, onAppended: convAppended, now: Date.now });
   const convIngester = new ConvIngester({
     repo: convRepo, sessions, onAppended: convAppended, now: Date.now, log: (m) => logger(m),
-    transcriptOf: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptOf: (id) => transcriptLocator.find(id),
     // 开着终端的 head；不是对话另存 target 的（没认领的外部 session）由 ConvIngester 自己跳过。
     openHeads: () => [...new Set(pty.openIds().map((t) => sessions.head(t)?.id).filter((id): id is string => !!id))],
     judge: (turn, s) => judgeConvQa({ ...judgeDeps, timeoutMs: 60_000 }, turn, existsSync(s.cwd) ? s.cwd : paths.home, s.ticketKey),
@@ -1791,7 +1793,7 @@ async function bootstrap(): Promise<void> {
     writeTail: async (oldHeadId, termId) => {
       await Promise.race([convIngester.syncNow(oldHeadId), delay(3000, undefined, { ref: false })]).catch(() => undefined);
       const out = refreshTailPath(paths, termId);
-      const tail = await writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out, sessionId: oldHeadId });
+      const tail = await writeRefreshTail({ transcript: transcriptLocator.find(oldHeadId), out, sessionId: oldHeadId });
       return withRecentQa(out, tail, conv.recentQa(oldHeadId, RECENT_QA_CHARS));
     },
     notify,
@@ -2736,7 +2738,7 @@ async function bootstrap(): Promise<void> {
         send: (x) => mailbox.send(x),
       }, env);
       const effect = applyHookEnvelope(env, {
-        sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
+        sessions, tickets, transcriptState: (id) => transcriptLocator.state(id),
         placement: (key, cwd) => ticketService.placement(key, cwd),
         featureForCwd,
       });
@@ -2877,7 +2879,7 @@ async function bootstrap(): Promise<void> {
       const terms = butlerTerminals();
       return {
         head: t.head, termId: t.termId, pinned: t.head.pinned === true,
-        transcript: transcriptState(paths.claudeProjects, t.head.id),
+        transcript: transcriptLocator.state(t.head.id),
         activity: a && { working: working(a), background: a.background },
         screenNeedsUser: pty.screenNeedsUser(t.termId),
         draft: pty.hasDraft(t.termId),

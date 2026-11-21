@@ -7,6 +7,7 @@ import { DebouncedWatch, type WatchFn } from "../sessions/transcript-watch";
 import { capText, convEntriesOf, type ConvEntry, type UserOpen } from "./conv-parse";
 import { isQuestionLike, ruleQa, type ConvQaVerdict } from "./conv-qa";
 import { readChunk } from "./jsonl-reader";
+import { perfOp } from "../diag/perf-stats";
 
 /**
  * 对话另存（UI 重做第 4 层）：把 transcript 增量读进 conv_* 表。只存双方说的话；工具调用只用来给这一轮打标记。
@@ -66,6 +67,11 @@ export class ConvIngester {
   /** ticketKey（没有 ticket 是 ""）→ 到这个时间之前不再问模型。 */
   private readonly pausedUntil = new Map<string, number>();
   private sweeping: Promise<void> | null = null;
+  /**
+   * 规则判过、要问模型的轮（BTL-242）：轮 id → 当时的样子。没变的下次读完不再取它的消息重判（原来每次 ingest
+   * 把所有等模型的轮的消息都读一遍）。这次读进了它的东西（apply 碰过）的先删掉。
+   */
+  private readonly needsJudge = new Map<number, string>();
 
   constructor(private readonly d: ConvIngesterDeps) {}
 
@@ -202,6 +208,10 @@ export class ConvIngester {
 
   /** 只做不用问模型的那部分（同步）：每次读完就跑，模型判断正在跑也不耽误规则结论（换新前的恢复提示要用）。 */
   private applyRules(): void {
+    perfOp("conv.rules", () => this.applyRulesNow());
+  }
+
+  private applyRulesNow(): void {
     try {
       let after: { endedAt: number; id: number } | undefined;
       for (;;) {
@@ -219,12 +229,19 @@ export class ConvIngester {
 
   /** 规则能定的写规则结论（不看新旧：规则不花钱）；要问模型但太旧的记 no / old。写了返回 true，要问模型返回 false。 */
   private ruleVerdict(t: ConvTurn): boolean {
-    const rule = ruleQa({ asked: t.asked, mutated: t.mutated, otherTools: t.otherTools, answerChars: [...this.qaText(t.id).answer].length });
-    if (rule !== "judge") {
-      this.verdict(t.id, rule, "rule");
-      return true;
+    const stamp = `${t.lastAt}|${t.endedAt}|${t.asked}|${t.mutated}|${t.otherTools}`;
+    if (this.needsJudge.get(t.id) !== stamp) {
+      const rule = ruleQa({ asked: t.asked, mutated: t.mutated, otherTools: t.otherTools, answerChars: [...this.qaText(t.id).answer].length });
+      if (rule !== "judge") {
+        this.needsJudge.delete(t.id);
+        this.verdict(t.id, rule, "rule");
+        return true;
+      }
+      this.needsJudge.set(t.id, stamp);
+      if (this.needsJudge.size > PARENT_MAP_MAX) this.needsJudge.delete(this.needsJudge.keys().next().value as number);
     }
     if ((t.endedAt ?? 0) < this.d.now() - CONV_JUDGE_MAX_AGE_MS) {
+      this.needsJudge.delete(t.id);
       this.verdict(t.id, "no", "old");
       return true;
     }
@@ -325,7 +342,7 @@ export class ConvIngester {
       if (chunk.lines.length === 0 && chunk.skipped === 0) return;
       let changed = false;
       try {
-        repo.transaction(() => {
+        perfOp("conv.ingest", () => repo.transaction(() => {
           for (const line of chunk.lines) {
             for (const e of convEntriesOf(line)) {
               const r = this.apply(id, root, e, openTurnId);
@@ -334,7 +351,7 @@ export class ConvIngester {
             }
           }
           repo.saveCursor({ sessionId: id, rootSessionId: root, file, ino: chunk.ino, offset: chunk.next, openTurnId, updatedAt: this.d.now() });
-        });
+        }));
       } catch (e) {
         // 事务回滚了：parentMap 里可能有指向回滚掉的轮的 id。
         this.parents.delete(id);
@@ -390,6 +407,7 @@ export class ConvIngester {
     }
 
     let turnId = (e.parent !== null ? parents.get(e.parent) : undefined) ?? openTurnId;
+    if (turnId !== null && e.kind !== "noise") this.needsJudge.delete(turnId);
     if (e.kind === "noise") {
       if (turnId !== null) this.remember(id, e.key, turnId);
       return { openTurnId, changed };
