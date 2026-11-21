@@ -18,13 +18,13 @@ test("the Butler 总控 page: terminal on the left, conversation on the right, o
   const split = butler.locator(".control-split");
   await expect(split).toHaveCount(1);
   await expect(split.locator(".control-right .control-feed")).toContainText(S.lay.ctlEmpty);
-  // 总控发出的消息默认折起，展开是空的。
-  const sent = split.locator(".control-right details.butler-sent");
-  await expect(sent.locator("> summary")).toHaveText(S.lay.butlerSent(0));
+  // 信箱的消息（BTL-245）默认折起，展开是空的。
+  const sent = split.locator(".control-right details.messages-box");
+  await expect(sent.locator("> summary")).toHaveText(S.lay.messages(0));
   await expect(sent).not.toHaveAttribute("open", /.*/);
   await sent.locator("> summary").click();
   await expect(sent).toHaveAttribute("open", "");
-  await expect(sent).toContainText(S.butlerRepliesNone);
+  await expect(sent).toContainText(S.messagesNone);
   // 没有仓库条。
   await expect(butler.locator(".repos-bar")).toHaveCount(0);
   await expect(split.locator(".control-left")).toContainText(S.noButlerSessions);

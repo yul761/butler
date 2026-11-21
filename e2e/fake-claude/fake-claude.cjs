@@ -17,6 +17,7 @@
 //       hook 回了 block 就记 check block <理由>，只给了提示就记 check note <提示>（换行记成 ⏎），这一轮照常结束；
 //     输入 /fake-skill <skill 名> 时像 Skill 工具：跑 PostToolUse（tool_name=Skill，带 tool_use_id；也读 --settings 里 matcher 为 Skill 的 hook），打印 skill <名>，这一轮照常结束；
 //     输入 /fake-tool <工具名> [JSON 参数] 时写一条 tool_use 和它的结果，这一轮不结束（实况窗口：工具调用、记忆读写的行和光点）；
+//       之后跑 PostToolUse（tool_name=工具名，也读 --settings 里的 hook）：hook 输出的 additionalContext 记成 additional-context <一行>（信箱，BTL-245）；
 //     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
@@ -663,6 +664,16 @@ function interactive() {
       const toolId = `toolu-${Date.now()}-${messages}`;
       append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "tool_use", usage: usage(), content: [{ type: "tool_use", id: toolId, name: fakeTool[1], input: fakeTool[2] ? JSON.parse(fakeTool[2]) : {} }] } });
       append({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "ok" }] } });
+      const input = fakeTool[2] ? JSON.parse(fakeTool[2]) : {};
+      const outputs = runHooks("PostToolUse", { session_id: sessionId, cwd, tool_name: fakeTool[1], tool_input: input, tool_use_id: toolId, tool_response: "ok", transcript_path: transcript });
+      for (const o of outputs) {
+        try {
+          const ctx = JSON.parse(o).hookSpecificOutput?.additionalContext;
+          if (typeof ctx === "string" && ctx) log(`additional-context ${ctx.replace(/\r?\n/g, " ⏎ ")}`);
+        } catch {
+          // 不是 JSON：没有附加上下文。
+        }
+      }
       out(`tool ${fakeTool[1]}\n`);
       return;
     }

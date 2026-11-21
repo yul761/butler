@@ -24,12 +24,12 @@ test("outward actions are off by default; the audit page and Butler replies are 
   await openSettingsGroup(page, "external");
   await expect(page.getByTestId("external-ci_rerun")).toBeChecked();
 
-  // 审计页的「对外动作」一节；Butler 页右栏折起的「总控发出的消息」。
+  // 审计页的「对外动作」一节；Butler 页右栏折起的「消息」。
   await page.locator(".sidebar").getByRole("button", { name: S.audit, exact: true }).click();
   await expect(page.getByTestId("external-audit")).toContainText(S.externalAuditNone);
   await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await page.locator(".butler-sent > summary").click();
-  await expect(page.getByText(S.butlerRepliesNone, { exact: true })).toBeVisible();
+  await page.locator(".messages-box > summary").click();
+  await expect(page.getByText(S.messagesNone, { exact: true })).toBeVisible();
 });
 
 /** 假 gh 的一个开着的 PR：list 和 view 两份。 */

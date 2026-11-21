@@ -87,18 +87,18 @@ test("Butler control messages a feature coordinator by name, reopening it when i
   // 按 feature 名字发：接着原来的总控打开，消息交进去。
   const sent = await callTool(page, s, "send_message", { feature: "payment", text: "去看一下 PR" });
   expect(sent.error).toBe(false);
-  expect(JSON.parse(sent.text)).toMatchObject({ sent: true, sessionId: coordinator, opened: "resumed" });
+  expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: coordinator, opened: "resumed" });
   await expect.poll(() => fakeLog(s)).toContain(`interactive resume ${coordinator} `);
-  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toBe("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 去看一下 PR");
+  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toContain("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 去看一下 PR");
   expect(sessionsIn(s, workspace)).toEqual([coordinator]);
 
   // 现在开着：list_features 给出它的 id，按 id 发直接发进去，不再开新的。
   await expect.poll(async () => JSON.parse((await callTool(page, s, "list_features")).text)[0].coordinatorSession).toBe(coordinator);
   await page.waitForTimeout(1500);
   const again = await callTool(page, s, "send_message", { session: coordinator, text: "再看一下" });
-  expect(JSON.parse(again.text)).toMatchObject({ sent: true, sessionId: coordinator });
+  expect(JSON.parse(again.text)).toMatchObject({ queued: true, sessionId: coordinator });
   expect(JSON.parse(again.text).opened).toBeUndefined();
-  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toBe("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 再看一下");
+  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toContain("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 再看一下");
   expect(fakeLog(s).match(new RegExp(`interactive resume ${coordinator} `, "g"))).toHaveLength(1);
 });
 
@@ -130,18 +130,18 @@ test("Butler control messages an open epic session nobody has typed into", async
 
   const sent = await callTool(page, s, "send_message", { epic: "checkout-revamp", text: "先看一下规划" });
   expect(sent.error).toBe(false);
-  expect(JSON.parse(sent.text)).toMatchObject({ sent: true, sessionId: epicSession });
+  expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: epicSession });
   expect(JSON.parse(sent.text).opened).toBeUndefined();
-  await expect.poll(() => flat(messagesIn(s, workspace)[epicSession]?.at(-1))).toBe("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 先看一下规划");
+  await expect.poll(() => flat(messagesIn(s, workspace)[epicSession]?.at(-1))).toContain("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 先看一下规划");
   expect(sessionsIn(s, workspace)).toEqual([epicSession]);
 
-  // 回复回流（ws-b）：epic session 这一轮做完，它最后一段回复带着 requestId 输入回 Butler 总控；「总控发出的消息」里记着已送回。
+  // 回复回流（ws-b）：epic session 这一轮做完，它最后一段回复带着 requestId 经信箱送回 Butler 总控；「消息」里记着已回复（BTL-245）。
   const { requestId } = JSON.parse(sent.text) as { requestId: string };
   expect(requestId).toMatch(/\S/);
   const butlerWorkspace = join(s.butlerHome, "workspaces", "_butler");
-  const back = () => Object.values(messagesIn(s, butlerWorkspace)).flat().map(flat).find((m) => m.startsWith("【回复】"));
+  const back = () => Object.values(messagesIn(s, butlerWorkspace)).flat().map(flat).find((m) => m.includes("【回复】"));
   await expect.poll(back, { timeout: 30_000 }).toContain(requestId);
   expect(back()).toContain("收到：");
-  await page.locator(".butler-sent > summary").click();
-  await expect(page.getByTestId("butler-replies")).toContainText(S.butlerMessageStatus.delivered);
+  await page.locator(".messages-box > summary").click();
+  await expect(page.getByTestId("message-list")).toContainText(S.messageStatus.replied);
 });
