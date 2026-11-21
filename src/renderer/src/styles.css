@@ -204,7 +204,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .ticket-pr section + section { margin-top: 12px; }
 .terminal-wrap { flex: 1; min-width: 0; flex-direction: column; background: #000; overflow: clip; }
 /* Chromium 默认会把 ，。（ 等标点量窄，实际却占满一格，后面的字和拼音框就错位；space-all 让它们按整格量。 */
-.terminal { flex: 1; min-height: 0; padding: 4px; text-spacing-trim: space-all; }
+.terminal { flex: 1; min-height: 0; padding: 4px; text-spacing-trim: space-all; display: flex; flex-direction: column; }
+/* xterm 的宿主（BTL-242）：切走时整个摘下来留着，切回来挂回 .terminal。 */
+.terminal-host { flex: 1; min-height: 0; min-width: 0; }
 .exited { padding: 6px 12px; background: var(--panel); color: var(--danger); }
 
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

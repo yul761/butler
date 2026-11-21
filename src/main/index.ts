@@ -8,6 +8,7 @@ import { cpus, freemem, homedir, release as osRelease, totalmem } from "node:os"
 import { writeFile as writeFileAsync } from "node:fs/promises";
 import { DiagService } from "./diag/diag-service";
 import { Invalidator } from "./diag/invalidator";
+import { PtySubscriptions } from "./sessions/pty-subscriptions";
 import { ViewCache } from "./diag/view-cache";
 import { isStateScope, type StateChangedPayload } from "../shared/state-scope";
 import { diagMode, perfOp } from "./diag/perf-stats";
@@ -339,6 +340,8 @@ if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
 /** 性能诊断（BTL-242）：bootstrap 里装上。 */
 let diag: DiagService | null = null;
+/** 渲染进程挂着的终端（BTL-242）：pty:data 只发给它们。 */
+const ptySubs = new PtySubscriptions();
 
 function safeSend(channel: string, ...args: unknown[]): void {
   if (win && canSend(win)) {
@@ -417,6 +420,11 @@ function createWindow(): BrowserWindow {
     if (!isOwnUrl(url)) e.preventDefault();
   });
   w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // 渲染进程整页重新加载（或者崩了）：之前挂的终端都不在了（BTL-242）。
+  w.webContents.on("did-start-navigation", (e) => {
+    if (e.isMainFrame && !e.isSameDocument) ptySubs.clear();
+  });
+  w.webContents.on("render-process-gone", () => ptySubs.clear());
   // CSP 拦下了什么就记一笔（任务 6）：界面某处空白时先看这里。
   w.webContents.on("console-message", (e) => {
     if (isCspViolationMessage(e.message)) logger(`${CSP_VIOLATION_LOG_PREFIX} ${e.message}`);
@@ -648,7 +656,9 @@ async function bootstrap(): Promise<void> {
   /** 自动接活建好以后才接上（session 结束时让它再试排着的）。 */
   let intakeEnded: (() => void) | null = null;
   const pty = new PtyManager(nodePtyFactory, {
-    data: (id, data) => safeSend(IPC.ptyData, id, data),
+    data: (id, data) => {
+      if (ptySubs.has(id)) safeSend(IPC.ptyData, id, data);
+    },
     opened: (id) => procs?.terminalOpened(id),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
@@ -3093,6 +3103,7 @@ async function bootstrap(): Promise<void> {
   registerIpc({
     diag: diag ?? undefined,
     onWrite: () => viewCache.invalidate(),
+    ptySubs,
     views,
     conv,
     fork: forkService,

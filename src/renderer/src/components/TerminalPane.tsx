@@ -1,24 +1,16 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { HibernateReason } from "../../../shared/types";
 import { api, pathForFile, platform } from "../api";
 import { dropText } from "../drop";
-import { reportError } from "../errors";
-import { S } from "../strings";
-import { clipboardAction } from "../terminal-keys";
 import { compositionShift } from "./composition-fit";
+import { LiveTerminal, terminalCache } from "./live-terminal";
+import { S } from "../strings";
 
-/** Ctrl+V 时剪贴板里没有文字（比如截图）：照常把 ^V 交给 claude，由它自己读剪贴板里的图片。 */
-const CTRL_V = "\x16";
-
-/** xterm 留的回滚行数（WS-M D）：主进程的快照另外留着 256 KB 的原始输出，切回来时从快照重建。 */
-export const TERMINAL_SCROLLBACK = 3000;
 
 /**
- * 只有看得见的终端才有 xterm（WS-M D）：切走就 dispose，切回来从主进程的快照重建，渲染进程里只留一个终端的缓冲区和 WebGL / DOM。
- * 可见性同时报给主进程（pty:visible），后台优先级（E）按它判断。
+ * 看得见的终端挂着一个 xterm（WS-M D）；切走只是摘下来，最近看过的几个留在 terminalCache 里（BTL-242），切回来不用从快照重建。
+ * 被挤出缓存的才 dispose，下次从主进程的快照重建。可见性同时报给主进程（pty:visible），后台优先级（E）按它判断。
  */
 export function TerminalPane({ termId, visible, hibernated = null, onClose, onResume }: {
   termId: string;
@@ -29,7 +21,7 @@ export function TerminalPane({ termId, visible, hibernated = null, onClose, onRe
   onResume: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
+  const liveRef = useRef<LiveTerminal | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   // 切到休眠的终端：每次休眠唤醒一次（失败了留着横幅，用户自己点恢复）。醒了、或者不再算休眠以后，下次休眠再自动唤醒。
   const woke = useRef(false);
@@ -45,67 +37,35 @@ export function TerminalPane({ termId, visible, hibernated = null, onClose, onRe
   useEffect(() => {
     if (!visible) return;
     api.ptyVisible(termId, true);
-    const term = new Terminal({ fontFamily: 'Menlo, Consolas, "Cascadia Mono", monospace', fontSize: 13, cursorBlink: true, scrollback: TERMINAL_SCROLLBACK });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(ref.current!);
-    termRef.current = term;
+    // 同一个终端已经挂在别处（两个视图同时开着）：这里另建一个不进缓存的，摘下时就拆掉。
+    const cached = terminalCache.peek(termId);
+    const own = cached?.attached ? new LiveTerminal(termId) : null;
+    const live = own ?? terminalCache.acquire(termId, () => new LiveTerminal(termId));
+    const { term, fit } = live;
+    live.attach(ref.current!, setExitCode);
+    setExitCode(live.exitCode);
+    liveRef.current = live;
 
     const doFit = () => {
       if (!ref.current || ref.current.offsetParent === null) return;
       fit.fit();
       api.ptyResize(termId, term.cols, term.rows);
     };
-    // 快照写进来之前先量好尺寸：新建的 xterm 是 80x24，按那个宽度重放按 200 列画的屏幕会错行，
-    // 而尺寸和 pty 一样时 claude 收不到 SIGWINCH、不会重画，错的画面会一直留着。
     try {
       doFit();
     } catch {
       // 还量不出字宽：等下面的第一帧。
     }
-
-    // 主进程按顺序发送数据事件和 invoke 的返回：快照返回之前收到的数据都已包含在快照里，直接丢弃。
-    let ready = false;
+    live.load();
     let disposed = false;
-    const offData = api.onPtyData((id, data) => {
-      if (id !== termId || !ready) return;
-      term.write(data);
-      // 退出后又收到数据，说明终端被重新打开（续接）了。
-      setExitCode(null);
-    });
-    const offExit = api.onPtyExit((id, code) => {
-      if (id === termId) setExitCode(code);
-    });
-    void api
-      .ptySnapshot(termId)
-      .then((snap) => {
-        if (disposed) return;
-        term.write(snap.data);
-        setExitCode(snap.exitCode);
-        ready = true;
-      })
-      .catch((e) => {
-        ready = true;
-        reportError(e);
-      });
     const firstFrame = requestAnimationFrame(() => {
       if (disposed) return;
       doFit();
+      // 挂回来的 xterm（WebGL 的画布换了位置）：整屏重画一次。
+      term.refresh(0, term.rows - 1);
       term.focus();
     });
 
-    const input = term.onData((d) => api.ptyWrite(termId, d));
-    // Windows / Linux 的 Ctrl+C / Ctrl+V（见 terminal-keys）。preventDefault 让菜单里的粘贴快捷键不再触发第二次。
-    term.attachCustomKeyEventHandler((e) => {
-      const action = clipboardAction(e, platform(), term.hasSelection());
-      if (!action) return true;
-      if (e.type === "keydown") {
-        e.preventDefault();
-        if (action === "copy") copySelection(term);
-        else if (action === "paste") pasteInto(term);
-      }
-      return false;
-    });
     // 拼音框超出终端右边时往左移，保持可见。xterm 自己会写 left，所以只用 transform；结束输入时清掉。
     let fitFrame = 0;
     const fitComposition = () => {
@@ -136,32 +96,21 @@ export function TerminalPane({ termId, visible, hibernated = null, onClose, onRe
       cancelAnimationFrame(fitFrame);
       textarea?.removeEventListener("compositionupdate", fitComposition);
       textarea?.removeEventListener("compositionend", fitComposition);
-      offData();
-      offExit();
-      input.dispose();
-      term.dispose();
-      termRef.current = null;
+      live.detach();
+      if (own) own.dispose();
+      else terminalCache.release(termId);
+      liveRef.current = null;
     };
   }, [termId, visible]);
 
-  function copySelection(term: Terminal) {
-    api.clipboardWrite(term.getSelection()).catch(reportError);
-    term.clearSelection();
-  }
-
-  function pasteInto(term: Terminal) {
-    // term.paste 处理换行和 claude 打开的 bracketed paste，多行文本不会被逐行当成回车提交。
-    api.clipboardRead().then((text) => (text ? term.paste(text) : api.ptyWrite(termId, CTRL_V)), reportError);
-  }
-
   // Windows / Linux 上右键和 Windows Terminal 一样：有选区复制，没有就粘贴。macOS 保持原样。
   function onContextMenu(e: React.MouseEvent) {
-    const term = termRef.current;
+    const live = liveRef.current;
     // 已退出的终端不再接收输入。
-    if (platform() === "darwin" || !term || exitCode !== null) return;
+    if (platform() === "darwin" || !live || exitCode !== null) return;
     e.preventDefault();
-    if (term.hasSelection()) copySelection(term);
-    else pasteInto(term);
+    if (live.term.hasSelection()) live.copySelection();
+    else live.paste();
   }
 
   function onDrop(e: React.DragEvent) {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakePtyFactory } from "../test-utils";
-import { BUFFER_LIMIT, nextDraftLength, PtyManager, trimBuffer } from "./pty-manager";
+import { BUFFER_LIMIT, nextDraftLength, PtyManager, pushOutput, trimBuffer } from "./pty-manager";
 
 function setup() {
   const { factory, spawned } = fakePtyFactory();
@@ -78,6 +78,30 @@ describe("PtyManager", () => {
     // 还在缓冲里的模式不重复补；退出后的记录也带着。
     spawned[0].pty.emitExit(0);
     expect(mgr.snapshot("t1").data).toBe(snap);
+  });
+
+  it("many small chunks replay like one string: capped, newline-aligned, newest last (BTL-242)", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("\x1b[?1049h\n");
+    const line = `${"y".repeat(99)}\n`;
+    for (let i = 0; i < Math.ceil((BUFFER_LIMIT * 3) / line.length); i++) spawned[0].pty.emit(line);
+    spawned[0].pty.emit("tail");
+    const snap = mgr.snapshot("t1").data;
+    expect(snap.startsWith(`\x1b[?1049h${line}`)).toBe(true);
+    expect(snap.endsWith(`${line}tail`)).toBe(true);
+    expect(snap.length).toBeLessThanOrEqual(BUFFER_LIMIT + "\x1b[?1049h".length);
+    expect(mgr.snapshot("t1").data).toBe(snap);
+  });
+
+  it("pushOutput keeps at most the limit plus slack, dropping whole chunks", () => {
+    const t = { chunks: [] as string[], chunkLen: 0, cutModes: new Map<number, boolean>() };
+    pushOutput(t, "\x1b[?1000h");
+    for (let i = 0; i < 400; i++) pushOutput(t, "z".repeat(1024));
+    expect(t.chunkLen).toBe(t.chunks.reduce((n, c) => n + c.length, 0));
+    expect(t.chunkLen).toBeGreaterThanOrEqual(BUFFER_LIMIT);
+    expect(t.chunkLen).toBeLessThanOrEqual(BUFFER_LIMIT + 64 * 1024);
+    expect(t.cutModes.get(1000)).toBe(true);
   });
 
   it("adds no mode prefix while nothing has been cut", () => {

@@ -95,6 +95,7 @@ import type { RoutingAction, RoutingView, SessionLimitView } from "../../shared/
 import type { SwitchResult } from "../routing/session-switch";
 import type { DiagService } from "../diag/diag-service";
 import { isReadChannel } from "./read-channels";
+import type { PtySubscriptions } from "../sessions/pty-subscriptions";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -196,6 +197,8 @@ export interface IpcDeps {
   onInvoked?: (channel: string, args: readonly unknown[], result: unknown) => void;
   /** 性能诊断（BTL-242）。 */
   diag?: Pick<DiagService, "report" | "snapshot" | "export" | "invoke">;
+  /** 渲染进程挂着的终端（pty:snapshot 挂、pty:detach 摘）。 */
+  ptySubs?: Pick<PtySubscriptions, "attach" | "detach">;
   /** 写操作的 invoke 前后调（作废视图缓存）。 */
   onWrite?: () => void;
   /** 缓存过的视图（BTL-242）；不给就直接调 sessionService。 */
@@ -478,7 +481,14 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.activityDismiss, (raw: unknown) => d.activity.dismiss(sessionIdArg(raw)));
 
-  handle(IPC.ptySnapshot, (id: string) => d.pty.snapshot(id));
+  // 取快照就是挂上这个终端（BTL-242）：之后它的输出才发过来；先挂再取，快照之后的数据一条不漏。
+  handle(IPC.ptySnapshot, (id: string) => {
+    if (typeof id === "string") d.ptySubs?.attach(id);
+    return d.pty.snapshot(id);
+  });
+  ipcMain.on(IPC.ptyDetach, (_e, id: unknown) => {
+    if (typeof id === "string") d.ptySubs?.detach(id);
+  });
   handle(IPC.ptyKill, (id: string) => d.pty.kill(id));
   ipcMain.on(IPC.ptyWrite, (_e, id: string, data: string) => {
     d.pty.write(id, data);

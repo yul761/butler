@@ -26,9 +26,16 @@ export interface PtyEvents {
 /** 每个终端保留的回放缓冲，切回 ticket 页面时重放。 */
 export const BUFFER_LIMIT = 256 * 1024;
 
+/** 回放缓冲最多多攒这么多再整块丢掉开头（BTL-242）：每次输出不再拼接、截取整个 256 KB 的字符串。 */
+const BUFFER_SLACK = 64 * 1024;
+/** 块太碎时先并成一块，免得数组太长。 */
+const MAX_CHUNKS = 4096;
+
 interface Term {
   proc: PtyProcess;
-  buffer: string;
+  /** 回放缓冲：按到达顺序的输出块，总长 chunkLen；回放（snapshot、退出）时才拼起来、按 BUFFER_LIMIT 截齐。 */
+  chunks: string[];
+  chunkLen: number;
   /** 已经截出缓冲的那部分输出留下的终端模式，回放时补在缓冲前面（见 modePrefix）。 */
   cutModes: Map<number, boolean>;
   lastOutputAt: number;
@@ -166,8 +173,33 @@ export interface PtySnapshot {
   exitCode: number | null;
 }
 
+/** 记下一块输出；超过上限加余量时从头整块丢掉（丢掉的部分里的模式记下来），留下的总长不少于 BUFFER_LIMIT。 */
+export function pushOutput(t: Pick<Term, "chunks" | "chunkLen" | "cutModes">, data: string): void {
+  t.chunks.push(data);
+  t.chunkLen += data.length;
+  if (t.chunkLen <= BUFFER_LIMIT + BUFFER_SLACK) {
+    if (t.chunks.length > MAX_CHUNKS) t.chunks = [t.chunks.join("")];
+    return;
+  }
+  let drop = 0;
+  let len = t.chunkLen;
+  while (drop < t.chunks.length - 1 && len - t.chunks[drop].length >= BUFFER_LIMIT) len -= t.chunks[drop++].length;
+  if (drop > 0) {
+    recordModes(t.cutModes, t.chunks.slice(0, drop).join(""));
+    t.chunks = t.chunks.slice(drop);
+    t.chunkLen = len;
+  }
+  if (t.chunks.length > MAX_CHUNKS) t.chunks = [t.chunks.join("")];
+}
+
+/** 拼成回放内容：截到 BUFFER_LIMIT（同 trimBuffer），截掉部分的模式补在前面。拼好的留下来当一块。 */
 function replay(t: Term): string {
-  return modePrefix(t.cutModes) + t.buffer;
+  const joined = t.chunks.join("");
+  const kept = trimBuffer(joined);
+  if (kept.length < joined.length) recordModes(t.cutModes, joined.slice(0, joined.length - kept.length));
+  t.chunks = kept === "" ? [] : [kept];
+  t.chunkLen = kept.length;
+  return modePrefix(t.cutModes) + kept;
 }
 
 export class PtyManager {
@@ -198,7 +230,7 @@ export class PtyManager {
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
     const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
     const term: Term = {
-      proc, buffer: "", cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
+      proc, chunks: [], chunkLen: 0, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
       screen: new TermScreen(cols, rows), submittedAt: 0, held: null,
     };
     this.terms.set(termId, term);
@@ -206,9 +238,7 @@ export class PtyManager {
       // ConPTY 在进程退出后还可能吐出尾部数据；退出后一律丢弃，否则渲染进程会以为终端被重新打开而清掉退出提示。
       if (term.exited) return;
       term.lastOutputAt = this.now();
-      const full = term.buffer + data;
-      term.buffer = trimBuffer(full);
-      if (term.buffer.length < full.length) recordModes(term.cutModes, full.slice(0, full.length - term.buffer.length));
+      pushOutput(term, data);
       this.guard(termId, "screen write", () => term.screen.write(data));
       this.events.data(termId, data);
     });

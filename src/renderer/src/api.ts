@@ -50,6 +50,9 @@ declare global {
   interface Window {
     butler: {
       platform: string;
+      /** 旧的 preload 没有这一项：当 webgl。 */
+      terminalRenderer?: "webgl" | "dom";
+      terminalCacheMax?: number | null;
       pathForFile(file: File): string;
       invoke(channel: string, ...args: unknown[]): Promise<unknown>;
       send(channel: string, ...args: unknown[]): void;
@@ -71,6 +74,8 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 export const platform = (): string => window.butler.platform;
+export const terminalRendererPref = (): "webgl" | "dom" => window.butler.terminalRenderer ?? "webgl";
+export const terminalCacheMaxPref = (): number | null => window.butler.terminalCacheMax ?? null;
 export const pathForFile = (file: File): string => window.butler.pathForFile(file);
 
 // 整个渲染进程只挂一个 state:changed 监听（BTL-242）。
