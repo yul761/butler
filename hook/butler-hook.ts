@@ -30,6 +30,22 @@ function trimAgentPayload(payload: unknown): unknown {
   };
 }
 
+const REMEMBER_LIMIT = 4000;
+
+/** feature 记忆的 remember（约定广播，BTL-245）：只留存进去的那段话和 consolidate，tool_response 不带。 */
+function trimRememberPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  const p = payload as Record<string, unknown>;
+  if (p.hook_event_name !== "PostToolUse" || p.tool_name !== "mcp__butler-feature__remember") return payload;
+  const input = p.tool_input && typeof p.tool_input === "object" ? (p.tool_input as Record<string, unknown>) : {};
+  return {
+    hook_event_name: p.hook_event_name,
+    session_id: p.session_id,
+    tool_name: p.tool_name,
+    tool_input: { text: typeof input.text === "string" ? input.text.slice(0, REMEMBER_LIMIT) : null, consolidate: input.consolidate === true },
+  };
+}
+
 const COMMAND_LIMIT = 2000;
 const PR_URLS_MAX = 5;
 
@@ -81,7 +97,7 @@ export function buildEnvelope(raw: string, env: NodeJS.ProcessEnv, now: number):
   const ticket = env.BUTLER_TICKET?.trim() || null;
   const butlerSession = env.BUTLER_SESSION?.trim() || null;
   try {
-    return { v: 1, receivedAt: now, ticket, butlerSession, payload: trimBashPayload(trimAgentPayload(JSON.parse(raw))) };
+    return { v: 1, receivedAt: now, ticket, butlerSession, payload: trimRememberPayload(trimBashPayload(trimAgentPayload(JSON.parse(raw)))) };
   } catch (e) {
     return { v: 1, receivedAt: now, ticket, butlerSession, payload: null, parseError: (e as Error).message, raw: raw.slice(0, RAW_LIMIT) };
   }

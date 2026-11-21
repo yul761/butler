@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { renameWithRetrySync } from "../util/fs-retry";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
+/** feature 记忆的 remember 工具：约定广播（BTL-245）的来源。 */
+export const REMEMBER_TOOL = "mcp__butler-feature__remember";
+
 /**
  * 计划 3 任务 1 的实测（Ruling P3-R1）：--setting-sources user 下本地级（~/.claude.json 里按目录记录的）MCP 会不会丢。
  * 会丢时为 true：把它导出成 --mcp-config 文件挂回去。
@@ -258,6 +261,8 @@ export function projectMcpApprovalSettings(
   dirs: string[],
   p: ProjectMcpPaths & {
     gateCommand?: string; allowTools?: readonly string[]; checks?: { editTimeoutSec: number; pushTimeoutSec: number };
+    /** 信箱（BTL-245）的 hook 命令（mailboxHookCommand）：每次工具调用之后跑，信箱为空时只是一次 test。要有 gateCommand 才挂。 */
+    mailboxCommand?: string;
     /** 权限档案（ws-j）确认过的只读规则：再过一遍 isSafeRule，排在 allowTools 后面。 */
     profileRules?: readonly string[];
   },
@@ -282,6 +287,13 @@ export function projectMcpApprovalSettings(
       const ship = { matcher: "Bash", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
       // 失败的也要：`git push && gh pr create` 里 gh 失败了只有 PostToolUseFailure，推送却成功了。
       const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent, ship] as unknown[], PostToolUseFailure: [...group, ship] as unknown[] };
+      // 信箱（BTL-245）：工具调用的间隙把排队的消息送进去（matcher 为空 = 所有工具，MCP 工具也算）；失败的工具调用之后也送。
+      // 约定广播：存进 feature 记忆的 remember 写一个信封，主进程推给同一个 feature 里开着的其他 session。
+      if (p.mailboxCommand) {
+        const mailbox = { matcher: "", hooks: [{ type: "command", command: p.mailboxCommand, timeout: 10 }] };
+        hooks.PostToolUse.push(mailbox, { matcher: REMEMBER_TOOL, hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] });
+        hooks.PostToolUseFailure.push(mailbox);
+      }
       if (p.checks) {
         hooks.PreToolUse = [...group, { matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} check-push --budget-ms ${p.checks.pushTimeoutSec * 1000}`, timeout: p.checks.pushTimeoutSec + 30 }] }];
         hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: `${p.gateCommand} check --budget-ms ${p.checks.editTimeoutSec * 1000}`, timeout: p.checks.editTimeoutSec + 3 }] });

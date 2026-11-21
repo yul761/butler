@@ -12,6 +12,8 @@ export interface ButlerPaths {
   logs: string;
   /** Butler 生成的 --mcp-config 文件。 */
   mcp: string;
+  /** 信箱（BTL-245）的磁盘投影：每个开着、有消息在排队的终端一个 <BUTLER_SESSION> 目录。 */
+  mailbox: string;
   /** 孤儿清理（WS-M F）记下的 Butler 起过的进程：procs/owned.json。 */
   procsOwned: string;
   /** StateCore 的嵌入式存储目录（里面是 statecore.db）。 */
@@ -73,6 +75,7 @@ export function resolvePaths(
     hookBin: join(bin, platform === "win32" ? "butler-hook.exe" : "butler-hook"),
     logs: join(butlerHome, "logs"),
     mcp: join(butlerHome, "mcp"),
+    mailbox: join(butlerHome, "mailbox"),
     procsOwned: join(butlerHome, "procs", "owned.json"),
     statecore: join(butlerHome, "statecore"),
     workspaces: join(butlerHome, "workspaces"),

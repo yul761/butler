@@ -33,6 +33,7 @@ import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
+import { mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
 import { NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
@@ -1210,6 +1211,7 @@ async function bootstrap(): Promise<void> {
         claudeJson: paths.claudeJson, claudeSettings: paths.claudeSettings, mcpDir: paths.mcp, log: logger, allowTools: SESSIONS_AUTO_ALLOW,
         profileRules,
         gateCommand: hookInstalled() ? hookCommand(paths.hookBin, process.platform) : undefined,
+        mailboxCommand: hookInstalled() ? mailboxHookCommand(hookCommand(paths.hookBin, process.platform), paths.mailbox, process.platform) : undefined,
         checks: cc.enabled ? { editTimeoutSec: cc.editTimeoutSec, pushTimeoutSec: cc.pushTimeoutSec } : undefined,
       });
     },

@@ -28,6 +28,16 @@ describe("butler-hook", () => {
     expect((task.payload as Record<string, unknown>).tool_response).toBeUndefined();
   });
 
+  it("trims a feature-memory remember to the text and consolidate flag (BTL-245)", () => {
+    const raw = JSON.stringify({
+      hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__butler-feature__remember", cwd: "/w",
+      tool_input: { text: "t".repeat(5000), consolidate: true }, tool_response: { content: "x".repeat(100_000) },
+    });
+    const env = buildEnvelope(raw, {}, 1);
+    expect(env.payload).toEqual({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "mcp__butler-feature__remember", tool_input: { text: "t".repeat(4000), consolidate: true } });
+    expect(wanted(env)).toBe(true);
+  });
+
   it("keeps only git push / gh pr create Bash calls, trimmed to the command, cwd and printed PR links", () => {
     const bash = (command: string, stdout = "") =>
       buildEnvelope(JSON.stringify({ hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Bash", tool_use_id: "tu", cwd: "/w", tool_input: { command, description: "d" }, tool_response: { stdout, stderr: "secret".repeat(10) } }), { BUTLER_SESSION: "b1" }, 1);
