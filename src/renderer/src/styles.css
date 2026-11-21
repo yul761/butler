@@ -109,7 +109,6 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .page-tabs-panel h3 { display: flex; gap: 8px; align-items: baseline; margin: 6px 0 4px; font-size: 12px; color: var(--muted); }
 .page-tabs-panel h3 .section-toggle { flex-shrink: 0; }
 .control-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; position: relative; }
-.control-split.right-folded { grid-template-columns: 1fr; }
 /* Butler 总控页：分栏是 .ticket-page 的直接子元素，要自己长高到窗口底。 */
 .butler-page .control-split { flex: 1 1 auto; }
 .control-fold { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2; width: 16px; padding: 2px 0; line-height: 1; font-size: 14px; }
@@ -122,10 +121,16 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .control-lede { flex: 0 0 auto; margin: 0; padding: 8px 16px 4px; }
 .control-left { display: flex; flex-direction: column; min-width: 0; }
 .control-left > * { flex-shrink: 0; }
-.control-right { min-width: 0; padding: 8px 16px 8px 0; }
+.control-right { min-width: 0; padding: 8px 16px 8px 4px; }
 /* 并排时右栏不撑高这一行（contain: size）：行高只看左栏，终端保住它那一半、底边不出窗口；对话多了在右栏里自己滚。 */
 @media (min-width: 901px) {
   .control-right { contain: size; overflow-y: auto; }
+}
+/* 收起只在并排时生效；右栏一直挂着（只是藏起来），草稿、选中的 session 不丢。窄屏单列时没有按钮，右栏照常显示。 */
+@media (min-width: 901px) {
+  .control-split.right-folded { grid-template-columns: 1fr; }
+  .control-split.right-folded .control-right { display: none; }
+  .control-split.right-folded .control-left { padding-right: 24px; }
 }
 .feature-summary { background: var(--panel); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 12px; margin: 0 0 6px; overflow-wrap: anywhere; }
 .feature-summary p { margin: 0 0 6px; }

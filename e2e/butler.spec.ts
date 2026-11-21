@@ -88,14 +88,14 @@ test("the Butler 总控 page fills the window and its right column folds, per pa
   const fold = split.getByRole("button", { name: S.lay.ctlCollapse, exact: true });
   const narrow = (await split.locator(".control-left").boundingBox())!.width;
   await fold.click();
-  await expect(split.locator(".control-right")).toHaveCount(0);
+  await expect(split.locator(".control-right")).toBeHidden();
   await expect.poll(async () => (await split.locator(".control-left").boundingBox())!.width).toBeGreaterThan(narrow * 1.5);
   await expect(split.locator(".control-left .terminal-wrap")).toBeVisible();
 
   // 重新加载后还是收起；展开后右栏回来。
   await page.reload();
   await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await expect(butler.locator(".control-right")).toHaveCount(0);
+  await expect(butler.locator(".control-right")).toBeHidden();
   await butler.getByRole("button", { name: S.lay.ctlExpand, exact: true }).click();
   await expect(butler.locator(".control-right")).toBeVisible();
 });

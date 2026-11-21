@@ -139,7 +139,7 @@ export function ControlSplit(p: { lede?: string; left: ReactNode; right: ReactNo
         >
           {folded ? "‹" : "›"}
         </button>
-        {!folded && <div className="control-right">{p.right}</div>}
+        <div className="control-right">{p.right}</div>
       </div>
     </>
   );
