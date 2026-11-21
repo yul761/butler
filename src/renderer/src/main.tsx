@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { startActivityLog } from "./activity-log";
 import { api } from "./api";
 import { App } from "./App";
 import { browserLongTaskObserver, startLongTaskReporter } from "./diag";
@@ -15,6 +16,9 @@ startLongTaskReporter({
   setInterval: (fn, ms) => window.setInterval(fn, ms),
   clearInterval: (h) => window.clearInterval(h as number),
 });
+
+// 实况窗口卡片上的工具调用：从启动起一直收（BTL-242），不只是实况挂着的时候。
+startActivityLog();
 
 // 先拿到语言再渲染（设计文档 2026-10-26）：拿不到就用中文。
 api.language().then(setUiLang, () => setUiLang("zh")).finally(() => {
