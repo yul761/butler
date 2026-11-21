@@ -202,6 +202,8 @@ export const SETTING_DEFAULTS = {
   intakePollMinutes: "15",
   /** 工作流 N：ticket → 仓库，一行一条 `匹配 => 绝对路径`（见 src/main/intake/sources.ts 的 parseRepoMap）。 */
   intakeRepoMap: "",
+  /** 4.0（BTL-244）：显示 Butler 之外开的 session（未认领）。默认关：关着时完全不扫描 ~/.claude/projects 去发现它们。 */
+  showOutsideSessions: "0",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

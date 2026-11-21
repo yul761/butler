@@ -11,6 +11,18 @@ export function lessonsTree(s: LessonsState): Array<{ product: LessonProductView
   return tree;
 }
 
+/** 复盘规矩页默认视图的待确认列表（BTL-244）：所有仓库和产品的待确认规矩，按 state 里的顺序。 */
+export function allPending(s: Pick<LessonsState, "lessons">): Lesson[] {
+  return s.lessons.filter((l) => l.status === "pending");
+}
+
+/** 一条规矩属于哪里：仓库写 slug，产品写名字（产品已经没了时写 #id）。 */
+export function scopeLabel(l: Pick<Lesson, "scope">, s: Pick<LessonsState, "products">): string {
+  if (l.scope.kind === "repo") return l.scope.slug;
+  const id = l.scope.productId;
+  return s.products.find((p) => p.id === id)?.name ?? `#${id}`;
+}
+
 /** 选中的仓库或产品自己的规矩，分成待确认和已确认（含停用的，停用的排在最后）。 */
 export function lessonsFor(s: LessonsState, sel: LessonsSelection): { pending: Lesson[]; confirmed: Lesson[] } {
   const mine = s.lessons.filter((l) =>

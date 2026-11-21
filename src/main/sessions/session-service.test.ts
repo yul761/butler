@@ -74,7 +74,7 @@ async function setup(opts: {
   });
   const repo = makeRepo();
   const ticket = await ticketService.create({ key: "PROJ-1", repoPath: repo, workMode: opts.workMode ?? "worktree" });
-  return { db, service, sessions, tickets, spawned, pty, repo, ticket, ticketService, logs, submitted };
+  return { db, service, sessions, settings, tickets, spawned, pty, repo, ticket, ticketService, logs, submitted };
 }
 
 describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
@@ -485,8 +485,15 @@ describe("SessionService views", () => {
     expect(service.ticketHeads("NOPE")).toEqual([]);
   });
 
-  it("unclaimed suggests tickets and claim/dismiss work", async () => {
+  it("unclaimed is empty while showOutsideSessions is off (the default)", async () => {
     const { service, sessions } = await setup();
+    sessions.insertIfAbsent({ id: "u1", ticketKey: null, cwd: "/w", origin: "discovered", lastActivityAt: 900, createdAt: 900 });
+    expect(service.unclaimed()).toEqual([]);
+  });
+
+  it("unclaimed suggests tickets and claim/dismiss work", async () => {
+    const { service, sessions, settings } = await setup();
+    settings.set("showOutsideSessions", "1");
     sessions.insertIfAbsent({ id: "u1", ticketKey: null, cwd: "/w", origin: "discovered", gitBranch: "feature/proj-1-x", lastActivityAt: 900, createdAt: 900 });
     sessions.insertIfAbsent({ id: "u2", ticketKey: null, cwd: "/w", origin: "discovered", firstPrompt: "看 PROJ-77", lastActivityAt: 900, createdAt: 900 });
     const list = service.unclaimed();

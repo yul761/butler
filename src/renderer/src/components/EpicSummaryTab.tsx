@@ -1,14 +1,14 @@
 import { useState } from "react";
 import type { EpicFeatureRow } from "../../../shared/types";
 import { S } from "../strings";
+import type { SummaryRunMessage } from "./FeatureSummaryTab";
 
-/** 一次「立即更新」的结果：bad 为真时标红（失败、限流、降级）。 */
-export interface SummaryRunMessage { text: string; bad: boolean }
+export type { SummaryRunMessage };
 
 const formatTime = (ms: number): string => new Date(ms).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /**
- * epic 的「AI 总结」页签：每个没归档的 feature 一节（最新汇总、生成时间、卡住的地方），各自一个「立即更新」。
+ * epic 的「状态」页签：每个没归档的 feature 一节（最新汇总、生成时间、卡住的地方），各自一个「立即更新」。
  * 没有一份 epic 整体的总结：每个 feature 各自更新，免得一下点出 N 次模型调用。onRun 返回给人看的结果，不应 reject（reject 了也只显示通用错误）。
  */
 export function EpicSummaryTab({ rows, onRun }: { rows: EpicFeatureRow[]; onRun: (featureId: number) => Promise<SummaryRunMessage> }) {

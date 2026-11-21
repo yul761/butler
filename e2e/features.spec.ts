@@ -191,9 +191,10 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
     // 已经结束的再结束一次：Butler 说它已经结束了。
     await expect.poll(async () => (await boss.call("end_session", { session: second.sessionId, reason: "again" })).content[0].text).toContain("已经结束");
 
-    // 6. handoff（「记录」页签）：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
-    await openTicketTab(page, "log");
-    await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
+    // 6. 更新状态（概况的「状态」一节，BTL-244）：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
+    await openTicketTab(page, "overview");
+    await page.getByTestId("ticket-status").getByRole("button", { name: S.runHandoff, exact: true }).click();
+    await expect(page.getByTestId("ticket-status").locator(".handoff-entry")).toBeVisible();
     await openTicketTab(page, "terminal");
     await expect(page.locator(".repos-bar").getByText(S.worktreeRemoved, { exact: true })).toBeVisible();
     expect(existsSync(feWorktree)).toBe(false);

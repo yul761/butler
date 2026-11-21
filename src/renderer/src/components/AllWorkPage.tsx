@@ -13,6 +13,8 @@ import { IntakeQueue } from "./IntakeQueue";
 import { ReviewQueue } from "./ReviewQueue";
 import { WhoTag } from "./ScopeParts";
 import { ManagedStacks } from "./StacksPanel";
+import { useStateRefetch } from "./useStateRefetch";
+import { api } from "../api";
 
 export interface AllWorkBodyProps {
   board: TurnBoard | null;
@@ -21,6 +23,8 @@ export interface AllWorkBodyProps {
   /** 单独的 ticket（不在任何 feature 里）。 */
   tickets: TicketView[];
   unclaimedCount: number;
+  /** 「显示 Butler 之外开的 session」开着才有「未认领 session」入口（BTL-244，默认关）。 */
+  showUnclaimed?: boolean;
   now: number;
   /** 从提醒跳来：「更多」默认展开。 */
   focusMore?: "stacks" | "intake";
@@ -78,7 +82,7 @@ export function AllWorkBody(p: AllWorkBodyProps) {
         <button onClick={p.onNewEpic}>+ {S.newEpic}</button>
         <span className="spacer" />
         <button onClick={() => p.onGo({ page: "archived" })}>{S.archived}</button>
-        <button onClick={() => p.onGo({ page: "unclaimed" })}>{S.hm.all.unclaimedBtn(p.unclaimedCount)}</button>
+        {p.showUnclaimed && <button onClick={() => p.onGo({ page: "unclaimed" })}>{S.hm.all.unclaimedBtn(p.unclaimedCount)}</button>}
       </div>
       {rows.length === 0 ? <p className="muted">{S.hm.all.empty}</p> : (
         <table className="all-work-table">
@@ -123,5 +127,7 @@ export function AllWorkBody(p: AllWorkBodyProps) {
 
 /** App 用的入口；现在就是 AllWorkBody。 */
 export function AllWorkPage(p: AllWorkBodyProps) {
-  return <AllWorkBody {...p} />;
+  // 入口跟着设置走：改了设置会发 stateChanged，这里跟着重取。
+  const settings = useStateRefetch("settings:all-work", api.settings);
+  return <AllWorkBody {...p} showUnclaimed={settings?.showOutsideSessions === "1"} />;
 }

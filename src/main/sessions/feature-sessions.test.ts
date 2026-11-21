@@ -29,6 +29,8 @@ async function setup() {
   const handoffs = new HandoffsRepo(db);
   const epicHistory = new EpicHistoryRepo(db);
   const settings = new SettingsRepo(db);
+  // 这里的断言要看「不进未认领」：先打开未认领列表（默认关着时它总是空的）。
+  settings.set("showOutsideSessions", "1");
   const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
   const featureService = new FeatureService({ features, tickets, now: () => 1 });
   const parent = join(tempDir("butler-code-"), "shop");

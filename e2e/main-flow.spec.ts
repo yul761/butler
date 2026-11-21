@@ -42,13 +42,16 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await expect(page.locator(".sidebar .ticket .turn-dot")).toHaveAttribute("title", S.hm.dotTitle.stuck);
     await expect(page.locator(".sidebar .ticket .cnt")).toHaveText("1");
 
-    // 4. 立即 handoff（假 claude 的 -p 模式，不挂记忆）：合并后任务入库，ticket 变成“已合并·待收尾”。
-    //    立即交接、待跟进、记忆都在「记录」页签里，三个小节一起显示。
+    // 4. 更新状态（就是 handoff；假 claude 的 -p 模式，不挂记忆）：合并后任务入库，ticket 变成“已合并·待收尾”。
+    //    「更新状态」在概况的「状态」一节里（BTL-244）；待跟进、状态记录、记忆在「记录」页签里，三个小节一起显示。
     // title 是「名字\nsession id」；名字会从「新对话」换成第一句话，只认 id。
     const sessionId = (await page.locator(".sessions-bar .session.active").getAttribute("title"))!.split("\n")[1];
     const screen = await terminalText(page);
+    await openTicketTab(page, "overview");
+    await page.getByTestId("ticket-status").getByRole("button", { name: S.runHandoff, exact: true }).click();
+    // 概况里的「状态」换成新的一份。
+    await expect(page.getByTestId("ticket-status").locator(".handoff-entry")).toBeVisible();
     await openTicketTab(page, "log");
-    await page.getByRole("button", { name: S.runHandoff, exact: true }).click();
     await expect(page.locator(".ticket-log-followups h3 .count")).toHaveText("1");
     await expect(page.locator(".followup .text").getByText("改 staging 配置", { exact: true })).toBeVisible();
     // 侧栏不再按状态分组（UI 重做第 2 层）：ticket 还在树里。

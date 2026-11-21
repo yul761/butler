@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ElectronApplication } from "@playwright/test";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, openSettingsGroup, test } from "./fixtures";
+import { completeWizard, expect, openSettingsGroup, test, openLessonsAdvanced } from "./fixtures";
 
 /** 文件选择框换成固定的路径（主进程里开的系统对话框 e2e 点不到，也不能抢焦点）。 */
 async function stubDialogs(app: ElectronApplication, file: string): Promise<void> {
@@ -40,7 +40,7 @@ test("an export imports into another BUTLER_HOME with a diff preview, and the im
 
   const file = join(a.dir, "butler-export.json");
   await stubDialogs(first.app, file);
-  await first.page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(first.page);
   await first.page.getByTestId("lessons-page-tab-io").click();
   await first.page.getByTestId("io-export").click();
   await expect(first.page.getByTestId("io-export-message")).toHaveText(S.ioExported(file));
@@ -61,7 +61,7 @@ test("an export imports into another BUTLER_HOME with a diff preview, and the im
   await second.page.reload();
   await stubDialogs(second.app, file);
   const page = second.page;
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-io").click();
   await page.getByTestId("io-choose").click();
 

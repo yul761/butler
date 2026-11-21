@@ -23,10 +23,10 @@ describe("followup view helpers", () => {
   });
 
   it("explains each handoff outcome", () => {
-    expect(outcomeMessage({ ticketKey: "A-1", status: "stored", handoffId: 1, degraded: false })).toBe("handoff 已更新。");
+    expect(outcomeMessage({ ticketKey: "A-1", status: "stored", handoffId: 1, degraded: false })).toBe("状态已更新。");
     expect(outcomeMessage({ ticketKey: "A-1", status: "stored", handoffId: 1, degraded: true })).toContain("不完整");
     expect(outcomeMessage({ ticketKey: "A-1", status: "skipped", reason: "rate_limited" })).toContain("限流");
-    expect(outcomeMessage({ ticketKey: "A-1", status: "failed", reason: "timeout", message: "超过 300 秒没有完成" })).toBe("handoff 失败：超过 300 秒没有完成");
+    expect(outcomeMessage({ ticketKey: "A-1", status: "failed", reason: "timeout", message: "超过 300 秒没有完成" })).toBe("更新状态失败：超过 300 秒没有完成");
     expect(triggerLabel("command")).toBe("/handoff");
   });
 });

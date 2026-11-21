@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type { FeatureView } from "../../../shared/types";
 import { S } from "../strings";
-import type { SummaryRunMessage } from "./EpicSummaryTab";
 import { useCollapsed } from "./useCollapsed";
+
+/** 一次「立即更新」的结果：bad 为真时标红（失败、限流、降级）。 */
+export interface SummaryRunMessage { text: string; bad: boolean }
 
 /** 这一页签要的 feature 字段（便于测试）。 */
 export type FeatureSummaryFeature = Pick<FeatureView, "id" | "summary" | "brief"> & { tickets: Pick<FeatureView["tickets"][number], "key">[] };

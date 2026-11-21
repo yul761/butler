@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { defHash } from "../src/main/backtest/evaluate";
 import { S } from "../src/renderer/src/strings";
 import { pct } from "../src/renderer/src/backtest-view";
-import { completeWizard, expect, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, test, type Sandbox, openLessonsAdvanced } from "./fixtures";
 
 const DAY = 86_400_000;
 
@@ -81,7 +81,7 @@ test("backtest: a shadow check that passed its backtest is promoted by the revie
   await expect(notice).toHaveCount(0);
 
   // 5. 检查页：回测结果，影子进度里写着被撤销过、要人看。
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-checks").click();
   await page.getByTestId("checks-layer").selectOption("repo:acme/web");
   const f = page.getByTestId(`check-f-${checkId}`);

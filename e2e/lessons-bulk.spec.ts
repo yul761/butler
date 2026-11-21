@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, test } from "./fixtures";
+import { completeWizard, expect, test, openLessonsAdvanced } from "./fixtures";
 
 /**
  * 批量操作（契约 4.4）：按筛选一步确认 → 整批撤销；接受全部推荐；勾选几条拒绝；在批次历史里撤销。
@@ -25,7 +25,7 @@ test("pending lessons are confirmed by filter in one action and the batch is und
   db.close();
   await page.reload();
 
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-repo-acme/web").click();
   const pending = page.locator(".lesson.pending");
   const confirmed = page.locator(".lesson.confirmed");

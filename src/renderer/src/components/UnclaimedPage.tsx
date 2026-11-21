@@ -3,9 +3,11 @@ import type { TicketView, UnclaimedSession } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
+import { useStateRefetch } from "./useStateRefetch";
 
 export function UnclaimedPage({ tickets }: { tickets: TicketView[] }) {
   const [items, setItems] = useState<UnclaimedSession[] | null>(null);
+  const settings = useStateRefetch("settings:unclaimed", api.settings);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const load = useCallback(async () => {
     try {
@@ -20,7 +22,9 @@ export function UnclaimedPage({ tickets }: { tickets: TicketView[] }) {
     return api.onStateChanged(() => void load());
   }, [load]);
 
-  if (!items) return <p className="empty">{S.loading}</p>;
+  if (!items || !settings) return <p className="empty">{S.loading}</p>;
+  // 设置关着（默认）：主进程不扫描，列表总是空的；说一句去哪里打开（BTL-244）。
+  if (settings.showOutsideSessions !== "1") return <p className="empty">{S.unclaimedOff}</p>;
   if (items.length === 0) return <p className="empty">{S.noUnclaimed}</p>;
 
   return (

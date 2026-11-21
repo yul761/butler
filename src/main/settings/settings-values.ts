@@ -368,6 +368,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       return normalizeTicketPattern(value);
     case "memoryEnabled":
     case "onboardingDone":
+    case "showOutsideSessions":
     case "checksEnabled":
     case "memoryMonitor":
     case "backgroundPriority":

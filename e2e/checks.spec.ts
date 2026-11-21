@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, terminalText, test, type Sandbox, newButton, openTicketTab } from "./fixtures";
+import { completeWizard, expect, terminalText, test, type Sandbox, newButton, openTicketTab, openLessonsAdvanced } from "./fixtures";
 
 /** 在当前显示的终端里输入一行并回车。 */
 async function typeLine(page: Page, line: string): Promise<void> {
@@ -70,7 +70,7 @@ test("checks: an enforced pattern blocks the edit and is recorded, shadow only r
   );
   d.close();
   await page.reload();
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-repo-acme/web").click();
   await page.getByTestId(`lesson-make-check-${lessonId}`).click();
   await expect(page.getByTestId("check-form")).toBeVisible();
@@ -106,7 +106,7 @@ test("checks: an enforced pattern blocks the edit and is recorded, shadow only r
   expect(hits(s)[0].detail).toContain('console.log("debug")');
 
   // 4. 检查页上看到这次命中；切到试运行。
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-checks").click();
   await page.getByTestId("checks-layer").selectOption("repo:acme/web");
   const row2 = page.locator(".check-row").filter({ hasText: "no console.log" });
@@ -130,7 +130,7 @@ test("checks: an enforced pattern blocks the edit and is recorded, shadow only r
   // 6. push 前的命令检查（全局层，强制）：失败时 git push 被拒绝，理由里有命令的输出。
   // /fake-run 用 Git Bash 执行命令，Windows 上的引号和路径还没验证过（和合并总控的 e2e 一样）。
   if (process.platform === "win32") return;
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-checks").click();
   await page.getByTestId("checks-layer").selectOption("global");
   await page.getByTestId("checks-new").click();

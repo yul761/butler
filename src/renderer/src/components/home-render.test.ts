@@ -135,7 +135,10 @@ describe("AllWorkBody", () => {
 
   it("has the create buttons, the two entries and the four columns", () => {
     const html = render({ board: board([scope("epic", 1, { youCount: 2 }), scope("epic", 2), scope("ticket", "BTL-9", { total: 1, merged: 0 })]) });
-    for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`, S.archived, S.hm.all.unclaimedBtn(0)]) expect(html).toContain(t);
+    for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`, S.archived]) expect(html).toContain(t);
+    // 「显示 Butler 之外开的 session」默认关：没有未认领入口（BTL-244）。
+    expect(html).not.toContain(S.hm.all.unclaimedBtn(0));
+    expect(render({ showUnclaimed: true, unclaimedCount: 3 })).toContain(S.hm.all.unclaimedBtn(3));
     for (const c of [S.hm.all.colName, S.hm.all.colWho, S.hm.all.colNow, S.hm.all.colProgress]) expect(html).toContain(`>${c}</th>`);
     expect(html).toContain(S.hm.all.lede(2, 1));
     expect(html).toContain(S.hm.whoYou(2));
@@ -156,7 +159,7 @@ describe("AllWorkBody", () => {
 
   it("counts unclaimed sessions on the button", () => {
     expect(S.hm.all.unclaimedBtn(0)).not.toMatch(/\d/);
-    expect(render({ unclaimedCount: 1 })).toContain(S.hm.all.unclaimedBtn(1));
+    expect(render({ showUnclaimed: true, unclaimedCount: 1 })).toContain(S.hm.all.unclaimedBtn(1));
   });
 
   it("still draws the rows without a board, and a row with no stats shows a dash", () => {

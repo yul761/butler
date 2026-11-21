@@ -8,7 +8,7 @@ import { useSettingsForm } from "./useSettingsForm";
 
 const TEXT_FIELDS = ["claudePath", "branchTemplate", "ticketPattern"] as const;
 
-/** 设置 › 基本：语言、claude 路径、分支和 ticket 号、开机启动、记忆、换新阈值、重新运行向导。 */
+/** 设置 › 基本：语言、claude 路径、分支和 ticket 号、开机启动、显示 Butler 之外开的 session、记忆、换新阈值、重新运行向导。 */
 export function BasicSettings({ report, onHealth, onRerunWizard }: { report: HealthReport; onHealth: (r: HealthReport) => void; onRerunWizard: () => void }) {
   const [autostart, setAutostart] = useState<AutostartState | null>(null);
   const form = useSettingsForm((k) => {
@@ -58,6 +58,11 @@ export function BasicSettings({ report, onHealth, onRerunWizard }: { report: Hea
         {S.autostart}
       </label>
       {autostart && !autostart.supported && <p className="muted">{S.autostartUnsupported}</p>}
+      <label className="inline">
+        <input type="checkbox" data-testid="setting-showOutsideSessions" checked={current.showOutsideSessions === "1"} onChange={(e) => void save("showOutsideSessions", e.target.checked ? "1" : "0")} />
+        {S.showOutsideSessions}
+      </label>
+      <p className="muted">{S.showOutsideSessionsHelp}</p>
 
       <h2>{S.memorySettings}</h2>
       <label className="inline">

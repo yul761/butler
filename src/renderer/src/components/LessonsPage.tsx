@@ -3,8 +3,7 @@ import type { Lesson, LessonAction, LessonRepoView, LessonsState } from "../../.
 import { api } from "../api";
 import { reportError } from "../errors";
 import { queueBarButtons, queueBarText, sourceLabel, TONE_PILL } from "../lesson-runs-view";
-import { firstPendingSelection, pendingLessons } from "../butler-self-view";
-import { saveTab, savedTab } from "../local-prefs";
+import { saveTab, savedTab, setCollapsed } from "../local-prefs";
 import { pickTab } from "../page-tabs";
 import { lessonsFor, lessonsTree, pruneLessonsUi, type LessonsSelection } from "../lessons-view";
 import { S } from "../strings";
@@ -21,24 +20,23 @@ import { useStateRefetch } from "./useStateRefetch";
 import { WizardPanel } from "./WizardPanel";
 import { CalibrationPanel } from "./CalibrationPanel";
 import { ScoreParts } from "./ScoreParts";
+import { GroupToggle } from "./HomeMore";
+import { PendingLessons } from "./PendingLessons";
+import { useCollapsed } from "./useCollapsed";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 const PAGE_TABS = ["lessons", "wizard", "calibration", "checks", "baselines", "batches", "io"] as const;
 type PageTabId = (typeof PAGE_TABS)[number];
 
-/** 有新规矩待确认时放在页面最上面的一张卡：数量 + 「逐条看」。 */
-export function LessonsAttention({ count, onOpen }: { count: number; onOpen(): void }) {
-  if (count <= 0) return null;
-  return (
-    <p className="lessons-suggest" role="status" data-testid="lessons-attention">
-      <span>{S.lay.lessonsAttention(count)}</span>
-      <button data-testid="lessons-attention-open" onClick={onOpen}>{S.lay.lessonsReview}</button>
-    </p>
-  );
-}
+/** 「高级」折叠的开合记号（BTL-244）：默认收起。 */
+const ADVANCED_KEY = "lessons:advanced";
+const openAdvanced = () => setCollapsed(ADVANCED_KEY, false, true);
 
-/** 只有界面状态放在这里；数据都等 stateChanged 之后重取。 */
+/**
+ * 复盘规矩页。默认视图只有待确认列表（PendingLessons）；原来的整页原样放在默认收起的「高级」里（BTL-244）。
+ * 只有界面状态放在这里；数据都等 stateChanged 之后重取。
+ */
 export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(id: string): void; tab?: "checks" }) {
   const state = useStateRefetch("lessons", api.lessonsState);
   // 「该导出了」的提醒在规矩标签页也显示（导入导出标签页里另有一条）。
@@ -62,8 +60,12 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
     saveTab("lessons", t);
     setPageTabRaw(t);
   };
+  const [advancedCollapsed, toggleAdvanced] = useCollapsed(ADVANCED_KEY, true);
   useEffect(() => {
-    if (initialTab) setPageTab(initialTab);
+    if (!initialTab) return;
+    setPageTab(initialTab);
+    // 从别处跳到「检查」：它在「高级」里，先展开。
+    openAdvanced();
   }, [initialTab]);
   /** 从规矩起草好的检查：交给检查标签页打开表单。 */
   const [checkDraft, setCheckDraft] = useState<CheckDraftState | null>(null);
@@ -139,6 +141,7 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
       }
       setCheckDraft({ lessonId: l.id, scope: r.scope, input: r.draft, reason: r.reason });
       setPageTab("checks");
+      openAdvanced();
     } catch (e) {
       reportError(e);
     } finally {
@@ -482,14 +485,30 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
     <div className="page lessons-page">
       <h2>{S.lessons}</h2>
       <p className="muted">{S.lay.lessonsLede}</p>
-      <LessonsAttention
-        count={pendingLessons(s)}
-        onOpen={() => {
-          setPageTab("lessons");
-          const first = firstPendingSelection(s);
-          if (first) select(first);
-        }}
-      />
+      {ioStatus?.remind && (advancedCollapsed || pageTab !== "io") && (
+        <p className="lessons-suggest" role="status" data-testid="lessons-export-reminder">
+          <span>{S.ioReminder(ioStatus.reminderDays)}</span>
+          <button className="link" data-testid="lessons-export-reminder-open" onClick={() => {
+              setPageTab("io");
+              openAdvanced();
+            }}
+          >
+            {S.ioOpenTab}
+          </button>
+        </p>
+      )}
+      <PendingLessons s={s} act={act} error={(k) => errors[k]} />
+      <section className="lessons-advanced" data-testid="lessons-advanced">
+        <h3><GroupToggle open={!advancedCollapsed} onToggle={toggleAdvanced}>{S.lessonsAdvanced}</GroupToggle></h3>
+        {!advancedCollapsed && advanced()}
+      </section>
+    </div>
+  );
+
+  function advanced() {
+    return (
+    <>
+      <p className="muted">{S.lessonsAdvancedHint}</p>
       <div className="lessons-tabs lessons-row" role="tablist">
         {PAGE_TABS.map((t) => (
           <button key={t} role="tab" aria-selected={pageTab === t} className={pageTab === t ? "primary" : undefined} data-testid={`lessons-page-tab-${t}`} onClick={() => setPageTab(t)}>
@@ -498,12 +517,6 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
         ))}
       </div>
       {notice && <BatchNotice notice={notice} onChange={setNotice} />}
-      {pageTab === "lessons" && ioStatus?.remind && (
-        <p className="lessons-suggest" role="status" data-testid="lessons-export-reminder">
-          <span>{S.ioReminder(ioStatus.reminderDays)}</span>
-          <button className="link" data-testid="lessons-export-reminder-open" onClick={() => setPageTab("io")}>{S.ioOpenTab}</button>
-        </p>
-      )}
       {pageTab === "wizard" ? (
         <WizardPanel lessons={s} onNotice={setNotice} />
       ) : pageTab === "calibration" ? (
@@ -574,6 +587,7 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
           {detail()}
         </>
       )}
-    </div>
-  );
+    </>
+    );
+  }
 }
