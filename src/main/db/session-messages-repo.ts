@@ -108,7 +108,7 @@ export class SessionMessagesRepo {
 
   /** 全部在排队的，先排的在前。 */
   queued(): SessionMessage[] {
-    return (this.db.prepare(`SELECT * FROM session_messages WHERE status = 'queued' ORDER BY queued_at, id`).all() as unknown as Row[]).map(toMessage);
+    return (this.db.prepare(`SELECT * FROM session_messages WHERE status = 'queued' ORDER BY queued_at, rowid`).all() as unknown as Row[]).map(toMessage);
   }
 
   /** 送到了，记下怎么送的和送到时目标最后一条回复的 id。只从 queued 改；改了返回 true。 */
