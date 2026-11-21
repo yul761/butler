@@ -6,7 +6,7 @@ import { mkdirSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, write
 import { join } from "node:path";
 import { MESSAGE_LIMIT, sanitizeTask, TASK_LIMIT } from "../../shared/control";
 import {
-  DONE_SUFFIX, MAILBOX_CONTEXT_LIMIT, MAIN_SUFFIX, MSG_SUFFIX, messageFileName, messageIdOf, TAKEN_SUFFIX, type MailboxFile,
+  DONE_SUFFIX, MAIN_SUFFIX, MSG_SUFFIX, messageFileName, messageIdOf, TAKEN_SUFFIX, type MailboxFile,
 } from "../../shared/mailbox";
 import type { MessageKind, MessageScope, MessageView, Session } from "../../shared/types";
 import type { NewSessionMessage, SessionMessage, SessionMessagesRepo } from "../db/session-messages-repo";
@@ -28,6 +28,8 @@ export const AGE_NOTE_MS = 10 * 60_000;
 export const RECENT_MESSAGES = 30;
 /** 直接输入一次最多这么多字符；第一条总要送。 */
 const INPUT_LIMIT = TASK_LIMIT - 1000;
+/** 一条消息的正文最多这么多字符：一条总能放进一次直接输入（开头另算），也放得进一次 additionalContext。 */
+export const MAILBOX_BODY_LIMIT = INPUT_LIMIT - 500;
 
 export interface MailboxFs {
   mkdir(dir: string): void;
@@ -72,8 +74,11 @@ export interface MailboxDeps {
   lastReply(sessionId: string): { id: string; text: string; at: number | null } | null;
   /** 给人看的 session 名字（列表、回复的开头）："ABC-1"、"feature 登录改版的总控"、"Butler 总控"。null 是 Butler 自己。 */
   nameOf(sessionId: string | null): string;
-  /** Butler 往这个 session（head）里直接输入了一段：接下来那次 UserPromptSubmit 不算用户在终端里答了提问。 */
-  typedByButler?(headId: string): void;
+  /**
+   * Butler 往这个 session（head）里直接输入：start 在 deliver 之前，之后是 sent / failed。这一段引起的那次 UserPromptSubmit
+   * 不算用户在终端里答了提问（InboxService.butlerTyping）。
+   */
+  typing?(headId: string, phase: "start" | "sent" | "failed"): void;
   notify(): void;
   now(): number;
   newId?: () => string;
@@ -130,7 +135,7 @@ export class Mailbox {
     const to = this.headOf(input.to);
     const msg: NewSessionMessage = {
       id: this.d.newId?.() ?? randomUUID(), kind: input.kind, fromSession: input.from === null ? null : this.headOf(input.from), toSession: to,
-      featureId: input.featureId, body: input.body.slice(0, MAILBOX_CONTEXT_LIMIT - 200), queuedAt: (this.lastQueuedAt = Math.max(this.d.now(), this.lastQueuedAt + 1)),
+      featureId: input.featureId, body: input.body.slice(0, MAILBOX_BODY_LIMIT), queuedAt: (this.lastQueuedAt = Math.max(this.d.now(), this.lastQueuedAt + 1)),
       interrupt: input.interrupt === true, ref: input.ref, meta: input.meta, expectsReply: EXPECTS_REPLY.has(input.kind),
     };
     const before = input.ref ? this.d.repo.queuedByRef(input.ref) : null;
@@ -400,8 +405,13 @@ export class Mailbox {
       const list = forced ? [...claimed.mine.filter((m) => m.id === forced), ...claimed.mine.filter((m) => m.id !== forced)] : claimed.mine;
       const { text, ids } = this.batch(list);
       const at = this.d.now();
-      this.d.typedByButler?.(head);
-      const result = await this.d.deliver(term, text, recheck);
+      this.d.typing?.(head, "start");
+      const result = await this.d.deliver(term, text, recheck).catch((e: unknown) => {
+        // 抛了也要收尾，不然那个 session 下一次 UserPromptSubmit 一直被当成 Butler 的。
+        this.d.typing?.(head, "failed");
+        throw e;
+      });
+      this.d.typing?.(head, result === "sent" ? "sent" : "failed");
       if (result !== "sent") {
         this.d.log(`mailbox: input to ${head}: ${result}`);
         return false;

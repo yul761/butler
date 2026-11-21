@@ -56,7 +56,7 @@ function world() {
     interruptRecheck: () => () => true,
     lastReply: (id) => replies.get(head(id)?.id ?? id) ?? null,
     nameOf: (id) => (id === null ? "Butler" : `S(${id})`),
-    typedByButler: (h) => typed.push(h),
+    typing: (h, phase) => typed.push(`${h}:${phase}`),
     notify: () => {},
     now: () => now,
     log: () => {},
@@ -108,7 +108,7 @@ describe("Mailbox", () => {
     expect(w.repo.queued()).toEqual([]);
     expect(w.repo.recent({ featureId: 1 }, 5).every((m) => m.via === "input")).toBe(true);
     expect(w.dirFiles("t1")).toBeNull();
-    expect(w.typed).toEqual(["t1"]);
+    expect(w.typed).toEqual(["t1:start", "t1:sent"]);
   });
 
   it("never refuses: a blocked or closed target keeps the message queued until it can take it", async () => {
