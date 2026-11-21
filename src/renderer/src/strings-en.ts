@@ -2333,6 +2333,8 @@ export const EN: UiStrings = {
     groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} merged`,
     noTicketsInGroup: "No tickets in this group yet.",
     ctlLede: "The control session splits up work and coordinates the tickets. Terminal on the left, conversation on the right.",
+    ctlCollapse: "Collapse the conversation column",
+    ctlExpand: "Expand the conversation column",
     ctlEmpty: "Reports from child sessions (done or blocked) show up here in time order.",
     butlerSent: (n: number) => `Messages sent by control (${n})`,
     lessonsLede: "Rules Butler distilled from merged PRs. Confirmed ones are passed to future sessions.",

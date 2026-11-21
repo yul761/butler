@@ -157,6 +157,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
             id: "control", label: S.lay.tabControl,
             content: (
               <ControlSplit
+                page="feature"
                 lede={S.lay.ctlLede}
                 left={
                   <SessionArea

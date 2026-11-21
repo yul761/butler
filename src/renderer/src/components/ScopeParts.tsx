@@ -1,5 +1,6 @@
 // 范围页（epic / feature）共用的展示件：只吃 props，不调 api。
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
+import { isCollapsed, setCollapsed } from "../local-prefs";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
 import { barSegments, cardKey, type RunningRow } from "../home-view";
 import { progressLine, scopeRowLine, slowestLine, whoLabel, type TicketRow } from "../scope-view";
@@ -111,12 +112,35 @@ export function ScopeTicketTable(p: {
   );
 }
 
-/** 「总控」页签：上面一句说明（lede，可不给），下面左终端、右对话。 */
-export function ControlSplit(p: { lede?: string; left: ReactNode; right: ReactNode }) {
+/**
+ * 「总控」页签：上面一句说明（lede，可不给），下面左终端、右对话。
+ * 分栏线上有个按钮把右栏收起来（左边终端占满），再点展开；`page` 是页面种类（epic / feature / butler），各记各的。
+ * 终端靠自己的 ResizeObserver 重新 fit，这里不用管。
+ */
+export function ControlSplit(p: { lede?: string; left: ReactNode; right: ReactNode; page?: string }) {
+  const id = `control-right:${p.page ?? "default"}`;
+  const [folded, setFolded] = useState(() => isCollapsed(id));
+  const toggle = () => {
+    setFolded(!folded);
+    setCollapsed(id, !folded);
+  };
   return (
     <>
       {p.lede && <p className="muted control-lede">{p.lede}</p>}
-      <div className="control-split"><div className="control-left">{p.left}</div><div className="control-right">{p.right}</div></div>
+      <div className={`control-split${folded ? " right-folded" : ""}`}>
+        <div className="control-left">{p.left}</div>
+        <button
+          type="button"
+          className="control-fold"
+          aria-expanded={!folded}
+          title={folded ? S.lay.ctlExpand : S.lay.ctlCollapse}
+          aria-label={folded ? S.lay.ctlExpand : S.lay.ctlCollapse}
+          onClick={toggle}
+        >
+          {folded ? "‹" : "›"}
+        </button>
+        <div className="control-right">{p.right}</div>
+      </div>
     </>
   );
 }
