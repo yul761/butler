@@ -4,7 +4,7 @@ import type { MemorySamplesRepo } from "../db/memory-samples-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SettingsRepo } from "../db/settings-repo";
 import { backgroundPriorityOn, memoryMonitorOn, orphanCleanupOn, refreshMemoryMb } from "../settings/settings-values";
-import { MemoryMonitor, type AppMetric, type MonitorSample } from "./memory-monitor";
+import { MemoryMonitor, sampleIntervalMs, type AppMetric, type MonitorSample } from "./memory-monitor";
 import { MemoryRefresh } from "./memory-refresh";
 import { OrphanSweeper, platformKill } from "./orphans";
 import { platformBackend, PriorityManager } from "./priority";
@@ -144,7 +144,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
     },
     start: () => {
       void orphans.sweepAtStartup().catch((e: unknown) => d.log("orphan startup sweep failed", e));
-      monitor.start();
+      monitor.start(sampleIntervalMs(platform));
       // 启动后很快采第一次（「现在」页不用等一分钟才有数）。
       setTimeout(() => void monitor.tick(), 5_000).unref?.();
     },

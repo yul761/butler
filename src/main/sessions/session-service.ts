@@ -763,16 +763,20 @@ export class SessionService {
   }
 
   /** session 行加上它的终端；分成显示的和隐藏的（正在运行的终端永远显示，隐藏只对没在跑的 session 起作用）。 */
-  private split(rows: Session[], heads: Map<string, string>): { sessions: SessionView[]; hiddenSessions: SessionView[] } {
+  private split(rows: Session[], heads: Map<string, string>, rootsKnown?: Map<string, string>): { sessions: SessionView[]; hiddenSessions: SessionView[] } {
     const live = rows.filter((s) => !s.replacedBy);
-    const roots = this.d.sessions.rootsOf(live.map((s) => s.id));
+    const roots = rootsKnown ?? this.d.sessions.rootsOf(live.map((s) => s.id));
     const all = live.map((s) => ({ ...s, termId: heads.get(s.id) ?? null, rootId: roots.get(s.id) ?? s.id }));
     return { sessions: all.filter((s) => !s.dismissed || s.termId !== null), hiddenSessions: all.filter((s) => s.dismissed && s.termId === null) };
   }
 
   private allTicketViews(heads: Map<string, string>): TicketView[] {
-    return this.d.tickets.list().map((t) => {
-      const { sessions, hiddenSessions } = this.split(this.d.sessions.listByTicket(t.key), heads);
+    // 一次取所有 ticket 的 session、一次取它们的链根（BTL-242：原来每个 ticket 各两次查询）。
+    const list = this.d.tickets.list();
+    const byTicket = this.d.sessions.listByTickets(list.map((t) => t.key));
+    const roots = this.d.sessions.rootsOf([...byTicket.values()].flat().filter((s) => !s.replacedBy).map((s) => s.id));
+    return list.map((t) => {
+      const { sessions, hiddenSessions } = this.split(byTicket.get(t.key) ?? [], heads, roots);
       return { ...t, effectiveStatus: effectiveStatus(t), sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) };
     });
   }

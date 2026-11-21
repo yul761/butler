@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { memDb } from "../test-utils";
+import { insertTicket, memDb } from "../test-utils";
+import { TicketsRepo } from "./tickets-repo";
 import { SessionsRepo } from "./sessions-repo";
 
 /** 一个复盘运行（sessions.lesson_run_id 有外键）。 */
@@ -237,5 +238,28 @@ describe("SessionsRepo keeps the old epic sessions out (BTL-246)", () => {
     repo.setReplacedBy("a", "b", "clear");
     expect(db.prepare(`SELECT epic_id FROM sessions WHERE id = 'b'`).get()).toEqual({ epic_id: null });
     expect(repo.listUnclaimed(0).map((s) => s.id)).toEqual(["b"]);
+  });
+});
+
+describe("SessionsRepo.listByTickets (BTL-242)", () => {
+  it("matches listByTicket for each key in one query", () => {
+    const { db, repo } = setup();
+    const tickets = new TicketsRepo(db);
+    for (const key of ["T-1", "T-2", "T-3"]) {
+      insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: `feature/${key}`, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    }
+    const add = (id: string, ticketKey: string | null, at: number) => repo.insertIfAbsent({ id, ticketKey, cwd: "/w", origin: "butler", createdAt: at });
+    add("a", "T-1", 1);
+    add("b", "T-1", 3);
+    add("c", "T-2", 2);
+    add("d", null, 4);
+    const spy = vi.spyOn(db, "prepare");
+    const got = repo.listByTickets(["T-1", "T-2", "T-3"]);
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    for (const key of ["T-1", "T-2"]) expect(got.get(key)).toEqual(repo.listByTicket(key));
+    expect(got.has("T-3")).toBe(false);
+    expect(got.get("T-1")?.map((x) => x.id)).toEqual(["b", "a"]);
+    expect(repo.listByTickets([])).toEqual(new Map());
   });
 });

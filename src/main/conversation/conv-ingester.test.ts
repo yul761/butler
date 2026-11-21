@@ -425,6 +425,25 @@ describe("ConvIngester scheduling", () => {
       await vi.waitFor(() => expect(e.turns().map((t) => [t.qa, t.qaBy])).toEqual([["pending", null], ["yes", "judge"], ["yes", "rule"]]));
     });
 
+    it("a pending turn the rules already passed to the model is not re-read on every ingest until it changes (BTL-242)", async () => {
+      const e = env();
+      e.judge.mockImplementation(() => new Promise<ConvQaVerdict>(() => undefined));
+      const f = e.file("s1", turn("讲讲换新的流程", "先写 handoff，再开新会话"));
+      e.file("s2", turn("讲讲合并的流程", "等 CI 过了再合"));
+      const ing = e.make();
+      await ing.ingest("s1");
+      await vi.waitFor(() => expect(e.judge).toHaveBeenCalledTimes(1));
+      const [first] = e.db.prepare(`SELECT id FROM conv_turns ORDER BY id`).all() as { id: number }[];
+      const spy = vi.spyOn(e.repo, "turnMessages");
+      await ing.ingest("s2");
+      expect(spy.mock.calls.map((c) => c[0])).not.toContain(first.id);
+      // 这一轮又读进了新内容：再按规则判一次。
+      spy.mockClear();
+      appendFileSync(f, jsonl(reply("a9", "a1", "补一句", 9)));
+      await ing.ingest("s1");
+      expect(spy.mock.calls.map((c) => c[0])).toContain(first.id);
+    });
+
     it("rule verdicts land right after the read even while a model judge is in flight (final review 8)", async () => {
       const e = env();
       e.judge.mockImplementation(() => new Promise<ConvQaVerdict>(() => undefined));

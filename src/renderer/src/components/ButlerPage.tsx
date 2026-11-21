@@ -9,6 +9,7 @@ import { ControlConversation } from "./ControlConversation";
 import { Messages } from "./MessageList";
 import { ControlSplit } from "./ScopeParts";
 import { SessionArea, SessionButton, useSessionPanes } from "./WorkspaceParts";
+import { LIVE_SCOPES } from "../state-bus";
 
 /** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
 const STATE_DEBOUNCE_MS = 80;
@@ -25,10 +26,11 @@ function useButlerView(): ButlerView | null {
       api.butlerView().then((v) => live && n === seq && setView(v), reportError);
     };
     load();
+    // Butler 页带着各个 session 在干什么（BTL-242）。
     const off = api.onStateChanged(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(load, STATE_DEBOUNCE_MS);
-    });
+    }, LIVE_SCOPES);
     return () => {
       live = false;
       if (timer) clearTimeout(timer);

@@ -5,7 +5,7 @@ import type { ActivityEvent } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { setLang } from "../i18n";
 import { tempDir } from "../test-utils";
-import { ACTIVITY_TICK_MS, ActivityMonitor, activityIntervals, type ActivityDeps, deriveActivity } from "./activity-monitor";
+import { ACTIVITY_TICK_MS, ActivityMonitor, activityChange, activityIntervals, type ActivityDeps, deriveActivity } from "./activity-monitor";
 import type { WatchFn } from "./transcript-watch";
 import { applyEntry, newTranscriptState } from "./activity-parse";
 import { stripAnsi } from "./pty-manager";
@@ -1927,5 +1927,30 @@ describe("the live window's signals (BTL-190 7)", () => {
     await h.monitor.promptSubmitted("closed");
     expect(h.monitor.get("closed")).toBeNull();
     expect(h.notifications()).toBe(1);
+  });
+});
+
+describe("activityChange (BTL-242)", () => {
+  const base = { sessionId: "s", kind: "thinking", detail: null, background: false, startedAt: 1, lastOutputAt: 1, stuck: null, reason: null, action: null, lastOutput: ["a"] } as const;
+  const a = (over: Record<string, unknown> = {}) => ({ ...base, lastOutput: [...base.lastOutput], ...over }) as Parameters<typeof activityChange>[1];
+
+  it("a newly tracked session is visible", () => {
+    expect(activityChange(null, a(), "none")).toBe("visible");
+  });
+
+  it("only new output is quiet: the UI does not show it", () => {
+    expect(activityChange(a(), a({ lastOutputAt: 2, lastOutput: ["a", "b"] }), "none")).toBe("quiet");
+  });
+
+  it("kind, detail, stuck or limit changes are visible", () => {
+    expect(activityChange(a(), a({ kind: "tool" }), "none")).toBe("visible");
+    expect(activityChange(a(), a({ detail: "x.ts", lastOutputAt: 2 }), "none")).toBe("visible");
+    expect(activityChange(a(), a({ stuck: true }), "none")).toBe("visible");
+  });
+
+  it("no change keeps whatever the events said", () => {
+    expect(activityChange(a(), a(), "none")).toBe("none");
+    expect(activityChange(a(), a(), "quiet")).toBe("quiet");
+    expect(activityChange(a(), a({ lastOutputAt: 5 }), "visible")).toBe("visible");
   });
 });

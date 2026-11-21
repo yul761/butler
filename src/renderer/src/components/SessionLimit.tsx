@@ -3,6 +3,7 @@ import type { SessionLimitView, SwitchModelResult } from "../../../shared/model-
 import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
+import { LIVE_SCOPES } from "../state-bus";
 
 /** 所有 session 行共用一份撞限列表：一次 stateChanged 只取一次。 */
 let limits: SessionLimitView[] = [];
@@ -21,10 +22,11 @@ function subscribe(cb: () => void): () => void {
   listeners.add(cb);
   if (!off) {
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // 撞限是活动的一部分（BTL-242）。
     const stop = api.onStateChanged(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(load, 80);
-    });
+    }, LIVE_SCOPES);
     off = () => {
       if (timer) clearTimeout(timer);
       stop();

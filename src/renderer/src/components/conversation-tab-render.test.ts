@@ -8,8 +8,14 @@ import type { InboxItemView } from "../../../shared/types";
 import { resetClock } from "../availability-view";
 import { errorText, type TimelineItem } from "../conversation-view";
 import { S } from "../strings";
-import { ConversationFeed, ConversationTab, SearchHits, SendBar } from "./ConversationTab";
+import { Composer, ConversationFeed, ConversationTab, runSend, SearchHits, SendBar } from "./ConversationTab";
 import { ForkBox, submitFollowUp, type ForkActions } from "./ForkBox";
+
+const prefs = vi.hoisted(() => ({ split: false }));
+vi.mock("../local-prefs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../local-prefs")>()),
+  savedConvSplit: () => prefs.split,
+}));
 
 const NOW = new Date(2026, 10, 20, 15, 0).getTime();
 const AT = new Date(2026, 10, 20, 14, 32).getTime();
@@ -153,6 +159,45 @@ describe("ConversationFeed", () => {
   });
 });
 
+describe("Composer (BTL-242: the draft lives here, so typing does not re-render the timeline)", () => {
+  const sink = () => {
+    const log: string[] = [];
+    return { log, set: { draft: (v: string) => log.push(`draft:${v}`), busy: (v: boolean) => log.push(`busy:${v}`), notice: (v: string | null) => log.push(`notice:${v}`) } };
+  };
+
+  it("starts with an empty draft and send disabled", () => {
+    const html = renderToStaticMarkup(createElement(Composer, { target: "fork", onTarget: noop, resetKey: "s1", send: async () => ({ clear: true }) }));
+    expect(html).toContain("<textarea");
+    expect(isDisabled(html, S.conv.send)).toBe(true);
+  });
+
+  it("sends, then clears the draft when told to", async () => {
+    const { log, set } = sink();
+    const sent: string[] = [];
+    await runSend({ draft: "问一句", target: "fork", busy: false }, async (t) => (sent.push(t), { clear: true }), set);
+    expect(sent).toEqual(["问一句"]);
+    expect(log).toEqual(["busy:true", "notice:null", "draft:", "busy:false"]);
+  });
+
+  it("keeps the draft and shows the notice when refused; stays quiet when the session changed meanwhile", async () => {
+    const a = sink();
+    await runSend({ draft: "改一下", target: "dev", busy: false }, async () => ({ clear: false, notice: "挡下了" }), a.set);
+    expect(a.log).toEqual(["busy:true", "notice:null", "notice:挡下了", "busy:false"]);
+    const b = sink();
+    await runSend({ draft: "改一下", target: "dev", busy: false }, async () => ({ clear: false }), b.set);
+    expect(b.log).toEqual(["busy:true", "notice:null", "busy:false"]);
+  });
+
+  it("does nothing for blank text or while busy", async () => {
+    const { log, set } = sink();
+    let calls = 0;
+    const send = async () => (calls++, { clear: true });
+    await runSend({ draft: "  ", target: "fork", busy: false }, send, set);
+    await runSend({ draft: "问", target: "fork", busy: true }, send, set);
+    expect([calls, log]).toEqual([0, []]);
+  });
+});
+
 describe("SendBar", () => {
   const bar = (o: Partial<Parameters<typeof SendBar>[0]> = {}) =>
     renderToStaticMarkup(createElement(SendBar, { target: "fork", onTarget: noop, busy: false, notice: null, draft: "问一句", onDraft: noop, onSend: noop, ...o }));
@@ -222,5 +267,19 @@ describe("ConversationTab", () => {
     const html = renderToStaticMarkup(createElement(ConversationTab, { rootSessionId: "r", sessions: [], footer: createElement("div", { className: "the-footer" }) }));
     expect(html).toContain("the-footer");
     expect(html.indexOf("the-footer")).toBeLessThan(html.indexOf("conv-input"));
+  });
+
+  // BTL-242 审查：草稿在 Composer 里，切换并排时树的形状一变 Composer 就重建、草稿丢了。两种都是同一个外壳，.conv 在同一格。
+  it("side by side or not, the conversation sits in the same wrapper slot (the composer and its draft survive the toggle)", () => {
+    const render = (split: boolean) => {
+      prefs.split = split;
+      return renderToStaticMarkup(createElement(ConversationTab, { rootSessionId: "r", sessions: [], renderTerminal: () => createElement("div", { className: "the-term" }) }));
+    };
+    try {
+      expect(render(false)).toMatch(/^<div class="conv-shell"><div class="conv">/);
+      expect(render(true)).toMatch(/^<div class="conv-split"><div class="conv-term"><div class="the-term"><\/div><\/div><div class="conv">/);
+    } finally {
+      prefs.split = false;
+    }
   });
 });

@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { ActivityEvent } from "../../../shared/activity";
 import type { NowRow, NowTarget, NowView } from "../../../shared/types";
+import { useActivityLog } from "../activity-log";
 import { api } from "../api";
+import { useMotionPaused } from "../motion";
 import { allRows, eventKey, liveMemoryLine, liveNeeds, livePill, liveRows, mergeEvents, rowLabel, wirePath, type Box } from "../now-view";
 import { S } from "../strings";
 
@@ -11,8 +13,6 @@ const MAX_CARDS = 8;
 const CARD_LINES = 3;
 /** 核心卡片上的记忆读写条数。 */
 const MEMORY_LINES = 4;
-/** 推过来的事件留多少条（够每张卡片取最近几行）。 */
-const PUSHED_LIMIT = 200;
 /** 光点在线上走多久（和样式里 live-travel 的时长一样）；减少动态效果时线亮这么久。 */
 const SPARK_MS = 1600;
 
@@ -24,14 +24,14 @@ interface Spark {
 
 /** 推过来的 activity:event：留最近的一些，记忆读写各放一个光点，过一会儿收走。 */
 function usePushedEvents(): { events: ActivityEvent[]; sparks: Spark[]; pulse: number } {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  // 卡片上的行用启动以来一直收着的（activity-log）：实况没挂着时推来的也在。光点只放挂着以后来的。
+  const events = useActivityLog();
   const [sparks, setSparks] = useState<Spark[]>([]);
   const [pulse, setPulse] = useState(0);
   useEffect(() => {
     let next = 0;
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const off = api.onActivityEvent((e) => {
-      setEvents((all) => [...all, e].slice(-PUSHED_LIMIT));
       if (e.kind !== "memory-write" && e.kind !== "memory-read") return;
       const spark: Spark = { id: ++next, sessionId: e.sessionId, kind: e.kind };
       setSparks((all) => [...all, spark]);
@@ -62,6 +62,9 @@ const boxOf = (el: Element, origin: DOMRect): Box => {
  */
 export function LiveWindow({ view, onOpen }: { view: NowView; onOpen: (t: NowTarget) => void }) {
   const { events, sparks, pulse } = usePushedEvents();
+  // BTL-242：窗口在后台或者实况滚出视野时，动画停下。
+  const [stage, setStage] = useState<HTMLDivElement | null>(null);
+  const paused = useMotionPaused(stage);
   const rows = liveRows(view);
   // 要你做事的排前面，其余按页面上的顺序。
   const ordered = [...rows.filter((r) => liveNeeds(r) > 0), ...rows.filter((r) => liveNeeds(r) === 0)];
@@ -107,7 +110,7 @@ export function LiveWindow({ view, onOpen }: { view: NowView; onOpen: (t: NowTar
   return (
     <section className="live" aria-label={S.liveTitle}>
       <h3 className="live-title">{S.liveTitle}</h3>
-      <div className="live-stage">
+      <div className={`live-stage${paused ? " motion-paused" : ""}`} ref={setStage}>
         <div className="live-grid" ref={grid}>
           <svg className="live-wires" aria-hidden="true">
             {cards.map((r) => {

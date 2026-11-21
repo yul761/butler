@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakePtyFactory } from "../test-utils";
-import { BUFFER_LIMIT, nextDraftLength, PtyManager, trimBuffer } from "./pty-manager";
+import { BUFFER_LIMIT, nextDraftLength, PtyManager, pushOutput, trimBuffer } from "./pty-manager";
 
 function setup() {
   const { factory, spawned } = fakePtyFactory();
@@ -78,6 +78,30 @@ describe("PtyManager", () => {
     // 还在缓冲里的模式不重复补；退出后的记录也带着。
     spawned[0].pty.emitExit(0);
     expect(mgr.snapshot("t1").data).toBe(snap);
+  });
+
+  it("many small chunks replay like one string: capped, newline-aligned, newest last (BTL-242)", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("\x1b[?1049h\n");
+    const line = `${"y".repeat(99)}\n`;
+    for (let i = 0; i < Math.ceil((BUFFER_LIMIT * 3) / line.length); i++) spawned[0].pty.emit(line);
+    spawned[0].pty.emit("tail");
+    const snap = mgr.snapshot("t1").data;
+    expect(snap.startsWith(`\x1b[?1049h${line}`)).toBe(true);
+    expect(snap.endsWith(`${line}tail`)).toBe(true);
+    expect(snap.length).toBeLessThanOrEqual(BUFFER_LIMIT + "\x1b[?1049h".length);
+    expect(mgr.snapshot("t1").data).toBe(snap);
+  });
+
+  it("pushOutput keeps at most the limit plus slack, dropping whole chunks", () => {
+    const t = { chunks: [] as string[], chunkLen: 0, cutModes: new Map<number, boolean>() };
+    pushOutput(t, "\x1b[?1000h");
+    for (let i = 0; i < 400; i++) pushOutput(t, "z".repeat(1024));
+    expect(t.chunkLen).toBe(t.chunks.reduce((n, c) => n + c.length, 0));
+    expect(t.chunkLen).toBeGreaterThanOrEqual(BUFFER_LIMIT);
+    expect(t.chunkLen).toBeLessThanOrEqual(BUFFER_LIMIT + 64 * 1024);
+    expect(t.cutModes.get(1000)).toBe(true);
   });
 
   it("adds no mode prefix while nothing has been cut", () => {
@@ -573,4 +597,63 @@ describe("PtyManager.hasDraft", () => {
     expect(opened).toEqual(["t1"]);
     expect(mgr.isOpen("t1")).toBe(true);
   });
+
+  // BTL-242：摘下来的终端不再收数据；挂回去时只补摘下期间的那一段（since），补不上（输出太多被截掉了、终端重开过）才整份重放。
+  describe("marks and since", () => {
+    it("the snapshot carries a mark; since returns only what came after it", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("hello ");
+      const snap = mgr.snapshotAt("t1");
+      expect(snap.data).toBe("hello ");
+      spawned[0].pty.emit("wor");
+      spawned[0].pty.emit("ld");
+      const got = mgr.since("t1", snap.mark);
+      expect(got).toEqual({ data: "world", exitCode: null, mark: { epoch: snap.mark.epoch, end: snap.mark.end + 5 } });
+      expect(mgr.since("t1", got!.mark)).toEqual({ data: "", exitCode: null, mark: got!.mark });
+    });
+
+    it("a mark in the middle of a chunk gets the rest of that chunk", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("abcdef");
+      const { mark } = mgr.snapshotAt("t1");
+      spawned[0].pty.emit("ghij");
+      expect(mgr.since("t1", { epoch: mark.epoch, end: mark.end - 2 })?.data).toBe("efghij");
+    });
+
+    it("returns null once the part after the mark has been cut from the buffer", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("x");
+      const { mark } = mgr.snapshotAt("t1");
+      for (let i = 0; i < 6; i++) spawned[0].pty.emit("y".repeat(BUFFER_LIMIT / 2));
+      expect(mgr.since("t1", mark)).toBeNull();
+    });
+
+    it("returns null for a mark from an earlier run of the same terminal, or one past the end", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("first run");
+      const { mark } = mgr.snapshotAt("t1");
+      expect(mgr.since("t1", { epoch: mark.epoch, end: mark.end + 1 })).toBeNull();
+      spawned[0].pty.emitExit(0);
+      mgr.open("t1", spec, opts);
+      spawned[1].pty.emit("second run, longer than the first");
+      expect(mgr.since("t1", mark)).toBeNull();
+      expect(mgr.since("nope", mark)).toBeNull();
+    });
+
+    it("after exit: nothing new since the last mark gives the exit code; an older mark gives null", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("bye");
+      const { mark } = mgr.snapshotAt("t1");
+      spawned[0].pty.emitExit(4);
+      expect(mgr.since("t1", mark)).toEqual({ data: "", exitCode: 4, mark });
+      expect(mgr.snapshotAt("t1")).toMatchObject({ data: "bye", exitCode: 4, mark });
+      expect(mgr.since("t1", { epoch: mark.epoch, end: mark.end - 1 })).toBeNull();
+    });
+  });
 });
+

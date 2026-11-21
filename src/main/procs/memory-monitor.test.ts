@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MemorySamplesRepo } from "../db/memory-samples-repo";
 import { memDb } from "../test-utils";
-import { MemoryMonitor, type MemoryMonitorDeps, type MonitorSample } from "./memory-monitor";
+import { MemoryMonitor, type MemoryMonitorDeps, type MonitorSample, sampleIntervalMs, SAMPLE_INTERVAL_MS } from "./memory-monitor";
 import { parsePsTable } from "./proc-table";
 
 const PS = [
@@ -162,7 +162,7 @@ describe("MemoryMonitor", () => {
       let release: () => void = () => {};
       let gate: Promise<void> | null = null;
       let reads = 0;
-      const { m } = setup({ readTable: async () => { reads++; if (gate) await gate; return parsePsTable(PS); } });
+      const { m } = setup({ soonGapMs: 0, readTable: async () => { reads++; if (gate) await gate; return parsePsTable(PS); } });
       m.soon(3_000);
       m.soon(3_000);
       await vi.advanceTimersByTimeAsync(2_999);
@@ -190,5 +190,38 @@ describe("MemoryMonitor", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("spaces out the extra samples: at most one per soonGapMs, later ones wait instead of being dropped (BTL-242)", async () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      let now = 0;
+      const { m } = setup({ soonGapMs: 20_000, now: () => now, readTable: async () => { reads++; return parsePsTable(PS); } });
+      const step = async (ms: number) => {
+        now += ms;
+        await vi.advanceTimersByTimeAsync(ms);
+      };
+      m.soon(3_000);
+      await step(3_000);
+      expect(reads).toBe(1);
+      // 5 秒后又开了一个终端：等到上一次之后满 20 秒才采。
+      await step(5_000);
+      m.soon(3_000);
+      await step(3_000);
+      expect(reads).toBe(1);
+      await step(12_000);
+      expect(reads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("sampleIntervalMs (BTL-242)", () => {
+  it("samples every 2 minutes on Windows, where each sample is a PowerShell process-table query", () => {
+    expect(sampleIntervalMs("win32")).toBe(120_000);
+    expect(sampleIntervalMs("darwin")).toBe(SAMPLE_INTERVAL_MS);
+    expect(sampleIntervalMs("linux")).toBe(SAMPLE_INTERVAL_MS);
   });
 });

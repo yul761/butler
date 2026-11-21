@@ -14,11 +14,14 @@ import type { TicketPr } from "../db/ticket-prs-repo";
 import type { CommentLoop } from "../loop/comment-loop";
 import { deliveryKey, type Recipient } from "../prwatch/ci-delivery";
 import { scopeReviews, type ReviewRequestScope } from "../prwatch/review-requests";
+import { perfOp } from "../diag/perf-stats";
 import { buildTurnBoard, type BoardInput, type BoardPr, type BoardTicket, type LooseItem } from "./turn-board";
 
 export type { TurnSendReason } from "../../shared/turn";
 
 export interface TurnServiceDeps {
+  /** 看板输入的缓存（BTL-242，index.ts 的 ViewCache）：一次刷新里几次 board() 共用一份输入。不给就每次重新拼。 */
+  cache?: <T>(key: string, build: () => T) => T;
   /** sessionService.ticketViews()：单独的 ticket。feature 下的从 features() 里取。 */
   tickets(): TicketView[];
   features(): FeatureView[];
@@ -107,7 +110,7 @@ export class TurnService {
 
   /** 只算看板，不触发任何查询：第 2 层每次收到 turn:changed 都会重取。 */
   board(filter: TurnFilter | null): TurnBoard {
-    return buildTurnBoard(this.input(), filter);
+    return perfOp("turn.board", () => buildTurnBoard(this.cachedInput(), filter));
   }
 
   /**
@@ -119,7 +122,7 @@ export class TurnService {
   prTurns(): (url: string, ticketKey?: string) => Turn | null {
     const byUrl = new Map<string, Turn>();
     const byTicket = new Map<string, Turn>();
-    for (const t of this.input().tickets) {
+    for (const t of this.cachedInput().tickets) {
       for (const p of t.prs) {
         const u = p.url.toLowerCase();
         if (!byUrl.has(u)) byUrl.set(u, p.turn);
@@ -130,6 +133,10 @@ export class TurnService {
       const u = url.toLowerCase();
       return (ticketKey !== undefined ? byTicket.get(`${ticketKey}\n${u}`) : byUrl.get(u)) ?? null;
     };
+  }
+
+  private cachedInput(): BoardInput {
+    return this.d.cache ? this.d.cache("turn.input", () => this.input()) : this.input();
   }
 
   /** 切到首页（turn:home-opened）：补查请你 review 的 PR（离开时、一分钟内查过时由 poller 跳过）。 */

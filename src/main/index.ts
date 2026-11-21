@@ -4,7 +4,15 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveB
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { homedir } from "node:os";
+import { cpus, freemem, homedir, release as osRelease, totalmem } from "node:os";
+import { writeFile as writeFileAsync } from "node:fs/promises";
+import { DiagService } from "./diag/diag-service";
+import { Invalidator } from "./diag/invalidator";
+import { PtySubscriptions } from "./sessions/pty-subscriptions";
+import { ViewCache } from "./diag/view-cache";
+import { throttle } from "./diag/throttle";
+import { isStateScope, type StateChangedPayload } from "../shared/state-scope";
+import { diagMode, perfOp } from "./diag/perf-stats";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sanitizeTask, taskMessage } from "../shared/control";
@@ -161,7 +169,7 @@ import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } fr
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
 import { childrenWorking } from "./sessions/managed-by";
-import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
+import { needsDiscovery, scanClaudeProjects, syncDiscovered, TranscriptLocator, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { fillBranchFromCwd, outsideSessionsOn } from "./sessions/outside-sessions";
 import { defaultReadDeps, memorySnapshotLine, readAvailableMemory } from "./sessions/available-memory";
 import { measuredOpenSessionsKb, MemoryAdmission } from "./sessions/memory-admission";
@@ -289,6 +297,9 @@ import { SessionModelSwitcher } from "./routing/session-switch";
 import { routingSettings } from "./routing/routing-settings";
 import type { DiscoveryView, Tier } from "../shared/model-routing";
 
+/** session 只是又有了输出时，最多隔这么久告诉界面一次（ticket 速览的上下文、最后一句）。 */
+const OUTPUT_NOTIFY_MS = 5000;
+
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 /** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
 const HOOK_DISCOVERY_DEBOUNCE_MS = 3000;
@@ -308,6 +319,8 @@ const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
 let keepAwake: KeepAwake | null = null;
 const quitState = createQuitState(() => app.quit());
 let logger: Logger = () => undefined;
+/** 把攒着的日志行同步写完（退出、崩溃时；BTL-242 起日志攒一会儿再异步写）。 */
+let flushLogSync: () => void = () => undefined;
 /** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
 let teeing = false;
 let teeBroken = false;
@@ -331,8 +344,16 @@ if (process.env.BUTLER_HOME?.trim()) app.setPath("userData", join(resolvePaths()
 // Windows 的通知要有 AppUserModelID，否则点击通知没有反应（计划 2 Task 13）。
 if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
+/** 性能诊断（BTL-242）：bootstrap 里装上。 */
+let diag: DiagService | null = null;
+/** 渲染进程挂着的终端（BTL-242）：pty:data 只发给它们。 */
+const ptySubs = new PtySubscriptions();
+
 function safeSend(channel: string, ...args: unknown[]): void {
-  if (win && canSend(win)) win.webContents.send(channel, ...args);
+  if (win && canSend(win)) {
+    diag?.send(channel, args);
+    win.webContents.send(channel, ...args);
+  }
 }
 
 /** 开发时仓库根目录下的 build/（out/main/index.js 往上两级）。 */
@@ -405,6 +426,11 @@ function createWindow(): BrowserWindow {
     if (!isOwnUrl(url)) e.preventDefault();
   });
   w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // 渲染进程整页重新加载（或者崩了）：之前挂的终端都不在了（BTL-242）。
+  w.webContents.on("did-start-navigation", (e) => {
+    if (e.isMainFrame && !e.isSameDocument) ptySubs.clear();
+  });
+  w.webContents.on("render-process-gone", () => ptySubs.clear());
   // CSP 拦下了什么就记一笔（任务 6）：界面某处空白时先看这里。
   w.webContents.on("console-message", (e) => {
     if (isCspViolationMessage(e.message)) logger(`${CSP_VIOLATION_LOG_PREFIX} ${e.message}`);
@@ -466,7 +492,39 @@ function trayTooltip(): string {
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
-  logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
+  const fileLog = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
+  logger = fileLog;
+  flushLogSync = fileLog.flushSync;
+  diag = new DiagService({
+    mode: diagMode(process.env),
+    now: Date.now,
+    log: (line) => logger(line),
+    logFile: join(paths.logs, "main.log"),
+    flushLog: () => fileLog.flush(),
+    info: () => ({
+      version: app.getVersion(),
+      versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      platform: process.platform,
+      arch: process.arch,
+      osRelease: osRelease(),
+      cpus: { model: cpus()[0]?.model ?? "", count: cpus().length },
+      memory: { totalMb: Math.round(totalmem() / 1048576), freeMb: Math.round(freemem() / 1048576) },
+      appMetrics: app.getAppMetrics().map((m) => ({ type: m.type, cpu: m.cpu.percentCPUUsage, memoryKb: m.memory.workingSetSize, peakKb: m.memory.peakWorkingSetSize })),
+      mainMemory: { ...process.memoryUsage() },
+    }),
+    pickSavePath: async (defaultName) => {
+      const opts = { defaultPath: defaultSavePath((n) => app.getPath(n), defaultName), filters: [{ name: "JSON", extensions: ["json"] }] };
+      const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+      return r.canceled || !r.filePath ? null : r.filePath;
+    },
+    writeFile: (path, text) => writeFileAsync(path, text, "utf8"),
+    cpuTimes: () => {
+      const t: Record<string, number> = {};
+      for (const m of app.getAppMetrics()) t[m.type] = (t[m.type] ?? 0) + (m.cpu.cumulativeCPUUsage ?? 0);
+      return t;
+    },
+  });
+  diag.start();
   if (!app.isPackaged) process.stderr.on("error", () => { teeBroken = true; });
   // 先用 Butler 自己的 PATH 定下 git 和 gh 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
   const ownPath = process.env[pathKey(process.env)] ?? "";
@@ -516,10 +574,23 @@ async function bootstrap(): Promise<void> {
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger, onHookBinCurrent: seedSkillTracking });
   // 「谁该动」看板（UI 重做第 1 层）跟着 stateChanged 一起防抖推 turn:changed；TurnService 在下面才建好。
   let turnChanged: (() => void) | null = null;
-  const notify = () => {
-    safeSend(IPC.stateChanged);
-    turnChanged?.();
-  };
+  // 找对话记录文件（BTL-242）：记住找到过的路径，命中时只看那一个文件还在不在。
+  const transcriptLocator = new TranscriptLocator(paths.claudeProjects);
+  // 视图缓存（BTL-242）：界面那边的读（列表、首页、看板）在下一次 notify / 写操作 / 1 秒之前共用一份。主进程自己的逻辑不走它。
+  const viewCache = new ViewCache({ now: Date.now });
+  // notify 合并（BTL-242）：一小段时间里的多次 notify 合成一次 state:changed（带上范围），turn:changed 跟着同一次发。
+  // 只是一次内存采样（procs）时看板不用重取。
+  const invalidator = new Invalidator({
+    emit: (scopes) => {
+      safeSend(IPC.stateChanged, { scopes } satisfies StateChangedPayload);
+      if (scopes.includes("data") || scopes.includes("activity")) turnChanged?.();
+    },
+    onChange: () => viewCache.invalidate(),
+  });
+  // 有些地方把 notify 直接当回调传（.then(notify)）：参数不是范围的一律当 data。
+  const notify = (scope?: unknown) => invalidator.notify(isStateScope(scope) ? scope : "data");
+  // session 只是又有了输出：隔 5 秒才告诉界面一次（只有 ticket 速览听 output）。
+  const outputChanged = throttle(() => notify("output"), OUTPUT_NOTIFY_MS);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
   // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
@@ -576,7 +647,7 @@ async function bootstrap(): Promise<void> {
   const usageScanner = new UsageScanner({
     repo: usageRepo,
     sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "butler").map((s) => s!.id),
-    transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptFile: (id) => transcriptLocator.find(id),
     // 扫完一遍：成本熔断按新用量看一遍（工作流 L）。
     onScanned: () => costCheckSoon(),
     log: logger,
@@ -596,7 +667,9 @@ async function bootstrap(): Promise<void> {
   /** 自动接活建好以后才接上（session 结束时让它再试排着的）。 */
   let intakeEnded: (() => void) | null = null;
   const pty = new PtyManager(nodePtyFactory, {
-    data: (id, data) => safeSend(IPC.ptyData, id, data),
+    data: (id, data) => {
+      if (ptySubs.has(id)) safeSend(IPC.ptyData, id, data);
+    },
     opened: (id) => procs?.terminalOpened(id),
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
@@ -961,7 +1034,7 @@ async function bootstrap(): Promise<void> {
           for (const id of sessions.chainOf(s.id)) {
             if (seen.has(id)) continue;
             seen.add(id);
-            const file = findTranscript(paths.claudeProjects, id);
+            const file = transcriptLocator.find(id);
             if (!file) continue;
             try {
               transcripts.push(await readTailLines(file, TRANSCRIPT_TAIL_BYTES));
@@ -1140,20 +1213,22 @@ async function bootstrap(): Promise<void> {
   });
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
-    transcriptFile: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptFile: (id) => transcriptLocator.find(id),
     judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
-    notify: () => {
+    // 只是输出、工具调用变了（quiet）时只发限频的 output（BTL-242）：ticket 速览跟着它刷新，别的界面不重取；工具调用另外推给实况窗口；主进程里的后续照常跑。
+    notify: (change) => {
       needsYou.update();
       refresher.autoCheck();
       waitTracker.sync();
-      notify();
+      if (change === "visible") notify("activity");
+      else outputChanged();
     },
     // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面，记一次打断（ws-h）。
     onStuck: (info) => {
       interrupts.stuck(info.sessionId, info.ticketKey);
-      notify();
+      notify("activity");
     },
     now: Date.now,
     intervals: activityIntervals(process.env),
@@ -1201,12 +1276,12 @@ async function bootstrap(): Promise<void> {
     workDir: () => paths.home, setting: (k) => settings.get(k), now: Date.now, markEffective: markInterruptEffective, log: logger,
   });
   const profileHits = new ProfileHitCounter({
-    transcriptOf: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptOf: (id) => transcriptLocator.find(id),
     builtIn: SESSIONS_AUTO_ALLOW,
     recordEvent,
   });
   /** 这个 session 有 transcript（SessionService 判断能不能 --resume、ForkService 判断能不能完整分叉共用）。 */
-  const transcriptExists = (id: string): boolean => transcriptState(paths.claudeProjects, id) !== "absent";
+  const transcriptExists = (id: string): boolean => transcriptLocator.state(id) !== "absent";
   const sessionService = new SessionService({
     knownModel: routing.registered,
     tickets, sessions, settings, ticketService, pty, blocks,
@@ -1217,7 +1292,7 @@ async function bootstrap(): Promise<void> {
     dirBusy: (repo): Promise<{ ticket: string; branch: string } | null> => mergeGate.dirBusy(repo),
     ready: () => healthReady,
     transcriptExists,
-    transcriptState: (id) => transcriptState(paths.claudeProjects, id),
+    transcriptState: (id) => transcriptLocator.state(id),
     claude: () => health.claude(),
     newId: randomUUID,
     now: Date.now,
@@ -1294,7 +1369,7 @@ async function bootstrap(): Promise<void> {
   }
 
   const transcriptMtime = (id: string): number | null => {
-    const file = findTranscript(paths.claudeProjects, id);
+    const file = transcriptLocator.find(id);
     if (!file) return null;
     try {
       return statSync(file).mtimeMs;
@@ -1698,7 +1773,7 @@ async function bootstrap(): Promise<void> {
   const conv = new ConversationStore({ repo: convRepo, sessions, onAppended: convAppended, now: Date.now });
   const convIngester = new ConvIngester({
     repo: convRepo, sessions, onAppended: convAppended, now: Date.now, log: (m) => logger(m),
-    transcriptOf: (id) => findTranscript(paths.claudeProjects, id),
+    transcriptOf: (id) => transcriptLocator.find(id),
     // 开着终端的 head；不是对话另存 target 的（没认领的外部 session）由 ConvIngester 自己跳过。
     openHeads: () => [...new Set(pty.openIds().map((t) => sessions.head(t)?.id).filter((id): id is string => !!id))],
     judge: (turn, s) => judgeConvQa({ ...judgeDeps, timeoutMs: 60_000 }, turn, existsSync(s.cwd) ? s.cwd : paths.home, s.ticketKey),
@@ -1740,7 +1815,7 @@ async function bootstrap(): Promise<void> {
     writeTail: async (oldHeadId, termId) => {
       await Promise.race([convIngester.syncNow(oldHeadId), delay(3000, undefined, { ref: false })]).catch(() => undefined);
       const out = refreshTailPath(paths, termId);
-      const tail = await writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out, sessionId: oldHeadId });
+      const tail = await writeRefreshTail({ transcript: transcriptLocator.find(oldHeadId), out, sessionId: oldHeadId });
       return withRecentQa(out, tail, conv.recentQa(oldHeadId, RECENT_QA_CHARS));
     },
     notify,
@@ -2685,7 +2760,7 @@ async function bootstrap(): Promise<void> {
         send: (x) => mailbox.send(x),
       }, env);
       const effect = applyHookEnvelope(env, {
-        sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
+        sessions, tickets, transcriptState: (id) => transcriptLocator.state(id),
         placement: (key, cwd) => ticketService.placement(key, cwd),
         featureForCwd,
       });
@@ -2775,7 +2850,7 @@ async function bootstrap(): Promise<void> {
     onSample: (s) => hibernator?.onSample(s),
     sampleNeeded: () => memoryPressureOn(settings),
     log: logger,
-    changed: notify,
+    changed: () => notify("procs"),
   });
   const procServices = procs;
   // e2e（后台窗口模式下才算数）：BUTLER_HIBERNATE_AFTER_MS 把四种等待的分钟数都换成这么多毫秒，安静期也一起缩短。
@@ -2826,7 +2901,7 @@ async function bootstrap(): Promise<void> {
       const terms = butlerTerminals();
       return {
         head: t.head, termId: t.termId, pinned: t.head.pinned === true,
-        transcript: transcriptState(paths.claudeProjects, t.head.id),
+        transcript: transcriptLocator.state(t.head.id),
         activity: a && { working: working(a), background: a.background },
         screenNeedsUser: pty.screenNeedsUser(t.termId),
         draft: pty.hasDraft(t.termId),
@@ -2928,20 +3003,29 @@ async function bootstrap(): Promise<void> {
     repo: reviewRequests,
     away: () => idleSignal.locked() || idleSignal.idleSeconds() >= REVIEW_AWAY_IDLE_SECONDS,
     ghAvailable: () => ghAvailable(),
-    changed: () => turnService.changed(),
+    // 写了 review 请求：看板的输入缓存作废（BTL-242）。
+    changed: () => {
+      viewCache.invalidate();
+      turnService.changed();
+    },
     now: Date.now,
     log: logger,
   });
+  const views = {
+    tickets: viewCache.wrap("tickets", () => perfOp("views.tickets", () => sessionService.ticketViews())),
+    features: viewCache.wrap("features", () => perfOp("views.features", () => sessionService.featureViews())),
+  };
   /** 总控 session（feature 总控和 Butler 总控）的 head：开着终端或休眠着的。 */
   const turnCoordinators = () =>
     turnCoordinatorsOf({
-      featureViews: () => sessionService.featureViews(),
+      featureViews: views.features,
       runningButler: () => sessionService.runningButler(),
       hibernatedHeads,
     });
   const turnService = new TurnService({
-    tickets: () => sessionService.ticketViews(),
-    features: () => sessionService.featureViews(),
+    cache: (key, build) => viewCache.get(key, build),
+    tickets: views.tickets,
+    features: views.features,
     hibernatedHeads,
     coordinators: turnCoordinators,
     head: (id) => sessions.head(id),
@@ -2976,7 +3060,7 @@ async function bootstrap(): Promise<void> {
     emit: () => safeSend(IPC.turnChanged),
     now: Date.now,
   });
-  turnChanged = () => turnService.changed();
+  turnChanged = () => safeSend(IPC.turnChanged);
   // 设置变了以后该跑的：设置页保存、套用自动化档位预设都走这里（BTL-247 抽出来给档位用）。
   const onSettingChanged = (key: EditableSettingKey): void => {
     if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
@@ -3029,6 +3113,10 @@ async function bootstrap(): Promise<void> {
   automationHooks.policy = featurePolicyLayers({ loop: loopPolicyIo, stacks: stackPolicyIo, intake: intakePolicyIo });
   const keepAwakeSwitch = keepAwake;
   registerIpc({
+    diag: diag ?? undefined,
+    onWrite: () => viewCache.invalidate(),
+    ptySubs,
+    views,
     conv,
     fork: forkService,
     devSend: devSender,
@@ -3221,8 +3309,8 @@ async function bootstrap(): Promise<void> {
       const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
       const reasons = needsYou.reasons();
       const view = buildNowView({
-        tickets: sessionService.ticketViews(),
-        features: sessionService.featureViews(),
+        tickets: views.tickets(),
+        features: views.features(),
         // 休眠着的 Butler 总控照样算（WS-M B）。
         butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
           sessionService.runningButler() ?? hibernatedHeads().find((h) => h.butler && h.ticketKey === null) ?? null,
@@ -3562,7 +3650,9 @@ async function bootstrap(): Promise<void> {
     unbindReviewFocus?.();
     reviewPoller.stop();
     turnChanged = null;
+    invalidator.dispose();
     turnService.dispose();
+    diag?.stop();
     pty.killAll();
     keepAwakeSwitch.set(false);
     tray?.destroy();
@@ -3570,10 +3660,16 @@ async function bootstrap(): Promise<void> {
     waitTracker.closeAll();
     closing = true;
     db.close();
+    flushLogSync();
   });
 }
 
-process.on("uncaughtException", (e) => logger("uncaughtException", e));
+process.on("uncaughtException", (e) => {
+  logger("uncaughtException", e);
+  flushLogSync();
+});
+// 退出前把还攒着的日志写完（app.exit、正常退出都会到这里）。
+process.on("exit", () => flushLogSync());
 process.on("unhandledRejection", (e) => logger("unhandledRejection", e));
 
 if (process.argv.includes("--smoke")) {

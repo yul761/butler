@@ -10,6 +10,8 @@ import type { DevSendResult, ForkView, RememberResult } from "../../shared/fork"
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
+import { createStateBus } from "./state-bus";
+import type { StateScope } from "../../shared/state-scope";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { PrStagesScope, PrStagesTicket } from "../../shared/pr-stages";
 import type { AvailabilityAction, AvailabilityView } from "../../shared/availability";
@@ -34,6 +36,8 @@ import type { MetricsOverview } from "../../shared/metrics";
 import type { InterruptsAction, InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicyOverrides, StackPolicySetResult, StackPolicyView, StacksFilter, StacksView } from "../../shared/stacks";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
+import type { DiagSnapshot } from "../../shared/diag";
+import type { LongTaskTotals } from "./diag";
 import type { FeaturePolicyState, PolicyFamily } from "../../shared/feature-rows";
 import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
@@ -46,6 +50,9 @@ declare global {
   interface Window {
     butler: {
       platform: string;
+      /** 旧的 preload 没有这一项：当 webgl。 */
+      terminalRenderer?: "webgl" | "dom";
+      terminalCacheMax?: number | null;
       pathForFile(file: File): string;
       invoke(channel: string, ...args: unknown[]): Promise<unknown>;
       send(channel: string, ...args: unknown[]): void;
@@ -67,7 +74,25 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 export const platform = (): string => window.butler.platform;
+export const terminalRendererPref = (): "webgl" | "dom" => window.butler.terminalRenderer ?? "webgl";
+export const terminalCacheMaxPref = (): number | null => window.butler.terminalCacheMax ?? null;
 export const pathForFile = (file: File): string => window.butler.pathForFile(file);
+
+// 整个渲染进程只挂一个 state:changed 监听（BTL-242）。
+const stateBus = createStateBus();
+let stateBusOn = false;
+function ensureStateBus(): void {
+  if (stateBusOn) return;
+  stateBusOn = true;
+  window.butler.on(IPC.stateChanged, (payload) => stateBus.dispatch(payload));
+}
+
+/** 终端快照和它对应的输出位置（BTL-242，见主进程的 PtyManager.snapshotAt / since）。 */
+export interface PtyMarked {
+  data: string;
+  exitCode: number | null;
+  mark: { epoch: number; end: number };
+}
 
 export const api = {
   listTickets: () => call<TicketView[]>(IPC.ticketsList),
@@ -114,11 +139,19 @@ export const api = {
   deleteHiddenSessions: (sessionIds: string[]) => call<number>(IPC.sessionsDeleteHidden, sessionIds),
   pinSession: (sessionId: string, pinned: boolean) => call<void>(IPC.sessionsPin, sessionId, pinned),
   wakeSession: (sessionId: string) => call<"woken" | "not_hibernated" | "cooldown" | "failed">(IPC.sessionsWake, sessionId),
-  ptySnapshot: (termId: string) => call<{ data: string; exitCode: number | null }>(IPC.ptySnapshot, termId),
+  ptySnapshot: (termId: string) => call<PtyMarked>(IPC.ptySnapshot, termId),
+  ptySince: (termId: string, mark: PtyMarked["mark"]) => call<PtyMarked & { reset: boolean }>(IPC.ptySince, termId, mark),
   ptyKill: (termId: string) => call<void>(IPC.ptyKill, termId),
   ptyWrite: (termId: string, data: string) => window.butler.send(IPC.ptyWrite, termId, data),
   ptyResize: (termId: string, cols: number, rows: number) => window.butler.send(IPC.ptyResize, termId, cols, rows),
   ptyVisible: (termId: string, visible: boolean) => window.butler.send(IPC.ptyVisible, termId, visible),
+  /** 这个终端的 xterm 实例销毁了：主进程不再给它推 pty:data（BTL-242）。 */
+  ptyDetach: (termId: string) => window.butler.send(IPC.ptyDetach, termId),
+  /** 性能诊断（BTL-242）。 */
+  diagReport: (totals: LongTaskTotals) => window.butler.send(IPC.diagRenderer, totals),
+  diagSnapshot: (resetMeasure = false) => call<DiagSnapshot | null>(IPC.diagSnapshot, resetMeasure),
+  /** 弹保存对话框写一份诊断文件；返回写到的路径，取消为 null。 */
+  diagExport: () => call<string | null>(IPC.diagExport),
   memUsageHistory: (hours = 24) => call<MemoryHistoryPoint[]>(IPC.memUsageHistory, hours),
   health: () => call<HealthReport>(IPC.healthGet),
   installHooks: () => call<HealthReport>(IPC.healthInstallHooks),
@@ -255,7 +288,11 @@ export const api = {
   dismissActivity: (sessionId: string) => call<void>(IPC.activityDismiss, sessionId),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
-  onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),
+  /** 不给 scopes 只听 data；跟着 session 活动变的视图传 LIVE_SCOPES（BTL-242）。 */
+  onStateChanged: (cb: (scopes: StateScope[]) => void, scopes?: readonly StateScope[]) => {
+    ensureStateBus();
+    return stateBus.subscribe(cb, scopes);
+  },
   onTurnChanged: (cb: () => void) => window.butler.on(IPC.turnChanged, cb),
   onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
   /** 实况窗口（BTL-190 第 7 点）：开着的 session 新的一次工具调用、记忆读写、回合开始 / 结束。 */

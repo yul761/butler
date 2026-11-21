@@ -19,6 +19,7 @@ import { TicketTerminalTab, useTicketTerminals, type TicketTerminals } from "./T
 import { TitleDialog } from "./TitleDialog";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
+import { GLANCE_SCOPES } from "../state-bus";
 
 interface Props {
   ticket: TicketView;
@@ -127,7 +128,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
 function ConversationSlot({ ticket, focus, renderTerminal }: {
   ticket: TicketView; focus: { sessionId: string; n: number } | null; renderTerminal: (sessionId: string) => ReactNode;
 }) {
-  const glance = useStateRefetch(`glance:${ticket.key}`, () => api.ticketGlance(ticket.key));
+  const glance = useStateRefetch(`glance:${ticket.key}`, () => api.ticketGlance(ticket.key), { scopes: GLANCE_SCOPES });
   if (glance === null) return null;
   if (!glance.rootSessionId) return <p className="muted">{S.lay.convNoSession}</p>;
   // 从卡片落进来：选中轮到你的那个 session 的链；否则是 ticket 的主链。

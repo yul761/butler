@@ -18,6 +18,8 @@ test("the coordinator terminal still scrolls after its output outgrows the repla
   // Windows 上 ConPTY 把终端的 SGR 鼠标上报变成控制台输入事件，假 claude 从 stdin 读不到；回放补模式的逻辑有单元测试。
   test.skip(process.platform === "win32", "ConPTY turns SGR mouse reports into console input events, so the fake claude never reads them from stdin; the replay logic is covered by unit tests");
   const s = makeSandbox();
+  // 切走的终端不留着（BTL-242 起默认留 4 个）：这里要测的是从快照重建。
+  s.env = { BUTLER_TERMINAL_CACHE: "0" };
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const { page } = await launch(s);
   await completeWizard(page, s);

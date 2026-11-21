@@ -52,6 +52,16 @@ The section has three buttons:
 
 These buttons, and the same step in the first-run wizard, are the only way Butler ever writes to your Claude Code configuration.
 
+### Export diagnostics
+
+**Export diagnostics** at the bottom of the section saves a JSON file you can attach to a bug report about Butler being slow. It holds:
+
+- the Butler, Electron and OS versions, the CPU and memory, and each Butler process's CPU and memory
+- the last hour of one-minute performance windows: the main process's event-loop delay (p50 / p99), how many events of each kind went to the window, the IPC calls, the heavy jobs that took longer than 50 ms, the window's long tasks, and whether the terminals draw with WebGL or fell back to the DOM
+- the last 1000 lines of `main.log`
+
+It never contains transcript content, prompts or memory. The counters are always on and cost almost nothing; a minute with nothing notable writes nothing to the log. Set the environment variable `BUTLER_PERF_DIAG=off` to turn them off, or `BUTLER_PERF_DIAG=verbose` to log every minute.
+
 ## General
 
 | Setting | Key | Default | Accepted values and notes |

@@ -52,11 +52,19 @@ export const IPC = {
   activityDismiss: "activity:dismiss",
   usageSummary: "usage:summary",
   ptySnapshot: "pty:snapshot",
+  /** 挂回一个摘下过的终端，只取摘下之后的输出（BTL-242）；补不上回整份快照（reset）。 */
+  ptySince: "pty:since",
   ptyKill: "pty:kill",
   ptyWrite: "pty:write",
   ptyResize: "pty:resize",
   /** 终端出现在屏幕上 / 不在了（WS-M D、E）。 */
   ptyVisible: "pty:visible",
+  /** 终端的 xterm 实例销毁了（BTL-242）：主进程不再给它推 pty:data。pty:snapshot 订阅。 */
+  ptyDetach: "pty:detach",
+  /** 性能诊断（BTL-242）：渲染进程每分钟报一次 long task；快照给 e2e 测量；导出写一份诊断文件。 */
+  diagRenderer: "diag:renderer",
+  diagSnapshot: "diag:snapshot",
+  diagExport: "diag:export",
   /** 内存历史曲线（WS-M A）。 */
   memUsageHistory: "memusage:history",
   ptyData: "pty:data",
@@ -243,7 +251,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.reposScan, IPC.ticketsRecheckCleanup,
   IPC.butlerView, IPC.butlerOpenSession, IPC.messagesList, IPC.metricsView,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionsPin, IPC.sessionsWake, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
-  IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
+  IPC.ptySnapshot, IPC.ptySince, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft,
   IPC.baselinesView, IPC.baselinesAct, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyAct, IPC.legacyViolations, IPC.checkExportList, IPC.checkExportAct, IPC.backtestView, IPC.backtestAct, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.admissionState, IPC.wizardEstimate, IPC.wizardAct, IPC.calibrationSample, IPC.calibrationStats, IPC.calibrationAct, IPC.principlesRegroup,
@@ -260,9 +268,10 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.forkAsk, IPC.forkSendConclusion, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.convSend, IPC.inboxReports,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
   IPC.automationState, IPC.featuresSetAutomationLevel,
+  IPC.diagSnapshot, IPC.diagExport,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
-export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible];
+export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];
 /** 主进程 → 渲染进程。 */
 export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged, IPC.convAppended, IPC.turnChanged, IPC.forkChanged];
 
