@@ -2,7 +2,7 @@ import { net } from "electron";
 import { isLoopbackHost } from "../settings/settings-values";
 import { M } from "../strings";
 
-/** 和 provider 一样用 Electron 的 net.fetch（遵循系统代理）；单元测试里退回 Node 的 fetch。 */
+/** ESLint 只允许这个文件用 Electron 的 net 和 fetch（BTL-243）。用 net.fetch（遵循系统代理）；单元测试里退回 Node 的 fetch。 */
 const httpFetch: typeof fetch = (input, init) => (typeof net?.fetch === "function" ? net.fetch(input as string, init) : fetch(input, init));
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
@@ -37,7 +37,7 @@ export interface WebhookRequest {
 export type WebhookResult = { ok: true; status: number } | { ok: false; status: number | null; error: string };
 
 /**
- * 发一次 webhook（ws-j 设计 7）：只有 PrivacyGateway 调它。地址再查一遍；不带 cookie、不跟随重定向，10 秒超时。
+ * 发一次 webhook（ws-j 设计 7）：只有 notifier 调它（对外动作 push_notification，开关默认关，每次都记审计）。地址再查一遍；不带 cookie、不跟随重定向，10 秒超时。
  * 不抛错：失败的原因只用固定的几句话（不带响应正文）。
  */
 export async function sendWebhook(r: WebhookRequest): Promise<WebhookResult> {

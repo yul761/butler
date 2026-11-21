@@ -46,8 +46,8 @@ test("the wizard's permission step offers read-only commands from history and co
   await next.click();
   await page.getByRole("button", { name: S.installHooks, exact: true }).click();
   await expect(kvValue(page, S.hooks)).toHaveText(S.hookStatus.installed);
-  for (let i = 0; i < 3; i++) await next.click();
-  await expect(page.getByText(S.wizardStep(5, 5), { exact: true })).toBeVisible();
+  for (let i = 0; i < 2; i++) await next.click();
+  await expect(page.getByText(S.wizardStep(4, 4), { exact: true })).toBeVisible();
   const step = page.getByTestId("wizard-permissions");
   await expect(step.getByRole("heading", { name: S.wizardPermissionsTitle, exact: true })).toBeVisible();
 

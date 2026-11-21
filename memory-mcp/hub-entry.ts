@@ -4,7 +4,7 @@
 // 顺序就是执行顺序：先清掉环境变量里的模型 key（R1），再加载 StateCore。
 import "./clean-env";
 import { createEmbeddedBackend } from "statecore-mcp/lib";
-import { startLoopbackMcp } from "../src/main/gateway/loopback-mcp";
+import { startLoopbackMcp } from "./loopback-http";
 import { Hub, parseHubCommand } from "./hub";
 
 function arg(name: string): string | undefined {
@@ -21,7 +21,8 @@ if (!dataDir || !Number.isInteger(wanted) || wanted < 0 || wanted > 65535) {
   process.exit(2);
 }
 
-const hub = new Hub({ backend: (scope) => createEmbeddedBackend({ dataDir, scopeName: scope, env: process.env }), log });
+// backgroundDigest: false：Butler 不蒸馏（BTL-243），consolidate 的内容作为事件留着。
+const hub = new Hub({ backend: (scope) => createEmbeddedBackend({ dataDir, scopeName: scope, env: process.env, backgroundDigest: false }), log });
 
 async function listen() {
   try {

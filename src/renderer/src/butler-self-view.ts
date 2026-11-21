@@ -1,6 +1,6 @@
-/** 审计里一条记录都没有（模型调用和对外动作都是 0）。 */
-export function auditIsEmpty(a: { llmEntries: number; externalEntries: number }): boolean {
-  return a.llmEntries === 0 && a.externalEntries === 0;
+/** 审计里一条对外动作的记录都没有。 */
+export function auditIsEmpty(externalEntries: number): boolean {
+  return externalEntries === 0;
 }
 
 /** 效果页的 tab，按显示顺序。 */

@@ -1,10 +1,8 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ticketScope, WORKSPACE_SCOPE } from "../../shared/memory";
 import { tempDir } from "../test-utils";
-import { listScopeNames, NOTES_CAP, parseDigestOutcome, withScope } from "./statecore";
+import { NOTES_CAP, withScope } from "./statecore";
 
 // StateCore 的 pino 直接读 process.env.LOG_LEVEL（不看 env 选项），在它加载之前静音。
 vi.hoisted(() => {
@@ -43,7 +41,6 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
     await withScope({ dataDir: dir, scope: WORKSPACE_SCOPE }, async (s) => {
       expect(await s.facts()).toEqual([]);
     });
-    expect((await listScopeNames(dir)).sort()).toEqual(["ticket:PROJ-1", "workspace"]);
   });
 
   it("forget then remember a revision keeps the old version on the why chain", async () => {
@@ -137,70 +134,52 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
     });
   });
 
-  it("reports pending consolidate events and cannot digest without a model", async () => {
+  it("keeps a consolidate event pending: Butler never digests (BTL-243)", async () => {
     const dir = tempDir();
     await seedEvent(dir, "ticket:PROJ-5", "claude 里记下的一段原始对话");
     await withScope({ dataDir: dir, scope: "ticket:PROJ-5" }, async (s) => {
-      expect(await s.pendingEvents()).toBe(1);
-      expect(await s.digestNow()).toBe("no-llm");
-    });
-  });
-
-  it("keeps an event written before the scope's first note pending (fixed in statecore-mcp 1.1)", async () => {
-    const dir = tempDir();
-    await seedEvent(dir, "ticket:PROJ-11", "claude 在第一次同步之前记下的原始对话");
-    await withScope({ dataDir: dir, scope: "ticket:PROJ-11" }, async (s) => {
       expect(await s.pendingEvents()).toBe(1);
       await s.remember("[decision:db] 用 PostgreSQL");
       expect(await s.pendingEvents()).toBe(1);
     });
   });
 
+  it("returns a long consolidate event whole in recall, next to a full set of notes, with or without a query", async () => {
+    // BTL-243 addendum §4：没有蒸馏以后，consolidate 进来的长内容作为最近事件留在 recall 里（不存成 note：note 有 500 字和 30 条的上限）。
+    const dir = tempDir();
+    const scope = "ticket:PROJ-12";
+    const long = `讨论记录：${"为什么用 WAL 而不是回滚日志，并发读写和崩溃恢复都要考虑。".repeat(60)}`;
+    expect(long.length).toBeGreaterThan(1500);
+    await seedEvent(dir, scope, long);
+    await withScope({ dataDir: dir, scope }, async (s) => {
+      for (let i = 0; i < NOTES_CAP; i++) await s.remember(`[decision:d${i}] 第 ${i} 条决定`);
+    });
+    const b = createEmbeddedBackend({ dataDir: dir, scopeName: scope, env: {}, backgroundDigest: false });
+    await b.init();
+    try {
+      for (const args of [{}, { query: "WAL 回滚日志" }, { query: "完全无关的词" }]) {
+        const r = (await b.recall({ ...args, maxChars: 4000 })) as { events: { content: string }[] };
+        expect(r.events.map((e) => e.content), JSON.stringify(args)).toContain(long);
+      }
+    } finally {
+      await b.close();
+    }
+  });
+
   it("never hands StateCore a model key from the environment (R1)", async () => {
     const dir = tempDir();
     await seedEvent(dir, "ticket:PROJ-6", "原始事件");
     process.env.FEATURE_LLM = "true";
+    process.env.STATECORE_DIGEST_THRESHOLD = "1";
     process.env.MODEL_API_KEY = "sk-inherited";
     process.env.OPENAI_API_KEY = "sk-inherited-2";
     // A regression must never be able to reach a real provider.
     process.env.MODEL_BASE_URL = "http://127.0.0.1:9/v1";
     process.env.OPENAI_BASE_URL = "http://127.0.0.1:9/v1";
     await withScope({ dataDir: dir, scope: "ticket:PROJ-6" }, async (s) => {
-      expect(await s.digestNow()).toBe("no-llm");
-    });
-  });
-
-  it("digests through an injected model only", async () => {
-    const dir = tempDir();
-    await seedEvent(dir, "ticket:PROJ-7", "原始事件");
-    const seen: string[] = [];
-    const model = {
-      chat: async (messages: { role: "system" | "user"; content: string }[]) => {
-        seen.push(messages.map((m) => m.role).join(","));
-        throw new Error("stub model");
-      },
-    };
-    await withScope({ dataDir: dir, scope: "ticket:PROJ-7", model }, async (s) => {
-      expect(await s.digestNow()).toBe("failed");
+      for (let i = 0; i < 3; i++) await s.remember(`[decision:k${i}] 第 ${i} 条`);
       expect(await s.pendingEvents()).toBe(1);
     });
-    expect(seen.length).toBeGreaterThan(0);
-  });
-
-  it("validates digestNow results and maps anything unknown to unsupported", () => {
-    expect(parseDigestOutcome({ ran: true })).toBe("ran");
-    expect(parseDigestOutcome({ ran: true, partial: true })).toBe("partial");
-    expect(parseDigestOutcome({ ran: true, partial: false })).toBe("ran");
-    expect(parseDigestOutcome({ ran: false, reason: "locked" })).toBe("locked");
-    expect(parseDigestOutcome({ ran: false, reason: "something-new" })).toBe("unsupported");
-    expect(parseDigestOutcome({ ran: false })).toBe("unsupported");
-    expect(parseDigestOutcome(null)).toBe("unsupported");
-  });
-
-  it("lists no scopes and creates nothing when the store does not exist", async () => {
-    const dir = tempDir();
-    expect(await listScopeNames(dir)).toEqual([]);
-    expect(existsSync(join(dir, "statecore.db"))).toBe(false);
   });
 
   it("closes the store even when the callback throws", async () => {

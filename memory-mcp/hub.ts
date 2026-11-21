@@ -1,6 +1,6 @@
 // 共享 MCP 的路由表（WS-M H，设计文档 2026-11-17 §8）：每个 token 对应一个 server（某个作用域的记忆，或某个终端的 butler-sessions）。
 // 记忆后端按作用域共用一个，懒加载，30 分钟没人用就关掉；butler-sessions 每条路由一个 SessionsServer，和 stdio 时每个进程一个一样。
-import type { RpcHandler, RpcMessage } from "../src/main/gateway/loopback-mcp";
+import type { RpcHandler, RpcMessage } from "./loopback-http";
 import { type MemoryBackendLike, MemoryServer } from "./memory-tools";
 import { SessionsServer } from "./sessions-server";
 import { sessionsOptionsFromEnv } from "./sessions-options";

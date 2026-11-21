@@ -4,6 +4,7 @@ import type { EditableSettings } from "../../../shared/settings";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
+import { useSettingsForm } from "./useSettingsForm";
 
 /**
  * 设置里的「对外动作」（契约 4.8，ws-b）：每种对外动作一个开关，默认全关。
@@ -53,6 +54,19 @@ export function ExternalActionSettings() {
           </div>
         );
       })}
+      <AuditRetentionField />
     </section>
+  );
+}
+
+/** 审计保留天数（BTL-243 从原来的隐私分组搬过来）：对外动作审计和外部通知记录都按它清理。 */
+function AuditRetentionField() {
+  const form = useSettingsForm();
+  if (!form) return null;
+  return (
+    <div data-testid="audit-retention">
+      {form.error && <p className="error">{form.error}</p>}
+      {form.numberField("auditRetentionDays", S.externalAuditRetention, S.externalAuditRetentionHelp, { min: 1, max: 3650 })}
+    </div>
   );
 }

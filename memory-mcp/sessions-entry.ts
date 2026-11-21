@@ -1,6 +1,7 @@
 // Butler session 的 butler-sessions MCP server（设计文档 2026-10-23 第二步）。先读出要用的变量，再清掉环境变量里的模型 key。
 import { sanitizeEnv } from "./sanitize";
-import { SessionsServer, serveStdio } from "./sessions-server";
+import { SessionsServer } from "./sessions-server";
+import { serveStdio } from "./stdio";
 import { sessionsOptionsFromEnv } from "./sessions-options";
 
 const options = sessionsOptionsFromEnv(process.env);

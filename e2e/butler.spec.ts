@@ -48,26 +48,24 @@ test("page tabs are always open and the last tab survives leaving and a reload",
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  // 审计页的两个页签：总有一个选中、内容总在（没有收起），默认是「对外动作」。
-  const openAudit = () => page.locator(".sidebar").getByRole("button", { name: S.audit, exact: true }).click();
-  await openAudit();
+  // 效果页的页签：总有一个选中、内容总在（没有收起），默认是「概况」。
+  const openEffect = () => page.locator(".sidebar").getByRole("button", { name: S.effectNav, exact: true }).click();
+  await openEffect();
   await expect(page.locator(".page-tabs-toggle")).toHaveCount(0);
   await expect(page.locator(".page-tabs-panel")).toHaveCount(1);
-  await expect(pageTab(page, S.lay.auditTabs.external)).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByTestId("external-audit")).toBeVisible();
-  await openTab(page, S.lay.auditTabs.llm);
+  await expect(pageTab(page, S.lay.effectTabs.overview)).toHaveAttribute("aria-selected", "true");
+  await openTab(page, S.lay.effectTabs.rework);
   // 再点一下当前页签不会收起。
-  await pageTab(page, S.lay.auditTabs.llm).click();
-  await expect(pageTab(page, S.lay.auditTabs.llm)).toHaveAttribute("aria-selected", "true");
+  await pageTab(page, S.lay.effectTabs.rework).click();
+  await expect(pageTab(page, S.lay.effectTabs.rework)).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".page-tabs-panel")).toHaveCount(1);
-  await expect(page.getByTestId("external-audit")).toHaveCount(0);
-  // 离开再回来、重新加载：都还是「模型调用」。
+  // 离开再回来、重新加载：都还是「返工」。
   await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await openAudit();
-  await expect(pageTab(page, S.lay.auditTabs.llm)).toHaveAttribute("aria-selected", "true");
+  await openEffect();
+  await expect(pageTab(page, S.lay.effectTabs.rework)).toHaveAttribute("aria-selected", "true");
   await page.reload();
-  await openAudit();
-  await expect(pageTab(page, S.lay.auditTabs.llm)).toHaveAttribute("aria-selected", "true");
+  await openEffect();
+  await expect(pageTab(page, S.lay.effectTabs.rework)).toHaveAttribute("aria-selected", "true");
 });
 
 test("the Butler 总控 page fills the window and its right column folds, per page kind (BTL-241)", async ({ makeSandbox, launch }) => {
@@ -98,4 +96,15 @@ test("the Butler 总控 page fills the window and its right column folds, per pa
   await expect(butler.locator(".control-right")).toBeHidden();
   await butler.getByRole("button", { name: S.lay.ctlExpand, exact: true }).click();
   await expect(butler.locator(".control-right")).toBeVisible();
+});
+
+test("the audit page lists outward actions only, with no model-call tab (BTL-243)", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await page.locator(".sidebar").getByRole("button", { name: S.audit, exact: true }).click();
+  await expect(page.getByTestId("external-audit")).toBeVisible();
+  await expect(page.getByTestId("audit-empty-note")).toBeVisible();
+  await expect(page.locator(".page-tabs")).toHaveCount(0);
+  await expect(page.getByRole("tab")).toHaveCount(0);
 });

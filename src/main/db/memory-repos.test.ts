@@ -1,7 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { insertTicket, memDb } from "../test-utils";
-import { AuditRepo } from "./audit-repo";
 import { migrate } from "./database";
 import { MemorySyncRepo } from "./memory-sync-repo";
 import { MIGRATIONS } from "./migrations";
@@ -21,10 +20,11 @@ function v3db(withTicket: boolean): DatabaseSync {
 }
 
 describe("migration 4", () => {
-  it("adds the memory sync cursor and the audit source, keeping old audit rows as narrative", () => {
+  it("adds the audit source column (the rows themselves are cleared later, BTL-243)", () => {
     const db = v3db(true);
     expect(migrate(db)).toBe(MIGRATIONS.length);
-    expect(new AuditRepo(db).list()[0]).toMatchObject({ source: "narrative", status: "sent" });
+    expect((db.prepare("PRAGMA table_info(llm_audit)").all() as { name: string }[]).map((c) => c.name)).toContain("source");
+    expect((db.prepare("SELECT COUNT(*) AS n FROM llm_audit").get() as { n: number }).n).toBe(0);
     expect(() => db.exec(`INSERT INTO llm_audit (ts, provider, model, level, status, source) VALUES (1, 'p', 'm', 'full', 'sent', 'other')`)).toThrow();
     db.close();
   });
@@ -58,14 +58,5 @@ describe("MemorySyncRepo", () => {
     sync.setCursor("PROJ-1", 9, 300);
     expect(sync.cursor("PROJ-1")).toBe(9);
     expect(sync.cursor("NOPE-1")).toBe(0);
-  });
-});
-
-describe("AuditRepo source", () => {
-  it("records where a call came from", () => {
-    const audit = new AuditRepo(memDb());
-    audit.insert({ ts: 1, provider: "p", model: "m", level: "metadata", status: "pending", payloadSent: "{}" });
-    audit.insert({ ts: 2, provider: "p", model: "m", level: "full", status: "pending", payloadSent: "{}", source: "statecore" });
-    expect(audit.list().map((e) => e.source)).toEqual(["statecore", "narrative"]);
   });
 });

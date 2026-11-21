@@ -1,4 +1,4 @@
-// 把 statecore-mcp 的 MCP server 连同依赖打成一个文件。Butler 用自己的 Electron（ELECTRON_RUN_AS_NODE=1）运行它，挂给 claude。
+// 把 Butler 的记忆 MCP server（memory-mcp/entry.ts：MemoryServer + 嵌入式 StateCore）连同依赖打成一个文件。Butler 用自己的 Electron（ELECTRON_RUN_AS_NODE=1）运行它，挂给 claude。
 // 同一个目录里还有总控 session 的 butler-sessions MCP server（butler-sessions-mcp.cjs，设计文档 2026-10-23 第二步）
 // 和共享 MCP hub（mcp-hub.cjs，WS-M H）。
 // 用法：node scripts/build-memory-mcp.mjs [输出文件]，默认 build/memory-mcp/statecore-mcp.cjs。
@@ -29,6 +29,7 @@ await build({
   outfile,
   // statecore-mcp 自己打包时也把它留在外面：@statecore/core 里一个嵌入式后端永远走不到的懒加载 import。
   external: ["@statecore/db"],
+  plugins: [requireCondition("statecore-mcp/lib")],
   logLevel: "warning",
 });
 console.log(`built ${outfile}`);

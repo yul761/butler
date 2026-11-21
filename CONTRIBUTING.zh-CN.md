@@ -2,7 +2,7 @@
 
 [English](CONTRIBUTING.md) | **简体中文**
 
-感谢你来帮忙。Butler 是一个个人效率工具，经手的是别人的工作数据。下面有几条规则没有商量余地：隐私、网关之外不许联网、测试里不许调用真实的 `claude` 或 LLM。
+感谢你来帮忙。Butler 是一个个人效率工具，经手的是别人的工作数据。下面有几条规则没有商量余地：隐私、Butler 自己不写联网代码、测试里不许调用真实的 `claude` 或 LLM。
 
 ## 工具链
 
@@ -59,8 +59,8 @@ E2E 测试是沙箱化的。每个测试都有自己的临时 `BUTLER_HOME`、`C
 ## 架构概览
 
 - `src/main` 是 Electron 主进程：node-pty 里的 session、hook 收件箱、handoff 运行器、调度器、简报引擎、StateCore 记忆和设置。
-- `src/main/gateway` 是 **PrivacyGateway**，唯一允许发网络请求的代码（调用个人 LLM API）。ESLint 在 `eslint.config.mjs` 里强制这一点，`src/main/egress-lint.test.ts` 证明这些规则能抓到违规。
-- `src/main/memory/statecore.ts`（主进程）和 `memory-mcp/entry.ts`（Claude Code 启动的 MCP server）是仅有的两处可以 import StateCore 的地方。StateCore 的进程永远拿不到模型 key：`statecoreEnv()` 会去掉模型相关的环境变量，`memory-mcp` 启动时会再清一遍。蒸馏只在主进程里通过 `PrivacyGateway.statecoreModel()` 运行，它会给每次调用记审计、算预算。
+- **没有联网代码。** Butler 没有自己的 LLM API（PrivacyGateway 已经在 BTL-243 去掉了）。`eslint.config.mjs` 里的出网规则对每个源文件都生效，只有三个应用文件各自放开它要的那一小块：`src/main/notify/webhook.ts`（Electron 的 `net`，发通知 webhook）、`memory-mcp/loopback-http.ts`（只有 `createServer`，共享 MCP 在 127.0.0.1 上的监听）和只给测试用的 `src/main/testing/loopback-recorder.ts`（`createServer` 和 `request`，只在 127.0.0.1 上；非测试文件不能 import `src/main/testing/` 下的任何东西）。E2E 用的假 `claude`（`e2e/fake-claude/fake-claude.cjs`）也留着 `node:http`，用来调共享 MCP，它不进安装包。`src/main/egress-lint.test.ts` 证明这些规则能抓到违规，包括这三个文件里的其他用法。
+- `src/main/memory/statecore.ts`（主进程）和 `memory-mcp/entry.ts`（Claude Code 启动的 MCP server）和 `memory-mcp/hub-entry.ts`（共享 MCP 的 hub）是仅有的几处可以 import StateCore 的地方。StateCore 的进程永远拿不到模型 key：`statecoreEnv()` 会去掉模型相关的环境变量，`memory-mcp` 启动时会再清一遍，每个后端都以 `backgroundDigest: false` 运行。没有任何东西蒸馏记忆，`remember(consolidate: true)` 一直是事件。`memory-mcp/memory-tools.ts` 一字不差地留着 statecore-mcp 的工具说明，外加一份有名字的改动清单，`memory-mcp/hub-contract.test.ts` 拿真的 statecore-mcp 把两者都核对一遍。
 - `src/renderer` 是 React 界面。它不能访问 Node，通过 `src/shared/ipc.ts` 里有类型的 IPC 白名单和主进程通信。
 - `hook/` 是 Claude Code 运行的小程序 `butler-hook`。它必须总是以 0 退出，并且从不联网。
 
@@ -68,9 +68,9 @@ E2E 测试是沙箱化的。每个测试都有自己的临时 `BUTLER_HOME`、`C
 
 ## 规则
 
-- **`src/main/gateway` 之外不许联网。** "就快速 fetch 一下"也不行。
-- **隐私不变量测试是发布的阻断项**（`src/main/gateway/privacy-invariant.test.ts`）。随机生成的 ticket 号、仓库名、人名和术语绝不能出现在发出去的内容里。
-- **测试从不调用真实的 LLM 服务商或真实的 `claude`，也从不读写真实的 `~/.butler` 或 `~/.claude`。** 用进程内的假服务商（`src/main/gateway/testing.ts`）、假 `claude` 的辅助工具（`src/main/test-utils.ts`、`e2e/fake-claude`）和临时文件夹。
+- **不许新加联网代码。** "就快速 fetch 一下"也不行。数据只经由用户的 `claude`、经 `gh` 做的对外动作（每种都有自己的开关，都记审计）和通知 webhook 离开电脑。
+- **通知说得越少越好。** 默认一条 webhook 消息只说事件类型和数量；问题原文、评论原文、路径和仓库名从不发出去；`src/main/notify/notifier.test.ts` 检查连 ticket 号也只在打开 **带上编号** 时才出现。
+- **测试从不调用真实的 LLM 服务商或真实的 `claude`，也从不读写真实的 `~/.butler` 或 `~/.claude`。** 用本机回环记录器（`src/main/testing/loopback-recorder.ts`）证明什么都没发出去，用假 `claude` 的辅助工具（`src/main/test-utils.ts`、`e2e/fake-claude`）和临时文件夹。
 - **永远不要通过代码或测试改用户的 Claude Code 配置**，用户亲手点的 hook 安装除外。也就是说，不许 `claude mcp add`，不许 `claude config set`，诸如此类。记忆 MCP server 通过 `--mcp-config` 按 session 传入。
 - **数据库迁移只能追加**（`src/main/db/migrations.ts`）。
 - **新行为在用户打开之前都是关着的。**什么设置都不改的用户，看到的应该和上一个版本一样。往 GitHub 或别的外部服务写东西的，一律经过 `ExternalActions.attempt`（`src/main/external/actions.ts`），有自己的 `external*` 开关，默认关；每次尝试都记进审计日志。`src/main/db/settings-defaults-3.test.ts` 和 `e2e/defaults.spec.ts` 会检查。

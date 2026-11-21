@@ -8,7 +8,7 @@ export const SETTINGS_TABS = ["basic", "features", "advanced", "health"] as cons
 export type SettingsTabId = (typeof SETTINGS_TABS)[number];
 
 export const ADVANCED_GROUPS = [
-  "schedule", "sessions", "routing", "cost", "loop", "review", "stacks", "intake", "interrupts", "lessons", "privacy", "external",
+  "schedule", "sessions", "routing", "cost", "loop", "review", "stacks", "intake", "interrupts", "lessons", "external",
 ] as const;
 export type AdvancedGroupId = (typeof ADVANCED_GROUPS)[number];
 
@@ -115,15 +115,8 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   configBackupIntervalDays: adv("lessons"),
   configBackupKeep: adv("lessons"),
   configExportReminderDays: adv("lessons"),
-  // 高级 › 隐私与个人 API
-  llmLevel: adv("privacy"),
-  llmBaseUrl: adv("privacy"),
-  llmModel: adv("privacy"),
-  llmMonthlyBudgetUsd: adv("privacy"),
-  llmPrices: adv("privacy"),
-  llmConfirm: adv("privacy"),
-  auditRetentionDays: adv("privacy"),
-  // 高级 › 对外动作
+  // 高级 › 对外动作（auditRetentionDays：对外动作审计的保留天数，BTL-243 从「隐私」挪过来）
+  auditRetentionDays: adv("external"),
   externalCommentReply: adv("external"),
   externalCommentResolve: adv("external"),
   externalPrDescriptionEdit: adv("external"),

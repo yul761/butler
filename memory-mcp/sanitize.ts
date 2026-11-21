@@ -1,4 +1,4 @@
-import { statecoreEnv } from "../src/main/gateway/statecore-env";
+import { statecoreEnv } from "../src/main/memory/statecore-env";
 
 /**
  * 原地删掉 StateCore 会用来调用模型的变量（计划 4 R1）。claude 启动 MCP server 时会把它自己的环境变量

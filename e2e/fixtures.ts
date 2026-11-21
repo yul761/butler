@@ -491,8 +491,8 @@ export async function completeWizard(page: Page, s: Sandbox): Promise<void> {
   await page.getByRole("button", { name: S.installHooks, exact: true }).click();
   await expect(kvValue(page, S.hooks)).toHaveText(S.hookStatus.installed);
   await expect(kvValue(page, S.handoffCommand)).toHaveText(S.handoffCommandStatus.installed);
-  // tracker → 隐私 → 权限档案（ws-j）→ 完成。
-  for (let i = 0; i < 4; i++) await page.getByRole("button", { name: S.wizardNext, exact: true }).click();
+  // tracker → 权限档案（ws-j）→ 完成（隐私那一步 BTL-243 去掉了）。
+  for (let i = 0; i < 3; i++) await page.getByRole("button", { name: S.wizardNext, exact: true }).click();
   await page.getByRole("button", { name: S.wizardFinish, exact: true }).click();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
 }

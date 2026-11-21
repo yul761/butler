@@ -17,9 +17,8 @@ import type { FollowupsRepo } from "../db/followups-repo";
 import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { MemorySyncRepo } from "../db/memory-sync-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
-import type { StatecoreChatModel } from "../gateway/types";
 import { desiredNotes, featureDecisionNotes, handoffSummaryFor, isFull, planReconcile } from "./notes";
-import { listScopeNames, NOTES_CAP, withScope, type DigestOutcome, type ScopeHandle } from "./statecore";
+import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
 
 /** 一个 ticket 第一次同步（或积压很多）时最多回放多少条 handoff 的 learnings：workspace 的 notes 上限本来就是 30。 */
 export const BACKFILL_HANDOFFS = 20;
@@ -43,18 +42,6 @@ export interface MemoryServiceDeps {
   onSynced?: (key: string) => void;
   log?: (msg: string, err?: unknown) => void;
 }
-
-export interface DistillResult {
-  /** 有待蒸馏事件、尝试了蒸馏的 scope 数。 */
-  scopes: number;
-  ran: number;
-  failed: number;
-}
-
-const TICKET_SCOPE_PREFIX = ticketScope("");
-/** ticket scope 的 ticket key；不是 ticket scope（workspace、claude 自己建的）时为 null。 */
-const scopeTicket = (scope: string): string | null =>
-  scope.startsWith(TICKET_SCOPE_PREFIX) && scope.length > TICKET_SCOPE_PREFIX.length ? scope.slice(TICKET_SCOPE_PREFIX.length) : null;
 
 /** StateCore 里交接的摘要（设计文档 8.3：summary = done_today）。 */
 export function handoffSummary(p: Handoff): string {
@@ -516,114 +503,9 @@ export class MemoryService {
     }
   }
 
-  /**
-   * full 档位：把 claude 里 consolidate 进来的原始事件蒸馏成记忆（计划 4 R1：模型只能是 PrivacyGateway.statecoreModel() 的结果）。
-   * model 为 null（不是 full 档位等）或记忆关闭时什么都不做。永不 reject；一个 scope 失败不影响其他 scope。
-   * 每个 scope 单独排进同步队列（审查 M1）：和写入不并发，但这期间 handoff 触发的同步可以插在两个 scope 之间，不用等整轮蒸馏。
-   * 轮到一个 scope 时再检查：已经 stop()、记忆关了、allowed() 为 false（档位降了、开了发送前确认、开始退出）就停下，剩下的 scope 留到下次。
-   * statecore-mcp 1.1 起，蒸馏提炼的 note 不会挤掉调用方（Butler、claude 里的 remember）写的 note：位置满了就丢掉自己提炼的那条，
-   * 所以不再要求蒸馏前留空位。蒸馏加重新同步之后还有要保留的条目看不见，只记条数（同样的情况不重复记）。
-   * 一个 ticket scope 蒸馏成功后马上重新同步这个 ticket（任务 4 审查 F3）：蒸馏会按相似度改写、合并、挤掉 notes，
-   * Butler 要保留的条目可能被改掉或没了登记；重新同步按现状比对、每次写之前重新数位置，不沿用蒸馏之前的任何估计。
-   * "partial"：有的事件没处理到（失败的分块、超出预算），statecore-mcp 1.1 起如实报告；和 "ran" 一样算跑过并重新同步，另外记一笔。
-   * 完全失败时 StateCore 不写摘要，事件留着下次再试（连续失败三次后它写一份降级摘要，以免卡住）。
-   */
-  async distill(model: StatecoreChatModel | null, allowed: () => boolean = () => true): Promise<DistillResult> {
-    const r: DistillResult = { scopes: 0, ran: 0, failed: 0 };
-    if (!model || !this.d.enabled()) return r;
-    const scopes = await this.enqueue("memory distill", () => listScopeNames(this.d.dataDir), []);
-    for (const scope of scopes) {
-      const step = await this.enqueue(`memory distill ${scope}`, () => this.distillScope(scope, model, allowed), "stop" as const);
-      if (step === "stop") break;
-      if (step === "skipped") continue;
-      r.scopes++;
-      if (step === "ran" || step === "partial") r.ran++;
-      else if (step === "failed") r.failed++;
-    }
-    return r;
-  }
-
-  /** 蒸馏一个 scope（已经在队列里）。"skipped"：没有待蒸馏的事件；"stop"：整轮停下。 */
-  private async distillScope(
-    scope: string,
-    model: StatecoreChatModel,
-    allowed: () => boolean,
-  ): Promise<DigestOutcome | "skipped" | "stop"> {
-    if (this.stopped || !this.d.enabled()) return "stop";
-    if (!allowed()) {
-      this.log("memory distill stopped: the model is no longer allowed");
-      return "stop";
-    }
-    const key = scopeTicket(scope);
-    try {
-      const outcome = await withScope({ dataDir: this.d.dataDir, scope, model }, async (s): Promise<DigestOutcome | "skipped"> => {
-        if ((await s.pendingEvents()) === 0) return "skipped";
-        return s.digestNow();
-      });
-      if (outcome === "partial") this.log(`memory distill ${scope}: partial (some events were not processed)`);
-      if ((outcome === "ran" || outcome === "partial") && key !== null) await this.resyncAfterDigest(key);
-      return outcome;
-    } catch (e) {
-      this.log(`memory distill ${scope} failed`, e);
-      return "failed";
-    }
-  }
-
-  /**
-   * 蒸馏之后重新同步一个 ticket（已经在队列里，直接执行）。失败只写日志，不算蒸馏失败。
-   * 同步完再看一次：要保留的条目还有看不见的（被蒸馏挤掉、又没有空位写回去），记下条数，同样的条数不重复记。
-   */
-  private async resyncAfterDigest(key: string): Promise<void> {
-    if (this.stopped) return;
-    try {
-      const desired = await this.syncNow(key);
-      if (desired === null) return;
-      const items = await withScope({ dataDir: this.d.dataDir, scope: ticketScope(key) }, (s) => s.facts());
-      const missing = planReconcile(items, desired).write.length;
-      this.notice(`${key}|digest`, missing ? `memory ${key}: ${missing} desired note(s) still missing after distill and resync` : null);
-    } catch (e) {
-      this.log(`memory sync ${key} after distill failed`, e);
-    }
-  }
-
   /** 一条记忆（或交接）的版本链。 */
   async why(key: string, factId: string): Promise<WhyEntry[] | null> {
     if (!this.d.enabled()) return null;
     return withScope({ dataDir: this.d.dataDir, scope: ticketScope(key) }, (s) => s.why(factId));
-  }
-}
-
-/** nightlyDistill 用到的 gateway 部分（PrivacyGateway 满足它）。 */
-export interface StatecoreModelSource {
-  statecoreModel(signal?: AbortSignal): StatecoreChatModel | null;
-}
-
-/**
- * 晚间任务的蒸馏一步（主进程的 dailyDeps.distill）。每次运行都重新向 gateway 要模型：
- * 用户把档位调到 full 或调回去，下一次晚间任务就生效，不用重启；只有 full 档位、关了发送前确认时才有模型（P4-R5）。
- * 每个 scope 开始前再问一次：途中档位降了或开始退出，就停下（已经开始的那个 scope 的调用由 gateway 拒绝，StateCore 记一次失败，事件留着）。
- * 永不 reject：失败只写日志。
- */
-export async function nightlyDistill(d: {
-  memory: Pick<MemoryService, "distill">;
-  gateway: StatecoreModelSource;
-  signal: AbortSignal;
-  log: (msg: string, err?: unknown) => void;
-}): Promise<DistillResult> {
-  const empty: DistillResult = { scopes: 0, ran: 0, failed: 0 };
-  try {
-    if (d.signal.aborted) return empty;
-    const allowed = () => !d.signal.aborted && d.gateway.statecoreModel() !== null;
-    const r = await d.memory.distill(d.gateway.statecoreModel(d.signal), allowed);
-    if (r.scopes > 0) d.log(`memory distill: ${r.scopes} scope(s), ${r.ran} ran, ${r.failed} failed`);
-    return r;
-  } catch (e) {
-    // 意外错误（例如读设置失败）：只记消息和错误本身，没有记忆内容；key 只在 gateway 的请求头里，不会出现在这里。
-    try {
-      d.log("memory distill failed", e);
-    } catch {
-      // 写日志失败也不能让晚间任务出错。
-    }
-    return empty;
   }
 }

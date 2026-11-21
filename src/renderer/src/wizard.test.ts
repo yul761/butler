@@ -14,17 +14,16 @@ const report = (claude: Partial<HealthReport["claude"]>): HealthReport => ({
 
 describe("first-run wizard (design 9, 10)", () => {
   it("walks the steps in the design's order", () => {
-    expect(WIZARD_STEPS).toEqual(["claude", "hooks", "tracker", "privacy", "permissions", "done"]);
+    expect(WIZARD_STEPS).toEqual(["claude", "hooks", "tracker", "permissions", "done"]);
     expect(nextStep("claude")).toBe("hooks");
     expect(nextStep("done")).toBe("done");
     expect(prevStep("hooks")).toBe("claude");
     expect(prevStep("claude")).toBe("claude");
-    expect(stepNumber("claude")).toEqual({ n: 1, total: 5 });
-    expect(stepNumber("privacy")).toEqual({ n: 4, total: 5 });
-    // 权限档案（ws-j）在隐私之后、完成之前，可以跳过。
-    expect(nextStep("privacy")).toBe("permissions");
+    expect(stepNumber("claude")).toEqual({ n: 1, total: 4 });
+    // BTL-243 起没有隐私档位这一步：tracker 之后直接是权限档案（ws-j），可以跳过。
+    expect(nextStep("tracker")).toBe("permissions");
     expect(nextStep("permissions")).toBe("done");
-    expect(stepNumber("permissions")).toEqual({ n: 5, total: 5 });
+    expect(stepNumber("permissions")).toEqual({ n: 4, total: 4 });
   });
 
   it("blocks the first step until a working claude is found", () => {
@@ -33,7 +32,7 @@ describe("first-run wizard (design 9, 10)", () => {
     expect(canAdvance("claude", report({ error: "spawn failed" }))).toBe(false);
     expect(canAdvance("claude", report({}))).toBe(true);
     // 其余步骤都可以先跳过。
-    for (const s of ["hooks", "tracker", "privacy", "permissions"] as const) expect(canAdvance(s, null)).toBe(true);
+    for (const s of ["hooks", "tracker", "permissions"] as const) expect(canAdvance(s, null)).toBe(true);
     expect(canAdvance("done", report({}))).toBe(false);
   });
 

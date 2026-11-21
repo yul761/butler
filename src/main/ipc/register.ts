@@ -38,11 +38,9 @@ import { IPC } from "../../shared/ipc";
 import {
   FOLLOWUP_STATUSES, type AutostartState, type ButlerMessageView, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
-import type { AuditPage, LlmStatus, SensitiveTerm } from "../../shared/llm";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
 import type { EpicService } from "../epics/epic-service";
-import type { AuditRepo } from "../db/audit-repo";
 import type { MemoryService } from "../memory/memory-service";
 import { JOB_NIGHTLY, type JobsRepo } from "../db/jobs-repo";
 import type { FollowupsRepo } from "../db/followups-repo";
@@ -52,10 +50,7 @@ import type { SettingsRepo } from "../db/settings-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { UsageRepo } from "../db/usage-repo";
 import { summarizeUsage, USAGE_WINDOW_MS } from "../usage/usage-summary";
-import type { TermsRepo } from "../db/terms-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
-import type { KeyStore } from "../gateway/key-store";
-import { auditPage } from "../gateway/status";
 import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
@@ -89,8 +84,8 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, apiKeyArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, auditCursorArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, termsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
+  addRepoArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
@@ -230,9 +225,6 @@ export interface IpcDeps {
   featureRunner: Pick<FeatureSummaryRunner, "runManual">;
   scheduler: Scheduler;
   jobs: JobsRepo;
-  keys: KeyStore;
-  terms: TermsRepo;
-  audit: AuditRepo;
   /** 对外动作的审计（契约 4.8，ws-b）。 */
   externalAudit: Pick<ExternalAuditRepo, "list">;
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
@@ -251,7 +243,6 @@ export interface IpcDeps {
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   /** 防休眠开关（只在内存里，启动时是关的）。 */
   keepAwake: { isOn(): boolean; set(on: boolean): void };
-  llmStatus: () => LlmStatus;
   /** followup 状态变化后重新推导 ticket 状态。 */
   rederive: (ticketKey: string) => void;
   detectTrackerTools: () => Promise<McpProbe>;
@@ -808,26 +799,6 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.settingsFeaturePolicy, (): FeaturePolicyState => featureIpc.get());
   handle(IPC.settingsPolicyPatch, (raw: unknown): void => featureIpc.patch(raw));
 
-  // 个人 API：key 只进不出，界面只拿到打码后的 LlmStatus。参数一律在运行时检查（渲染进程不可信）。
-  handle(IPC.llmStatus, (): LlmStatus => d.llmStatus());
-  handle(IPC.llmKeySave, (key: unknown): LlmStatus => {
-    d.keys.save(apiKeyArg(key));
-    d.notify();
-    return d.llmStatus();
-  });
-  handle(IPC.llmKeyClear, (): LlmStatus => {
-    d.keys.clear();
-    d.notify();
-    return d.llmStatus();
-  });
-  handle(IPC.termsList, (): SensitiveTerm[] => d.terms.list());
-  handle(IPC.termsSave, (terms: unknown): SensitiveTerm[] => {
-    d.terms.replaceAll(termsArg(terms));
-    d.notify();
-    return d.terms.list();
-  });
-  handle(IPC.auditList, (beforeId: unknown): AuditPage =>
-    auditPage({ settings: d.settings, keys: d.keys, audit: d.audit, now: d.now }, auditCursorArg(beforeId)));
   handle(IPC.externalAuditList, (): ExternalActionEntry[] => d.externalAudit.list({ limit: 200 }));
 
   // StateCore 记忆（设计文档 8.4）：只读。

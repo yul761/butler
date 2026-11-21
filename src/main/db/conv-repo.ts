@@ -2,7 +2,7 @@ import { CONV_QUERY_MAX, CONV_SEARCH_LIMIT, type ConvListOpts, type ConvMessage 
 import { withTransaction, type Db } from "./database";
 
 // UI 重做第 4 层（BTL-234）：对话另存的三张表（conv_turns、conv_messages、conv_cursors）和可选的 FTS5 索引。
-// 对话原文只留在本机：和 transcript、handoffs.raw_text 同一个信任级别，绝不放进 PrivacyGateway 的投影。
+// 对话原文只留在本机：和 transcript、handoffs.raw_text 同一个信任级别，Butler 从不把它发到别处。
 
 /** 一轮是怎么开的：user 用户说话；silent 斜杠命令 / Butler 通知 / 转达的回答；handoff 写 handoff；fork 分叉讨论；orphan 找不到开头的 agent 话。 */
 export type TurnKind = "user" | "silent" | "handoff" | "fork" | "orphan";

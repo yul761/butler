@@ -1,6 +1,8 @@
 import { EXTERNAL_ACTIONS, type ExternalActionEntry, type ExternalActionKind, type ExternalOutcome } from "../../shared/external";
-import { AUDIT_TEXT_LIMIT } from "./audit-repo";
 import type { Db } from "./database";
+
+/** 审计里每段文本的上限：内容异常大时也不会把数据库撑爆。 */
+export const AUDIT_TEXT_LIMIT = 200_000;
 
 interface Row {
   id: number;

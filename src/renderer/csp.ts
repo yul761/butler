@@ -1,5 +1,5 @@
 /**
- * 渲染进程的 Content-Security-Policy。界面只加载 app 自己的文件，从不联网（个人 API 在主进程的 gateway 里）。
+ * 渲染进程的 Content-Security-Policy。界面只加载 app 自己的文件，从不联网（唯一的出网是主进程 notify/webhook.ts 推送外部通知）。
  * xterm 会往页面里插 <style>，所以样式允许内联；脚本不允许内联，也没有 unsafe-eval。
  */
 export const PROD_CSP = [

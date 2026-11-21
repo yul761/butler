@@ -1,6 +1,6 @@
 // 共享 MCP（WS-M H，设计文档 2026-11-17 §8）的 HTTP 监听：只绑 127.0.0.1，按 URL 里的 token 把 JSON-RPC 交给对应的 server。
 // MCP Streamable HTTP 的无状态用法：只回 JSON（不开 SSE 流），不发 Mcp-Session-Id。
-// 网络模块只能在 gateway 里用（设计文档 7.1），这是 gateway 的公开模块之一；它只收本机的请求，不往外发。
+// ESLint 只允许这个文件从 node:http 拿 createServer（BTL-243）：它只收本机 claude 发来的请求，从不往外发。
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 /** 一条 JSON-RPC 消息（请求、通知或回复）。 */

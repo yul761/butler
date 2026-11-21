@@ -1,7 +1,6 @@
 import type { AvailabilityAction, LimitKind } from "../../shared/availability";
 import { isBgKind, type BackgroundAction } from "../../shared/background";
 import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
-import type { SensitiveTerm } from "../../shared/llm";
 import { CONTEXT_LIMIT, TASK_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import { normTurnFilter, type TurnFilter } from "../../shared/turn";
@@ -26,7 +25,6 @@ import {
 } from "../../shared/config-io";
 import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
-import { normalizeTerms, SettingError, TERMS_LIMIT } from "../settings/settings-values";
 import { M } from "../strings";
 import { TicketError } from "../tickets/ticket-service";
 
@@ -34,37 +32,6 @@ import { TicketError } from "../tickets/ticket-service";
  * 渲染进程不可信：IPC 参数在主进程里按运行时类型检查，不合规就抛错（toIpcResult 包装成 { ok: false }）。
  * 上限在做任何规范化之前生效，超大的输入不会被逐项处理。
  */
-
-/** key 本身的格式（8–512 个可打印 ASCII）由 KeyStore 检查；这里只挡住非字符串和超大的输入。 */
-const API_KEY_INPUT_LIMIT = 4096;
-/** 提交的条数上限：去重前可以比 TERMS_LIMIT 多一些（normalizeTerms 再按去重后的条数限制）。 */
-export const TERMS_INPUT_LIMIT = TERMS_LIMIT * 2;
-/** 单个敏感词原文的上限（NFKC 和压缩空白之前）；规范化后的上限是 100 字，由 normalizeTerms 检查。 */
-const TERM_INPUT_LENGTH = 1000;
-
-export function apiKeyArg(v: unknown): string {
-  // 报错里不带输入：它可能就是 key。
-  if (typeof v !== "string" || v.length > API_KEY_INPUT_LIMIT) throw new SettingError(M().apiKeyFormat);
-  return v;
-}
-
-export function termsArg(v: unknown): SensitiveTerm[] {
-  if (!Array.isArray(v)) throw new SettingError(M().termsFormat);
-  if (v.length > TERMS_INPUT_LIMIT) throw new SettingError(M().tooManyTerms(TERMS_LIMIT));
-  for (const x of v as unknown[]) {
-    const o = x as { term?: unknown } | null;
-    if (!o || typeof o !== "object" || typeof o.term !== "string") throw new SettingError(M().termsFormat);
-    if (o.term.length > TERM_INPUT_LENGTH) throw new SettingError(M().termTooLongShort);
-  }
-  return normalizeTerms(v);
-}
-
-/** 审计翻页的游标：不传，或者正整数（上一页最后一条的 id）。 */
-export function auditCursorArg(v: unknown): number | undefined {
-  if (v === undefined || v === null) return undefined;
-  if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v;
-  throw new Error(`invalid audit cursor: ${typeof v}`);
-}
 
 /** ticket 号：1–200 字的字符串（格式由 ticket 正则决定；查不到就是空结果）。 */
 export function ticketKeyArg(v: unknown): string {

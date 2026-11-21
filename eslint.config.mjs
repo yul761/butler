@@ -2,14 +2,13 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 /**
- * 设计文档 7.1：个人 LLM API 的网络请求只能从 PrivacyGateway（src/main/gateway/）发出。
- * 其他文件不能用浏览器 / Node 的网络 API，也不能 import 网络模块、HTTP 客户端、LLM SDK 或 Electron 的 net。
- * src/main/egress-lint.test.ts 用一段违规代码验证这些规则真的生效。
+ * Butler 自己不往外发网络请求（BTL-243 拿掉了个人 LLM API 和 PrivacyGateway）。
+ * 所有源码都不能用浏览器 / Node 的网络 API，也不能 import 网络模块、HTTP 客户端、LLM SDK 或 Electron 的 net。没有目录例外，
+ * 只有三个文件各放开一小块（见 ALLOWANCES）。src/main/egress-lint.test.ts 用一段违规代码验证这些规则真的生效。
  */
-const EGRESS_DIR = "src/main/gateway/**";
-const EGRESS_MESSAGE = "网络请求只能在 src/main/gateway/ 里发（设计文档 7.1：PrivacyGateway 是唯一出口）。";
+const EGRESS_MESSAGE = "Butler 不往外发网络请求（BTL-243）。唯一的出口是 src/main/notify/webhook.ts（对外动作 push_notification）。";
 const NETWORK_BUILTINS = ["http", "https", "http2", "net", "tls", "dgram", "dns"];
-/** 能绕过静态检查去拿到任意模块的入口，同样只允许在 gateway 里。 */
+/** 能绕过静态检查去拿到任意模块的入口，同样禁止。 */
 const LOADER_BUILTINS = ["module"];
 /** Electron 里能联网的对象。 */
 const ELECTRON_NETWORK = ["net", "session", "autoUpdater", "netLog"];
@@ -33,11 +32,11 @@ const TEST_FILES = ["**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"];
 
 /**
  * StateCore（statecore-mcp）自带联网的 http 后端，还会按环境变量（FEATURE_LLM / MODEL_*）直接调用模型。
- * 只有这几处能用它：主进程的适配层 src/main/memory/statecore.ts（环境变量由 statecoreEnv() 生成，模型只能是 PrivacyGateway 给的）、
+ * 只有这几处能用它：主进程的适配层 src/main/memory/statecore.ts（环境变量由 statecoreEnv() 生成，从不给模型）、
  * 它所在目录的测试，以及给 claude 挂载的 MCP 入口 memory-mcp/entry.ts 和共享 MCP 的入口 memory-mcp/hub-entry.ts（都先清掉环境变量里的 key）。
  * 见计划 4 Ruling R1；hub 见 WS-M 设计 §8，它的契约测试要和真的 statecore-mcp 比。
  */
-const STATECORE_MESSAGE = "StateCore 只能经 src/main/memory/statecore.ts、memory-mcp/entry.ts 或 memory-mcp/hub-entry.ts 使用（计划 4 R1：模型 key 不能绕过 PrivacyGateway）。";
+const STATECORE_MESSAGE = "StateCore 只能经 src/main/memory/statecore.ts、memory-mcp/entry.ts 或 memory-mcp/hub-entry.ts 使用（计划 4 R1：StateCore 不能拿到模型 key，也不能自己联网）。";
 const STATECORE_MODULE = "/^statecore-mcp(\\/.*)?$/";
 /** 动态 import / require / import = 的 statecore-mcp：报 StateCore 的提示，而不是出网的提示。 */
 const STATECORE_SYNTAX = [
@@ -48,13 +47,6 @@ const STATECORE_SYNTAX = [
   { selector: 'ImportExpression > TemplateLiteral.source[quasis.0.value.raw=/^statecore-mcp/]', message: STATECORE_MESSAGE },
   { selector: 'CallExpression[callee.name="require"] > TemplateLiteral.arguments[quasis.0.value.raw=/^statecore-mcp/]', message: STATECORE_MESSAGE },
 ];
-/** gateway 里出口规则关了，非字面量的模块名就能绕过上面的字面量检查：只允许字面量。 */
-const GATEWAY_LITERAL_MESSAGE = "gateway 里只能用字面量模块名加载模块（import() / require）。";
-const GATEWAY_LITERAL_SYNTAX = [
-  { selector: 'ImportExpression[source.type!="Literal"]', message: GATEWAY_LITERAL_MESSAGE },
-  { selector: 'CallExpression[callee.name="require"][arguments.0.type!="Literal"]', message: GATEWAY_LITERAL_MESSAGE },
-  { selector: 'CallExpression[callee.name="require"][arguments.length!=1]', message: GATEWAY_LITERAL_MESSAGE },
-];
 const STATECORE_ENTRY_FILES = ["src/main/memory/statecore.ts", "memory-mcp/entry.ts", "memory-mcp/hub-entry.ts"];
 const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts", "memory-mcp/hub-contract.test.ts"];
 /**
@@ -64,14 +56,13 @@ const STATECORE_TEST_FILES = ["src/main/memory/**/*.test.ts", "memory-mcp/hub-co
 const FAKE_CLAUDE_FILES = ["e2e/fake-claude/fake-claude.cjs"];
 
 /**
- * gateway 的内部模块：直接发请求的 provider 和测试用假服务器 testing。
- * gateway 外面只能经 PrivacyGateway（gateway.ts）和 key-store、safe-storage、status、types、budget、statecore-env 这几个公开模块。
- * 测试文件不受这一条限制（其余出口规则照旧）。
+ * 测试用的本机记录器（loopback-recorder）能开 HTTP 服务、发 HTTP 请求：只有测试文件能 import 它。
+ * 非测试文件 import / re-export 任何 testing/ 下的东西都不行，任何路径写法的 loopback-recorder 也不行
+ * （./loopback-recorder、../testing/./loopback-recorder 这类绕法一样被拦）。
  */
-const GATEWAY_INTERNALS = ["provider", "testing"];
-const GATEWAY_INTERNAL_MESSAGE = "gateway 的内部模块只能在 src/main/gateway/ 里用，外面请经 PrivacyGateway（设计文档 7.1）。";
-const GATEWAY_INTERNAL_RE = `(^|/)gateway/(${GATEWAY_INTERNALS.join("|")})(\\.[cm]?[jt]sx?)?$`;
-const GATEWAY_INTERNAL_SEL = `/(^|\\/)gateway\\/(${GATEWAY_INTERNALS.join("|")})(\\.[cm]?[jt]sx?)?$/`;
+const TEST_ONLY_MESSAGE = "src/main/testing/ 下的文件只给测试用（BTL-243）。";
+const TEST_ONLY_RE = "(^|/)(testing/|loopback-recorder(\\.[cm]?[jt]sx?)?$)";
+const TEST_ONLY_SEL = "/(^|\\/)(testing\\/|loopback-recorder(\\.[cm]?[jt]sx?)?$)/";
 
 const egressRules = {
   "no-restricted-imports": [
@@ -125,21 +116,61 @@ const egressRules = {
   ],
 };
 
-/** gateway 以外的非测试文件：在出口规则之上，再禁止 import / require gateway 的内部模块（相对路径或别名都算）。 */
+/** 非测试文件：在出口规则之上，再禁止 import / require 测试用的记录器（相对路径或别名都算）。 */
 const [, egressImportOptions] = egressRules["no-restricted-imports"];
-const outsideGatewayRules = {
+const productionRules = {
   ...egressRules,
   "no-restricted-imports": [
     "error",
-    { ...egressImportOptions, patterns: [...egressImportOptions.patterns, { regex: GATEWAY_INTERNAL_RE, message: GATEWAY_INTERNAL_MESSAGE }] },
+    { ...egressImportOptions, patterns: [...egressImportOptions.patterns, { regex: TEST_ONLY_RE, message: TEST_ONLY_MESSAGE }] },
   ],
   "no-restricted-syntax": [
     ...egressRules["no-restricted-syntax"],
-    { selector: `ImportExpression[source.value=${GATEWAY_INTERNAL_SEL}]`, message: GATEWAY_INTERNAL_MESSAGE },
-    { selector: `CallExpression[callee.name="require"][arguments.0.value=${GATEWAY_INTERNAL_SEL}]`, message: GATEWAY_INTERNAL_MESSAGE },
-    { selector: `TSExternalModuleReference[expression.value=${GATEWAY_INTERNAL_SEL}]`, message: GATEWAY_INTERNAL_MESSAGE },
+    { selector: `ImportExpression[source.value=${TEST_ONLY_SEL}]`, message: TEST_ONLY_MESSAGE },
+    { selector: `CallExpression[callee.name="require"][arguments.0.value=${TEST_ONLY_SEL}]`, message: TEST_ONLY_MESSAGE },
+    { selector: `TSExternalModuleReference[expression.value=${TEST_ONLY_SEL}]`, message: TEST_ONLY_MESSAGE },
   ],
 };
+
+/**
+ * 给单个文件放开一小块（BTL-243），其余规则一条不少：
+ * - http：node:http（和 http）只能具名 import 这几个名字，默认 / 命名空间 import、require、import() 照旧被拦；
+ * - electron：从 "electron" 具名 import 这几个联网对象；
+ * - globals：可以用这几个全局（只是裸名字，globalThis.fetch 这种照旧被拦）。
+ */
+function allowing(rules, { http = [], electron = [], globals = [] }) {
+  const [level, options] = rules["no-restricted-imports"];
+  const paths = options.paths.map((p) => {
+    if (http.length && (p.name === "http" || p.name === "node:http")) return { name: p.name, allowImportNames: http, message: p.message };
+    if (electron.length && p.name === "electron") return { ...p, importNames: p.importNames.filter((n) => !electron.includes(n)) };
+    return p;
+  });
+  const electronSel = `ImportDeclaration[source.value=${ELECTRON_MODULE}] ImportSpecifier[imported.name=${ELECTRON_NET_NAMES}]`;
+  const rest = ELECTRON_NETWORK.filter((n) => !electron.includes(n));
+  const syntax = rules["no-restricted-syntax"].map((r) =>
+    electron.length && typeof r === "object" && r.selector === electronSel
+      // "electron" 本身只放开给的名字；electron/main 这类子路径一个都不放开。
+      ? { ...r, selector: `:matches(ImportDeclaration[source.value="electron"] ImportSpecifier[imported.name=/^(${rest.join("|")})$/], ImportDeclaration[source.value=/^electron\\/.+$/] ImportSpecifier[imported.name=${ELECTRON_NET_NAMES}])` }
+      : r,
+  );
+  const [gLevel, ...gList] = rules["no-restricted-globals"];
+  return {
+    ...rules,
+    "no-restricted-imports": [level, { ...options, paths }],
+    "no-restricted-globals": [gLevel, ...gList.filter((g) => !globals.includes(g.name))],
+    "no-restricted-syntax": syntax,
+  };
+}
+
+/** 唯一的三处放行。每一处为什么需要见文件头的注释；改这里要同时改 egress-lint.test.ts。 */
+const ALLOWANCES = [
+  // 对外动作 push_notification 的 webhook：Electron 的 net.fetch（单元测试里退回全局 fetch）。开关默认关，每次都记审计。
+  { files: ["src/main/notify/webhook.ts"], allow: { electron: ["net"], globals: ["fetch"] } },
+  // 共享 MCP 在 127.0.0.1 上的监听：只收本机 claude 的请求，不往外发。
+  { files: ["memory-mcp/loopback-http.ts"], allow: { http: ["createServer", "IncomingMessage", "ServerResponse"] } },
+  // 测试用的本机记录器：只在 127.0.0.1 上收发。只有测试能 import 它（productionRules）。
+  { files: ["src/main/testing/loopback-recorder.ts"], allow: { http: ["createServer", "request", "IncomingHttpHeaders"] } },
+];
 
 /** 去掉 StateCore 那两条 import 限制（只给 STATECORE_ENTRY_FILES / STATECORE_TEST_FILES 用）。动态 import 仍然被拦。 */
 function withoutStatecore(rules) {
@@ -188,31 +219,19 @@ export default tseslint.config(
     },
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
-  // 计划 3 遗留：eval / new Function / 字符串 setTimeout 能在运行时拼出任何代码，出口规则看不到。gateway 里也一样禁止。
+  // 计划 3 遗留：eval / new Function / 字符串 setTimeout 能在运行时拼出任何代码，出口规则看不到。
   // no-implied-eval 只认声明过的全局：这里声明 setTimeout / setInterval，否则字符串形式的定时器抓不到。
   {
     files: SOURCE_FILES,
     languageOptions: { globals: { setTimeout: "readonly", setInterval: "readonly" } },
     rules: { "no-eval": "error", "no-new-func": "error", "no-implied-eval": "error" },
   },
-  { files: SOURCE_FILES, rules: outsideGatewayRules },
-  // 测试文件可以用 gateway 的内部模块（假服务器等），但自己仍然不能联网。
+  { files: SOURCE_FILES, rules: productionRules },
+  // 测试文件可以用测试记录器，但自己仍然不能联网。
   { files: TEST_FILES, rules: egressRules },
-  // 唯一出口：只有 gateway 目录可以联网。
-  { files: [EGRESS_DIR], rules: Object.fromEntries(Object.keys(egressRules).map((rule) => [rule, "off"])) },
-  // gateway 里出口规则关了，但 StateCore 的限制照旧（key 就在 gateway 里，R1 回归最可能出在这里）。
-  {
-    files: [EGRESS_DIR],
-    rules: {
-      "no-restricted-imports": [
-        "error",
-        { paths: [{ name: "statecore-mcp", message: STATECORE_MESSAGE }], patterns: [{ group: ["statecore-mcp/*"], message: STATECORE_MESSAGE }] },
-      ],
-      "no-restricted-syntax": ["error", ...STATECORE_SYNTAX, ...GATEWAY_LITERAL_SYNTAX],
-    },
-  },
-  // StateCore 的两个入口和适配层的测试（计划 4 R1）。
-  { files: STATECORE_ENTRY_FILES, rules: withoutStatecore(outsideGatewayRules) },
+  ...ALLOWANCES.map(({ files, allow }) => ({ files, rules: allowing(productionRules, allow) })),
+  // StateCore 的入口和适配层的测试（计划 4 R1）。
+  { files: STATECORE_ENTRY_FILES, rules: withoutStatecore(productionRules) },
   { files: STATECORE_TEST_FILES, rules: withoutStatecore(egressRules) },
-  { files: FAKE_CLAUDE_FILES, rules: withoutHttp(outsideGatewayRules) },
+  { files: FAKE_CLAUDE_FILES, rules: withoutHttp(productionRules) },
 );

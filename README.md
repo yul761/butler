@@ -7,7 +7,7 @@ macOS (Apple silicon) and Windows (x64). MIT licensed. Website: [butler.statecor
 
 Tickets can be grouped into features, and features into epics. Talk an epic through in an epic session and it creates the features with their plans; a feature's coordinator session then creates the tickets, opens a session in each and hands it its task. Sessions don't talk to each other directly. They share layered memory in a local StateCore store, so the progress and decisions one session saves can be read by the others in the same ticket, feature or epic. The **Your turn** page puts what needs you first, and **All work** lists every epic, feature and ticket with what each session is doing. When a session needs a decision from you it says so with `ask_user`, and it reports progress with `report`; both land in tabs on the epic, feature and Butler control pages. Each night Butler writes a handoff for every ticket that moved.
 
-**Local-first.** Butler keeps its data in local SQLite files. Data leaves your machine only through your own `claude` and, if you configure one, a personal LLM API. That API is called only at the Full privacy level, for memory distillation, and every call it receives is logged on an audit page.
+**Local-first.** Butler keeps its data in local SQLite files and calls no model of its own. Data leaves your machine only through your own `claude`, plus two channels you switch on yourself: GitHub writes through your `gh` (outward actions) and a notification webhook. Every outward action is listed on the **Audit** page.
 
 **Language.** The UI comes in English and Chinese. It follows your system language at first (Chinese for any Chinese locale, English otherwise); change it under **Settings → General → 语言 / Language** or on the first-run wizard. The language also switches the default prompts Butler sends to `claude`, so handoffs and memory notes are written in that language; prompts you edited yourself are kept. Installs upgraded from 1.2.0 or earlier stay in Chinese until you change it. After switching, click **Install / repair** in the environment check once so the `/handoff` command is rewritten in the new language. This README quotes the labels of the English UI; the [Chinese README](README.zh-CN.md) quotes the Chinese ones.
 
@@ -142,13 +142,12 @@ There are deliberate limits:
 - **Home page.** The **Your turn** page is the first entry in the sidebar, and the entry shows how many things wait for you. Each thing that needs you gets a card at the top: a session waiting on a confirmation, a pending question, a reply that asks for your decision or really stuck, a PR ready to merge, a review requested from you, a PR nobody is on, and Butler notices that need you (a paused cost cap with **Continue and raise the cap**, a Claude limit, CI results nobody received for 30 minutes, review comments waiting for classification, a stack conflict, an auto-intake item that needs a decision). Below them, a collapsed **In progress** list shows every session that is running, with what each one is doing, its PR and CI, and how long it has been at it; click a row to open its terminal. At the bottom, the collapsed **How it is running** section holds **Other notes from Butler** (notices that only tell you something), the memory card, recent merges, the automatic intake log for the last 24 hours, the usage line and **Live**. **Live** shows the sessions that are working as small terminal cards around a Butler card: each card has its ticket, repo, a status pill and the last 3 tool calls, and a dot runs along a dashed line when a session writes to memory (blue, toward Butler) or reads from it (green, back to the session). A card waiting for you turns yellow and says **Needs you**. At most 8 cards are drawn. When nobody is working it says so. The working count on the page and in the groups counts only sessions that are really working (thinking, running a tool or a background command); a stopped session with a PR open is counted as idle. The animation respects your system's reduced-motion setting. In the same section, one line shows the last 7 days of token usage: the total, the share of cache reads, and the share of turns with 200k or more tokens of context. It counts the sessions Butler opened, their subagents, and the `claude` runs Butler starts in the background (handoffs, feature summaries, stuck checks), read from Claude Code's transcripts on your machine. Click the line for the split by kind (**ticket sessions**, **coordinators**, **subagents**, **background jobs**) and by model. The shares are weighted by relative price, for comparing only; Butler doesn't convert them to money.
 - **Keep awake.** When sessions should keep running while you're away with the lid open, tick **Keep awake** at the bottom of the sidebar or in the tray menu. While it's on, the computer doesn't sleep when idle and the screen stays on. It turns off when you untick it, when the computer goes to sleep (closing the lid), and when Butler quits, and Butler always starts with it off. Closing the lid still puts a Mac to sleep; on Windows that depends on your lid setting.
 - **Memory.** Progress, decisions, open follow-ups and cross-ticket learnings go into a local [StateCore](https://github.com/yul761/StateCore) store. Every session Butler starts can `recall` them. The ticket page's **Log** tab has a **Memory** section that shows each entry's history.
-- **Optional personal LLM API.** At the **Full** privacy level, Butler uses an OpenAI-compatible API that you pay for to distil StateCore memory after each nightly run. Every call goes through a privacy gateway with an audit page and a monthly budget. Nothing is sent until you configure a provider and choose the full level; see [Privacy model](#privacy-model).
 
 ## What Butler does not touch
 
 - **Your Claude Code configuration.** Butler changes it only when you click the hook install, either in the first-run wizard or with **Settings → Environment check → Install / repair**. That adds four hooks to your user-level `settings.json` and a `/handoff` command. Your other hooks and commands are kept. Memory is never registered with `claude mcp add`. Instead, Butler passes `--mcp-config` on the command line of each session it starts.
 - **Your tracker and code host.** Butler has no Jira, GitHub or Claude login of its own. Jira, Linear, GitLab or any other tracker is read only by your company's Claude Code, through its own MCP servers. PRs are read by `claude` with your `gh`.
-- **The network.** The only network code in Butler is the privacy gateway for the optional personal API. A lint rule enforces this.
+- **The network.** Butler has no network code of its own apart from the notification webhook sender and the shared MCP's listener on 127.0.0.1. A lint rule enforces this; see [Privacy model](#privacy-model).
 
 ## Requirements
 
@@ -215,7 +214,7 @@ A short wizard, **Welcome to Butler**, walks you through these steps:
    - Sessions Butler starts also record Skill calls (only the skill name) through a hook, which is how it tells whether design and self-review happened.
    - To remove them, use **Settings → Environment check → Uninstall**.
 3. **Tracker MCP tools.** Butler lists the MCP tools your Claude Code exposes, and you pick the read-only ones handoffs may call.
-4. **Privacy level and personal API (optional).** Optional.
+4. **Permission profile.** How much Butler's sessions may do without asking you; see [docs/configuration.md](docs/configuration.md#permission-profile).
 
 You can run the wizard again from Settings. [docs/configuration.md](docs/configuration.md) covers every setting, including how to adapt Butler to another company's tracker and conventions.
 
@@ -223,7 +222,7 @@ You can run the wizard again from Settings. [docs/configuration.md](docs/configu
 
 | Path | What |
 |------|------|
-| `~/.butler/app.db` | Tickets, sessions, handoffs, follow-ups, settings, the LLM audit log, the review lessons (stored only here, never written into your repos), and the encrypted API key (SQLite). Rows left by older versions (morning briefs, the sensitive-terms list) stay but are no longer used. |
+| `~/.butler/app.db` | Tickets, sessions, handoffs, follow-ups, settings, the outward-action audit, the review lessons (stored only here, never written into your repos), and the encrypted notification webhook address (SQLite). Tables left by older versions (morning briefs, the LLM call log, the sensitive-terms list) stay but are empty or no longer used. |
 | `~/.butler/statecore/statecore.db` | StateCore memory |
 | `~/.butler/inbox/` | Hook reports waiting to be processed (`inbox/bad/` keeps unreadable ones) |
 | `~/.butler/bin/butler-hook` | The hook program Claude Code runs (`butler-hook.exe` on Windows) |
@@ -253,13 +252,13 @@ Apart from the hook install, Butler only reads Claude Code's files:
 
 The transcripts, output files and registry files are Claude Code's internal files, and an update can change them. If Butler can't read them, the live status falls back to the command and how long it has run.
 
-Your personal API key is encrypted with the OS keychain (macOS Keychain / Windows DPAPI). After you save it, the UI shows at most its last 4 characters. A key shorter than 12 characters is shown only as `••••`.
+The notification webhook address is encrypted with the OS keychain (macOS Keychain / Windows DPAPI), and the UI shows only its host. Butler uses the keychain only when you save a webhook address, when it sends a notification, and when you open **Interruptions & notifications** in the advanced settings, which shows the webhook's host. If you never set up a webhook, Butler never touches the keychain.
 
-Butler uses the keychain only when you save a key, and later when it needs that key to show its last 4 characters or to call your API. If you never save a key, Butler never touches the keychain.
+On macOS, a dialog may ask whether Butler may use "butler Safe Storage" in your keychain (Electron names the item after the app's internal name, `butler`). Click **Always Allow**. The builds are ad-hoc signed, not signed with a Developer ID, so macOS treats every new version as a different app and asks again once after each upgrade. If you click **Deny**, Butler can't read the saved address; enter it again.
 
-On macOS, a dialog may ask whether Butler may use "butler Safe Storage" in your keychain (Electron names the item after the app's internal name, `butler`). Click **Always Allow**. The builds are ad-hoc signed, not signed with a Developer ID, so macOS treats every new version as a different app and asks again once after each upgrade. This can happen right at startup if a scheduled memory distillation needs the key. Butler's window does not respond until you answer. If you click **Deny**, Butler can't read the saved key, and Settings shows it as unreadable; enter it again.
+Upgrading from 3.x deletes the personal API key, its settings, the sensitive-terms list and the LLM call log from `app.db`. Butler no longer has a way to show or clear them.
 
-Electron also keeps its own profile folder, with Chromium's caches and the single-instance lock: `~/Library/Application Support/butler` on macOS and `%APPDATA%\butler` on Windows. When `BUTLER_HOME` is set, Butler uses `<BUTLER_HOME>/electron` instead. On Windows this folder also holds the DPAPI-protected encryption key for the saved API key, so if you delete it, enter the API key again.
+Electron also keeps its own profile folder, with Chromium's caches and the single-instance lock: `~/Library/Application Support/butler` on macOS and `%APPDATA%\butler` on Windows. When `BUTLER_HOME` is set, Butler uses `<BUTLER_HOME>/electron` instead. On Windows this folder also holds the DPAPI-protected encryption key for the saved webhook address, so if you delete it, enter the address again.
 
 ## StateCore memory
 
@@ -269,21 +268,19 @@ Everything under an epic also gets `butler-epic`, the epic's memory (scope `epic
 
 **Do not also install StateCore's own Claude Code capture plugin.** Butler already provides StateCore memory in the sessions it starts, and with both installed memory is recorded twice. Settings warns you if it finds the plugin.
 
-- **No model key reaches StateCore.** The memory servers that Claude Code starts get no model API key: Butler strips model variables from their environment. Butler's own writes (handoffs, decisions, follow-ups, learnings) are deterministic and need no model.
-- **Distillation, at Full only.** When the privacy level is **Full** and confirm-before-send is off, Butler runs StateCore's distillation through your personal API. Butler's main process makes the calls, and the key stays inside the privacy gateway. Distillation runs in the background after every nightly handoff run, including catch-up runs and **Run the nightly handoff now**. For each scope with pending events, the calls send:
-  - the scope name, which for a ticket is the real ticket id (`ticket:<KEY>`)
-  - the scope's recent raw events, including what Claude saved with `remember(consolidate: true)`
-  - the scope's existing memory as JSON: Butler's follow-up and decision notes, Claude's own notes, and the previous summary with its next steps
-  - the text of notes forgotten in that scope, so the model won't bring them back
-
-  In the `workspace` scope, each learning is tagged with the id of the ticket it came from. **None of this is pseudonymized or scanned.** Each sent call is recorded on the audit page as **StateCore memory distillation** and counts against your monthly budget.
-- **Memory holds 30 live notes per ticket.** StateCore keeps at most 30 notes per scope (one scope per ticket). Since statecore-mcp 1.1, finished follow-ups and replaced decisions free their slots, and distillation never pushes Butler's notes out. A ticket can still fill up if it has more than 30 open follow-ups and decisions at once (Butler keeps at most 24 of its own), or if Claude writes many notes itself. See [docs/configuration.md](docs/configuration.md#how-memory-works).
+- **No model, no network.** StateCore runs only on your machine and calls no model. The memory servers that Claude Code starts get no model API key: Butler strips model variables from their environment and turns StateCore's background digest off. Butler's own writes (handoffs, decisions, follow-ups, learnings) are deterministic and need no model.
+- **Long entries stay word for word.** What Claude saves with `remember(consolidate: true)` (up to 2,000 characters) is kept as an event, exactly as written. Nothing distils it into facts; `recall` returns it among the recent events, next to the notes.
+- **Memory holds 30 live notes per ticket.** StateCore keeps at most 30 notes per scope (one scope per ticket). Since statecore-mcp 1.1, finished follow-ups and replaced decisions free their slots. A ticket can still fill up if it has more than 30 open follow-ups and decisions at once (Butler keeps at most 24 of its own), or if Claude writes many notes itself. See [docs/configuration.md](docs/configuration.md#how-memory-works).
 
 ## Privacy model
 
-Company work goes only through your company's `claude`. The optional personal API is used for one thing only: StateCore memory distillation at the **Full** privacy level. It sends real ticket ids, raw conversation excerpts and existing memory, unscanned (see [StateCore memory](#statecore-memory)). Review lesson analysis is separate: it gives PR comments, the related code changes, and excerpts of Butler's handoffs and conversation records to your own `claude`, not to the personal LLM API, so the privacy level does not affect it. At **Off**, **Metadata only** (the default) and **Redacted text**, the personal API is never called.
+Butler calls no model of its own and has no API key. All model work, including handoffs, memory notes and review lesson analysis, goes through your own `claude`, under your company's login and settings. Data leaves your machine in only three ways:
 
-The **Audit** page lists every call that was sent or refused over budget. Some refusals are only written to the log, for example a distillation call refused because the level changed, or a saved key that can no longer be decrypted.
+- **Your `claude`.** The sessions Butler starts and the background runs (handoffs, summaries, checks) are your own Claude Code. What it sends is up to Claude Code and your company's configuration.
+- **Outward actions through your `gh`.** Replies to PR comments, pushes, PR edits and the like. Each kind has its own switch under **Settings → Outward actions**, all off by default, and every action taken, failed or skipped is listed on the **Audit** page.
+- **The notification webhook.** Off by default (**Push notifications**). By default a message names only the kind of event and a count; see [docs/configuration.md](docs/configuration.md#notifications).
+
+A lint rule keeps it this way: no source file may use the network, except the webhook sender (Electron's `net`), the shared MCP's listener (accepts only, on 127.0.0.1) and a test-only recorder. The memory servers get no model key.
 
 ## Code signing policy
 
@@ -305,14 +302,14 @@ This program will not transfer any information to other networked systems unless
 
 - **Network.** Butler sends no telemetry, has no accounts or license checks, and does not check for updates.
 - **Claude Code.** Butler starts your own `claude` CLI. That CLI connects to Anthropic, or to whatever endpoint your company configured, under your login and settings.
-- **Personal API.** Butler calls the personal LLM API only if you configure one, and sends only what your chosen privacy level allows (see [Privacy model](#privacy-model)).
+- **Outward actions and notifications.** Butler writes to GitHub through your `gh`, or posts to a notification webhook, only for the kinds you switch on, and lists each one on the Audit page (see [Privacy model](#privacy-model)). Butler has no LLM API of its own.
 - **Local data.** Everything Butler stores stays on your machine (see [Where your data lives](#where-your-data-lives)).
 
 ## Known issues
 
 - Unsigned builds (see above). macOS builds are Apple silicon only.
 - No auto-update.
-- macOS asks again for keychain access to the saved API key after every upgrade (builds are ad-hoc signed). With no key saved, there is no prompt.
+- macOS asks again for keychain access to the saved webhook address after every upgrade (builds are ad-hoc signed). With no webhook saved, there is no prompt.
 - **Live status limits.** A command piped into `| tail` prints nothing until it ends, so the status shows no output for it. On Windows, Butler doesn't check child-process CPU and may not find a command's output, so the status can show only the command and how long it has run.
 - **Windows, npm-installed Claude Code.** Butler starts the npm/pnpm `claude.cmd` shim's target directly, without `cmd.exe`. The target is either the native `claude.exe` or `node <script>`.
   - If Claude Code was installed with `--ignore-scripts`, or its native optional package is missing, `bin\claude.exe` is only a small placeholder file.
@@ -323,7 +320,7 @@ This program will not transfer any information to other networked systems unless
 
 1. **Settings → Environment check → Uninstall** removes Butler's hooks and `/handoff` command from Claude Code.
 2. Delete the app. On macOS, drag Butler out of Applications. On Windows, go to Settings → Apps → Butler → Uninstall.
-3. To also remove your data, delete `~/.butler`. Neither step removes Electron's profile folder, `~/Library/Application Support/butler` on macOS or `%APPDATA%\butler` on Windows; delete it too for a clean uninstall. On macOS, if you saved an API key, you can also delete the "butler Safe Storage" item in Keychain Access.
+3. To also remove your data, delete `~/.butler`. Neither step removes Electron's profile folder, `~/Library/Application Support/butler` on macOS or `%APPDATA%\butler` on Windows; delete it too for a clean uninstall. On macOS, if you saved a webhook address, you can also delete the "butler Safe Storage" item in Keychain Access.
 
 ## Development
 

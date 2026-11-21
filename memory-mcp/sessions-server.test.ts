@@ -5,9 +5,10 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MESSAGE_LIMIT, REASON_LIMIT, START_INSTRUCTIONS_LIMIT } from "../src/shared/control";
 import {
-  BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, LIST_STACKS_TOOL, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, STACK_TOOLS_EN, SessionsServer, serveStdio, TOOLS, TOOLS_EN,
+  BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, LIST_STACKS_TOOL, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, STACK_TOOLS_EN, SessionsServer, TOOLS, TOOLS_EN,
   type SessionsServerOptions,
 } from "./sessions-server";
+import { serveStdio } from "./stdio";
 
 function setup(timeoutMs = 2000, scope: SessionsServerOptions["scope"] = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
   const dir = tempDir("butler-control-");

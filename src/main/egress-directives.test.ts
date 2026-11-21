@@ -1,11 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const EGRESS_RULES = ["no-restricted-globals", "no-restricted-imports", "no-restricted-syntax", "no-restricted-properties"];
-const GATEWAY = join("src", "main", "gateway") + sep;
 const SOURCE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -54,12 +53,12 @@ describe("egress lint rule cannot be silenced by comments", () => {
     expect(silencingDirectives("/* eslint eqeqeq: off */")).toHaveLength(0);
   });
 
-  it("no file outside src/main/gateway disables it", () => {
+  it("no file disables it (there is no gateway exception any more)", () => {
     const offenders: string[] = [];
-    for (const dir of ["src", "hook", "scripts"]) {
+    for (const dir of ["src", "hook", "scripts", "memory-mcp", "e2e"]) {
       for (const file of walk(join(root, dir))) {
         const rel = relative(root, file);
-        if (rel.startsWith(GATEWAY) || rel.endsWith("egress-directives.test.ts")) continue;
+        if (rel.endsWith("egress-directives.test.ts")) continue;
         for (const d of silencingDirectives(readFileSync(file, "utf8"))) offenders.push(`${rel}: ${d}`);
       }
     }

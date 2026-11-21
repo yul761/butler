@@ -1,10 +1,7 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { createEmbeddedBackend, listScopes } from "statecore-mcp/lib";
+import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { z } from "zod";
 import type { MemoryHandoff, MemoryItem, WhyEntry } from "../../shared/memory";
-import { statecoreEnv } from "../gateway/statecore-env";
-import type { StatecoreChatModel } from "../gateway/types";
+import { statecoreEnv } from "./statecore-env";
 
 /**
  * Butler 里唯一 import statecore-mcp/lib 的生产代码（ESLint 强制，计划 4 R1）。
@@ -12,12 +9,9 @@ import type { StatecoreChatModel } from "../gateway/types";
  * 主进程不长期占着连接。StateCore 的返回值类型是 unknown，这里用 zod 校验成 Butler 自己的类型。
  */
 
-/** partial：蒸馏写进去了，但有的事件没处理到（失败的分块、超出预算的事件；statecore-mcp 1.1 起如实报告）。 */
-export type DigestOutcome = "ran" | "partial" | "no-llm" | "below-threshold" | "locked" | "failed" | "unsupported";
-
 /**
  * StateCore 每个 scope 的 notes 上限（默认 facet pack 里 notes 的 cap）。调用方（remember）再追加一条时，StateCore 挤掉最旧的那条。
- * statecore-mcp 1.1 起 forget 会释放位置，蒸馏提炼的 note 也不会挤掉调用方写的 note（1.0.0 两者都不成立）。
+ * statecore-mcp 1.1 起 forget 会释放位置（1.0.0 不会）。
  */
 export const NOTES_CAP = 30;
 
@@ -42,10 +36,10 @@ export interface ScopeHandle {
    * 再并上 facts() 里看得见的 Notes（防止个别条目没登记），按 StateCore 的规则（去首尾空白、压空白、小写）去重。
    */
   noteSlots(): Promise<{ used: number; cap: number }>;
-  /** 等待蒸馏的 consolidate 事件数。 */
+  /**
+   * consolidate 进来、还没被蒸馏的事件数。Butler 从不蒸馏（BTL-243），这些事件原样留着，recall 时作为最近事件返回。
+   */
   pendingEvents(): Promise<number>;
-  /** 立即蒸馏一次（只有 withScope 给了 model 才可能 ran）。 */
-  digestNow(): Promise<DigestOutcome>;
 }
 
 const FactGroups = z.array(
@@ -70,10 +64,6 @@ const Registry = z.object({
   factRegistry: z.array(z.object({ content: z.string(), facet: z.string().optional(), supersededBy: z.string().optional(), retiredAt: z.string().optional() })),
 });
 const Remembered = z.object({ superseded: z.string().optional() });
-const DigestResult = z.union([
-  z.object({ ran: z.literal(true), partial: z.boolean().optional() }),
-  z.object({ ran: z.literal(false), reason: z.enum(["no-llm", "below-threshold", "locked", "failed", "unsupported"]) }),
-]);
 const Pending = z.object({ events: z.number() }).nullable().optional();
 
 type Backend = ReturnType<typeof createEmbeddedBackend>;
@@ -146,27 +136,15 @@ function handle(b: Backend): ScopeHandle {
     async pendingEvents() {
       return Pending.parse(await b.pendingEvents?.())?.events ?? 0;
     },
-    async digestNow() {
-      return parseDigestOutcome(await b.digestNow());
-    },
   };
-}
-
-/** 校验 StateCore digestNow() 的结果；形状或 reason 不认识时按 "unsupported" 处理，不让未知值流出去。 */
-export function parseDigestOutcome(raw: unknown): DigestOutcome {
-  const r = DigestResult.safeParse(raw);
-  if (!r.success) return "unsupported";
-  if (r.data.ran) return r.data.partial ? "partial" : "ran";
-  return r.data.reason;
 }
 
 /**
  * 打开一个 scope，执行 fn，然后一定关闭。环境变量一律经 statecoreEnv() 去掉模型相关的变量（R1）；
- * 后台蒸馏关闭（backgroundDigest: false：Butler 的写入是确定性的，不触发任何 LLM 调用）。
- * 只有给了 model（PrivacyGateway.statecoreModel() 的结果）时 digestNow() 才可能调用模型。
+ * 后台蒸馏关闭、不给模型（backgroundDigest: false，没有 digestLlm）：Butler 不调用任何模型（BTL-243），写入都是确定性的。
  */
 export async function withScope<T>(
-  o: { dataDir: string; scope: string; model?: StatecoreChatModel | null },
+  o: { dataDir: string; scope: string },
   fn: (s: ScopeHandle) => Promise<T>,
 ): Promise<T> {
   const backend = createEmbeddedBackend({
@@ -174,7 +152,6 @@ export async function withScope<T>(
     scopeName: o.scope,
     env: statecoreEnv(process.env),
     backgroundDigest: false,
-    ...(o.model ? { digestLlm: o.model } : {}),
   });
   try {
     await backend.init();
@@ -182,10 +159,4 @@ export async function withScope<T>(
   } finally {
     await backend.close();
   }
-}
-
-/** 存储里所有 scope 的名字；存储还不存在时返回空，不会创建它。 */
-export async function listScopeNames(dataDir: string): Promise<string[]> {
-  if (!existsSync(join(dataDir, "statecore.db"))) return [];
-  return (await listScopes(dataDir)).map((s) => s.name);
 }
