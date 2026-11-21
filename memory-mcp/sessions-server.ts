@@ -612,6 +612,43 @@ export const FEATURE_TOOLS_EN = [
 ] as const;
 
 
+/** feature 总控的 send_message（BTL-245）：给这个 feature 的 ticket session、修复 session 发消息，排进它的信箱。 */
+export const FEATURE_SEND_TOOL = {
+  name: "send_message",
+  description:
+    `给这个 feature 的一个 ticket session 或修复 session 发一条消息（最多 ${MESSAGE_LIMIT} 字符）：改主意了、接口变了、要它先做别的。` +
+    "消息排进它的信箱，不会因为它在忙被拒：它在干活就在下一次调用工具时读到，停着就直接输入，终端关着就等下次打开再送。" +
+    "interrupt: true 先按 Esc 叫停它手上的事再送（只在真要它马上停下时用，比如它在做的方向错了）。" +
+    "返回 requestId；它读到之后这一轮的最后一段回复会以「【回复】」开头自动送回给你，不用去轮询 session_activity。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      session: { type: "string", description: "ticket session 或修复 session 的 id（list_sessions 里的）" },
+      text: { type: "string", description: `要发的话，最长 ${MESSAGE_LIMIT} 字符` },
+      interrupt: { type: "boolean", description: "可选：true 先按 Esc 叫停它再送" },
+    },
+    required: ["session", "text"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const FEATURE_SEND_TOOL_EN = {
+  ...FEATURE_SEND_TOOL,
+  description:
+    `Send a message (at most ${MESSAGE_LIMIT} characters) to one of this feature's ticket sessions or fix sessions: a change of plan, an interface that changed, something to do first. ` +
+    "It goes into its mailbox and is never refused for being busy: a working session reads it at its next tool call, a stopped one gets it typed in, and a closed one gets it the next time it opens. " +
+    "interrupt: true presses Esc to stop what it is doing first (only when it really has to stop now, for example when it is heading the wrong way). " +
+    "It returns a requestId; the last reply it writes in the turn after reading it comes back to you automatically, starting with \"[Reply]\", so you do not need to poll session_activity.",
+  inputSchema: {
+    ...FEATURE_SEND_TOOL.inputSchema,
+    properties: {
+      session: { type: "string", description: "the id of a ticket session or fix session (from list_sessions)" },
+      text: { type: "string", description: `what to send, at most ${MESSAGE_LIMIT} characters` },
+      interrupt: { type: "boolean", description: "optional: true presses Esc to stop it before sending" },
+    },
+  },
+} as const;
+
 /** epic session 的工具（设计文档 2026-11-01）。 */
 export const EPIC_TOOLS = [
   {
@@ -838,8 +875,8 @@ export const BUTLER_TOOLS = [
     name: "list_inbox",
     description:
       "列出全部未决的「待你决定」（decisions，从早到晚）和最近的汇报（reports，从新到旧）：谁问的 / 谁报的（role、ticket、feature、epic）、问题或正文、选项、背景、终端是否开着。" +
-      "这些已经摆在用户面前了，不要再用 ask_user 重复问一遍。messages 是你最近用 send_message 发的消息（最多 30 条，从新到旧）：requestId、目标、状态" +
-      "（sending 在送、waiting 等回复、replied 拿到回复还没送回给你、delivered 已经送回给你、failed 没送进去、expired 一直没回复）和回复。",
+      "这些已经摆在用户面前了，不要再用 ask_user 重复问一遍。messages 是你最近发出和收到的信箱消息（最多 30 条，从新到旧）：id（就是 requestId）、谁发给谁、状态" +
+      "（queued 在信箱里排队、delivered 已经送到、replied 拿到了回复）、怎么送到的（hook 在它干活时、input 在它停下时）和回复。",
     inputSchema: EMPTY_SCHEMA,
   },
   {
@@ -847,9 +884,10 @@ export const BUTLER_TOOLS = [
     description:
       `给一个 feature 总控或 epic session 发一条消息（最多 ${MESSAGE_LIMIT} 字符），用来跨 epic、跨 feature 协调：比如告诉它另一个 feature 的接口改了、先合哪个 PR。` +
       "目标给 feature（发给它的总控）、epic（发给它的 epic session）或 session 三者之一；feature、epic 用名字或 id（list_features、list_epics 里的）。" +
+      "消息一律排进它的信箱，不会因为它在忙被拒：它在干活就在下一次调用工具时读到，停着就直接输入，用户正在输入时等用户打完。" +
       "终端关着（比如闲置时被自动关掉了）也能发：Butler 接着它最近的对话打开（feature 从没开过总控就新开一个），再把消息交进去。" +
-      "终端开着时，它正在干活、在等用户、用户正在输入时 Butler 会拒绝，稍后再试。不能发给 ticket 的 session 和修复 session，要它们做什么就告诉管它们的总控。" +
-      "消息前面会带上「Butler 总控发来的消息」。返回 requestId；它这一轮做完时的最后一段回复会以「【回复】」开头自动送回给你，带同一个 requestId，不用去轮询 session_activity。",
+      "interrupt: true 先按 Esc 叫停它手上的事再送（只在真要它马上停下时用）。不能发给 ticket 的 session 和修复 session，要它们做什么就告诉管它们的总控。" +
+      "消息前面会带上「Butler 总控发来的消息」。返回 requestId；它读到之后这一轮的最后一段回复会以「【回复】」开头自动送回给你，带同一个 requestId，不用去轮询 session_activity。",
     inputSchema: {
       type: "object",
       properties: {
@@ -857,6 +895,7 @@ export const BUTLER_TOOLS = [
         feature: { type: "string", description: "可选：发给这个 feature 的总控（名字或 id）" },
         epic: { type: "string", description: "可选：发给这个 epic 的 epic session（名字或 id）" },
         text: { type: "string", description: `要发的话，最长 ${MESSAGE_LIMIT} 字符` },
+        interrupt: { type: "boolean", description: "可选：true 先按 Esc 叫停它再送" },
       },
       required: ["text"],
       additionalProperties: false,
@@ -972,8 +1011,8 @@ export const BUTLER_TOOLS_EN = [
     ...BUTLER_TOOLS[6],
     description:
       "List every pending decision (decisions, oldest first) and the recent reports (reports, newest first): who asked or reported (role, ticket, feature, epic), the question or text, options, context, and whether its terminal is open. " +
-      "These are already in front of the user, so do not ask them again with ask_user. messages are the messages you sent with send_message recently (at most 30, newest first): requestId, target, status " +
-      "(sending, waiting for a reply, replied but not yet back to you, delivered back to you, failed to go in, expired with no reply) and the reply.",
+      "These are already in front of the user, so do not ask them again with ask_user. messages are the mailbox messages you sent and received recently (at most 30, newest first): id (the requestId), from and to, status " +
+      "(queued in the mailbox, delivered, replied), how it got in (hook while the target was working, input once it stopped) and the reply.",
   },
   {
     ...BUTLER_TOOLS[7],
@@ -981,8 +1020,9 @@ export const BUTLER_TOOLS_EN = [
       `Send a message (at most ${MESSAGE_LIMIT} characters) to a feature coordinator or an epic session, to coordinate across epics and features: for example, tell it another feature's interface changed, or which PR to merge first. ` +
       "Give exactly one target: feature (its coordinator), epic (its epic session) or session; feature and epic take a name or id from list_features or list_epics. " +
       "A closed terminal (for example one closed for being idle) is fine: Butler reopens its latest conversation (or opens a new coordinator if the feature never had one) and hands it the message. " +
-      "When the terminal is open, Butler refuses while it is working, waiting for the user, or while the user is typing, so try again later. Ticket sessions and fix sessions cannot be messaged; tell the coordinator that manages them instead. " +
-      "The message is prefixed with \"Message from Butler control\". It returns a requestId; the last reply the target writes when it finishes that turn comes back to you automatically, starting with \"[Reply]\" and carrying the same requestId, so you do not need to poll session_activity.",
+      "Every message goes into its mailbox and is never refused for being busy: a working target reads it at its next tool call, a stopped one gets it typed in, and Butler waits while the user is typing. " +
+      "interrupt: true presses Esc to stop what it is doing first (only when it really has to stop now). Ticket sessions and fix sessions cannot be messaged; tell the coordinator that manages them instead. " +
+      "The message is prefixed with \"Message from Butler control\". It returns a requestId; the last reply the target writes in the turn after reading it comes back to you automatically, starting with \"[Reply]\" and carrying the same requestId, so you do not need to poll session_activity.",
     inputSchema: {
       ...BUTLER_TOOLS[7].inputSchema,
       properties: {
@@ -990,6 +1030,7 @@ export const BUTLER_TOOLS_EN = [
         feature: { type: "string", description: "optional: send to this feature's coordinator (name or id)" },
         epic: { type: "string", description: "optional: send to this epic's epic session (name or id)" },
         text: { type: "string", description: `what to send, at most ${MESSAGE_LIMIT} characters` },
+        interrupt: { type: "boolean", description: "optional: true presses Esc to stop it before sending" },
       },
     },
   },
@@ -1077,6 +1118,7 @@ const TEXT = {
           : `现在还能再开 ${c.canStart} 个 session（按内存算${c.maxRunning !== null ? `，以及同时开着最多 ${c.maxRunning} 个的上限` : ""}）：` +
             `可用 ${mbText(c.availableMb)}，每个按 ${mbText(c.sessionMb)} 算${c.estimate === "measured" ? "（实测）" : ""}，留 ${mbText(c.reserveMb)} 给系统。`,
     needMessage: `send_message 需要字符串参数 text（不能为空，最多 ${MESSAGE_LIMIT} 字符），以及 session、feature、epic 三者之一`,
+    needFeatureMessage: `send_message 需要字符串参数 session（list_sessions 里的 id）和 text（不能为空，最多 ${MESSAGE_LIMIT} 字符），interrupt 可选，是布尔值`,
     badTicketFilter: "list_tickets 的 feature、epic 必须是非空的名字或 id",
     badProgressFilter: "progress_overview 的 feature、epic 必须是非空的名字或 id",
     needSummaryFeature: "refresh_feature_summary 需要参数 feature（feature 的名字或 id）",
@@ -1120,6 +1162,7 @@ const TEXT = {
           : `You can start ${c.canStart} more session${c.canStart === 1 ? "" : "s"} now (by memory${c.maxRunning !== null ? `, and the cap of ${c.maxRunning} open at once` : ""}): ` +
             `${mbText(c.availableMb)} available, ${mbText(c.sessionMb)} per session${c.estimate === "measured" ? " (measured)" : ""}, ${mbText(c.reserveMb)} kept free.`,
     needMessage: `send_message needs a string text (not empty, at most ${MESSAGE_LIMIT} characters) and exactly one of session, feature and epic`,
+    needFeatureMessage: `send_message needs a string session (an id from list_sessions) and a string text (not empty, at most ${MESSAGE_LIMIT} characters); interrupt is an optional boolean`,
     badTicketFilter: "feature and epic for list_tickets must be a non-empty name or id",
     badProgressFilter: "feature and epic for progress_overview must be a non-empty name or id",
     needSummaryFeature: "refresh_feature_summary needs feature (the feature's name or id)",
@@ -1191,7 +1234,7 @@ export class SessionsServer {
     if ("epicId" in scope) return [...(this.en ? EPIC_TOOLS_EN : EPIC_TOOLS), this.en ? LIST_STACKS_TOOL_EN : LIST_STACKS_TOOL, ...inbox];
     if ("featureId" in scope) {
       const base = this.en ? FEATURE_TOOLS_EN : FEATURE_TOOLS;
-      return [...base, ...(scope.epic ? [this.en ? EPIC_CONTEXT_TOOL_EN : EPIC_CONTEXT_TOOL] : []), ...stacks, ...inbox];
+      return [...base, this.en ? FEATURE_SEND_TOOL_EN : FEATURE_SEND_TOOL, ...(scope.epic ? [this.en ? EPIC_CONTEXT_TOOL_EN : EPIC_CONTEXT_TOOL] : []), ...stacks, ...inbox];
     }
     // 普通 ticket session（member）：交证据、取预审结果，加上 ask_user 和 report。
     if (scope.member) return [...(this.en ? MEMBER_TOOLS_EN : MEMBER_TOOLS), ...inbox];
@@ -1327,7 +1370,8 @@ export class SessionsServer {
         if (typeof value !== "string" || !value.trim() || value.length > 500 || typeof text !== "string" || !text.trim() || text.length > MESSAGE_LIMIT) {
           return toolError(this.text.needMessage);
         }
-        return { ...base, op: "send_message", text, [given[0]]: value } as ControlRequest;
+        if (args.interrupt !== undefined && typeof args.interrupt !== "boolean") return toolError(this.text.needMessage);
+        return { ...base, op: "send_message", text, [given[0]]: value, ...(args.interrupt === true && { interrupt: true }) } as ControlRequest;
       }
       default:
         return toolError(this.text.noTool(String(tool)));
@@ -1389,6 +1433,12 @@ export class SessionsServer {
         return { ...base, op: "list_repos" };
       case "list_sessions":
         return { ...base, op: "list_sessions" };
+      case "send_message": {
+        const { session, text, interrupt } = args;
+        if (typeof session !== "string" || !session.trim() || session.length > 200 || typeof text !== "string" || !text.trim() || text.length > MESSAGE_LIMIT) return toolError(this.text.needFeatureMessage);
+        if (interrupt !== undefined && typeof interrupt !== "boolean") return toolError(this.text.needFeatureMessage);
+        return { ...base, op: "send_message", session, text, ...(interrupt === true && { interrupt: true }) };
+      }
       case "session_activity":
         return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);
       case "end_session":

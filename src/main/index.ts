@@ -33,7 +33,7 @@ import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
-import { mailboxHookCommand } from "../shared/mailbox";
+import { MAILBOX_EVENT, mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
 import { NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
@@ -74,8 +74,10 @@ import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
-import { ButlerMessagesRepo } from "./db/butler-messages-repo";
-import { ButlerMessages } from "./control/butler-messages";
+import { SessionMessagesRepo } from "./db/session-messages-repo";
+import { Mailbox } from "./mailbox/mailbox";
+import { broadcastConvention } from "./mailbox/broadcast";
+import { sessionName } from "./mailbox/names";
 import { ExternalAuditRepo } from "./db/external-audit-repo";
 import { ExternalActions } from "./external/actions";
 import { buildProgress } from "./progress/progress-view";
@@ -604,6 +606,8 @@ async function bootstrap(): Promise<void> {
       removeTerminalMcpConfig(paths.mcp, id);
       // 度量（ws-h）：这个终端的按键去重记录不用留着。
       terminalMeter.forget(id);
+      // 信箱（BTL-245）：hook 已经写出去的记成送达，排着的留在库里，等下次打开再送；投影删掉。
+      mailbox.termExited(id);
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
       const exitedHead = sessions.head(id);
       const exitedTicket = exitedHead?.ticketKey ?? null;
@@ -1764,6 +1768,44 @@ async function bootstrap(): Promise<void> {
   // 「待你决定」和汇报（BTL-190 第 2+3 点）。递回答不看「需要你」（未决的 ask_user 本身就算），别的检查照常；递汇报和 CI 结果同一道 guard。
   // 递用户自己的话（卡片上的回答、对话 tab 发给开发 session 的话和分叉的结论）共用这一道：在换新的挡，「需要你」不挡。
   const answerGuard = new DeliveryGuard({ ...guardDeps, refreshing: (id) => refresher.isRefreshing(id) });
+  // 信箱（BTL-245）：session 之间的消息一律排队存库；在忙的下一次工具调用时由 PostToolUse hook 带进去，停着的直接输入。
+  // 回答（ask_user 的）过 answerGuard（不看「需要你」），别的过 deliveryGuard。inboxService 在下面才建好：回调里才用到。
+  const mailboxName = (id: string | null): string =>
+    sessionName({ head: (x) => sessions.head(x), featureName: (f) => features.get(f)?.name ?? null, epicName: (e) => epics.get(e)?.name ?? null }, id);
+  const mailbox = new Mailbox({
+    repo: new SessionMessagesRepo(db),
+    root: paths.mailbox,
+    head: (id) => sessions.head(id),
+    termOf: gateTerm,
+    openTerms: () => pty.openIds(),
+    check: (id, o) => (o.answer ? answerGuard : deliveryGuard).check(id),
+    recheckAfter: (id, passed, o) => (o.answer ? answerGuard : deliveryGuard).recheckAfter(id, passed),
+    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    // 叫停：在忙、屏幕上没有要用户回答的、用户 30 秒内没打字、没有草稿、没在换新、没被熔断压着、没有别的自动输入正在进去。
+    canInterrupt: (termId) => {
+      const h = sessions.head(termId);
+      if (!h || h.waitingForInput || refresher.isRefreshing(h.id) || costBreaker?.sessionPaused(h.id)) return false;
+      if (pty.screenNeedsUser(termId) || pty.hasDraft(termId) || pty.autoInputInFlight(termId)) return false;
+      const typed = pty.lastUserInputAt(termId);
+      return typed === 0 || Date.now() - typed >= (guardDeps.typingQuietMs ?? USER_TYPING_QUIET_MS);
+    },
+    interrupt: (termId) => pty.interrupt(termId),
+    interruptRecheck: (termId) => {
+      const at = Date.now();
+      return () => pty.isOpen(termId) && pty.lastUserInputAt(termId) <= at && !pty.screenNeedsUser(termId);
+    },
+    lastReply: (id) => activityMonitor.lastReplyOf(id),
+    nameOf: mailboxName,
+    typing: (h, phase) => inboxService.butlerTyping(h, phase),
+    // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；熔断压着的不叫。
+    wake: (id) => {
+      if (costBreaker?.sessionPaused(id) || !hibernator || !isHibernated(id)) return;
+      void hibernator.wake(id, "delivery");
+    },
+    notify,
+    now: Date.now,
+    log: logger,
+  });
   const inboxRepo = new InboxRepo(db);
   const inboxService: InboxService = new InboxService({
     repo: inboxRepo,
@@ -1773,9 +1815,18 @@ async function bootstrap(): Promise<void> {
     epicName: (id) => epics.get(id)?.name ?? null,
     termOf: gateTerm,
     openHeads: liveButlerHeads,
-    answerGuard,
-    reportGuard: deliveryGuard,
-    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
+    mailbox,
+    latestCoordinator: (where) => {
+      const list = "ticket" in where ? sessions.listByTicket(where.ticket).filter((x) => x.coordinator)
+        : "feature" in where ? sessions.listFeatureCoordinators(where.feature)
+        : "epic" in where ? sessions.listByEpic(where.epic)
+        : sessions.listButler();
+      for (const x of list) {
+        const h = sessions.head(x.id);
+        if (h && !h.dismissed) return h.id;
+      }
+      return null;
+    },
     // 换新输入的 /handoff 和接着做的话也会触发 UserPromptSubmit：那不是用户在终端里回答。
     refreshing: (id) => refresher.isRefreshing(id),
     recordEvent,
@@ -1928,23 +1979,6 @@ async function bootstrap(): Promise<void> {
     waitTracker.sync();
     if (terminalMeter.keys(termId, data)) setTimeout(() => waitTracker.sync(), 1500).unref?.();
   };
-  // send_message 的回复回流（ws-b）：目标停下来时把它最后一条回复送回发消息的总控，和递汇报同一道 guard。
-  const butlerMessages = new ButlerMessages({
-    repo: new ButlerMessagesRepo(db),
-    head: (id) => sessions.head(id),
-    lastReply: (id) => activityMonitor.lastReplyOf(id),
-    termOf: gateTerm,
-    guard: deliveryGuard,
-    deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
-    targetName: (m) => {
-      if (m.featureId !== null) return M().butlerTargetFeature(features.get(m.featureId)?.name ?? String(m.featureId));
-      if (m.epicId !== null) return M().butlerTargetEpic(epics.get(m.epicId)?.name ?? String(m.epicId));
-      return M().butlerTargetUnknown;
-    },
-    notify,
-    now: Date.now,
-    log: logger,
-  });
   // Butler 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Butler 总控，发巡检消息；开着的先过 guard，忙就等下一次 check。
   const butlerPatrol = new ButlerPatrol({
     time: () => settings.get("butlerPatrolTime"),
@@ -2077,9 +2111,7 @@ async function bootstrap(): Promise<void> {
     model: (cwd, list) => classifyCommentsByModel(judgeDeps, cwd, list),
     external: externalActions,
     recipient: loopRecipient,
-    guard: deliveryGuard,
-    deliver: loopDeliver,
-    busy: deliveringTo,
+    mailbox,
     // stackService 在下面才建好：递评论时才用。
     stackNote: (row): string | null => stackService.stackNote(row.url, row.headBranch),
     recordEvent,
@@ -2232,9 +2264,7 @@ async function bootstrap(): Promise<void> {
     openPrFor,
     profile: prProfile,
     policy: prPolicyFor,
-    guard: deliveryGuard,
-    deliver: loopDeliver,
-    busy: deliveringTo,
+    mailbox,
     lang: () => currentLang(),
     changed: () => notify(),
     now: Date.now,
@@ -2575,8 +2605,8 @@ async function bootstrap(): Promise<void> {
         needsYou.update();
         // 卡片上答好的回答、该送给总控的汇报也趁现在送（永不 reject）。
         void inboxService.flush();
-        // 它是总控 send_message 的目标：把这一轮的最后一条回复送回去；它是总控自己：送还没送回的回复（ws-b）。
-        void butlerMessages.targetStopped(stopped).then(() => butlerMessages.flush(), (e: unknown) => logger(`butler messages: ${stopped} stopped`, e));
+        // 信箱（BTL-245）：它收过等回复的消息就把这一轮的最后一条回复送回去，再把排着的消息直接输入（永不 reject）。
+        void mailbox.stopped(stopped);
         // 在等 Butler 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
         if (!headlessAbort.signal.aborted) void butlerPatrol.check();
         return flushCi();
@@ -2612,6 +2642,20 @@ async function bootstrap(): Promise<void> {
     badDir: paths.inboxBad,
     log: (m) => logger(m),
     handle: (env) => {
+      // 信箱 hook 送完了（BTL-245）：马上清扫这个终端的 .done，记成送达。
+      const mp = env.payload && typeof env.payload === "object" ? (env.payload as { hook_event_name?: unknown }) : null;
+      if (mp?.hook_event_name === MAILBOX_EVENT) {
+        if (env.butlerSession) mailbox.sweep(env.butlerSession);
+        return;
+      }
+      // 约定广播（BTL-245）：存进 feature 记忆的 remember 推给同一个 feature 里开着的其他 session。
+      broadcastConvention({
+        head: (id) => sessions.head(id),
+        ticketFeature: (key) => tickets.get(key)?.featureId ?? null,
+        openTerms: () => pty.openIds(),
+        nameOf: mailboxName,
+        send: (x) => mailbox.send(x),
+      }, env);
       const effect = applyHookEnvelope(env, {
         sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
         placement: (key, cwd) => ticketService.placement(key, cwd),
@@ -2648,7 +2692,11 @@ async function bootstrap(): Promise<void> {
       if (effect.kind === "ignored") return;
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       // 终端按 BUTLER_SESSION 记：--resume 有时换 session id，唤醒（WS-M B）和交任务等的都是终端的 id。
-      if (effect.kind === "session_started") pty.markStarted(env.butlerSession ?? effect.sessionId);
+      if (effect.kind === "session_started") {
+        pty.markStarted(env.butlerSession ?? effect.sessionId);
+        // 信箱：/clear、resume 之后 head 换了，投影按新的 head 对一遍。
+        mailbox.syncTerm(env.butlerSession ?? effect.sessionId);
+      }
       // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
       // /clear 以后 hook 里的 session id 已经换了。
       // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Butler 刚递回答时不算，BTL-190 第 2+3 点）。
@@ -2972,7 +3020,7 @@ async function bootstrap(): Promise<void> {
     memory,
     externalAudit,
     metrics: (days) => metricsView(days),
-    butlerMessages: () => butlerMessages.recent(),
+    messages: (scope) => mailbox.views(scope, sessions.listButler().map((x) => x.id)),
     usage: usageRepo, sessions,
     refreshSession: (id) => {
       const refused = startRefresh(refresher, id, "manual", logger);
@@ -3249,8 +3297,10 @@ async function bootstrap(): Promise<void> {
       refresher,
       lastReply: (id) => activityMonitor.lastReply(id),
       inbox: inboxService,
+      mailbox,
       // Butler 总控（BTL-190 第 5 点）的只读数据。
       butler: {
+        butlerSessions: () => sessions.listButler().map((x) => x.id),
         epicViews: () => sessionService.epicViews(),
         featureRows: () => sessionService.featureRowsAll(),
         prs: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
@@ -3267,7 +3317,6 @@ async function bootstrap(): Promise<void> {
           // 和 feature 页的"立即更新"一样：后台跑，完成后刷新界面。
           refresh: (id) => void featureRunner.runManual(id).then(notify, (e: unknown) => logger(`control: refreshing the summary of feature ${id} failed`, e)),
         },
-        messages: butlerMessages,
         assessment: {
           summaries: (ids) => assessRepo.summaries(ids),
           view: (ref) => {
@@ -3368,6 +3417,8 @@ async function bootstrap(): Promise<void> {
   void runDiscovery();
   // 启动时补齐记忆：老数据、上次退出时没写完的。
   void memory.syncAll();
+  // 信箱上次退出时留下的投影（hook 已经写出去的 .done、认领到一半的）：按库重建。送达回调都注册好了才做。
+  mailbox.rebuild();
   const discoveryTimer = setInterval(() => void runDiscovery(), DISCOVERY_INTERVAL_MS);
   const intakeTimer = setInterval(() => intakeTick(), 60_000);
   void healthReady.then(() => intakeTick(true));
@@ -3381,7 +3432,8 @@ async function bootstrap(): Promise<void> {
     hibernator?.tick();
     // 等着送的回答和汇报：Stop 那一刻没送成（用户在打字、有草稿）的，按这个节奏再试。
     void inboxService.flush();
-    void butlerMessages.flush();
+    // 信箱：清扫投影、停着的再试直接输入、清理旧消息（永不 reject）。
+    void mailbox.tick();
   }, activityIntervals(process.env).tickMs);
 
   // 调度：启动（health 探测完成后）、唤醒、解锁时检查到期任务；每分钟 tick，覆盖 16:00 和整晚没锁屏的情况。

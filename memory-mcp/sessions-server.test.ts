@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MESSAGE_LIMIT, REASON_LIMIT, START_INSTRUCTIONS_LIMIT } from "../src/shared/control";
 import {
-  BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, LIST_STACKS_TOOL, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, STACK_TOOLS_EN, SessionsServer, TOOLS, TOOLS_EN,
+  BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, LIST_STACKS_TOOL, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, STACK_TOOLS_EN, SessionsServer, TOOLS, TOOLS_EN,
   type SessionsServerOptions,
 } from "./sessions-server";
 import { serveStdio } from "./stdio";
@@ -145,10 +145,12 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     const { server } = setup(2000, { featureId: 7 });
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
     expect(list.result.tools.map((t) => t.name)).toEqual([
-      "list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session",
+      "list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session", "send_message",
       "list_stacks", "stack_define", "stack_rebase", "stack_layer_mode", "ask_user", "report",
     ]);
-    expect(list.result.tools).toEqual([...FEATURE_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS]);
+    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS]);
+    expect(FEATURE_SEND_TOOL_EN.inputSchema.required).toEqual(["session", "text"]);
+    expect(/[\u4e00-\u9fff]/.test(JSON.stringify(FEATURE_SEND_TOOL_EN))).toBe(false);
     // 英文版只换描述：名字、顺序、必填参数一样。
     const shape = (tools: readonly { name: string; inputSchema: object }[]) => tools.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]);
     expect(shape(FEATURE_TOOLS_EN)).toEqual(shape(FEATURE_TOOLS));
@@ -157,6 +159,17 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     expect(start.inputSchema.required).toEqual(["ticket", "task"]);
     expect(shape(FEATURE_TOOLS).find(([n]) => n === "session_activity")).toEqual(["session_activity", ["session"]]);
     expect(FEATURE_TOOLS.at(-1)!.description).not.toBe(FEATURE_TOOLS_EN.at(-1)!.description);
+  });
+
+  it("sends send_message with the session, text and interrupt; rejects bad arguments (BTL-245)", async () => {
+    const { server, answer } = setup(2000, { featureId: 7 });
+    const call = server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "send_message", arguments: { session: "c1", text: "停一下", interrupt: true } } });
+    expect(await answer({ v: 1, ok: true, value: { queued: true } })).toEqual({ v: 1, featureId: 7, from: "boss", op: "send_message", session: "c1", text: "停一下", interrupt: true });
+    await call;
+    for (const args of [{ session: "c1" }, { text: "x" }, { session: "c1", text: "x", interrupt: "yes" }]) {
+      const bad = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "send_message", arguments: args } })) as { result: { isError?: boolean } };
+      expect(bad.result.isError).toBe(true);
+    }
   });
 
   it("sends session_activity with the session id, for a feature and for a ticket", async () => {
@@ -397,7 +410,7 @@ describe("stack tools (workstream K)", () => {
 describe("epic_context for a feature coordinator in an epic", () => {
   it("appears only when the feature belongs to an epic", async () => {
     expect((await tools(setup(2000, { featureId: 7 }).server)).map((t) => t.name)).not.toContain("epic_context");
-    expect(await tools(setup(2000, { featureId: 7, epic: true }).server)).toEqual([...FEATURE_TOOLS, EPIC_CONTEXT_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS]);
+    expect(await tools(setup(2000, { featureId: 7, epic: true }).server)).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, EPIC_CONTEXT_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS]);
     const en = await tools(setup(2000, { featureId: 7, epic: true }, "en").server);
     expect(en.at(-3 - STACK_TOOLS_EN.length)).toEqual(EPIC_CONTEXT_TOOL_EN);
     expect(EPIC_CONTEXT_TOOL_EN.description).not.toBe(EPIC_CONTEXT_TOOL.description);
@@ -621,7 +634,7 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     const send = BUTLER_TOOLS.find((t) => t.name === "send_message")!;
     expect(send.description).toContain("feature 总控");
     expect(send.inputSchema).toMatchObject({ required: ["text"] });
-    expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "feature", "epic", "text"]);
+    expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "feature", "epic", "text", "interrupt"]);
   });
 
   it("sends each tool as a butler request, turning list_tickets ids into strings", async () => {

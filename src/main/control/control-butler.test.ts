@@ -9,9 +9,12 @@ import { TicketsRepo } from "../db/tickets-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
-import { ButlerMessagesRepo } from "../db/butler-messages-repo";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SessionMessagesRepo } from "../db/session-messages-repo";
+import { Mailbox } from "../mailbox/mailbox";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
-import { ButlerMessages } from "./butler-messages";
 import { MemoryAdmission } from "../sessions/memory-admission";
 import type { ControlHandlerDeps } from "./control-handler";
 import { controlHandler } from "./control-handler";
@@ -78,10 +81,19 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
   const inboxView: InboxView = { decisions: [], reports: [] };
   const replies = new Map<string, { id: string; text: string; at: number | null }>();
   let now = 1_000;
-  const messages = new ButlerMessages({
-    repo: new ButlerMessagesRepo(db), head: (id) => sessions.head(id), lastReply: (id) => replies.get(id) ?? null, termOf: (id) => (open.has(id) ? id : null),
-    guard: { check: (id) => guardCheck(id), recheckAfter: () => () => true }, deliver: async (termId, text) => (delivered.push([termId, text]), "sent" as DeliverResult),
-    targetName: (m) => (m.featureId !== null ? `feature ${m.featureId}` : `epic ${m.epicId}`), notify: () => {}, now: () => now, log: () => {},
+  const interrupts: string[] = [];
+  const repo = new SessionMessagesRepo(db);
+  const mailbox = new Mailbox({
+    repo, root: mkdtempSync(join(tmpdir(), "cb-mbox-")),
+    head: (id) => sessions.head(id), termOf: (id) => {
+      const h = sessions.head(id)?.id ?? id;
+      return open.has(h) ? h : null;
+    },
+    openTerms: () => [...open],
+    check: (id) => guardCheck(id), recheckAfter: () => () => true,
+    deliver: async (termId, text) => (delivered.push([termId, text]), "sent" as DeliverResult),
+    canInterrupt: () => true, interrupt: (t) => void interrupts.push(t), interruptRecheck: () => () => true,
+    lastReply: (id) => replies.get(id) ?? null, nameOf: (id) => id ?? "Butler", notify: () => {}, now: () => now, log: () => {},
   });
   const progressCalls: ProgressFilter[] = [];
   const metricsCalls: (number | undefined)[] = [];
@@ -100,6 +112,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
       openEpic: async (req: { epicId: number; sessionId?: string }) => (opened.push({ epic: req.epicId, session: req.sessionId ?? null }), openAs(req.sessionId)),
     } as never,
     refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
+    mailbox,
     guard: { check: (id) => guardCheck(id), recheckAfter: () => () => true },
     deliver: async (termId, text) => (delivered.push([termId, text]), "sent" as DeliverResult),
     activity: (id) => activities.get(id) ?? null,
@@ -121,7 +134,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
         openHeads: () => [...open].map((id) => sessions.get(id)!),
         needsYou: (id) => needs.get(id) ?? null,
         inbox: { view: () => inboxView },
-        messages,
+        butlerSessions: () => ["bt"],
         progress: (f) => (progressCalls.push(f), progressView),
         ...(!o.noMetrics && { metrics: (days: number | undefined) => (metricsCalls.push(days), { days: days ?? 30 } as never) }),
         ...(o.assessment && {
@@ -141,7 +154,7 @@ function setup(o: { butlerDeps?: boolean; admission?: ControlHandlerDeps["admiss
   const call = (req: Record<string, unknown>) => handle({ ...base, ...req } as ButlerControlRequest);
   return {
     handle, call, base, shop, checkout, docs, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
-    prs, replies, messages, progressCalls, metricsCalls, summaryState, setNow: (t: number) => (now = t),
+    prs, replies, mailbox, repo, interrupts, progressCalls, metricsCalls, summaryState, setNow: (t: number) => (now = t),
   };
 }
 
@@ -316,87 +329,109 @@ describe("Butler 总控 read-only tools (BTL-190 5)", () => {
   });
 });
 
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const PREFIX = "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：";
+
 describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
-  it("sends a message to an epic session or a feature coordinator through the guard, with a prefix", async () => {
+  it("queues a message for an epic session or a feature coordinator; the mailbox types it in with a prefix (BTL-245)", async () => {
     const { call, delivered } = setup();
-    expect(value(await call({ op: "send_message", session: "ep", text: "先合 checkout" }))).toMatchObject({ sent: true, sessionId: "ep" });
-    expect(value(await call({ op: "send_message", session: "fc", text: "接口改了" }))).toMatchObject({ sent: true });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(delivered).toEqual([["ep", "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：\n先合 checkout"], ["fc", "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：\n接口改了"]]);
+    expect(value(await call({ op: "send_message", session: "ep", text: "先合 checkout" }))).toMatchObject({ queued: true, sessionId: "ep", state: "busy" });
+    expect(value(await call({ op: "send_message", session: "fc", text: "接口改了" }))).toMatchObject({ queued: true });
+    await tick();
+    expect(delivered.map(([t]) => t)).toEqual(["ep", "fc"]);
+    expect(delivered[0][1]).toContain(`${PREFIX}\n先合 checkout`);
+    expect(delivered[1][1]).toContain(`${PREFIX}\n接口改了`);
   });
 
-  it("returns a requestId and sends the target's next reply back to the Butler 总控 (ws-b)", async () => {
-    const { call, delivered, replies, messages, setNow } = setup();
+  it("returns a requestId and sends the target's next reply back to the Butler 总控 (ws-b, BTL-245)", async () => {
+    const { call, delivered, replies, mailbox, repo, setNow } = setup();
     replies.set("fc", { id: "r0", text: "earlier", at: 1 });
     const out = value<{ requestId: string }>(await call({ op: "send_message", session: "fc", text: "进度？" }));
     expect(out.requestId).toMatch(/^[0-9a-f-]{36}$/);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(messages.recent()[0]).toMatchObject({ requestId: out.requestId, status: "waiting", targetSession: "fc" });
+    await tick();
+    expect(repo.get(out.requestId)).toMatchObject({ status: "delivered", toSession: "fc", fromSession: "bt" });
     setNow(2_000);
     replies.set("fc", { id: "r1", text: "PR 都绿了", at: 2_000 });
-    await messages.targetStopped("fc");
+    await mailbox.stopped("fc");
+    await tick();
     expect(delivered.at(-1)?.[0]).toBe("bt");
     expect(delivered.at(-1)?.[1]).toContain(out.requestId);
     expect(delivered.at(-1)?.[1]).toContain("PR 都绿了");
-    const inbox = value<{ messages: { status: string }[] }>(await call({ op: "list_inbox" }));
-    expect(inbox.messages[0].status).toBe("delivered");
+    const inbox = value<{ messages: { id: string; status: string }[] }>(await call({ op: "list_inbox" }));
+    expect(inbox.messages.find((m) => m.id === out.requestId)?.status).toBe("replied");
   });
 
-  it("records a requestId for a message that went to a reopened terminal, and a failure when the guard says no (ws-b)", async () => {
-    const { call, messages, setGuard, setNow } = setup();
-    const out = value<{ requestId: string }>(await call({ op: "send_message", feature: "docs", text: "看一下" }));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(messages.recent()[0]).toMatchObject({ requestId: out.requestId, status: "waiting", targetSession: "dc" });
-    setNow(2_000);
-    setGuard(() => ({ ok: false, block: "typing" }));
-    expect((await call({ op: "send_message", session: "fc", text: "t" })).ok).toBe(false);
-    expect(messages.recent()[0]).toMatchObject({ status: "failed" });
+  it("never refuses because the target is busy: the message waits in its mailbox (BTL-245)", async () => {
+    const { call, delivered, repo, mailbox, setGuard } = setup();
+    setGuard(() => ({ ok: false, block: "busy" }));
+    const out = value<{ requestId: string; note: string }>(await call({ op: "send_message", session: "ep", text: "t" }));
+    expect(out.note).toContain("信箱");
+    await tick();
+    expect(delivered).toEqual([]);
+    expect(repo.get(out.requestId)?.status).toBe("queued");
+    setGuard((id) => ({ ok: true, termId: id, headId: id }));
+    await mailbox.stopped("ep");
+    expect(delivered.map(([t]) => t)).toEqual(["ep"]);
   });
 
-  it("opening a closed coordinator asks memory first; a refusal says why, opens nothing and marks the message failed (workstream W, ws-b)", async () => {
+  it("interrupt presses Esc on a busy target first, then types the message in (BTL-245)", async () => {
+    const { call, delivered, interrupts, setGuard } = setup();
+    setGuard(() => ({ ok: false, block: "busy" }));
+    expect(value(await call({ op: "send_message", session: "fc", text: "停一下", interrupt: true }))).toMatchObject({ queued: true, state: "busy" });
+    await tick();
+    expect(interrupts).toEqual(["fc"]);
+    expect(delivered[0][1]).toContain("停一下");
+  });
+
+  it("opening a closed coordinator asks memory first; a refusal opens nothing but keeps the message queued for its next open (workstream W, BTL-245)", async () => {
     const mem = { availableMb: 2500 };
     const admission = new MemoryAdmission({
       read: async () => ({ totalKb: 64 * 1024 * 1024, availableKb: mem.availableMb * 1024, source: "vm_stat", pressure: "normal" }),
       settings: () => ({ reserveMb: 2048, sessionMb: 1024, maxRunning: 0 }),
       running: () => 0, now: () => 0, log: () => undefined,
     });
-    const { call, opened, submitted, messages } = setup({ admission });
-    expect(err(await call({ op: "send_message", feature: "docs", text: "看一下" }))).toContain("内存不够");
+    const { call, opened, submitted, repo } = setup({ admission });
+    const first = value<{ requestId: string; openError: string; state: string }>(await call({ op: "send_message", feature: "docs", text: "看一下" }));
+    expect(first.openError).toContain("内存不够");
+    expect(first.state).toBe("closed");
     expect(opened).toEqual([]);
     expect(submitted).toEqual([]);
-    expect(messages.recent()[0]).toMatchObject({ status: "failed", error: "no_memory" });
+    expect(repo.get(first.requestId)?.status).toBe("queued");
     mem.availableMb = 8000;
-    expect(value(await call({ op: "send_message", feature: "docs", text: "看一下" }))).toMatchObject({ sessionId: "dc", opened: "resumed" });
+    expect(value(await call({ op: "send_message", feature: "docs", text: "再看一下" }))).toMatchObject({ sessionId: "dc", opened: "resumed" });
+    await tick();
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0][1]).toMatch(/看一下[\s\S]*再看一下/);
+    expect(repo.get(first.requestId)?.status).toBe("delivered");
   });
 
-  it("refuses ticket and fix sessions, itself, unknown ones and a blocked guard", async () => {
-    const { call, delivered, setGuard } = setup();
+  it("refuses ticket and fix sessions, itself and unknown ones", async () => {
+    const { call, delivered } = setup();
     expect(err(await call({ op: "send_message", session: "c1", text: "t" }))).toContain("epic session");
     expect(err(await call({ op: "send_message", session: "fx", text: "t" }))).toContain("epic session");
     expect(err(await call({ op: "send_message", session: "bt", text: "t" }))).toContain("bt");
     expect(err(await call({ op: "send_message", session: "nope", text: "t" }))).toContain("nope");
     expect(err(await call({ op: "send_message", feature: "nope", text: "t" }))).toContain("checkout");
     expect(err(await call({ op: "send_message", epic: "old", text: "t" }))).toContain("shop");
-    setGuard(() => ({ ok: false, block: "busy" }));
-    expect(err(await call({ op: "send_message", session: "ep", text: "t" }))).toContain("它还没停下来等输入");
     expect(delivered).toEqual([]);
   });
 
   it("takes a feature or an epic by name or id and sends to its running session", async () => {
     const { call, delivered, opened, shop } = setup();
-    expect(value(await call({ op: "send_message", feature: "Checkout", text: "a" }))).toMatchObject({ sent: true, sessionId: "fc" });
-    expect(value(await call({ op: "send_message", epic: String(shop), text: "b" }))).toMatchObject({ sent: true, sessionId: "ep" });
-    await new Promise((r) => setTimeout(r, 0));
+    expect(value(await call({ op: "send_message", feature: "Checkout", text: "a" }))).toMatchObject({ queued: true, sessionId: "fc" });
+    expect(value(await call({ op: "send_message", epic: String(shop), text: "b" }))).toMatchObject({ queued: true, sessionId: "ep" });
+    await tick();
     expect(delivered.map(([id]) => id)).toEqual(["fc", "ep"]);
     expect(opened).toEqual([]);
   });
 
   it("resumes the latest coordinator of a feature whose terminal was closed, then hands it the message", async () => {
     const { call, opened, submitted, delivered, docs } = setup();
-    expect(value(await call({ op: "send_message", feature: "docs", text: "看一下 PR" }))).toMatchObject({ sent: true, sessionId: "dc", opened: "resumed" });
+    expect(value(await call({ op: "send_message", feature: "docs", text: "看一下 PR" }))).toMatchObject({ queued: true, sessionId: "dc", opened: "resumed" });
     expect(opened).toEqual([{ feature: docs, session: "dc" }]);
-    await new Promise((r) => setTimeout(r, 0));
-    expect(submitted).toEqual([["dc", "Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：\n看一下 PR"]]);
+    await tick();
+    expect(submitted.map(([t]) => t)).toEqual(["dc"]);
+    expect(submitted[0][1]).toContain(`${PREFIX}\n看一下 PR`);
     expect(delivered).toEqual([]);
     // 给的是关着的 session：一样恢复它。
     const again = setup();
@@ -406,9 +441,9 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
   it("resumes the epic session that was used last when none is running", async () => {
     const { call, open, opened, submitted, shop } = setup();
     open.delete("ep");
-    expect(value(await call({ op: "send_message", epic: "shop", text: "巡检" }))).toMatchObject({ sent: true, opened: "resumed" });
+    expect(value(await call({ op: "send_message", epic: "shop", text: "巡检" }))).toMatchObject({ queued: true, opened: "resumed" });
     expect(opened).toEqual([{ epic: shop, session: "ep" }]);
-    await new Promise((r) => setTimeout(r, 0));
+    await tick();
     expect(submitted.map(([id]) => id)).toEqual(["ep"]);
     // 给的是关着的 session、同一个 epic 另一个 session 在跑：发给在跑的，不再开。
     open.add("ep");
@@ -419,14 +454,26 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
   it("opens a new coordinator when the feature never had one, unless its epic still has to start it", async () => {
     const { call, sessions, opened, submitted, docs, checkout } = setup();
     for (const s of sessions.listFeatureCoordinators(docs)) sessions.delete(s.id);
-    expect(value(await call({ op: "send_message", feature: "docs", text: "开始吧" }))).toMatchObject({ sent: true, opened: "opened" });
+    expect(value(await call({ op: "send_message", feature: "docs", text: "开始吧" }))).toMatchObject({ queued: true, opened: "opened" });
     expect(opened).toEqual([{ feature: docs, session: null }]);
-    await new Promise((r) => setTimeout(r, 0));
+    await tick();
     expect(submitted).toHaveLength(1);
     // checkout 属于 epic、规划还没发过、没有总控：这要 epic session 用 start_feature 开工。
     for (const s of sessions.listFeatureCoordinators(checkout)) sessions.delete(s.id);
     expect(err(await call({ op: "send_message", feature: "checkout", text: "t" }))).toContain("start_feature");
     expect(opened).toHaveLength(1);
+  });
+
+  it("a second message while a new coordinator is still opening waits for it and joins the same mailbox (BTL-245)", async () => {
+    const { call, sessions, opened, submitted, docs, repo } = setup();
+    for (const s of sessions.listFeatureCoordinators(docs)) sessions.delete(s.id);
+    const [a, b] = await Promise.all([call({ op: "send_message", feature: "docs", text: "一" }), call({ op: "send_message", feature: "docs", text: "二" })]);
+    expect(opened).toHaveLength(1);
+    const second = value<{ requestId: string; sessionId: string }>(b);
+    expect(value<{ sessionId: string }>(a).sessionId).toBe(second.sessionId);
+    await tick();
+    expect(submitted).toHaveLength(1);
+    expect(repo.get(second.requestId)?.toSession).toBe(second.sessionId);
   });
 
   it("only takes send_message from the Butler 总控 session itself", async () => {

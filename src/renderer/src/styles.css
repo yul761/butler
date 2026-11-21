@@ -361,8 +361,8 @@ p.inbox-reports { margin: 2px 0; }
 .inbox-kind.blocked { background: var(--pill-changes-bg); color: var(--pill-changes); }
 /* Butler 总控页（BTL-190 第 5 点）。 */
 .butler-intro { margin: 0; padding: 0 16px 8px; }
-.butler-sent { margin-top: 12px; }
-.butler-sent > summary { cursor: pointer; color: var(--muted); }
+.messages-box { margin-top: 12px; }
+.messages-box > summary { cursor: pointer; color: var(--muted); }
 .lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
 
 /* PR 阶段（ticket 页「PR 详情」的「阶段」小节）：边框和底色用 --ok / --accent / --danger，字用 --stage-*（浅色更深，styles-contrast.test.ts 查对比度）。 */
@@ -520,13 +520,13 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .stack-layer-action { margin-inline-start: 8px; }
 
 /* Butler 页「回复」tab（ws-b）。 */
-.butler-replies { list-style: none; margin: 0; padding: 0; }
-.butler-message { border-bottom: 1px solid var(--border); padding: 8px 0; }
-.butler-message-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
-.butler-message-text, .butler-message-reply p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.butler-message-reply { margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--border); }
-.butler-message.status-failed .badge, .butler-message.status-expired .badge { color: var(--danger); }
-.butler-message.status-delivered .badge { color: var(--ok); }
+.message-list { list-style: none; margin: 0; padding: 0; }
+.message { border-bottom: 1px solid var(--border); padding: 8px 0; }
+.message-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.message-text, .message-reply p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12em; overflow-y: auto; }
+.message-reply { margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--border); }
+.message.status-queued .badge { color: var(--muted); }
+.message.status-delivered .badge, .message.status-replied .badge { color: var(--ok); }
 
 /* 对外动作（契约 4.8，ws-b）。 */
 .external-action { margin: 4px 0; }

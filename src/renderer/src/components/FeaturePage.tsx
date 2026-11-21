@@ -8,6 +8,7 @@ import { flatGroup, scopeBoardView, scopeTotal, ticketRows, ticketsWithPr } from
 import { S } from "../strings";
 import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
+import { Messages } from "./MessageList";
 import type { SummaryRunMessage } from "./FeatureSummaryTab";
 import { FeatureSummaryTab } from "./FeatureSummaryTab";
 import { NewTicketDialog } from "./NewTicketDialog";
@@ -176,7 +177,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
                     onError={showError}
                   />
                 }
-                right={<ControlConversation scope={{ featureId: feature.id }} rootSessionId={defaultConvRoot(feature.sessions)} sessions={conversationSessions(feature.sessions, S)} />}
+                right={<ControlConversation scope={{ featureId: feature.id }} rootSessionId={defaultConvRoot(feature.sessions)} sessions={conversationSessions(feature.sessions, S)} footer={<Messages scope={{ featureId: feature.id }} />} />}
               />
             ),
           },

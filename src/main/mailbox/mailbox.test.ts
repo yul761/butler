@@ -25,6 +25,7 @@ function world() {
   let deliverResult: DeliverResult = "sent";
   const interrupts: string[] = [];
   const typed: string[] = [];
+  const woken: string[] = [];
   const head = (id: string): Session | null => {
     let s = sessions.get(id);
     while (s?.replacedBy) s = sessions.get(s.replacedBy);
@@ -57,6 +58,7 @@ function world() {
     lastReply: (id) => replies.get(head(id)?.id ?? id) ?? null,
     nameOf: (id) => (id === null ? "Butler" : `S(${id})`),
     typing: (h, phase) => typed.push(`${h}:${phase}`),
+    wake: (h) => woken.push(h),
     notify: () => {},
     now: () => now,
     log: () => {},
@@ -67,7 +69,7 @@ function world() {
   };
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
-    root, repo, mb, sessions, terms, replies, blocked, delivered, deliver, interrupts, typed, add, dirFiles,
+    root, repo, mb, sessions, terms, replies, blocked, delivered, deliver, interrupts, typed, woken, add, dirFiles,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -93,6 +95,18 @@ describe("Mailbox", () => {
     const [m] = w.repo.recent({ featureId: 1 }, 5);
     expect(m).toMatchObject({ status: "delivered", via: "hook" });
     // 送完目录没了：下一次工具调用只是一次 test。
+    expect(w.dirFiles("t1")).toBeNull();
+  });
+
+  it("opened types every queued message into a terminal just opened for it, without the guard", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.mb.send({ ...msg("t1", "wake up"), kind: "butler" });
+    const typedIn: string[] = [];
+    expect(await w.mb.opened("t1", "t1", async (_t, text) => (typedIn.push(text), "sent"))).toBe(true);
+    expect(typedIn[0]).toContain("wake up");
+    expect(w.deliver).not.toHaveBeenCalled();
+    expect(w.repo.recent({ featureId: 1 }, 5)[0]).toMatchObject({ status: "delivered", via: "input" });
     expect(w.dirFiles("t1")).toBeNull();
   });
 
@@ -221,6 +235,27 @@ describe("Mailbox", () => {
     expect(w.repo.get(late.id)?.status).toBe("delivered");
   });
 
+  it("a target that replies and stops before the delivery is recorded still counts as replied", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("t1", true);
+    w.replies.set("t1", { id: "r0", text: "old", at: w.now() - 10 });
+    // 假 claude 那样的很短一轮：送进去的同时已经回完、停下了，送达的记账在那之后。
+    w.deliver.mockImplementationOnce(async (term, text) => {
+      w.delivered.push({ term, text });
+      w.tick(50);
+      w.replies.set("t1", { id: "r1", text: "fast answer", at: w.now() });
+      await w.mb.stopped("t1");
+      w.tick(50);
+      return "sent";
+    });
+    const { id } = w.mb.send(msg("t1", "question"));
+    await flushPromises();
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "replied", replyText: "fast answer" });
+    expect(w.repo.queued()).toMatchObject([{ kind: "reply", toSession: "boss" }]);
+  });
+
   it("calls the handler for the message's ref prefix once it is delivered", async () => {
     const w = world();
     w.add("t1", true);
@@ -291,5 +326,17 @@ describe("Mailbox", () => {
     w.mb.send({ ...msg("t1", "y"), from: "butler", featureId: null, kind: "butler" });
     expect(w.mb.views({ featureId: 1 }, []).map((v) => [v.from, v.to, v.status, v.text])).toEqual([["S(boss)", "S(t1)", "queued", "x"]]);
     expect(w.mb.views({ butler: true }, ["butler"]).map((v) => v.text)).toEqual(["y"]);
+  });
+
+  it("asks a session without a terminal to wake for a message, but not for a convention alone", async () => {
+    const w = world();
+    w.add("z", true, false);
+    w.mb.send({ kind: "convention", from: "a", to: "z", featureId: 1, body: "约定" });
+    await flushPromises();
+    expect(w.woken).toEqual([]);
+    expect(w.mb.send(msg("z", "醒醒")).state).toBe("closed");
+    await flushPromises();
+    expect(w.woken).toEqual(["z"]);
+    expect(w.repo.queued()).toHaveLength(2);
   });
 });

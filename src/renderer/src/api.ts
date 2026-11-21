@@ -38,7 +38,7 @@ import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, ButlerMessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView, InboxItemView,
+  CreateEpicInput, Epic, EpicRepo, EpicView, OpenEpicSessionRequest, OpenButlerSessionRequest, ButlerView, MessageScope, MessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView, InboxItemView,
 } from "../../shared/types";
 
 declare global {
@@ -105,7 +105,7 @@ export const api = {
   unarchiveEpic: (id: number) => call<void>(IPC.epicsUnarchive, id),
   openEpicSession: (req: OpenEpicSessionRequest) => call<OpenSessionResult>(IPC.epicsOpenSession, req),
   butlerView: () => call<ButlerView>(IPC.butlerView),
-  butlerMessages: () => call<ButlerMessageView[]>(IPC.butlerMessages),
+  messages: (scope: MessageScope) => call<MessageView[]>(IPC.messagesList, scope),
   metrics: (days?: number) => call<MetricsOverview>(IPC.metricsView, days),
   openButlerSession: (req: OpenButlerSessionRequest) => call<OpenSessionResult>(IPC.butlerOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),

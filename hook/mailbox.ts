@@ -81,7 +81,7 @@ export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, 
     } catch {
       continue; // 被主进程（直接输入）或者并行的另一个 hook 拿走了。
     }
-    let file: MailboxFile | null = null;
+    let file: MailboxFile | null;
     try {
       file = parse(d.read(join(dir, claimed)));
     } catch {

@@ -124,6 +124,15 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     expect(openOf(`${pre}x 之后呢`)).toBe("user");
   });
 
+  it("a mailbox delivery is a relay when it carries an answer, silent otherwise (BTL-245)", () => {
+    setLang(lang);
+    const m = M();
+    const intro = m.mailboxIntro.replace("{n}", "2");
+    expect(openOf(`${intro}\n\n---\n\n${m.inboxReportLine("BTL-1", "done", "合了")}\n\n---\n\n${m.inboxAnswer("要不要改成每天跑？", "要")}`)).toBe("relay");
+    expect(openOf(`${intro}\n\n---\n\n${m.mailboxAge(12)}\n${m.inboxAnswer("Run it daily?", "yes")}`)).toBe("relay");
+    expect(openOf(`${intro}\n\n---\n\n${m.mailboxInstruction("feature 总控", "先停下", true)}`)).toBe("silent");
+  });
+
   it("messages Butler types into the terminal are silent (PR #60 review 2)", () => {
     setLang(lang);
     const m = M();

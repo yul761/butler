@@ -79,6 +79,11 @@ export interface MailboxDeps {
    * 不算用户在终端里答了提问（InboxService.butlerTyping）。
    */
   typing?(headId: string, phase: "start" | "sent" | "failed"): void;
+  /**
+   * 目标没开着终端、排着的不只是约定广播：休眠着的就叫它醒（醒来停下时 stopped 再送）；真关了的什么都不做，下次打开再送。
+   * 约定广播不为它叫醒谁。
+   */
+  wake?(headId: string): void;
   notify(): void;
   now(): number;
   newId?: () => string;
@@ -96,6 +101,8 @@ export interface SendInput {
   interrupt?: boolean;
   ref?: string;
   meta?: unknown;
+  /** 调用方马上用 opened 交给刚打开的终端：这里先不直接输入（也不写投影）。 */
+  hold?: boolean;
 }
 
 /** 发出那一刻目标的状态：在忙（下一次工具调用时送）、停着（马上送）、关着（下次打开时送）。 */
@@ -153,7 +160,7 @@ export class Mailbox {
     if (input.interrupt && term !== null && state === "busy" && this.d.canInterrupt(term)) {
       this.interrupting.add(id);
       void this.interruptAndSend(to, term, id);
-    } else {
+    } else if (!input.hold) {
       if (term !== null) this.syncTerm(term);
       void this.flush(to);
     }
@@ -318,7 +325,10 @@ export class Mailbox {
 
   private markDelivered(m: SessionMessage, via: "hook" | "input", at: number): boolean {
     const target = this.headOf(m.toSession);
-    if (!this.d.repo.delivered(m.id, { at, via, toSession: target, baseReplyId: m.expectsReply ? (this.d.lastReply(target)?.id ?? null) : null })) return false;
+    // 基线是送达之前的最后一条回复；对方一轮很短时，记账前它已经回完了，那条比送达晚，不能当基线。
+    const last = m.expectsReply ? this.d.lastReply(target) : null;
+    const baseReplyId = last && (last.at === null || last.at < at) ? last.id : null;
+    if (!this.d.repo.delivered(m.id, { at, via, toSession: target, baseReplyId })) return false;
     const prefix = m.ref?.split(":")[0];
     const fn = prefix ? this.handlers.get(prefix) : undefined;
     if (fn) {
@@ -399,7 +409,11 @@ export class Mailbox {
   async flush(sessionId: string): Promise<void> {
     const head = this.headOf(sessionId);
     const term = this.d.termOf(head);
-    if (term === null || this.inputting.has(term)) return;
+    if (term === null) {
+      if (this.d.wake && this.queuedFor(head).some((m) => m.kind !== "convention")) this.d.wake(head);
+      return;
+    }
+    if (this.inputting.has(term)) return;
     const queued = this.queuedFor(head).filter((m) => !this.interrupting.has(m.id));
     if (queued.length === 0) return;
     const answer = queued.some((m) => m.kind === "answer");
@@ -408,7 +422,20 @@ export class Mailbox {
     await this.input(head, gate.termId, queued, this.d.recheckAfter(head, gate, { answer }));
   }
 
-  private async input(head: string, term: string, queued: SessionMessage[], recheck: () => boolean, forced?: string): Promise<boolean> {
+  /**
+   * 刚为这些消息打开的终端（send_message 打开了关着的总控）：排着的消息当第一条输入交进去（submit 自己等输入框就绪），不过 guard。
+   * 返回送到没有。永不 reject。
+   */
+  async opened(sessionId: string, termId: string, submit: (termId: string, text: string) => Promise<DeliverResult>): Promise<boolean> {
+    const head = this.headOf(sessionId);
+    if (this.inputting.has(termId)) return false;
+    return this.input(head, termId, this.queuedFor(head), () => true, undefined, submit);
+  }
+
+  private async input(
+    head: string, term: string, queued: SessionMessage[], recheck: () => boolean, forced?: string,
+    submit?: (termId: string, text: string) => Promise<DeliverResult>,
+  ): Promise<boolean> {
     this.inputting.add(term);
     const sent = new Set<string>();
     let files = new Map<string, string>();
@@ -423,7 +450,7 @@ export class Mailbox {
       const { text, ids } = this.batch(list);
       const at = this.d.now();
       this.d.typing?.(head, "start");
-      const result = await this.d.deliver(term, text, recheck).catch((e: unknown) => {
+      const result = await (submit ? submit(term, text) : this.d.deliver(term, text, recheck)).catch((e: unknown) => {
         // 抛了也要收尾，不然那个 session 下一次 UserPromptSubmit 一直被当成 Butler 的。
         this.d.typing?.(head, "failed");
         throw e;

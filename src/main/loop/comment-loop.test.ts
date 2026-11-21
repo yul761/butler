@@ -31,7 +31,7 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
     threads: 0, compares: 0, replies: [] as string[], prComments: [] as string[], resolves: [] as string[], model: [] as string[][], audits: [] as string[],
     events: [] as { kind: string; dedupeKey?: string; data?: Record<string, unknown> }[],
   };
-  const deliver = vi.fn(async (_term: string, _text: string) => "sent" as const);
+  const deliver = vi.fn<(term: string, text: string) => Promise<"sent">>(async () => "sent");
   const guard = { ok: o.guardOk ?? true };
   const mailbox = fakeMailbox({ canDeliver: () => guard.ok, deliver: (_to, body) => void deliver("t1", body), now: () => t });
   const policy = { ...LOOP_POLICY_DEFAULTS, "comments.enabled": true, ...over };
@@ -330,7 +330,7 @@ describe("CommentLoop", () => {
     await s.observe();
     expect(s.mailbox.queued.size).toBe(1);
     s.setThreads([thread(), thread({ id: "T2", dbId: 102, body: "Second finding.", line: 40 })]);
-    await s.observe({ reviews: [{ id: "R2", author: "copilot-pull-request-reviewer", state: "COMMENTED", body: "", submittedAt: null }] as PrStatus["reviews"] });
+    await s.observe({ reviews: [{ id: "R2", author: "copilot-pull-request-reviewer", state: "COMMENTED", body: "", submittedAt: 1 }] as PrStatus["reviews"] });
     expect(s.mailbox.queued.size).toBe(1);
     const [msg] = [...s.mailbox.queued.values()];
     expect(msg.body).toContain("Second finding.");

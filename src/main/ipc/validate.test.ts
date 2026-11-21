@@ -10,7 +10,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg, openButlerArg, openEpicArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg } from "./validate";
 
 describe("memory IPC arguments", () => {
   it("accepts a ticket key and a StateCore fact id, nothing else", () => {
@@ -159,6 +159,9 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(inboxAnswerArg("用 A")).toBe("用 A");
     for (const bad of ["", "   ", 3, null, "x".repeat(4001)]) expect(() => inboxAnswerArg(bad)).toThrow();
     expect(inboxScopeArg({ featureId: 2 })).toEqual({ featureId: 2 });
+    expect(messageScopeArg({ butler: true })).toEqual({ butler: true });
+    expect(messageScopeArg({ featureId: 4 })).toEqual({ featureId: 4 });
+    for (const bad of [null, {}, { butler: 1 }, { featureId: -1 }, { epicId: 1 }]) expect(() => messageScopeArg(bad)).toThrow();
     expect(inboxScopeArg({ epicId: 3 })).toEqual({ epicId: 3 });
     expect(inboxScopeArg({ all: true })).toEqual({ all: true });
     for (const bad of [null, {}, { all: 1 }, { featureId: 0 }, { epicId: "3" }, "all"]) expect(() => inboxScopeArg(bad), JSON.stringify(bad)).toThrow();

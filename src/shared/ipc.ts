@@ -214,7 +214,8 @@ export const IPC = {
   intakeAct: "intake:act",
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metricsView: "metrics:view",
-  butlerMessages: "butler:messages",
+  /** 信箱（BTL-245）：Butler 总控的或一个 feature 的消息（MessageScope），状态已排队 / 已送达 / 已回复。 */
+  messagesList: "messages:list",
   memoryView: "memory:view",
   memoryWhy: "memory:why",
   memoryChanged: "memory:changed",
@@ -248,7 +249,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.featuresMove, IPC.reposScan, IPC.ticketsRecheckCleanup,
   IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
-  IPC.butlerView, IPC.butlerOpenSession, IPC.butlerMessages, IPC.metricsView,
+  IPC.butlerView, IPC.butlerOpenSession, IPC.messagesList, IPC.metricsView,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionsPin, IPC.sessionsWake, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
