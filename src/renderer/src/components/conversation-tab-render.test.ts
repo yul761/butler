@@ -11,6 +11,12 @@ import { S } from "../strings";
 import { Composer, ConversationFeed, ConversationTab, runSend, SearchHits, SendBar } from "./ConversationTab";
 import { ForkBox, submitFollowUp, type ForkActions } from "./ForkBox";
 
+const prefs = vi.hoisted(() => ({ split: false }));
+vi.mock("../local-prefs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../local-prefs")>()),
+  savedConvSplit: () => prefs.split,
+}));
+
 const NOW = new Date(2026, 10, 20, 15, 0).getTime();
 const AT = new Date(2026, 10, 20, 14, 32).getTime();
 const noop = () => {};
@@ -261,5 +267,19 @@ describe("ConversationTab", () => {
     const html = renderToStaticMarkup(createElement(ConversationTab, { rootSessionId: "r", sessions: [], footer: createElement("div", { className: "the-footer" }) }));
     expect(html).toContain("the-footer");
     expect(html.indexOf("the-footer")).toBeLessThan(html.indexOf("conv-input"));
+  });
+
+  // BTL-242 审查：草稿在 Composer 里，切换并排时树的形状一变 Composer 就重建、草稿丢了。两种都是同一个外壳，.conv 在同一格。
+  it("side by side or not, the conversation sits in the same wrapper slot (the composer and its draft survive the toggle)", () => {
+    const render = (split: boolean) => {
+      prefs.split = split;
+      return renderToStaticMarkup(createElement(ConversationTab, { rootSessionId: "r", sessions: [], renderTerminal: () => createElement("div", { className: "the-term" }) }));
+    };
+    try {
+      expect(render(false)).toMatch(/^<div class="conv-shell"><div class="conv">/);
+      expect(render(true)).toMatch(/^<div class="conv-split"><div class="conv-term"><div class="the-term"><\/div><\/div><div class="conv">/);
+    } finally {
+      prefs.split = false;
+    }
   });
 });

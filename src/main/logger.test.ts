@@ -18,6 +18,22 @@ describe("createFileLogger", () => {
     expect(lines[1]).toContain("boom Error: bad");
   });
 
+  // BTL-242 审查：flushSync 时还有一批在异步写，进程马上就退：那一批也要同步写下去，而且在后来的行前面。
+  it("flushSync while an async write is still running writes that batch too, ahead of the later lines", async () => {
+    const file = join(tempDir(), "logs", "main.log");
+    const log = createFileLogger(file, () => new Date("2026-01-02T03:04:05.000Z"), undefined, { flushMs: 0 });
+    log("one");
+    const pending = log.flush();
+    log("two");
+    log.flushSync();
+    expect(read(file)).toMatch(/one\n.*two\n$/s);
+    await pending;
+    await log.flush();
+    const text = read(file);
+    expect(text).toContain("one");
+    expect(text.indexOf("one")).toBeLessThan(text.indexOf("two"));
+  });
+
   it("never throws when the target is unwritable", async () => {
     const dir = tempDir();
     const blocker = join(dir, "file");

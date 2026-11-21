@@ -726,6 +726,8 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .conv-target .primary { margin-left: auto; }
 .conv-input .error, .fork .error { margin: 0; }
 /* 并排显示终端：左边终端、右边对话；窄窗口上下排。 */
+/* 不并排时的外壳：不占布局，.conv 照旧像直接放在页面里一样（BTL-242）。 */
+.conv-shell { display: contents; }
 .conv-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
 @media (max-width: 900px) { .conv-split { grid-template-columns: 1fr; } }
 .conv-term { display: flex; flex-direction: column; min-width: 0; }

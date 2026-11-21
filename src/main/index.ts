@@ -10,6 +10,7 @@ import { DiagService } from "./diag/diag-service";
 import { Invalidator } from "./diag/invalidator";
 import { PtySubscriptions } from "./sessions/pty-subscriptions";
 import { ViewCache } from "./diag/view-cache";
+import { throttle } from "./diag/throttle";
 import { isStateScope, type StateChangedPayload } from "../shared/state-scope";
 import { diagMode, perfOp } from "./diag/perf-stats";
 import { basename, join } from "node:path";
@@ -295,6 +296,9 @@ import { RoutingService } from "./routing/routing-service";
 import { SessionModelSwitcher } from "./routing/session-switch";
 import { routingSettings } from "./routing/routing-settings";
 import type { DiscoveryView, Tier } from "../shared/model-routing";
+
+/** session 只是又有了输出时，最多隔这么久告诉界面一次（ticket 速览的上下文、最后一句）。 */
+const OUTPUT_NOTIFY_MS = 5000;
 
 const DISCOVERY_INTERVAL_MS = 5 * 60 * 1000;
 /** hook 发现没有 ticket 的 session 后，稍等片刻再扫描磁盘（合并连续事件）。 */
@@ -585,6 +589,8 @@ async function bootstrap(): Promise<void> {
   });
   // 有些地方把 notify 直接当回调传（.then(notify)）：参数不是范围的一律当 data。
   const notify = (scope?: unknown) => invalidator.notify(isStateScope(scope) ? scope : "data");
+  // session 只是又有了输出：隔 5 秒才告诉界面一次（只有 ticket 速览听 output）。
+  const outputChanged = throttle(() => notify("output"), OUTPUT_NOTIFY_MS);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
   // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
@@ -1211,12 +1217,13 @@ async function bootstrap(): Promise<void> {
     judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
-    // 只是输出、工具调用变了（quiet）时界面不用重取（BTL-242）：工具调用另外推给实况窗口；主进程里的后续照常跑。
+    // 只是输出、工具调用变了（quiet）时只发限频的 output（BTL-242）：ticket 速览跟着它刷新，别的界面不重取；工具调用另外推给实况窗口；主进程里的后续照常跑。
     notify: (change) => {
       needsYou.update();
       refresher.autoCheck();
       waitTracker.sync();
       if (change === "visible") notify("activity");
+      else outputChanged();
     },
     // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面，记一次打断（ws-h）。
     onStuck: (info) => {

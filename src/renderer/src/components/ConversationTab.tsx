@@ -422,10 +422,11 @@ export function ConversationTab(p: {
       <Composer target={target} onTarget={pickTarget} resetKey={selected} send={send} />
     </div>
   );
-  if (!p.renderTerminal || !split) return body;
+  // 并排和不并排是同一棵树（BTL-242）：body 一直在同一个位置，切换时 Composer 不重建，没发出去的草稿和「发送中」都还在。
+  const sideBySide = !!p.renderTerminal && split;
   return (
-    <div className="conv-split">
-      <div className="conv-term">{p.renderTerminal(selected)}</div>
+    <div className={sideBySide ? "conv-split" : "conv-shell"}>
+      {sideBySide && <div className="conv-term">{p.renderTerminal!(selected)}</div>}
       {body}
     </div>
   );

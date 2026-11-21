@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStateBus, LIVE_SCOPES } from "./state-bus";
+import { createStateBus, GLANCE_SCOPES, LIVE_SCOPES } from "./state-bus";
 
 describe("state bus (BTL-242)", () => {
   it("listeners without scopes hear only data; old payloads count as data", () => {
@@ -26,6 +26,18 @@ describe("state bus (BTL-242)", () => {
     bus.dispatch({ scopes: ["data"] });
     expect(n).toBe(2);
     expect(bus.size()).toBe(0);
+  });
+
+  it("output (a session only printed more) reaches the ticket glance, not the other live views", () => {
+    const bus = createStateBus();
+    let live = 0;
+    let glance = 0;
+    bus.subscribe(() => live++, LIVE_SCOPES);
+    bus.subscribe(() => glance++, GLANCE_SCOPES);
+    bus.dispatch({ scopes: ["output"] });
+    bus.dispatch({ scopes: ["activity"] });
+    expect(live).toBe(1);
+    expect(glance).toBe(2);
   });
 
   it("one throwing listener does not stop the others", () => {

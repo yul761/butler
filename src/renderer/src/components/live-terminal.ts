@@ -48,6 +48,8 @@ export class LiveTerminal {
   /** 写进来的输出到了哪儿；null：还没取过快照。 */
   private mark: PtyMarked["mark"] | null = null;
   private listening = false;
+  /** xterm 里已经写过东西：没有 mark 时（上次取快照失败）重放之前先清屏，免得重复。 */
+  private dirty = false;
   /** 每次挂上加一：摘下又挂回时，上一次还没回来的回包不再写进来。 */
   private loadSeq = 0;
   private disposed = false;
@@ -117,6 +119,7 @@ export class LiveTerminal {
         api.onPtyData((id, data) => {
           if (id !== this.termId || !this.ready) return;
           this.term.write(data);
+          this.dirty = true;
           if (this.mark) this.mark = { epoch: this.mark.epoch, end: this.mark.end + data.length };
           // 退出后又收到数据，说明终端被重新打开（续接）了。
           if (this.exitCode !== null) this.setExit(null);
@@ -132,14 +135,19 @@ export class LiveTerminal {
     void req
       .then((snap) => {
         if (this.disposed || !this.subscribed || seq !== this.loadSeq) return;
-        if (snap.reset) this.term.reset();
+        if (snap.reset || (mark === null && this.dirty)) this.term.reset();
         this.term.write(snap.data);
+        this.dirty = true;
         this.mark = snap.mark;
         this.setExit(snap.exitCode);
         this.ready = true;
       })
       .catch((e) => {
-        if (this.subscribed && seq === this.loadSeq) this.ready = true;
+        // 取失败了：照样接着收（不然屏幕就停了），但 mark 作废，下次挂回来清屏取整份。
+        if (this.subscribed && seq === this.loadSeq) {
+          this.mark = null;
+          this.ready = true;
+        }
         reportError(e);
       });
   }

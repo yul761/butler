@@ -27,6 +27,8 @@ export function createFileLogger(file: string, now: () => Date = () => new Date(
   let size = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let writing: Promise<void> | null = null;
+  /** 正在异步写的那一批（写完之前 flushSync 要把它也同步写一遍，不然退出时可能丢）。 */
+  let inflight: string | null = null;
   let dirReady = false;
 
   const take = (): string => {
@@ -39,15 +41,19 @@ export function createFileLogger(file: string, now: () => Date = () => new Date(
   const writeOnce = async (): Promise<void> => {
     while (buf.length > 0) {
       const text = take();
+      inflight = text;
       try {
         if (!dirReady) {
           await mkdir(dirname(file), { recursive: true });
           dirReady = true;
         }
-        await appendFile(file, text);
+        // flushSync 已经同步写过这一批：不再写第二遍（mkdir 还没完的时候会走到这里）。
+        if (inflight === text) await appendFile(file, text);
       } catch {
         // 日志本身不能让主进程出错。
         dirReady = false;
+      } finally {
+        if (inflight === text) inflight = null;
       }
     }
   };
@@ -80,11 +86,15 @@ export function createFileLogger(file: string, now: () => Date = () => new Date(
   }) as FileLogger;
 
   log.flush = flush;
+  // 退出、崩溃时用。还在异步写的那一批也同步写一遍、写在前面：异步那次可能来不及写完进程就退了。
+  // 它要是已经写进了文件，这一批会重复一次；退出时宁可重复，不能丢。
   log.flushSync = () => {
     if (timer) clearTimeout(timer);
     timer = null;
-    if (buf.length === 0) return;
-    const text = take();
+    const pending = inflight ?? "";
+    inflight = null;
+    if (buf.length === 0 && pending === "") return;
+    const text = pending + take();
     try {
       mkdirSync(dirname(file), { recursive: true });
       appendFileSync(file, text);

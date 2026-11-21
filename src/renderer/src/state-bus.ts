@@ -36,3 +36,5 @@ export function createStateBus(): StateBus {
 
 /** 跟着 session 活动、内存读数变的视图用这个。 */
 export const LIVE_SCOPES: readonly StateScope[] = ["data", "activity", "procs"];
+/** ticket 速览（上下文、最后一句）：session 只是又有输出时也要重取（主进程限频成 5 秒一次）。 */
+export const GLANCE_SCOPES: readonly StateScope[] = [...LIVE_SCOPES, "output"];
