@@ -724,11 +724,37 @@ describe("IntakeService: Jira epics (BTL-246 §7)", () => {
     expect(h.repo.get("PROJ-3")).toMatchObject({ state: "held", waitReason: "auto_off", ticketKey: null });
     await h.drain();
     expect(h.opened.map((o) => o.key)).toEqual(["PROJ-1"]);
-    // 改成半自动以后重新决定：搁着的那个也开工。
+    // 改成半自动以后重新决定：搁着的那个也开工，它的 epic 总控也收到名单（不然没人把它分进 feature）。
     levels["SHOP-2"] = "semi";
     await h.s.reevaluate();
     expect(h.state("PROJ-2")).toBe("queued");
     expect(h.state("PROJ-3")).toBe("held");
+    expect(h.epicTexts.map((e) => e.epic)).toEqual(["SHOP-1", "SHOP-2"]);
+    expect(h.epicTexts[1]!.text).toContain("PROJ-2");
+    // 再重新决定一次：没有新放行的，不再发。
+    await h.s.reevaluate();
+    expect(h.epicTexts).toHaveLength(2);
+  });
+
+  it("an epic set to semi does not turn intake on: a repo whose intake is off still takes nothing in (BTL-247)", async () => {
+    const h = setup();
+    h.d.policies.forSlug = () => ({ ...INTAKE_POLICY_DEFAULTS, enabled: false, autoStart: false });
+    h.d.epicLevel = () => "semi";
+    h.setTickets([ticket("PROJ-1", { epic })]);
+    await h.s.poll();
+    expect(h.created).toEqual([]);
+    expect(h.opened).toEqual([]);
+    expect(h.epicTexts).toEqual([]);
+  });
+
+  it("an epic set to manual only notifies you about a ticket that needs clarifying, it opens no session (BTL-247)", async () => {
+    const h = setup({ policy: { clarifyMode: "session" }, allowed: { intake_tracker_comment: true } });
+    h.d.epicLevel = () => "manual";
+    h.setTickets([ticket("PROJ-1", { epic, storyPoints: null, description: "vague" })]);
+    await h.s.poll();
+    expect(h.state("PROJ-1")).toBe("needs_clarification");
+    expect(h.opened).toEqual([]);
+    expect(h.events.find((e) => e.kind === "intake.clarify")!.data).toEqual({ mode: "notify" });
   });
 
   it("an epic set to manual only organizes its tickets even when the repo starts intake work on its own (BTL-247)", async () => {

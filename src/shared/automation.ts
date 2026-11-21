@@ -159,12 +159,13 @@ export function overlayStack(p: StackPolicy, level: AutomationLevel | null): Sta
 
 /**
  * Jira 接进来、父 epic 在 Butler 里另选了档位的 ticket：接活策略按 BTL-246 §7 的手动 / 半自动（BTL-247）。
- * 半自动 = 半自动档的预设（接活开、自动开工）。手动只关自动开工：仓库的接活开着时照样拉进来、建进 epic 整理，只是不开工；
+ * 只管开不开工，接活本身开没开（拉不拉、接不接这个仓库）仍然按三层：一个 epic 不能替全局把接活打开。
+ * 半自动 = 自动开工。手动 = 不开工，拿不准要澄清时也只提醒你、不自动开 session；仓库的接活开着时照样建进 epic 整理。
  * 不用手动档的预设（接活整个关掉），否则 epic 选了手动反而连整理都不做了。
  */
 export function overlayIntake(p: IntakePolicy, level: AutomationLevel | null): IntakePolicy {
-  if (level === "semi") return { ...p, ...AUTOMATION_PRESETS.semi.intake };
-  if (level === "manual") return { ...p, autoStart: false };
+  if (level === "semi") return { ...p, autoStart: true };
+  if (level === "manual") return { ...p, autoStart: false, clarifyMode: "notify" };
   return p;
 }
 

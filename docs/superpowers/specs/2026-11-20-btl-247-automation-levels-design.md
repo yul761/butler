@@ -47,7 +47,7 @@
   - 对外动作：注入 `ExternalActions` 的 `layered(key, scope)`：scope 里的 ticket 有 epic 档位、key 是受管的对外开关时返回预设值。动作照样一条条记进审计（`attempt` 不变）。
   - 预审：`preReviewActive(ticketKey?)`：有 ticket 时按 epic 覆盖，没有按全局。预审排队、交证据、就绪条件、session 说明里的预审一段都按 ticket 调。
   - 栈：一个栈跨几层、几个 ticket。规则：任何一层的 ticket 所在 epic 选了「手动」→ 按手动；每一层都在选了「半自动」的 epic 里 → 按半自动；其他情况按仓库原来的策略。自动检测栈：仓库的策略开着，或者有选了「半自动」的 epic 的 ticket 在这个仓库里，就检测。
-  - 自动接活（接 BTL-246 §7 的手动 / 半自动）：Jira ticket 的父 epic 在 Butler 里已经有、而且自己设了档位时，按 `features.byJiraEpic` 找到它，用 `overrideForFeature` 盖接活策略（`overlayIntake`）：半自动 = 接活开、自动开工，预审按半自动；手动只关自动开工，仓库接活开着时照样建进 epic 整理、不开工（不用手动档的预设，否则连整理都不做）。排着的项开工前再看一次，epic 改成手动就回到搁着；改 epic 档位后搁着的项马上重新决定。父 epic 还没建、跟随全局、没有父 epic 的按接活策略原来的三层（也就是全局档位写下的开关）。
+  - 自动接活（接 BTL-246 §7 的手动 / 半自动）：Jira ticket 的父 epic 在 Butler 里已经有、而且自己设了档位时，按 `features.byJiraEpic` 找到它，用 `overrideForFeature` 盖接活策略（`overlayIntake`），只盖开不开工，接活本身开没开（`enabled`、来源、拉取）仍按三层，一个 epic 不能替全局把接活打开：半自动 = 自动开工，预审按半自动；手动 = 不开工，要澄清时只提醒、不自动开 session，仓库接活开着时照样建进 epic 整理（不用手动档的预设，否则连整理都不做）。排着的项开工前再看一次，epic 改成手动就回到搁着；改 epic 档位后搁着的项马上重新决定，这回放行的和新拉进来的一样告诉 epic 总控。父 epic 还没建、跟随全局、没有父 epic 的按接活策略原来的三层（也就是全局档位写下的开关）。
   - 非 ticket 的 session（总控）的说明只看全局。
 - 档位不是新的权限：半自动只是替你打开这些开关。所有对外动作仍然经 `ExternalActions.attempt`，开关、审计都和手动打开一样。
 

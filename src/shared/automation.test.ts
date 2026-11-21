@@ -112,13 +112,12 @@ describe("epic overlays", () => {
     expect(preReviewOn("manual", true)).toBe(false);
   });
 
-  it("maps an epic level onto intake: semi starts on its own, manual only stops the start (BTL-246 §7)", () => {
+  it("maps an epic level onto intake: only whether it starts, never whether intake is on (BTL-246 §7)", () => {
     const off = { ...INTAKE_POLICY_DEFAULTS, enabled: false, autoStart: false, maxSize: "small" as const };
     expect(overlayIntake(off, null)).toBe(off);
-    expect(overlayIntake(off, "semi")).toEqual({ ...off, enabled: true, autoStart: true });
-    const on = { ...INTAKE_POLICY_DEFAULTS, enabled: true, autoStart: true };
-    expect(overlayIntake(on, "manual")).toEqual({ ...on, autoStart: false });
-    expect(overlayIntake(off, "manual")).toEqual(off);
+    expect(overlayIntake(off, "semi")).toEqual({ ...off, autoStart: true });
+    const on = { ...INTAKE_POLICY_DEFAULTS, enabled: true, autoStart: true, clarifyMode: "session" as const };
+    expect(overlayIntake(on, "manual")).toEqual({ ...on, autoStart: false, clarifyMode: "notify" });
   });
 
   it("decides a stack's level from all its layers", () => {

@@ -551,13 +551,17 @@ export class IntakeService {
 
   /** 策略或预审开关变了：搁着的项按新的条件重新决定（内容没变的拉取不会碰它们）。 */
   async reevaluate(): Promise<void> {
+    const released: string[] = [];
     for (const r of this.d.repo.byState(["held"])) {
       try {
         await this.decide(r.key);
+        if (r.payload.epic && PENDING.includes(this.d.repo.get(r.key)?.state ?? "held")) released.push(r.key);
       } catch (e) {
         this.d.log?.(`intake: re-deciding ${r.key} failed`, e);
       }
     }
+    // 搁着的这回要开工了（比如 epic 改成了半自动）：和新拉进来的一样告诉 epic 总控，它才会把它们分进 feature。
+    await this.tellEpics(released);
   }
 
   /** 启动时：还在等开工的项重新排进后台队列（队列的任务没了、项还在等的不会没人管）。 */
