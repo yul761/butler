@@ -10,6 +10,7 @@ import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
 import { Messages } from "./MessageList";
 import { FeatureSummaryTab, type SummaryRunMessage } from "./FeatureSummaryTab";
+import { EpicLevel } from "./EpicLevel";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";
 import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
@@ -97,7 +98,9 @@ export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSessi
         archivingLabel={S.archiving}
         onArchive={() => api.archiveFeature(feature.id)}
         onError={showError}
-      />
+      >
+        <EpicLevel featureId={feature.id} value={feature.automationLevel} onError={showError} />
+      </WorkspaceHeader>
       {/* 页面的错误（改名、归档、打开 session）放在页签外面：停在哪个页签都看得到。 */}
       {error && <p className="error">{error}</p>}
 

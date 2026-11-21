@@ -81,4 +81,27 @@ describe("settings IPC handlers", () => {
     expect(changed).toHaveBeenCalledTimes(2);
     expect(settings.get("sharedMcp")).toBe(SETTING_DEFAULTS.sharedMcp);
   });
+
+  it("applies the automation level preset on save and on reset, and refuses unknown levels (BTL-247)", () => {
+    const settings = new SettingsRepo(memDb());
+    const applied: string[] = [];
+    const notify = vi.fn(() => applied.push("notify"));
+    const h = settingsHandlers({ settings, notify, memoryToggled: () => {}, applyAutomationLevel: (l) => applied.push(l) });
+    h.set("automationLevel", " semi ");
+    expect(settings.get("automationLevel")).toBe("semi");
+    h.reset("automationLevel");
+    expect(applied).toEqual(["semi", "notify", "manual", "notify"]);
+    expect(() => h.set("automationLevel", "full")).toThrow(SettingError);
+    expect(settings.get("automationLevel")).toBe("manual");
+  });
+
+  it("still notifies when writing the preset fails half way (BTL-247)", () => {
+    const settings = new SettingsRepo(memDb());
+    const notify = vi.fn();
+    const h = settingsHandlers({ settings, notify, memoryToggled: () => {}, applyAutomationLevel: () => {
+      throw new SettingError("bad layer");
+    } });
+    expect(() => h.set("automationLevel", "semi")).toThrow("bad layer");
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
 });

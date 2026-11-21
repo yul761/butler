@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Db } from "../db/database";
 import { memDb } from "../test-utils";
-import { readFeaturePolicy } from "./feature-policy";
+import { readFeaturePolicy, readGovernedLayers } from "./feature-policy";
 
 type Table = "loop_policies" | "stack_policies" | "intake_policies";
 
@@ -75,5 +75,18 @@ describe("readFeaturePolicy", () => {
     expect(s.overrides).toHaveLength(500);
     expect(prepared).toHaveLength(3);
     for (const t of ["loop_policies", "stack_policies", "intake_policies"]) expect(prepared.filter((q) => q.includes(t))).toHaveLength(1);
+  });
+});
+
+describe("readGovernedLayers", () => {
+  it("lists every layer that sets a governed key, with only the governed keys", () => {
+    const db = memDb();
+    layer(db, "loop_policies", { kind: "global" }, { "ci.maxReruns": 1, "ci.flakyTests": ["a"] });
+    layer(db, "loop_policies", { kind: "repo", slug: "acme/web" }, { "ci.useModel": false });
+    layer(db, "intake_policies", { kind: "product", id: 4 }, { autoStart: false });
+    expect(readGovernedLayers(db, (id) => (id === 4 ? "Shop" : null))).toEqual([
+      { family: "loop", scope: "global", label: "", values: { "ci.maxReruns": 1 } },
+      { family: "intake", scope: "product", label: "Shop", values: { autoStart: false } },
+    ]);
   });
 });

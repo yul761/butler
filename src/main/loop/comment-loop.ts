@@ -37,7 +37,8 @@ export interface CommentLoopDeps {
   prs: Pick<TicketPrsRepo, "get" | "byTicket" | "byUrl">;
   /** 栈式 PR（工作流 K）：这个 PR 是栈的一层时补一段话，追加在送进 session 的正文后面；不是就返回 null。 */
   stackNote?(row: TicketPr): string | null;
-  policy(slug: string | null): LoopPolicy;
+  /** ticketKey：它所在 epic 自己选了自动化档位时盖在三层策略上（BTL-247）。 */
+  policy(slug: string | null, ticketKey?: string | null): LoopPolicy;
   /** PR 行在哪个目录跑 gh（用户在界面上点「再回复一次」时用；observe 时用 PrWatcher 给的）。 */
   cwdOf(pr: TicketPr): string | null;
   gh: {
@@ -138,7 +139,7 @@ export class CommentLoop {
       if (closed > 0) this.d.changed();
       return;
     }
-    const policy = this.d.policy(where.slug);
+    const policy = this.d.policy(where.slug, primaryRow(rows).ticketKey);
     if (!policy["comments.enabled"]) return;
     for (const r of rows) this.whereOf.set(r.id, where);
     const sig = [pr.headSha, pr.reviews.map((r) => `${r.id}:${r.state}`).sort().join(","), pr.comments.map((c) => c.id).sort().join(",")].join("|");
@@ -364,7 +365,7 @@ export class CommentLoop {
       this.d.mailbox.withdraw(ref);
       return Promise.resolve("not_open");
     }
-    const policy = this.d.policy(row.slug);
+    const policy = this.d.policy(row.slug, row.ticketKey);
     if (!policy["comments.enabled"]) return Promise.resolve("disabled");
     // 收件的 session：先找这一行的 ticket，没有就找链接同一个 PR 的其他 ticket。
     let to = this.d.recipient(row.ticketKey, row.repoId, row.headBranch);
@@ -466,7 +467,7 @@ export class CommentLoop {
   /** 这个 PR 的仓库开着 comments.enabled：关着时 deliverPr 什么都不递，一键送出也就不能算数。 */
   private enabled(prId: number): boolean {
     const row = this.d.prs.get(prId);
-    return !!row && this.d.policy(row.slug)["comments.enabled"];
+    return !!row && this.d.policy(row.slug, row.ticketKey)["comments.enabled"];
   }
 
   /** 首页「发给 agent」：review / pending 的条目都按 send 的规则改成 queued，再 flush 一次；返回排上的条数。 */
@@ -486,7 +487,7 @@ export class CommentLoop {
   list(ticketKey: string): PrCommentsView[] {
     return this.d.prs.byTicket(ticketKey).map((r) => {
       const primary = primaryRow(this.d.prs.byUrl(r.url).filter((x) => x.state === r.state).concat(r));
-      return { prId: r.id, number: r.number, url: r.url, enabled: this.d.policy(r.slug)["comments.enabled"], items: this.d.items.byPr(primary.id).map(commentView) };
+      return { prId: r.id, number: r.number, url: r.url, enabled: this.d.policy(r.slug, r.ticketKey)["comments.enabled"], items: this.d.items.byPr(primary.id).map(commentView) };
     });
   }
 
@@ -517,7 +518,7 @@ export class CommentLoop {
         })();
         if (!where) return null;
         // 用户明确要再回复：按策略的语言，回复开关照样要开。
-        await this.reply(item, row, item.addressedSha, { ...this.d.policy(row.slug), "comments.reply": true }, where);
+        await this.reply(item, row, item.addressedSha, { ...this.d.policy(row.slug, row.ticketKey), "comments.reply": true }, where);
         break;
       }
     }
@@ -537,7 +538,7 @@ export class CommentLoop {
       for (const i of items) (by.get(i.prId) ?? by.set(i.prId, []).get(i.prId)!).push(i);
       for (const [prId, list] of by) {
         const row = this.d.prs.get(prId);
-        if (!row || row.state !== "open" || !this.d.policy(row.slug)["comments.enabled"]) continue;
+        if (!row || row.state !== "open" || !this.d.policy(row.slug, row.ticketKey)["comments.enabled"]) continue;
         out.push({ reason, ticketKey: row.ticketKey, prId, number: row.number, count: list.length, since: Math.min(...list.map(since)) });
       }
     };

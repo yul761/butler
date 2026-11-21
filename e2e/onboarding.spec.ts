@@ -4,10 +4,10 @@ import type { Page } from "@playwright/test";
 import { STRINGS } from "../src/renderer/src/strings";
 import { EXTERNAL_ACTIONS } from "../src/shared/external";
 import { FEATURE_IDS } from "../src/shared/feature-rows";
-import { completeWizard, expect, openSettingsGroup, openSettingsTab, test, type Sandbox } from "./fixtures";
+import { completeWizard, expect, openAutomationAdvanced, openSettingsGroup, openSettingsTab, test, type Sandbox } from "./fixtures";
 
 /**
- * UI 重做第 6 层：新装时「设置 › 功能」每一行都关着；打开一行只写那一行的开关（不连带对外动作），
+ * UI 重做第 6 层：新装时「设置 › 自动化 › 高级」每一行都关着；打开一行只写那一行的开关（不连带对外动作），
  * 重新加载、切语言后读回来还是开；老用户只开了一部分的行显示成「部分开」。
  * 首页空状态的 e2e 依赖首页接线，由接线的那一层补；这一层用 render 测试覆盖组件。
  */
@@ -38,16 +38,17 @@ test("turning on a feature writes the setting, leaves outward actions off, and s
   const s = makeSandbox();
   const { app, page } = await launch(s);
   await completeWizard(page, s);
-  await openSettingsTab(page, "features");
+  await openAutomationAdvanced(page);
 
   await page.getByTestId("feature-toggle-hibernate").click();
   await expect(row(page, "hibernate")).toHaveAttribute("data-state", "on");
   await page.reload();
-  await openSettingsTab(page, "features");
+  await openAutomationAdvanced(page);
   await expect(row(page, "hibernate")).toHaveAttribute("data-state", "on");
   expect(settingValues(s, ["hibernateEnabled"])).toEqual({ hibernateEnabled: "1" });
 
   // 打开「PR 评论转给 session」：对外动作一个都不跟着开。
+  await openAutomationAdvanced(page);
   await page.getByTestId("feature-toggle-review_comments").click();
   await expect(row(page, "review_comments")).toHaveAttribute("data-state", "on");
   await openSettingsGroup(page, "external");
@@ -79,7 +80,7 @@ test("a half-enabled row is shown as partial", async ({ makeSandbox, launch }) =
   db.close();
   await page.reload();
 
-  await openSettingsTab(page, "features");
+  await openAutomationAdvanced(page);
   const lessons = row(page, "lessons_auto");
   await expect(lessons).toHaveAttribute("data-state", "partial");
   await expect(lessons).toContainText("1/3");

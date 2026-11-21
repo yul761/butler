@@ -1,3 +1,4 @@
+import { isAutomationLevel, type AutomationLevel } from "../../shared/automation";
 import type { AvailabilityAction, LimitKind } from "../../shared/availability";
 import { isBgKind, type BackgroundAction } from "../../shared/background";
 import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
@@ -240,6 +241,13 @@ export function createFeatureArg(v: unknown): CreateFeatureInput {
   if (!o || typeof o !== "object") throw new Error("invalid feature");
   if (o.workspaceDir !== undefined) dirArg(o.workspaceDir);
   return { name: featureNameArg(o.name), repoPaths: repoPathsArg(o.repoPaths), workspaceDir: o.workspaceDir as string | undefined };
+}
+
+/** epic 的自动化档位（BTL-247）：manual、semi，或 null（跟随全局）。不接受 undefined：少传参数不能变成跟随全局。 */
+export function automationLevelArg(v: unknown): AutomationLevel | null {
+  if (v === null) return null;
+  if (!isAutomationLevel(v)) throw new Error("invalid automation level");
+  return v;
 }
 
 /** 新建 ticket：可以带 feature 和好几个仓库。 */

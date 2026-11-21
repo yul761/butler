@@ -1497,4 +1497,8 @@ export const MIGRATIONS: string[] = [
     WHERE kind = 'decision' AND status = 'pending' AND session_id IN (SELECT id FROM sessions WHERE epic_id IS NOT NULL);
   UPDATE sessions SET coordinator = 0 WHERE ticket_key IS NOT NULL AND coordinator = 1;
   `,
+  // BTL-247：epic（表名仍是 features）自己选的自动化档位；NULL = 跟随全局（设置 automationLevel）。
+  `
+  ALTER TABLE features ADD COLUMN automation_level TEXT CHECK (automation_level IS NULL OR automation_level IN ('manual', 'semi'));
+  `,
 ];

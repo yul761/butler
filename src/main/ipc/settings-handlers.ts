@@ -14,6 +14,11 @@ interface Deps {
   settingChanged?: (key: EditableSettingKey) => void;
   /** 共享 MCP 开关保存或恢复默认之后（WS-M H）：启动或停掉 hub。 */
   sharedMcpChanged?: () => void;
+  /**
+   * 选了全局自动化档位（BTL-247，保存或恢复默认）之后、在 notify 之前：把受管开关写成那一档的预设。
+   * 再选一次同一档也会重写，所以「自定义」时点回原来那一档就是恢复预设。
+   */
+  applyAutomationLevel?: (level: string) => void;
 }
 
 /**
@@ -37,9 +42,14 @@ export function settingsHandlers(d: Deps): {
     write();
     const memoryAfter = memoryOn(d.settings);
     if (k === "language") d.languageChanged?.();
-    d.settingChanged?.(k);
-    if (k === "sharedMcp") d.sharedMcpChanged?.();
-    d.notify();
+    try {
+      // 预设写到一半失败（策略校验没过）也要通知：界面重读后显示「自定义」，别的页面也跟着刷新。
+      if (k === "automationLevel") d.applyAutomationLevel?.(next);
+    } finally {
+      d.settingChanged?.(k);
+      if (k === "sharedMcp") d.sharedMcpChanged?.();
+      d.notify();
+    }
     if (memoryAfter !== memoryBefore) d.memoryToggled(memoryAfter);
   };
   return {

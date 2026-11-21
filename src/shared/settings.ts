@@ -93,6 +93,8 @@ export const EDITABLE_SETTINGS = [
   "intakeRepoMap",
   // 4.0 界面减法（BTL-244）：显示 Butler 之外开的 session；关着时不扫描 ~/.claude/projects。
   "showOutsideSessions",
+  // 4.0 自动化档位（BTL-247）：manual | semi。写它会把受管开关写成那一档的预设（src/shared/automation.ts）。
+  "automationLevel",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

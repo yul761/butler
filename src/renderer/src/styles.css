@@ -480,6 +480,16 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .feature-partial { color: var(--muted); font-size: 12px; }
 .feature-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .feature-elsewhere { color: var(--danger); font-size: 12px; }
+/* 设置 › 自动化：档位（BTL-247） */
+.automation-level { margin-bottom: 16px; }
+.automation-level h3 { margin: 0 0 4px; }
+.automation-options { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.automation-option { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; }
+.automation-option > .muted { grid-column: 2; font-size: 12px; }
+.automation-option.disabled { opacity: 0.55; }
+.automation-label { font-weight: 600; }
+.automation-advanced > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.epic-level { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 /* 首页空状态（FirstRunHome）：三种开工方式和主流程。 */
 .first-run { max-width: 760px; }
 .first-run h1 { margin: 0 0 8px; font-size: 22px; }

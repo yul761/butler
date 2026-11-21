@@ -1,3 +1,4 @@
+import { isAutomationLevel, type AutomationLevel } from "../../shared/automation";
 import type { Feature, FeatureRepo } from "../../shared/types";
 import { samePath } from "../tickets/ticket-service";
 import type { Db } from "./database";
@@ -11,6 +12,7 @@ interface FeatureRow {
   brief: string | null;
   brief_sent_at: number | null;
   jira_epic_key: string | null;
+  automation_level: string | null;
 }
 
 interface FeatureRepoRow {
@@ -38,6 +40,7 @@ export class FeaturesRepo {
       brief: r.brief,
       briefSentAt: r.brief_sent_at,
       jiraEpicKey: r.jira_epic_key,
+      automationLevel: isAutomationLevel(r.automation_level) ? r.automation_level : null,
     };
   }
 
@@ -84,6 +87,16 @@ export class FeaturesRepo {
   /** 工作区就是这个目录的未归档 feature（Windows 不分大小写）。 */
   byWorkspace(dir: string): Feature | null {
     return this.list().find((f) => samePath(f.workspaceDir, dir)) ?? null;
+  }
+
+  /** 这个 epic 自己选的自动化档位（BTL-247）；null = 跟随全局。 */
+  automationLevel(id: number): AutomationLevel | null {
+    const row = this.db.prepare(`SELECT automation_level FROM features WHERE id = ?`).get(id) as { automation_level: string | null } | undefined;
+    return row && isAutomationLevel(row.automation_level) ? row.automation_level : null;
+  }
+
+  setAutomationLevel(id: number, level: AutomationLevel | null): void {
+    this.db.prepare(`UPDATE features SET automation_level = ? WHERE id = ?`).run(level, id);
   }
 
   setName(id: number, name: string): void {

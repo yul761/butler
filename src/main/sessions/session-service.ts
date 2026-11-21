@@ -91,7 +91,8 @@ export interface SessionServiceDeps {
   checksAbsence?: () => CheckAbsenceReason | null;
   /** Butler 的 session 说明文件（--append-system-prompt-file）；不给或返回 null 时不加。 */
   /** repoPaths：这个 session 涉及的仓库路径，用来挑要送进去的规矩。 */
-  guidePath?: (kind: GuideKind, repoPaths: string[]) => string | null;
+  /** ticketKey：给了时按它所在 epic 的自动化档位决定预审那段（BTL-247）。 */
+  guidePath?: (kind: GuideKind, repoPaths: string[], ticketKey?: string) => string | null;
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
   /** epic 里的 feature（BTL-246，内部叫 block）；不给 FeatureView 里 blocks 是空的。 */
@@ -232,7 +233,8 @@ export class SessionService {
     const mcpConfigPath = this.configPath(ticket.key, () => this.d.mcpConfig?.(ticket.key, { featureId: ticket.featureId }, termId) ?? null, claudePath, launch.viaCmd);
     const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)], termId) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     // ticket 总控去掉了（BTL-246）：以前的 ticket 总控从「隐藏的 session」里恢复时，按普通 ticket session 开（工具、说明都是 ticket 的）。
-    const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.("ticket", ticket.repos.map((r) => r.repoPath)) ?? null, claudePath, launch.viaCmd, "session guide");
+    // 传 ticket.key：预审那段按它所在 epic 的自动化档位（BTL-247）。
+    const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.("ticket", ticket.repos.map((r) => r.repoPath), ticket.key) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs: string[] = [];
     let args: string[];
     let model: SessionModel | null | undefined;

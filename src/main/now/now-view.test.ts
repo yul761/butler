@@ -61,6 +61,7 @@ function feature(id: number, tickets: TicketView[], sessions: SessionView[] = []
     archivedAt: null,
     brief: null,
     briefSentAt: null,
+    automationLevel: null,
     tickets,
     blocks: [],
     sessions,

@@ -126,7 +126,14 @@ import { MetricsRollup } from "./metrics/rollup";
 import { baselineCutoffOf, ensureMetricsSince, metricsSince } from "./metrics/since";
 import { TOUCH_MS as WAIT_TOUCH_MS, WaitTracker, type WaitHead } from "./metrics/wait-tracker";
 import { registerIpc } from "./ipc/register";
-import { readFeaturePolicy } from "./settings/feature-policy";
+import { readFeaturePolicy, readGovernedLayers } from "./settings/feature-policy";
+import { AutomationLevels } from "./automation/levels";
+import { featurePolicyLayers, type FeaturePolicyDeps } from "./ipc/feature-policy-handlers";
+import type { EditableSettingKey } from "../shared/settings";
+import type { LoopPolicyOverrides, LoopScope } from "../shared/loop-policy";
+import type { PolicyScope } from "../shared/admission-policy";
+import type { StackPolicySetResult } from "../shared/stacks";
+import type { IntakePolicySetResult } from "../shared/intake";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
@@ -844,11 +851,38 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     logger("legacy scan: recovering interrupted scans failed", e);
   }
+  // 自动化档位（BTL-247）：全局档位套用时写受管开关；epic 自己选了档位时盖在原来的开关上。
+  // 三族策略和「设置变了以后该跑的」在后面才建好，先占位，registerIpc 之前接上（只有选档位时才用到）。
+  const automationHooks: { policy: Pick<FeaturePolicyDeps, "globalLayer" | "writeLayer"> | null; settingChanged: (key: EditableSettingKey) => void } = {
+    policy: null,
+    settingChanged: () => {},
+  };
+  const automation = new AutomationLevels({
+    setting: (k) => settings.get(k),
+    writeSetting: (k, v) => {
+      settings.set(k, v);
+      automationHooks.settingChanged(k);
+    },
+    globalLayer: (f) => {
+      if (!automationHooks.policy) throw new Error("automation: policies are not ready");
+      return automationHooks.policy.globalLayer(f);
+    },
+    writeLayer: (f, l) => {
+      if (!automationHooks.policy) throw new Error("automation: policies are not ready");
+      automationHooks.policy.writeLayer(f, l);
+    },
+    layers: () => readGovernedLayers(db, (id) => lessonsRepo.product(id)?.name ?? null),
+    featureLevel: (id) => features.automationLevel(id),
+    ticketFeature: (k) => tickets.get(k)?.featureId ?? null,
+    log: logger,
+  });
   // 对外动作（契约 4.8，ws-b）：开关和审计的框架；接入的 workstream 用 externalActions.attempt（现在是导出成 lint 的推送分支和开 PR）。
   const externalAudit = new ExternalAuditRepo(db);
   const externalActions = new ExternalActions({
     repo: externalAudit,
     setting: (key) => settings.get(key),
+    // epic 自己选了档位：受管的对外开关按那一档（BTL-247）；其他照旧看全局设置。
+    layered: (key, scope) => automation.external(key, scope.ticketKey),
     now: Date.now,
     cutoff: (now) => auditCutoff(now, auditRetentionDays(settings)),
     log: logger,
@@ -866,8 +900,8 @@ async function bootstrap(): Promise<void> {
   });
   // 上次跑到一半退出的导出：建了的 worktree 和分支收回去。
   void checkExporter.recover().catch((e) => logger("check export: recovering interrupted exports failed", e));
-  /** 预审（工作流 G）开着吗。 */
-  const preReviewActive = (): boolean => settings.get("preReviewEnabled") === "1";
+  /** 预审（工作流 G）开着吗；给了 ticket 时它所在的 epic 自己选的档位优先（BTL-247）。 */
+  const preReviewActive = (ticketKey?: string | null): boolean => automation.preReview(ticketKey, settings.get("preReviewEnabled") === "1");
   /** 「完成前交证据」那一段的仓库：worktree 目录名和档案（导入的、没扫过的没有档案）。 */
   const guideRepos = (repoPaths: string[]): GuideRepo[] =>
     repoPaths.map((root) => {
@@ -1205,11 +1239,11 @@ async function bootstrap(): Promise<void> {
       });
     },
     checksAbsence,
-    guidePath: (kind, repoPaths) => {
+    guidePath: (kind, repoPaths, ticketKey) => {
       const lessons = kind === "ticket"
         ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger, { principles: settings.get("lessonsPrinciples") === "1", core: settings.get("lessonsCoreGuide") === "1" })
         : [];
-      const preReview = kind === "ticket" && preReviewActive();
+      const preReview = kind === "ticket" && preReviewActive(ticketKey);
       return writeSessionGuide(paths.mcp, currentLang(), kind, lessons, {
         // 预审（工作流 G）打开时：规矩段那句「PR 前会自动预审」，加上「完成前交证据」一段（按仓库档案列命令）。
         preReview,
@@ -2015,7 +2049,8 @@ async function bootstrap(): Promise<void> {
   const deliveringTo = new Set<string>();
   // 评论闭环和 CI 分类（工作流 I）：三层策略（契约 4.2），模型经路由（comment_classify / ci_classify），对外动作过 4.8 的开关。
   const loopPolicies = new LoopPolicies({ db, products: { productsOf: (slug) => lessonsRepo.productsOf(slug), product: (id) => lessonsRepo.product(id) }, now: Date.now });
-  const loopPolicyFor = (slug: string | null) => loopPolicies.forSlug(slug);
+  /** 仓库的三层策略；给了 ticket 且它所在 epic 自己选了自动化档位时，受管的键按那一档（BTL-247）。 */
+  const loopPolicyFor = (slug: string | null, ticketKey?: string | null) => automation.loop(loopPolicies.forSlug(slug), ticketKey);
   const ciTriageRepo = new CiTriageRepo(db);
   const commentItems = new CommentItemsRepo(db);
   const loopStats = new LoopStats({ comments: commentItems, triage: ciTriageRepo });
@@ -2118,6 +2153,11 @@ async function bootstrap(): Promise<void> {
   const stackService = new StackService({
     repo: new StacksRepo(db, Date.now),
     policy: stackPolicy,
+    // 自动化档位（BTL-247）：栈里各层 ticket 所在 epic 自己选的档位盖在三层策略上；「半自动」epic 的仓库也做栈检测。
+    overlay: (base, keys) => automation.stack(base, keys),
+    autoRebaseRepos: () => [
+      ...new Set(tickets.list().filter((t) => t.archivedAt === null && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
+    ],
     external: externalActions,
     workRoot: join(paths.home, "stack-work"),
     execPath: process.execPath,
@@ -2228,7 +2268,7 @@ async function bootstrap(): Promise<void> {
     sessionOf: prRecipient,
     openCommentItems: (prId) => {
       const pr = ticketPrs.get(prId);
-      if (!pr || !loopPolicyFor(pr.slug)["comments.enabled"]) return null;
+      if (!pr || !loopPolicyFor(pr.slug, pr.ticketKey)["comments.enabled"]) return null;
       return commentItems.byPr(prId).filter((c) => c.state === "pending" || c.state === "review" || c.state === "queued" || c.state === "delivered").length;
     },
     waitingOnGate: (pr) =>
@@ -2496,6 +2536,11 @@ async function bootstrap(): Promise<void> {
       const g = deliveryGuard.check(b.id);
       if (!g.ok) return false;
       return (await pty.deliver(g.termId, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck: deliveryGuard.recheckAfter(b.id, g) })) === "sent";
+    },
+    // Jira epic 对应的 Butler epic 自己选了档位：它的 ticket 接进来以后整理还是开工按它（BTL-247 接 BTL-246 §7）。
+    epicLevel: (epicKey) => {
+      const f = features.byJiraEpic(epicKey);
+      return f ? automation.overrideForFeature(f.id) : null;
     },
     toEpicCoordinator: async (epic, repoPath, text) => {
       const featureId = await featureService.ensureJiraEpic(epic, repoPath);
@@ -2932,6 +2977,56 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
   });
   turnChanged = () => turnService.changed();
+  // 设置变了以后该跑的：设置页保存、套用自动化档位预设都走这里（BTL-247 抽出来给档位用）。
+  const onSettingChanged = (key: EditableSettingKey): void => {
+    if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
+    // 后台调度的设置（工作流 L）：马上按新的时段、空闲、额度重算，该让路的让路。提醒线跟着路由阈值。
+    if (key.startsWith("bg")) bgScheduler.tick();
+    if (key === "routingThresholds" || key === "routingQuotas") costCheckSoon();
+    // 打断减少的开关第一次打开：Effect 页前后对比从这里分界（ws-j）。
+    if ((key === "interruptChoiceRule" || key === "interruptChoiceDefaults" || key === "interruptSelfServe") && settings.get(key) === "1") markInterruptEffective(Date.now());
+    // 预审开关变了：就绪条件跟着变（工作流 G）。
+    if (key === "preReviewEnabled") {
+      reassessAll();
+      intakePollSoon();
+    }
+    // 自动接活的来源和间隔（工作流 N）：改了马上按新的拉一次。
+    if (key.startsWith("intake")) intakePollSoon();
+    // 打开「显示 Butler 之外开的 session」：马上扫一次，不等 5 分钟的定时（BTL-244）。
+    if (key === "showOutsideSessions") void runDiscovery();
+  };
+  automationHooks.settingChanged = onSettingChanged;
+  // 三族策略的读写入口：设置 › 自动化的开关、套用档位预设、register 的 loop / stacks / intake 用同一份。
+  const loopPolicyIo = {
+    policyView: (scope: LoopScope) => loopPolicies.view(scope),
+    policySet: (scope: LoopScope, overrides: LoopPolicyOverrides) => loopPolicies.setLayer(scope, overrides),
+  };
+  const stackPolicyIo = {
+    policyView: (scope: PolicyScope) => stackPolicy.view(scope),
+    policySet: (scope: PolicyScope, overrides: Record<string, unknown>): StackPolicySetResult => {
+      try {
+        stackPolicy.setLayer(scope, overrides);
+        return { ok: true };
+      } catch (e) {
+        if (e instanceof StackPolicyError) return { ok: false, key: e.key, message: e.code };
+        throw e;
+      }
+    },
+  };
+  const intakePolicyIo = {
+    policyView: (scope: PolicyScope) => intakePolicies.view(scope),
+    policySet: (scope: PolicyScope, overrides: Record<string, unknown>): IntakePolicySetResult => {
+      try {
+        intakePolicies.setLayer(scope, overrides);
+        intakePollSoon();
+        return { ok: true };
+      } catch (e) {
+        if (e instanceof IntakePolicyError) return { ok: false, key: e.key, message: e.code };
+        throw e;
+      }
+    },
+  };
+  automationHooks.policy = featurePolicyLayers({ loop: loopPolicyIo, stacks: stackPolicyIo, intake: intakePolicyIo });
   const keepAwakeSwitch = keepAwake;
   registerIpc({
     conv,
@@ -2948,23 +3043,7 @@ async function bootstrap(): Promise<void> {
       applyLanguage();
       checkSnapshots.schedule();
     },
-    settingChanged: (key) => {
-      if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
-      // 后台调度的设置（工作流 L）：马上按新的时段、空闲、额度重算，该让路的让路。提醒线跟着路由阈值。
-      if (key.startsWith("bg")) bgScheduler.tick();
-      if (key === "routingThresholds" || key === "routingQuotas") costCheckSoon();
-      // 打断减少的开关第一次打开：Effect 页前后对比从这里分界（ws-j）。
-      if ((key === "interruptChoiceRule" || key === "interruptChoiceDefaults" || key === "interruptSelfServe") && settings.get(key) === "1") markInterruptEffective(Date.now());
-      // 预审开关变了：就绪条件跟着变（工作流 G）。
-      if (key === "preReviewEnabled") {
-        reassessAll();
-        intakePollSoon();
-      }
-      // 自动接活的来源和间隔（工作流 N）：改了马上按新的拉一次。
-      if (key.startsWith("intake")) intakePollSoon();
-      // 打开「显示 Butler 之外开的 session」：马上扫一次，不等 5 分钟的定时（BTL-244）。
-      if (key === "showOutsideSessions") void runDiscovery();
-    },
+    settingChanged: onSettingChanged,
     // 共享 MCP（WS-M H）：打开就启动 hub（之后开的 session 用它）；关掉时接着它的 session 退完了再停。
     sharedMcpChanged: () => {
       if (sharedMcpOn(settings)) {
@@ -3001,8 +3080,7 @@ async function bootstrap(): Promise<void> {
     admission: admissionFacade,
     interrupts: interruptsFacade,
     loop: {
-      policyView: (scope) => loopPolicies.view(scope),
-      policySet: (scope, overrides) => loopPolicies.setLayer(scope, overrides),
+      ...loopPolicyIo,
       comments: (key) => commentLoop.list(key),
       act: (a) => commentLoop.act(a),
       flaky: () => ciTriageRepo.flakyEntries(Date.now() - loopPolicies.forSlug(null)["ci.autoListDays"] * 86_400_000),
@@ -3018,16 +3096,7 @@ async function bootstrap(): Promise<void> {
       setLayerMode: (id, mode) => stackService.setLayerMode(id, mode),
       restore: (id) => stackService.restore(id),
       remove: (id) => stackService.remove(id),
-      policyView: (scope) => stackPolicy.view(scope),
-      policySet: (scope, overrides) => {
-        try {
-          stackPolicy.setLayer(scope, overrides);
-          return { ok: true };
-        } catch (e) {
-          if (e instanceof StackPolicyError) return { ok: false, key: e.key, message: e.code };
-          throw e;
-        }
-      },
+      ...stackPolicyIo,
       policyLayers: () => stackPolicy.layers(),
     },
     review: {
@@ -3071,17 +3140,7 @@ async function bootstrap(): Promise<void> {
     intake: {
       view: () => intake.view(),
       effect: (days) => intake.effect(days),
-      policyView: (scope) => intakePolicies.view(scope),
-      policySet: (scope, overrides) => {
-        try {
-          intakePolicies.setLayer(scope, overrides);
-          intakePollSoon();
-          return { ok: true };
-        } catch (e) {
-          if (e instanceof IntakePolicyError) return { ok: false, key: e.key, message: e.code };
-          throw e;
-        }
-      },
+      ...intakePolicyIo,
       classify: (e) => intake.editClassification(e),
       poll: async () => {
         const r = await intake.poll({ manual: true });
@@ -3192,6 +3251,16 @@ async function bootstrap(): Promise<void> {
     },
     detectTrackerTools,
     featurePolicy: () => readFeaturePolicy(db, (id) => lessonsRepo.product(id)?.name ?? null),
+    automation: {
+      state: () => automation.state(),
+      apply: (level) => automation.apply(level),
+      // epic 档位改了：它的 PR 的预审、就绪要按新档位重算，搁着的接活项按新档位重新决定（在跑的 session 的说明要下次打开才换）。
+      setFeatureLevel: (id, level) => {
+        features.setAutomationLevel(id, level);
+        reassessAll();
+        intakePollSoon();
+      },
+    },
     window: () => win,
     now: Date.now,
     notify,

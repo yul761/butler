@@ -230,6 +230,9 @@ export const IPC = {
   appKeepAwakeChanged: "app:keepAwakeChanged",
   clipboardRead: "clipboard:read",
   clipboardWrite: "clipboard:write",
+  // 自动化档位（BTL-247）：全局档位的显示（读）和 epic 自己选的档位（写）。全局档位本身走 settings:set。
+  automationState: "automation:state",
+  featuresSetAutomationLevel: "features:setAutomationLevel",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -256,6 +259,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.convList, IPC.convSearch,
   IPC.forkAsk, IPC.forkSendConclusion, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.convSend, IPC.inboxReports,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
+  IPC.automationState, IPC.featuresSetAutomationLevel,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible];

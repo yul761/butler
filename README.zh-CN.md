@@ -18,6 +18,7 @@
 - **管的是工作，不只是 session。** session 属于 ticket，ticket 属于 epic；epic 里的 ticket 再分成几个 feature，一次推一个。epic 里定下的约定，比如前后端之间的 API 约定，记在 epic 的记忆里，它所有 ticket 的 session 都会读到。
 - **记忆比 session 活得久。** 每个 session 都能 `recall` 同一个 ticket 或 epic 里之前的 session 记下的东西，所以不用写文档留给下一个 session 读。上下文太长的 session 会先写交接、清空，再从记忆里接着干。
 - **你始终在回路里。** **轮到你** 页给每件等你的事一张卡片，只有真要你拍板的事才有卡片。session 问你的问题会变成这里的一张卡片，也出现在它所在 epic 的 **概况** tab 的 **这个范围里轮到你的** 下面，而不是埋在终端里。停住不动的 session 也会有一张卡片，附上可能的原因，你不点就不会去修。
+- **做多少，选一档就行。** **设置 › 自动化** 里有档位：**手动**（默认）或 **半自动**。半自动会把 PR 评论转给 session、不稳定的 CI 失败重跑一次、栈自动 rebase 并推送、开 PR 前预审、自动接活直接开工。epic 可以在自己页面的标题旁边另选一档。合并永远要你自己点，对外动作都记进审计。一个个开关在同一页的 **高级** 里。详见[自动化档位](docs/configuration.zh-CN.md#自动化档位)。
 - **少撞车。** 同一个仓库里，一个合并会和另一个 ticket 的分支冲突时，合并总控会先拦下它。
 - **交接自动写好。** 每天晚上，以及你输入 `/handoff` 时，Butler 会让你自己的 `claude` 为每个 ticket 写一份结构化的交接，为每个 epic 写一份进度汇总。
 
@@ -115,7 +116,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - **它能做的**只有说话：`send_message` 给 epic 总控带一句话，用 epic 或 session id 指定。ticket 的 session 和修复 session 不能发。总控的终端关着（闲置时被自动关掉了，或者 Butler 重启过）时，Butler 接着它最近的对话打开（epic 从没开过总控就新开一个），再把话交进去。开着的走它的信箱：在干活就在下一次调用工具时收到，停着就在你没在打字时输入进去。带 `interrupt` 时 Butler 先按 Esc。每条消息有一个 `requestId`；对方这一轮做完时，它最后一段回复会以 **【回复】** 开头、写明 `requestId`，输入回全局总控，总控页面上的 **消息（N）** 列出最近 30 条消息（新的在前），每条是 **已排队**、**已送达** 或 **已回复**。`refresh_epic_summary` 在后台重写一份 epic 汇总，和 **立即更新** 一样。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
   - **它不能**建、删或结束任何东西（[栈](docs/configuration.zh-CN.md#栈) 除外），也不能为别的事开 session。这些留给 epic 总控。
   - 只读的工具在 Butler 给它写的设置里是放行的，巡检时不会每个工具都停下来等确认；`send_message`、`refresh_session` 和 `refresh_epic_summary` 照样要确认。
-  - **每天巡检。** 设置 **每天几点让全局总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）全局总控，让它看一遍 PR、CI 和未决的提问，需要的话提醒 epic 总控，并用 `ask_user` 列出要你亲自做的事。全局总控正忙就等它停下来。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#调度与-handoff)。
+  - **每天巡检。** 设置 **每天几点让全局总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）全局总控，让它看一遍 PR、CI 和未决的提问，需要的话提醒 epic 总控，并用 `ask_user` 列出要你亲自做的事。全局总控正忙就等它停下来。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#定时与状态)。
   - 全局总控开着时只在 **轮到你** 页的 **运行情况** 里有自己的实况卡片，不在 **进行中** 里占一行。它停下来等你回话时在该页有一张卡片：这时巡检等着送给它。
   - 全局总控不会被自动换新，也不会因为闲置被自动关闭。
 - **合并总控。** 同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](docs/configuration.zh-CN.md#合并总控)。

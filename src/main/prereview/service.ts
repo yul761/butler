@@ -24,8 +24,8 @@ export interface SessionPlace {
 export interface PreReviewServiceDeps {
   repo: PreReviewRepo;
   queue: { enqueue(kind: "pre_review", payload: PreReviewPayload, o: { ticketKey?: string | null; dedupeKey?: string | null }): number; cancel(id: number): boolean };
-  /** preReviewEnabled。 */
-  enabled(): boolean;
+  /** preReviewEnabled；给了 ticket 时它所在 epic 自己选的自动化档位优先（BTL-247）。 */
+  enabled(ticketKey?: string | null): boolean;
   /** session 在哪（worktree、ticket、仓库 slug）；不认识的 session 为 null。 */
   place(sessionId: string): SessionPlace | null;
   git: GitRun;
@@ -106,10 +106,10 @@ export class PreReviewService {
   /** session 交证据（MCP submit_evidence）。 */
   async submitEvidence(sessionId: string, raw: unknown): Promise<SubmitResult> {
     const m = this.m();
-    if (!this.d.enabled()) return { ok: false, message: m.off };
+    const place = this.d.place(sessionId);
+    if (!this.d.enabled(place?.ticketKey)) return { ok: false, message: m.off };
     const args = parseSubmitEvidence(raw);
     if (!args) return { ok: false, message: m.bad };
-    const place = this.d.place(sessionId);
     if (!place || !place.slug) return { ok: false, message: m.unknown };
     let head: string;
     let branch: string;
@@ -143,7 +143,7 @@ export class PreReviewService {
     if (!pr.headSha || !pr.headBranch) return null;
     const target: ReviewTarget = { repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha };
     if (this.d.repo.attachPr(pr.id, target) > 0) this.d.changed();
-    if (!this.d.enabled() || pr.state !== "open" || pr.isDraft || !this.d.isButlerPr(pr)) return null;
+    if (!this.d.enabled(pr.ticketKey) || pr.state !== "open" || pr.isDraft || !this.d.isButlerPr(pr)) return null;
     if (this.d.repo.latestFor(target)) return null;
     const sessionId = this.d.recipient(pr);
     const cwd = this.d.cwdOf(pr, sessionId);

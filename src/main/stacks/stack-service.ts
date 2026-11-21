@@ -43,6 +43,13 @@ export interface BriefLayer {
 export interface StackServiceDeps {
   repo: StacksRepo;
   policy: StackPolicyService;
+  /**
+   * 自动化档位（BTL-247）：栈里各层 ticket（还没合并的）所在的 epic 自己选了档位时，盖在三层策略上。
+   * 不给就是原来的三层策略。
+   */
+  overlay?(base: StackPolicy, ticketKeys: (string | null)[]): StackPolicy;
+  /** 有 ticket 在「半自动」epic 里的仓库：三层策略没开 autoRebase 也要做栈检测。 */
+  autoRebaseRepos?(): string[];
   external: {
     attempt<T>(kind: ExternalActionKind, detail: ExternalDetail, run: () => Promise<T>): Promise<AttemptResult<T>>;
     allowed(kind: ExternalActionKind, scope?: ExternalDetail["scope"]): boolean;
@@ -787,13 +794,16 @@ export class StackService {
       const stacks = this.d.repo.list();
       const repos = new Map<string, StackRow[]>();
       for (const s of stacks) repos.set(s.repoPath, [...(repos.get(s.repoPath) ?? []), s]);
-      if (now - this.lastDetect >= DETECT_EVERY_MS && this.d.repos && this.d.policy.anyAutoRebase()) {
+      const epicRepos = new Set(this.epicAutoRebaseRepos());
+      if (now - this.lastDetect >= DETECT_EVERY_MS && this.d.repos && (this.d.policy.anyAutoRebase() || epicRepos.size > 0)) {
         this.lastDetect = now;
-        // 自动检测只在开了 autoRebase 的仓库里做（gh 调用不白跑）
+        // 自动检测只在开了 autoRebase 的仓库（或有「半自动」epic 的 ticket 的仓库）里做（gh 调用不白跑）
         for (const r of this.d.repos()) {
           if (!existsSync(r)) continue;
-          const slug = await this.d.slugOf(r).catch(() => null);
-          if (!this.d.policy.forSlug(slug).autoRebase) continue;
+          if (!epicRepos.has(r)) {
+            const slug = await this.d.slugOf(r).catch(() => null);
+            if (!this.d.policy.forSlug(slug).autoRebase) continue;
+          }
           await this.detect(r).catch((e) => this.d.log(`stacks: detect in ${r}`, e));
         }
       }
@@ -881,8 +891,10 @@ export class StackService {
     const scope = { repoSlug: s.repoSlug };
     const lr = this.d.repo.lastRun(s.id);
     const settled = !lr || lr.outcome === "rebased" || lr.outcome === "noop" || lr.outcome === "restored";
-    if (settled && this.d.external.allowed("force_push", scope)) await this.pushPending(s);
-    if (settled && p.autoOpenBottomPr && this.needsPromotion(s) && this.d.external.allowed("pr_open", scope)) await this.promoteBottom(s);
+    // 开关按层的 ticket 判断：epic 自己选了档位时（BTL-247），那一层的推送、开 PR 按它的档位。
+    if (settled) await this.pushPending(s);
+    const bottom = settled && p.autoOpenBottomPr ? this.needsPromotion(s) : null;
+    if (bottom && this.d.external.allowed("pr_open", { ...scope, ticketKey: bottom.ticketKey })) await this.promoteBottom(s);
     if (p.overview === "issue" && this.d.external.allowed("issue_post", scope)) await this.syncOverview(s);
   }
 
@@ -893,6 +905,7 @@ export class StackService {
   private async pushPending(s: StackRow): Promise<void> {
     for (const l of this.d.repo.layers(s.id)) {
       if (l.state === "merged" || l.remoteOkSha === null) continue;
+      if (!this.d.external.allowed("force_push", { repoSlug: s.repoSlug, ticketKey: l.ticketKey })) continue;
       const local = await revParse(s.repoPath, `refs/heads/${l.branch}`);
       const remote = await remoteTip(s.repoPath, s.remote, l.branch);
       if (remote === local) {
@@ -1127,7 +1140,23 @@ export class StackService {
   // ---------------------------------------------------------------- 小工具
 
   policyOf(s: StackRow): StackPolicy {
-    return this.d.policy.forSlug(s.repoSlug);
+    const base = this.d.policy.forSlug(s.repoSlug);
+    if (!this.d.overlay) return base;
+    try {
+      return this.d.overlay(base, this.d.repo.layers(s.id).filter((l) => l.mergedAt === null).map((l) => l.ticketKey));
+    } catch (e) {
+      this.d.log(`stacks: automation level for stack ${s.id}`, e);
+      return base;
+    }
+  }
+
+  private epicAutoRebaseRepos(): string[] {
+    try {
+      return this.d.autoRebaseRepos?.() ?? [];
+    } catch (e) {
+      this.d.log("stacks: repos of semi epics", e);
+      return [];
+    }
   }
 
   private isManaged(repo: string, branch: string, path: string): boolean {

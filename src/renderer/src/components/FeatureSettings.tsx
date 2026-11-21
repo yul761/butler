@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AUTOMATION_LEVELS, type AutomationLevel, type AutomationState } from "../../../shared/automation";
 import { applyFeatureToggle, type FeatureId, type FeaturePolicyState, type FeatureRow } from "../../../shared/feature-rows";
 import type { EditableSettings } from "../../../shared/settings";
 import type { AdvancedGroupId } from "../../../shared/settings-layout";
@@ -51,12 +52,57 @@ function FeatureRowView({ row, busy, onToggle, onOpenAdvanced }: { row: FeatureR
 }
 
 /** 功能页的纯视图（测试直接渲染它）。busyId：正在写的那一行；写的期间所有行的控件都禁用，免得别的行点了弹回原样。 */
-export function FeatureList({ rows, busyId, onToggle, onOpenAdvanced }: { rows: FeatureRow[]; busyId: FeatureId | null; onToggle(id: FeatureId, on: boolean): void; onOpenAdvanced(group: AdvancedGroupId): void }) {
+export function FeatureList({ rows, busyId, locked = false, onToggle, onOpenAdvanced }: {
+  rows: FeatureRow[];
+  busyId: FeatureId | null;
+  /** 正在套用档位预设：所有行也禁用。 */
+  locked?: boolean;
+  onToggle(id: FeatureId, on: boolean): void;
+  onOpenAdvanced(group: AdvancedGroupId): void;
+}) {
   return (
     <div className="feature-list">
       {rows.map((r) => (
-        <FeatureRowView key={r.id} row={r} busy={busyId !== null} onToggle={onToggle} onOpenAdvanced={onOpenAdvanced} />
+        <FeatureRowView key={r.id} row={r} busy={locked || busyId !== null} onToggle={onToggle} onOpenAdvanced={onOpenAdvanced} />
       ))}
+    </div>
+  );
+}
+
+/** 档位的选项：手动、半自动可选；全自动以后再做，先显示成不能选；「自定义」只在开关和档位对不上时出现、不能选。 */
+export function AutomationLevelView({ state, busy, onPick }: { state: AutomationState; busy: boolean; onPick(level: AutomationLevel): void }) {
+  const t = S.set.auto;
+  const custom = state.display === "custom";
+  // 产品、仓库层的不一样（`族:键@名字`）点档位改不回来，单独列出来；其余是全局的，点档位就恢复。
+  const globalDiffers = state.differs.filter((d) => !d.includes("@")).length;
+  const layerNames = [...new Set(state.differs.filter((d) => d.includes("@")).map((d) => d.slice(d.indexOf("@") + 1)))];
+  return (
+    <div className="automation-level" data-testid="automation-level" data-display={state.display}>
+      <h3>{t.title}</h3>
+      <p className="muted">{t.intro}</p>
+      <div className="automation-options" role="radiogroup" aria-label={t.title}>
+        {AUTOMATION_LEVELS.map((l) => (
+          <label key={l} className="automation-option" data-testid={`automation-${l}`}>
+            <input type="radio" name="automation-level" checked={!custom && state.level === l} disabled={busy} onChange={() => onPick(l)} />
+            <span className="automation-label">{t.levels[l].label}</span>
+            <span className="muted">{t.levels[l].desc}</span>
+          </label>
+        ))}
+        <label className="automation-option disabled" data-testid="automation-full">
+          <input type="radio" name="automation-level" checked={false} disabled readOnly />
+          <span className="automation-label">{t.levels.full.label}</span>
+          <span className="muted">{t.levels.full.desc}</span>
+        </label>
+        {custom && (
+          <label className="automation-option" data-testid="automation-custom">
+            <input type="radio" name="automation-level" checked disabled readOnly />
+            <span className="automation-label">{t.custom}</span>
+            {globalDiffers > 0 && <span className="muted">{t.customHint(globalDiffers)}</span>}
+            {layerNames.length > 0 && <span className="muted" data-testid="automation-custom-layers">{t.customLayers(layerNames.join(", "))}</span>}
+          </label>
+        )}
+      </div>
+      {state.level === "semi" && !state.intakeSourceSet && <p className="feature-elsewhere" data-testid="automation-no-source">{t.semiNoSource}</p>}
     </div>
   );
 }
@@ -64,12 +110,14 @@ export function FeatureList({ rows, busyId, onToggle, onOpenAdvanced }: { rows: 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
- * 设置 › 功能：每个 3.0 功能一行。设置和覆盖都读到才画；写的时候不做乐观更新，
+ * 设置 › 自动化（tab id 仍是 features）：上面是档位（BTL-247），下面「高级」里收着原来每个功能一行的开关。设置和覆盖都读到才画；写的时候不做乐观更新，
  * 写完（成没成都）重读一次，界面总是显示真实状态（免得显示成开、其实只写了一半）。
  */
 export function FeatureSettings({ onOpenAdvanced }: { onOpenAdvanced(group: AdvancedGroupId): void }) {
   const [settings, setSettings] = useState<EditableSettings | null>(null);
   const [policy, setPolicy] = useState<FeaturePolicyState | null>(null);
+  const [auto, setAuto] = useState<AutomationState | null>(null);
+  const [autoBusy, setAutoBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<FeatureId | null>(null);
   const seq = useRef(0);
@@ -77,8 +125,9 @@ export function FeatureSettings({ onOpenAdvanced }: { onOpenAdvanced(group: Adva
 
   const load = useCallback(async () => {
     const mine = ++seq.current;
-    const [s, p] = await Promise.allSettled([api.settings(), api.featurePolicy()]);
+    const [s, p, a] = await Promise.allSettled([api.settings(), api.featurePolicy(), api.automationState()]);
     if (!live.current || mine !== seq.current) return;
+    setAuto(a.status === "fulfilled" ? a.value : null);
     if (s.status === "rejected" || p.status === "rejected") {
       setError(message(s.status === "rejected" ? s.reason : (p as PromiseRejectedResult).reason));
       return;
@@ -104,7 +153,7 @@ export function FeatureSettings({ onOpenAdvanced }: { onOpenAdvanced(group: Adva
   }, [load]);
 
   async function toggle(id: FeatureId, on: boolean) {
-    if (busyId) return;
+    if (busyId || autoBusy) return;
     setBusyId(id);
     const r = await runFeatureWrites(applyFeatureToggle(id, on), (w) =>
       w.kind === "setting" ? api.setSetting(w.key, w.value) : api.policyPatch({ family: w.family, key: w.key, value: w.value }),
@@ -114,10 +163,26 @@ export function FeatureSettings({ onOpenAdvanced }: { onOpenAdvanced(group: Adva
     if (live.current) setBusyId(null);
   }
 
+  async function pick(level: AutomationLevel) {
+    if (autoBusy || busyId) return;
+    setAutoBusy(true);
+    try {
+      await api.setSetting("automationLevel", level);
+    } catch (e) {
+      reportError(e);
+    }
+    await load();
+    if (live.current) setAutoBusy(false);
+  }
+
   const view = featuresView({ settings, policy, error });
   return (
     <section className="settings-section">
-      <p className="muted">{S.set.featuresIntro}</p>
+      {auto ? (
+        <AutomationLevelView state={auto} busy={autoBusy || busyId !== null} onPick={(l) => void pick(l)} />
+      ) : (
+        view.kind !== "loading" && <p className="error">{S.set.auto.failed}</p>
+      )}
       {view.kind === "loading" && <p className="empty">{S.loading}</p>}
       {view.kind === "failed" && (
         <div className="empty">
@@ -126,7 +191,15 @@ export function FeatureSettings({ onOpenAdvanced }: { onOpenAdvanced(group: Adva
           <button type="button" data-testid="features-retry" onClick={() => void load()}>{S.set.retry}</button>
         </div>
       )}
-      {view.kind === "ready" && <FeatureList rows={view.rows} busyId={busyId} onToggle={(id, on) => void toggle(id, on)} onOpenAdvanced={onOpenAdvanced} />}
+      {view.kind === "ready" && (
+        // 「高级」：原来的一个个开关，默认收起（BTL-247）。
+        <details className="automation-advanced" data-testid="automation-advanced">
+          <summary>{S.set.auto.advanced}</summary>
+          <p className="muted">{S.set.featuresIntro}</p>
+          <p className="muted">{S.set.auto.advancedHint}</p>
+          <FeatureList rows={view.rows} busyId={busyId} locked={autoBusy} onToggle={(id, on) => void toggle(id, on)} onOpenAdvanced={onOpenAdvanced} />
+        </details>
+      )}
     </section>
   );
 }

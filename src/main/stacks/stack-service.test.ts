@@ -130,7 +130,7 @@ function gitWorld(branches: readonly string[]) {
 }
 
 /** 4 层的栈 a ← b ← c ← d，每层一个提交、各改各的文件；全部推到远端。另有一个「GitHub」克隆用来合并。 */
-function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => boolean; autoRebase?: boolean; policy?: Record<string, unknown>; branches?: string[] } = {}) {
+function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?: ExternalDetail["scope"]) => boolean; autoRebase?: boolean; policy?: Record<string, unknown>; branches?: string[] } = {}) {
   const branches = o.branches ?? BRANCHES;
   const { remote, repo, hub } = gitWorld(branches);
 
@@ -148,12 +148,12 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind) => bool
     policy,
     external: {
       async attempt<T>(kind: ExternalActionKind, detail: ExternalDetail, run: () => Promise<T>) {
-        const ran = allow(kind);
+        const ran = allow(kind, detail.scope);
         external.push({ kind, detail, ran });
         if (!ran) return { ran: false as const, auditId: 1 };
         return { ran: true as const, value: await run(), auditId: 1 };
       },
-      allowed: (k) => allow(k),
+      allowed: (k, scope) => allow(k, scope),
     },
     workRoot: join(tempDir("butler-stackwork-"), "stack-work"),
     execPath: process.execPath,
@@ -303,6 +303,20 @@ describe("StackService.define", () => {
     expect(w.svc.remove(ids[0]!).ok).toBe(true);
     expect(await w.svc.detect(w.repo)).toEqual([]);
   });
+
+  it("detects stacks on tick in a repo of a semi epic even with autoRebase off everywhere (BTL-247)", async () => {
+    const w = world({ autoRebase: false });
+    for (const [i, b] of BRANCHES.entries()) {
+      fake.prs.set(10 + i, { number: 10 + i, url: `https://github.com/acme/app/pull/${10 + i}`, state: "OPEN", isDraft: i > 0, title: b, body: "", base: i ? BRANCHES[i - 1]! : "main", head: b, headSha: null, labels: [] });
+    }
+    w.deps.repos = () => [w.repo];
+    await w.svc.tick();
+    expect(w.repoT.list()).toEqual([]);
+    w.deps.autoRebaseRepos = () => [w.repo];
+    w.advance(24 * 3_600_000);
+    await w.svc.tick();
+    expect(w.repoT.list()).toHaveLength(1);
+  });
 });
 
 describe.each<[string, StackRunMode | undefined]>([["--update-refs", undefined], ["per-layer fallback", "per_layer"]])("bottom merged (%s)", (_n, mode) => {
@@ -436,6 +450,22 @@ describe("StackService switches", () => {
     expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
   });
 
+  it("lets an epic's own automation level decide autoRebase from the unmerged layers' tickets (BTL-247)", async () => {
+    const w = world({ autoRebase: false });
+    const id = await defineAll(w);
+    const seen: (string | null)[][] = [];
+    let level: "semi" | "manual" | null = "semi";
+    w.deps.overlay = (base, keys) => (seen.push(keys), level === null ? base : { ...base, autoRebase: level === "semi" });
+    expect(w.svc.policyOf(w.repoT.get(id)!).autoRebase).toBe(true);
+    expect(seen.at(-1)).toEqual(["A", "B", "C", "D"]);
+    level = "manual";
+    expect(w.svc.policyOf(w.repoT.get(id)!).autoRebase).toBe(false);
+    w.deps.overlay = () => {
+      throw new Error("boom");
+    };
+    expect(w.svc.policyOf(w.repoT.get(id)!).autoRebase).toBe(false);
+  });
+
   it("rebases locally but neither pushes nor opens PRs with the outward switches off, then catches up", async () => {
     let on = false;
     const w = world({ allow: () => on });
@@ -459,6 +489,26 @@ describe("StackService switches", () => {
     on = true;
     await w.svc.rebaseNow(id);
     await w.svc.tick();
+    expect(w.remoteTip("b")).toBe(w.tip("b"));
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
+  });
+});
+
+describe("StackService per-ticket switches (BTL-247)", () => {
+  it("catches up pushes and the bottom PR when only the layers' tickets are allowed", async () => {
+    let on = false;
+    // 全局关着；只有带 ticket 的判断（epic 档位盖上去的）放行。
+    const w = world({ policy: { dailyRebase: false }, allow: (_k, scope) => on && !!scope?.ticketKey });
+    const id = await defineAll(w);
+    const oldRemote = w.remoteTip("b");
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "u1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    expect(w.remoteTip("b")).toBe(oldRemote);
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+    on = true;
+    w.advance(10 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)?.trigger).toBe("bottom_merged");
     expect(w.remoteTip("b")).toBe(w.tip("b"));
     expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
   });

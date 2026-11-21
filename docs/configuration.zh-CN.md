@@ -11,14 +11,30 @@ Butler 没有配置文件。所有设置都在 **设置** 页里改，存在 `~/
 1. **环境检查**
 2. **常规**
 3. **记忆（StateCore）**
-4. **调度与 handoff**
+4. **定时与状态**
 5. **复盘规矩**（自动备份、导出提醒和准入策略，见[复盘规矩：批量操作、准入策略和导入导出](#复盘规矩批量操作准入策略和导入导出)）
 
-设置页顶上还有四个标签：**模型路由**（见[模型路由](#模型路由)）、**评论与 CI**（见[评论与 CI](#评论与-ci)）、**打断与通知**（见[打断与通知](#打断与通知)）和 **栈**（见[栈](#栈)）。
+**自动化** 标签见[自动化档位](#自动化档位)。设置页顶上还有四个标签：**模型路由**（见[模型路由](#模型路由)）、**评论与 CI**（见[评论与 CI](#评论与-ci)）、**打断与通知**（见[打断与通知](#打断与通知)）和 **栈**（见[栈](#栈)）。
 
 合并总控，以及给 epic 总控用的 `end_session` 工具，见[合并总控](#合并总控)和 [README](../README.zh-CN.md)，两者都没有设置项。
 
 审计记录在侧边栏单独的 **审计** 页里。**效果** 页也没有设置项，见[效果页](#效果页)。
+
+## 自动化档位
+
+设置页顶上的 **自动化** 标签决定 Butler 自己做多少事。
+
+| 设置 | 键 | 默认值 | 可填的值和说明 |
+|------|----|--------|----------------|
+| 自动化档位 | `automationLevel` | `manual` | `manual` 或 `semi`。**全自动（以后）** 会显示，但还不能选。选一档会把它管的开关（见下面）写成这一档的预设，别的都不动。再选一次同一档，会把这些开关恢复成预设。 |
+
+- **手动。** 受管的开关全关：评论、CI、栈、接活都等你处理。
+- **半自动。** PR 评论转给 session，不回复、不标 resolved（`comments.enabled` 开，`comments.reply` 和 `comments.resolve` 关）。看起来不稳定的 CI 失败重跑一次（`ci.enabled` 开，`ci.maxReruns` 为 1，`externalCiRerun` 开）。栈自动 rebase，Butler 推送、强推并开 PR（`autoRebase` 开，`externalBranchPush`、`externalForcePush`、`externalPrOpen` 开）。开 PR 前预审（`preReviewEnabled` 开）。选了来源的自动接活直接开工（`enabled` 和 `autoStart` 开；`intakeSource` 还是 `none` 时，这个标签会提示一句，这一项先不动）。
+- **合并永远要你自己点**，哪一档都一样；对外动作照样记进[审计](#对外动作)。
+
+一个个开关收在默认折叠的 **高级：一个个开关** 里，和 **高级** 标签里对应的设置是同一个。只要有受管的开关和存的档位对不上（全局层，或者[评论与 CI](#评论与-ci)、[栈](#栈)、[自动接活](#自动接活)的产品层、仓库层），档位就显示 **自定义**，并写着有几个开关不一样。点档位只改全局那一层，所以这个标签会列出自己的设置不一样的产品和仓库；它们照旧在 **高级** 标签里改。
+
+**epic 档位。** epic 页标题旁边有 **epic 档位** 下拉框：**跟随全局**（默认）、**手动** 或 **半自动**。epic 自己选的档位只管它的 ticket，对这些 ticket 盖过受管开关在全局、产品、仓库三层的设置。它存在 epic 上，不是一项设置。一个栈里每个 ticket 所在的 epic 都自己选了同一档时，这个栈才按那一档；档位混着的栈按原来的开关。自动接活从 Jira 接进来的 ticket，父 epic 在 Butler 里已经有了时，开不开工也按这个 epic 的档位；这个仓库接不接活仍然按接活的设置。**半自动** 就开工（也按半自动预审），哪怕仓库的接活不自动开工，并告诉 epic 总控；**手动** 只建进 epic、不开工，要澄清的只提醒你、不开 session，已经排着的在 epic 改成手动以后回到搁着。改了 epic 档位，搁着的马上按新档位重新决定。接活来源和拉取时间仍然只看全局。
 
 ## 环境检查
 
@@ -90,7 +106,7 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 
 | 设置 | 键 | 默认值 | 可填的值和说明 |
 |------|----|--------|----------------|
-| 把 handoff 的进度、决策、follow-up 和经验写进 StateCore，并在 Butler 打开的 session 里挂上记忆 | `memoryEnabled` | `1`（开） | `1` 或 `0`。关掉后，Butler 不往 StateCore 写任何东西，启动 session 时也不挂记忆 MCP server。已有的记忆会保留。重新打开后，Butler 会把漏掉的 ticket 补上。 |
+| 把状态里的进度、决策、follow-up 和经验写进 StateCore，并在 Butler 打开的 session 里挂上记忆 | `memoryEnabled` | `1`（开） | `1` 或 `0`。关掉后，Butler 不往 StateCore 写任何东西，启动 session 时也不挂记忆 MCP server。已有的记忆会保留。重新打开后，Butler 会把漏掉的 ticket 补上。 |
 | 上下文超过多少 token 时自动换新（0 = 关） | `refreshThresholdTokens` | `150000` | `0` 表示关掉自动换新，否则填一个 token 整数（最多 7 位）。当 Butler 的某个 session 已经停下、没在等你，而且上一轮的上下文至少有这么长时，Butler 会输入 `/handoff`，等记忆真的存好 handoff，把最近几轮对话存到 `~/.butler/refresh/<session>.md`（不调用模型），再输入 `/clear`，然后让 session recall 那份 handoff、读这个文件，接着做换新前在做的事（如果当时在等你、等 CI 或等子 session，就说一句在等什么并继续等）。需要打开记忆。运行中的 session 旁边的 ↻ 按钮，以及总控的 `refresh_session`，可以随时手动换新，不受这项设置影响。 |
 | session 闲置多少分钟后自动关闭（0 = 关） | `idleCloseMinutes` | `180` | `0` 表示关掉自动关闭，否则填一个不小于 10 的分钟整数（最多 5 位）。当 Butler 的某个 session 开着终端、停下超过这个时间（电脑睡着的时间不算），没有要你决定的事、没有后台任务、没在等合并或 CI、不在换新中，如果是总控、它管的子 session 也都没在干活时，Butler 会先让它写 handoff（`/handoff`），等记忆写完，再像 `end_session` 一样结束终端，以后可以恢复。记忆关着时 ticket 的 session 和 epic 总控照样写 `/handoff`（Butler 自己存着，每日简报要用）。你隐藏的 session 超过 14 天会从 Butler 里删掉，transcript 留在磁盘上。session 栏的 **清理闲置** 会立刻对那里停下至少 5 分钟的 session 做同样的事，不受这项设置影响。 |
 
@@ -141,19 +157,21 @@ macOS 上的可用内存按 Activity Monitor 的算法从 `vm_stat` 算：总量
 - **macOS：**把放 worktree 的目录加进「聚焦」的隐私列表（系统设置 → Siri 与聚焦 → 聚焦隐私），免得每次 `pnpm install` 都被重新索引。装了第三方杀毒软件的话，同样排除这些目录。macOS 自己管交换空间：磁盘至少留 15%～20% 的空闲，它才有地方换出。
 - **两边都是：**你自己的 Claude 配置里装的每个 MCP server，每个 session 都会再起一份。**轮到你**页「运行情况」里的**内存**卡片会列出你装的 MCP 里占内存最多的。不常用的可以从你的 Claude 配置里去掉；Butler 不会替你改这个配置。
 
-## 调度与 handoff
+## 定时与状态
+
+Butler 内部把它为 ticket 写的状态叫 handoff，`/handoff` 命令沿用这个名字。
 
 | 设置 | 键 | 默认值 | 可填的值和说明 |
 |------|----|--------|----------------|
-| 晚间 handoff 时间 | `nightlyTime` | `16:00` | `HH:MM`，本地时间。如果到点时 Butler 没开、电脑在睡眠或锁屏，会在下次启动、唤醒或解锁时补跑，排在早间刷新之前。 |
+| 晚间状态更新的时间 | `nightlyTime` | `16:00` | `HH:MM`，本地时间。如果到点时 Butler 没开、电脑在睡眠或锁屏，会在下次启动、唤醒或解锁时补跑，排在早间刷新之前。 |
 | 每天几点让全局总控巡检一次 | `butlerPatrolTime` | 空（关） | `HH:MM`，本地时间；空 = 关。到点时 Butler 打开（或接着用最近的）全局总控，让它看一遍 PR、CI 和未决的提问，用 `send_message` 提醒该跟进的 epic 总控，用 `ask_user` 列出要你亲自做的事。全局总控正忙就等它停下来；到点时电脑在睡眠或 Butler 没开，当天醒来、解锁或启动时补一次，过了零点不补。如果在当天的巡检时间过了之后才打开这项设置，会马上巡检一次。巡检每天最多开一次 session。上一次巡检列出的提问还没处理时，下一次会等你处理完。全局总控不会被自动换新，也不会因为闲置被自动关闭。 |
-| 工作日（只在这些天跑晚间 handoff） | `workingDays` | `1,2,3,4,5`（周一到周五） | 界面上是复选框。存的值是用逗号分隔的 `0`–`6`，`0` 是周日。晚间 handoff 和早间刷新只在这些天运行。 |
-| tracker MCP 工具（handoff 只能调用这些，一行一个） | `trackerTools` | 空 | 一行一个 MCP 工具名，格式是 `mcp__<server>__<tool>`。只写 `mcp__<server>` 会放开这个 server 的所有工具，除非 server 是只读的，否则别这么写。其他内容，例如 `Bash(...)` 规则或命令行参数，都会被拒绝。handoff 和刷新可以调用这些工具，加上 `Read`、`Grep`、`Glob`、`gh pr view`、`gh pr checks`、`git log` 和 `git status`，再加上你用户级或托管（policy）的 Claude Code 设置允许的工具（见下文）。 |
-| 后台 handoff 也加载本地级的 MCP… | `headlessProjectMcp` | `0`（关） | `1` 或 `0`。见[接入你的 tracker](#接入你的-tracker)。 |
-| handoff prompt 模板 | `handoffPrompt` | 内置 | 做 handoff 时发给 `claude` 的指令。不能为空，最长 20,000 个字符。见[改写提示词](#改写提示词)。 |
-| 早间刷新 prompt 模板 | `refreshPrompt` | 内置 | 早上快速查一遍 PR 和 tracker 状态，不总结对话。限制同上。 |
+| 工作日（只在这些天跑晚间状态更新） | `workingDays` | `1,2,3,4,5`（周一到周五） | 界面上是复选框。存的值是用逗号分隔的 `0`–`6`，`0` 是周日。晚间 handoff 和早间刷新只在这些天运行。 |
+| tracker MCP 工具（更新状态时只能调用这些，一行一个） | `trackerTools` | 空 | 一行一个 MCP 工具名，格式是 `mcp__<server>__<tool>`。只写 `mcp__<server>` 会放开这个 server 的所有工具，除非 server 是只读的，否则别这么写。其他内容，例如 `Bash(...)` 规则或命令行参数，都会被拒绝。handoff 和刷新可以调用这些工具，加上 `Read`、`Grep`、`Glob`、`gh pr view`、`gh pr checks`、`git log` 和 `git status`，再加上你用户级或托管（policy）的 Claude Code 设置允许的工具（见下文）。 |
+| 后台的状态更新也加载本地级的 MCP… | `headlessProjectMcp` | `0`（关） | `1` 或 `0`。见[接入你的 tracker](#接入你的-tracker)。 |
+| 状态更新的提示词模板 | `handoffPrompt` | 内置 | 做 handoff 时发给 `claude` 的指令。不能为空，最长 20,000 个字符。见[改写提示词](#改写提示词)。 |
+| 早间刷新的提示词模板 | `refreshPrompt` | 内置 | 早上快速查一遍 PR 和 tracker 状态，不总结对话。限制同上。 |
 
-这一节还有 **立即运行晚间 handoff** 按钮。
+这一节还有 **现在就跑一次晚间状态更新** 按钮。
 
 晚间运行做完 ticket 之后，还会为每个自上次汇总以来总控 session 或 ticket 有新动静的 epic 写一份汇总。有总控 session 时，它会 fork 这个 session，并使用和 handoff 相同的只读参数。如果 ticket 那一轮被限流了，当晚不写 epic 汇总，留给早上的补跑。epic 页上还有 **立即更新**，它先为这个 epic 里有动静的 ticket 跑 handoff，再写汇总。上次汇总之后 PR 的状态、CI、review 或能不能合并有变化，也算新动静，所以就算没人打字，汇总也会标成过时。每份汇总都写着读 PR 的时间（"PR 状态截至"）。在总控 session 里运行 `/handoff`，会直接根据对话本身写汇总。
 

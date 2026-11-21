@@ -30,7 +30,8 @@ export interface AssessmentDeps {
   gaps(row: PreReviewRow): EvidenceGap[];
   /** 预审给界面、总控看的样子（PreReviewService.view）。 */
   preReviewView(row: PreReviewRow): PreReviewView;
-  preReviewEnabled(): boolean;
+  /** 给了 ticket 时它所在 epic 自己选的自动化档位优先（BTL-247）。 */
+  preReviewEnabled(ticketKey?: string | null): boolean;
   policy(slug: string): ResolvedPrPolicy;
   /** session 的检查情况（和预审同一个来源）。 */
   checks(sessionId: string | null): { absent: string | null; hits: CheckHitView[] };
@@ -111,7 +112,7 @@ export class AssessmentService {
       risk: risk && { level: risk.level, reasons: risk.reasons, headSha: risk.headSha, computedAt: risk.computedAt, rulesVersion: risk.rulesVersion },
       preReview: row ? this.d.preReviewView(row) : null,
       brief,
-      preReviewEnabled: this.d.preReviewEnabled(),
+      preReviewEnabled: this.d.preReviewEnabled(pr.ticketKey),
       canPost: pr.state === "open" && brief !== null,
     };
   }
@@ -135,7 +136,7 @@ export class AssessmentService {
           prId: null, url: null, number: null, title: null, state: null, draft: false, target: r.target, readiness: null, risk: null,
           preReview: this.d.preReviewView(r),
           brief: this.briefView(this.d.repo.latestBriefFor(r.target) ?? this.d.repo.latestBriefForBranch(r.target.repoSlug, r.target.branch)),
-          preReviewEnabled: this.d.preReviewEnabled(), canPost: false,
+          preReviewEnabled: this.d.preReviewEnabled(ticketKey), canPost: false,
         }),
       );
     return { ticketKey, prs: prs.map((p) => this.view(p)), branches };
@@ -212,7 +213,7 @@ export class AssessmentService {
   private async doAssess(prId: number): Promise<void> {
     const pr = this.d.prs.get(prId);
     if (!pr || pr.state !== "open") return;
-    const enabled = this.d.preReviewEnabled();
+    const enabled = this.d.preReviewEnabled(pr.ticketKey);
     const policy = this.d.policy(pr.slug);
     const lang = this.d.lang();
     const row = this.latestPreReview(pr);

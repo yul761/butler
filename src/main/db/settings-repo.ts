@@ -190,6 +190,8 @@ export const SETTING_DEFAULTS = {
   intakeRepoMap: "",
   /** 4.0（BTL-244）：显示 Butler 之外开的 session（未认领）。默认关：关着时完全不扫描 ~/.claude/projects 去发现它们。 */
   showOutsideSessions: "0",
+  /** 4.0（BTL-247）：全局自动化档位，manual | semi。默认手动 = 4.0 以前的默认；每个 epic 可以另选（features.automation_level）。 */
+  automationLevel: "manual",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

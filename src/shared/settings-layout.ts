@@ -30,7 +30,7 @@ export function sectionTarget(s: SettingsSection | undefined): { tab: SettingsTa
   return { tab: "basic", group: null };
 }
 
-export type Placement = { tab: "basic" } | { tab: "advanced"; group: AdvancedGroupId } | { tab: "health" } | { tab: "elsewhere" };
+export type Placement = { tab: "basic" } | { tab: "features" } | { tab: "advanced"; group: AdvancedGroupId } | { tab: "health" } | { tab: "elsewhere" };
 
 const basic: Placement = { tab: "basic" };
 const adv = (group: AdvancedGroupId): Placement => ({ tab: "advanced", group });
@@ -47,6 +47,8 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   refreshThresholdTokens: basic,
   onboardingDone: basic,
   showOutsideSessions: basic,
+  // 自动化（tab id 仍是 features）：全局档位
+  automationLevel: { tab: "features" },
   // 高级 › 定时与 handoff
   nightlyTime: adv("schedule"),
   workingDays: adv("schedule"),
