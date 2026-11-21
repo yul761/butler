@@ -150,7 +150,7 @@ export const ASK_USER_TOOL_EN = {
 export const REPORT_TOOL = {
   name: "report",
   description:
-    "把进展交给总控和用户：存进 Butler 的「汇报」栏。kind 是 done 或 blocked 时，Butler 还会在管你的总控停下来时把它送进总控的终端，总控不用来问。" +
+    "把进展交给总控和用户：存进 Butler 的「汇报」栏。kind 是 done 或 blocked 时，Butler 还会把它放进管你的总控的信箱（它在干活就在下一次调用工具时读到，停着就直接送进去），总控不用来问。" +
     "交给你的事做完了用 done；卡住了、要总控或别的 session 帮忙用 blocked；中途的进展用 progress（只存不送，默认）。" +
     "要用户拍板的事用 ask_user，不要用 report。",
   inputSchema: {
@@ -167,7 +167,7 @@ export const REPORT_TOOL = {
 export const REPORT_TOOL_EN = {
   ...REPORT_TOOL,
   description:
-    "Hand your progress to your coordinator and the user: it is stored in Butler's \"Reports\" pane. When kind is done or blocked, Butler also delivers it into the terminal of the coordinator that manages you once it stops, so it does not have to ask. " +
+    "Hand your progress to your coordinator and the user: it is stored in Butler's \"Reports\" pane. When kind is done or blocked, Butler also puts it in the mailbox of the coordinator that manages you (it reads it at its next tool call if working, or gets it typed in once stopped), so it does not have to ask. " +
     "Use done when the work you were given is finished; blocked when you are stuck and need the coordinator or another session; progress for progress along the way (stored only, the default). " +
     "For things the user has to decide, use ask_user, not report.",
   inputSchema: {
