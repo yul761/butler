@@ -1,9 +1,10 @@
-import { main, readStdin } from "./butler-hook";
+import { inboxDir, main, readStdin, writeEnvelope } from "./butler-hook";
 import { parseCheckArgs, realCheckDeps, runCheck, runPushCheck } from "./check";
 import { killLiveCommands } from "./check-run";
 import { realGateDeps, runGate } from "./gate";
 import { writeSync } from "node:fs";
 import { runReadonly } from "./readonly";
+import { mailboxEnvelope, runMailbox } from "./mailbox";
 
 // 设计文档 4.3：任何异常都以退出码 0 静默结束，绝不阻塞 Claude Code。
 // 例外：readonly 模式出错必须拒绝（见 readonlyAnswer），所以这里同步写出 deny 再退出。
@@ -52,6 +53,26 @@ async function readonlyAnswer(): Promise<void> {
   if (out) await new Promise<void>((resolve) => process.stdout.write(out, () => resolve()));
 }
 
+/**
+ * mailbox：工具调用的间隙送信箱里的消息（BTL-245）。stdout 写完才把认领的文件记成送出；写不出去就放回去。
+ * 最后写一个信封叫主进程马上记账（写不了也不要紧：.done 文件本身就是回执，主进程定时清扫）。
+ */
+async function mailboxAnswer(): Promise<void> {
+  const run = runMailbox(await readStdin(), process.env, process.argv[3] ?? "");
+  if (!run.out) return;
+  const ok = await new Promise<boolean>((resolve) => process.stdout.write(run.out, (err) => resolve(!err)));
+  if (!ok) {
+    run.rollback();
+    return;
+  }
+  run.commit();
+  try {
+    writeEnvelope(inboxDir(process.env), mailboxEnvelope(process.env, Date.now()));
+  } catch {
+    // 定时清扫会补上。
+  }
+}
+
 const mode = process.argv[2];
 const opts = parseCheckArgs(process.argv.slice(3));
 // gate：合并闸门；check：编辑后的确定性检查；check-push：push 前的检查（契约 4.5）；其余照旧写收件箱。
@@ -60,6 +81,8 @@ const job =
     ? answer((s) => runGate(s, process.env, realGateDeps))
     : mode === "readonly"
       ? readonlyAnswer()
+      : mode === "mailbox"
+      ? mailboxAnswer()
       : mode === "check"
       ? answer((s) => runCheck(s, process.env, realCheckDeps, opts))
       : mode === "check-push"
