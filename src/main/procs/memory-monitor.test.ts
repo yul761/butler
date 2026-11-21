@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MemorySamplesRepo } from "../db/memory-samples-repo";
 import { memDb } from "../test-utils";
-import { MemoryMonitor, type MemoryMonitorDeps, type MonitorSample } from "./memory-monitor";
+import { MemoryMonitor, type MemoryMonitorDeps, type MonitorSample, sampleIntervalMs, SAMPLE_INTERVAL_MS } from "./memory-monitor";
 import { parsePsTable } from "./proc-table";
 
 const PS = [
@@ -215,5 +215,13 @@ describe("MemoryMonitor", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("sampleIntervalMs (BTL-242)", () => {
+  it("samples every 2 minutes on Windows, where each sample is a PowerShell process-table query", () => {
+    expect(sampleIntervalMs("win32")).toBe(120_000);
+    expect(sampleIntervalMs("darwin")).toBe(SAMPLE_INTERVAL_MS);
+    expect(sampleIntervalMs("linux")).toBe(SAMPLE_INTERVAL_MS);
   });
 });

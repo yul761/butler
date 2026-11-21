@@ -6,6 +6,12 @@ import { perfOpAsync } from "../diag/perf-stats";
 
 /** 采样间隔（设计 §2）。 */
 export const SAMPLE_INTERVAL_MS = 60_000;
+/** Windows 上每次采样是一次 PowerShell（Get-CimInstance Win32_Process），又慢又占 CPU：两分钟一次（BTL-242）。 */
+export const WIN_SAMPLE_INTERVAL_MS = 120_000;
+
+export function sampleIntervalMs(platform: NodeJS.Platform): number {
+  return platform === "win32" ? WIN_SAMPLE_INTERVAL_MS : SAMPLE_INTERVAL_MS;
+}
 /** 每几次采样写一次历史（5 分钟一个点）。 */
 export const HISTORY_EVERY = 5;
 /** 历史留多久。 */

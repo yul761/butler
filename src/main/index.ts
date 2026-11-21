@@ -315,6 +315,8 @@ const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
 let keepAwake: KeepAwake | null = null;
 const quitState = createQuitState(() => app.quit());
 let logger: Logger = () => undefined;
+/** 把攒着的日志行同步写完（退出、崩溃时；BTL-242 起日志攒一会儿再异步写）。 */
+let flushLogSync: () => void = () => undefined;
 /** dev 控制台 tee：防止在 tee 里再次写日志造成递归，stderr 管道断开后停止 tee。 */
 let teeing = false;
 let teeBroken = false;
@@ -486,12 +488,15 @@ function trayTooltip(): string {
 async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
-  logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
+  const fileLog = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
+  logger = fileLog;
+  flushLogSync = fileLog.flushSync;
   diag = new DiagService({
     mode: diagMode(process.env),
     now: Date.now,
     log: (line) => logger(line),
     logFile: join(paths.logs, "main.log"),
+    flushLog: () => fileLog.flush(),
     info: () => ({
       version: app.getVersion(),
       versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
@@ -3648,10 +3653,16 @@ async function bootstrap(): Promise<void> {
     waitTracker.closeAll();
     closing = true;
     db.close();
+    flushLogSync();
   });
 }
 
-process.on("uncaughtException", (e) => logger("uncaughtException", e));
+process.on("uncaughtException", (e) => {
+  logger("uncaughtException", e);
+  flushLogSync();
+});
+// 退出前把还攒着的日志写完（app.exit、正常退出都会到这里）。
+process.on("exit", () => flushLogSync());
 process.on("unhandledRejection", (e) => logger("unhandledRejection", e));
 
 if (process.argv.includes("--smoke")) {

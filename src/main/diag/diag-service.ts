@@ -15,6 +15,8 @@ export interface DiagServiceDeps {
   now: () => number;
   log: (line: string) => void;
   logFile: string;
+  /** 读日志尾巴之前把还攒着的行写进去（BTL-242 起日志是攒一会儿再写的）。 */
+  flushLog?: () => Promise<void>;
   /** 导出时要的其他信息（版本、进程指标……）。 */
   info: () => Omit<Parameters<typeof buildDiagnostics>[0], "now" | "mode" | "current" | "history" | "logTail">;
   /** 弹保存对话框，返回选的路径（取消为 null）。 */
@@ -140,6 +142,7 @@ export class DiagService {
 
   async build(): Promise<DiagnosticsFile> {
     const now = this.d.now();
+    await this.d.flushLog?.();
     return buildDiagnostics({
       ...this.d.info(),
       now, mode: this.d.mode,
