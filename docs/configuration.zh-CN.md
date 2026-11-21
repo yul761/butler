@@ -589,7 +589,7 @@ Butler 能在你 review 之前先把一遍关。默认全是关着的或只读�
 
 先用规则：已经 resolve 的 thread、你自己的评论和其他机器人的评论跳过，带 ```` ```suggestion ```` 的算要改，上面那几种情况算可忽略。规则判断不了的，`comments.useModel` 开着时经模型路由的 `comment_classify` 任务交给模型；模型也给不出结果的，或者模型关着时规则判断不了的，都算需要人判断。
 
-Copilot 和人的评论分开设置（`comments.copilot`、`comments.human`）。设成 `auto` 时，要改的（`comments.questions` 是 `session` 时还有提问）送进这个 PR 分支所属的 session，也就是 CI 结论送去的那个 session。Butler 等它停下来才送，不会打断它；一次最多送 `comments.maxPerDelivery` 条，带文件、行号和原文，同一个 session 同时只送一样东西（和 CI 结论共用）。设成 `review`（人的评论默认这样）时，评论在 ticket 的 **评论** 标签里等你看，**轮到你** 页会有一张卡片。该送进 session 却等了 30 分钟还没送出去的评论也会有卡片。设成 `off` 就不处理。
+Copilot 和人的评论分开设置（`comments.copilot`、`comments.human`）。设成 `auto` 时，要改的（`comments.questions` 是 `session` 时还有提问）送进这个 PR 分支所属的 session，也就是 CI 结论送去的那个 session。评论放进这个 session 的信箱，不会打断它：在干活就在下一次调用工具时读到，停着就直接输入进去。一次最多送 `comments.maxPerDelivery` 条，带文件、行号和原文。设成 `review`（人的评论默认这样）时，评论在 ticket 的 **评论** 标签里等你看，**轮到你** 页会有一张卡片。该送进 session 却等了 30 分钟还没送出去的评论也会有卡片。设成 `off` 就不处理。
 
 push 之后，Butler 在新的 head 上核对送出去的每条评论：行内评论的 thread 在别处 resolve 了、位置过时或没了，或者这次的改动碰到了它那几行（前后 3 行以内），就算已处理；review 正文和 PR 评论有新提交就算已处理。push 两次还没改到的，交回给你。已处理的评论，`comments.reply` 开着时 Butler 回复"已在 <提交> 中修改。"（标明是 Butler 的自动回复），`comments.resolve` 开着时 resolve 这个 thread。这两件事还要各自打开[对外动作](#对外动作)里的开关（`externalCommentReply`、`externalCommentResolve`），每次尝试都记在审计页上。
 

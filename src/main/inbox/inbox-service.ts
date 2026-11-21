@@ -1,21 +1,18 @@
-import { sanitizeTask, TASK_LIMIT, type ReportKind } from "../../shared/control";
+import type { ReportKind } from "../../shared/control";
 import type { InboxItemView, InboxRole, InboxScope, InboxView, NowTarget, Session, Ticket } from "../../shared/types";
 import type { InboxArchiveScope, InboxFilter, InboxItem, InboxOwner, InboxRepo } from "../db/inbox-repo";
 import type { ChoiceService } from "../interrupts/choices";
 import type { RecordEvent } from "../metrics/events";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
-import type { DeliverResult } from "../sessions/pty-manager";
+import { MAILBOX_BODY_LIMIT, type Mailbox } from "../mailbox/mailbox";
 import { M } from "../strings";
 
 /** feature 页、epic 页上最多显示这么多条最近的汇报。 */
 export const RECENT_REPORTS_LIMIT = 30;
-/** 汇报这么久还没送到总控（总控一直没开、没停下来）就不送了：过时的「做完了」只会误导总控。 */
+/** 汇报这么久还找不到总控（一个总控 session 都没有）就不送了：过时的「做完了」只会误导总控。排进了信箱的不受这个限制。 */
 export const REPORT_DELIVERY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-/** 一次送给总控的几条汇报（或者送给提问的 session 的几条回答）加起来最多这么多字符（sanitizeTask 的上限之内，留出开头的位置）；剩下的下一次送。 */
-const BATCH_CHARS = TASK_LIMIT - 1000;
 /**
- * 递回答送到（deliver 返回 sent）以后这么久之内，这个 session 的下一次 UserPromptSubmit 算是这次递引起的（只认一次）：
- * deliver 没等到 hook 就返回时（hook 不通、等满了），迟到的那一次不能把它别的未决条目当成用户在终端里答了。
+ * Butler 往一个 session 里直接输入信箱消息、送到（deliver 返回 sent）以后这么久之内，这个 session 的下一次 UserPromptSubmit
+ * 算是这次输入引起的（只认一次）：deliver 没等到 hook 就返回时（hook 不通、等满了），迟到的那一次不能把它别的未决条目当成用户在终端里答了。
  */
 export const ANSWERING_TTL_MS = 30_000;
 
@@ -34,11 +31,13 @@ export interface InboxServiceDeps {
   openHeads(): Session[];
   /** epic 的名字（送给 Butler 总控的汇报里写是哪个 epic，BTL-190 第 5 点）；不给或者找不到就不写。 */
   epicName?(epicId: number): string | null;
-  /** 递回答用的：不看「需要你」（未决的 ask_user 本身就算需要你），别的照常（忙、屏幕上有对话框、用户在打字、有草稿、在换新）。 */
-  answerGuard: Pick<DeliveryGuard, "check" | "recheckAfter">;
-  /** 递汇报用的：和 CI 结果同一道 guard（总控在等用户回答时不往里贴）。 */
-  reportGuard: Pick<DeliveryGuard, "check" | "recheckAfter">;
-  deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
+  /** 信箱（BTL-245）：回答和汇报都排进去，送达后在 on("answer") / on("report") 里结束条目。 */
+  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
+  /**
+   * 终端关着时汇报送给谁：这一类总控最近的那个（没隐藏的 head）。ticket：这个 ticket 的总控；feature、epic：它们的总控、epic session；
+   * butler：Butler 总控。没有为 null。不给时只送给开着的总控。
+   */
+  latestCoordinator?(where: { ticket: string } | { feature: number } | { epic: number } | { butler: true }): string | null;
   notify(): void;
   now(): number;
   log(msg: string, err?: unknown): void;
@@ -94,12 +93,33 @@ const repoName = (path: string): string => path.split(/[\\/]/).filter(Boolean).a
  * - report 存下；done / blocked 等管它的总控停下来时送进去（progress 只存不送；上面不可能有总控的也只存）。
  */
 export class InboxService {
-  /** 正在往里递东西的 session（head id）：同一个 session 同时只递一条。 */
-  private readonly busy = new Set<string>();
-  /** 正在递回答、或者刚送到回答的 session（head id）→ 到什么时候为止：这次递引起的 UserPromptSubmit 不结束别的条目（见 ANSWERING_TTL_MS）。 */
+  /** Butler 刚往里直接输入过信箱消息的 session（head id）→ 到什么时候为止：这次输入引起的 UserPromptSubmit 不结束别的条目（见 ANSWERING_TTL_MS）。 */
   private readonly answering = new Map<string, number>();
 
-  constructor(private readonly d: InboxServiceDeps) {}
+  constructor(private readonly d: InboxServiceDeps) {
+    // 回答送到了：结束这一条，记下送出去的那份答案（投递途中用户又改了，新答案会替换还在排队的那条）。
+    d.mailbox.on("answer", (m) => {
+      const id = Number(m.ref?.slice("answer:".length));
+      const answer = (m.meta as { answer?: unknown } | null)?.answer;
+      if (this.d.repo.resolve(id, "answered", this.d.now(), typeof answer === "string" ? answer : undefined)) this.d.notify();
+    });
+    // 汇报送到了总控。
+    d.mailbox.on("report", (m) => {
+      if (this.d.repo.resolve(Number(m.ref?.slice("report:".length)), "answered", this.d.now())) this.d.notify();
+    });
+  }
+
+  /**
+   * 信箱往这个 session 里直接输入（Mailbox 的 typing）：输入的途中（不限时）和送到以后 ANSWERING_TTL_MS 之内，
+   * 这个 session 的下一次 UserPromptSubmit 算这次输入引起的。没送到就不留。
+   */
+  butlerTyping(headId: string, phase: "start" | "sent" | "failed"): void {
+    const head = this.headId(headId);
+    if (phase === "start") this.answering.set(head, Infinity);
+    // 送到了、UserPromptSubmit 还没来（deliver 没等到 hook 就返回）：再等它一会儿。来过了（已经删掉）就不留。
+    else if (phase === "sent" && this.answering.has(head)) this.answering.set(head, this.d.now() + ANSWERING_TTL_MS);
+    else this.answering.delete(head);
+  }
 
   /** 这个 session 拥有的 ticket、feature、epic：ticket 的 session 从 ticket 往上找。 */
   private owner(s: Session): InboxOwner {
@@ -128,11 +148,13 @@ export class InboxService {
     if (auto && this.d.repo.setAnswer(id, M().interrupts.autoAnswered(auto.answer))) {
       this.d.choices?.recordDefault({ sessionId: s.id, ticketKey: s.ticketKey }, id, auto.defaultId, q.question, auto.answer);
       this.d.notify();
-      void this.flushAnswers(s.id);
+      this.queueAnswer(id);
       if (supersedes.length > 0) this.d.onSuperseded?.(supersedes);
+      this.withdrawSettled();
       return id;
     }
     this.d.notify();
+    if (supersedes.length > 0) this.withdrawSettled();
     this.d.onAsked?.({ id, sessionId: s.id, ticketKey: s.ticketKey, question: q.question, options: q.options ?? [], context: q.context ?? null, supersedes });
     return id;
   }
@@ -151,13 +173,24 @@ export class InboxService {
     const queued = kind !== "progress" && !noCoordinator;
     const id = this.d.repo.addReport({ ...owner, text, kind, status: queued ? "pending" : "dismissed", createdAt: this.d.now() });
     this.d.notify();
-    if (queued) void this.flushReports();
+    if (queued) this.queueReport(id);
     return { id, queued, noCoordinator };
   }
 
   /** ticket、feature、epic 归档了：这个范围里还未决的「待你决定」和汇报都记成 dismissed（不再显示、不再送）。 */
   dismissScope(scope: InboxArchiveScope): void {
     if (this.d.repo.dismissPending(scope, this.d.now()) > 0) this.d.notify();
+    this.withdrawSettled();
+  }
+
+  /** 已经不用送的（被顶掉的提问、归档时 dismissed 的、在终端里答过的）：还在信箱里排队的撤回。 */
+  private withdrawSettled(): void {
+    for (const prefix of ["answer", "report"]) {
+      for (const ref of this.d.mailbox.queuedRefs(prefix)) {
+        const item = this.d.repo.get(Number(ref.slice(prefix.length + 1)));
+        if (!item || item.status !== "pending") this.d.mailbox.withdraw(ref);
+      }
+    }
   }
 
   /** 这个 session 上面有没有能收汇报的总控：epic session 只有 Butler 总控开着时才有（BTL-190 第 5 点，没开就只存），别的看 mayHaveCoordinator。 */
@@ -174,7 +207,7 @@ export class InboxService {
     if (!answer || !item || item.kind !== "decision" || !this.d.repo.setAnswer(id, answer)) return false;
     this.recordAnswer(item, "card");
     this.d.notify();
-    void this.flushAnswers(this.headId(item.sessionId));
+    this.queueAnswer(id);
     return true;
   }
 
@@ -189,8 +222,8 @@ export class InboxService {
   /**
    * 这个 session 收到 UserPromptSubmit：用户在终端里回答了，它还没答的条目都算 answered。卡片上答好、还没送进去的不动：
    * 下次停下来照常送（不然答案永远送不进去）。
-   * Butler 正在往里递回答、刚送到回答（只认一次，最多 ANSWERING_TTL_MS），或者正在换新（/handoff、接着做的话）时不算：
-   * 递的回答送到后自己结束那几条。
+   * Butler 刚往里直接输入过信箱消息（只认一次，最多 ANSWERING_TTL_MS），或者正在换新（/handoff、接着做的话）时不算：
+   * 信箱送到的回答自己结束那几条。
    */
   promptSubmitted(sessionId: string): void {
     const head = this.headId(sessionId);
@@ -228,130 +261,101 @@ export class InboxService {
     return out;
   }
 
-  /** 递还没递出去的回答和汇报；太旧的汇报不再送。永不 reject。 */
+  /**
+   * 补排：已经答了、还没排进信箱的回答，还没找到总控的汇报（那时一个总控都没有）。太旧的、找不到作者的汇报不再送。
+   * 每个 tick 调。永不 reject。
+   */
   async flush(): Promise<void> {
     try {
-      const heads = new Set(this.d.repo.pendingDecisions().filter((x) => x.answer !== null).map((x) => this.headId(x.sessionId)));
-      for (const h of heads) await this.flushAnswers(h);
-      await this.flushReports();
+      this.withdrawSettled();
+      for (const x of this.d.repo.pendingDecisions()) if (x.answer !== null && !this.d.mailbox.queuedByRef(`answer:${x.id}`)) this.queueAnswer(x.id);
+      const now = this.d.now();
+      for (const item of this.d.repo.pendingReports()) {
+        if (this.d.mailbox.queuedByRef(`report:${item.id}`)) continue;
+        if (!this.queueReport(item.id) && now - item.createdAt > REPORT_DELIVERY_MAX_AGE_MS) this.d.repo.resolve(item.id, "dismissed", now);
+      }
     } catch (e) {
       this.d.log("inbox: flush failed", e);
     }
+    return Promise.resolve();
   }
 
-  /** 把这个 session 已经答了、还没送的回答一起送进去（一条消息）。 */
-  private async flushAnswers(head: string): Promise<void> {
-    if (this.busy.has(head)) return;
-    const items = this.d.repo.pendingDecisions().filter((x) => x.answer !== null && this.headId(x.sessionId) === head);
-    if (items.length === 0) return;
-    const gate = this.d.answerGuard.check(head);
-    if (!gate.ok) return;
+  /** 这一条的回答排进提问的 session 的信箱（同一条改了答案就替换还在排队的那份）。 */
+  private queueAnswer(id: number): void {
+    const x = this.d.repo.get(id);
+    if (!x || x.kind !== "decision" || x.answer === null) return;
     const m = M();
-    const lines: string[] = [];
-    const sent: InboxItem[] = [];
-    let size = m.inboxAnswersIntro.length;
-    for (const x of items) {
-      let line = m.inboxAnswer(x.text, x.answer ?? "");
-      // 第一条总要送；后面的放不下就留到下一次（sanitizeTask 会截掉超出的部分，截掉的回答不能算送到了）。
-      if (sent.length > 0 && size + 2 + line.length > BATCH_CHARS) break;
-      // 单独一条就放不下：截掉它自己的回答，注明截掉了（不然它永远送不进去，后面的也一直卡着）。
-      if (line.length > BATCH_CHARS) {
-        const keep = Math.max(0, BATCH_CHARS - m.inboxAnswer(x.text, "").length - m.inboxAnswerCut.length);
-        line = m.inboxAnswer(x.text, Array.from(x.answer ?? "").slice(0, keep).join("") + m.inboxAnswerCut);
-      }
-      lines.push(line);
-      sent.push(x);
-      size += 2 + line.length;
+    let body = m.inboxAnswer(x.text, x.answer);
+    // 太长：截掉回答，注明截掉了（不然送进去的会在半路断掉）。
+    if (body.length > MAILBOX_BODY_LIMIT) {
+      const keep = Math.max(0, MAILBOX_BODY_LIMIT - m.inboxAnswer(x.text, "").length - m.inboxAnswerCut.length);
+      body = m.inboxAnswer(x.text, Array.from(x.answer).slice(0, keep).join("") + m.inboxAnswerCut);
     }
-    const text = lines.length === 1 ? lines[0] : [m.inboxAnswersIntro, ...lines].join("\n\n");
-    this.busy.add(head);
-    // 递的途中（不限时）和送到以后 ANSWERING_TTL_MS 之内，这个 session 的下一次 UserPromptSubmit 算这次递引起的。
-    this.answering.set(head, Infinity);
-    let typed = false;
     try {
-      const result = await this.d.deliver(gate.termId, sanitizeTask(text), this.d.answerGuard.recheckAfter(head, gate));
-      if (result === "sent") {
-        typed = true;
-        const now = this.d.now();
-        // 只结束答案还是送出去那份的：投递途中用户改了答案，新答案留着下次送。
-        for (const x of sent) this.d.repo.resolve(x.id, "answered", now, x.answer ?? undefined);
-        this.d.notify();
-      } else this.d.log(`inbox: answers for ${head}: ${result}`);
+      this.d.mailbox.send({ kind: "answer", from: null, to: this.headId(x.sessionId), featureId: x.featureId, body, ref: `answer:${id}`, meta: { answer: x.answer } });
     } catch (e) {
-      this.d.log(`inbox: answers for ${head} failed`, e);
-    } finally {
-      this.busy.delete(head);
-      // 送到了、UserPromptSubmit 还没来（deliver 没等到 hook 就返回）：再等它一会儿。来过了（已经删掉）或者没送到就不留。
-      if (typed && this.answering.has(head)) this.answering.set(head, this.d.now() + ANSWERING_TTL_MS);
-      else this.answering.delete(head);
+      this.d.log(`inbox: queueing answer ${id} failed`, e);
+    }
+  }
+
+  /** 这条汇报排进管它的总控的信箱；找不到总控返回 false（留着，下一个 tick 再找）。 */
+  private queueReport(id: number): boolean {
+    const item = this.d.repo.get(id);
+    const author = item ? this.d.head(item.sessionId) : null;
+    if (!item || !author) return false;
+    const target = this.reportTarget(item, author);
+    if (target === null) return false;
+    const m = M();
+    try {
+      this.d.mailbox.send({
+        kind: "report", from: author.id, to: target, featureId: item.featureId, ref: `report:${id}`,
+        body: m.inboxReportLine(this.whoOf(author), m.inboxReportKinds[item.reportKind ?? "progress"], item.text),
+      });
+      return true;
+    } catch (e) {
+      this.d.log(`inbox: queueing report ${id} failed`, e);
+      return false;
     }
   }
 
   /**
-   * 汇报送给谁：管这个 session 的、终端开着的总控（head id）。
+   * 汇报送给谁（head id）：管这个 session 的总控，开着的优先，其次是这一类里最近的那个（关着的读信箱要等打开）。
    * ticket 的 session → 同一个 ticket 的总控 → feature 总控 → epic session；ticket 总控、修复 session → feature 总控 → epic session；
-   * feature 总控 → epic session。
+   * feature 总控 → epic session；epic session → Butler 总控。
    */
   private reportTarget(item: InboxItem, author: Session): string | null {
     const open = this.d.openHeads();
     const role = roleOf(author);
     const pick = (ok: (h: Session) => boolean): string | null => open.find((h) => h.id !== author.id && ok(h))?.id ?? null;
-    let target: string | null = null;
-    if (role === "ticket" && item.ticketKey !== null) target = pick((h) => h.ticketKey === item.ticketKey && h.coordinator);
-    if (target === null && role !== "feature_coordinator" && role !== "epic" && item.featureId !== null) {
-      target = pick((h) => h.ticketKey === null && h.featureId === item.featureId && h.fixesSession === null);
+    const latest = (where: Parameters<NonNullable<InboxServiceDeps["latestCoordinator"]>>[0]): string | null => {
+      const id = this.d.latestCoordinator?.(where) ?? null;
+      return id === null || this.headId(id) === author.id ? null : this.headId(id);
+    };
+    // 先在开着的里面按顺序找，都没有再找最近的那个（关着的）。
+    const chain: { open: (h: Session) => boolean; latest: Parameters<typeof latest>[0] }[] = [];
+    if (role === "ticket" && item.ticketKey !== null) {
+      const key = item.ticketKey;
+      chain.push({ open: (h) => h.ticketKey === key && h.coordinator, latest: { ticket: key } });
     }
-    if (target === null && role !== "epic" && item.epicId !== null) target = pick((h) => h.ticketKey === null && h.featureId === null && h.epicId === item.epicId);
+    if (role !== "feature_coordinator" && role !== "epic" && item.featureId !== null) {
+      const f = item.featureId;
+      chain.push({ open: (h) => h.ticketKey === null && h.featureId === f && h.fixesSession === null, latest: { feature: f } });
+    }
+    if (role !== "epic" && item.epicId !== null) {
+      const e = item.epicId;
+      chain.push({ open: (h) => h.ticketKey === null && h.featureId === null && h.epicId === e, latest: { epic: e } });
+    }
     // epic session → Butler 总控（BTL-190 第 5 点）。
-    if (target === null && role === "epic") target = pick((h) => h.butler);
-    return target;
-  }
-
-  /** 把还要送的汇报按总控分组，每个总控一条消息。 */
-  private async flushReports(): Promise<void> {
-    const now = this.d.now();
-    const byTarget = new Map<string, { item: InboxItem; author: Session }[]>();
-    for (const item of this.d.repo.pendingReports()) {
-      const author = this.d.head(item.sessionId);
-      if (!author || now - item.createdAt > REPORT_DELIVERY_MAX_AGE_MS) {
-        this.d.repo.resolve(item.id, "dismissed", now);
-        continue;
-      }
-      const target = this.reportTarget(item, author);
-      if (target !== null) byTarget.set(target, [...(byTarget.get(target) ?? []), { item, author }]);
+    if (role === "epic") chain.push({ open: (h) => h.butler, latest: { butler: true } });
+    for (const c of chain) {
+      const t = pick(c.open);
+      if (t !== null) return t;
     }
-    for (const [target, list] of byTarget) await this.deliverReports(target, list);
-  }
-
-  private async deliverReports(target: string, list: { item: InboxItem; author: Session }[]): Promise<void> {
-    if (this.busy.has(target)) return;
-    const gate = this.d.reportGuard.check(target);
-    if (!gate.ok) return;
-    const m = M();
-    const lines: string[] = [];
-    const sent: number[] = [];
-    let size = 0;
-    for (const { item, author } of list) {
-      const line = m.inboxReportLine(this.whoOf(author), m.inboxReportKinds[item.reportKind ?? "progress"], item.text);
-      // 第一条总要送；后面的放不下就留到下一次。
-      if (sent.length > 0 && size + line.length > BATCH_CHARS) break;
-      lines.push(line);
-      sent.push(item.id);
-      size += line.length;
+    for (const c of chain) {
+      const t = latest(c.latest);
+      if (t !== null) return t;
     }
-    this.busy.add(target);
-    try {
-      const result = await this.d.deliver(gate.termId, sanitizeTask([m.inboxReportsIntro, ...lines].join("\n\n")), this.d.reportGuard.recheckAfter(target, gate));
-      if (result === "sent") {
-        const at = this.d.now();
-        for (const id of sent) this.d.repo.resolve(id, "answered", at);
-        this.d.notify();
-      } else this.d.log(`inbox: reports for ${target}: ${result}`);
-    } catch (e) {
-      this.d.log(`inbox: reports for ${target} failed`, e);
-    } finally {
-      this.busy.delete(target);
-    }
+    return null;
   }
 
   /** 给总控看的「谁」：ticket 号（ticket 有几个仓库时加仓库名）、总控、修复 session。 */

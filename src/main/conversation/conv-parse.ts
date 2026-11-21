@@ -18,7 +18,8 @@ import { MAIN_STRINGS } from "../strings";
  *     或者以 [Request interrupted by user 开头：noise。
  *  5. handoff（不存，这一轮 agent 的话也不存）：/handoff 调用；Butler 的 epic handoff 请求（refreshEpicHandoff、
  *     idleCloseEpicHandoff，中英各取前 24 个字符）。
- *  6. relay（存成 user 消息，但这一轮不判问答）：以 inboxAnswersIntro 开头，Butler 转给 agent 的用户回答。
+ *  6. relay（存成 user 消息，但这一轮不判问答）：以 inboxAnswersIntro 开头，Butler 转给 agent 的用户回答；
+ *     信箱直接输入（mailboxIntro 开头）里有一段是转来的回答也算。其余信箱直接输入是 silent。
  *  7. silent（不存，开一轮 qa=no；agent 的话照存）：其他斜杠命令（含 <command-name>）；Butler：/Butler: 开头的通知；
  *     换新的恢复提示（refreshResume）、转来的汇报（inboxReportsIntro）、每日巡检（butlerPatrolMessage），中英各取前 16 个字符；
  *     总控发来的消息、花费上限后的「接着做」取整段固定开头（SILENT_HEADS）；别的 session 的回复、预审结果、进件缺信息时
@@ -77,6 +78,9 @@ const RELAY_SINGLE = Object.values(MAIN_STRINGS).map((s) => {
 const isSingleRelay = (t: string): boolean => RELAY_SINGLE.some(({ pre, mid }) => t.startsWith(pre) && t.indexOf(mid, pre.length) > 0);
 /** 模板里第一个占位符之前的那段（占位符用 \u0000 代入）。 */
 const before0 = (t: string): string => t.split("\u0000")[0];
+/** 信箱直接输入的开头（BTL-245）：几条消息合成一段，各条之间用 MAILBOX_PART 隔开。 */
+const MAILBOX_HEADS = heads((s) => before0(s.mailboxIntro.replace("{n}", "\u0000")), Number.MAX_SAFE_INTEGER);
+const MAILBOX_PART = "\n\n---\n\n";
 /**
  * 模板（占位符代入 \u0000、\u0001）第一行的固定段：文本要以第一段开头，后面各段按顺序出现才算。
  * 只认开头太容易误伤用户自己的话（「Butler 对 CI 的判断对吗？」「【回复】一下 amy 的评论」）。
@@ -136,6 +140,8 @@ export function userOpenOf(content: unknown, cleaned: string): UserOpen | "noise
   if (!cleaned || NOISE_HEAD.test(cleaned)) return "noise";
   if (isHandoffInvocation(content) || HANDOFF_HEADS.some((h) => cleaned.startsWith(h))) return "handoff";
   if (RELAY_HEADS.some((h) => cleaned.startsWith(h)) || isSingleRelay(cleaned)) return "relay";
+  // 信箱送进来的一批：里面有转来的回答就是 relay，否则（汇报、回复、指令、约定）是 silent。
+  if (MAILBOX_HEADS.some((h) => cleaned.startsWith(h))) return cleaned.split(MAILBOX_PART).slice(1).some((p) => isSingleRelay(p.replace(/^[（(][^\n]*\n/, ""))) ? "relay" : "silent";
   if (COMMAND_NAME.test(cleaned) || BUTLER_NOTICE.test(cleaned) || SILENT_HEADS.some((h) => cleaned.startsWith(h)) || SILENT_SHAPES.some((sh) => fits(sh, cleaned))) {
     return "silent";
   }

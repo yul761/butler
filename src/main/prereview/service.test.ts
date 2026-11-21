@@ -1,3 +1,4 @@
+import { fakeMailbox } from "../mailbox/fake-mailbox";
 import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
 import type { BgJobContext } from "../background/queue";
@@ -30,6 +31,8 @@ function setup(o: { enabled?: boolean; dirty?: string; guardOk?: boolean; review
   const sent: string[] = [];
   let guardOk = o.guardOk ?? true;
   const git = async (_cwd: string, args: string[]) => (args[0] === "rev-parse" ? (args[1] === "HEAD" ? SHA : "feat/x") : (o.dirty ?? ""));
+  const mailbox = fakeMailbox({ canDeliver: () => guardOk, deliver: (_to, body) => void sent.push(body) });
+  const deliverQueued = mailbox.deliverQueued;
   const sd: PreReviewServiceDeps = {
     repo,
     queue: { enqueue: (kind, payload, x) => (jobs.push({ kind, payload, dedupeKey: x.dedupeKey }), jobs.length), cancel: (id) => (cancelled.push(id), true) },
@@ -42,9 +45,7 @@ function setup(o: { enabled?: boolean; dirty?: string; guardOk?: boolean; review
     openPrFor: (k, t) => prs.byTicket(k ?? "").find((p) => p.state === "open" && p.slug === t.repoSlug && p.headBranch === t.branch) ?? null,
     profile: () => ({ projects: [proj], dirs: [], ci: [], pitfalls: [] }),
     policy: () => defaultPrPolicy(),
-    guard: { check: () => (guardOk ? { ok: true, termId: "t1", headId: "s1" } : { ok: false, block: "busy" }), recheckAfter: () => () => true },
-    deliver: async (_t, text) => (sent.push(text), "sent"),
-    busy: new Set(),
+    mailbox,
     lang: () => "en",
     changed: () => undefined,
     now: () => 1000,
@@ -77,7 +78,7 @@ function setup(o: { enabled?: boolean; dirty?: string; guardOk?: boolean; review
     const c = { id: 1, kind: "pre_review", payload: { preReviewId: id }, checkpoint, ticketKey: "T-1", attempts: 1, signal, save: (x: unknown) => saved.push(x), sessionAwake: () => true, admitSession: async () => ({ ok: false, reason: "x" }) } as BgJobContext;
     return { c, saved };
   };
-  return { db, repo, prs, service, handler, ctx, jobs, cancelled, sent, after, setGuard: (v: boolean) => (guardOk = v) };
+  return { db, repo, prs, service, handler, ctx, jobs, cancelled, sent, after, setGuard: (v: boolean) => (guardOk = v), deliverQueued };
 }
 
 const evidence = { checks: [{ name: "unit tests", category: "test", command: "echo ok", result: "pass", output: "12 passed" }], acceptance: [{ criterion: "AC1", how: "added X" }] };
@@ -150,16 +151,17 @@ describe("pre-review runner and delivery", () => {
     expect(s.sent[0]).not.toContain("FULL RULE TEXT");
     expect(s.sent[0]).toContain("submit_evidence");
   });
-  it("a busy session gets it later, from flush", async () => {
+  it("a busy session gets it later from its mailbox, and flush does not queue it twice (BTL-245)", async () => {
     const s = setup({ guardOk: false });
     const r = await s.service.submitEvidence("s1", evidence);
     if (!r.ok) throw new Error(r.message);
     await s.handler(s.ctx(r.preReviewId).c);
     expect(s.sent).toEqual([]);
-    expect(s.repo.get(r.preReviewId)!.deliverTries).toBe(1);
-    s.setGuard(true);
     await s.service.flush();
+    s.setGuard(true);
+    s.deliverQueued();
     expect(s.sent).toHaveLength(1);
+    expect(s.repo.get(r.preReviewId)!.deliveredAt).toBe(1000);
     await s.service.flush();
     expect(s.sent).toHaveLength(1);
   });
@@ -207,6 +209,7 @@ describe("pre-review runner and delivery", () => {
     s.setGuard(true);
     const stale = s.repo.get(r.preReviewId)!;
     await s.service.flush();
+    s.deliverQueued();
     expect(s.sent).toHaveLength(1);
     expect(await s.service.deliver(stale)).toBe("already");
     expect(s.sent).toHaveLength(1);

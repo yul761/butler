@@ -8,7 +8,6 @@ import { progressOverview } from "../progress/progress-view";
 import type { MetricsOverview } from "../../shared/metrics";
 import type { PrAssessmentView, Readiness, RiskLevel } from "../../shared/prereview";
 import { M } from "../strings";
-import type { ButlerMessages } from "./butler-messages";
 import { admitOrRefuse } from "./admission";
 import type { ControlHandlerDeps } from "./control-handler";
 
@@ -47,8 +46,8 @@ export interface ButlerControlDeps {
     /** ticket_prs 的 id 或 PR 链接；找不到为 null。 */
     view(ref: string): PrAssessmentView | null;
   };
-  /** send_message 的回复回流（ws-b）。 */
-  messages?: Pick<ButlerMessages, "begin" | "settled" | "failed" | "ensureRunning" | "recent">;
+  /** list_inbox 的 messages：Butler 总控发出、收到的信箱消息（BTL-245）。 */
+  butlerSessions?: () => string[];
 }
 
 const iso = (t: number | null | undefined): string | null => (t ? new Date(t).toISOString() : null);
@@ -81,8 +80,8 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
     return byId ?? list.find((x) => x.name.trim().toLowerCase() === w.toLowerCase());
   };
 
-  /** 正在给这个 feature、epic 开 session（send_message 打开关着的终端）：同时来的第二条不再开第二个。 */
-  const opening = new Set<string>();
+  /** 正在给这个 feature、epic 开 session（send_message 打开关着的终端）：同时来的第二条不再开第二个，等它开好排进同一个信箱。值是开好的 head，没开成为 null。 */
+  const opening = new Map<string, Promise<string | null>>();
 
   return async (req) => {
     const b = d.butler;
@@ -140,36 +139,20 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
     /** epic 正在跑的 epic session（链上最新的那个）。 */
     const runningEpicSession = (epicId: number): Session | null =>
       d.sessions.listByEpic(epicId).find((x) => x.replacedBy === null && !!d.sessionService.termIdOf(x.id)) ?? null;
-    /** 终端开着：过 guard，过了交给 deliver（不等它送到：deliver 要等输入框就绪，最多一分钟）。 */
-    const msgs = b.messages;
-    const sendNow = (sessionId: string, text: string, requestId: string | null): ControlResult => {
-      const blocked = (why: string): ControlResult => {
-        if (requestId) msgs?.failed(requestId, why);
-        return fail(M().ctlSendBlocked(sessionId, why));
-      };
-      if (!d.guard || !d.deliver) return blocked(M().ctlStartBlock.closed);
-      const g = d.guard.check(sessionId);
-      if (!g.ok) return blocked(M().ctlStartBlock[g.block]);
-      d.deliver(g.termId, text, d.guard.recheckAfter(sessionId, g)).then(
-        (res) => {
-          if (requestId) msgs?.settled(requestId, g.headId, res);
-          if (res !== "sent") d.log?.(`control: butler message for ${sessionId} not delivered (${res})`);
-        },
-        (err: unknown) => {
-          if (requestId) msgs?.failed(requestId, "error");
-          d.log?.(`control: butler message for ${sessionId} failed`, err);
-        },
-      );
-      return ok({ sent: true, sessionId: g.headId, ...(requestId && { requestId }), note: M().ctlSendNote });
-    };
+    const mailbox = d.mailbox;
+    /** 排进目标的信箱（BTL-245）：在忙的下一次工具调用时读到，停着的直接输入；从不因为它在忙而拒绝。 */
+    const enqueue = (sessionId: string, text: string, featureId: number | null, interrupt: boolean, hold = false) =>
+      mailbox!.send({ kind: "butler", from: self?.id ?? null, to: sessionId, featureId, body: text, interrupt, hold });
+    const queued = (r: { id: string; state: "busy" | "idle" | "closed" }, sessionId: string, extra: object = {}): ControlResult =>
+      ok({ queued: true, sessionId: d.sessions.head(sessionId)?.id ?? sessionId, requestId: r.id, state: r.state, ...extra, note: `${M().mailboxSendNote(r.state)}${M().mailboxReplyNote}` });
     /**
      * 终端关着（闲置时自动关掉了、Butler 重启过）：和用户点开一样接着最近的那个（给的 session 没隐藏就接着它），
-     * 消息当作它的第一条输入（submit 等输入框就绪）。feature 从没开过总控时新开一个；但属于 epic、规划还没发过的，要 epic session 用 start_feature 开工。
+     * 排着的消息当作它的第一条输入（submit 等输入框就绪）。feature 从没开过总控时新开一个；但属于 epic、规划还没发过的，要 epic session 用 start_feature 开工。
+     * 正在打开（同时来的第二条）、打开失败：消息照样排在接着的那个 session 的信箱里，下次打开时送；没有可接着的才报错。
      */
-    const openAndSend = async (target: Target, text: string, begin: (resumeId: string | null) => string | null): Promise<ControlResult> => {
+    const openAndSend = async (target: Target, text: string, featureId: number | null, interrupt: boolean): Promise<ControlResult> => {
       const svc = d.sessionService;
       const key = target.kind === "feature" ? `f${target.feature.id}` : `e${target.epic.id}`;
-      if (opening.has(key)) return fail(M().ctlSendOpening);
       let resume: Session | undefined;
       let open: () => Promise<OpenSessionResult>;
       if (target.kind === "feature") {
@@ -189,44 +172,43 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         const openEpic = svc.openEpic.bind(svc);
         open = () => openEpic({ epicId: e.id, ...(resume && { sessionId: resume.id }) });
       }
-      opening.add(key);
-      // 接着的那个 session 现在的最后一条回复记成"送之前的"：resume 之后读到的旧回复不算。
-      const requestId = begin(resume?.id ?? null);
-      const failed = (error: string, message: string): ControlResult => {
-        if (requestId) msgs?.failed(requestId, error);
-        return fail(message);
-      };
-      let r: OpenSessionResult;
+      // 先排进接着的那个的信箱：打开时一起送；打不开也不丢。
+      // hold：马上就要打开它（或交给 opened），不让信箱再去唤醒一次，免得两边同时 --resume 同一个 session。
+      const early = resume ? enqueue(resume.id, text, featureId, false, true) : null;
+      const pending = opening.get(key);
+      if (pending) {
+        if (early) return queued(early, resume!.id);
+        const head = await pending;
+        return head === null ? fail(M().ctlOpenFailed("open_failed")) : queued(enqueue(head, text, featureId, interrupt), head);
+      }
+      let settle: (head: string | null) => void = () => {};
+      opening.set(key, new Promise((res) => (settle = res)));
+      let r: OpenSessionResult | undefined;
       let room: Awaited<ReturnType<typeof admitOrRefuse>> | null = null;
+      const failed = (message: string): ControlResult => (early ? queued(early, resume!.id, { openError: message }) : fail(message));
       try {
         // 要新开一个终端：和 start_session 一样先按内存放行（工作流 W）。
         room = await admitOrRefuse(d.admission, `send_message ${key}`);
-        if (!room.ok) return failed("no_memory", room.error);
+        if (!room.ok) return failed(room.error);
         r = await open();
       } catch (err) {
         if (room?.ok) room.release();
         d.log?.(`control: butler message: opening ${key} failed`, err);
-        return failed("open_failed", (err as Error).message);
+        return failed((err as Error).message);
       } finally {
         opening.delete(key);
+        // 等着的那几条：开成了拿到 head（排进它的信箱），抛了、没开成拿到 null。
+        settle(r?.ok ? (d.sessions.head(r.termId)?.id ?? r.termId) : null);
       }
       if (!r.ok || r.alreadyOpen) room.release();
-      if (!r.ok) return failed(r.reason, r.reason === "claude_missing" ? M().ctlClaudeMissing : M().ctlOpenFailed(r.reason));
+      if (!r.ok) return failed(r.reason === "claude_missing" ? M().ctlClaudeMissing : M().ctlOpenFailed(r.reason));
       d.notify();
-      // 查过没在跑、打开时却已经开着（和用户同时点开）：和在跑一样过 guard。
       const headId = d.sessions.head(r.termId)?.id ?? r.termId;
-      if (r.alreadyOpen) return sendNow(headId, text, requestId);
-      d.submit(r.termId, text).then(
-        (res) => {
-          if (requestId) msgs?.settled(requestId, headId, res);
-          if (res !== "sent") d.log?.(`control: butler message for ${headId} not delivered (${res})`);
-        },
-        (err: unknown) => {
-          if (requestId) msgs?.failed(requestId, "error");
-          d.log?.(`control: butler message for ${headId} failed`, err);
-        },
-      );
-      return ok({ sent: true, sessionId: headId, ...(requestId && { requestId }), opened: resume ? "resumed" : "opened", note: M().ctlSendOpenedNote });
+      // 查过没在跑、打开时却已经开着（和用户同时点开）：信箱照常送（在忙走 hook，停着直接输入）；还没排过的照样能叫停。
+      const sent = early ?? enqueue(headId, text, featureId, r.alreadyOpen && interrupt, !r.alreadyOpen);
+      if (r.alreadyOpen) return queued(sent, headId);
+      void mailbox!.opened(headId, r.termId, d.submit).catch((err: unknown) => d.log?.(`control: butler message for ${headId} failed`, err));
+      return queued({ ...sent, state: "closed" }, headId, { opened: resume ? "resumed" : "opened" });
     };
 
     switch (req.op) {
@@ -304,7 +286,7 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       case "session_activity":
         return h.sessionActivity(req.session, () => true);
       case "list_inbox":
-        return ok({ ...b.inbox.view({ all: true }), messages: msgs?.recent() ?? [] });
+        return ok({ ...b.inbox.view({ all: true }), messages: mailbox?.views({ butler: true }, b.butlerSessions?.() ?? (self ? [self.id] : [])) ?? [] });
       case "refresh_session":
         if (!fromOpenButler) return fail(M().ctlInboxNotYours);
         return h.refreshSession(req, () => true);
@@ -313,14 +295,12 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
         if (!fromOpenButler) return fail(M().ctlInboxNotYours);
         const target = resolveTarget(req);
         if ("error" in target) return fail(target.error);
+        if (!mailbox) return fail(M().ctlStartUnavailable);
         const text = sanitizeTask(`${M().butlerMessagePrefix}\n${req.text}`);
         const running = target.kind === "feature" ? d.sessionService.runningCoordinator?.(target.feature.id) ?? null : runningEpicSession(target.epic.id);
-        const owner = target.kind === "feature" ? { featureId: target.feature.id, epicId: null } : { featureId: null, epicId: target.epic.id };
-        // 记一行，回复回来时送回这个总控（ws-b）。
-        const begin = (to: string | null): string | null => (self && msgs ? msgs.begin({ from: self.id, target: to, ...owner, text: req.text }) : null);
-        // ensureRunning：给 M 的钩子（唤醒休眠的 session）；默认只看终端开没开。
-        if (running && (!msgs || (await msgs.ensureRunning(running.id)))) return sendNow(running.id, text, begin(running.id));
-        return openAndSend(target, text, begin);
+        const featureId = target.kind === "feature" ? target.feature.id : null;
+        if (running) return queued(enqueue(running.id, text, featureId, req.interrupt === true), running.id);
+        return openAndSend(target, text, featureId, req.interrupt === true);
       }
       case "progress_overview": {
         if (!b.progress) return fail(M().ctlProgressUnavailable);

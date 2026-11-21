@@ -25,7 +25,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { ButlerMessageView, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -365,7 +365,7 @@ const ZH = {
       fix: "开修复 session",
       ignore: "没事，忽略",
       send: "送给 agent",
-      answered: (text: string) => `已回答：${text}，等 session 停下来后送进去`,
+      answered: (text: string) => `已回答：${text}，已放进 session 的信箱`,
       answerGone: "这个问题已经没了",
       sendNot: (reason: string) => `没送出去：${reason}`,
       prOpenNot: "这个 PR 链接打不开",
@@ -1844,17 +1844,16 @@ const ZH = {
     loopFlakyText: (n: number, wasted: string) => `${n} 次 · ${wasted}`,
     loopListed: "（在名单上）",
   },
-  butlerRepliesNone: "Butler 总控还没用 send_message 发过消息。",
-  butlerMessageStatus: {
-    sending: "在送",
-    waiting: "等回复",
-    replied: "收到回复，还没送回总控",
-    delivered: "已送回总控",
-    failed: "没送进去",
-    expired: "过期",
-  } as Record<ButlerMessageView["status"], string>,
-  butlerMessageSent: "发出",
-  butlerMessageReply: "回复",
+  /** 信箱（BTL-245）：Butler 总控页和 feature 页「总控」tab 对话下面的消息列表。 */
+  messagesNone: "还没有消息。",
+  messageStatus: { queued: "已排队", delivered: "已送达", replied: "已回复" } as Record<MessageStatus, string>,
+  messageKind: {
+    instruction: "指令", report: "汇报", answer: "回答", butler: "Butler 总控", reply: "回复", review: "预审结果", comments: "评论", convention: "约定",
+  } as Record<MessageKind, string>,
+  messageVia: { hook: "工具调用间隙送到", input: "直接输入" } as Record<"hook" | "input", string>,
+  messageInterrupt: "叫停",
+  messageQueued: "排队",
+  messageReply: "回复",
   /** feature 页整体进度（ws-b）。 */
   featureSummaryPrAsOf: (t: string) => `PR 状态截至 ${t}`,
   /** 设置里的「对外动作」（契约 4.8，ws-b）。 */
@@ -2303,7 +2302,7 @@ const ZH = {
     ctlCollapse: "收起右侧对话栏",
     ctlExpand: "展开右侧对话栏",
     ctlEmpty: "子 session 的完成和卡住汇报会按时间出现在这里。",
-    butlerSent: (n: number) => `总控发出的消息（${n}）`,
+    messages: (n: number) => `消息（${n}）`,
     lessonsLede: "Butler 从合了的 PR 里总结出来的规矩。确认过的会在以后的 session 里提醒 agent。",
     effectLede: (days: number) => `最近 ${days} 天 Butler 替你省了多少事、花了多少钱。`,
     effectTabs: { overview: "概况", trend: "趋势", spend: "花费明细", rework: "返工", automation: "自动化的效果" },

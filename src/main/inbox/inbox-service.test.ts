@@ -4,6 +4,11 @@ import { InboxRepo } from "../db/inbox-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SessionMessagesRepo } from "../db/session-messages-repo";
+import { Mailbox } from "../mailbox/mailbox";
 import { TASK_LIMIT } from "../../shared/control";
 import type { RecordEvent } from "../metrics/events";
 import { AutoChoicesRepo, ChoiceDefaultsRepo } from "../db/interrupts-repo";
@@ -19,7 +24,10 @@ const ticket = (key: string, featureId: number | null, repos: { id: number; repo
   ({ key, featureId, repos, title: null } as unknown as Ticket);
 
 /** 链：chains 里 old → new 的映射，head 沿着走到底。 */
-function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string>; recordEvent?: RecordEvent; onAsked?: (q: AskedQuestion) => void; choices?: InboxServiceDeps["choices"] }) {
+function setup(o: {
+  sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<number, number>; open?: string[]; epicNames?: Record<number, string>; recordEvent?: RecordEvent;
+  onAsked?: (q: AskedQuestion) => void; choices?: InboxServiceDeps["choices"]; latestCoordinator?: InboxServiceDeps["latestCoordinator"];
+}) {
   const repo = new InboxRepo(memDb());
   const sessions = new Map(o.sessions.map((s) => [s.id, s]));
   const replaced = new Map<string, string>();
@@ -44,21 +52,41 @@ function setup(o: { sessions: Session[]; tickets?: Ticket[]; epicOf?: Record<num
   });
   const notify = vi.fn();
   const deliver = vi.fn<(term: string, text: string, recheck: () => boolean) => Promise<DeliverResult>>(async () => state.result);
+  const termOf = (id: string) => (state.open.has(head(id)?.id ?? id) ? `term-${head(id)?.id ?? id}` : null);
+  // 真的信箱（BTL-245），终端 id 是 term-<head>：回答和汇报都经它送。
+  let inboxRef: InboxService | null = null;
+  const mailbox = new Mailbox({
+    repo: new SessionMessagesRepo(memDb()), root: mkdtempSync(join(tmpdir(), "inbox-mb-")),
+    head: (id) => head(id.startsWith("term-") ? id.slice(5) : id), termOf, openTerms: () => [...state.open].map((id) => `term-${id}`),
+    check: (id, g) => gate(g.answer ? "answerGate" : "reportGate").check(id), recheckAfter: () => () => true,
+    deliver: (t, text, recheck) => deliver(t, text, recheck),
+    canInterrupt: () => false, interrupt: () => {}, interruptRecheck: () => () => true,
+    lastReply: () => null, nameOf: (id) => id ?? "Butler", typing: (h, phase) => inboxRef?.butlerTyping(h, phase),
+    notify: () => {}, now: () => state.now, log: () => {},
+  });
   const inbox = new InboxService({
     repo, head, ticket: (k) => tickets.get(k) ?? null, epicOfFeature: (id) => o.epicOf?.[id] ?? null,
-    termOf: (id) => (state.open.has(head(id)?.id ?? id) ? `term-${head(id)?.id ?? id}` : null),
+    termOf,
     openHeads: () => [...state.open].map((id) => sessions.get(id)!).filter(Boolean),
     epicName: (id) => o.epicNames?.[id] ?? null,
     refreshing: (id) => state.refreshing.has(head(id)?.id ?? id),
-    answerGuard: gate("answerGate"), reportGuard: gate("reportGate"), deliver, notify, now: () => state.now, log: () => {},
+    mailbox, latestCoordinator: o.latestCoordinator, notify, now: () => state.now, log: () => {},
     recordEvent: o.recordEvent, onAsked: o.onAsked, choices: o.choices,
   });
+  inboxRef = inbox;
   const replace = (from: string, to: Session) => {
     sessions.set(to.id, to);
     replaced.set(from, to.id);
     if (state.open.delete(from)) state.open.add(to.id);
   };
-  return { repo, inbox, state, deliver, notify, replace, sessions };
+  // 测试里的 flush = 补排 + 信箱的一次 tick（调度器里两个都每个 tick 跑）。
+  const backfill = inbox.flush.bind(inbox);
+  inbox.flush = async () => {
+    await backfill();
+    await mailbox.tick();
+    await settle();
+  };
+  return { repo, inbox, state, deliver, notify, replace, sessions, mailbox };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -93,7 +121,7 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     await settle();
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0][0]).toBe("term-s1");
-    expect(deliver.mock.calls[0][1]).toBe("你问的『用哪个方案？』，用户的回答：B");
+    expect(deliver.mock.calls[0][1]).toContain("---\n\n你问的『用哪个方案？』，用户的回答：B");
     expect(repo.get(id)).toMatchObject({ status: "answered", answer: "B" });
     expect(inbox.hasPendingDecision("s1")).toBe(false);
     // 已经答过的、空的回答、不存在的条目都不接。
@@ -302,8 +330,9 @@ describe("InboxService report (BTL-190 2+3)", () => {
     state.open.add("ep");
     await inbox.flush();
     expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-ep");
-    const second = inbox.report(child, "done now", "done");
+    // 排队时就定了送给谁：开着的 feature 总控优先于 epic session。
     state.open.add("fc");
+    const second = inbox.report(child, "done now", "done");
     await inbox.flush();
     expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-fc");
     expect(repo.get(second.id)?.status).toBe("answered");
@@ -331,13 +360,58 @@ describe("InboxService report (BTL-190 2+3)", () => {
     expect(deliver.mock.calls[0][1]).toMatch(/BTL-1 · 完成】one[\s\S]*BTL-2 · 卡住】two/);
     expect(repo.pendingReports()).toEqual([]);
 
+    // 排进了信箱的不过期：总控忙了很久，停下来照样送到，注明是多久之前发的。
     state.reportGate = { ok: false, block: "needs_you" };
-    const old = inbox.report(a, "stale", "done");
+    const late = inbox.report(a, "late", "done");
     state.now += REPORT_DELIVERY_MAX_AGE_MS + 1;
     state.reportGate = null;
     await inbox.flush();
+    expect(repo.get(late.id)?.status).toBe("answered");
+    expect(deliver.mock.calls.at(-1)?.[1]).toMatch(/分钟前发的[\s\S]*late/);
+
+    // 一个总控都找不到的汇报，过了 6 小时就不送了。
+    state.open.delete("fc");
+    const old = inbox.report(a, "stale", "done");
+    state.now += REPORT_DELIVERY_MAX_AGE_MS + 1;
+    await inbox.flush();
     expect(repo.get(old.id)?.status).toBe("dismissed");
-    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues a report for the latest coordinator when none is open; it reads it when its terminal opens (BTL-245)", async () => {
+    const a = session("a", { ticketKey: "BTL-1" });
+    const fc = session("fc", { featureId: 3 });
+    const { inbox, repo, deliver, state, mailbox } = setup({
+      sessions: [a, fc], tickets: [ticket("BTL-1", 3)], open: ["a"], latestCoordinator: (w) => ("feature" in w && w.feature === 3 ? "fc" : null),
+    });
+    const r = inbox.report(a, "PR up", "done");
+    await inbox.flush();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(mailbox.queuedByRef(`report:${r.id}`)?.toSession).toBe("fc");
+    state.open.add("fc");
+    await mailbox.stopped("fc");
+    expect(deliver.mock.calls.at(-1)?.[0]).toBe("term-fc");
+    expect(repo.get(r.id)?.status).toBe("answered");
+  });
+});
+
+describe("InboxService withdrawals (BTL-245)", () => {
+  it("withdraws a queued report or answer once its item is dismissed by archiving", async () => {
+    const a = session("a", { ticketKey: "BTL-1" });
+    const fc = session("fc", { featureId: 3 });
+    const { inbox, repo, mailbox, state } = setup({ sessions: [a, fc], tickets: [ticket("BTL-1", 3)], open: ["a", "fc"] });
+    state.answerGate = { ok: false, block: "busy" };
+    state.reportGate = { ok: false, block: "busy" };
+    const r = inbox.report(a, "PR up", "done");
+    const q = inbox.ask(a, { question: "which?" });
+    inbox.answer(q, "this one");
+    await settle();
+    expect(mailbox.queuedByRef(`report:${r.id}`)).not.toBeNull();
+    expect(mailbox.queuedByRef(`answer:${q}`)).not.toBeNull();
+    inbox.dismissScope({ ticketKey: "BTL-1" });
+    expect(mailbox.queuedByRef(`report:${r.id}`)).toBeNull();
+    expect(mailbox.queuedByRef(`answer:${q}`)).toBeNull();
+    expect(repo.get(r.id)?.status).toBe("dismissed");
   });
 });
 

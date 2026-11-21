@@ -28,6 +28,7 @@ import { startRefresh, type SessionRefresher } from "../sessions/session-refresh
 import { FEATURE_NAME_LIMIT, type FeatureService } from "../tickets/feature-service";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
+import type { Mailbox } from "../mailbox/mailbox";
 
 export interface ControlHandlerDeps {
   tickets: TicketsRepo;
@@ -72,6 +73,10 @@ export interface ControlHandlerDeps {
   guard?: Pick<DeliveryGuard, "check" | "recheckAfter">;
   deliver?: (termId: string, text: string, recheck: () => boolean) => Promise<DeliverResult>;
   notify: () => void;
+  /**
+   * 信箱（BTL-245）：Butler 总控和 feature 总控的 send_message 一律排队，不再因为对方在忙被拒。不给时 send_message 报「没开」。
+   */
+  mailbox?: Pick<Mailbox, "send" | "opened" | "views">;
   /** ask_user、report（BTL-190 第 2+3 点）；不给就拒绝。 */
   inbox?: Pick<InboxService, "ask" | "report">;
   /** Butler 总控的请求（BTL-190 第 5 点）；不给就拒绝。 */
@@ -516,6 +521,24 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /** feature 总控（设计文档 2026-10-26）：feature 和 ticket 都在这里重新核对，ticket 必须属于这个 feature 且未归档。 */
+  /**
+   * feature 总控的 send_message（BTL-245）：只能发给这个 feature 的 ticket session 和修复 session，排进它的信箱。
+   * 从不因为它在忙被拒；终端关着时排着，下次打开再送。from 必须是这个 feature 开着终端的总控。
+   */
+  const featureSend = (f: Feature, own: Ticket[], req: Extract<FeatureControlRequest, { op: "send_message" }>): ControlResult => {
+    if (!d.mailbox) return fail(M().ctlStartUnavailable);
+    const h = req.from ? d.sessions.head(req.from) : null;
+    if (!h || h.featureId !== f.id || !h.coordinator || !d.sessionService.termIdOf(h.id)) return fail(M().ctlInboxNotYours);
+    const keys = new Set(own.map((t) => t.key));
+    const t = d.sessions.head(req.session);
+    const belongs = !!t && !t.dismissed && (t.ticketKey !== null ? keys.has(t.ticketKey) : t.featureId === f.id && t.fixesSession !== null);
+    if (!t || !belongs) return fail(M().mailboxNotYours(req.session));
+    const interrupt = req.interrupt === true;
+    const body = sanitizeTask(M().mailboxInstruction(M().butlerTargetFeature(f.name), req.text, interrupt));
+    const r = d.mailbox.send({ kind: "instruction", from: h.id, to: t.id, featureId: f.id, body, interrupt });
+    return ok({ queued: true, sessionId: t.id, requestId: r.id, state: r.state, note: `${M().mailboxSendNote(r.state)}${M().mailboxReplyNote}` });
+  };
+
   const featureRequest = async (req: NonInbox<FeatureControlRequest>): Promise<ControlResult> => {
     const f = d.features?.get(req.featureId);
     if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
@@ -544,6 +567,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     }
 
     if (req.op === "list_sessions") return listed(featureSessionRows(f, own));
+
+    if (req.op === "send_message") return featureSend(f, own, req);
 
     if (req.op === "end_session" || req.op === "refresh_session") {
       // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关，也不归它换新（修复 session 换新会被拒绝）。

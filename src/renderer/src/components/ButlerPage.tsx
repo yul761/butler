@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import type { ButlerMessageView, ButlerView, OpenSessionResult } from "../../../shared/types";
+import type { ButlerView, OpenSessionResult } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { defaultConvRoot } from "../ticket-view";
 import { epicErrorText } from "./epic-row";
 import { ControlConversation } from "./ControlConversation";
+import { Messages } from "./MessageList";
 import { ControlSplit } from "./ScopeParts";
 import { SessionArea, SessionButton, useSessionPanes } from "./WorkspaceParts";
-import { useStateRefetch } from "./useStateRefetch";
 
 /** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
 const STATE_DEBOUNCE_MS = 80;
@@ -128,53 +128,10 @@ function ButlerArea({ view, focusSession }: Props & { view: ButlerView }) {
           scope={{ all: true }}
           rootSessionId={defaultConvRoot(view.sessions)}
           sessions={view.sessions.map((s) => ({ id: s.rootId, label: S.butlerSession }))}
-          footer={<ButlerReplies />}
+          footer={<Messages scope={{ butler: true }} />}
         />
       }
     />
   );
 }
 
-const shortTime = (iso: string) => new Date(iso).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-
-/** 总控用 send_message 发出去的消息（ws-b）：送到没有，收到的回复送回总控没有。新的在前。 */
-export function ButlerRepliesList({ messages }: { messages: ButlerMessageView[] }) {
-  if (messages.length === 0) return <p className="muted">{S.butlerRepliesNone}</p>;
-  return (
-    <ul className="butler-replies" data-testid="butler-replies">
-      {messages.map((m) => (
-        <li key={m.requestId} className={`butler-message status-${m.status}`}>
-          <div className="butler-message-head">
-            <strong>{m.target}</strong>
-            <span className={`badge status-${m.status}`}>{S.butlerMessageStatus[m.status]}</span>
-            <span className="muted">{S.butlerMessageSent} {shortTime(m.queuedAt)}</span>
-            {m.error && <span className="muted">· {m.error}</span>}
-          </div>
-          <p className="butler-message-text">{m.text}</p>
-          {m.reply !== null && (
-            <div className="butler-message-reply">
-              <span className="muted">{S.butlerMessageReply}{m.repliedAt ? ` · ${shortTime(m.repliedAt)}` : ""}</span>
-              <p>{m.reply}</p>
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** 对话下面默认折起的「总控发出的消息（N）」；还没取到消息时整块不显示。 */
-export function ButlerRepliesSummary({ messages }: { messages: ButlerMessageView[] | null }) {
-  if (messages === null) return null;
-  return (
-    <details className="butler-sent">
-      <summary>{S.lay.butlerSent(messages.length)}</summary>
-      <ButlerRepliesList messages={messages} />
-    </details>
-  );
-}
-
-function ButlerReplies() {
-  const messages = useStateRefetch("butler:messages", () => api.butlerMessages());
-  return <ButlerRepliesSummary messages={messages} />;
-}

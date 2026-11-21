@@ -482,6 +482,16 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     expect(post).toEqual(["Bash", "Skill", "Agent|Task", "Bash"]);
   });
 
+  it("with a mailbox command, runs it after every tool (failed ones too) and records feature-memory remembers (BTL-245)", () => {
+    const s = setup();
+    const hooks = JSON.parse(readFileSync(projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: "/b/h", mailboxCommand: "MB" })!, "utf8")).hooks;
+    const mailbox = { matcher: "", hooks: [{ type: "command", command: "MB", timeout: 10 }] };
+    expect(hooks.PostToolUse.slice(-2)).toEqual([mailbox, { matcher: "mcp__butler-feature__remember", hooks: [{ type: "command", command: "/b/h", timeout: 10 }] }]);
+    expect(hooks.PostToolUseFailure.at(-1)).toEqual(mailbox);
+    // 没有 hook 程序就没有信箱 hook。
+    expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, mailboxCommand: "MB" })!))).not.toContain("hooks");
+  });
+
   it("with checks on, adds the edit check after Edit|Write|MultiEdit and the push check before Bash (contract 4.5)", () => {
     const s = setup();
     const hooks = JSON.parse(readFileSync(projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: "/b/h", checks: { editTimeoutSec: 8, pushTimeoutSec: 600 } })!, "utf8")).hooks;

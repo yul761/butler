@@ -36,7 +36,7 @@ import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicySe
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type ButlerMessageView, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
+  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
 } from "../../shared/types";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
@@ -84,7 +84,7 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createEpicArg, createFeatureArg, createTicketArg, dirArg, epicIdArg, epicNameArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, moveTargetArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openEpicArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -230,7 +230,8 @@ export interface IpcDeps {
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metrics: (days: number | undefined) => MetricsOverview;
   /** Butler 页"回复"tab（ws-b）。 */
-  butlerMessages: () => ButlerMessageView[];
+  /** 信箱（BTL-245）的消息：Butler 总控的或一个 feature 的。 */
+  messages: (scope: MessageScope) => MessageView[];
   memory: Pick<MemoryService, "view" | "why">;
   /** 对话另存（UI 重做第 4 层）：只读。 */
   conv: Pick<ConversationStore, "list" | "search">;
@@ -423,7 +424,7 @@ export function registerIpc(d: IpcDeps): void {
   });
 
   handle(IPC.butlerView, () => d.sessionService.butlerView());
-  handle(IPC.butlerMessages, (): ButlerMessageView[] => d.butlerMessages());
+  handle(IPC.messagesList, (raw: unknown): MessageView[] => d.messages(messageScopeArg(raw)));
   handle(IPC.metricsView, (raw: unknown): MetricsOverview => d.metrics(typeof raw === "number" ? raw : undefined));
   handle(IPC.butlerOpenSession, async (raw: unknown) => {
     const r = await d.sessionService.openButler(openButlerArg(raw));

@@ -1,6 +1,5 @@
 // 预审的入口（设计 §3.1、§4.1、§4.5）：session 交证据、Butler 看到 PR 的新提交、手动重跑；结果送回 session。
-import type { DeliverResult } from "../sessions/pty-manager";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
+import type { Mailbox } from "../mailbox/mailbox";
 import type { PreReviewRepo, PreReviewRow } from "../db/prereview-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
 import type { RepoProfile } from "../../shared/baselines";
@@ -40,10 +39,8 @@ export interface PreReviewServiceDeps {
   openPrFor(ticketKey: string | null, target: ReviewTarget): TicketPr | null;
   profile(slug: string): RepoProfile | null;
   policy(slug: string): ResolvedPrPolicy;
-  guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
-  deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
-  /** 和 CI、评论递送共用：同一个 session 同时只递一条。 */
-  busy: Set<string>;
+  /** 信箱（BTL-245）：结果排进 session 的信箱，送到后在 on("prereview") 里记 deliveredAt。 */
+  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
   lang(): Lang;
   changed(): void;
   now(): number;
@@ -72,7 +69,14 @@ const MSG = {
 };
 
 export class PreReviewService {
-  constructor(private readonly d: PreReviewServiceDeps) {}
+  constructor(private readonly d: PreReviewServiceDeps) {
+    d.mailbox.on("prereview", (m) => {
+      const id = Number(m.ref?.slice("prereview:".length));
+      this.d.repo.update(id, { deliveredAt: m.deliveredAt ?? this.d.now() });
+      this.d.log(`pre-review ${id}: sent the result to ${m.toSession} (${m.via})`);
+      this.d.changed();
+    });
+  }
 
   private m() {
     return MSG[this.d.lang()];
@@ -187,46 +191,36 @@ export class PreReviewService {
     return row ? this.view(row) : null;
   }
 
-  /** 送进 session。只送 evidence 和 manual 触发的、还有 PR 触发但有 session 的；送不到留着，flush 再试。 */
-  async deliver(given: PreReviewRow): Promise<"sent" | string> {
+  /**
+   * 排进 session 的信箱。只送 evidence 和 manual 触发的、还有 PR 触发但有 session 的。已经在排队的不再排。
+   * 返回 queued，或者为什么不送。
+   */
+  deliver(given: PreReviewRow): Promise<"queued" | string> {
     // 重新读一遍：flush 手里的是一轮开始时的旧行，期间 runner 可能已经送过了。
     const row = this.d.repo.get(given.id) ?? given;
-    if (row.deliveredAt !== null) return "already";
-    if (!row.sessionId) return "no_session";
-    if (row.status !== "done" && !(row.status === "failed" && row.trigger === "evidence")) return "not_done";
-    if (row.finishedAt !== null && this.d.now() - row.finishedAt > PRE_REVIEW_DELIVERY_MS) return "expired";
-    const sid = row.sessionId;
-    if (this.d.busy.has(sid)) return "busy_delivering";
-    const gate = this.d.guard.check(sid);
-    if (!gate.ok) {
-      this.d.repo.update(row.id, { deliverTries: row.deliverTries + 1 });
-      return `guard:${gate.block}`;
-    }
-    const lang = this.d.lang();
-    const text = sanitizeTask(
+    if (row.deliveredAt !== null) return Promise.resolve("already");
+    if (!row.sessionId) return Promise.resolve("no_session");
+    if (row.status !== "done" && !(row.status === "failed" && row.trigger === "evidence")) return Promise.resolve("not_done");
+    if (row.finishedAt !== null && this.d.now() - row.finishedAt > PRE_REVIEW_DELIVERY_MS) return Promise.resolve("expired");
+    const ref = `prereview:${row.id}`;
+    if (this.d.mailbox.queuedByRef(ref)) return Promise.resolve("queued");
+    const body = sanitizeTask(
       deliveryText({
         shortSha: row.target.headSha.slice(0, 7), verdict: row.verdict ?? "error", violations: row.violations,
-        gaps: row.status === "done" ? this.gaps(row) : [], error: row.detail, lang,
+        gaps: row.status === "done" ? this.gaps(row) : [], error: row.detail, lang: this.d.lang(),
       }),
     );
-    this.d.busy.add(sid);
-    try {
-      const r = await this.d.deliver(gate.termId, text, this.d.guard.recheckAfter(sid, gate));
-      if (r !== "sent") {
-        this.d.repo.update(row.id, { deliverTries: row.deliverTries + 1 });
-        return `deliver:${r}`;
-      }
-      this.d.repo.update(row.id, { deliveredAt: this.d.now() });
-      this.d.log(`pre-review ${row.id}: sent the result to ${sid}`);
-      this.d.changed();
-      return "sent";
-    } finally {
-      this.d.busy.delete(sid);
-    }
+    this.d.mailbox.send({ kind: "review", from: null, to: row.sessionId, featureId: null, body, ref });
+    return Promise.resolve("queued");
   }
 
   /** roundDone、启动时：还没送到的再送一次（24 小时为止）。 */
   async flush(): Promise<void> {
+    // 排了 24 小时还没送到（目标一直关着）：撤回，打开时不再送过期的结论。
+    for (const ref of this.d.mailbox.queuedRefs("prereview")) {
+      const row = this.d.repo.get(Number(ref.slice("prereview:".length)));
+      if (!row || (row.finishedAt !== null && this.d.now() - row.finishedAt > PRE_REVIEW_DELIVERY_MS)) this.d.mailbox.withdraw(ref);
+    }
     for (const row of this.d.repo.undelivered(this.d.now() - PRE_REVIEW_DELIVERY_MS)) {
       try {
         await this.deliver(row);

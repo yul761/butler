@@ -13,6 +13,7 @@ import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { FeatureService } from "../tickets/feature-service";
 import { TicketService } from "../tickets/ticket-service";
 import { controlHandler } from "./control-handler";
+import type { SendInput } from "../mailbox/mailbox";
 import { StackControl, type StackControlDeps } from "./stack-control";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -48,7 +49,14 @@ async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: Feat
   const replies = new Map<string, string>();
   const logs: string[] = [];
   const refreshed: string[] = [];
+  const mailed: SendInput[] = [];
+  const mailbox = {
+    send: (x: SendInput) => (mailed.push(x), { id: `m${mailed.length}`, state: "busy" as const }),
+    opened: async () => true,
+    views: () => [],
+  };
   const handle = controlHandler({
+    mailbox,
     tickets, sessions, features, ticketService, sessionService,
     refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     activity: (id) => activities.get(id) ?? null,
@@ -73,7 +81,7 @@ async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: Feat
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed };
+  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -290,6 +298,48 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     const r = await handle({ ...base, from: "fix", op: "start_session", ticket: "DMS-1", task: "a" });
     if (!r.ok) throw new Error("did not open");
     expect(sessions.get((r.value as { sessionId: string }).sessionId)?.spawnedBy).toBeNull();
+  });
+
+  it("send_message queues a message for a ticket or fix session of this feature, never refusing a busy one (BTL-245)", async () => {
+    const { handle, base, sessions, sessionService, feature, mailed } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!child.ok) throw new Error(child.error);
+    const kid = (child.value as { sessionId: string }).sessionId;
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: kid });
+    const from = { ...base, from: c.termId };
+    const r = await handle({ ...from, op: "send_message", session: kid, text: "接口改了", interrupt: true });
+    expect(r).toMatchObject({ ok: true, value: { queued: true, sessionId: kid, requestId: "m1", state: "busy" } });
+    expect(mailed[0]).toMatchObject({ kind: "instruction", from: c.termId, to: kid, featureId: feature.id, interrupt: true });
+    expect(mailed[0].body).toContain("接口改了");
+    expect(mailed[0].body).toContain("checkout");
+    expect(await handle({ ...from, op: "send_message", session: "fix", text: "x" })).toMatchObject({ ok: true, value: { sessionId: "fix" } });
+    expect(mailed[1]).toMatchObject({ to: "fix", interrupt: false });
+    // /clear 之后旧 id 也能用：发给链上最新的那个。
+    sessions.insertIfAbsent({ id: "kid-new", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
+    sessions.setReplacedBy(kid, "kid-new");
+    expect(await handle({ ...from, op: "send_message", session: kid, text: "y" })).toMatchObject({ ok: true, value: { sessionId: "kid-new" } });
+  });
+
+  it("send_message refuses sessions outside this feature, the coordinator itself, and callers that are not its coordinator (BTL-245)", async () => {
+    const { handle, base, sessionService, feature, other, mailed } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    const theirs = await sessionService.openFeature({ featureId: other.id });
+    if (!c.ok || !theirs.ok) throw new Error("no coordinator");
+    const otherChild = await handle({ v: 1, featureId: other.id, from: null, op: "start_session", ticket: "OTH-1", task: "a" });
+    const mine = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!otherChild.ok || !mine.ok) throw new Error("did not open");
+    const theirKid = (otherChild.value as { sessionId: string }).sessionId;
+    const kid = (mine.value as { sessionId: string }).sessionId;
+    for (const session of [theirKid, c.termId, "nope"]) {
+      expect(await handle({ ...base, from: c.termId, op: "send_message", session, text: "x" })).toMatchObject({ ok: false, error: expect.stringContaining(session) });
+    }
+    // 只有这个 feature 的总控能发：别的 feature 的总控、子 session、认不出来的调用方都不行。
+    for (const from of [theirs.termId, kid, null]) {
+      expect(await handle({ ...base, from, op: "send_message", session: kid, text: "x" })).toMatchObject({ ok: false });
+    }
+    expect(mailed).toEqual([]);
   });
 
   it("refuses to read a session of another feature or of a ticket outside this feature", async () => {

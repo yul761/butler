@@ -131,7 +131,9 @@ export type FeatureControlRequest =
   /** feature 属于 epic 时：epic 名字和同一 epic 下其他 feature 的情况。 */
   | { v: 1; featureId: number; from: string | null; op: "epic_context" }
   | { v: 1; featureId: number; from: string | null; op: "end_session"; session: string; reason: string }
-  | { v: 1; featureId: number; from: string | null; op: "refresh_session"; session: string };
+  | { v: 1; featureId: number; from: string | null; op: "refresh_session"; session: string }
+  /** 给这个 feature 的 ticket session 或修复 session 发一条（排进它的信箱，BTL-245）；interrupt 先按 Esc 叫停。 */
+  | { v: 1; featureId: number; from: string | null; op: "send_message"; session: string; text: string; interrupt?: boolean };
 
 /**
  * epic session 的请求（设计文档 2026-11-01）：create_feature 在 epic 下建 feature，epic 只有一个仓库时 repos 可以省略。
@@ -157,8 +159,8 @@ export const MESSAGE_LIMIT = 4000;
 
 /**
  * Butler 总控的请求（BTL-190 第 5 点）：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session，但什么都不建、不删、不结束，
- * 也不开 ticket 的 session。send_message 只能发给 epic session 或 feature 总控（经过 DeliveryGuard）：session、feature、epic 给且只给一个，
- * feature、epic 是名字或 id。目标的终端关着时 Butler 接着它最近的那个 session（feature 从没开过总控时新开一个）再把消息交进去。
+ * 也不开 ticket 的 session。send_message 只能发给 epic session 或 feature 总控（排进它的信箱，BTL-245）：session、feature、epic 给且只给一个，
+ * feature、epic 是名字或 id；interrupt 先按 Esc 叫停再送。目标的终端关着时 Butler 接着它最近的那个 session（feature 从没开过总控时新开一个）再把消息交进去。
  * list_tickets 的 feature / epic 是名字或 id（list_features、list_epics 里的），可以都不给。
  */
 /** send_message 发给谁：一个 session，或者一个 feature（它的总控）、一个 epic（它的 epic session）。 */
@@ -174,7 +176,7 @@ export type ButlerControlRequest =
   | { v: 1; butler: true; from: string | null; op: "list_sessions" }
   | { v: 1; butler: true; from: string | null; op: "session_activity"; session: string }
   | { v: 1; butler: true; from: string | null; op: "list_inbox" }
-  | ({ v: 1; butler: true; from: string | null; op: "send_message"; text: string } & ButlerMessageTarget)
+  | ({ v: 1; butler: true; from: string | null; op: "send_message"; text: string; interrupt?: boolean } & ButlerMessageTarget)
   | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string }
   /** 后台给一个 feature 重新生成汇总（ws-b）：立刻返回，生成完 list_features 能看到新的 summaryAt。 */
   | { v: 1; butler: true; from: string | null; op: "refresh_feature_summary"; feature: string }
@@ -302,6 +304,11 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
     if (o.op === "epic_context") return { ...base, op: "epic_context" };
+    if (o.op === "send_message") {
+      if (!okName(o.session, 200) || typeof o.text !== "string" || !o.text.trim() || o.text.length > MESSAGE_LIMIT) return null;
+      if (o.interrupt !== undefined && typeof o.interrupt !== "boolean") return null;
+      return { ...base, op: "send_message", session: o.session, text: o.text, ...(o.interrupt === true && { interrupt: true }) };
+    }
     if (isSessionOp(o.op)) return sessionOp(base, o);
     if (isStackOp(o.op)) return stackOp(base, o);
     if (o.op === "create_ticket") {
@@ -385,7 +392,8 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
     if (given.length !== 1) return null;
     const key = given[0];
     if (!okName(o[key], key === "session" ? 200 : 500)) return null;
-    return { ...base, op: "send_message", text: o.text, [key]: o[key] } as ButlerControlRequest;
+    if (o.interrupt !== undefined && typeof o.interrupt !== "boolean") return null;
+    return { ...base, op: "send_message", text: o.text, [key]: o[key], ...(o.interrupt === true && { interrupt: true }) } as ButlerControlRequest;
   }
   return null;
 }

@@ -5,7 +5,7 @@ import { CONTEXT_LIMIT, TASK_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import { normTurnFilter, type TurnFilter } from "../../shared/turn";
 import type {
-  AddRepoInput, CiItemRef, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CiItemRef, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, MessageScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
@@ -186,6 +186,15 @@ export function inboxScopeArg(v: unknown): InboxScope {
   if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
   if (o.epicId !== undefined) return { epicId: epicIdArg(o.epicId) };
   throw new Error("invalid inbox scope");
+}
+
+/** 信箱消息列表（BTL-245）的范围：Butler 总控的，或者一个 feature 的。 */
+export function messageScopeArg(v: unknown): MessageScope {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid message scope");
+  if (o.butler === true) return { butler: true };
+  if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
+  throw new Error("invalid message scope");
 }
 
 /** PR 进度的范围：一个 ticket、一个 feature 或一个 epic。 */

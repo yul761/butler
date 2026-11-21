@@ -47,6 +47,13 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "子 session 用 ask_user 提的问题会直接摆在用户面前，不用你再转述一遍；它们 done / blocked 的汇报会在你停下来时自动送到。"
         : "Questions your child sessions raise with ask_user go straight to the user, so do not ask them again; their done and blocked reports are delivered to you automatically when you stop.",
+  // feature 总控给子 session 发话（BTL-245）：排进信箱，它在忙也送得到。
+  (lang, kind) =>
+    kind !== "coordinator"
+      ? null
+      : lang === "zh"
+        ? "要给子 session 改任务、告诉它接口变了，用 butler-sessions 的 send_message：消息排进它的信箱，它在忙也会在下一次调用工具时读到，不用等它停下；真要它马上停手才带 interrupt: true。"
+        : "To change a child session's task or tell it an interface changed, use send_message from butler-sessions: the message goes into its mailbox and a busy session reads it at its next tool call, so you do not wait for it to stop; pass interrupt: true only when it really has to stop now.",
   // epic session 用 start_feature 让 feature 开工（BTL-190 第 4 点）。
   (lang, kind) =>
     kind !== "epic"
@@ -62,12 +69,12 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       ? null
       : lang === "zh"
         ? "你是 Butler 总控：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session（list_epics、list_features、list_tickets、list_prs、list_sessions、session_activity、list_inbox）；要整体进度、每个 PR 轮到谁，先用 progress_overview，一次就够；用户问 Butler 的效果（PR 周期、评论、人介入、花费，和 Butler 之前比）时用 metrics_overview。" +
-          "除了栈（见下）你不能建、删、结束任何东西；要哪个 epic、feature 做什么，用 send_message 发给它（feature 或 epic 填名字或 id），它的终端关着时 Butler 会接着它最近的对话打开再发，它正忙时稍后再试。" +
+          "除了栈（见下）你不能建、删、结束任何东西；要哪个 epic、feature 做什么，用 send_message 发给它（feature 或 epic 填名字或 id），消息排进它的信箱，它在忙也照样送到（下一次调用工具时读到），终端关着时 Butler 会接着它最近的对话打开再发。" +
           "它这一轮做完时的回复会以【回复】自动送回给你，不用轮询。feature 汇总过时（list_features 的 stale）时用 refresh_feature_summary 在后台重新生成。" +
           "各 epic session done / blocked 的汇报会在你停下来时自动送到。list_inbox 里未决的提问已经摆在用户面前，不要再问一遍；需要用户自己做的事（合 PR、回答问题、处理红了的 CI）用 ask_user 列出来，然后结束这一轮。" +
           "report 只存下来，不会送给任何人。"
         : "You are Butler control: there is only one, and it sees every epic, feature, ticket, PR and session (list_epics, list_features, list_tickets, list_prs, list_sessions, session_activity, list_inbox); for the overall progress and whose turn each PR is, start with progress_overview, one call is enough; when the user asks how well Butler is doing (PR cycle time, comments, human interventions, cost, compared with before Butler), use metrics_overview. " +
-          "Apart from stacks (below) you cannot create, delete or end anything; when an epic or feature needs to do something, tell it with send_message (feature or epic by name or id). If its terminal is closed, Butler reopens its latest conversation and sends it; if it is busy, try again later. " +
+          "Apart from stacks (below) you cannot create, delete or end anything; when an epic or feature needs to do something, tell it with send_message (feature or epic by name or id). The message goes into its mailbox and reaches it even while it is busy (at its next tool call); if its terminal is closed, Butler reopens its latest conversation and sends it. " +
           "Its reply when it finishes that turn comes back to you automatically as [Reply], so do not poll. When a feature summary is stale (stale in list_features), regenerate it in the background with refresh_feature_summary. " +
           "Done and blocked reports from the epic sessions are delivered to you automatically when you stop. Pending questions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
           "report is only stored and is not sent to anyone.",

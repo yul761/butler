@@ -17,7 +17,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { ButlerMessageView, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
@@ -359,7 +359,7 @@ export const EN: UiStrings = {
       fix: "Open a fix session",
       ignore: "It's fine, ignore",
       send: "Send to agent",
-      answered: (text: string) => `Answered: ${text}. It goes in when the session stops.`,
+      answered: (text: string) => `Answered: ${text}. It is in the session's mailbox.`,
       answerGone: "This question is gone",
       sendNot: (reason: string) => `Not sent: ${reason}`,
       prOpenNot: "This PR link can't be opened",
@@ -1829,17 +1829,15 @@ export const EN: UiStrings = {
     loopFlakyText: (n: number, wasted: string) => `${n} × · ${wasted}`,
     loopListed: " (listed)",
   },
-  butlerRepliesNone: "Butler control has not sent any message with send_message yet.",
-  butlerMessageStatus: {
-    sending: "Sending",
-    waiting: "Waiting for a reply",
-    replied: "Replied, not yet back to Butler control",
-    delivered: "Delivered to Butler control",
-    failed: "Not delivered",
-    expired: "Expired",
-  } as Record<ButlerMessageView["status"], string>,
-  butlerMessageSent: "Sent",
-  butlerMessageReply: "Reply",
+  messagesNone: "No messages yet.",
+  messageStatus: { queued: "Queued", delivered: "Delivered", replied: "Replied" } as Record<MessageStatus, string>,
+  messageKind: {
+    instruction: "Instruction", report: "Report", answer: "Answer", butler: "Butler control", reply: "Reply", review: "Pre-review", comments: "Comments", convention: "Convention",
+  } as Record<MessageKind, string>,
+  messageVia: { hook: "between tool calls", input: "typed in" } as Record<"hook" | "input", string>,
+  messageInterrupt: "Interrupt",
+  messageQueued: "Queued",
+  messageReply: "Reply",
   featureSummaryPrAsOf: (t: string) => `PR status as of ${t}`,
   externalHeading: "Outward actions",
   externalAuditRetention: "Keep audit records (days)",
@@ -2282,7 +2280,7 @@ export const EN: UiStrings = {
     ctlCollapse: "Collapse the conversation column",
     ctlExpand: "Expand the conversation column",
     ctlEmpty: "Reports from child sessions (done or blocked) show up here in time order.",
-    butlerSent: (n: number) => `Messages sent by control (${n})`,
+    messages: (n: number) => `Messages (${n})`,
     lessonsLede: "Rules Butler distilled from merged PRs. Confirmed ones are passed to future sessions.",
     effectLede: (days: number) => `What Butler saved you and what it cost over the last ${days} days.`,
     effectTabs: { overview: "Overview", trend: "Trend", spend: "Spend", rework: "Rework", automation: "Automation effect" },
