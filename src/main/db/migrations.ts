@@ -1416,6 +1416,32 @@ export const MIGRATIONS: string[] = [
   // BTL-239 起完整分叉第一轮读得到开发 session 存下的累计时取 T1 − 它，是准数，不再标。
   `
   ALTER TABLE fork_discussions ADD COLUMN cost_approx INTEGER NOT NULL DEFAULT 0;
+  `,  // BTL-245：每个 session 一个信箱。消息一律排队、存进库里，状态只有 queued / delivered / replied。
+  // to_session 是排队那一刻的 head，送的时候按 head 链找最新的；ref 是来源键（report:12 之类），同一个 ref 同时只有一条在排队。
+  // 旧的 butler_messages 留着不用。
+  `
+  CREATE TABLE session_messages (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('instruction','report','answer','butler','reply','review','comments','convention')),
+    from_session TEXT,
+    to_session TEXT NOT NULL,
+    feature_id INTEGER,
+    body TEXT NOT NULL,
+    interrupt INTEGER NOT NULL DEFAULT 0,
+    ref TEXT,
+    meta TEXT,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','delivered','replied')),
+    via TEXT CHECK (via IN ('hook','input')),
+    expects_reply INTEGER NOT NULL DEFAULT 0,
+    base_reply_id TEXT,
+    reply_text TEXT,
+    queued_at INTEGER NOT NULL,
+    delivered_at INTEGER,
+    replied_at INTEGER
+  );
+  CREATE INDEX session_messages_status ON session_messages (status, to_session);
+  CREATE INDEX session_messages_queued_at ON session_messages (queued_at);
+  CREATE UNIQUE INDEX session_messages_queued_ref ON session_messages (ref) WHERE ref IS NOT NULL AND status = 'queued';
   `,
   // BTL-243：个人 LLM API、隐私档位和记忆蒸馏都拿掉了。清掉存下的 key、这几项设置、敏感词和 LLM 调用的审计（里面是发出去的原文），
   // 表留着不用。secrets 里的 webhook 地址和 auditRetentionDays（对外动作的审计也用它）不动。

@@ -716,3 +716,31 @@ export interface ButlerMessageView {
   repliedAt: string | null;
   deliveredAt: string | null;
 }
+
+/** 信箱（BTL-245）：消息的种类。 */
+export type MessageKind = "instruction" | "report" | "answer" | "butler" | "reply" | "review" | "comments" | "convention";
+/** 信箱消息的状态：已排队、已送达、已回复。 */
+export type MessageStatus = "queued" | "delivered" | "replied";
+
+/** 界面上的一条信箱消息。时间是 ISO 字符串。 */
+export interface MessageView {
+  id: string;
+  kind: MessageKind;
+  /** 给人看的发送方："feature 登录改版的总控"、"ABC-1"、"Butler"之类。 */
+  from: string;
+  /** 给人看的接收方。 */
+  to: string;
+  toSession: string;
+  status: MessageStatus;
+  /** 怎么送到的：hook（工具调用的间隙）或 input（直接输入）；还没送到为 null。 */
+  via: "hook" | "input" | null;
+  interrupt: boolean;
+  text: string;
+  queuedAt: string;
+  deliveredAt: string | null;
+  reply: string | null;
+  repliedAt: string | null;
+}
+
+/** messages:list 的范围：Butler 总控的，或者一个 feature 的。 */
+export type MessageScope = { butler: true } | { featureId: number };
