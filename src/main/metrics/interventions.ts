@@ -194,6 +194,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.stacksList, IPC.stacksPolicyGet, IPC.stacksPolicyLayers, IPC.stacksPolicySet, IPC.stacksRemove,
   // 自动接活（工作流 N）：只读、策略，改分类是校准规则（记进 intake_overrides，不推动工作）
   IPC.intakeView, IPC.intakeEffect, IPC.intakePolicyGet, IPC.intakePolicySet, IPC.intakeClassify,
+  // 自动化档位（BTL-247）：读档位、给 epic 选档位都是搭环境
+  IPC.automationState, IPC.featuresSetAutomationLevel,
 ]);
 
 /** 这个通道算不算手动触发。 */

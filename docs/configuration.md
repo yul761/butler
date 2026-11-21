@@ -11,14 +11,30 @@ The Settings page has these sections, in order:
 1. **Environment check**
 2. **General**
 3. **Memory (StateCore)**
-4. **Schedule and handoffs**
+4. **Schedule and status**
 5. **Lessons** (automatic backups, the export reminder and the admission policy; see [Lessons: bulk actions, admission policy and import / export](#lessons-bulk-actions-admission-policy-and-import--export))
 
-Four more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)), **Comments & CI** (see [Comments and CI](#comments-and-ci)), **Interruptions & notifications** (see [Interruptions and notifications](#interruptions-and-notifications)) and **Stacks** (see [Stacks](#stacks)).
+The **Automation** tab is described under [Automation level](#automation-level). Four more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)), **Comments & CI** (see [Comments and CI](#comments-and-ci)), **Interruptions & notifications** (see [Interruptions and notifications](#interruptions-and-notifications)) and **Stacks** (see [Stacks](#stacks)).
 
 The merge coordinator and the `end_session` tool for epic coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
 
 The audit log has its own page, **Audit**, in the sidebar. The **Effect** page has no setting either; see [Effect page](#effect-page).
+
+## Automation level
+
+The **Automation** tab at the top of the Settings page chooses how much Butler does on its own.
+
+| Setting | Key | Default | Accepted values and notes |
+|---------|-----|---------|---------------------------|
+| Automation level | `automationLevel` | `manual` | `manual` or `semi`. **Fully automatic (later)** is shown but can't be picked yet. Picking a level writes its preset into the switches it manages, listed below; nothing else changes. Picking the same level again puts those switches back to the preset. |
+
+- **Manual.** Every managed switch is off: comments, CI, stacks and intake wait for you.
+- **Semi-automatic.** PR comments go to the session, without replies and without resolving threads (`comments.enabled` on, `comments.reply` and `comments.resolve` off). A CI failure that looks flaky is rerun once (`ci.enabled` on, `ci.maxReruns` 1, `externalCiRerun` on). Stacks rebase on their own, and Butler pushes, force-pushes and opens their PRs (`autoRebase` on, `externalBranchPush`, `externalForcePush` and `externalPrOpen` on). PRs get a pre-review (`preReviewEnabled` on). Automatic intake starts work on its own once a source is set (`enabled` and `autoStart` on; with `intakeSource` still `none`, the tab says so and that part does nothing).
+- **Merging always needs your click** at every level, and every outward action is still recorded in the [audit](#outward-actions).
+
+The individual switches sit under **Advanced: switch by switch**, collapsed by default; they are the same settings as on the **Advanced** tab. When any managed switch no longer matches the saved level, in the global layer or in a product or repo layer of [Comments and CI](#comments-and-ci), [Stacks](#stacks) or [Automatic intake](#automatic-intake), the level shows **Custom** with how many switches differ. Picking a level rewrites only the global layer, so the tab lists the products and repos whose own settings differ; those are still edited on the **Advanced** tab, as before.
+
+**Epic level.** The header of an epic's page has an **Epic level** menu: **Follow global** (the default), **Manual** or **Semi-automatic**. An epic's own level applies only to its tickets and overrides the global, product and repo settings of the managed switches for them. It is stored with the epic, not as a setting. A stack follows an epic level only when every ticket in it is in an epic with that same level of its own; a stack that mixes levels keeps the normal switches. For tickets that intake brings in from Jira, the epic's own level also decides what happens once that epic exists in Butler: **Semi-automatic** starts them (and pre-reviews them) even if the repo's intake doesn't start work on its own; **Manual** only creates them in the epic without starting them, and a queued ticket goes back to held when its epic is switched to manual. Held tickets are decided again right after you change an epic's level. The intake source and its schedule stay global.
 
 ## Environment check
 
@@ -90,7 +106,7 @@ The log (`logs/main.log` in Butler's data folder) records the reading at startup
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
-| Write handoff progress, decisions, follow-ups and learnings to StateCore, and give the sessions Butler opens their memory | `memoryEnabled` | `1` (on) | `1` or `0`. When off, Butler writes nothing to StateCore and starts sessions without the memory MCP servers. Existing memory is kept. When you turn it back on, Butler catches up on the tickets it missed. |
+| Write the progress, decisions, follow-ups and learnings to StateCore, and give the sessions Butler opens their memory | `memoryEnabled` | `1` (on) | `1` or `0`. When off, Butler writes nothing to StateCore and starts sessions without the memory MCP servers. Existing memory is kept. When you turn it back on, Butler catches up on the tickets it missed. |
 | Refresh automatically when the context passes this many tokens (0 = off) | `refreshThresholdTokens` | `150000` | `0` turns automatic refresh off, otherwise a whole number of tokens (at most 7 digits). When a Butler session has stopped, is not waiting on you and its last turn's context is at least this long, Butler types `/handoff`, waits until memory has stored the handoff, saves the last few turns of the conversation to `~/.butler/refresh/<session>.md` (no model is called), types `/clear`, then has the session recall the handoff, read that file and carry on with what it was doing (if it was waiting for you, CI or a child session, it says what for and keeps waiting). Needs memory on. The ↻ button next to a running session and a coordinator's `refresh_session` do the same on demand and do not depend on this setting. |
 | Close a session automatically after it has been idle this many minutes (0 = off) | `idleCloseMinutes` | `180` | `0` turns automatic closing off, otherwise a whole number of minutes from 10 up (at most 5 digits). When a Butler session's terminal is open but it has stopped for longer than this (time the computer was asleep doesn't count), with nothing waiting on you, no background task, no merge queue or CI run it is waiting on, not in the middle of a refresh and (for a coordinator) no child session at work, Butler has it write a handoff (`/handoff`), waits for memory to be written, then ends the terminal like `end_session`. You can resume it later. With memory off, ticket sessions and epic coordinators still write `/handoff` (Butler keeps it for the daily brief). Sessions you have hidden are deleted from Butler after 14 days; their transcripts stay on disk. **Clean up idle** in a session bar does the same at once for sessions there that have stopped for at least 5 minutes, whatever this setting is. |
 
@@ -141,19 +157,21 @@ These settings are in **Settings → General → Memory and performance**. None 
 - **macOS:** add the folder that holds your worktrees to Spotlight's privacy list (System Settings → Siri & Spotlight → Spotlight Privacy) so every `pnpm install` isn't indexed again. If you run third-party antivirus, exclude the same folders. macOS manages swap itself: keep at least 15–20% of the disk free so it has room.
 - **Both:** every MCP server in your own Claude configuration starts once per session. The **Memory** card under **How it is running** on the **Your turn** page names the ones of yours that use the most. Remove the ones you rarely use from your Claude configuration; Butler never changes it for you.
 
-## Schedule and handoffs
+## Schedule and status
+
+Butler calls the status it writes for a ticket a handoff internally; the `/handoff` command keeps that name.
 
 | Setting | Key | Default | Accepted values and notes |
 |---------|-----|---------|---------------------------|
-| Nightly handoff time | `nightlyTime` | `16:00` | `HH:MM`, local time. If Butler was closed, asleep or locked at that time, the run catches up at the next launch, wake or unlock, before the morning refresh. |
+| Nightly status update time | `nightlyTime` | `16:00` | `HH:MM`, local time. If Butler was closed, asleep or locked at that time, the run catches up at the next launch, wake or unlock, before the morning refresh. |
 | Daily global control patrol at | `butlerPatrolTime` | empty (off) | `HH:MM`, local time; empty means off. At this time Butler opens (or reuses the latest) global control and has it go over PRs, CI and pending questions, nudging the epic coordinators that should follow up with `send_message` and listing what you need to do yourself with `ask_user`. If the global control is busy, Butler waits until it stops. If the computer was asleep or Butler was closed at that time, the patrol runs once at the next wake, unlock or launch on the same day; it is not made up after midnight. If you turn the setting on after that day's time has passed, the first patrol runs right away. A patrol opens a session at most once a day. While a question listed by the previous patrol is still pending, the next one waits for you to deal with it. The global control is not refreshed or closed for being idle automatically. |
-| Working days | `workingDays` | `1,2,3,4,5` (Mon–Fri) | Checkboxes in the UI. The stored value is a comma-separated list of `0`–`6`, where `0` is Sunday. Nightly handoffs and morning refreshes run only on these days. |
-| Tracker MCP tools | `trackerTools` | empty | One MCP tool name per line, in the form `mcp__<server>__<tool>`. `mcp__<server>` alone allows every tool of that server, so avoid it unless the server is read-only. Anything else, such as `Bash(...)` rules or flags, is rejected. Handoffs and refreshes may call these tools, plus `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr checks`, `git log` and `git status`, plus anything your user-level or managed (policy) Claude Code settings allow (see below). |
-| Background handoffs also load local-scope MCP servers… | `headlessProjectMcp` | `0` (off) | `1` or `0`. See [Plugging in your tracker](#plugging-in-your-tracker). |
-| Handoff prompt template | `handoffPrompt` | built in | The instructions sent to `claude` for a handoff. It can't be empty and is limited to 20,000 characters. See [Adapting the prompts](#adapting-the-prompts). |
+| Working days (the nightly status update runs only on these) | `workingDays` | `1,2,3,4,5` (Mon–Fri) | Checkboxes in the UI. The stored value is a comma-separated list of `0`–`6`, where `0` is Sunday. Nightly handoffs and morning refreshes run only on these days. |
+| Tracker MCP tools (status updates may call only these; one per line) | `trackerTools` | empty | One MCP tool name per line, in the form `mcp__<server>__<tool>`. `mcp__<server>` alone allows every tool of that server, so avoid it unless the server is read-only. Anything else, such as `Bash(...)` rules or flags, is rejected. Handoffs and refreshes may call these tools, plus `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr checks`, `git log` and `git status`, plus anything your user-level or managed (policy) Claude Code settings allow (see below). |
+| Background status updates also load local-scope MCP servers… | `headlessProjectMcp` | `0` (off) | `1` or `0`. See [Plugging in your tracker](#plugging-in-your-tracker). |
+| Status update prompt template | `handoffPrompt` | built in | The instructions sent to `claude` for a handoff. It can't be empty and is limited to 20,000 characters. See [Adapting the prompts](#adapting-the-prompts). |
 | Morning refresh prompt template | `refreshPrompt` | built in | The quick morning check of PR and tracker status. It doesn't summarise the conversation. Same limits as above. |
 
-The section also has **Run the nightly handoff now**.
+The section also has **Run the nightly status update now**.
 
 After the tickets, the nightly run also writes a summary for every epic whose coordinator session or tickets had new activity since its last summary. It forks the coordinator session when there is one and uses the same read-only flags as a handoff. If the ticket run was rate limited, no epic summaries are written that night and the morning catch-up does them. An epic's page also has **Update now**, which first runs handoffs for the epic's tickets that had activity and then writes the summary. A change in a PR's state, CI, review or mergeability since the last summary also counts as new activity, so the summary is marked out of date even when nobody typed anything. Each summary shows "PR status as of" the time it read the PRs. `/handoff` in a coordinator writes the summary from the conversation itself.
 

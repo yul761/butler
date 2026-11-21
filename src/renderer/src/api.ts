@@ -1,3 +1,4 @@
+import type { AutomationLevel, AutomationState } from "../../shared/automation";
 import type { TicketGlance } from "../../shared/ticket-glance";
 import { normTurnFilter, type TurnBoard, type TurnFilter, type TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
@@ -94,6 +95,9 @@ export const api = {
   archivedFeatures: () => call<Feature[]>(IPC.featuresArchived),
   unarchiveFeature: (id: number) => call<void>(IPC.featuresUnarchive, id),
   openFeatureSession: (req: OpenFeatureSessionRequest) => call<OpenSessionResult>(IPC.featuresOpenSession, req),
+  /** epic 自己选的自动化档位（BTL-247）；null = 跟随全局。 */
+  setFeatureAutomationLevel: (id: number, level: AutomationLevel | null) => call<void>(IPC.featuresSetAutomationLevel, id, level),
+  automationState: () => call<AutomationState>(IPC.automationState),
   butlerView: () => call<ButlerView>(IPC.butlerView),
   messages: (scope: MessageScope) => call<MessageView[]>(IPC.messagesList, scope),
   metrics: (days?: number) => call<MetricsOverview>(IPC.metricsView, days),

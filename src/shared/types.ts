@@ -1,3 +1,4 @@
+import type { AutomationLevel } from "./automation";
 import type { IntakeNoticeInfo, IntakeRecentEntry } from "./intake";
 import type { CostBreakerView } from "./cost";
 import type { CommentsWaiting } from "./loop";
@@ -51,6 +52,8 @@ export interface Feature {
   briefSentAt: number | null;
   /** 从 Jira 按 epic 接进来时对应的 Jira epic（BTL-246 §7）；省略或 null：不是从 Jira epic 来的。 */
   jiraEpicKey?: string | null;
+  /** 自动化档位（BTL-247）：这个 epic 自己选的；null = 跟随全局。 */
+  automationLevel: AutomationLevel | null;
 }
 
 export type FeatureStatus = "stuck" | "waiting" | "not_started" | "active" | "archived";

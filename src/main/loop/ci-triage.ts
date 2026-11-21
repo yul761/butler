@@ -36,7 +36,8 @@ export interface TriageWhere {
 
 export interface CiTriageDeps {
   repo: CiTriageRepo;
-  policy(slug: string | null): LoopPolicy;
+  /** ticketKey：它所在 epic 自己选了自动化档位时盖在三层策略上（BTL-247）。 */
+  policy(slug: string | null, ticketKey?: string | null): LoopPolicy;
   external: Pick<ExternalActions, "attempt">;
   gh: {
     runInfo(cwd: string, runId: number, timeoutMs: number, repo?: string | null): Promise<RunInfo | null>;
@@ -86,7 +87,7 @@ export class CiTriage {
     if (!w || row.headSha === null) return deliver;
     let policy: LoopPolicy;
     try {
-      policy = this.d.policy(w.slug);
+      policy = this.d.policy(w.slug, w.ticketKey);
     } catch (e) {
       this.d.log("ci triage: reading the policy failed", e);
       return deliver;
@@ -309,7 +310,7 @@ export class CiTriage {
     const wasted = Math.max(0, now - row.firstFailedAt);
     this.d.repo.update(row.id, { state: "passed", passedAt: now, outcome: "passed" }, now);
     const slug = w.slug ?? "";
-    const policy = this.d.policy(w.slug);
+    const policy = this.d.policy(w.slug, w.ticketKey);
     const since = now - policy["ci.autoListDays"] * 86_400_000;
     const names: { kind: "check" | "test"; name: string }[] = [...row.checks.map((name) => ({ kind: "check" as const, name })), ...row.tests.map((name) => ({ kind: "test" as const, name }))];
     // 认出了测试名时只自动列入测试名：列入整个检查（比如 "test"）会把这个检查以后真的失败也当成 flaky。

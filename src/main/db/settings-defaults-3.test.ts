@@ -26,6 +26,8 @@ describe("3.0.0 defaults: nothing new acts on its own", () => {
     expect(SETTING_DEFAULTS.routingQuotas).toBe("");
     expect(SETTING_DEFAULTS.intakeSource).toBe("none");
     expect(SETTING_DEFAULTS.bgWindow).toBe("anytime");
+    // 4.0（BTL-247）：全局档位默认手动。
+    expect(SETTING_DEFAULTS.automationLevel).toBe("manual");
   });
 
   it("keeps every new policy's own switch off", () => {

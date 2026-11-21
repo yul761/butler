@@ -7,6 +7,7 @@ import {
   type IncomingTicket, type IntakeActResult, type IntakeAction, type IntakeClassification, type IntakeClassifyEdit, type IntakeDim, type IntakeEffect,
   type IntakeItemView, type IntakeNoticeInfo, type IntakePolicy, type IntakeRecentEntry, type IntakeSourceKind, type IntakeState, type IntakeView, type IntakeWaitReason,
 } from "../../shared/intake";
+import { overlayIntake, preReviewOn, type AutomationLevel } from "../../shared/automation";
 import type { ExternalActionKind } from "../../shared/external";
 import type { Tier } from "../../shared/model-routing";
 import type { ResolvedPrPolicy } from "../../shared/pr-policy";
@@ -75,6 +76,8 @@ export interface IntakeDeps {
   toCoordinator: (text: string) => Promise<boolean>;
   /** 交给 Jira epic 对应的 Butler epic 的总控（没有这个 epic 就新建；总控没开就按内存放行后打开，BTL-246 §7）。 */
   toEpicCoordinator?: (epic: { key: string; title: string | null }, repoPath: string, text: string) => Promise<{ ok: true } | { ok: false; message: string }>;
+  /** Jira epic 对应的 Butler epic 自己选的自动化档位（BTL-247）；还没建、跟随全局时返回 null（按接活策略原来的三层）。 */
+  epicLevel?: (epicKey: string) => AutomationLevel | null;
   recordEvent: RecordEvent;
   metricEvents: (since: number, kinds: readonly string[]) => { kind: string; ticketKey: string | null; data: Record<string, unknown> | null }[];
   knownRepos: () => { path: string; slug: string | null }[];
@@ -238,7 +241,8 @@ export class IntakeService {
   async decide(key: string): Promise<void> {
     const r = this.d.repo.get(key);
     if (!r || SETTLED.includes(r.state) || r.state === "needs_repo") return;
-    const p = this.d.policies.forSlug(r.repoSlug);
+    const level = this.epicLevel(r);
+    const p = overlayIntake(this.d.policies.forSlug(r.repoSlug), level);
     const c = r.classification;
     // 这个仓库的策略没开（或者来源关了）：停在 held，不提醒、不开澄清 session。
     if ((!p.enabled || !this.active()) && !r.forceStart) return this.setState(r, "held", "auto_off", null);
@@ -257,7 +261,7 @@ export class IntakeService {
     this.d.repo.update(key, { tier });
     if (!r.forceStart) {
       const hold: IntakeWaitReason | null =
-        !p.autoStart ? "auto_off" : !sizeAtMost(size, p.maxSize) ? "too_large" : !riskAtMost(risk, p.maxRisk) ? "too_risky" : !this.d.preReviewOn() ? "prereview_off" : null;
+        !p.autoStart ? "auto_off" : !sizeAtMost(size, p.maxSize) ? "too_large" : !riskAtMost(risk, p.maxRisk) ? "too_risky" : !preReviewOn(level, this.d.preReviewOn()) ? "prereview_off" : null;
       if (hold) return this.setState(r, "held", hold, null);
     }
     if (size === "large" && r.parentKey === null && p.stackSubtasks && this.splittable(r)) return this.split(r);
@@ -266,6 +270,18 @@ export class IntakeService {
       this.d.recordEvent("intake.queued", { ticketKey: key, repoSlug: r.repoSlug, dedupeKey: `intake.queued:${key}:${this.d.now()}` });
     }
     this.d.enqueue(key);
+  }
+
+  /** 父 epic 在 Butler 里自己选的档位（BTL-247）：手动 / 半自动按它，盖过接活策略的三层；没有父 epic、epic 还没建、跟随全局时 null。 */
+  private epicLevel(r: IntakeRecord): AutomationLevel | null {
+    const key = r.payload.epic?.key;
+    if (!key || !this.d.epicLevel) return null;
+    try {
+      return this.d.epicLevel(key);
+    } catch (e) {
+      this.d.log?.(`intake: reading the level of epic ${key} failed`, e);
+      return null;
+    }
   }
 
   /** 手动档：把有父 epic 的项在 Butler 里建成这个 epic 下的 ticket（不开 session）。建过的、栈里的层、Butler 里已经有的不动。 */
@@ -392,8 +408,10 @@ export class IntakeService {
   private async handleKey(ctx: BgJobContext, key: string): Promise<BgJobResult> {
     const r = this.d.repo.get(key);
     if (!r || !PENDING.includes(r.state)) return { done: true };
-    const p = this.d.policies.forSlug(r.repoSlug);
-    if ((!p.enabled || !this.active()) && !r.forceStart) {
+    const level = this.epicLevel(r);
+    const p = overlayIntake(this.d.policies.forSlug(r.repoSlug), level);
+    // 排着的时候父 epic 改成了手动（BTL-247）：不开工，回到搁着（你可以在队列里点开工）。
+    if ((!p.enabled || !this.active() || level === "manual") && !r.forceStart) {
       this.setState(r, "held", "auto_off", null);
       return { done: true };
     }

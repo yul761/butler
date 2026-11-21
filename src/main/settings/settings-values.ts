@@ -2,6 +2,7 @@ import { renderBranch } from "../../shared/branch";
 import { LANG_SETTINGS } from "../../shared/i18n";
 import { isAbsolute } from "node:path";
 import vm from "node:vm";
+import { isAutomationLevel } from "../../shared/automation";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { M } from "../strings";
@@ -280,6 +281,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "interruptSelfServe":
     case "notifyDetails":
       return normalizeFlag(value);
+    case "automationLevel": {
+      const t = value.trim();
+      if (!isAutomationLevel(t)) throw new SettingError(M().automationLevel);
+      return t;
+    }
     case "notifyFormat": {
       const t = value.trim();
       if (!(NOTIFY_FORMATS as readonly string[]).includes(t)) throw new SettingError(M().interrupts.notifyFormat);

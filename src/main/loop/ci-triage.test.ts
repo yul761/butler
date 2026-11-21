@@ -27,9 +27,10 @@ function setup(over: Partial<LoopPolicy> = {}, o: { allowed?: boolean; rerunOk?:
   let log = o.log ?? "test\tRun tests\t2026-11-18T00:00:00Z Error: connect ETIMEDOUT 10.0.0.1:443";
   const calls = { reruns: 0, audits: [] as string[], wakes: 0, soons: 0, events: [] as { kind: string; dedupeKey?: string }[], model: 0, timers: [] as (() => void)[] };
   const policy = { ...LOOP_POLICY_DEFAULTS, "ci.enabled": true, ...over };
+  const policyAsks: [string | null, string | null | undefined][] = [];
   const d: CiTriageDeps = {
     repo,
-    policy: () => policy,
+    policy: (slug, ticketKey) => (policyAsks.push([slug, ticketKey]), policy),
     external: {
       attempt: (async (_kind: string, _detail: unknown, run: () => Promise<unknown>) => {
         if (o.allowed === false) return calls.audits.push("skipped"), { ran: false, auditId: 1 };
@@ -60,7 +61,7 @@ function setup(over: Partial<LoopPolicy> = {}, o: { allowed?: boolean; rerunOk?:
   const triage = new CiTriage(d);
   const failing = (runId: number | null = 7, name = "test"): { headSha: string; ci: string; failed: CiCheck[] } => ({ headSha: "abc", ci: "failing", failed: [{ name, state: "failing", runId, log }] });
   return {
-    triage, repo, calls, failing,
+    triage, repo, calls, failing, policyAsks,
     advance: (ms: number) => void (t += ms),
     setInfo: (i: RunInfo) => void (info = i),
     setLog: (l: string) => void (log = l),
@@ -73,6 +74,12 @@ describe("CiTriage", () => {
     const s = setup({ "ci.enabled": false });
     expect(s.decide()).toEqual({ action: "deliver", note: null });
     expect(s.repo.atSha({ kind: "pr", id: 1 }, "abc")).toHaveLength(0);
+  });
+
+  it("reads the policy for the ticket of the failure, so an epic's automation level applies (BTL-247)", () => {
+    const s = setup({ "ci.enabled": false });
+    s.decide();
+    expect(s.policyAsks).toEqual([["o/r", "T-1"]]);
   });
 
   it("delivers external checks (no run id) straight away", () => {

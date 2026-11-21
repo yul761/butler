@@ -36,8 +36,9 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
   const guard = { ok: o.guardOk ?? true };
   const mailbox = fakeMailbox({ canDeliver: () => guard.ok, deliver: (_to, body) => void deliver("t1", body), now: () => t });
   const policy = { ...LOOP_POLICY_DEFAULTS, "comments.enabled": true, ...over };
+  const policyAsks: [string | null, string | null | undefined][] = [];
   const d: CommentLoopDeps = {
-    items, prs, policy: () => policy, cwdOf: () => "/r",
+    items, prs, policy: (slug, ticketKey) => (policyAsks.push([slug, ticketKey]), policy), cwdOf: () => "/r",
     gh: {
       reviewThreads: async () => (calls.threads++, threads),
       compareFiles: async () => (calls.compares++, [{ filename: "src/a.ts", patch }]),
@@ -75,7 +76,7 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
     await loop.observe([prs.get(row0.id)!], s, { cwd: "/r", slug: "o/r" });
   };
   return {
-    loop, items, prs, tickets, row: row0, calls, deliver, guard, observe, status, mailbox,
+    loop, items, prs, tickets, row: row0, calls, deliver, guard, observe, status, mailbox, policyAsks,
     advance: (ms: number) => void (t += ms),
     setThreads: (x: ReviewThread[]) => void (threads = x),
     setPatch: (p: string) => void (patch = p),
@@ -143,6 +144,14 @@ describe("CommentLoop", () => {
     // 两个 ticket 的「评论」标签都看得到这条。
     expect(s.loop.list("T-1")[0].items).toHaveLength(1);
     expect(s.loop.list("T-2")[0].items).toHaveLength(1);
+  });
+
+  it("reads the policy for the PR's ticket, so an epic's automation level applies (BTL-247)", async () => {
+    const s = setup();
+    await s.observe();
+    s.policyAsks.length = 0;
+    s.loop.list("T-1");
+    expect(s.policyAsks).toEqual([["o/r", "T-1"]]);
   });
 
   it("keeps your choice when the model answers after you dismissed the comment", async () => {

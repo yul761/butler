@@ -79,11 +79,12 @@ import type { ForkService } from "../fork/fork-service";
 import type { DevSender } from "../fork/dev-send";
 import { settingsHandlers } from "./settings-handlers";
 import { featurePolicyHandlers, featurePolicyLayers } from "./feature-policy-handlers";
+import { isAutomationLevel, type AutomationLevel, type AutomationState } from "../../shared/automation";
 import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -247,6 +248,12 @@ export interface IpcDeps {
   detectTrackerTools: () => Promise<McpProbe>;
   /** 设置 › 功能：三张策略表各读一次（UI 重做第 6 层）。 */
   featurePolicy: () => FeaturePolicyState;
+  /** 自动化档位（BTL-247）：设置页的显示、套用全局预设、epic 自己选的档位。 */
+  automation: {
+    state(): AutomationState;
+    apply(level: AutomationLevel): void;
+    setFeatureLevel(featureId: number, level: AutomationLevel | null): void;
+  };
   window: () => BrowserWindow | null;
   now: () => number;
   notify: () => void;
@@ -373,6 +380,12 @@ export function registerIpc(d: IpcDeps): void {
     const r = await d.sessionService.openFeature(openFeatureArg(raw));
     d.notify();
     return r;
+  });
+  // 自动化档位（BTL-247）
+  handle(IPC.automationState, (): AutomationState => d.automation.state());
+  handle(IPC.featuresSetAutomationLevel, (id: unknown, level: unknown) => {
+    d.automation.setFeatureLevel(featureIdArg(id), automationLevelArg(level));
+    d.notify();
   });
   handle(IPC.butlerView, () => d.sessionService.butlerView());
   handle(IPC.messagesList, (raw: unknown): MessageView[] => d.messages(messageScopeArg(raw)));
@@ -737,7 +750,12 @@ export function registerIpc(d: IpcDeps): void {
     return d.jobs.get(JOB_NIGHTLY);
   });
 
-  const settingsIpc = settingsHandlers(d);
+  const settingsIpc = settingsHandlers({
+    ...d,
+    applyAutomationLevel: (level) => {
+      if (isAutomationLevel(level)) d.automation.apply(level);
+    },
+  });
   handle(IPC.settingsGet, settingsIpc.get);
   handle(IPC.settingsSet, settingsIpc.set);
   handle(IPC.settingsReset, settingsIpc.reset);

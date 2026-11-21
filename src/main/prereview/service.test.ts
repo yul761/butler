@@ -20,7 +20,7 @@ const ok = (value: unknown): HeadlessExecResult => ({ ok: true, value, rawText: 
 const proj: ProfileProject = { dir: "", langs: [], install: null, build: null, testAll: "pnpm test", testOne: null, fastest: null, lint: null, typecheck: null, inferred: [] };
 const lesson = (id: number, text: string): Lesson => ({ id, text, strength: "must", scopeGlobs: [], scopeLang: null } as unknown as Lesson);
 
-function setup(o: { enabled?: boolean; dirty?: string; guardOk?: boolean; review?: unknown; verify?: unknown } = {}) {
+function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean); dirty?: string; guardOk?: boolean; review?: unknown; verify?: unknown } = {}) {
   const db = memDb();
   const repo = new PreReviewRepo(db);
   const tickets = new TicketsRepo(db);
@@ -36,7 +36,7 @@ function setup(o: { enabled?: boolean; dirty?: string; guardOk?: boolean; review
   const sd: PreReviewServiceDeps = {
     repo,
     queue: { enqueue: (kind, payload, x) => (jobs.push({ kind, payload, dedupeKey: x.dedupeKey }), jobs.length), cancel: (id) => (cancelled.push(id), true) },
-    enabled: () => o.enabled ?? true,
+    enabled: (k) => (typeof o.enabled === "function" ? o.enabled(k) : (o.enabled ?? true)),
     place: (sid) => (sid === "s1" ? { cwd: "/w", ticketKey: "T-1", slug: "o/app" } : null),
     git,
     recipient: () => "s1",
@@ -249,6 +249,13 @@ describe("PreReviewService.onPrSeen", () => {
     const off = setup({ enabled: false });
     expect(off.service.onPrSeen(pr(off))).toBeNull();
     expect(off.service.manual(pr(off))).not.toBeNull();
+  });
+  it("asks whether pre-review is on for this PR's / session's ticket (epic automation level, BTL-247)", async () => {
+    const asked: (string | null | undefined)[] = [];
+    const s = setup({ enabled: (k) => (asked.push(k), false) });
+    expect(s.service.onPrSeen(pr(s))).toBeNull();
+    expect((await s.service.submitEvidence("s1", {})).ok).toBe(false);
+    expect(asked).toEqual(["T-1", "T-1"]);
   });
 });
 

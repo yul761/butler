@@ -20,8 +20,9 @@ function before(): DatabaseSync {
 }
 
 describe("hierarchy A′ migration (BTL-246)", () => {
-  it("is the last migration", () => {
-    expect(A).toBe(MIGRATIONS.length - 1);
+  it("comes right before BTL-247's features.automation_level", () => {
+    // 后面的工作项接着追加迁移，所以只钉住它后面紧跟的那条。
+    expect(MIGRATIONS[A + 1]).toContain("ADD COLUMN automation_level");
   });
 
   it("turns an old epic's features into independent epics: plan into the brief, epic archived, epic and ticket-coordinator sessions hidden", () => {

@@ -566,6 +566,14 @@ export async function openSettingsTab(page: Page, tab: SettingsTabId): Promise<v
   await expect(page.getByTestId(`settings-tab-${tab}`)).toHaveAttribute("aria-selected", "true");
 }
 
+/** 设置 › 自动化：展开默认收起的「高级」（一个个功能开关，BTL-247）。已经展开就不动。 */
+export async function openAutomationAdvanced(page: Page): Promise<void> {
+  await openSettingsTab(page, "features");
+  const fold = page.getByTestId("automation-advanced");
+  if ((await fold.getAttribute("open")) === null) await fold.locator("summary").click();
+  await expect(fold).toHaveAttribute("open", "");
+}
+
 /**
  * 设置 →「评论与 CI」（工作流 I）：在全局这一层把 values 里的键设上（布尔、枚举是下拉框，其余是输入框），保存；
  * external 里的对外动作开关一并打开。
