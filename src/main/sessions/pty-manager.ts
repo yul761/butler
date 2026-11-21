@@ -36,6 +36,9 @@ interface Term {
   /** 回放缓冲：按到达顺序的输出块，总长 chunkLen；回放（snapshot、退出）时才拼起来、按 BUFFER_LIMIT 截齐。 */
   chunks: string[];
   chunkLen: number;
+  /** 这一次运行到现在一共输出了多少（字符）；缓冲里的是最后 chunkLen 个。epoch 区分同一个 termId 的每次运行。 */
+  written: number;
+  epoch: number;
   /** 已经截出缓冲的那部分输出留下的终端模式，回放时补在缓冲前面（见 modePrefix）。 */
   cutModes: Map<number, boolean>;
   lastOutputAt: number;
@@ -173,8 +176,19 @@ export interface PtySnapshot {
   exitCode: number | null;
 }
 
+/** 输出里的一个位置（BTL-242）：渲染进程记着它看到了哪儿，挂回来时只要这之后的（PtyManager.since）。 */
+export interface PtyMark {
+  epoch: number;
+  end: number;
+}
+
+export type MarkedSnapshot = PtySnapshot & { mark: PtyMark };
+
+let nextEpoch = 1;
+
 /** 记下一块输出；超过上限加余量时从头整块丢掉（丢掉的部分里的模式记下来），留下的总长不少于 BUFFER_LIMIT。 */
-export function pushOutput(t: Pick<Term, "chunks" | "chunkLen" | "cutModes">, data: string): void {
+export function pushOutput(t: Pick<Term, "chunks" | "chunkLen" | "cutModes"> & Partial<Pick<Term, "written">>, data: string): void {
+  if (t.written !== undefined) t.written += data.length;
   t.chunks.push(data);
   t.chunkLen += data.length;
   if (t.chunkLen <= BUFFER_LIMIT + BUFFER_SLACK) {
@@ -205,7 +219,7 @@ function replay(t: Term): string {
 export class PtyManager {
   private readonly terms = new Map<string, Term>();
   /** 已退出终端的回放内容（模式已经补在前面）。 */
-  private readonly exited = new Map<string, { buffer: string; exitCode: number }>();
+  private readonly exited = new Map<string, { buffer: string; exitCode: number; mark: PtyMark }>();
   /** 每个终端正在进行的 deliver 有几个（I2）：DeliveryGuard 看到有就当作忙，别的自动输入不往里贴。 */
   private readonly inFlight = new Map<string, number>();
 
@@ -230,7 +244,7 @@ export class PtyManager {
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
     const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
     const term: Term = {
-      proc, chunks: [], chunkLen: 0, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
+      proc, chunks: [], chunkLen: 0, written: 0, epoch: nextEpoch++, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
       screen: new TermScreen(cols, rows), submittedAt: 0, held: null,
     };
     this.terms.set(termId, term);
@@ -247,7 +261,7 @@ export class PtyManager {
       this.guard(termId, "screen dispose", () => term.screen.dispose());
       this.terms.delete(termId);
       this.exited.delete(termId);
-      this.exited.set(termId, { buffer: replay(term), exitCode });
+      this.exited.set(termId, { buffer: replay(term), exitCode, mark: { epoch: term.epoch, end: term.written } });
       while (this.exited.size > EXITED_LIMIT) this.exited.delete(this.exited.keys().next().value as string);
       this.events.exit(termId, exitCode);
     });
@@ -383,6 +397,41 @@ export class PtyManager {
     const done = this.exited.get(termId);
     if (done) return { data: done.buffer, exitCode: done.exitCode };
     return { data: "", exitCode: null };
+  }
+
+  /** 快照加上它对应的位置（渲染进程挂上终端时用）。 */
+  snapshotAt(termId: string): MarkedSnapshot {
+    const live = this.terms.get(termId);
+    if (live) return { data: replay(live), exitCode: null, mark: { epoch: live.epoch, end: live.written } };
+    const done = this.exited.get(termId);
+    if (done) return { data: done.buffer, exitCode: done.exitCode, mark: done.mark };
+    return { data: "", exitCode: null, mark: { epoch: 0, end: 0 } };
+  }
+
+  /**
+   * mark 之后的输出（BTL-242）：摘下来的终端挂回去时补上中间那段，不用整份重放。
+   * 补不上时返回 null：那段已经截出缓冲、终端重开过（epoch 不同）、mark 不对，或者终端退出后还有没看到的输出（退出时的缓冲已经拼过，不再按位置切）。
+   */
+  since(termId: string, mark: PtyMark): MarkedSnapshot | null {
+    const live = this.terms.get(termId);
+    if (live) {
+      if (live.epoch !== mark.epoch || mark.end > live.written) return null;
+      const want = live.written - mark.end;
+      if (want > live.chunkLen) return null;
+      // 从后往前拿够 want 个字符，不拼整个缓冲。
+      const parts: string[] = [];
+      let got = 0;
+      for (let i = live.chunks.length - 1; i >= 0 && got < want; i--) {
+        const c = live.chunks[i];
+        const need = want - got;
+        parts.push(c.length <= need ? c : c.slice(c.length - need));
+        got += Math.min(c.length, need);
+      }
+      return { data: parts.reverse().join(""), exitCode: null, mark: { epoch: live.epoch, end: live.written } };
+    }
+    const done = this.exited.get(termId);
+    if (done && done.mark.epoch === mark.epoch && done.mark.end === mark.end) return { data: "", exitCode: done.exitCode, mark: done.mark };
+    return null;
   }
 
   /** claude 的 SessionStart hook 到了：启动对话框已经过去，可以交任务了。 */

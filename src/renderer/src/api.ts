@@ -87,6 +87,13 @@ function ensureStateBus(): void {
   window.butler.on(IPC.stateChanged, (payload) => stateBus.dispatch(payload));
 }
 
+/** 终端快照和它对应的输出位置（BTL-242，见主进程的 PtyManager.snapshotAt / since）。 */
+export interface PtyMarked {
+  data: string;
+  exitCode: number | null;
+  mark: { epoch: number; end: number };
+}
+
 export const api = {
   listTickets: () => call<TicketView[]>(IPC.ticketsList),
   ticketGlance: (key: string) => call<TicketGlance>(IPC.ticketsGlance, key),
@@ -132,7 +139,8 @@ export const api = {
   deleteHiddenSessions: (sessionIds: string[]) => call<number>(IPC.sessionsDeleteHidden, sessionIds),
   pinSession: (sessionId: string, pinned: boolean) => call<void>(IPC.sessionsPin, sessionId, pinned),
   wakeSession: (sessionId: string) => call<"woken" | "not_hibernated" | "cooldown" | "failed">(IPC.sessionsWake, sessionId),
-  ptySnapshot: (termId: string) => call<{ data: string; exitCode: number | null }>(IPC.ptySnapshot, termId),
+  ptySnapshot: (termId: string) => call<PtyMarked>(IPC.ptySnapshot, termId),
+  ptySince: (termId: string, mark: PtyMarked["mark"]) => call<PtyMarked & { reset: boolean }>(IPC.ptySince, termId, mark),
   ptyKill: (termId: string) => call<void>(IPC.ptyKill, termId),
   ptyWrite: (termId: string, data: string) => window.butler.send(IPC.ptyWrite, termId, data),
   ptyResize: (termId: string, cols: number, rows: number) => window.butler.send(IPC.ptyResize, termId, cols, rows),

@@ -597,4 +597,63 @@ describe("PtyManager.hasDraft", () => {
     expect(opened).toEqual(["t1"]);
     expect(mgr.isOpen("t1")).toBe(true);
   });
+
+  // BTL-242：摘下来的终端不再收数据；挂回去时只补摘下期间的那一段（since），补不上（输出太多被截掉了、终端重开过）才整份重放。
+  describe("marks and since", () => {
+    it("the snapshot carries a mark; since returns only what came after it", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("hello ");
+      const snap = mgr.snapshotAt("t1");
+      expect(snap.data).toBe("hello ");
+      spawned[0].pty.emit("wor");
+      spawned[0].pty.emit("ld");
+      const got = mgr.since("t1", snap.mark);
+      expect(got).toEqual({ data: "world", exitCode: null, mark: { epoch: snap.mark.epoch, end: snap.mark.end + 5 } });
+      expect(mgr.since("t1", got!.mark)).toEqual({ data: "", exitCode: null, mark: got!.mark });
+    });
+
+    it("a mark in the middle of a chunk gets the rest of that chunk", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("abcdef");
+      const { mark } = mgr.snapshotAt("t1");
+      spawned[0].pty.emit("ghij");
+      expect(mgr.since("t1", { epoch: mark.epoch, end: mark.end - 2 })?.data).toBe("efghij");
+    });
+
+    it("returns null once the part after the mark has been cut from the buffer", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("x");
+      const { mark } = mgr.snapshotAt("t1");
+      for (let i = 0; i < 6; i++) spawned[0].pty.emit("y".repeat(BUFFER_LIMIT / 2));
+      expect(mgr.since("t1", mark)).toBeNull();
+    });
+
+    it("returns null for a mark from an earlier run of the same terminal, or one past the end", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("first run");
+      const { mark } = mgr.snapshotAt("t1");
+      expect(mgr.since("t1", { epoch: mark.epoch, end: mark.end + 1 })).toBeNull();
+      spawned[0].pty.emitExit(0);
+      mgr.open("t1", spec, opts);
+      spawned[1].pty.emit("second run, longer than the first");
+      expect(mgr.since("t1", mark)).toBeNull();
+      expect(mgr.since("nope", mark)).toBeNull();
+    });
+
+    it("after exit: nothing new since the last mark gives the exit code; an older mark gives null", () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      spawned[0].pty.emit("bye");
+      const { mark } = mgr.snapshotAt("t1");
+      spawned[0].pty.emitExit(4);
+      expect(mgr.since("t1", mark)).toEqual({ data: "", exitCode: 4, mark });
+      expect(mgr.snapshotAt("t1")).toMatchObject({ data: "bye", exitCode: 4, mark });
+      expect(mgr.since("t1", { epoch: mark.epoch, end: mark.end - 1 })).toBeNull();
+    });
+  });
 });
+
