@@ -46,6 +46,7 @@ import { currentBranch } from "../tickets/git";
 import { dirsOutsideWorkspace, isInside, TicketError, type TicketService } from "../tickets/ticket-service";
 import { describeActivity } from "./activity-monitor";
 import { suggestTicket, type TranscriptState, UNCLAIMED_WINDOW_MS } from "./discovery";
+import { outsideSessionsOn } from "./outside-sessions";
 import { fixTaskMessage } from "./fix-task";
 import type { DeliverResult, PtyManager } from "./pty-manager";
 import { M } from "../strings";
@@ -1031,7 +1032,9 @@ export class SessionService {
     });
   }
 
+  /** 「显示 Butler 之外开的 session」关着（默认）时是空的（BTL-244）。 */
   unclaimed(): UnclaimedSession[] {
+    if (!outsideSessionsOn(this.d.settings)) return [];
     const pattern = this.d.settings.get("ticketPattern");
     return this.d.sessions.listUnclaimed(this.d.now() - UNCLAIMED_WINDOW_MS).map((s) => {
       const key = suggestTicket(s, pattern);

@@ -8,7 +8,7 @@ import { flatGroup, scopeBoardView, scopeTotal, ticketRows, ticketsWithPr } from
 import { S } from "../strings";
 import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
-import type { SummaryRunMessage } from "./EpicSummaryTab";
+import type { SummaryRunMessage } from "./FeatureSummaryTab";
 import { FeatureSummaryTab } from "./FeatureSummaryTab";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";

@@ -1,17 +1,34 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setCollapsed } from "../local-prefs";
 import { S } from "../strings";
 import { TicketPrRows } from "./PrStages";
 import { TicketLogTab } from "./TicketLogTab";
 import { TicketPrBody } from "./TicketPrTab";
 
 describe("TicketPrBody", () => {
-  const html = renderToStaticMarkup(
-    createElement(TicketPrBody, { stages: createElement(TicketPrRows, { rows: [] }), review: "REVIEW", comments: "COMMENTS" }),
+  // 「阶段」的开合读写 localStorage：给一个内存里的。
+  const store = new Map<string, string>();
+  beforeEach(() => vi.stubGlobal("localStorage", {
+    getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k),
+  }));
+  afterEach(() => { store.clear(); vi.unstubAllGlobals(); });
+  const render = () => renderToStaticMarkup(
+    createElement(TicketPrBody, { ticketKey: "BTL-1", stages: createElement(TicketPrRows, { rows: [] }), review: "REVIEW", comments: "COMMENTS" }),
   );
+  it("the six stages start collapsed (BTL-244); review and comments stay open", () => {
+    const html = render();
+    expect(html).toContain(S.lay.prSecStages);
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain(S.prNoRepos);
+    expect(html).toContain("REVIEW");
+    expect(html).toContain("COMMENTS");
+  });
   it("stacks stages, review and comments under their own headings", () => {
-    expect(html).toContain(`<h3>${S.lay.prSecStages}</h3>`);
+    setCollapsed("ticket-pr-stages:BTL-1", false, true);
+    const html = render();
+    expect(html).toContain(`${S.lay.prSecStages}</button></h3>`);
     expect(html).toContain(`<h3>${S.lay.prSecReview}</h3>`);
     expect(html).toContain(`<h3>${S.lay.prSecComments}</h3>`);
     expect(S.lay.prSecStages).toBe("阶段");
@@ -21,7 +38,8 @@ describe("TicketPrBody", () => {
     expect(html.indexOf("REVIEW")).toBeLessThan(html.indexOf("COMMENTS"));
   });
   it("with no PR the stages part says so instead of throwing", () => {
-    expect(html).toContain(S.prNoRepos);
+    setCollapsed("ticket-pr-stages:BTL-1", false, true);
+    expect(render()).toContain(S.prNoRepos);
   });
 });
 
@@ -31,15 +49,13 @@ describe("TicketLogTab", () => {
     expect(html).toContain(`>${S.lay.logFollowups}<`);
     expect(html).toContain(`>${S.lay.logHandoffs}<`);
     expect(html).toContain(`>${S.lay.logMemory}<`);
-    expect([S.lay.logFollowups, S.lay.logHandoffs, S.lay.logMemory]).toEqual(["待跟进", "交接记录", "记忆"]);
+    expect([S.lay.logFollowups, S.lay.logHandoffs, S.lay.logMemory]).toEqual(["待跟进", "状态记录", "记忆"]);
     expect(html).not.toContain("overview-panel");
     expect(html).toContain(S.noFollowups);
     expect(html).toContain(S.noHandoffs);
   });
-  it("keeps the hand-off-now button next to the handoffs heading", () => {
-    expect(html).toContain(`>${S.runHandoff}</button>`);
-    const handoffs = html.indexOf(S.lay.logHandoffs);
-    expect(handoffs).toBeLessThan(html.indexOf(S.runHandoff));
-    expect(html.indexOf(S.runHandoff)).toBeLessThan(html.indexOf(S.lay.logMemory));
+  it("lists the status history without the update button: that lives on the overview (BTL-244)", () => {
+    expect(html).not.toContain(`>${S.runHandoff}</button>`);
+    expect(html.indexOf(S.lay.logHandoffs)).toBeLessThan(html.indexOf(S.lay.logMemory));
   });
 });

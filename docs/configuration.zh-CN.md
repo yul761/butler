@@ -47,6 +47,7 @@ Butler 只会通过这几个按钮，以及首次启动向导里的同一步，�
 | 语言 / Language | `language` | `auto` | `auto`、`zh` 或 `en`。`auto` 跟随系统的首选语言：任何 `zh` 开头的区域设置用中文，其他都用英文。界面、Butler 的提示和发给 `claude` 的默认提示词（handoff、刷新、记忆笔记）都会切换；你自己改过的提示词保持原样。以前生成的内容不会翻译。从 1.2.0 或更早版本升级上来的安装从 `zh` 开始。切换之后，**环境检查** 里的 `/handoff` 命令会显示需要更新；点 **安装 / 修复**，session 里的 `/handoff` 也会换成新语言。环境变量 `BUTLER_LANG=zh` 或 `BUTLER_LANG=en` 会覆盖这项设置。 |
 | 请你 review / Review requests | `reviewRequestScope` | `all` | 首页显示哪些请你 review 的 PR。`all`：`gh` 账号能看到的所有仓库。`registered`：只看 Butler 登记过的仓库（ticket 的仓库，或者出现过 ticket PR 的仓库）。Butler 每 5 分钟跑一次 `gh search prs --review-requested=@me --state=open`（电脑空闲或锁屏时每 15 分钟一次；窗口切到前台、打开首页时，离上次超过 1 分钟就补查一次）。搜索只查 `gh` 的默认主机，企业版 GitHub 上请你 review 的 PR 查不到。 |
 | 开机时自动启动 Butler | — | 关 | 只在安装好的 Butler 里可用，开发模式下不可用。 |
+| 显示 Butler 之外开的 session | `showOutsideSessions` | `0` | `1` 或 `0`。打开后，Butler 在启动时和每 5 分钟看一遍 `~/.claude/projects`，把最近 7 天你在 Butler 之外开的 Claude Code session 列在 **全部工作 › 未认领 session** 下，可以认领到 ticket。关着（默认）时不扫描 `~/.claude/projects` 去找它们，也没有这个入口。Butler 自己开的 session 不受影响。打开时马上扫一次。 |
 | 重新运行首次启动向导 | `onboardingDone` | 新安装为 `0` | 这是一个按钮，不是输入框。你完成或跳过向导时它被设为 `1`，点这个按钮会把它改回 `0`。已经有 ticket 的旧安装在迁移时被设为 `1`。 |
 
 ### ticket 号正则

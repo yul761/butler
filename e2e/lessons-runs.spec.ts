@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { RESUME_SLACK_MS } from "../src/main/claude/availability";
 import { limitLine, resetClock } from "../src/renderer/src/availability-view";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, type FakeGhFixture, type Launched, openSettingsTab, type PrViewFixture, type Sandbox, terminalText, test, unsupportedGhCalls } from "./fixtures";
+import { completeWizard, expect, type FakeGhFixture, type Launched, openSettingsTab, type PrViewFixture, type Sandbox, terminalText, test, unsupportedGhCalls, openLessonsAdvanced } from "./fixtures";
 
 /**
  * 复盘的分析记录和 Claude 限额（计划 2026-11-16 lessons-visibility 任务 13）：
@@ -63,7 +63,7 @@ function lessonsCalls(s: Sandbox): string[] {
 const homeButton = (page: Page) => page.getByRole("button", { name: S.home, exact: true });
 
 async function openRuns(page: Page): Promise<void> {
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId(`lessons-repo-${SLUG}`).click();
   await page.getByTestId("lessons-tab-runs").click();
   await expect(page.getByTestId("lesson-runs")).toBeVisible();

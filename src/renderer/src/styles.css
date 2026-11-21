@@ -393,6 +393,11 @@ p.inbox-reports { margin: 2px 0; }
 .lessons-product-name { font-weight: 600; }
 .lessons-overflow, .lessons-error { margin: 2px 0 4px; }
 .lessons-unknown { margin: 10px 0; padding-left: 18px; }
+/* BTL-244：复盘规矩页默认的待确认列表和默认收起的「高级」。 */
+.lessons-pending-all h3 .count, .ticket-home-status h3 .count { margin-left: 6px; color: var(--muted); }
+.pending-lesson .pill { margin-right: 8px; }
+.lessons-advanced { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 8px; }
+.lessons-advanced > h3 { margin: 0 0 8px; }
 .lessons-suggest { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
 .lessons-new-product { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .lessons-new-product h3 { width: 100%; margin-bottom: 0; }
@@ -661,6 +666,11 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .ticket-home .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
 .ticket-home .kv dt { color: var(--muted); }
 .ticket-home .kv dd { margin: 0; overflow-wrap: anywhere; }
+/* BTL-244：概况里的「状态」（最新一份 handoff）和默认收起的「细节」。 */
+.ticket-home-status h3 { display: flex; align-items: baseline; gap: 8px; }
+.ticket-home-details { margin-top: 4px; }
+.ticket-home-details > .section-toggle { color: var(--muted); font-size: 12px; }
+.ticket-home-details .kv { margin-top: 4px; }
 
 /* 对话 tab（UI 重做第 5 层）：一条时间线，上面是筛选，下面是输入框；黄框是分叉讨论。费用和模式只用文字，不另外上色。 */
 .conv { display: flex; flex-direction: column; gap: 8px; min-width: 0; }

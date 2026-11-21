@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PR_STAGES, type PrStageId } from "../src/shared/pr-stages";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openArchived, openTab, openTicketTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openArchived, openPrStages, openTab, openTicketTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox, newButton } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
@@ -22,7 +22,7 @@ test("a skill call in a session moves the design step to active; the timeline st
 
   // 阶段在「PR 详情」页签（ticket 页默认停在「概况」）。
   await expect(pageTab(page, S.lay.tabPr)).toHaveAttribute("aria-selected", "false");
-  await openTicketTab(page, "pr");
+  await openPrStages(page);
   const design = page.locator(".pr-stages .pr-cell").filter({ hasText: S.prStage.design });
   await expect(design).toHaveClass(/pr-todo/);
 
@@ -35,7 +35,7 @@ test("a skill call in a session moves the design step to active; the timeline st
   await expect.poll(() => terminalText(page)).toContain("skill superpowers:brainstorming");
 
   // 设计那一格进行中（还没有 PR，也没有第一次提交）。
-  await openTicketTab(page, "pr");
+  await openPrStages(page);
   await expect(design).toHaveClass(/pr-active/);
 
   // 时间线：收起后消失；刷新页面后仍然是收起的，页面也还停在「PR 详情」。
@@ -146,7 +146,7 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   await expect.poll(() => terminalText(page)).toContain("next_steps");
 
   // 3. ticket 页「PR 详情」：三行，新的在前。watcher 每 15 秒一轮，分支上找到的 PR 下一轮才读。
-  await openTicketTab(page, "pr");
+  await openPrStages(page);
   const links = page.locator(".pr-stages .pr-repo .pr-link");
   await expect(links).toHaveText(["#3", "#2", "#1"], { timeout: 60_000 });
   // 三个 PR 都已合并：每行的「合并」一格是 done。
@@ -201,7 +201,7 @@ test("backfill of an old merged ticket", async ({ makeSandbox, launch }) => {
   await openArchived(page);
   await page.locator(".table tr").filter({ hasText: "OLD-1" }).getByRole("button", { name: S.unarchive, exact: true }).click();
   await expect(page.getByRole("heading", { name: "OLD-1", exact: true })).toBeVisible();
-  await openTicketTab(page, "pr");
+  await openPrStages(page);
   // 只有一个 PR：#9。
   await expect(page.locator(".pr-stages .pr-repo")).toHaveCount(1);
   await expect(page.locator(".pr-stages .pr-link")).toHaveText(["#9"]);

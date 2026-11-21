@@ -172,9 +172,11 @@ test("the All work page has the create buttons, the entries and every piece of w
   await completeWizard(page, s);
   await openAllWork(page);
   const all = page.locator(".all-work");
-  for (const name of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`, S.archived, S.hm.all.unclaimedBtn(0)]) {
+  for (const name of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`, S.archived]) {
     await expect(all.getByRole("button", { name, exact: true })).toBeVisible();
   }
+  // 「显示 Butler 之外开的 session」默认关：没有未认领入口（BTL-244）。
+  await expect(all.getByRole("button", { name: S.hm.all.unclaimedBtn(0), exact: true })).toHaveCount(0);
   await expect(all).toContainText(S.hm.all.empty);
 
   await newTicket(page, s, "HOME-4");

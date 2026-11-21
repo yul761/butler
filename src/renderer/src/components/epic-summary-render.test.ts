@@ -29,7 +29,7 @@ describe("EpicSummaryTab", () => {
 
   it("says there is no summary yet for a feature that has none, and shows no time", () => {
     const html = render([row()]);
-    expect(html).toContain("还没有汇总");
+    expect(html).toContain("还没有状态");
     expect(html).not.toContain("summary-at");
   });
 

@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newButton, openTab, openTicketTab, pageTab, terminalText, test, type FakeGhFixture, type Sandbox } from "./fixtures";
+import { completeWizard, create, expandPrStages, expect, FAKE_GH_ORIGIN, makeGitRepo, newButton, openTab, openTicketTab, pageTab, terminalText, test, type FakeGhFixture, type Sandbox } from "./fixtures";
 
 /**
  * UI 重做第 3 层：ticket、feature、epic 页分成页签。ticket 页默认停在「概况」、记着上次停在哪个页签；
@@ -86,6 +86,7 @@ test("a ticket whose CI failed opens from its home card on the PR tab", async ({
   await card.getByRole("button", { name: S.hm.act.look, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-2", exact: true })).toBeVisible();
   await expect(pageTab(page, S.lay.tabPr)).toHaveAttribute("aria-selected", "true");
+  await expandPrStages(page);
   await expect(page.locator(".ticket-pr-stages .pr-link")).toHaveText(["#52"]);
 });
 

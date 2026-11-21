@@ -97,6 +97,8 @@ export const EDITABLE_SETTINGS = [
   "intakeFilePath",
   "intakePollMinutes",
   "intakeRepoMap",
+  // 4.0 界面减法（BTL-244）：显示 Butler 之外开的 session；关着时不扫描 ~/.claude/projects。
+  "showOutsideSessions",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

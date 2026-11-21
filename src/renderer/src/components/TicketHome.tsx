@@ -1,12 +1,13 @@
-// ticket 页的「概况」页签（UI 重做第 3 层，spec §5.3）：一句状态、主按钮、agent 最后说的那句话、一小块基本信息。
+// ticket 页的「概况」页签（UI 重做第 3 层，spec §5.3）：一句状态、主按钮、agent 最后说的那句话、「状态」（最新一份 handoff，BTL-244）、一小块基本信息。
 // TicketHome 只吃数据；TicketHomeTab 是取数薄壳。
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { PrStagesTicket } from "../../../shared/pr-stages";
 import type { TicketGlance } from "../../../shared/ticket-glance";
 import type { TurnItem } from "../../../shared/turn";
-import type { TicketView } from "../../../shared/types";
+import type { HandoffRecord, TicketView } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { outcomeMessage } from "../followup-view";
 import { cardActions, type CardAction } from "../home-view";
 import { usePrStages } from "../pr-stages-view";
 import type { TicketRow } from "../scope-view";
@@ -15,7 +16,10 @@ import { S, type UiStrings } from "../strings";
 import { landingTab, type TicketTab } from "../ticket-tabs";
 import { clipSaid, contextLine, mainActions, prStageLine, prUrlOf, type MainAction } from "../ticket-view";
 import { turnSentence } from "../turn-text";
+import { GroupToggle } from "./HomeMore";
 import { WhoTag } from "./ScopeParts";
+import { TicketStatus, type TicketStatusProps } from "./TicketStatus";
+import { useCollapsed } from "./useCollapsed";
 import { runCardAction, sendReasonText, type CardOutcome } from "../turn-card-actions";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
@@ -36,6 +40,8 @@ export interface TicketHomeProps {
   answered: Readonly<Record<number, string>>;
   /** 提问的回答正在送：提问行的按钮先禁用，免得连点覆盖答案。 */
   busy: boolean;
+  /** 「状态」一节（最新一份 handoff 和「更新状态」）。 */
+  status: TicketStatusProps;
   onGoTab: (t: TicketTab) => void;
   onOpenPr: (url: string) => void;
   onSend: () => void;
@@ -67,7 +73,7 @@ export async function runTicketAsk(
   }, s);
 }
 
-export function TicketHome({ ticket, row, glance, stages, canFix, notice, answered, busy, onGoTab, onOpenPr, onSend, onFix, onAsk }: TicketHomeProps) {
+export function TicketHome({ ticket, row, glance, stages, canFix, notice, answered, busy, status, onGoTab, onOpenPr, onSend, onFix, onAsk }: TicketHomeProps) {
   if (row === null) return <div className="ticket-home ticket-home-skeleton" aria-busy="true"><p className="muted">…</p></div>;
   const url = prUrlOf(row.item.pr, stages);
   const actions = mainActions(row.turn, { hasPr: url !== null, canFix }, S);
@@ -81,6 +87,10 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, answer
   const prTag = row.item.pr === null ? "" : `#${row.item.pr.number} `;
   const branches = [...new Set(ticket.repos.map((r) => r.branch))].join(", ");
   const ctx = glance === null ? null : contextLine(glance.context, S);
+  // 还没开 PR 时直接说（和分支、PR 号一样不收起）；有 PR 时阶段进度收进「细节」（BTL-244）。
+  const prLine = stages === null ? null : prStageLine(stages, S);
+  const noPr = prLine === S.lay.noPrYet;
+  const stageLine = noPr ? null : prLine;
   return (
     <div className="ticket-home">
       <p className="ticket-home-state">
@@ -118,14 +128,35 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, answer
           <button onClick={() => onGoTab("conversation")}>{S.lay.seeConversation}</button>
         </section>
       )}
+      <TicketStatus {...status} />
       <section className="ticket-home-info">
         <h3>{S.lay.thisTicket}</h3>
-        <dl className="kv">
-          {branches !== "" && <><dt>{S.lay.kvBranch}</dt><dd>{branches}</dd></>}
-          {stages !== null && <><dt>{S.lay.kvPr}</dt><dd>{prStageLine(stages, S)}</dd></>}
-          {ctx !== null && <><dt>{S.lay.kvContext}</dt><dd>{ctx.text}{ctx.nearRefresh && <span className="muted"> · {S.lay.ctxNear}</span>}</dd></>}
-        </dl>
+        {(branches !== "" || noPr) && (
+          <dl className="kv">
+            {branches !== "" && <><dt>{S.lay.kvBranch}</dt><dd>{branches}</dd></>}
+            {noPr && <><dt>{S.lay.kvPr}</dt><dd>{S.lay.noPrYet}</dd></>}
+          </dl>
+        )}
+        {(stageLine !== null || ctx !== null) && (
+          <DetailsFold ticketKey={ticket.key}>
+            <dl className="kv">
+              {stageLine !== null && <><dt>{S.lay.kvPr}</dt><dd>{stageLine}</dd></>}
+              {ctx !== null && <><dt>{S.lay.kvContext}</dt><dd>{ctx.text}{ctx.nearRefresh && <span className="muted"> · {S.lay.ctxNear}</span>}</dd></>}
+            </dl>
+          </DetailsFold>
+        )}
       </section>
+    </div>
+  );
+}
+
+/** 「细节」：PR 阶段和上下文 token，默认收起，按 ticket 记住开合（BTL-244）。 */
+function DetailsFold({ ticketKey, children }: { ticketKey: string; children: ReactNode }) {
+  const [collapsed, toggle] = useCollapsed(`ticket-home-details:${ticketKey}`, true);
+  return (
+    <div className="ticket-home-details">
+      <GroupToggle open={!collapsed} onToggle={toggle}>{S.lay.homeDetails}</GroupToggle>
+      {!collapsed && children}
     </div>
   );
 }
@@ -149,6 +180,16 @@ export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, bu
   const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key));
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
+  // 最新一份 handoff 就是这个 ticket 的「状态」：存下新的一份会发 stateChanged，这里跟着重取。
+  const history = useStateRefetch(`handoffs:${key}`, () => api.handoffs(key));
+  const [running, setRunning] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const runStatus = () => {
+    setRunning(true);
+    setStatusMessage(null);
+    api.runHandoff(key).then((o) => setStatusMessage(outcomeMessage(o)), reportError).finally(() => setRunning(false));
+  };
+  const latest: HandoffRecord | null | undefined = history === null ? undefined : (history[0] ?? null);
   const row = board === null ? null : (ticketRows([ticket], board.items)[0] ?? null);
   const turn = row?.turn;
   const stuckSession = turn?.owner === "you" && turn.kind === "stuck" ? turn.sessionId : null;
@@ -157,6 +198,7 @@ export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, bu
   return (
     <TicketHome
       ticket={ticket} row={row} glance={glance} stages={stages} canFix={canFix} notice={notice} answered={answered} busy={busy} onGoTab={onGoTab}
+      status={{ latest, running, message: statusMessage, onRun: runStatus }}
       onOpenPr={(url) => api.prOpen(url).catch(reportError)}
       onSend={() => {
         if (pr === null) return;

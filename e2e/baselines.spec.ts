@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { CI_ONLY_REPO, JS_REPO, type FixtureRepo } from "../src/main/baselines/__fixtures__/repos";
 import { M } from "../src/main/strings";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton, openTicketTab } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, newButton, openTicketTab, openLessonsAdvanced } from "./fixtures";
 
 const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
 
@@ -55,7 +55,7 @@ test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, le
   await page.reload();
 
   // 1. 扫描 JS 仓库：现有检查表、建议、可直接用的检查。
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-baselines").click();
   const web = page.getByTestId("baseline-repo-acme-web");
   await expect(web).toContainText(S.bl.never);
@@ -112,7 +112,7 @@ test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, le
   expect(guideText).not.toContain("./tools/check.sh");
 
   // 5. 一条禁止 debugger; 的检查（acme/web 这一层），扫存量：2 处，有明细。
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-checks").click();
   await page.getByTestId("checks-layer").selectOption("repo:acme/web");
   await page.getByTestId("checks-new").click();

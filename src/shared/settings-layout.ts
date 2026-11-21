@@ -46,6 +46,7 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   memoryEnabled: basic,
   refreshThresholdTokens: basic,
   onboardingDone: basic,
+  showOutsideSessions: basic,
   // 高级 › 定时与 handoff
   nightlyTime: adv("schedule"),
   workingDays: adv("schedule"),

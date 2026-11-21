@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, test } from "./fixtures";
+import { completeWizard, expect, test, openLessonsAdvanced } from "./fixtures";
 
 /**
  * 规矩质量与自动准入（工作流 D）。规矩直接插进 DB（后台分析走真 gh，e2e 不碰），模型是假的 claude。
@@ -21,7 +21,7 @@ test("old lessons get their scope and checkability filled in, without analysing 
   db.close();
   await page.reload();
 
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await expect(page.getByTestId("lessons-enrich")).toHaveText(S.lessonEnrich(2));
   await page.getByTestId("lessons-enrich").click();
   await expect(page.getByTestId("lessons-enrich")).toHaveCount(0);
@@ -64,7 +64,7 @@ test("a lesson's score parts expand to show each part and the policy version", a
   db.close();
   await page.reload();
 
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-repo-acme/web").click();
   await expect(page.getByTestId(`lesson-score-parts-${id}`)).toHaveCount(0);
   await page.getByTestId(`lesson-score-toggle-${id}`).click();
@@ -88,7 +88,7 @@ test("the calibration page draws a sample per band and records each mark as a sa
   db.close();
   await page.reload();
 
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-calibration").click();
   await expect(page.getByTestId("calibration-at")).toHaveText(S.calibrationNever);
   await page.getByTestId("calibration-draw").click();
@@ -132,7 +132,7 @@ test("the setup wizard picks up after a restart, summarises, and its accept is u
   db.close();
 
   const { page } = await launch(s);
-  await page.getByTestId("lessons-nav").click();
+  await openLessonsAdvanced(page);
   await page.getByTestId("lessons-page-tab-wizard").click();
   await page.getByTestId("wizard-scope").selectOption("repo:acme/web");
   await expect(page.getByTestId("wizard-run")).toHaveAttribute("data-state", "awaiting_accept", { timeout: 30_000 });

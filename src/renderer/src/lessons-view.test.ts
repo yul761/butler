@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LESSON_FIELD_DEFAULTS, type Lesson, type LessonRepoView, type LessonsState } from "../../shared/lessons";
-import { lessonsFor, lessonsTree, pruneLessonsUi, type LessonsSelection } from "./lessons-view";
+import { allPending, lessonsFor, lessonsTree, pruneLessonsUi, scopeLabel, type LessonsSelection } from "./lessons-view";
 
 const repo = (slug: string): LessonRepoView => ({ slug, localPath: `/x/${slug}`, lastAnalyzedAt: null, analyzedCount: 0, queued: 0, failed: 0, running: 0, skipped: 0, cancelled: 0, backfilled: false, overflow: 0 });
 const lesson = (id: number, scope: Lesson["scope"], status: Lesson["status"], hits = 1, lastSeenAt = 1): Lesson => ({
@@ -8,6 +8,29 @@ const lesson = (id: number, scope: Lesson["scope"], status: Lesson["status"], hi
 });
 const state = (over: Partial<LessonsState> = {}): LessonsState => ({
   repos: [], unknownRepos: [], products: [], suggestions: [], lessons: [], ghAvailable: true, queue: { running: [], queued: 0, pause: null }, enrich: { needing: 0, running: false }, ...over,
+});
+
+describe("allPending and scopeLabel (BTL-244)", () => {
+  it("lists every pending lesson across repos and products, in state order", () => {
+    const s = state({
+      products: [{ id: 1, name: "shop", slugs: ["o/web"] }],
+      lessons: [
+        lesson(1, { kind: "repo", slug: "o/api" }, "pending"),
+        lesson(2, { kind: "repo", slug: "o/api" }, "confirmed"),
+        lesson(3, { kind: "product", productId: 1 }, "pending"),
+        lesson(4, { kind: "repo", slug: "o/web" }, "disabled"),
+        lesson(5, { kind: "repo", slug: "o/web" }, "pending"),
+      ],
+    });
+    expect(allPending(s).map((l) => l.id)).toEqual([1, 3, 5]);
+    expect(allPending(state())).toEqual([]);
+  });
+  it("labels a repo lesson by its slug and a product lesson by the product's name", () => {
+    const s = state({ products: [{ id: 1, name: "shop", slugs: [] }] });
+    expect(scopeLabel({ scope: { kind: "repo", slug: "o/api" } }, s)).toBe("o/api");
+    expect(scopeLabel({ scope: { kind: "product", productId: 1 } }, s)).toBe("shop");
+    expect(scopeLabel({ scope: { kind: "product", productId: 9 } }, s)).toBe("#9");
+  });
 });
 
 describe("lessonsTree", () => {

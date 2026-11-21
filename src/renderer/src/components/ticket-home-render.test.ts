@@ -1,9 +1,10 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrStagesTicket, PrStagesView } from "../../../shared/pr-stages";
 import type { TurnItem } from "../../../shared/turn";
-import type { TicketView } from "../../../shared/types";
+import type { HandoffRecord, TicketView } from "../../../shared/types";
+import { setCollapsed } from "../local-prefs";
 import type { TicketRow } from "../scope-view";
 import { S } from "../strings";
 import { turnSentence } from "../turn-text";
@@ -28,8 +29,20 @@ const stages = (rows: PrStagesView[]): PrStagesTicket => ({ ticketKey: "BTL-1", 
 const props = (o: Partial<TicketHomeProps> = {}): TicketHomeProps => ({
   ticket, row: mkRow(), canFix: false, notice: null, answered: {}, busy: false,
   glance: { rootSessionId: "s", lastSaid: { text: "测试都过了", at: 1 }, context: { tokens: 148000, threshold: 150000 } },
-  stages: stages([stageRow]), onGoTab: noop, onOpenPr: noop, onSend: noop, onFix: noop, onAsk: noop, ...o,
+  stages: stages([stageRow]), onGoTab: noop, onOpenPr: noop, onSend: noop, onFix: noop, onAsk: noop,
+  status: { latest: null, running: false, message: null, onRun: noop }, ...o,
 });
+const handoff = (o: Partial<HandoffRecord> = {}): HandoffRecord => ({
+  id: 1, ticketKey: "BTL-1", sessionId: null, sourceRef: null, createdAt: 0, trigger: "command", degraded: false, rawText: null,
+  payload: { done_today: ["接口写完"], next_steps: ["前端联调"], blockers: ["等设计稿"], open_questions: ["要不要分页"] },
+  ...o,
+} as HandoffRecord);
+// 「细节」的开合读写 localStorage：给一个内存里的。
+const store = new Map<string, string>();
+beforeEach(() => vi.stubGlobal("localStorage", {
+  getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k),
+}));
+afterEach(() => { store.clear(); vi.unstubAllGlobals(); });
 const html = (o?: Partial<TicketHomeProps>) => renderToStaticMarkup(createElement(TicketHome, props(o)));
 /** 在 TicketHome 返回的元素树里找文字是 label 的按钮（只有原生元素，不用渲染）。 */
 type El = { type: unknown; props: { children?: unknown; onClick?: () => void; disabled?: boolean } };
@@ -48,6 +61,7 @@ function findButton(node: unknown, label: string): El & { props: { onClick: () =
 
 describe("TicketHome", () => {
   it("mergeable: sentence, primary button, last said, basic info", () => {
+    setCollapsed("ticket-home-details:BTL-1", false, true);
     const h = html();
     expect(h).toContain("可以合并了");
     expect(h).toContain("打开 PR");
@@ -59,9 +73,35 @@ describe("TicketHome", () => {
     expect(h).toContain("6 个阶段走完 5 个");
     expect(h).toContain("看完整对话");
   });
-  it("no PR: says so and offers no PR button", () => {
+  it("PR stages and context tokens sit in a 「细节」 fold that starts collapsed; the branch stays visible (BTL-244)", () => {
+    const h = html();
+    expect(h).toContain(S.lay.homeDetails);
+    expect(h).toContain('aria-expanded="false"');
+    expect(h).toContain("feat/btl-1");
+    expect(h).not.toContain("148k / 150k");
+    expect(h).not.toContain("6 个阶段走完 5 个");
+    setCollapsed("ticket-home-details:BTL-1", false, true);
+    expect(html()).toContain("148k / 150k");
+    // 别的 ticket 还是收起的。
+    expect(html({ ticket: { ...ticket, key: "BTL-2" } as TicketView })).not.toContain("148k / 150k");
+  });
+  it("shows the latest status first, with an update button named as status (BTL-244)", () => {
+    const none = html();
+    expect(none).toContain(`>${S.lay.homeStatus}<`);
+    expect(none).toContain(S.noHandoffs);
+    expect(none).toContain(`>${S.runHandoff}</button>`);
+    const h = html({ status: { latest: handoff(), running: false, message: "状态已更新。", onRun: noop } });
+    for (const t of ["接口写完", "前端联调", "等设计稿", "要不要分页", S.handoffTrigger.command, "状态已更新。"]) expect(h).toContain(t);
+    expect(h).not.toContain(S.noHandoffs);
+    expect(h.indexOf(S.lay.homeStatus)).toBeLessThan(h.indexOf(S.lay.thisTicket));
+    expect(html({ status: { latest: undefined, running: true, message: null, onRun: noop } })).toContain(`disabled="">${S.handoffRunning}</button>`);
+    expect(S.lay.homeStatus).toBe("状态");
+    expect(S.runHandoff).toBe("更新状态");
+  });
+  it("no PR: says so without opening the fold and offers no PR button", () => {
     const h = html({ stages: stages([]), row: mkRow(), glance: null });
     expect(h).toContain("还没开 PR");
+    expect(h).not.toContain(S.lay.homeDetails);
     expect(h).not.toContain("打开 PR");
   });
   it("last said missing vs glance not loaded", () => {

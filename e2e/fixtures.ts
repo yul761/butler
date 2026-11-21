@@ -440,6 +440,35 @@ export async function openTicketTab(page: Page, tab: keyof typeof TICKET_TAB_LAB
   await openTab(page, TICKET_TAB_LABEL[tab]);
 }
 
+/**
+ * 进复盘规矩页并展开默认收起的「高级」（BTL-244）：按仓库看、批量、批次、准入、产品、导入导出、向导、校准、检查、基线都在里面。
+ * 开合记在 localStorage 里，已经展开就不动。
+ */
+export async function openLessonsAdvanced(page: Page): Promise<void> {
+  await page.getByTestId("lessons-nav").click();
+  await expandLessonsAdvanced(page);
+}
+
+/** 已经在复盘规矩页上：展开「高级」（已经展开就不动）。 */
+export async function expandLessonsAdvanced(page: Page): Promise<void> {
+  const toggle = page.getByTestId("lessons-advanced").locator(".section-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
+/** 打开 ticket 页的「PR 详情」并展开默认收起的「阶段」（BTL-244）。开合按 ticket 记着，已经展开就不动。 */
+export async function openPrStages(page: Page): Promise<void> {
+  await openTicketTab(page, "pr");
+  await expandPrStages(page);
+}
+
+/** 展开「PR 详情」里的「阶段」（已经展开就不动）。 */
+export async function expandPrStages(page: Page): Promise<void> {
+  const toggle = page.locator(".ticket-pr-stages .section-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
 /** 名字正好是 term 的 <dt> 后面那个 <dd>（健康检查的键值表）。 */
 export function kvValue(page: Page, term: string) {
   const exact = new RegExp(`^${escapeRe(term)}$`);

@@ -158,6 +158,7 @@ import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
 import { childrenWorking } from "./sessions/managed-by";
 import { findTranscript, needsDiscovery, scanClaudeProjects, syncDiscovered, transcriptState, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
+import { fillBranchFromCwd, outsideSessionsOn } from "./sessions/outside-sessions";
 import { defaultReadDeps, memorySnapshotLine, readAvailableMemory } from "./sessions/available-memory";
 import { measuredOpenSessionsKb, MemoryAdmission } from "./sessions/memory-admission";
 import { PtyManager } from "./sessions/pty-manager";
@@ -1515,6 +1516,8 @@ async function bootstrap(): Promise<void> {
   let discoverAgain = false;
   /** 同一时间只有一次扫描；扫描中又被触发（hook、定时器）就在结束后再扫一次。 */
   const runDiscovery = async (): Promise<void> => {
+    // 「显示 Butler 之外开的 session」关着（默认）：完全不扫 ~/.claude/projects（BTL-244）。
+    if (!outsideSessionsOn(settings)) return;
     if (discovering) {
       discoverAgain = true;
       return;
@@ -1534,9 +1537,11 @@ async function bootstrap(): Promise<void> {
   const discoveryRequested = new Set<string>();
   /** hook 触发、等待下一次扫描确认的 session。 */
   const discoveryPending = new Set<string>();
+  /** 已经从目录读过分支的 session（每次运行最多一次，BTL-244）。 */
+  const branchTried = new Set<string>();
   let hookDiscoveryTimer: NodeJS.Timeout | null = null;
   const scheduleDiscovery = () => {
-    if (hookDiscoveryTimer) return;
+    if (hookDiscoveryTimer || !outsideSessionsOn(settings)) return;
     hookDiscoveryTimer = setTimeout(() => {
       hookDiscoveryTimer = null;
       void runDiscovery();
@@ -2688,9 +2693,14 @@ async function bootstrap(): Promise<void> {
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
       if (effect.kind !== "nested") {
         const s = sessions.get(effect.sessionId);
-        if (s && needsDiscovery(s, discoveryRequested)) {
+        if (s && outsideSessionsOn(settings) && needsDiscovery(s, discoveryRequested)) {
           discoveryPending.add(s.id);
           scheduleDiscovery();
+        }
+        // 分支不再靠扫描补（扫描默认关）：Butler 自己的 session 从目录读一次（BTL-244）。
+        if (s) {
+          void fillBranchFromCwd(s, { tried: branchTried, currentBranch: git.currentBranch, fill: (id, branch) => sessions.fillDetails(id, { gitBranch: branch }) })
+            .catch((e: unknown) => logger("reading a session's branch failed", e));
         }
       }
     },
@@ -2962,6 +2972,8 @@ async function bootstrap(): Promise<void> {
       }
       // 自动接活的来源和间隔（工作流 N）：改了马上按新的拉一次。
       if (key.startsWith("intake")) intakePollSoon();
+      // 打开「显示 Butler 之外开的 session」：马上扫一次，不等 5 分钟的定时（BTL-244）。
+      if (key === "showOutsideSessions") void runDiscovery();
     },
     // 共享 MCP（WS-M H）：打开就启动 hub（之后开的 session 用它）；关掉时接着它的 session 退完了再停。
     sharedMcpChanged: () => {
