@@ -144,7 +144,19 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
     await remember.click();
     await expect(box.locator(".fork-notice")).toHaveText(S.conv.remembered);
 
-    // 6. 发给开发 session：「继续」进了终端。
+    // 6. 发给开发 session：「继续」进了终端。先等它回完第 3 步的结论、跑完 Stop（● 亮了）：
+    // 还在忙时信箱照样收下，只是会说「已排队」（Windows 上 Stop hook 慢，CI 上见过）；这里要测的是停着时马上送、不出提示。
+    await expect
+      .poll(() => {
+        // 第 3 步那句结论进了开发 session（最后一条带它的 prompt 行）之后，跑完了一次 Stop。
+        const lines = fakeLog(s).split("\n");
+        const at = lines.map((l) => / prompt /.test(l) && l.includes(CONCLUSION)).lastIndexOf(true);
+        return at >= 0 && lines.slice(at + 1).some((l) => l.includes(" hook Stop "));
+      })
+      .toBe(true);
+    await openTicketTab(page, "terminal");
+    await expect(page.locator(".session.active .badge")).toBeVisible();
+    await openTicketTab(page, "conversation");
     const devPrompts = prompts(s).length;
     await (await draftTo(page, "dev", "继续")).click();
     await expect.poll(() => prompts(s).slice(devPrompts)).toContain("继续");
