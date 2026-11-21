@@ -1,6 +1,6 @@
 // 对话 tab（UI 重做第 5 层）：一条时间线——主流对话、黄框（分叉讨论）、换新分隔线，总控对话区还穿插子 session 的汇报。
 // 下面的输入框选「发给」开发 session 还是只问不改（开一个分叉讨论）。ticket 页还能「并排显示终端」。
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CONV_QUERY_MAX, type ConvMessage } from "../../../shared/conversation";
 import type { ForkView } from "../../../shared/fork";
 import type { InboxScope } from "../../../shared/types";
@@ -85,6 +85,44 @@ export function SendBar(p: {
   );
 }
 
+/** 发一句的结果：clear 清草稿；notice 给了就显示（undefined：期间切了 session，不动提示）。 */
+export interface SendResult {
+  clear: boolean;
+  notice?: string;
+}
+
+/** 发送栏按一下「发送」：空的、超长的、正在发的不发。 */
+export async function runSend(
+  now: { draft: string; target: Target; busy: boolean },
+  send: (draft: string) => Promise<SendResult>,
+  set: { draft: (v: string) => void; busy: (v: boolean) => void; notice: (v: string | null) => void },
+): Promise<void> {
+  const check = draftCheck(now.target, now.draft);
+  if (now.busy || check.blank || check.over) return;
+  set.busy(true);
+  set.notice(null);
+  try {
+    const r = await send(now.draft);
+    if (r.clear) set.draft("");
+    if (r.notice !== undefined) set.notice(r.notice);
+  } finally {
+    set.busy(false);
+  }
+}
+
+/**
+ * 发送栏和它的草稿（BTL-242）：草稿放在这里，打一个字只重画这一块，不再重画整条时间线。
+ * 草稿是整个 tab 共用的，切 session 不清；提示跟着 session（resetKey）清掉。
+ */
+export function Composer(p: { target: Target; onTarget: (t: Target) => void; resetKey: string; send: (draft: string) => Promise<SendResult> }) {
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => setNotice(null), [p.resetKey]);
+  const onSend = () => void runSend({ draft, target: p.target, busy }, p.send, { draft: setDraft, busy: setBusy, notice: setNotice });
+  return <SendBar target={p.target} onTarget={p.onTarget} busy={busy} notice={notice} draft={draft} onDraft={setDraft} onSend={onSend} />;
+}
+
 /** 设置里的记忆开关（关着时「记进记忆」不能点）；开关一变（memoryChanged(null)）就重读。 */
 function useMemoryOn(): boolean {
   const [on, setOn] = useState(true);
@@ -150,9 +188,6 @@ export function ConversationTab(p: {
   const splitPage = p.page ?? p.rootSessionId;
   const [split, setSplit] = useState(() => savedConvSplit(splitPage));
   const [target, setTarget] = useState<Target>(savedSendTarget);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<ForkActions["pending"]>({});
   const pendingRef = useRef(pending);
   const [forkNotice, setForkNotice] = useState<ForkActions["notice"]>({});
@@ -185,7 +220,6 @@ export function ConversationTab(p: {
     pendingRef.current = {};
     setPending({});
     setForkNotice({});
-    setNotice(null);
     setMemoryRefused(false);
     const latest = () => {
       api.convList(selected, { limit: CONV_PAGE }).then((pg) => live() && setConv((c) => mergeConvPage(c, pg, false)), reportError);
@@ -312,30 +346,24 @@ export function ConversationTab(p: {
     },
   };
 
-  async function send() {
-    const check = draftCheck(target, draft);
-    if (busy || check.blank || check.over) return;
+  /** 发出去（Composer 调）。回包回来时已经切了 session：不清草稿也不出提示（dev 发出去了照样清，草稿是整个 tab 共用的）。 */
+  async function send(text: string): Promise<SendResult> {
     const g = gen.current;
-    setBusy(true);
-    setNotice(null);
+    const current = () => gen.current === g;
     try {
       if (target === "dev") {
         // 这句话由第 4 层从 transcript 记进对话，自己会出现；被挡下时草稿留着。
-        const r = await api.convSend(selected, draft);
-        // 发出去了就清草稿，不管这期间切没切 session（草稿是整个 tab 共用的）。
-        if (r.ok) setDraft("");
-        else if (gen.current === g) setNotice(sendBlockText(r.reason, S));
-      } else {
-        // 同一句还在答时主进程返回已有的 forkId：黄框按分叉列表画，不会多出一个。
-        await api.forkAsk(selected, null, draft.trim());
-        if (gen.current !== g) return;
-        setDraft("");
-        refreshRef.current();
+        const r = await api.convSend(selected, text);
+        if (r.ok) return { clear: true };
+        return current() ? { clear: false, notice: sendBlockText(r.reason, S) } : { clear: false };
       }
+      // 同一句还在答时主进程返回已有的 forkId：黄框按分叉列表画，不会多出一个。
+      await api.forkAsk(selected, null, text.trim());
+      if (!current()) return { clear: false };
+      refreshRef.current();
+      return { clear: true };
     } catch (e) {
-      if (gen.current === g) setNotice(refusal(e));
-    } finally {
-      setBusy(false);
+      return current() ? { clear: false, notice: refusal(e) } : { clear: false };
     }
   }
 
@@ -350,12 +378,17 @@ export function ConversationTab(p: {
 
   const now = Date.now();
   const ready = conv !== null && (scope === null || reports !== null);
-  const items = ready
-    ? buildTimeline({
-      messages: conv.messages, refreshMarks: conv.refreshMarks, convHasMore: conv.hasMore, forks,
-      reports: reports?.reports ?? [], reportsHasMore: reports?.hasMore ?? false, filter: filter === "forks" ? "forks" : "all",
-    })
-    : [];
+  // 时间线只在对话、分叉、汇报或筛选变了才重拼（BTL-242）。
+  const timelineFilter = filter === "forks" ? "forks" : "all";
+  const items = useMemo(
+    () => (ready
+      ? buildTimeline({
+        messages: conv.messages, refreshMarks: conv.refreshMarks, convHasMore: conv.hasMore, forks,
+        reports: reports?.reports ?? [], reportsHasMore: reports?.hasMore ?? false, filter: timelineFilter,
+      })
+      : []),
+    [ready, conv, forks, reports, timelineFilter],
+  );
   const hasOlder = filter === "all" && (!!conv?.hasMore || !!reports?.hasMore);
   const filters: [ConvFilter, string][] = [["all", S.conv.filterAll], ["forks", S.conv.filterForks], ["search", S.conv.filterSearch]];
 
@@ -386,7 +419,7 @@ export function ConversationTab(p: {
       )}
       <div ref={end} />
       {p.footer}
-      <SendBar target={target} onTarget={pickTarget} busy={busy} notice={notice} draft={draft} onDraft={setDraft} onSend={() => void send()} />
+      <Composer target={target} onTarget={pickTarget} resetKey={selected} send={send} />
     </div>
   );
   if (!p.renderTerminal || !split) return body;

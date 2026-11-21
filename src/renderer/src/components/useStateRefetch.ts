@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { reportError } from "../errors";
+import { keepSame } from "../keep-same";
 import type { StateScope } from "../../../shared/state-scope";
 
 /** hook 事件一来一串：合并成一次重读（和 App 的刷新一样）。 */
@@ -19,7 +20,8 @@ export function useStateRefetch<T>(key: string, fetch: () => Promise<T>, opts: {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const load = () => {
       const n = ++seq;
-      fetch().then((v) => live && n === seq && setValue(v), reportError);
+      // 内容没变就留着旧对象（BTL-242）：用它的组件不跟着重画。
+      fetch().then((v) => live && n === seq && setValue((prev) => keepSame(prev, v)), reportError);
     };
     load();
     const off = api.onStateChanged(() => {

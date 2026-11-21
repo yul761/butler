@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { FeatureView, TicketView } from "../../../shared/types";
 import type { Route } from "../App";
 import { dotKey, youBadge, type Dot } from "../sidebar-view";
@@ -40,7 +41,8 @@ function DotMark({ dot }: { dot: Dot | null }) {
   );
 }
 
-export function Sidebar({ tickets, features, youCount, dots, route, onNavigate, keepAwake, onKeepAwake }: Props) {
+/** 侧栏（BTL-242 起 memo）：App 每次刷新都重画，列表没变时这里不跟着画。 */
+export const Sidebar = memo(function Sidebar({ tickets, features, youCount, dots, route, onNavigate, keepAwake, onKeepAwake }: Props) {
   const lessonsPending = useStateRefetch("lessons-pending", api.lessonsPending) ?? 0;
   const badge = youCount !== null && youCount > 0 ? youCount : 0;
   const ticketButton = (t: TicketView) => (
@@ -94,7 +96,7 @@ export function Sidebar({ tickets, features, youCount, dots, route, onNavigate, 
       </label>
     </nav>
   );
-}
+});
 
 interface FeatureGroupProps {
   feature: FeatureView;

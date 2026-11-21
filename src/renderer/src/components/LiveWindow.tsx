@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import type { ActivityEvent } from "../../../shared/activity";
 import type { NowRow, NowTarget, NowView } from "../../../shared/types";
 import { api } from "../api";
+import { useMotionPaused } from "../motion";
 import { allRows, eventKey, liveMemoryLine, liveNeeds, livePill, liveRows, mergeEvents, rowLabel, wirePath, type Box } from "../now-view";
 import { S } from "../strings";
 
@@ -62,6 +63,9 @@ const boxOf = (el: Element, origin: DOMRect): Box => {
  */
 export function LiveWindow({ view, onOpen }: { view: NowView; onOpen: (t: NowTarget) => void }) {
   const { events, sparks, pulse } = usePushedEvents();
+  // BTL-242：窗口在后台或者实况滚出视野时，动画停下。
+  const [stage, setStage] = useState<HTMLDivElement | null>(null);
+  const paused = useMotionPaused(stage);
   const rows = liveRows(view);
   // 要你做事的排前面，其余按页面上的顺序。
   const ordered = [...rows.filter((r) => liveNeeds(r) > 0), ...rows.filter((r) => liveNeeds(r) === 0)];
@@ -107,7 +111,7 @@ export function LiveWindow({ view, onOpen }: { view: NowView; onOpen: (t: NowTar
   return (
     <section className="live" aria-label={S.liveTitle}>
       <h3 className="live-title">{S.liveTitle}</h3>
-      <div className="live-stage">
+      <div className={`live-stage${paused ? " motion-paused" : ""}`} ref={setStage}>
         <div className="live-grid" ref={grid}>
           <svg className="live-wires" aria-hidden="true">
             {cards.map((r) => {

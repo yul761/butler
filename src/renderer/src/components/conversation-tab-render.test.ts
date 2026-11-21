@@ -8,7 +8,7 @@ import type { InboxItemView } from "../../../shared/types";
 import { resetClock } from "../availability-view";
 import { errorText, type TimelineItem } from "../conversation-view";
 import { S } from "../strings";
-import { ConversationFeed, ConversationTab, SearchHits, SendBar } from "./ConversationTab";
+import { Composer, ConversationFeed, ConversationTab, runSend, SearchHits, SendBar } from "./ConversationTab";
 import { ForkBox, submitFollowUp, type ForkActions } from "./ForkBox";
 
 const NOW = new Date(2026, 10, 20, 15, 0).getTime();
@@ -150,6 +150,45 @@ describe("ConversationFeed", () => {
     const html = feed([{ kind: "report", key: "r1", report: report(1) }, { kind: "report", key: "r2", report: report(2) }]);
     expect(html.indexOf("汇报1")).toBeLessThan(html.indexOf("汇报2"));
     expect(html).not.toContain(S.conv.empty);
+  });
+});
+
+describe("Composer (BTL-242: the draft lives here, so typing does not re-render the timeline)", () => {
+  const sink = () => {
+    const log: string[] = [];
+    return { log, set: { draft: (v: string) => log.push(`draft:${v}`), busy: (v: boolean) => log.push(`busy:${v}`), notice: (v: string | null) => log.push(`notice:${v}`) } };
+  };
+
+  it("starts with an empty draft and send disabled", () => {
+    const html = renderToStaticMarkup(createElement(Composer, { target: "fork", onTarget: noop, resetKey: "s1", send: async () => ({ clear: true }) }));
+    expect(html).toContain("<textarea");
+    expect(isDisabled(html, S.conv.send)).toBe(true);
+  });
+
+  it("sends, then clears the draft when told to", async () => {
+    const { log, set } = sink();
+    const sent: string[] = [];
+    await runSend({ draft: "问一句", target: "fork", busy: false }, async (t) => (sent.push(t), { clear: true }), set);
+    expect(sent).toEqual(["问一句"]);
+    expect(log).toEqual(["busy:true", "notice:null", "draft:", "busy:false"]);
+  });
+
+  it("keeps the draft and shows the notice when refused; stays quiet when the session changed meanwhile", async () => {
+    const a = sink();
+    await runSend({ draft: "改一下", target: "dev", busy: false }, async () => ({ clear: false, notice: "挡下了" }), a.set);
+    expect(a.log).toEqual(["busy:true", "notice:null", "notice:挡下了", "busy:false"]);
+    const b = sink();
+    await runSend({ draft: "改一下", target: "dev", busy: false }, async () => ({ clear: false }), b.set);
+    expect(b.log).toEqual(["busy:true", "notice:null", "busy:false"]);
+  });
+
+  it("does nothing for blank text or while busy", async () => {
+    const { log, set } = sink();
+    let calls = 0;
+    const send = async () => (calls++, { clear: true });
+    await runSend({ draft: "  ", target: "fork", busy: false }, send, set);
+    await runSend({ draft: "问", target: "fork", busy: true }, send, set);
+    expect([calls, log]).toEqual([0, []]);
   });
 });
 

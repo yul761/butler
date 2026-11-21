@@ -27,6 +27,7 @@ import { onboardingReducer } from "./wizard";
 import type { SettingsSection } from "../../shared/settings-layout";
 import type { Turn } from "../../shared/turn";
 import { LIVE_SCOPES } from "./state-bus";
+import { keepSame } from "./keep-same";
 
 /** 状态变化事件合并的时间窗。 */
 const STATE_DEBOUNCE_MS = 80;
@@ -91,14 +92,15 @@ export function App() {
     const seq = ++refreshSeq.current;
     // 「现在」页单独取、单独报错：它失败了侧栏和列表照样刷新。
     void api.nowView().then(
-      (n) => seq === refreshSeq.current && setNowView(n),
+      (n) => seq === refreshSeq.current && setNowView((prev) => keepSame(prev, n)),
       (e) => seq === refreshSeq.current && reportError(e),
     );
     try {
       const [t, f, u] = await Promise.all([api.listTickets(), api.listFeatures(), api.unclaimed()]);
       if (seq !== refreshSeq.current) return true;
-      setTickets(t);
-      setFeatures(f);
+      // 内容没变就留着旧数组（BTL-242）：下面按引用 memo 的都不用重算。
+      setTickets((prev) => keepSame(prev, t));
+      setFeatures((prev) => keepSame(prev, f));
       setUnclaimedCount(u.length);
       return true;
     } catch (e) {
@@ -134,7 +136,7 @@ export function App() {
   }, [refresh]);
 
   /** 所有未归档的 ticket，含 feature 下的（认领、ticket 页都按 ticket 号找）。 */
-  const allTickets = [...tickets, ...features.flatMap((f) => f.tickets)];
+  const allTickets = useMemo(() => [...tickets, ...features.flatMap((f) => f.tickets)], [tickets, features]);
 
   // 归档可能要等两分钟：等完时用户在看别的页面就留在那里；在看的页面跟着归档了（ticket 跟着 feature）就回首页，不留空白；
   // 路由停在这一版已经没有的页面（旧版本留下的）也回首页。
@@ -181,10 +183,13 @@ export function App() {
   const goFeature = (id: number) => void refresh().then(() => setRoute({ page: "feature", id }));
 
   const dots = useMemo(() => scopeDots(turn.board?.items ?? []), [turn.board]);
-  const ctx: NameCtx = {
+  // 列表没变就是同一个 ctx（BTL-242）：拿它做依赖的 memo 不会每次渲染都失效。
+  const ctx: NameCtx = useMemo(() => ({
     features: new Map(features.map((f) => [f.id, f.name])),
     tickets: new Map(allTickets.map((t) => [t.key, t.title])),
-  };
+  }), [features, allTickets]);
+  const liveTickets = useMemo(() => new Set(allTickets.map((t) => t.key)), [allTickets]);
+  const onKeepAwake = useCallback((on: boolean) => void api.setKeepAwake(on).then(setKeepAwake, reportError), []);
   /** 「开修复 session」（首页、ticket 页、feature 页的卡片）：开好了去 feature 页的「总控」看它的终端（修复 session 在那里），失败报到全局错误条。 */
   const fixSeq = useRef(0);
   const openFix = (featureId: number, stuckSessionId: string) => {
@@ -198,7 +203,7 @@ export function App() {
     <div className="app">
       <Sidebar
         tickets={tickets} features={features} youCount={turn.board?.counts.you ?? null} dots={dots} route={route} onNavigate={setRoute}
-        keepAwake={keepAwake} onKeepAwake={(on) => api.setKeepAwake(on).then(setKeepAwake, reportError)}
+        keepAwake={keepAwake} onKeepAwake={onKeepAwake}
       />
       <main className="main">
         {error && (
@@ -220,7 +225,7 @@ export function App() {
               <HomePage
                 state={turn} noWork={isNoWork(allTickets.length + features.length, turn.board?.items ?? null, nowView?.notices.length ?? 0)}
                 firstRun={<FirstRunHome {...firstRunProps({ onNewTicket: () => setShowNew(true), onNewFeature: () => setShowNewFeature(true), onGo: go })} />}
-                ctx={ctx} nowView={nowView} liveTickets={new Set(allTickets.map((t) => t.key))}
+                ctx={ctx} nowView={nowView} liveTickets={liveTickets}
                 onFix={openFix} onOpen={openTarget} onGo={go} onOpenTicket={(key) => openTicket(key)} onChanged={turn.reload}
                 onResumeSetup={() => dispatchOnboarding({ type: "rerun" })}
               />

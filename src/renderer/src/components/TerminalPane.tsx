@@ -38,9 +38,9 @@ export function TerminalPane({ termId, visible, hibernated = null, onClose, onRe
     if (!visible) return;
     api.ptyVisible(termId, true);
     // 同一个终端已经挂在别处（两个视图同时开着）：这里另建一个不进缓存的，摘下时就拆掉。
-    const cached = terminalCache.peek(termId);
+    const cached = terminalCache().peek(termId);
     const own = cached?.attached ? new LiveTerminal(termId) : null;
-    const live = own ?? terminalCache.acquire(termId, () => new LiveTerminal(termId));
+    const live = own ?? terminalCache().acquire(termId, () => new LiveTerminal(termId));
     const { term, fit } = live;
     live.attach(ref.current!, setExitCode);
     setExitCode(live.exitCode);
@@ -98,7 +98,7 @@ export function TerminalPane({ termId, visible, hibernated = null, onClose, onRe
       textarea?.removeEventListener("compositionend", fitComposition);
       live.detach();
       if (own) own.dispose();
-      else terminalCache.release(termId);
+      else terminalCache().release(termId);
       liveRef.current = null;
     };
   }, [termId, visible]);

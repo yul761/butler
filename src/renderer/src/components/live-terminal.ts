@@ -143,5 +143,9 @@ export class LiveTerminal {
   }
 }
 
-/** 最近看过的几个终端（BTL-242）。 */
-export const terminalCache = new LruCache<LiveTerminal>(terminalCacheMaxPref() ?? TERMINAL_CACHE_MAX, (_id, t) => t.dispose());
+let cache: LruCache<LiveTerminal> | null = null;
+/** 最近看过的几个终端（BTL-242）。第一次用到时才建：模块加载时（比如测试里）还没有 window。 */
+export function terminalCache(): LruCache<LiveTerminal> {
+  cache ??= new LruCache<LiveTerminal>(terminalCacheMaxPref() ?? TERMINAL_CACHE_MAX, (_id, t) => t.dispose());
+  return cache;
+}

@@ -293,6 +293,8 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .live-line .verb { margin-right: 5px; font-weight: 600; }
 .live-line.none { color: var(--muted); }
 .live-line.none::before { content: ""; }
+/* BTL-242：窗口在后台或者实况滚出视野（motion.ts）时停下，无限动画不再每帧占主线程。 */
+.live-stage.motion-paused *, .live-stage.motion-paused *::before { animation-play-state: paused; }
 @keyframes live-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 @keyframes live-flow { to { stroke-dashoffset: -9; } }
 @keyframes live-travel { 0% { stroke-dashoffset: 0; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { stroke-dashoffset: -99.9; opacity: 0; } }
