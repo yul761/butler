@@ -62,7 +62,6 @@ export interface StuckInfo {
   sessionId: string;
   ticketKey: string | null;
   featureId: number | null;
-  epicId: number | null;
   reason: string;
 }
 
@@ -159,11 +158,10 @@ export function describeActivity(a: SessionActivity): string {
   return `${[m.activityKinds[a.kind], a.detail].filter(Boolean).join(" ")}${a.background ? m.activityBackground : ""}`;
 }
 
-/** 卡住检测的范围：Butler 开的、不是修复 session 的所有 session（ticket、总控、epic），已归档的 ticket 和 feature 除外。 */
+/** 卡住检测的范围：Butler 开的、不是修复 session 的所有 session（ticket、总控），已归档的 ticket 和 feature 除外。 */
 interface StuckScope {
   ticketKey: string | null;
   featureId: number | null;
-  epicId: number | null;
 }
 
 interface Tracked {
@@ -520,7 +518,7 @@ export class ActivityMonitor {
       const feature = this.d.features.get(featureId);
       if (!feature || feature.archivedAt !== null) return null;
     }
-    return { ticketKey: head.ticketKey, featureId, epicId: head.epicId };
+    return { ticketKey: head.ticketKey, featureId };
   }
 
   private async readTranscript(t: Tracked): Promise<{ state: TranscriptState; size: number }> {

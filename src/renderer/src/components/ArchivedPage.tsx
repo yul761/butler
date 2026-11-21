@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Epic, Feature, Ticket } from "../../../shared/types";
+import type { Feature, Ticket } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { lastSegment, repoWhere } from "../repos";
@@ -8,20 +8,17 @@ import { S } from "../strings";
 interface Props {
   onRestored: (key: string) => void;
   onFeatureRestored: (id: number) => void;
-  onEpicRestored: (id: number) => void;
 }
 
-/** 已归档的 ticket、feature 和 epic：恢复后回到侧栏，并打开它。 */
-export function ArchivedPage({ onRestored, onFeatureRestored, onEpicRestored }: Props) {
+/** 已归档的 ticket 和 feature：恢复后回到侧栏，并打开它。 */
+export function ArchivedPage({ onRestored, onFeatureRestored }: Props) {
   const [items, setItems] = useState<Ticket[] | null>(null);
   const [features, setFeatures] = useState<Feature[]>([]);
-  const [epics, setEpics] = useState<Epic[]>([]);
   const load = useCallback(async () => {
     try {
-      const [t, f, e] = await Promise.all([api.archivedTickets(), api.archivedFeatures(), api.archivedEpics()]);
+      const [t, f] = await Promise.all([api.archivedTickets(), api.archivedFeatures()]);
       setItems(t);
       setFeatures(f);
-      setEpics(e);
     } catch (e) {
       reportError(e);
     }
@@ -68,7 +65,6 @@ export function ArchivedPage({ onRestored, onFeatureRestored, onEpicRestored }: 
         </table>
       )}
       <ArchivedTable title={S.archivedFeatures} nameColumn={S.colFeature} rows={features} onRestore={(id) => void restore(() => api.unarchiveFeature(id), () => onFeatureRestored(id))} />
-      <ArchivedTable title={S.archivedEpics} nameColumn={S.colEpic} rows={epics} onRestore={(id) => void restore(() => api.unarchiveEpic(id), () => onEpicRestored(id))} />
     </div>
   );
 }
@@ -76,11 +72,11 @@ export function ArchivedPage({ onRestored, onFeatureRestored, onEpicRestored }: 
 interface ArchivedTableProps {
   title: string;
   nameColumn: string;
-  rows: Pick<Epic | Feature, "id" | "name" | "workspaceDir" | "repos" | "archivedAt">[];
+  rows: Pick<Feature, "id" | "name" | "workspaceDir" | "repos" | "archivedAt">[];
   onRestore: (id: number) => void;
 }
 
-/** 已归档的 feature 或 epic：两者显示的内容一样，没有就不显示。 */
+/** 已归档的 feature：没有就不显示。 */
 function ArchivedTable({ title, nameColumn, rows, onRestore }: ArchivedTableProps) {
   if (rows.length === 0) return null;
   return (

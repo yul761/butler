@@ -5,7 +5,7 @@ import { CONTEXT_LIMIT, TASK_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import { normTurnFilter, type TurnFilter } from "../../shared/turn";
 import type {
-  AddRepoInput, CiItemRef, CreateEpicInput, CreateFeatureInput, CreateTicketInput, InboxScope, MessageScope, OpenButlerSessionRequest, OpenEpicSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CiItemRef, CreateFeatureInput, CreateTicketInput, InboxScope, MessageScope, OpenButlerSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
@@ -23,10 +23,7 @@ import { isAbsolutePath } from "../intake/repo-map";
 import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
-import { EPIC_NAME_LIMIT } from "../epics/epic-service";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
-import { M } from "../strings";
-import { TicketError } from "../tickets/ticket-service";
 
 /**
  * 渲染进程不可信：IPC 参数在主进程里按运行时类型检查，不合规就抛错（toIpcResult 包装成 { ok: false }）。
@@ -178,13 +175,12 @@ export function devMessageArg(v: unknown): string {
   return v;
 }
 
-/** 收件箱的范围：一个 feature、一个 epic，或者全部。 */
+/** 收件箱的范围：一个 feature，或者全部。 */
 export function inboxScopeArg(v: unknown): InboxScope {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object") throw new Error("invalid inbox scope");
   if (o.all === true) return { all: true };
   if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
-  if (o.epicId !== undefined) return { epicId: epicIdArg(o.epicId) };
   throw new Error("invalid inbox scope");
 }
 
@@ -197,13 +193,12 @@ export function messageScopeArg(v: unknown): MessageScope {
   throw new Error("invalid message scope");
 }
 
-/** PR 进度的范围：一个 ticket、一个 feature 或一个 epic。 */
+/** PR 进度的范围：一个 ticket 或一个 feature。 */
 export function prStagesScopeArg(v: unknown): PrStagesScope {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object") throw new Error("invalid PR stages scope");
   if (o.ticketKey !== undefined) return { ticketKey: ticketKeyArg(o.ticketKey) };
   if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
-  if (o.epicId !== undefined) return { epicId: epicIdArg(o.epicId) };
   throw new Error("invalid PR stages scope");
 }
 
@@ -247,31 +242,6 @@ export function createFeatureArg(v: unknown): CreateFeatureInput {
   return { name: featureNameArg(o.name), repoPaths: repoPathsArg(o.repoPaths), workspaceDir: o.workspaceDir as string | undefined };
 }
 
-/** epic 的 id：正整数。 */
-export function epicIdArg(v: unknown): number {
-  if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid epic id");
-  return v;
-}
-
-/** epic 名：1–100 字。带上 invalid_name，界面才能显示 epic 自己的提示。 */
-export function epicNameArg(v: unknown): string {
-  if (typeof v !== "string" || v.trim().length === 0 || v.length > EPIC_NAME_LIMIT) throw new TicketError("invalid_name", M().epicNameInvalid(EPIC_NAME_LIMIT));
-  return v;
-}
-
-/** 新建 epic（设计文档 2026-11-01）。 */
-export function createEpicArg(v: unknown): CreateEpicInput {
-  const o = v as Record<string, unknown> | null;
-  if (!o || typeof o !== "object") throw new Error("invalid epic");
-  if (o.workspaceDir !== undefined) dirArg(o.workspaceDir);
-  return { name: epicNameArg(o.name), repoPaths: repoPathsArg(o.repoPaths), workspaceDir: o.workspaceDir as string | undefined };
-}
-
-/** feature 移到哪个 epic：null 是移出。不接受 undefined：少传参数不能变成移出。 */
-export function moveTargetArg(v: unknown): number | null {
-  return v === null ? null : epicIdArg(v);
-}
-
 /** 新建 ticket：可以带 feature 和好几个仓库。 */
 export function createTicketArg(v: unknown): CreateTicketInput {
   const o = v as Record<string, unknown> | null;
@@ -311,18 +281,6 @@ export function openButlerArg(v: unknown): OpenButlerSessionRequest {
   if (!o || typeof o !== "object") throw new Error("invalid butler session request");
   if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
   return {
-    ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
-    ...(o.prefill !== undefined && { prefill: o.prefill }),
-  };
-}
-
-/** 打开 epic session。 */
-export function openEpicArg(v: unknown): OpenEpicSessionRequest {
-  const o = v as Record<string, unknown> | null;
-  if (!o || typeof o !== "object") throw new Error("invalid epic session request");
-  if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
-  return {
-    epicId: epicIdArg(o.epicId),
     ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),
     ...(o.prefill !== undefined && { prefill: o.prefill }),
   };
@@ -889,12 +847,11 @@ export function backgroundActionArg(v: unknown): BackgroundAction {
 
 // ---- 栈（工作流 K）
 
-/** 栈区块的范围：epic / feature 都可以是 null。 */
+/** 栈区块的范围：feature 可以是 null。 */
 export function stacksFilterArg(v: unknown): StacksFilter {
-  if (v === undefined || v === null) return { epicId: null, featureId: null };
-  const o = objArg(v, "stacks filter", ["epicId", "featureId"]);
+  if (v === undefined || v === null) return { featureId: null };
+  const o = objArg(v, "stacks filter", ["featureId"]);
   return {
-    epicId: o.epicId === undefined || o.epicId === null ? null : posInt(o.epicId, "stacks filter"),
     featureId: o.featureId === undefined || o.featureId === null ? null : posInt(o.featureId, "stacks filter"),
   };
 }
@@ -985,17 +942,13 @@ const turnPosInt = (n: unknown): n is number => typeof n === "number" && Number.
 const shortStr = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 200;
 
 /**
- * turn:board 的范围（UI 重做第 1 层）：undefined / null → null。只看 epicId、featureId（正整数）、ticketKey（1–200 字符），
- * 别的键不看；值为 undefined 的键当没给；给了的键类型不对就拒；几个都给时和 normTurnFilter 一样按 ticketKey > featureId > epicId 取一个。
+ * turn:board 的范围（UI 重做第 1 层）：undefined / null → null。只看 featureId（正整数）、ticketKey（1–200 字符），
+ * 别的键不看；值为 undefined 的键当没给；给了的键类型不对就拒；都给时和 normTurnFilter 一样按 ticketKey > featureId 取一个。
  */
 export function turnFilterArg(v: unknown): TurnFilter | null {
   if (v === undefined || v === null) return null;
   if (!plainObj(v)) throw new Error("invalid turn filter");
   const f: TurnFilter = {};
-  if (v.epicId !== undefined) {
-    if (!turnPosInt(v.epicId)) throw new Error("invalid turn filter");
-    f.epicId = v.epicId;
-  }
   if (v.featureId !== undefined) {
     if (!turnPosInt(v.featureId)) throw new Error("invalid turn filter");
     f.featureId = v.featureId;

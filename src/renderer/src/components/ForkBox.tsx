@@ -19,7 +19,7 @@ export interface ForkActions {
   notice: Record<number, string | undefined>;
   /** 记忆开着（设置里的开关，且这个范围能记）；关着时「记进记忆」不能点。 */
   memoryOn: boolean;
-  /** 这一页有 ticket 或 feature 可记（ticket 页、feature 总控页）；没有（Butler 页、epic 页）时不出「记进记忆」。 */
+  /** 这一页有 ticket 或 feature 可记（ticket 页、feature 总控页）；没有（Butler 页）时不出「记进记忆」。 */
   canRemember: boolean;
 }
 

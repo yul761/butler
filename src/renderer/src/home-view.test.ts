@@ -15,7 +15,7 @@ const S = STRINGS.zh;
 const MIN = 60_000;
 
 function item(turn: Turn, o: Partial<TurnItem> = {}): TurnItem {
-  return { ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, turn, since: 1000, others: 0, ...o };
+  return { ticketKey: "BTL-1", pr: null, featureId: null, turn, since: 1000, others: 0, ...o };
 }
 const answer = (o: Partial<Extract<Turn, { kind: "answer" }>> = {}): Turn =>
   ({ owner: "you", kind: "answer", question: "q?", options: ["可以", "不行，先回测", "再说"], askId: 7, sessionId: "s1", ...o });
@@ -29,7 +29,7 @@ const ci: Turn = { owner: "external", kind: "ci_running", names: [] };
 const pr = { repo: "acme/app", number: 12, title: "Fix", url: "https://gh.example/acme/app/pull/12" };
 
 function scope(o: Partial<ScopeTurnRow> = {}): ScopeTurnRow {
-  return { kind: "epic", id: 1, name: "E", total: 10, merged: 2, bar: { done: 2, agent: 3, you: 1, external: 2, idle: 2 }, youCount: 1, slowest: null, ...o };
+  return { kind: "feature", id: 1, name: "F", total: 10, merged: 2, bar: { done: 2, agent: 3, you: 1, external: 2, idle: 2 }, youCount: 1, slowest: null, ...o };
 }
 
 describe("turnTone", () => {
@@ -122,28 +122,27 @@ describe("prUrl and lookTarget", () => {
     expect(lookTarget(item(review, { ticketKey: null, pr }))).toBeNull();
     expect(lookTarget(item(answer()))).toEqual({ page: "ticket", key: "BTL-1", sessionId: "s1" });
     expect(lookTarget(item(merge, { pr }))).toEqual({ page: "ticket", key: "BTL-1", sessionId: null });
-    // 没有 ticket 的提问：feature、epic 的总控，或者全局总控
+    // 没有 ticket 的提问：feature 的总控，或者全局总控
     expect(lookTarget(item(answer(), { ticketKey: null, featureId: 4 }))).toEqual({ page: "feature", id: 4, sessionId: "s1" });
-    expect(lookTarget(item(answer(), { ticketKey: null, epicId: 2 }))).toEqual({ page: "epic", id: 2, sessionId: "s1" });
     expect(lookTarget(item(answer(), { ticketKey: null }))).toEqual({ page: "butler", sessionId: "s1" });
   });
 });
 
 describe("locationOf", () => {
-  const ctx: NameCtx = { epics: new Map([[1, "Epic名"]]), features: new Map([[2, "Feature名"]]), tickets: new Map([["BTL-1", "标题"]]) };
+  const ctx: NameCtx = { features: new Map([[2, "Feature名"]]), tickets: new Map([["BTL-1", "标题"]]) };
   const now = 1000 + 12 * MIN;
-  it("writes epic › feature › ticket", () => {
-    const l = locationOf(item(merge, { epicId: 1, featureId: 2 }), ctx, now, S);
-    expect(l.path).toBe("Epic名 › Feature名 › BTL-1");
+  it("writes feature › ticket", () => {
+    const l = locationOf(item(merge, { featureId: 2 }), ctx, now, S);
+    expect(l.path).toBe("Feature名 › BTL-1");
     expect(l.age).toBe(S.hm.ago(S.durationMinutes(12)));
-    // 名字太长时省略的是前面的 epic、feature，ticket 号单独放、不省略。
-    expect(l.scope).toBe("Epic名 › Feature名 › ");
+    // 名字太长时省略的是前面的 feature，ticket 号单独放、不省略。
+    expect(l.scope).toBe("Feature名 › ");
     expect(l.key).toBe("BTL-1");
     expect(locationOf(item(merge, { ticketKey: null, featureId: 2 }), ctx, now, S)).toMatchObject({ scope: "Feature名", key: null });
   });
-  it("a loose ticket is just its key; a missing epic is skipped", () => {
+  it("a loose ticket is just its key; a missing feature is skipped", () => {
     expect(locationOf(item(merge), ctx, now, S).path).toBe("BTL-1");
-    expect(locationOf(item(merge, { epicId: 99, featureId: 2 }), ctx, now, S).path).toBe("Feature名 › BTL-1");
+    expect(locationOf(item(merge, { featureId: 99 }), ctx, now, S).path).toBe("BTL-1");
   });
   it("a review is repo#number · author, aged by how long you were asked", () => {
     const l = locationOf(item(review, { ticketKey: null, pr }), ctx, now, S);
@@ -152,7 +151,7 @@ describe("locationOf", () => {
   });
   it("a question with no ticket names the overseer when it has no scope", () => {
     expect(locationOf(item(answer(), { ticketKey: null }), ctx, now, S).path).toBe(S.butlerNav);
-    expect(locationOf(item(answer(), { ticketKey: null, epicId: 1 }), ctx, now, S).path).toBe("Epic名");
+    expect(locationOf(item(answer(), { ticketKey: null, featureId: 2 }), ctx, now, S).path).toBe("Feature名");
   });
   it("an unknown start time has no age", () => {
     expect(locationOf(item(merge, { since: 0 }), ctx, now, S).age).toBe("");
@@ -185,7 +184,6 @@ describe("barSegments", () => {
 
 describe("scope rows", () => {
   it("routes to the page of the scope", () => {
-    expect(scopeRoute(scope({ kind: "epic", id: 3 }))).toEqual({ page: "epic", id: 3 });
     expect(scopeRoute(scope({ kind: "feature", id: 4 }))).toEqual({ page: "feature", id: 4 });
     expect(scopeRoute(scope({ kind: "ticket", id: "BTL-9" }))).toEqual({ page: "ticket", key: "BTL-9" });
   });
@@ -217,7 +215,7 @@ const _c: TurnBoard["counts"] = { you: 0, agent: 0, external: 0, mergedToday: 0 
 void homeLede(_c, S);
 
 describe("runningRows", () => {
-  const it0 = (turn: Turn, o: Partial<TurnItem> = {}): TurnItem => ({ ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, turn, since: 1000, others: 0, ...o });
+  const it0 = (turn: Turn, o: Partial<TurnItem> = {}): TurnItem => ({ ticketKey: "BTL-1", pr: null, featureId: null, turn, since: 1000, others: 0, ...o });
   it("lists agent and external work, longest wait first, with who and the sentence", () => {
     const agent = it0({ owner: "agent", kind: "fixing_ci", sessionId: "s" }, { ticketKey: "BTL-2", since: 5000 });
     const ci = it0({ owner: "external", kind: "ci_running", names: [] }, { ticketKey: "BTL-3", since: 2000 });
@@ -240,8 +238,8 @@ describe("runningRows", () => {
   });
 
   it("two coordinators working on one page get different keys", () => {
-    const loose = (sessionId: string, featureId: number | null) => it0({ owner: "agent", kind: "working", sessionId }, { ticketKey: null, epicId: 1, featureId });
-    const rows = runningRows([loose("epic-ctl", null), loose("feature-ctl", 10)], S, 2000);
+    const loose = (sessionId: string, featureId: number | null) => it0({ owner: "agent", kind: "working", sessionId }, { ticketKey: null, featureId });
+    const rows = runningRows([loose("butler-ctl", null), loose("feature-ctl", 10)], S, 2000);
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((r) => r.key)).size).toBe(2);
   });
@@ -324,11 +322,11 @@ describe("ticketNowText (All work ticket rows)", () => {
 });
 
 describe("firstRunProps (home with no work at all)", () => {
-  it("the three create buttons open their dialogs; the settings link lands on Settings › Features", () => {
-    const d = { onNewTicket: vi.fn(), onNewFeature: vi.fn(), onNewEpic: vi.fn(), onGo: vi.fn() };
+  it("the two create buttons open their dialogs; the settings link lands on Settings › Features", () => {
+    const d = { onNewTicket: vi.fn(), onNewFeature: vi.fn(), onGo: vi.fn() };
     const p = firstRunProps(d);
-    p.onNewTicket(); p.onNewFeature(); p.onNewEpic();
-    expect([d.onNewTicket, d.onNewFeature, d.onNewEpic].map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
+    p.onNewTicket(); p.onNewFeature();
+    expect([d.onNewTicket, d.onNewFeature].map((f) => f.mock.calls.length)).toEqual([1, 1]);
     expect(d.onGo).not.toHaveBeenCalled();
     p.onOpenSettings();
     expect(d.onGo).toHaveBeenCalledWith({ page: "settings", section: "features" });

@@ -1,35 +1,34 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { EpicView, FeatureView, TicketView } from "../../shared/types";
+import type { Route } from "./App";
+import type { FeatureView, TicketView } from "../../shared/types";
 import { fixLanding, missingTicket, routeGone } from "./route-view";
 
 const tickets = [{ key: "DMS-1" }] as TicketView[];
 const features = [{ id: 2 }] as FeatureView[];
-const epics = [{ id: 3 }] as EpicView[];
 
 describe("routeGone", () => {
-  it("says a ticket, feature or epic page is gone when its target is not on the lists", () => {
-    expect(routeGone({ page: "ticket", key: "DMS-9" }, tickets, features, epics)).toBe(true);
-    expect(routeGone({ page: "feature", id: 9 }, tickets, features, epics)).toBe(true);
-    expect(routeGone({ page: "epic", id: 9 }, tickets, features, epics)).toBe(true);
+  it("says a ticket or feature page is gone when its target is not on the lists", () => {
+    expect(routeGone({ page: "ticket", key: "DMS-9" }, tickets, features)).toBe(true);
+    expect(routeGone({ page: "feature", id: 9 }, tickets, features)).toBe(true);
   });
 
   it("keeps a page whose target is still there", () => {
-    expect(routeGone({ page: "ticket", key: "DMS-1" }, tickets, features, epics)).toBe(false);
-    expect(routeGone({ page: "feature", id: 2 }, tickets, features, epics)).toBe(false);
-    expect(routeGone({ page: "epic", id: 3 }, tickets, features, epics)).toBe(false);
-  });
-
-  it("does not confuse a feature with an epic that has the same id", () => {
-    expect(routeGone({ page: "feature", id: 3 }, tickets, features, epics)).toBe(true);
-    expect(routeGone({ page: "epic", id: 2 }, tickets, features, epics)).toBe(true);
+    expect(routeGone({ page: "ticket", key: "DMS-1" }, tickets, features)).toBe(false);
+    expect(routeGone({ page: "feature", id: 2 }, tickets, features)).toBe(false);
   });
 
   it("never sends the user away from a page that has no target", () => {
-    for (const page of ["home", "unclaimed", "archived", "settings", "audit"] as const) {
-      expect(routeGone({ page }, [], [], [])).toBe(false);
+    for (const page of ["home", "unclaimed", "archived", "settings", "audit", "effect", "all", "lessons", "butler"] as const) {
+      expect(routeGone({ page }, [], [])).toBe(false);
     }
+  });
+
+  it("a route left over from an older version (the removed epic page) is gone, even when a feature has the same id", () => {
+    const old = { page: "epic", id: 2, focusSession: null } as unknown as Route;
+    expect(routeGone(old, tickets, features)).toBe(true);
+    expect(routeGone({ page: "bogus" } as unknown as Route, tickets, features)).toBe(true);
   });
 });
 
@@ -57,7 +56,7 @@ describe("App wiring: every way into a ticket page checks the ticket is still th
   const app = readFileSync(join(__dirname, "App.tsx"), "utf8");
   const props = [...app.matchAll(/\bon(OpenTicket|Go)(?:=\{|:\s*)([^}\n,]*(?:\([^)]*\)[^}\n,]*)?)/g)].map((m) => `on${m[1]} ${m[2].trim()}`);
   it("finds the page props it checks", () => {
-    expect(props.filter((p) => p.startsWith("onOpenTicket")).length).toBeGreaterThanOrEqual(4);
+    expect(props.filter((p) => p.startsWith("onOpenTicket")).length).toBeGreaterThanOrEqual(3);
     expect(props.filter((p) => p.startsWith("onGo")).length).toBeGreaterThanOrEqual(4);
   });
   it("no onOpenTicket or onGo goes straight to setRoute", () => {

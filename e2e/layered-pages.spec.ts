@@ -4,8 +4,8 @@ import { S } from "../src/renderer/src/strings";
 import { completeWizard, create, expandPrStages, expect, FAKE_GH_ORIGIN, makeGitRepo, newButton, openTab, openTicketTab, pageTab, terminalText, test, type FakeGhFixture, type Sandbox } from "./fixtures";
 
 /**
- * UI 重做第 3 层：ticket、feature、epic 页分成页签。ticket 页默认停在「概况」、记着上次停在哪个页签；
- * 从首页「轮到你」的卡片进来时落在要你动手的那个页签；epic 的「概况」空着时不出 NaN；「总控」页签左边终端、右边对话。
+ * UI 重做第 3 层：ticket、feature 页分成页签。ticket 页默认停在「概况」、记着上次停在哪个页签；
+ * 从首页「轮到你」的卡片进来时落在要你动手的那个页签；feature 的「总控」页签左边终端、右边对话。
  */
 
 const goHome = (page: Page) => page.locator(".sidebar").getByRole("button", { name: S.home, exact: true }).click();
@@ -90,48 +90,21 @@ test("a ticket whose CI failed opens from its home card on the PR tab", async ({
   await expect(page.locator(".ticket-pr-stages .pr-link")).toHaveText(["#52"]);
 });
 
-test("an empty epic's overview says so without NaN, and lists a feature once there is one", async ({ makeSandbox, launch }) => {
+test("the feature's control tab: the terminal on the left, the conversation on the right, inside the tab", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const shop = join(s.dir, "shop");
   makeGitRepo(join(shop, "backend"));
   makeGitRepo(join(shop, "frontend"));
   const { page } = await launch(s);
   await completeWizard(page, s);
-  await create(page, await newButton(page, "newEpic"), S.epicName, "epic-a", shop);
-
-  const panel = page.locator(".epic-page .page-tabs-panel");
-  await expect(pageTab(page, S.lay.tabOverview)).toHaveAttribute("aria-selected", "true");
-  await expect(panel).toContainText(S.noEpicFeatures);
-  await expect(panel).not.toContainText("NaN");
-  await expect(page.locator(".epic-page .scope-row")).toHaveCount(0);
-
-  // 建一个 feature（tab 条上的按钮），回到 epic 页：概况里有它的一行（还没有 ticket：0/0），没有 NaN。
-  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "payment", shop);
-  await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
-  await expect(page.getByRole("heading", { name: "epic-a", exact: true })).toBeVisible();
-  await expect(pageTab(page, S.lay.tabOverview)).toHaveAttribute("aria-selected", "true");
-  const row = page.locator(".epic-page .scope-row").filter({ has: page.getByRole("button", { name: "payment", exact: true }) });
-  await expect(row).toHaveCount(1);
-  await expect(row.locator(".line")).toHaveText(S.lay.featureCard(0, 0));
-  await expect(panel).not.toContainText(S.noEpicFeatures);
-  await expect(panel).not.toContainText("NaN");
-});
-
-test("the epic's control tab: the terminal on the left, the conversation on the right, inside the tab", async ({ makeSandbox, launch }) => {
-  const s = makeSandbox();
-  const shop = join(s.dir, "shop");
-  makeGitRepo(join(shop, "backend"));
-  makeGitRepo(join(shop, "frontend"));
-  const { page } = await launch(s);
-  await completeWizard(page, s);
-  await create(page, await newButton(page, "newEpic"), S.epicName, "epic-a", shop);
+  await create(page, await newButton(page, "newFeature"), S.featureName, "feature-a", shop);
 
   // 「概况」里没有终端；点「总控」才有。
-  await expect(page.locator(".epic-page .control-split")).toHaveCount(0);
+  await expect(page.locator(".feature-page .control-split")).toHaveCount(0);
   await openTab(page, S.lay.tabControl);
-  const split = page.locator(".epic-page .page-tabs-panel.tab-panel-control .control-split");
+  const split = page.locator(".feature-page .page-tabs-panel.tab-panel-control .control-split");
   await expect(split).toHaveCount(1);
-  await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const left = split.locator(".control-left");
   const right = split.locator(".control-right");
@@ -141,9 +114,9 @@ test("the epic's control tab: the terminal on the left, the conversation on the 
   // 并排：终端在左栏、对话在右栏，顶部对齐；终端不在页面底部（不在页签内容的下面）。
   const box = await page.evaluate(() => {
     const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect();
-    const term = r(".epic-page .control-left .terminal-wrap");
-    const panel = r(".epic-page .page-tabs-panel");
-    return { left: r(".epic-page .control-left"), right: r(".epic-page .control-right"), term, panel, window: window.innerHeight };
+    const term = r(".feature-page .control-left .terminal-wrap");
+    const panel = r(".feature-page .page-tabs-panel");
+    return { left: r(".feature-page .control-left"), right: r(".feature-page .control-right"), term, panel, window: window.innerHeight };
   });
   const info = JSON.stringify(box);
   expect(box.left.right, info).toBeLessThanOrEqual(box.right.left + 1);

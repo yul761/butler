@@ -7,7 +7,7 @@ const repo = (id: number, path: string, extra: Partial<TicketRepo> = {}): Ticket
 });
 const session = (extra: Partial<SessionView>): SessionView => ({
   id: "s", ticketKey: "P-1", cwd: "/x", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, termId: null, rootId: extra.id ?? "s", ...extra,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, termId: null, rootId: extra.id ?? "s", ...extra,
 });
 
 describe("repo labels", () => {
@@ -21,12 +21,11 @@ describe("repo labels", () => {
     expect(repoWhere(repo(1, "/c/web"))).toBe("/c/web @ feature/P-1");
   });
 
-  it("labels sessions by repo only when the ticket has several, and always labels the coordinator", () => {
+  it("labels sessions by repo only when the ticket has several", () => {
     const repos = [repo(1, "/c/web"), repo(2, "/c/api")];
-    expect(sessionPlace(session({ repoId: 2 }), repos, "总控")).toBe("api");
-    expect(sessionPlace(session({ coordinator: true }), repos, "总控")).toBe("总控");
-    expect(sessionPlace(session({ repoId: 1 }), [repos[0]], "总控")).toBeNull();
-    expect(sessionPlace(session({ repoId: null }), repos, "总控")).toBeNull();
+    expect(sessionPlace(session({ repoId: 2 }), repos)).toBe("api");
+    expect(sessionPlace(session({ repoId: 1 }), [repos[0]])).toBeNull();
+    expect(sessionPlace(session({ repoId: null }), repos)).toBeNull();
   });
 });
 

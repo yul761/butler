@@ -60,7 +60,7 @@ test("a skill call in a session moves the design step to active; the timeline st
   await expect(page.locator(".pr-stages")).toHaveCount(0);
 });
 
-test("a ticket row in the epic's all-tickets tab opens its ticket (mouse and keyboard)", async ({ makeSandbox, launch }) => {
+test("a ticket row in the feature's all-tickets tab opens its ticket (mouse and keyboard)", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const shop = join(s.dir, "shop");
   const { page } = await launch(s);
@@ -68,24 +68,22 @@ test("a ticket row in the epic's all-tickets tab opens its ticket (mouse and key
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
 
-  await create(page, await newButton(page, "newEpic"), S.epicName, "shop-epic", shop);
-  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "pay", shop);
+  await create(page, await newButton(page, "newFeature"), S.featureName, "pay", shop);
   await newTicket(page, "EP-1", "frontend", "backend");
 
-  // epic 页的「全部 ticket」按 feature 分组；点这一行的哪一格都去 ticket 页。
-  const openFromEpic = async (activate: (row: Locator) => Promise<void>) => {
-    await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
-    await expect(page.getByRole("heading", { name: "shop-epic", exact: true })).toBeVisible();
+  // feature 页的「全部 ticket」：点这一行的哪一格都去 ticket 页。
+  const openFromFeature = async (activate: (row: Locator) => Promise<void>) => {
+    await page.locator(".sidebar .ticket.feature").click();
+    await expect(page.getByRole("heading", { name: "pay", exact: true })).toBeVisible();
     await openTab(page, S.lay.tabTickets);
-    const table = page.locator(".epic-page .ticket-table");
-    await expect(table.locator("tr.group-row")).toHaveText(S.lay.groupHeader("pay", 0, 1));
-    await activate(table.locator("tbody tr:not(.group-row)").filter({ hasText: "EP-1" }));
+    const table = page.locator(".feature-page .ticket-table");
+    await activate(table.locator("tbody tr").filter({ hasText: "EP-1" }));
     await expect(page.getByRole("heading", { name: "EP-1", exact: true })).toBeVisible();
   };
-  await openFromEpic((row) => row.locator(".key").click());
-  await openFromEpic((row) => row.locator("td").last().click());
+  await openFromFeature((row) => row.locator(".key").click());
+  await openFromFeature((row) => row.locator("td").last().click());
   // 键盘：ticket 号是按钮，聚焦后按回车。
-  await openFromEpic(async (row) => {
+  await openFromFeature(async (row) => {
     await row.getByRole("button", { name: "EP-1", exact: true }).focus();
     await page.keyboard.press("Enter");
   });
@@ -111,7 +109,7 @@ function makeShop(s: Sandbox): string {
 
 /**
  * 每个 PR 一行（计划 2026-11-16）：分支 feature/DMS-1 上先后合并了 #1、#2（gh pr list 找到），#3 在另一个分支上、只在 handoff 里报过。
- * ticket 页三行，新的在前、都已合并；feature 页「全部 ticket」这个 ticket 一行，三个 PR 都列着；epic 页概况里这个 feature 有一个 ticket。
+ * ticket 页三行，新的在前、都已合并；feature 页「全部 ticket」这个 ticket 一行，三个 PR 都列着。
  * Windows 上跳过：resolveGh 只认 gh.exe，假 gh 是 sh 包装。
  */
 test("three PRs: two sequential on the branch and one on another branch linked by handoff", async ({ makeSandbox, launch }) => {
@@ -130,10 +128,9 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  // 1. epic 和它下面的 feature 用 shop 的两个仓库；ticket DMS-1 只用 app。
+  // 1. feature 用 shop 的两个仓库；ticket DMS-1 只用 app。
   const shop = makeShop(s);
-  await create(page, await newButton(page, "newEpic"), S.epicName, "shop", shop);
-  await create(page, page.locator(".epic-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newFeature}`, exact: true }), S.featureName, "app", shop);
+  await create(page, await newButton(page, "newFeature"), S.featureName, "app", shop);
   await newTicket(page, "DMS-1", "app", "api");
 
   // 2. ticket session 里 /handoff：报的 PR 只有 #3。
@@ -163,12 +160,6 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   const row = rows.filter({ hasText: "DMS-1" });
   await expect(row.locator("td").last()).toHaveText("#1 #2 #3");
 
-  // 5. epic 页概况：这个 feature 有一个 ticket。「合了」数的是标成完成的 ticket；session 里的 /handoff 没把它标成完成，
-  //    所以是 0/1（PR 合没合看 ticket 的「PR 详情」，上面已经看过）。
-  await page.locator(".sidebar .epic-group > .feature-row .ticket").click();
-  await expect(page.getByRole("heading", { name: "shop", exact: true })).toBeVisible();
-  await openTab(page, S.lay.tabOverview);
-  await expect(page.locator(".epic-page .scope-row").filter({ hasText: "app" })).toContainText(S.lay.featureCard(0, 1));
   expect(unsupportedGhCalls(s)).toEqual([]);
 });
 

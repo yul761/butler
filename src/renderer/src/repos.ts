@@ -16,9 +16,8 @@ export function repoWhere(r: TicketRepo): string {
   return r.workMode === "worktree" && r.worktreePath ? r.worktreePath : `${r.repoPath} @ ${r.branch}`;
 }
 
-/** session 按钮前面的小标签：总控、仓库名；单仓库 ticket 不显示（和以前一样）。 */
-export function sessionPlace(s: SessionView, repos: TicketRepo[], coordinatorLabel: string): string | null {
-  if (s.coordinator) return coordinatorLabel;
+/** session 按钮前面的小标签：仓库名；单仓库 ticket 不显示（和以前一样）。 */
+export function sessionPlace(s: SessionView, repos: TicketRepo[]): string | null {
   if (repos.length <= 1) return null;
   const r = repos.find((x) => x.id === s.repoId);
   return r ? repoName(r) : null;

@@ -30,7 +30,7 @@ export const stageKey = {
 /** 分支上第一个 commit（主要由分支检查记下；分支上有开着的 PR、分支不查时由 PR 的读取补上，同一个 key）。 */
 export function firstCommitObservation(t: Pick<BranchTarget, "ticketKey" | "repoId" | "branch">, at: number, afterPrId: number | null): Observation {
   return {
-    event: { ticketKey: t.ticketKey, repoId: t.repoId, prId: null, branch: t.branch, featureId: null, epicId: null, sessionId: null, kind: "first_commit", at, data: {} },
+    event: { ticketKey: t.ticketKey, repoId: t.repoId, prId: null, branch: t.branch, featureId: null, sessionId: null, kind: "first_commit", at, data: {} },
     dedupeKey: stageKey.firstCommit({ scope: String(t.repoId), branch: t.branch }, afterPrId),
   };
 }
@@ -54,7 +54,7 @@ export function prObservations(
   const out: Observation[] = [];
   const add = (kind: StageEvent["kind"], at: number, key: string, data: Record<string, unknown>) =>
     out.push({
-      event: { ticketKey: s.ticketKey, repoId: s.repoId, prId: s.prId, branch: s.branch, featureId: null, epicId: null, sessionId: null, kind, at, data },
+      event: { ticketKey: s.ticketKey, repoId: s.repoId, prId: s.prId, branch: s.branch, featureId: null, sessionId: null, kind, at, data },
       dedupeKey: key,
     });
   const first = prev === null || prev.checkedAt === 0;

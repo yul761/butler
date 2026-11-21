@@ -3,14 +3,15 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MESSAGE_LIMIT, REASON_LIMIT, START_INSTRUCTIONS_LIMIT } from "../src/shared/control";
+import { MESSAGE_LIMIT, REASON_LIMIT } from "../src/shared/control";
 import {
-  BUTLER_TOOLS, BUTLER_TOOLS_EN, EPIC_CONTEXT_TOOL, EPIC_CONTEXT_TOOL_EN, EPIC_TOOLS, EPIC_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, LIST_STACKS_TOOL, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, STACK_TOOLS_EN, SessionsServer, TOOLS, TOOLS_EN,
+  BUTLER_TOOLS, BUTLER_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer,
   type SessionsServerOptions,
 } from "./sessions-server";
 import { serveStdio } from "./stdio";
+import { sessionsOptionsFromEnv } from "./sessions-options";
 
-function setup(timeoutMs = 2000, scope: SessionsServerOptions["scope"] = { ticketKey: "P-1" }, lang: "zh" | "en" = "zh") {
+function setup(timeoutMs = 2000, scope: SessionsServerOptions["scope"] = { featureId: 7 }, lang: "zh" | "en" = "zh") {
   const dir = tempDir("butler-control-");
   const requestsDir = join(dir, "requests");
   const resultsDir = join(dir, "results");
@@ -42,31 +43,21 @@ describe("butler-sessions MCP server", () => {
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
     expect(await server.handle({ jsonrpc: "2.0", id: 2, method: "ping" })).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
     const list = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(["list_repos", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session", "ask_user", "report"]);
+    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS]);
     expect(await server.handle({ jsonrpc: "2.0", id: 4, method: "resources/list" })).toMatchObject({ id: 4, error: { code: -32601 } });
-  });
-
-  it("turns start_session into a request for this ticket and returns Butler's result", async () => {
-    const { server, answer } = setup();
-    const call = server.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "写接口\n加测试" } } });
-    const req = await answer({ v: 1, ok: true, value: { sessionId: "child-1", repo: "api" } });
-    expect(req).toEqual({ v: 1, ticketKey: "P-1", from: "boss", op: "start_session", repo: "api", task: "写接口\n加测试" });
-    const r = (await call) as { result: { content: { text: string }[]; isError?: boolean } };
-    expect(r.result.isError).toBeUndefined();
-    expect(JSON.parse(r.result.content[0].text)).toEqual({ sessionId: "child-1", repo: "api" });
   });
 
   it("sends the model of start_session, and refuses an unknown one without sending anything", async () => {
     const { server, answer } = setup();
-    const call = server.handle({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "sonnet" } } });
+    const call = server.handle({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t", model: "sonnet" } } });
     expect(await answer({ v: 1, ok: true, value: {} })).toMatchObject({ op: "start_session", model: "sonnet" });
     await call;
     const tier = setup();
-    const tierCall = tier.server.handle({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "mid" } } });
+    const tierCall = tier.server.handle({ jsonrpc: "2.0", id: 24, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t", model: "mid" } } });
     expect(await tier.answer({ v: 1, ok: true, value: {} })).toMatchObject({ op: "start_session", model: "mid" });
     await tierCall;
     const bad = setup(200);
-    expect(await bad.server.handle({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t", model: "bad name!" } } })).toMatchObject({ result: { isError: true } });
+    expect(await bad.server.handle({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t", model: "bad name!" } } })).toMatchObject({ result: { isError: true } });
     const badFeature = setup(200, { featureId: 7 });
     expect(await badFeature.server.handle({ jsonrpc: "2.0", id: 23, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t", model: 3 } } })).toMatchObject({ result: { isError: true } });
     // 没发出任何请求：目录要么没建，要么是空的。
@@ -74,14 +65,14 @@ describe("butler-sessions MCP server", () => {
   });
 
   it("start_session descriptions tell the coordinator to put only the task in task, the rest in memory", () => {
-    const zh = [TOOLS, FEATURE_TOOLS].map((t) => t.find((x) => x.name === "start_session")!.description);
-    const en = [TOOLS_EN, FEATURE_TOOLS_EN].map((t) => t.find((x) => x.name === "start_session")!.description);
+    const zh = [FEATURE_TOOLS].map((t) => t.find((x) => x.name === "start_session")!.description);
+    const en = [FEATURE_TOOLS_EN].map((t) => t.find((x) => x.name === "start_session")!.description);
     for (const d of zh) expect(d).toContain("task 里只写要做什么，背景、接口约定写进记忆，子 session 会自己读。");
     for (const d of en) expect(d).toContain("Put only what to do in task");
   });
 
-  it("lists model in both start_session schemas, in both languages", () => {
-    for (const tools of [TOOLS, TOOLS_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN]) {
+  it("lists model in the start_session schema, in both languages", () => {
+    for (const tools of [FEATURE_TOOLS, FEATURE_TOOLS_EN]) {
       const start = tools.find((t) => t.name === "start_session")!;
       const model = (start.inputSchema.properties as Record<string, { enum?: readonly string[]; description: string }>).model;
       expect(model.enum).toBeUndefined();
@@ -98,19 +89,19 @@ describe("butler-sessions MCP server", () => {
     await answered.answer({ v: 1, ok: false, error: "找不到 ticket" });
     expect(await failing).toMatchObject({ result: { isError: true, content: [{ text: "找不到 ticket" }] } });
     const { server } = setup(200);
-    expect(await server.handle({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "start_session", arguments: { repo: "api" } } })).toMatchObject({ result: { isError: true } });
+    expect(await server.handle({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1" } } })).toMatchObject({ result: { isError: true } });
     expect(await server.handle({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "rm_rf" } })).toMatchObject({ result: { isError: true } });
     expect(await server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "list_sessions" } })).toMatchObject({
       result: { isError: true, content: [{ text: expect.stringContaining("没有回应") }] },
     });
-    expect(await server.handle({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t" } } })).toMatchObject({
+    expect(await server.handle({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t" } } })).toMatchObject({
       result: { isError: true, content: [{ text: expect.stringContaining("list_sessions") }] },
     });
   });
 
   it("withdraws pending requests when it shuts down", async () => {
     const { server, requestsDir } = setup(5000);
-    void server.handle({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "start_session", arguments: { repo: "api", task: "t" } } });
+    void server.handle({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "start_session", arguments: { ticket: "A-1", task: "t" } } });
     await new Promise((r) => setTimeout(r, 20));
     expect(readdirSync(requestsDir).filter((n) => n.endsWith(".json"))).toHaveLength(1);
     server.withdrawAll();
@@ -136,7 +127,6 @@ describe("butler-sessions MCP server", () => {
     expect(msgs).toHaveLength(2);
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: 1, result: {} });
     expect(msgs).toContainEqual({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
-    expect(TOOLS.length).toBe(6);
   });
 });
 
@@ -145,10 +135,12 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     const { server } = setup(2000, { featureId: 7 });
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
     expect(list.result.tools.map((t) => t.name)).toEqual([
-      "list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session", "send_message",
+      "list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session",
+      "list_features", "create_feature", "reorder_features", "set_ticket_feature", "send_message",
       "list_stacks", "stack_define", "stack_rebase", "stack_layer_mode", "ask_user", "report",
     ]);
     expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS]);
+    expect(FEATURE_TOOLS_EN.find((t) => t.name === "set_ticket_feature")!.inputSchema.properties.feature.type).toEqual(["string", "null"]);
     expect(FEATURE_SEND_TOOL_EN.inputSchema.required).toEqual(["session", "text"]);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(FEATURE_SEND_TOOL_EN))).toBe(false);
     // 英文版只换描述：名字、顺序、必填参数一样。
@@ -172,8 +164,29 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     }
   });
 
-  it("sends session_activity with the session id, for a feature and for a ticket", async () => {
-    for (const scope of [{ featureId: 7 }, { ticketKey: "P-1" }]) {
+  it("sends the block tools (features inside an epic, BTL-246), checking their arguments first", async () => {
+    const send = async (name: string, args: object) => {
+      const { server, answer } = setup(2000, { featureId: 7 });
+      const call = server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } });
+      const req = await answer({ v: 1, ok: true, value: {} });
+      await call;
+      return req;
+    };
+    expect(await send("list_features", {})).toEqual({ v: 1, featureId: 7, from: "boss", op: "list_features" });
+    expect(await send("create_feature", { name: " Payment ", before: "Refunds" })).toEqual({ v: 1, featureId: 7, from: "boss", op: "create_feature", name: "Payment", before: "Refunds" });
+    expect(await send("reorder_features", { order: ["B", "A"] })).toEqual({ v: 1, featureId: 7, from: "boss", op: "reorder_features", order: ["B", "A"] });
+    expect(await send("set_ticket_feature", { ticket: "DMS-1", feature: null })).toEqual({ v: 1, featureId: 7, from: "boss", op: "set_ticket_feature", ticket: "DMS-1", feature: null });
+    expect(await send("create_ticket", { ticket: "DMS-2", feature: "Payment" })).toMatchObject({ op: "create_ticket", feature: "Payment" });
+    for (const [name, args] of [["create_feature", {}], ["reorder_features", { order: [] }], ["set_ticket_feature", { ticket: "DMS-1" }]] as const) {
+      const { server } = setup(2000, { featureId: 7 });
+      const r = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name, arguments: args } })) as { result: { isError?: boolean; content: { text: string }[] } };
+      expect(r.result.isError, name).toBe(true);
+      expect(r.result.content[0].text, name).toContain(name);
+    }
+  });
+
+  it("sends session_activity with the session id", async () => {
+    for (const scope of [{ featureId: 7 }]) {
       const { server, answer } = setup(2000, scope);
       const call = server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "session_activity", arguments: { session: "c1" } } });
       expect(await answer({ v: 1, ok: true, value: { kind: "test" } })).toEqual({ v: 1, ...scope, from: "boss", op: "session_activity", session: "c1" });
@@ -181,7 +194,7 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
       const bad = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "session_activity", arguments: {} } })) as { result: { isError?: boolean } };
       expect(bad.result.isError).toBe(true);
     }
-    const en = (await setup(2000, { ticketKey: "P-1" }, "en").server.handle({ jsonrpc: "2.0", id: 4, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } };
+    const en = (await setup(2000, { featureId: 7 }, "en").server.handle({ jsonrpc: "2.0", id: 4, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } };
     expect(en.result.tools.find((t) => t.name === "session_activity")).toMatchObject({ description: expect.stringMatching(/^[\x20-\x7e]+$/) });
   });
 
@@ -246,126 +259,6 @@ describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
 const tools = async (server: SessionsServer) => ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string; description: string }[] } }).result.tools;
 const callTool = (server: SessionsServer, name: string, args: object = {}) => server.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
 
-const EPIC_NAMES = ["list_features", "list_repos", "create_feature", "start_feature", "list_sessions", "session_activity", "end_session", "set_epic_plan", "refresh_session"];
-
-describe("butler-sessions for an epic session (design 2026-11-01)", () => {
-  it("lists the epic tools in order, in both languages", async () => {
-    expect((await tools(setup(2000, { epicId: 3 }).server))).toEqual([...EPIC_TOOLS, LIST_STACKS_TOOL, ...INBOX_TOOLS]);
-    expect(EPIC_TOOLS.map((t) => t.name)).toEqual(EPIC_NAMES);
-    expect(EPIC_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []])).toEqual(EPIC_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
-    const create = EPIC_TOOLS.find((t) => t.name === "create_feature")!;
-    expect(create.inputSchema.required).toEqual(["name", "brief"]);
-    for (const t of EPIC_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
-    const en = await tools(setup(2000, { epicId: 3 }, "en").server);
-    expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
-    expect(en.map((t) => t.name)).toEqual([...EPIC_NAMES, "list_stacks", "ask_user", "report"]);
-  });
-
-  it("tells Claude that tickets belong to the feature's own session, opened by the user or with start_feature", () => {
-    const zh = EPIC_TOOLS.find((t) => t.name === "create_feature")!.description;
-    const en = EPIC_TOOLS_EN.find((t) => t.name === "create_feature")!.description;
-    expect(zh).toContain("ticket");
-    expect(zh).toContain("总控");
-    expect(zh).toContain("start_feature");
-    expect(en).toMatch(/ticket/i);
-    expect(en).toMatch(/user opens/i);
-    expect(en).toContain("start_feature");
-  });
-
-  it("describes start_feature and create_feature's start in both languages (BTL-190 4)", () => {
-    for (const list of [EPIC_TOOLS, EPIC_TOOLS_EN]) {
-      const start = list.find((t) => t.name === "start_feature")!;
-      expect(start.inputSchema.required).toEqual(["feature"]);
-      expect(Object.keys(start.inputSchema.properties)).toEqual(["feature", "instructions"]);
-      expect(start.description).toMatch(/内存|memory/);
-      expect(start.description).toContain("list_features");
-      const create = list.find((t) => t.name === "create_feature")!;
-      expect(create.inputSchema.properties).toHaveProperty("start", expect.objectContaining({ type: "boolean" }));
-    }
-    expect(EPIC_TOOLS.find((t) => t.name === "start_feature")!.description).toContain("instructions");
-    expect(EPIC_TOOLS_EN.find((t) => t.name === "start_feature")!.description).toContain("instructions");
-  });
-
-  it("sends start_feature for this epic, taking the feature by name or id, and create_feature with start", async () => {
-    const { server, answer } = setup(2000, { epicId: 3 });
-    const a = callTool(server, "start_feature", { feature: "checkout" });
-    expect(await answer({ v: 1, ok: true, value: { sessionId: "fc" } })).toEqual({ v: 1, epicId: 3, from: "boss", op: "start_feature", feature: "checkout" });
-    expect(JSON.stringify(await a)).toContain("fc");
-    const b = callTool(server, "start_feature", { feature: 5, instructions: "先做 API" });
-    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "start_feature", feature: "5", instructions: "先做 API" });
-    await b;
-    const c = callTool(server, "create_feature", { name: "checkout", brief: "做结账", start: true });
-    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "create_feature", name: "checkout", brief: "做结账", start: true });
-    await c;
-    const d = callTool(server, "create_feature", { name: "checkout", brief: "做结账", start: false });
-    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "create_feature", name: "checkout", brief: "做结账" });
-    await d;
-  });
-
-  it("rejects bad start_feature arguments without asking Butler, and says what to check when Butler is slow", async () => {
-    const { server, requestsDir } = setup(30, { epicId: 3 });
-    for (const args of [{}, { feature: "" }, { feature: "  " }, { feature: true }, { feature: 1.5 }, { feature: "c", instructions: 3 }, { feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT + 1) }]) {
-      expect(await callTool(server, "start_feature", args), JSON.stringify(args).slice(0, 60)).toMatchObject({ result: { isError: true } });
-    }
-    expect(await callTool(server, "create_feature", { name: "a", brief: "b", start: "yes" })).toMatchObject({ result: { isError: true } });
-    expect(existsSync(requestsDir)).toBe(false);
-    expect(await callTool(server, "start_feature", { feature: "c" })).toMatchObject({ result: { isError: true, content: [{ text: expect.stringContaining("list_sessions") }] } });
-    // 只有 epic session 有这个工具。
-    expect(await callTool(setup(30, { featureId: 7, epic: true }).server, "start_feature", { feature: "c" })).toMatchObject({ result: { isError: true } });
-    const en = setup(30, { epicId: 3 }, "en");
-    expect(JSON.stringify(await callTool(en.server, "start_feature", {}))).not.toMatch(/[\u4e00-\u9fff]/);
-  });
-
-  it("sends list_features, list_repos and create_feature for this epic", async () => {
-    const { server, answer } = setup(2000, { epicId: 3 });
-    const a = callTool(server, "list_features");
-    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, epicId: 3, from: "boss", op: "list_features" });
-    await a;
-    const b = callTool(server, "list_repos");
-    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, epicId: 3, from: "boss", op: "list_repos" });
-    await b;
-    const c = callTool(server, "create_feature", { name: "checkout", repos: ["fe"], brief: "做结账" });
-    expect(await answer({ v: 1, ok: true, value: { id: 5, name: "checkout" } })).toEqual({ v: 1, epicId: 3, from: "boss", op: "create_feature", name: "checkout", repos: ["fe"], brief: "做结账" });
-    expect(JSON.stringify(await c)).toContain("checkout");
-  });
-
-  it("rejects bad create_feature arguments without asking Butler, and says what to check when Butler is slow", async () => {
-    const { server, requestsDir } = setup(30, { epicId: 3 });
-    for (const args of [{}, { name: "a" }, { brief: "b" }, { name: "a", brief: "b", repos: "x" }, { name: "a", brief: "b", repos: [1] }, { name: 1, brief: "b" }, { name: "a", brief: "x".repeat(BRIEF_LIMIT + 1) }]) {
-      expect(await callTool(server, "create_feature", args), JSON.stringify(args).slice(0, 60)).toMatchObject({ result: { isError: true } });
-    }
-    expect(existsSync(requestsDir)).toBe(false);
-    expect(await callTool(server, "create_feature", { name: "a", brief: "b" })).toMatchObject({ result: { isError: true, content: [{ text: expect.stringContaining("list_features") }] } });
-    expect(await callTool(server, "start_session", {})).toMatchObject({ result: { isError: true } });
-  });
-
-  it("sends set_epic_plan for this epic, and rejects a missing, empty or too long plan without asking Butler", async () => {
-    const { server, answer } = setup(2000, { epicId: 3 });
-    const call = callTool(server, "set_epic_plan", { plan: "先做支付" });
-    expect(await answer({ v: 1, ok: true, value: { note: "ok" } })).toEqual({ v: 1, epicId: 3, from: "boss", op: "set_epic_plan", plan: "先做支付" });
-    expect(await call).toMatchObject({ result: { content: [{ text: expect.stringContaining("ok") }] } });
-    const quiet = setup(30, { epicId: 3 });
-    for (const args of [{}, { plan: 5 }, { plan: "  " }, { plan: "x".repeat(EPIC_PLAN_MAX_CHARS + 1) }]) {
-      expect(await callTool(quiet.server, "set_epic_plan", args), JSON.stringify(args).slice(0, 40)).toMatchObject({ result: { isError: true } });
-    }
-    expect(existsSync(quiet.requestsDir)).toBe(false);
-    // 只有 epic session 有这个工具。
-    expect(await callTool(setup(30, { featureId: 7, epic: true }).server, "set_epic_plan", { plan: "p" })).toMatchObject({ result: { isError: true } });
-  });
-
-  it("tells the epic session to keep the plan with set_epic_plan and the handoff for progress only", () => {
-    const zh = EPIC_TOOLS.find((t) => t.name === "set_epic_plan")!;
-    const en = EPIC_TOOLS_EN.find((t) => t.name === "set_epic_plan")!;
-    expect(zh.inputSchema.required).toEqual(["plan"]);
-    expect(zh.description).toContain("handoff");
-    expect(zh.description).toContain("进度");
-    expect(en.description).toContain("handoff");
-    expect(en.description).toMatch(/progress/i);
-    expect(EPIC_TOOLS.find((t) => t.name === "create_feature")!.description).toContain("set_epic_plan");
-    expect(EPIC_TOOLS_EN.find((t) => t.name === "create_feature")!.description).toContain("set_epic_plan");
-  });
-});
-
 describe("stack tools (workstream K)", () => {
   it("sends the stack tools and create_ticket's stack_on as requests, checking arguments first", async () => {
     for (const scope of [{ featureId: 7 }, { butler: true as const }]) {
@@ -397,42 +290,13 @@ describe("stack tools (workstream K)", () => {
     await call;
     expect(((await callTool(server, "create_ticket", { ticket: "P-2", stack_on: 1 })) as { result: { isError?: boolean } }).result.isError).toBe(true);
   });
-
-  it("gives an epic session only list_stacks", async () => {
-    const { server, answer } = setup(2000, { epicId: 3 });
-    const call = callTool(server, "list_stacks");
-    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, epicId: 3, from: "boss", op: "list_stacks" });
-    await call;
-    expect(((await callTool(server, "stack_rebase", { stack: 1 })) as { result: { isError?: boolean } }).result.isError).toBe(true);
-  });
-});
-
-describe("epic_context for a feature coordinator in an epic", () => {
-  it("appears only when the feature belongs to an epic", async () => {
-    expect((await tools(setup(2000, { featureId: 7 }).server)).map((t) => t.name)).not.toContain("epic_context");
-    expect(await tools(setup(2000, { featureId: 7, epic: true }).server)).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, EPIC_CONTEXT_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS]);
-    const en = await tools(setup(2000, { featureId: 7, epic: true }, "en").server);
-    expect(en.at(-3 - STACK_TOOLS_EN.length)).toEqual(EPIC_CONTEXT_TOOL_EN);
-    expect(EPIC_CONTEXT_TOOL_EN.description).not.toBe(EPIC_CONTEXT_TOOL.description);
-    expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
-  });
-
-  it("sends epic_context, and refuses it without asking Butler when the feature has no epic", async () => {
-    const { server, answer } = setup(2000, { featureId: 7, epic: true });
-    const call = callTool(server, "epic_context");
-    expect(await answer({ v: 1, ok: true, value: { epic: "shop", features: [] } })).toEqual({ v: 1, featureId: 7, from: "boss", op: "epic_context" });
-    expect(JSON.stringify(await call)).toContain("shop");
-    const plain = setup(2000, { featureId: 7 });
-    expect(await callTool(plain.server, "epic_context")).toMatchObject({ result: { isError: true } });
-    expect(existsSync(plain.requestsDir)).toBe(false);
-  });
 });
 
 describe("end_session (task 11)", () => {
-  const scopes = [{ ticketKey: "P-1" }, { featureId: 7 }, { epicId: 3 }];
-  const lists = [[TOOLS, TOOLS_EN], [FEATURE_TOOLS, FEATURE_TOOLS_EN], [EPIC_TOOLS, EPIC_TOOLS_EN]] as const;
+  const scopes = [{ featureId: 7 }];
+  const lists = [[FEATURE_TOOLS, FEATURE_TOOLS_EN]] as const;
 
-  it("is in all three tool lists in both languages, with session and reason required", () => {
+  it("is in both tool lists in both languages, with session and reason required", () => {
     for (const [zh, en] of lists) {
       for (const list of [zh, en]) {
         const t = (list as readonly { name: string; description: string; inputSchema: object }[]).find((x) => x.name === "end_session")!;
@@ -450,7 +314,7 @@ describe("end_session (task 11)", () => {
   it("adds a line saying how many more sessions fit when the result carries capacity (workstream W), in both languages", async () => {
     const capacity = { canStart: 3, availableMb: 9216, sessionMb: 1024, estimate: "measured" as const, reserveMb: 2048, pending: 1, running: 4, maxRunning: null, pressure: "normal" as const, source: "vm_stat" as const };
     for (const [lang, want] of [["zh", "现在还能再开 3 个 session"], ["en", "You can start 3 more sessions now"]] as const) {
-      const { server, answer } = setup(2000, { ticketKey: "P-1" }, lang);
+      const { server, answer } = setup(2000, { featureId: 7 }, lang);
       const call = callTool(server, "list_sessions");
       await answer({ v: 1, ok: true, value: [], capacity });
       const r = (await call) as { result: { content: { text: string }[] } };
@@ -462,17 +326,6 @@ describe("end_session (task 11)", () => {
     const plain = callTool(server, "list_sessions");
     await answer({ v: 1, ok: true, value: [] });
     expect(((await plain) as { result: { content: unknown[] } }).result.content).toHaveLength(1);
-  });
-
-  it("gives an epic session list_sessions and session_activity", async () => {
-    const { server, answer } = setup(2000, { epicId: 3 });
-    const a = callTool(server, "list_sessions");
-    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ v: 1, epicId: 3, from: "boss", op: "list_sessions" });
-    await a;
-    const b = callTool(server, "session_activity", { session: "fc" });
-    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, epicId: 3, from: "boss", op: "session_activity", session: "fc" });
-    await b;
-    expect(await callTool(server, "session_activity", {})).toMatchObject({ result: { isError: true } });
   });
 
   it("sends end_session with the session and the reason, in every scope", async () => {
@@ -496,10 +349,10 @@ describe("end_session (task 11)", () => {
 });
 
 describe("refresh_session (plan 16)", () => {
-  const scopes = [{ ticketKey: "P-1" }, { featureId: 7 }, { epicId: 3 }];
-  const lists = [[TOOLS, TOOLS_EN], [FEATURE_TOOLS, FEATURE_TOOLS_EN], [EPIC_TOOLS, EPIC_TOOLS_EN]] as const;
+  const scopes = [{ featureId: 7 }];
+  const lists = [[FEATURE_TOOLS, FEATURE_TOOLS_EN]] as const;
 
-  it("is in all three tool lists in both languages, with session required", () => {
+  it("is in both tool lists in both languages, with session required", () => {
     for (const [zh, en] of lists) {
       const find = (list: readonly object[]) => (list as readonly { name: string; description: string; inputSchema: object }[]).find((x) => x.name === "refresh_session")!;
       for (const list of [zh, en]) expect(find(list).inputSchema).toMatchObject({ required: ["session"], properties: { session: { type: "string" } } });
@@ -531,8 +384,8 @@ describe("refresh_session (plan 16)", () => {
 
 describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
   it("a member (normal ticket session) has submit_evidence, pre_review_result, ask_user and report, in both languages", async () => {
-    expect(await tools(setup(2000, { ticketKey: "P-1", member: true }).server)).toEqual([...MEMBER_TOOLS, ...INBOX_TOOLS]);
-    const en = await tools(setup(2000, { ticketKey: "P-1", member: true }, "en").server);
+    expect(await tools(setup(2000, { ticketKey: "P-1" }).server)).toEqual([...MEMBER_TOOLS, ...INBOX_TOOLS]);
+    const en = await tools(setup(2000, { ticketKey: "P-1" }, "en").server);
     expect(en).toEqual([...MEMBER_TOOLS_EN, ...INBOX_TOOLS_EN]);
     expect(MEMBER_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]))
       .toEqual(MEMBER_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
@@ -545,7 +398,7 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
   });
 
   it("a member sends submit_evidence cleaned up, and pre_review_result (ws-g)", async () => {
-    const { server, answer, requestsDir } = setup(2000, { ticketKey: "P-1", member: true });
+    const { server, answer, requestsDir } = setup(2000, { ticketKey: "P-1" });
     const base = { v: 1, ticketKey: "P-1", from: "boss" };
     const sub = callTool(server, "submit_evidence", {
       checks: [{ name: "unit", category: "test", command: "pnpm test", result: "pass", output: "12 passed" }, { name: "junk" }],
@@ -565,18 +418,23 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
     expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
   });
 
-  it("a member cannot call coordinator tools; nothing is sent", async () => {
-    const { server, requestsDir } = setup(200, { ticketKey: "P-1", member: true });
+  it("a ticket session cannot call session-management tools; nothing is sent", async () => {
+    const { server, requestsDir } = setup(200, { ticketKey: "P-1" });
     const r = (await callTool(server, "start_session", { repo: "api", task: "t" })) as { result: { isError?: boolean; content: { text: string }[] } };
     expect(r.result.isError).toBe(true);
     expect(r.result.content[0].text).toContain("start_session");
+    for (const name of ["list_sessions", "list_repos", "session_activity", "end_session", "refresh_session"]) {
+      expect(await callTool(server, name, { session: "s", reason: "r" }), name).toMatchObject({ result: { isError: true } });
+    }
+    // ticket 的 session 只有这四个工具：没有总控的那一套。
+    expect((await tools(server)).map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "ask_user", "report"]);
     expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
   });
 
   it("sends ask_user and report in each scope, dropping empty options and blank context, defaulting kind to progress", async () => {
-    for (const scope of [{ ticketKey: "P-1", member: true }, { featureId: 7 }, { epicId: 3 }] as const) {
+    for (const scope of [{ ticketKey: "P-1" }, { featureId: 7 }] as const) {
       const { server, answer } = setup(2000, scope);
-      const ids = "ticketKey" in scope ? { ticketKey: "P-1" } : scope;
+      const ids = scope;
       const ask = callTool(server, "ask_user", { question: "Which?", options: [], context: " " });
       expect(await answer({ v: 1, ok: true, value: { id: 1 } })).toEqual({ v: 1, ...ids, from: "boss", op: "ask_user", question: "Which?" });
       await ask;
@@ -590,7 +448,7 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
   });
 
   it("passes a valid recommended option and choice reports, and drops an out-of-range recommendation (ws-j)", async () => {
-    const { server, answer } = setup(2000, { ticketKey: "P-1", member: true });
+    const { server, answer } = setup(2000, { ticketKey: "P-1" });
     const ask = callTool(server, "ask_user", { question: "Which?", options: ["A", "B"], recommended: 1 });
     expect(await answer({ v: 1, ok: true, value: { id: 1 } })).toEqual({ v: 1, ticketKey: "P-1", from: "boss", op: "ask_user", question: "Which?", options: ["A", "B"], recommended: 1 });
     await ask;
@@ -617,27 +475,29 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
 });
 
 describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
-  const NAMES = ["list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_feature_summary", "metrics_overview", "pr_assessment"];
+  const NAMES = ["list_epics", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_epic_summary", "metrics_overview", "pr_assessment", "list_features"];
 
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
     expect(await tools(setup(2000, { butler: true }).server)).toEqual([...BUTLER_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS]);
     expect(BUTLER_TOOLS.map((t) => t.name)).toEqual(NAMES);
     // 不建、不删、不结束；没有开 session 的工具（send_message 会接着关掉的终端）。
-    for (const t of ["create_feature", "create_ticket", "start_session", "start_feature", "end_session", "set_epic_plan"]) expect(NAMES).not.toContain(t);
+    for (const t of ["create_ticket", "start_session", "end_session"]) expect(NAMES).not.toContain(t);
     for (const t of BUTLER_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
     expect(BUTLER_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]))
       .toEqual(BUTLER_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
     const en = await tools(setup(2000, { butler: true }, "en").server);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
     expect(en.map((t) => t.name)).toEqual([...NAMES, ...STACK_TOOLS.map((t) => t.name), "ask_user", "report"]);
-    // send_message 说清楚只能发给 epic session 和 feature 总控。
+    // send_message 说清楚只能发给 epic 总控（BTL-246）。
     const send = BUTLER_TOOLS.find((t) => t.name === "send_message")!;
-    expect(send.description).toContain("feature 总控");
+    expect(send.description).toContain("epic 总控");
     expect(send.inputSchema).toMatchObject({ required: ["text"] });
-    expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "feature", "epic", "text", "interrupt"]);
+    expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "epic", "text", "interrupt"]);
+    // 中英文的参数一样。
+    for (const [i, t] of BUTLER_TOOLS.entries()) expect(Object.keys(BUTLER_TOOLS_EN[i].inputSchema.properties ?? {}), t.name).toEqual(Object.keys(t.inputSchema.properties ?? {}));
   });
 
-  it("sends each tool as a butler request, turning list_tickets ids into strings", async () => {
+  it("sends each tool as a butler request, turning epic ids into strings", async () => {
     const { server, answer } = setup(2000, { butler: true });
     const base = { v: 1, butler: true, from: "boss" };
     for (const op of ["list_epics", "list_features", "list_prs", "list_sessions", "list_inbox"]) {
@@ -645,9 +505,12 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
       expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ ...base, op });
       await call;
     }
-    const a = callTool(server, "list_tickets", { feature: 5, epic: "core" });
-    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ ...base, op: "list_tickets", feature: "5", epic: "core" });
+    const a = callTool(server, "list_tickets", { epic: 5 });
+    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ ...base, op: "list_tickets", epic: "5" });
     await a;
+    const a2 = callTool(server, "list_features", { epic: "shop" });
+    expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ ...base, op: "list_features", epic: "shop" });
+    await a2;
     const b = callTool(server, "list_tickets");
     expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ ...base, op: "list_tickets" });
     await b;
@@ -660,13 +523,10 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     const d = callTool(server, "send_message", { session: "e1", text: "先合 checkout" });
     expect(await answer({ v: 1, ok: true, value: { sent: true } })).toEqual({ ...base, op: "send_message", session: "e1", text: "先合 checkout" });
     expect(JSON.stringify(await d)).toContain("sent");
-    // feature、epic 的 id 是数字：转成字符串。
-    const d2 = callTool(server, "send_message", { feature: 4, text: "看 PR" });
-    expect(await answer({ v: 1, ok: true, value: { sent: true } })).toEqual({ ...base, op: "send_message", feature: "4", text: "看 PR" });
+    // epic 的 id 是数字：转成字符串。
+    const d2 = callTool(server, "send_message", { epic: 4, text: "看 PR" });
+    expect(await answer({ v: 1, ok: true, value: { sent: true } })).toEqual({ ...base, op: "send_message", epic: "4", text: "看 PR" });
     await d2;
-    const d3 = callTool(server, "send_message", { epic: "shop", text: "巡检" });
-    expect(await answer({ v: 1, ok: true, value: { sent: true } })).toEqual({ ...base, op: "send_message", epic: "shop", text: "巡检" });
-    await d3;
     const e = callTool(server, "refresh_session", { session: "e1" });
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "refresh_session", session: "e1" });
     await e;
@@ -682,8 +542,8 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     const m2 = callTool(server, "metrics_overview");
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "metrics_overview" });
     await m2;
-    const h = callTool(server, "refresh_feature_summary", { feature: 4 });
-    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "refresh_feature_summary", feature: "4" });
+    const h = callTool(server, "refresh_epic_summary", { epic: 4 });
+    expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "refresh_epic_summary", epic: "4" });
     await h;
     const f = callTool(server, "report", { text: "巡检完了", kind: "done" });
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, op: "report", text: "巡检完了", kind: "done" });
@@ -692,12 +552,13 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
 
   it("refuses bad arguments and tools it does not have without asking Butler", async () => {
     const { server, requestsDir } = setup(30, { butler: true });
+    // { feature } 是 BTL-246 以前的目标（现在叫 epic）：只给它等于没给目标。
     for (const [name, args] of [
       ["send_message", {}], ["send_message", { session: "e1" }], ["send_message", { session: "e1", text: " " }], ["send_message", { text: "t" }],
-      ["send_message", { session: "e1", text: "x".repeat(MESSAGE_LIMIT + 1) }], ["send_message", { session: "e1", feature: "f", text: "t" }],
-      ["send_message", { feature: "", text: "t" }], ["send_message", { epic: 1.5, text: "t" }], ["session_activity", {}], ["refresh_session", { session: "" }],
-      ["list_tickets", { feature: true }], ["list_tickets", { epic: "" }], ["list_tickets", { feature: 1.5 }],
-      ["progress_overview", { feature: "" }], ["progress_overview", { epic: 1.5 }], ["refresh_feature_summary", {}], ["refresh_feature_summary", { feature: " " }],
+      ["send_message", { session: "e1", text: "x".repeat(MESSAGE_LIMIT + 1) }], ["send_message", { session: "e1", epic: "f", text: "t" }],
+      ["send_message", { epic: "", text: "t" }], ["send_message", { feature: "shop", text: "t" }], ["session_activity", {}], ["refresh_session", { session: "" }],
+      ["list_tickets", { epic: true }], ["list_tickets", { epic: 1.5 }], ["list_features", { epic: "" }],
+      ["progress_overview", { epic: "" }], ["refresh_epic_summary", {}], ["refresh_epic_summary", { epic: " " }], ["refresh_feature_summary", { feature: "4" }],
       ["metrics_overview", { days: 0 }], ["metrics_overview", { days: 366 }], ["metrics_overview", { days: 1.5 }], ["metrics_overview", { days: "30" }],
       ["start_session", { repo: "r", task: "t" }], ["create_feature", { name: "a", brief: "b" }], ["end_session", { session: "s", reason: "r" }],
     ] as const) {
@@ -709,9 +570,25 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
   });
 
   it("other scopes do not have the Butler 总控 tools", async () => {
-    for (const scope of [{ epicId: 3 }, { featureId: 7 }, { ticketKey: "P-1" }]) {
+    for (const scope of [{ featureId: 7 }, { ticketKey: "P-1" }]) {
       expect(await callTool(setup(30, scope).server, "send_message", { session: "s", text: "t" })).toMatchObject({ result: { isError: true } });
       expect(await callTool(setup(30, scope).server, "list_prs")).toMatchObject({ result: { isError: true } });
     }
+  });
+});
+
+describe("sessionsOptionsFromEnv", () => {
+  const dirs = { BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" };
+
+  it("reads the ticket, feature or Butler scope", () => {
+    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_TICKET: "P-1" }, "s1")?.scope).toEqual({ ticketKey: "P-1" });
+    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_FEATURE: "7" }, "s1")?.scope).toEqual({ featureId: 7 });
+    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_SCOPE: "butler" }, "s1")?.scope).toEqual({ butler: true });
+  });
+
+  it("has no scope for the removed epic session's variables (BTL-246)", () => {
+    // 升级前写下的配置里可能还有这两个变量：BUTLER_EPIC 不再是作用域，BUTLER_FEATURE_EPIC 不再加工具。
+    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_EPIC: "3" }, "s1")).toBeNull();
+    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_FEATURE: "7", BUTLER_FEATURE_EPIC: "1" }, "s1")?.scope).toEqual({ featureId: 7 });
   });
 });

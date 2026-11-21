@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeatureHandoff, Handoff } from "../../shared/handoff";
 import type { Followup, FollowupStatus, HandoffTrigger } from "../../shared/types";
-import { EpicsRepo } from "../db/epics-repo";
+import { EpicArchiveRepo } from "../db/epic-archive-repo";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
@@ -11,12 +11,8 @@ import { HandoffsRepo } from "../db/handoffs-repo";
 import { MemorySyncRepo } from "../db/memory-sync-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { epicScope, featureScope, NOTE_BODY_LIMIT } from "../../shared/memory";
-import type { EpicFeatureRow } from "../../shared/types";
-import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
-import { carriedEpicPlan, carriedEpicProgress, EPIC_HANDOFF_MAX_CHARS, EPIC_PROGRESS_MAX_CHARS, renderEpicHandoff } from "../epics/epic-info";
-import { setLang } from "../i18n";
 import { insertTicket, memDb, tempDir } from "../test-utils";
-import { handoffSummary, MemoryService } from "./memory-service";
+import { EPIC_ARCHIVE_AT, EPIC_ARCHIVE_KEEP, EPIC_ARCHIVE_MAX, handoffSummary, MemoryService } from "./memory-service";
 import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
 
 // 故障注入的接缝：withScope 默认就是真的；个别测试把真实句柄包一层（StateCore 本身始终是真的嵌入式存储）。
@@ -52,10 +48,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const sync = new MemorySyncRepo(db);
   const features = new FeaturesRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
-  const epics = new EpicsRepo(db);
-  // epic 1；它下面各 feature 的情况由测试直接给。
-  epics.insert({ name: "E1", workspaceDir: "/e/E1", createdAt: 1 });
-  let epicRows: EpicFeatureRow[] = [];
+  const epicArchive = new EpicArchiveRepo(db);
   // feature 1、2、3；测试里主要用 3。
   for (const name of ["F1", "F2", "F3"]) features.insert({ name, workspaceDir: `/w/${name}`, createdAt: 1 });
   for (const key of ["PROJ-1", "PROJ-2"]) {
@@ -69,7 +62,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   let now = Date.now();
   const synced: string[] = [];
   const memory = new MemoryService({
-    dataDir, tickets, handoffs, followups, sync, features, featureHandoffs, epics, epicRows: () => epicRows,
+    dataDir, tickets, handoffs, followups, sync, features, featureHandoffs, epicArchive,
     enabled: () => enabled,
     now: () => now,
     onSynced: (key) => synced.push(key),
@@ -90,10 +83,8 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
   const items = (scope = "ticket:PROJ-1") => withScope({ dataDir, scope }, (s) => s.facts());
   const slots = (scope = "ticket:PROJ-1") => withScope({ dataDir, scope }, (s) => s.noteSlots());
   return {
-    memory, dataDir, sync, logs, synced, features, addHandoff, addFollowup, setFollowup, addSummary, texts, items, slots,
-    setEnabled: (v: boolean) => (enabled = v), epics, setEpicRows: (r: EpicFeatureRow[]) => (epicRows = r),
-    /** 把 epic 1 变回升级前的老 epic：规划还没从记忆里迁出来。 */
-    legacyEpic: () => void db.prepare(`UPDATE epics SET plan_at = NULL WHERE id = 1`).run(),
+    memory, dataDir, sync, logs, synced, features, epicArchive, db, addHandoff, addFollowup, setFollowup, addSummary, texts, items, slots,
+    setEnabled: (v: boolean) => (enabled = v),
   };
 }
 
@@ -105,7 +96,7 @@ describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
   const scope = featureScope(3);
   const handoffOf = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
 
-  it("writes the latest summary as the handoff of the feature scope and its decisions as notes", async () => {
+  it("writes the latest summary as the handoff of the epic scope, its decisions under Conventions instead of notes (BTL-246)", async () => {
     const t = setup();
     t.addSummary(summary({
       next_steps: [{ ticket: "PROJ-1", text: "补后端的错误码" }, { ticket: null, text: "约前端联调" }],
@@ -113,21 +104,26 @@ describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
       decisions: [{ key: "errors", statement: "错误码统一用 E 开头的四位数" }, { key: "api", statement: "接口走 REST" }],
     }));
     await t.memory.syncFeature(3);
-    expect((await handoffOf(t))?.content).toBe("接口联调完了，前端在等错误码\nOpen questions:\n- 要不要拆成两个 PR？\nNext steps:\n- 补后端的错误码\n- 约前端联调");
-    expect((await t.texts(scope)).sort()).toEqual(["[decision:api] 接口走 REST", "[decision:errors] 错误码统一用 E 开头的四位数"]);
+    expect((await handoffOf(t))?.content).toBe(
+      "接口联调完了，前端在等错误码\n\n约定：\n- 错误码统一用 E 开头的四位数\n- 接口走 REST\nOpen questions:\n- 要不要拆成两个 PR？\nNext steps:\n- 补后端的错误码\n- 约前端联调",
+    );
+    // Butler 不再占 epic 记忆的笔记位。
+    expect(await t.texts(scope)).toEqual([]);
     // 不碰 ticket scope 和 workspace。
     expect(await t.texts("workspace")).toEqual([]);
     expect(t.synced).toEqual([scope]);
   });
 
-  it("forgets a decision the newer summary no longer has, and replaces a changed one", async () => {
+  it("forgets the decision notes Butler wrote before, and leaves Claude's notes alone", async () => {
     const t = setup();
-    t.addSummary(summary({ decisions: [{ key: "errors", statement: "错误码用四位数" }, { key: "api", statement: "接口走 REST" }] }));
-    await t.memory.syncFeature(3);
+    await withScope({ dataDir: t.dataDir, scope }, async (s) => {
+      await s.remember("[decision:errors] 错误码用四位数");
+      await s.remember("前端的表单都用 zod 校验");
+    });
     t.addSummary(summary({ summary: "前端接上了", decisions: [{ key: "errors", statement: "错误码用五位数" }] }));
     await t.memory.syncFeature(3);
-    expect(await t.texts(scope)).toEqual(["[decision:errors] 错误码用五位数"]);
-    expect(await handoffOf(t)).toMatchObject({ content: "前端接上了", versionCount: 2 });
+    expect(await t.texts(scope)).toEqual(["前端的表单都用 zod 校验"]);
+    expect(await handoffOf(t)).toMatchObject({ content: "前端接上了\n\n约定：\n- 错误码用五位数", versionCount: 1 });
   });
 
   it("writes the handoff once per summary: a second sync with nothing new does not write it again", async () => {
@@ -138,7 +134,7 @@ describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
     await t.memory.syncFeature(3);
     expect(await handoffOf(t)).toEqual(before);
     expect(before?.versionCount).toBe(1);
-    expect(await t.texts(scope)).toEqual(["[decision:api] 接口走 REST"]);
+    expect(await t.texts(scope)).toEqual([]);
   });
 
   it("a later summary with the same text still gets its own handoff version", async () => {
@@ -195,413 +191,85 @@ describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
   });
 });
 
-describe("MemoryService.syncEpic (design 2026-11-01, epic handoff)", () => {
-  const scope = epicScope(1);
+describe("MemoryService epic memory: Plan, Conventions and the overflow archive (BTL-246 §5)", () => {
+  const scope = featureScope(3);
   const handoffOf = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
-  const row = (over: Partial<EpicFeatureRow> = {}): EpicFeatureRow => ({
-    id: 3, name: "支付", status: "active", archivedAt: null, summaryAt: 5, summary: "接口联调完了", blockers: [], decisions: [], openQuestions: [], ...over,
-  });
+  const words = (i: number) => ["amber", "birch", "cedar", "delta", "ember", "fjord"].map((w) => `${w}${i}x${i * 7}`).join(" ");
+  const fill = (t: ReturnType<typeof setup>, n: number, sc = scope) =>
+    withScope({ dataDir: t.dataDir, scope: sc }, async (s) => {
+      for (let i = 0; i < n; i++) await s.remember(`约定 ${i}：${words(i)}`);
+    });
 
-  it("writes the rendered features as the handoff of the epic scope and leaves the planning notes alone", async () => {
+  it("renders the brief under Plan even before the first summary, in the current language", async () => {
     const t = setup();
-    await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember("先做支付，再做退款"));
-    t.setEpicRows([row()]);
-    await t.memory.syncEpic(1);
-    expect((await handoffOf(t))?.content).toContain("## 支付\n接口联调完了");
-    expect(await t.texts(scope)).toEqual(["先做支付，再做退款"]);
-    expect(t.logs).toEqual([]);
+    t.db.prepare("UPDATE features SET brief = ? WHERE id = 3").run("先做购物车，再做支付");
+    await t.memory.syncFeature(3);
+    expect((await handoffOf(t))?.content).toBe("规划：\n先做购物车，再做支付");
     expect(t.synced).toEqual([scope]);
   });
 
-  it("rewrites the handoff when the features change, and not when nothing changed", async () => {
+  it(`moves the oldest notes into the archive at ${EPIC_ARCHIVE_AT}, keeping ${EPIC_ARCHIVE_KEEP}, and renders them under Earlier conventions`, async () => {
     const t = setup();
-    t.setEpicRows([row()]);
-    await t.memory.syncEpic(1);
-    await t.memory.syncEpic(1);
-    expect((await handoffOf(t))?.versionCount).toBe(1);
-    t.setEpicRows([]);
-    await t.memory.syncEpic(1);
-    expect(await handoffOf(t)).toMatchObject({ content: expect.not.stringContaining("支付"), versionCount: 2 });
-  });
-
-  it("never reconciles an epic scope: syncAll syncs epics through syncEpic and keeps their notes", async () => {
-    const t = setup();
-    await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember("规划笔记"));
-    t.setEpicRows([row()]);
-    await t.memory.syncAll();
-    expect(await t.texts(scope)).toEqual(["规划笔记"]);
-    expect((await handoffOf(t))?.content).toContain("支付");
-  });
-
-  it("syncAll queues the epics first, so a legacy epic migrates before its session can write a progress handoff", async () => {
-    const t = setup();
-    t.legacyEpic();
-    t.setEpicRows([row()]);
-    t.addSummary(summary(), 3);
-    await t.memory.syncAll();
-    expect(t.synced[0]).toBe(scope);
-    expect(t.synced).toEqual(expect.arrayContaining(["PROJ-1", "PROJ-2", featureScope(3)]));
-  });
-
-  it("does nothing when memory is off or the epic does not exist", async () => {
-    const off = setup({ enabled: false });
-    off.setEpicRows([row()]);
-    await off.memory.syncEpic(1);
-    expect(await handoffOf(off)).toBeNull();
-    const t = setup();
-    t.setEpicRows([row()]);
-    await t.memory.syncEpic(99);
-    expect(await handoffOf(t)).toBeNull();
-  });
-
-  it("logs a failed sync and still resolves", async () => {
-    const t = setup();
-    t.setEpicRows([row()]);
-    wrapScopes((sc) => sc === scope, (s) => ({ ...s, handoff: () => Promise.reject(new Error("boom")) }));
-    await expect(t.memory.syncEpic(1)).resolves.toBeUndefined();
-    expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
-  });
-
-  describe("the epic session's own handoff (butler-epic's handoff tool writes to the same scope)", () => {
-    /** 像 epic session 里挂的记忆 MCP 那样写一份交接。 */
-    const sessionWrites = (t: ReturnType<typeof setup>, h: { summary: string; nextSteps?: string[]; openQuestions?: string[] }) =>
-      withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ nextSteps: [], openQuestions: [], ...h }));
-    const count = (text: string, part: string) => text.split(part).length - 1;
-
-    afterEach(() => setLang("zh"));
-
-    it("an epic session's progress handoff no longer replaces the plan", async () => {
-      const t = setup();
-      t.setEpicRows([row()]);
-      t.epics.setPlan(1, "A 计划：先做支付，再做退款", 5);
-      await t.memory.syncEpic(1);
-      await sessionWrites(t, { summary: "做到第二步", nextSteps: ["拆 ticket"] });
-
-      await t.memory.syncEpic(1);
-      const content = (await handoffOf(t))?.content ?? "";
-      for (const part of ["A 计划：先做支付，再做退款", "做到第二步", "- 拆 ticket", "## 支付\n接口联调完了"]) expect(count(content, part), part).toBe(1);
-      expect(content.indexOf("A 计划")).toBeLessThan(content.indexOf("做到第二步"));
-      expect(content.indexOf("做到第二步")).toBeLessThan(content.indexOf("## 支付"));
-      expect(t.epics.get(1)?.plan).toBe("A 计划：先做支付，再做退款");
-
-      // 新的进度换掉旧的进度，规划不动。
-      await sessionWrites(t, { summary: "做到第三步" });
-      await t.memory.syncEpic(1);
-      const newer = (await handoffOf(t))?.content ?? "";
-      expect(count(newer, "A 计划：先做支付，再做退款")).toBe(1);
-      expect(count(newer, "做到第三步")).toBe(1);
-      expect(newer).not.toContain("做到第二步");
-      expect(newer).not.toContain("拆 ticket");
-      expect(t.epics.get(1)?.plan).toBe("A 计划：先做支付，再做退款");
-    });
-
-    it("carries the progress through later syncs without nesting, and re-renders when the plan or the features change", async () => {
-      const t = setup();
-      t.setEpicRows([row()]);
-      await t.memory.syncEpic(1);
-      await sessionWrites(t, { summary: "做到第二步", openQuestions: ["退款放哪个 feature"] });
-      await t.memory.syncEpic(1);
-      const carried = await handoffOf(t);
-      // 第二次同步：一字不差，不多写一个版本。
-      await t.memory.syncEpic(1);
-      expect(await handoffOf(t)).toEqual(carried);
-      // 新 epic 的 epic session 写的交接是进度，不是规划。
-      expect(t.epics.get(1)?.plan).toBeNull();
-
-      t.setEpicRows([row({ summary: "支付上线了" })]);
-      await t.memory.syncEpic(1);
-      const moved = (await handoffOf(t))?.content ?? "";
-      expect(count(moved, "做到第二步")).toBe(1);
-      expect(count(moved, "- 退款放哪个 feature")).toBe(1);
-      expect(moved).toContain("支付上线了");
-      expect(moved).not.toContain("接口联调完了");
-
-      // set_epic_plan 之后的同步：规划进来，进度还在。
-      t.epics.setPlan(1, "规划：先做支付", 9);
-      await t.memory.syncEpic(1);
-      const planned = (await handoffOf(t))?.content ?? "";
-      expect(count(planned, "规划：先做支付")).toBe(1);
-      expect(count(planned, "做到第二步")).toBe(1);
-      expect(planned.indexOf("规划：先做支付")).toBeLessThan(planned.indexOf("做到第二步"));
-    });
-
-    it("migrates the carried plan", async () => {
-      const t = setup();
-      t.legacyEpic();
-      t.setEpicRows([row()]);
-      // 老版本同步写下的正文：intro、分隔符包着的规划、feature。
-      const old = renderEpicHandoff([row()], "zh", "旧规划：先做支付");
-      await withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ summary: old, nextSteps: [], openQuestions: [] }, 0));
-      const before = await handoffOf(t);
-
-      await t.memory.syncEpic(1);
-      expect(t.epics.get(1)?.plan).toBe("旧规划：先做支付");
-      expect(t.epics.get(1)?.planAt).not.toBeNull();
-      // 渲染结果和迁移前一致：不多写一个版本。
-      expect(await handoffOf(t)).toEqual(before);
-
-      // 迁过之后 epic session 写的交接是进度。
-      await sessionWrites(t, { summary: "做到第二步" });
-      await t.memory.syncEpic(1);
-      const content = (await handoffOf(t))?.content ?? "";
-      expect(count(content, "旧规划：先做支付")).toBe(1);
-      expect(count(content, "做到第二步")).toBe(1);
-      expect(t.epics.get(1)?.plan).toBe("旧规划：先做支付");
-    });
-
-    it("migrates a whole handoff the epic session wrote before the upgrade as the plan, unchanged", async () => {
-      const t = setup();
-      t.legacyEpic();
-      t.setEpicRows([row()]);
-      await sessionWrites(t, { summary: "规划：先做支付", nextSteps: ["拆 ticket"] });
-      // 老版本同步之后的样子（老版本把它当作整份规划带着走）。
-      const own = (await handoffOf(t))?.content ?? "";
-      const expected = renderEpicHandoff([row()], "zh", own);
-      await t.memory.syncEpic(1);
-      expect(t.epics.get(1)?.plan).toBe(own);
-      expect((await handoffOf(t))?.content).toBe(expected);
-      expect(count(expected, "规划：先做支付")).toBe(1);
-    });
-
-    it("does not record the migration when writing the handoff fails, and migrates on the next sync", async () => {
-      const t = setup();
-      t.legacyEpic();
-      t.setEpicRows([row()]);
-      await sessionWrites(t, { summary: "规划：先做支付" });
-      wrapScopes((sc) => sc === scope, (s) => ({ ...s, handoff: () => Promise.reject(new Error("boom")) }));
-      await t.memory.syncEpic(1);
-      expect(t.epics.get(1)).toMatchObject({ plan: null, planAt: null });
-      vi.mocked(withScope).mockImplementation(realStatecore.withScope);
-      await t.memory.syncEpic(1);
-      expect(t.epics.get(1)?.plan).toBe("规划：先做支付");
-      const content = (await handoffOf(t))?.content ?? "";
-      expect(count(content, "规划：先做支付")).toBe(1);
-    });
-
-    it("migrates nothing from an old epic without a plan, and takes later handoffs as progress", async () => {
-      const t = setup();
-      t.legacyEpic();
-      t.setEpicRows([row()]);
-      await t.memory.syncEpic(1);
-      expect(t.epics.get(1)).toMatchObject({ plan: null, planAt: expect.any(Number) });
-      await sessionWrites(t, { summary: "做到第二步" });
-      await t.memory.syncEpic(1);
-      expect(t.epics.get(1)?.plan).toBeNull();
-      expect((await handoffOf(t))?.content).toContain("做到第二步");
-    });
-
-    it("keeps a very long progress inside its own limit, and stops writing once it is cut", async () => {
-      const t = setup();
-      t.setEpicRows([row()]);
-      t.epics.setPlan(1, "规划", 5);
-      await sessionWrites(t, { summary: "长".repeat(20000) });
-      await t.memory.syncEpic(1);
-      const first = await handoffOf(t);
-      expect(first?.content.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS + EPIC_PROGRESS_MAX_CHARS);
-      expect(first?.content).toContain("长".repeat(EPIC_PROGRESS_MAX_CHARS - 1));
-      expect(first?.content).not.toContain("长".repeat(EPIC_PROGRESS_MAX_CHARS));
-      expect(first?.content).toContain("## 支付");
-      await t.memory.syncEpic(1);
-      expect(await handoffOf(t)).toEqual(first);
-      // 只有真的丢了字的那一次记日志。
-      expect(t.logs.filter((l) => l.includes("cut"))).toHaveLength(1);
-    });
-
-    it("cuts a very long old plan once when it migrates it", async () => {
-      const t = setup();
-      t.legacyEpic();
-      t.setEpicRows([row()]);
-      await sessionWrites(t, { summary: "长".repeat(20000) });
-      await t.memory.syncEpic(1);
-      const plan = t.epics.get(1)?.plan ?? "";
-      expect(plan.length).toBeLessThanOrEqual(EPIC_PLAN_MAX_CHARS);
-      expect(plan.startsWith("长".repeat(EPIC_PLAN_MAX_CHARS - 1))).toBe(true);
-      const first = await handoffOf(t);
-      expect(first?.content.length).toBeLessThanOrEqual(EPIC_HANDOFF_MAX_CHARS);
-      await t.memory.syncEpic(1);
-      expect(await handoffOf(t)).toEqual(first);
-      expect(t.logs.filter((l) => l.includes("cut"))).toHaveLength(1);
-    });
-
-    it("round-trips a full plan, a full progress and several features through StateCore intact", async () => {
-      const t = setup();
-      const rows = Array.from({ length: 6 }, (_, i) => row({ id: i + 1, name: `F${i + 1}`, summaryAt: i + 1, summary: `${"进".repeat(800)}#${i + 1}` }));
-      t.setEpicRows(rows);
-      const plan = `${"规".repeat(EPIC_PLAN_MAX_CHARS - 1)}尾`;
-      const progress = `${"度".repeat(EPIC_PROGRESS_MAX_CHARS - 1)}尾`;
-      expect(plan).toHaveLength(EPIC_PLAN_MAX_CHARS);
-      expect(progress).toHaveLength(EPIC_PROGRESS_MAX_CHARS);
-      t.epics.setPlan(1, plan, 5);
-      await sessionWrites(t, { summary: progress });
-      await t.memory.syncEpic(1);
-      const first = await handoffOf(t);
-      const content = first?.content ?? "";
-      expect(carriedEpicPlan(content)).toBe(plan);
-      expect(carriedEpicProgress(content)).toBe(progress);
-      expect(content).toContain("## F6\n");
-      expect(t.logs.filter((l) => l.includes("cut"))).toEqual([]);
-      // 再同步一次：读回来的和写进去的一字不差，不多写一个版本。
-      await t.memory.syncEpic(1);
-      expect(await handoffOf(t)).toEqual(first);
-    });
-
-    it("survives the last feature leaving, and does not take Butler's empty text for progress", async () => {
-      const t = setup();
-      t.setEpicRows([]);
-      await t.memory.syncEpic(1);
-      t.setEpicRows([row()]);
-      await t.memory.syncEpic(1);
-      const none = "这个 epic 下还没有 feature";
-      expect((await handoffOf(t))?.content).not.toContain(none);
-
-      await sessionWrites(t, { summary: "做到第二步" });
-      t.setEpicRows([]);
-      await t.memory.syncEpic(1);
-      expect((await handoffOf(t))?.content).toContain("做到第二步");
-      t.setEpicRows([row()]);
-      await t.memory.syncEpic(1);
-      const back = (await handoffOf(t))?.content ?? "";
-      expect(count(back, "做到第二步")).toBe(1);
-      expect(back).not.toContain(none);
-    });
-
-    it("does not take Butler's own text for progress after the language changed", async () => {
-      const t = setup();
-      t.setEpicRows([row()]);
-      await t.memory.syncEpic(1);
-      setLang("en");
-      await t.memory.syncEpic(1);
-      const en = (await handoffOf(t))?.content ?? "";
-      expect(en).not.toContain("Butler 自动整理");
-      await sessionWrites(t, { summary: "progress: step two" });
-      await t.memory.syncEpic(1);
-      setLang("zh");
-      await t.memory.syncEpic(1);
-      const zh = (await handoffOf(t))?.content ?? "";
-      expect(zh).not.toContain("compiled by Butler");
-      expect(count(zh, "progress: step two")).toBe(1);
-    });
-  });
-});
-
-describe("MemoryService.setEpicDigestNote (plan 16 task 6: the rolling note of the epic history)", () => {
-  const scope = epicScope(1);
-  const handoffOf = (t: ReturnType<typeof setup>) => withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
-  const row: EpicFeatureRow = { id: 3, name: "支付", status: "active", archivedAt: null, summaryAt: 5, summary: "接口联调完了", blockers: [], decisions: [], openQuestions: [] };
-
-  it("writes one note with a stable id, overwrites it, and leaves the epic session's notes alone", async () => {
-    const t = setup();
-    // epic session 自己写的笔记，包括碰巧用了 Butler 前缀格式的，都不动。
-    await withScope({ dataDir: t.dataDir, scope }, async (s) => {
-      await s.remember("先做支付，再做退款");
-      await s.remember("[decision:plan] 第一期只做国内支付渠道");
-    });
-    const mine = ["[decision:plan] 第一期只做国内支付渠道", "先做支付，再做退款"];
-    await t.memory.setEpicDigestNote(1, "金额用分存；退款走原路");
-    expect((await t.texts(scope)).sort()).toEqual(["[decision:epic-digest] 金额用分存；退款走原路", ...mine]);
-    await t.memory.setEpicDigestNote(1, "接口走 REST；金额用分存");
-    expect((await t.texts(scope)).sort()).toEqual(["[decision:epic-digest] 接口走 REST；金额用分存", ...mine]);
-    expect(t.logs).toEqual([]);
-  });
-
-  it("cuts the body to the note limit", async () => {
-    const t = setup();
-    await t.memory.setEpicDigestNote(1, "长".repeat(NOTE_BODY_LIMIT + 50));
-    const [text] = await t.texts(scope);
-    expect(text).toBe(`[decision:epic-digest] ${"长".repeat(NOTE_BODY_LIMIT)}`);
-  });
-
-  it("survives the next syncEpic, and does not disturb the epic handoff", async () => {
-    const t = setup();
-    t.setEpicRows([row]);
-    await t.memory.syncEpic(1);
+    await fill(t, EPIC_ARCHIVE_AT - 1);
+    await t.memory.syncFeature(3);
+    // 还没到：不动。
+    expect(await t.texts(scope)).toHaveLength(EPIC_ARCHIVE_AT - 1);
+    expect(t.epicArchive.list(3)).toEqual([]);
+    await withScope({ dataDir: t.dataDir, scope }, (s) => s.remember(`最新的约定 ${words(99)}`));
+    await t.memory.syncFeature(3);
+    const left = await t.texts(scope);
+    expect(left).toHaveLength(EPIC_ARCHIVE_KEEP);
+    expect(left).toContain(`最新的约定 ${words(99)}`);
+    const moved = t.epicArchive.list(3);
+    expect(moved.map((e) => e.text)).toEqual(Array.from({ length: EPIC_ARCHIVE_AT - EPIC_ARCHIVE_KEEP }, (_, i) => `约定 ${i}：${words(i)}`));
+    expect(moved.every((e) => e.source === "notes")).toBe(true);
+    const content = (await handoffOf(t))!.content;
+    expect(content).toContain("以前的约定（从 epic 记忆里挪出来的旧笔记；要改哪一条，用 remember 记下新版本）：");
+    expect(content).toContain(`] 约定 0：${words(0)}`);
+    expect(content).toMatch(/\n- \[\d{4}-\d{2}-\d{2}\] 约定 5：/);
+    // 再同步一次：没有新东西，不多写版本。
     const before = await handoffOf(t);
-    await t.memory.setEpicDigestNote(1, "金额用分存");
+    await t.memory.syncFeature(3);
     expect(await handoffOf(t)).toEqual(before);
-    t.setEpicRows([{ ...row, summary: "上线了" }]);
-    await t.memory.syncEpic(1);
+  });
+
+  it(`keeps the newest ${EPIC_ARCHIVE_MAX} archived notes and logs the ones it drops`, async () => {
+    const t = setup();
+    for (let i = 0; i < EPIC_ARCHIVE_MAX; i++) t.epicArchive.add({ featureId: 3, text: `旧约定 ${i}`, source: "notes", notedAt: i + 1, archivedAt: 1 });
+    await fill(t, EPIC_ARCHIVE_AT);
+    await t.memory.syncFeature(3);
+    const kept = t.epicArchive.list(3);
+    expect(kept).toHaveLength(EPIC_ARCHIVE_MAX);
+    expect(kept.map((e) => e.text)).not.toContain("旧约定 0");
+    expect(t.logs.some((l) => l.includes("dropped") && l.includes(scope))).toBe(true);
+  });
+
+  it("copies the notes of an old epic into the archive of each of its features once, at the start-up sync", async () => {
+    const t = setup();
+    t.db.prepare("INSERT INTO epics (id, name, workspace_dir, created_at) VALUES (7, 'Big', '/w/big', 1)").run();
+    t.db.prepare("UPDATE features SET epic_id = 7 WHERE id IN (2, 3)").run();
+    await withScope({ dataDir: t.dataDir, scope: epicScope(7) }, async (s) => {
+      await s.remember("所有接口都走 /api/v2");
+      await s.remember("[decision:old] Butler 写的旧决策");
+    });
     await t.memory.syncAll();
-    expect(await t.texts(scope)).toEqual(["[decision:epic-digest] 金额用分存"]);
-    expect((await handoffOf(t))?.content).toContain("上线了");
+    for (const f of [2, 3]) expect(t.epicArchive.list(f).map((e) => [e.text, e.source])).toEqual([["所有接口都走 /api/v2", "epic:7"]]);
+    expect((await handoffOf(t))!.content).toContain("所有接口都走 /api/v2");
+    // 第二次启动不再搬。
+    await t.memory.syncAll();
+    expect(t.epicArchive.list(3)).toHaveLength(1);
+    // 旧 epic 记忆本身不动。
+    expect(await t.texts(epicScope(7))).toHaveLength(2);
   });
 
-  it("forgets the note when there is nothing left to say", async () => {
+  it("an old epic with no notes is still recorded as copied, and nothing is shown", async () => {
     const t = setup();
-    await t.memory.setEpicDigestNote(1, "金额用分存");
-    await t.memory.setEpicDigestNote(1, "  ");
-    expect(await t.texts(scope)).toEqual([]);
-  });
-
-  it("does nothing when memory is off", async () => {
-    const t = setup({ enabled: false });
-    await t.memory.setEpicDigestNote(1, "金额用分存");
-    expect(await t.texts(scope)).toEqual([]);
-  });
-});
-
-describe("MemoryService.epicProgress (plan 16 R29: refreshing an epic session)", () => {
-  const scope = epicScope(1);
-  const sessionWrites = (t: ReturnType<typeof setup>, summary: string) =>
-    withScope({ dataDir: t.dataDir, scope }, (s) => s.handoff({ summary, nextSteps: [], openQuestions: [] }));
-  const row: EpicFeatureRow = {
-    id: 3, name: "支付", status: "active", archivedAt: null, summaryAt: 5, summary: "接口联调完了", blockers: [], decisions: [], openQuestions: [],
-  };
-
-  it("is null without a handoff and without progress", async () => {
-    const t = setup();
-    expect(await t.memory.epicProgress(1)).toBeNull();
-    t.setEpicRows([row]);
-    t.epics.setPlan(1, "先做支付", 5);
-    await t.memory.syncEpic(1);
-    expect(await t.memory.epicProgress(1)).toBeNull();
-  });
-
-  it("takes the epic session's own handoff whole, and keeps the same progress when Butler renders it again", async () => {
-    const t = setup();
-    t.setEpicRows([row]);
-    t.epics.setPlan(1, "先做支付", 5);
-    await t.memory.syncEpic(1);
-    await sessionWrites(t, "  做到第二步  ");
-    expect(await t.memory.epicProgress(1)).toBe("做到第二步");
-    // Butler 自己重新渲染（feature 有变化）：handoff 换了版本，进度不变。
-    await t.memory.syncEpic(1);
-    t.setEpicRows([{ ...row, summary: "前端也联调完了" }]);
-    await t.memory.syncEpic(1);
-    const active = await withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
-    expect(active?.content).toContain("前端也联调完了");
-    expect(await t.memory.epicProgress(1)).toBe("做到第二步");
-    // epic session 写了新的进度：变了。
-    await sessionWrites(t, "做到第三步");
-    expect(await t.memory.epicProgress(1)).toBe("做到第三步");
-    await t.memory.syncEpic(1);
-    expect(await t.memory.epicProgress(1)).toBe("做到第三步");
-    expect(t.logs).toEqual([]);
-  });
-
-  it("reads a long raw handoff the way Butler will carry it, so Butler's re-render does not change it (review)", async () => {
-    const t = setup();
-    t.setEpicRows([row]);
-    await t.memory.syncEpic(1);
-    const raw = `<epic-session-progress>${"做到第二步，".repeat(450)}</epic-session-progress>`;
-    expect(raw.length).toBeGreaterThan(2500);
-    await sessionWrites(t, raw);
-    const snapshot = await t.memory.epicProgress(1);
-    expect(snapshot?.length).toBe(EPIC_PROGRESS_MAX_CHARS);
-    expect(snapshot).not.toContain("<epic-session-progress>");
-    await t.memory.syncEpic(1);
-    const active = await withScope({ dataDir: t.dataDir, scope }, (s) => s.activeHandoff());
-    expect(active?.content).not.toBe(raw.trim());
-    expect(await t.memory.epicProgress(1)).toBe(snapshot);
-  });
-
-  it("is null when memory is off, and logs a failed read without rejecting", async () => {
-    const off = setup({ enabled: false });
-    await sessionWrites(off, "进度");
-    expect(await off.memory.epicProgress(1)).toBeNull();
-    const t = setup();
-    wrapScopes((sc) => sc === scope, (s) => ({ ...s, activeHandoff: () => Promise.reject(new Error("boom")) }));
-    await expect(t.memory.epicProgress(1)).resolves.toBeNull();
-    expect(t.logs.some((l) => l.includes("boom"))).toBe(true);
+    t.db.prepare("INSERT INTO epics (id, name, workspace_dir, created_at) VALUES (8, 'Empty', '/w/e', 1)").run();
+    t.db.prepare("UPDATE features SET epic_id = 8 WHERE id = 3").run();
+    await t.memory.syncAll();
+    expect(t.epicArchive.has(3, "epic:8")).toBe(true);
+    expect(t.epicArchive.list(3)).toEqual([]);
+    expect(await handoffOf(t)).toBeNull();
   });
 });
 

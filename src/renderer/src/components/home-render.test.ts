@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { EpicView, FeatureView, NowNotice, NowView, TicketView } from "../../../shared/types";
+import type { FeatureView, NowNotice, NowView, TicketView } from "../../../shared/types";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
 import { buildTurnBoard } from "../../../main/turn/turn-board";
 import { runningRows, type NameCtx } from "../home-view";
@@ -20,24 +20,21 @@ import { TurnCard } from "./TurnCard";
 
 const ticket = (key: string, o: Partial<TicketView> = {}): TicketView =>
   ({ key, title: `${key} title`, featureId: null, effectiveStatus: "active", status: "active", sessions: [], hiddenSessions: [], waiting: false, ...o }) as TicketView;
-const feature = (id: number, epicId: number | null, tickets: TicketView[]): FeatureView =>
-  ({ id, name: `Feature ${id}`, epicId, tickets, sessions: [], hiddenSessions: [], waiting: false, summary: null, ticketPrs: {}, activity: {} }) as unknown as FeatureView;
-const epic = (id: number): EpicView =>
-  ({ id, name: `Epic ${id}`, sessions: [], hiddenSessions: [], waiting: false, stuck: false, features: [] }) as unknown as EpicView;
+const feature = (id: number, tickets: TicketView[] = []): FeatureView =>
+  ({ id, name: `Feature ${id}`, tickets, sessions: [], hiddenSessions: [], waiting: false, summary: null, ticketPrs: {}, activity: {} }) as unknown as FeatureView;
 
 describe("Sidebar", () => {
-  const epics = [epic(1), epic(2)];
-  const features = [feature(11, 1, [ticket("BTL-11", { featureId: 11 })]), feature(12, 2, [ticket("BTL-12", { featureId: 12 })])];
+  const features = [feature(11, [ticket("BTL-11", { featureId: 11 })]), feature(12, [ticket("BTL-12", { featureId: 12 })])];
   const long = "x".repeat(200);
   const tickets = [ticket("BTL-9", { title: long })];
   const render = (youCount: number | null, dots = new Map<string, Dot>()) =>
     renderToStaticMarkup(createElement(Sidebar, {
-      tickets, features, epics, youCount, dots, route: { page: "home" }, onNavigate: () => {}, keepAwake: false, onKeepAwake: () => {},
+      tickets, features, youCount, dots, route: { page: "home" }, onNavigate: () => {}, keepAwake: false, onKeepAwake: () => {},
     }));
 
   it("lists the entries in order and drops the old ones", () => {
     const html = render(null);
-    const order = [S.home, S.allWork, "Epic 1", "Feature 11", "BTL-11", "Epic 2", "BTL-9", S.butlerNav, S.selfGroup, S.lessons, S.effectNav, S.audit, S.settings, S.keepAwake];
+    const order = [S.home, S.allWork, "Feature 11", "BTL-11", "Feature 12", "BTL-12", "BTL-9", S.butlerNav, S.selfGroup, S.lessons, S.effectNav, S.audit, S.settings, S.keepAwake];
     let at = -1;
     for (const s of order) {
       const i = html.indexOf(s, at + 1);
@@ -45,6 +42,9 @@ describe("Sidebar", () => {
       at = i;
     }
     for (const gone of [S.newTicket, "进度", S.unclaimed, S.archived]) expect(html).not.toContain(gone);
+    // 没有 feature 上面的一层了：每个 feature 直接列在树的第一层。
+    expect(html).not.toContain("epic-group");
+    expect(html.split('class="feature-group"').length - 1).toBe(2);
   });
 
   it("shows the your-turn badge only above zero, with the count described for screen readers", () => {
@@ -58,7 +58,7 @@ describe("Sidebar", () => {
   });
 
   it("draws a dot where something moves and none elsewhere", () => {
-    const html = render(1, new Map([[dotKey("epic", 1), { tone: "ask", you: 2 }]]));
+    const html = render(1, new Map([[dotKey("feature", 11), { tone: "ask", you: 2 }]]));
     expect(html).toContain("turn-dot turn-ask");
     expect(html).toContain('<span class="cnt">2</span>');
     expect(html.match(/turn-dot/g)).toHaveLength(1);
@@ -89,7 +89,7 @@ describe("Notice (moved out of the Now page)", () => {
 
 describe("HomeMore (the old Now page's run-status blocks)", () => {
   const view = (o: Partial<NowView> = {}): NowView => ({
-    notices: [], epics: [], butler: null, running: 0, memory: [], merges: [], ...o,
+    notices: [], features: [], butler: null, running: 0, memory: [], merges: [], ...o,
   });
   const render = (v: NowView) => renderToStaticMarkup(createElement(HomeMore, { view: v, onOpen: () => {}, onOpenTicket: () => {}, liveTickets: new Set<string>(), onGo: () => {} }));
 
@@ -128,24 +128,27 @@ describe("AllWorkBody", () => {
   });
   const board = (scopes: ScopeTurnRow[]): TurnBoard => ({ items: [], counts: { you: 0, agent: 0, external: 0, mergedToday: 0 }, scopes, generatedAt: 1 });
   const base = {
-    epics: [epic(1), epic(2)], features: [] as FeatureView[], tickets: [ticket("BTL-9")], unclaimedCount: 0, now: 1000,
-    onNewTicket: () => {}, onNewFeature: () => {}, onNewEpic: () => {}, onGo: () => {}, onOpenTicket: () => {},
+    features: [feature(1), feature(2)], tickets: [ticket("BTL-9")], unclaimedCount: 0, now: 1000,
+    onNewTicket: () => {}, onNewFeature: () => {}, onGo: () => {}, onOpenTicket: () => {},
   };
   const render = (o: Partial<AllWorkBodyProps> = {}) => renderToStaticMarkup(createElement(AllWorkBody, { board: null, ...base, ...o }));
 
   it("has the create buttons, the two entries and the four columns", () => {
-    const html = render({ board: board([scope("epic", 1, { youCount: 2 }), scope("epic", 2), scope("ticket", "BTL-9", { total: 1, merged: 0 })]) });
-    for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, `+ ${S.newEpic}`, S.archived]) expect(html).toContain(t);
+    const html = render({ board: board([scope("feature", 1, { youCount: 2 }), scope("feature", 2), scope("ticket", "BTL-9", { total: 1, merged: 0 })]) });
+    for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, S.archived]) expect(html).toContain(t);
     // 「显示 Butler 之外开的 session」默认关：没有未认领入口（BTL-244）。
     expect(html).not.toContain(S.hm.all.unclaimedBtn(0));
     expect(render({ showUnclaimed: true, unclaimedCount: 3 })).toContain(S.hm.all.unclaimedBtn(3));
+    // 只有两个新建按钮（ticket、feature）和「已归档」入口（BTL-246 去掉了新建 epic）。
+    const actions = /<div class="actions all-work-actions">((?:(?!<\/div>).)*)<\/div>/.exec(html)![1];
+    expect(actions.split("<button").length - 1).toBe(3);
     for (const c of [S.hm.all.colName, S.hm.all.colWho, S.hm.all.colNow, S.hm.all.colProgress]) expect(html).toContain(`>${c}</th>`);
     expect(html).toContain(S.hm.all.lede(2, 1));
     expect(html).toContain(S.hm.whoYou(2));
     expect(html).toContain(S.hm.scopeLine(4, 1, null));
     expect(html).toContain('class="turn-bar"');
     // 轮到你多的在前。
-    expect(html.indexOf("Epic 1")).toBeLessThan(html.indexOf("Epic 2"));
+    expect(html.indexOf("Feature 1")).toBeLessThan(html.indexOf("Feature 2"));
   });
 
   it("a ticket row keeps its key whole and says the ticket's own state, not a scope count", () => {
@@ -163,17 +166,17 @@ describe("AllWorkBody", () => {
   });
 
   it("still draws the rows without a board, and a row with no stats shows a dash", () => {
-    const html = render({ board: board([scope("epic", 1)]) });
-    expect(html).toContain("Epic 2");
+    const html = render({ board: board([scope("feature", 1)]) });
+    expect(html).toContain("Feature 2");
     expect(html).not.toContain("NaN");
-    const row = /<tr[^>]*>(?:(?!<\/tr>).)*Epic 2(?:(?!<\/tr>).)*<\/tr>/.exec(html)![0];
+    const row = /<tr[^>]*>(?:(?!<\/tr>).)*Feature 2(?:(?!<\/tr>).)*<\/tr>/.exec(html)![0];
     expect(row.match(/>—</g)?.length).toBe(3);
-    expect(render()).toContain("Epic 1");
+    expect(render()).toContain("Feature 1");
   });
 
   it("a single ticket's row says where the ticket's own item stands", () => {
     const turn: Turn = { owner: "external", kind: "ci_running", names: [] };
-    const it9: TurnItem = { ticketKey: "BTL-9", pr: null, epicId: null, featureId: null, turn, since: 1, others: 0, ticketLevel: true };
+    const it9: TurnItem = { ticketKey: "BTL-9", pr: null, featureId: null, turn, since: 1, others: 0, ticketLevel: true };
     const html = render({ board: { ...board([scope("ticket", "BTL-9", { total: 1, merged: 0 })]), items: [it9] } });
     const row = /<tr[^>]*all-work-row-ticket-BTL-9(?:(?!<\/tr>).)*<\/tr>/.exec(html)![0];
     expect(row).toContain(turnSentence(turn, it9, S));
@@ -184,7 +187,7 @@ describe("AllWorkBody", () => {
     // 主进程不带 filter 的看板（App 给全部工作页的就是它）：BTL-9 单独一个，有一个 PR。
     const NOW = 1_000_000;
     const homeBoard = (prTurn: Turn, sessionTurn: Turn): TurnBoard => buildTurnBoard({
-      epics: [], features: [], loose: [], reviews: [], dayStart: 0, now: NOW,
+      features: [], loose: [], reviews: [], dayStart: 0, now: NOW,
       tickets: [{
         key: "BTL-9", name: "BTL-9", featureId: null, moreAsks: [], others: [{ turn: sessionTurn, since: NOW - 5 }],
         prs: [{ repo: "acme/app", number: 5, title: "t", url: "u", turn: prTurn, since: NOW - 9, mergedAt: null }],
@@ -209,15 +212,15 @@ describe("AllWorkBody", () => {
   });
 
   it("says so when there is no work, keeping the create buttons", () => {
-    const html = render({ epics: [], tickets: [] });
+    const html = render({ features: [], tickets: [] });
     expect(html).toContain(S.hm.all.empty);
-    expect(html).toContain(`+ ${S.newEpic}`);
+    expect(html).toContain(`+ ${S.newFeature}`);
     expect(html).not.toContain("<table");
   });
 
   it("puts the full name in a title", () => {
     const long = "y".repeat(200);
-    expect(render({ epics: [{ ...epic(1), name: long } as EpicView] })).toContain(`title="${long}"`);
+    expect(render({ features: [{ ...feature(1), name: long }] })).toContain(`title="${long}"`);
   });
 
   it("opens the stacks and intake fold only when a notice sent you here", () => {
@@ -228,9 +231,9 @@ describe("AllWorkBody", () => {
 });
 
 describe("TurnCard", () => {
-  const ctx: NameCtx = { epics: new Map([[1, "Epic名"]]), features: new Map([[11, "Feature名"]]), tickets: new Map([["BTL-1", "t"]]) };
+  const ctx: NameCtx = { features: new Map([[11, "Feature名"]]), tickets: new Map([["BTL-1", "t"]]) };
   const item = (turn: Turn, o: Partial<TurnItem> = {}): TurnItem =>
-    ({ ticketKey: "BTL-1", pr: null, epicId: 1, featureId: 11, turn, since: 1, others: 0, ...o });
+    ({ ticketKey: "BTL-1", pr: null, featureId: 11, turn, since: 1, others: 0, ...o });
   const render = (i: TurnItem) => renderToStaticMarkup(createElement(TurnCard, {
     item: i, ctx, now: 60_001, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onChanged: () => {},
   }));
@@ -245,7 +248,7 @@ describe("TurnCard", () => {
     expect(html).toContain(">不行，先回测</button>");
     expect(html).toContain(`>${S.hm.act.look}</button>`);
     expect(html).toContain(turnSentence(turn, item(turn), S));
-    expect(html).toContain('<span class="path" title="Epic名 › Feature名 › BTL-1"><span class="scope">Epic名 › Feature名 › </span><span class="key">BTL-1</span></span>');
+    expect(html).toContain('<span class="path" title="Feature名 › BTL-1"><span class="scope">Feature名 › </span><span class="key">BTL-1</span></span>');
     expect(render(item({ ...turn, askId: null }))).not.toContain(">可以</button>");
   });
 
@@ -256,7 +259,7 @@ describe("TurnCard", () => {
   });
 
   it("a review card shows the repo and author, with no look", () => {
-    const html = render(item({ owner: "you", kind: "review", author: "bob", title: "PR", url: pr.url }, { ticketKey: null, epicId: null, featureId: null, pr }));
+    const html = render(item({ owner: "you", kind: "review", author: "bob", title: "PR", url: pr.url }, { ticketKey: null, featureId: null, pr }));
     expect(html).toContain("acme/app#12 · bob");
     expect(html).not.toContain(S.hm.act.look);
   });
@@ -282,7 +285,7 @@ describe("TurnCard", () => {
   });
 
   it("a Butler card renders the notice with its own buttons", () => {
-    const html = render(item({ owner: "you", kind: "butler", notice: { kind: "lessons_paused" } }, { ticketKey: null, epicId: null, featureId: null }));
+    const html = render(item({ owner: "you", kind: "butler", notice: { kind: "lessons_paused" } }, { ticketKey: null, featureId: null }));
     expect(html).toContain('data-testid="now-notice-lessons_paused"');
     expect(html).toContain(S.hm.kind.butler);
     expect(html).not.toContain(S.hm.act.look);
@@ -291,22 +294,22 @@ describe("TurnCard", () => {
   it("puts the full location in a title", () => {
     const long = "z".repeat(200);
     const html = renderToStaticMarkup(createElement(TurnCard, {
-      item: item({ owner: "you", kind: "merge", risk: null }), ctx: { ...ctx, epics: new Map([[1, long]]) }, now: 1, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onChanged: () => {},
+      item: item({ owner: "you", kind: "merge", risk: null }), ctx: { ...ctx, features: new Map([[11, long]]) }, now: 1, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onChanged: () => {},
     }));
-    expect(html).toContain(`title="${long} › Feature名 › BTL-1"`);
+    expect(html).toContain(`title="${long} › BTL-1"`);
   });
 });
 
 describe("HomeBody", () => {
-  const ctx: NameCtx = { epics: new Map(), features: new Map(), tickets: new Map() };
-  const you = (n: number): TurnItem => ({ ticketKey: `BTL-${n}`, pr: null, epicId: null, featureId: null, turn: { owner: "you", kind: "merge", risk: null }, since: 1, others: 0 });
-  const busy = (n: number): TurnItem => ({ ticketKey: `RUN-${n}`, pr: null, epicId: null, featureId: null, turn: { owner: "agent", kind: "working", sessionId: "s" }, since: 1, others: 0 });
+  const ctx: NameCtx = { features: new Map(), tickets: new Map() };
+  const you = (n: number): TurnItem => ({ ticketKey: `BTL-${n}`, pr: null, featureId: null, turn: { owner: "you", kind: "merge", risk: null }, since: 1, others: 0 });
+  const busy = (n: number): TurnItem => ({ ticketKey: `RUN-${n}`, pr: null, featureId: null, turn: { owner: "agent", kind: "working", sessionId: "s" }, since: 1, others: 0 });
   const scope = (id: number, o: Partial<ScopeTurnRow> = {}): ScopeTurnRow => ({
-    kind: "epic", id, name: `Epic ${id}`, total: 4, merged: 1, bar: { done: 1, agent: 1, you: 2, external: 0, idle: 0 }, youCount: 0, slowest: null, ...o,
+    kind: "feature", id, name: `Feature ${id}`, total: 4, merged: 1, bar: { done: 1, agent: 1, you: 2, external: 0, idle: 0 }, youCount: 0, slowest: null, ...o,
   });
   const counts = { you: 0, agent: 2, external: 1, mergedToday: 3 };
   const board = (items: TurnItem[], scopes: ScopeTurnRow[] = [scope(1, { youCount: 2 })]): TurnBoard => ({ items, counts, scopes, generatedAt: 1 });
-  const nowView: NowView = { notices: [], epics: [], butler: null, running: 0, memory: [], merges: [], mem: { lines: [], updatedAt: 1 } as unknown as NowView["mem"] };
+  const nowView: NowView = { notices: [], features: [], butler: null, running: 0, memory: [], merges: [], mem: { lines: [], updatedAt: 1 } as unknown as NowView["mem"] };
   const render = (o: Partial<HomeBodyProps> = {}) => renderToStaticMarkup(createElement(HomeBody, {
     board: null, error: null, noWork: false, firstRun: createElement("div", { "data-testid": "first-run" }), ctx, now: 10_000, nowView,
     liveTickets: new Set<string>(), onRetry: () => {}, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onOpenTicket: () => {}, onChanged: () => {}, onResumeSetup: () => {}, ...o,

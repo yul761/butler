@@ -124,3 +124,47 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
   await expect(page.getByTestId("effect-intake-started")).toContainText("2");
   await expect(page.getByTestId("effect-intake-override")).toContainText("33%");
 });
+
+/**
+ * BTL-246 §7：手动档（不自动开工）下，有父 epic 的 ticket 建进 Butler 里对应的 epic（按 Jira epic key 去重，没有就新建「KEY 标题」），
+ * 不开 session；没有 epic 的照旧只在队列里等。
+ */
+test("intake in manual mode: tickets are grouped into an epic per Jira epic and nothing starts", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const file = join(s.dir, "intake.json");
+  const doc = (n: number) => `The heading in docs/page${n}.md has a typo; fix the spelling of that one heading only.`;
+  writeFileSync(file, JSON.stringify({
+    tickets: [
+      { key: "E2E-41", title: "Fix page one", type: "docs", description: doc(1), epic: { key: "JIRA-7", title: "Checkout" } },
+      { key: "E2E-42", title: "Fix page two", type: "docs", description: doc(2), epic: "JIRA-7" },
+      { key: "E2E-43", title: "Fix page three", type: "docs", description: doc(3) },
+    ],
+  }));
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+
+  await openSettingsGroup(page, "intake");
+  const map = page.getByTestId("setting-intakeRepoMap");
+  await map.fill(`* => ${s.repo}`);
+  await map.blur();
+  await page.getByTestId("setting-intakeSource").selectOption("file");
+  const path = page.getByTestId("setting-intakeFilePath");
+  await path.fill(file);
+  await path.blur();
+  await page.getByTestId("intake-input-enabled").selectOption("true");
+  await page.getByTestId("intake-input-autoStart").selectOption("false");
+  await page.getByTestId("intake-policy-save").click();
+  await expect(page.getByTestId("intake-policy-message")).toHaveText(S.policySaved);
+
+  // 侧栏：一个 epic「JIRA-7 Checkout」，下面是 E2E-41、E2E-42；E2E-43 不是 ticket。
+  const group = page.locator(".sidebar .feature-group").filter({ hasText: "JIRA-7 Checkout" });
+  await expect(group).toHaveCount(1, { timeout: 20_000 });
+  await expect(group.locator(".feature-tickets .ticket .key")).toHaveText(["E2E-41", "E2E-42"], { timeout: 20_000 });
+  await expect(page.locator(".sidebar .ticket .key").getByText("E2E-43", { exact: true })).toHaveCount(0);
+
+  // 队列里三个都搁着（自动开工关着），一个 session 都没开。
+  await openAllWorkMore(page);
+  for (const k of ["E2E-41", "E2E-42", "E2E-43"]) await expect(page.getByTestId(`intake-row-${k}`)).toHaveAttribute("data-state", "held");
+  expect(interactiveModels(s)).toEqual([]);
+  expect(existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "").not.toContain("interactive ");
+});

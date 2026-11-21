@@ -20,6 +20,7 @@ interface SessionRow {
   spawned_by: string | null;
   feature_id: number | null;
   fixes_session: string | null;
+  /** 以前的 epic session（BTL-246 去掉了）才有；新代码不写，只用来把这些老行挡在外面。 */
   epic_id: number | null;
   model: string | null;
   butler: number;
@@ -52,7 +53,6 @@ function toSession(r: SessionRow): Session {
     spawnedBy: r.spawned_by,
     featureId: r.feature_id === null ? null : Number(r.feature_id),
     fixesSession: r.fixes_session,
-    epicId: r.epic_id === null ? null : Number(r.epic_id),
     model: r.model,
     butler: r.butler === 1,
     lessonRunId: r.lesson_run_id === null ? null : Number(r.lesson_run_id),
@@ -81,7 +81,6 @@ export interface NewSession {
   spawnedBy?: string | null;
   featureId?: number | null;
   fixesSession?: string | null;
-  epicId?: number | null;
   model?: string | null;
   /** Butler 总控（BTL-190 第 5 点）。 */
   butler?: boolean;
@@ -113,12 +112,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, epic_id, model, butler, lesson_run_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, model, butler, lesson_run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.epicId ?? null, s.model ?? null, s.butler ? 1 : 0,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.model ?? null, s.butler ? 1 : 0,
         s.lessonRunId ?? null,
       );
     if (Number(r.changes) > 0) {
@@ -178,14 +177,6 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET feature_id = ?, coordinator = 1 WHERE id = ?`).run(featureId, id);
   }
 
-  /** epic session（ticket_key 和 feature_id 都为空、epic_id 是这个 epic 的）。 */
-  listByEpic(epicId: number): Session[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM sessions WHERE epic_id = ? AND ticket_key IS NULL AND feature_id IS NULL ORDER BY ${RECENCY} DESC, id`)
-      .all(epicId) as unknown as SessionRow[];
-    return rows.map(toSession);
-  }
-
   /** Butler 总控的 session（BTL-190 第 5 点），最近活动的在前。 */
   listButler(): Session[] {
     const rows = this.db
@@ -210,16 +201,18 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
-  /** 记成这个 epic 的 session；null：它不是 epic session（嵌套的 claude）。 */
   /** session 换模型（撞限后「换下一档继续」）：下次 --resume 带这个 --model。 */
   setModel(id: string, model: string | null): void {
     this.db.prepare(`UPDATE sessions SET model = ? WHERE id = ?`).run(model, id);
   }
 
-  setEpic(id: string, epicId: number | null): void {
-    this.db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epicId, id);
+  /** 是不是以前的 epic session（BTL-246 去掉了）：Session 上没有这一列，要挡住它的地方（例如它的 /handoff）来问。 */
+  isLegacyEpic(id: string): boolean {
+    const row = this.db.prepare(`SELECT epic_id FROM sessions WHERE id = ?`).get(id) as { epic_id: number | null } | undefined;
+    return row?.epic_id != null;
   }
 
+  /** 没认领的 session。以前的 epic session（BTL-246 去掉了，迁移时隐藏）也没有 ticket、feature，靠 epic_id 挡在外面。 */
   listUnclaimed(sinceMs: number): Session[] {
     const rows = this.db
       .prepare(
@@ -270,9 +263,9 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET pinned = ? WHERE id = ?`).run(pinned ? 1 : 0, id);
   }
 
-  /** 休眠着的 head（没被替换的）。 */
+  /** 休眠着的 head（没被替换的）。以前的 epic session（BTL-246 去掉了）不算：升级前休眠的那些再也唤醒不了。 */
   listHibernated(): Session[] {
-    return (this.db.prepare(`SELECT * FROM sessions WHERE hibernated_at IS NOT NULL AND replaced_by IS NULL ORDER BY hibernated_at, id`).all() as unknown as SessionRow[]).map(toSession);
+    return (this.db.prepare(`SELECT * FROM sessions WHERE hibernated_at IS NOT NULL AND replaced_by IS NULL AND epic_id IS NULL ORDER BY hibernated_at, id`).all() as unknown as SessionRow[]).map(toSession);
   }
 
   setWaiting(id: string, waiting: boolean, at: number): void {
@@ -285,7 +278,8 @@ export class SessionsRepo {
    * /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者、feature 和修复目标也照旧。
    * 模型和复盘运行（复盘分析 session）不管怎么接上的都照旧：/resume 也一样，终端还是那个复盘分析的终端。
    * 修复 session 的新段不是总控：磁盘扫描可能先按目录把它记成了总控，这里清掉。
-   * epic session 和 feature 级 session 互斥，同样以旧 session 为准：epic session 的新段不会是 feature 总控，反过来也一样。
+   * 以前的 epic session（BTL-246 去掉了）在 Butler 外面被 /clear 时，新段照旧记成它的 epic_id，不当总控、不归 feature：
+   * 这样它和旧段一样不会作为没认领的 session 冒出来。新代码不写 epic_id，别的 session 的新段 epic_id 一直是 NULL。
    * /resume（source 是 "resume"）接上的是已有的 session，不是新段：总控、feature、修复目标都留它自己的。resume 出来的新 id 由 hook 插入时继承。
    */
   setReplacedBy(id: string, newId: string, source?: string | null): void {
@@ -354,15 +348,15 @@ export class SessionsRepo {
   }
 
   /**
-   * 对话另存要读的 head（UI 重做第 4 层）：没被替换、Butler 开的或已认领到 ticket / feature / epic / Butler 总控、
-   * 不是复盘分析、since 之后有活动。recordHeadless 记的行是 discovered 且没有归属，不会被选中。
+   * 对话另存要读的 head（UI 重做第 4 层）：没被替换、Butler 开的或已认领到 ticket / feature / Butler 总控、
+   * 不是复盘分析、不是以前的 epic session（BTL-246 去掉了，没有页面能看）、since 之后有活动。recordHeadless 记的行是 discovered 且没有归属，不会被选中。
    */
   listConvTargets(sinceMs: number): Session[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM sessions
-         WHERE replaced_by IS NULL AND lesson_run_id IS NULL
-           AND (origin = 'butler' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR epic_id IS NOT NULL OR butler = 1)
+         WHERE replaced_by IS NULL AND lesson_run_id IS NULL AND epic_id IS NULL
+           AND (origin = 'butler' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR butler = 1)
            AND ${RECENCY} >= ?
          ORDER BY id`,
       )

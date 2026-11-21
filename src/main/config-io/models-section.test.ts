@@ -100,6 +100,19 @@ describe("models config section (contract 4.3)", () => {
     expect(b.routing.taskRoutes()).toEqual([]);
   });
 
+  it("a file from before BTL-246 with an epic_digest route still imports; that route is dropped", async () => {
+    const a = home();
+    a.routing.setTaskRoute({ task: "pr_brief", tier: "high", minTier: null, policy: null, critical: null });
+    const doc = a.io.exportDoc(all)!;
+    (doc.sections as Record<string, unknown[]>).models.push({ kind: "task", task: "epic_digest", tier: "mid", minTier: null, policy: null, critical: null });
+    const b = home();
+    const p = await preview(b, doc);
+    expect(p.rows.map((r) => r.label)).toEqual(["task · pr_brief"]);
+    const r = b.io.apply({ token: p.token, mode: "replace", bulk: "imported" });
+    if (!r.ok) throw new Error(`apply ${r.reason}`);
+    expect(b.routing.taskRoutes()).toEqual([expect.objectContaining({ task: "pr_brief", tier: "high" })]);
+  });
+
   it("a malformed models section is refused before anything is written", async () => {
     const a = home();
     const doc = a.io.exportDoc(all)!;

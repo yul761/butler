@@ -355,8 +355,7 @@ describe("CiDelivery with the real guard and needs-you tracker (I1)", () => {
   it("a Stop whose new reply is not judged yet does not get the CI result; the flush after a 'not needed' verdict does", async () => {
     const head = {
       id: "h1", ticketKey: "BTL-1", cwd: "/r", origin: "butler", gitBranch: "b", firstPrompt: null, lastActivityAt: null, waitingForInput: true,
-      replacedBy: null, dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null,
-      epicId: null, model: null,
+      replacedBy: null, dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null,
     } as Session;
     const pending: ((v: NeedsYouVerdict | null) => void)[] = [];
     const tracker = new NeedsYouTracker({
@@ -390,7 +389,7 @@ describe("ciRecipient (pickRecipient plus hibernated sessions, workstream M)", (
   const head = (id: string, gitBranch: string | null = null, o: Partial<Session> = {}): Session =>
     ({
       id, ticketKey: "BTL-1", repoId: 1, gitBranch, coordinator: false, cwd: "/r", origin: "butler", firstPrompt: null, lastActivityAt: null,
-      waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null,
+      waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, spawnedBy: null, featureId: null, fixesSession: null, model: null,
       ...o,
     }) as Session;
   const pick = (o: { open?: Session[]; asleep?: Session[]; owner?: string | null; ownerTermOpen?: boolean; chain?: Record<string, string>; branch?: string }) =>

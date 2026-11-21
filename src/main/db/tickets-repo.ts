@@ -13,6 +13,7 @@ interface TicketRow {
   created_at: number;
   archived_at: number | null;
   feature_id: number | null;
+  block_id: number | null;
 }
 
 interface RepoRow {
@@ -42,7 +43,7 @@ function toRepo(r: RepoRow): TicketRepo {
 }
 
 /** featureId 省略表示单独的 ticket。 */
-export type NewTicket = Omit<Ticket, "repos" | "featureId"> & { featureId?: number | null };
+export type NewTicket = Omit<Ticket, "repos" | "featureId" | "blockId"> & { featureId?: number | null; blockId?: number | null };
 export type NewRepo = Omit<TicketRepo, "id" | "worktreeRemovedAt" | "cleanupBlocked">;
 
 export class TicketsRepo {
@@ -58,6 +59,7 @@ export class TicketsRepo {
       createdAt: r.created_at,
       archivedAt: r.archived_at,
       featureId: r.feature_id === null ? null : Number(r.feature_id),
+      blockId: r.block_id === null ? null : Number(r.block_id),
     };
   }
 
@@ -66,10 +68,10 @@ export class TicketsRepo {
     return withTransaction(this.db, () => {
       this.db
         .prepare(
-          `INSERT INTO tickets (key, title, repo_path, work_mode, worktree_path, branch, status, status_manual, created_at, archived_at, feature_id)
-           VALUES (?, ?, '', 'branch', NULL, '', ?, ?, ?, ?, ?)`,
+          `INSERT INTO tickets (key, title, repo_path, work_mode, worktree_path, branch, status, status_manual, created_at, archived_at, feature_id, block_id)
+           VALUES (?, ?, '', 'branch', NULL, '', ?, ?, ?, ?, ?, ?)`,
         )
-        .run(t.key, t.title, t.status, t.statusManual, t.createdAt, t.archivedAt, t.featureId ?? null);
+        .run(t.key, t.title, t.status, t.statusManual, t.createdAt, t.archivedAt, t.featureId ?? null, t.blockId ?? null);
       return repo ? this.addRepo(repo) : null;
     });
   }
@@ -83,6 +85,11 @@ export class TicketsRepo {
     const where = opts.includeArchived ? "" : "WHERE archived_at IS NULL";
     const rows = this.db.prepare(`SELECT * FROM tickets ${where} ORDER BY created_at DESC, key`).all() as unknown as TicketRow[];
     return rows.map((r) => this.toTicket(r));
+  }
+
+  /** 在 epic 里换 feature（BTL-246）；null 表示不属于任何 feature。调用方保证 block 属于这个 ticket 的 epic。 */
+  setBlock(key: string, blockId: number | null): void {
+    this.db.prepare(`UPDATE tickets SET block_id = ? WHERE key = ?`).run(blockId, key);
   }
 
   /** 这个 feature 下的 ticket，按建立顺序。 */

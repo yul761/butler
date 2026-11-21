@@ -1,4 +1,4 @@
-// 首页「轮到你」（UI 重做第 2 层，spec §5.3）：标题和一句概况、要你动手的卡片、各个 epic 的小表、
+// 首页「轮到你」（UI 重做第 2 层，spec §5.3）：标题和一句概况、要你动手的卡片、各个 feature 的小表、
 // 折起来的「进行中」和「运行情况」。数据都来自第 1 层的 turn:board，这里只排版。
 import { useState, type ReactNode } from "react";
 import type { NowView } from "../../../shared/types";

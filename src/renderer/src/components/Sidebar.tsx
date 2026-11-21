@@ -1,7 +1,6 @@
-import type { EpicView, FeatureView, TicketView } from "../../../shared/types";
+import type { FeatureView, TicketView } from "../../../shared/types";
 import type { Route } from "../App";
 import { dotKey, youBadge, type Dot } from "../sidebar-view";
-import { featuresOutsideEpics } from "./epic-row";
 import { useCollapsed } from "./useCollapsed";
 import { api } from "../api";
 import { S } from "../strings";
@@ -14,8 +13,6 @@ interface Props {
   /** 单独的 ticket（feature 下的 ticket 在 features 里）。 */
   tickets: TicketView[];
   features: FeatureView[];
-  /** 未归档的 epic；它们下面的 feature 只列在 epic 下面。 */
-  epics: EpicView[];
   /** 轮到你的件数；null = 还没取到过。0 和 null 都不显示徽标。 */
   youCount: number | null;
   /** dotKey(kind, id) → 点；没有的节点不画点。 */
@@ -43,9 +40,8 @@ function DotMark({ dot }: { dot: Dot | null }) {
   );
 }
 
-export function Sidebar({ tickets, features, epics, youCount, dots, route, onNavigate, keepAwake, onKeepAwake }: Props) {
+export function Sidebar({ tickets, features, youCount, dots, route, onNavigate, keepAwake, onKeepAwake }: Props) {
   const lessonsPending = useStateRefetch("lessons-pending", api.lessonsPending) ?? 0;
-  const looseFeatures = featuresOutsideEpics(features, epics);
   const badge = youCount !== null && youCount > 0 ? youCount : 0;
   const ticketButton = (t: TicketView) => (
     <button
@@ -79,10 +75,7 @@ export function Sidebar({ tickets, features, epics, youCount, dots, route, onNav
       </button>
       <button className={cls("nav all", allActive)} onClick={() => onNavigate({ page: "all" })}>{S.allWork}</button>
       <div className="ticket-groups">
-        {epics.map((e) => (
-          <EpicGroup key={e.id} epic={e} features={features.filter((f) => f.epicId === e.id)} route={route} onNavigate={onNavigate} ticketButton={ticketButton} dots={dots} />
-        ))}
-        {looseFeatures.map((f) => (
+        {features.map((f) => (
           <FeatureGroup key={f.id} feature={f} route={route} onNavigate={onNavigate} ticketButton={ticketButton} dots={dots} />
         ))}
         {tickets.map(ticketButton)}
@@ -122,7 +115,7 @@ interface GroupRowProps {
   dot: Dot | null;
 }
 
-/** 侧栏里 epic 和 feature 的一行：前面的三角收起/展开下面的内容，点名字进它的页面；点看的是它下面的全部。 */
+/** 侧栏里 feature 的一行：前面的三角收起/展开下面的内容，点名字进它的页面；点看的是它下面的全部。 */
 function GroupRow({ name, count, collapsed, onToggle, active, onOpen, dot }: GroupRowProps) {
   return (
     <div className="feature-row">
@@ -141,33 +134,6 @@ function GroupRow({ name, count, collapsed, onToggle, active, onOpen, dot }: Gro
         {collapsed && <span className="title">{count}</span>}
         <DotMark dot={dot} />
       </button>
-    </div>
-  );
-}
-
-interface EpicGroupProps extends Omit<FeatureGroupProps, "feature"> {
-  epic: EpicView;
-  features: FeatureView[];
-}
-
-/** 侧栏里的一个 epic，下面列它的 feature。 */
-function EpicGroup({ epic: e, features, route, onNavigate, ticketButton, dots }: EpicGroupProps) {
-  const [collapsed, toggle] = useCollapsed(`sidebar-epic:${e.id}`);
-  // 收起时正在看的那个 feature（或它下面的 ticket）还留着，不然不知道自己在哪。
-  const isHere = (f: FeatureView) => (route.page === "feature" && route.id === f.id) || (route.page === "ticket" && f.tickets.some((t) => t.key === route.key));
-  const shown = collapsed ? features.filter(isHere) : features;
-  return (
-    <div className="feature-group epic-group">
-      <GroupRow
-        name={e.name} count={features.length} collapsed={collapsed} onToggle={toggle}
-        active={route.page === "epic" && route.id === e.id} onOpen={() => onNavigate({ page: "epic", id: e.id })}
-        dot={dots.get(dotKey("epic", e.id)) ?? null}
-      />
-      {shown.length > 0 && (
-        <div className="feature-tickets">
-          {shown.map((f) => <FeatureGroup key={f.id} feature={f} route={route} onNavigate={onNavigate} ticketButton={ticketButton} dots={dots} />)}
-        </div>
-      )}
     </div>
   );
 }

@@ -68,10 +68,10 @@ export type HibernateBlock =
   | "pinned" | "kind" | "transcript" | "working" | "screen" | "draft" | "typing" | "auto_input" | "refreshing" | "visible" | "children"
   | "just_opened" | "just_woken";
 
-/** 能休眠的种类：Butler 开的 ticket session、ticket 总控、feature 总控、epic session、Butler 总控。修复 session 和复盘分析的不行。 */
+/** 能休眠的种类：Butler 开的 ticket session、feature 总控、Butler 总控。修复 session 和复盘分析的不行。 */
 export function hibernatableKind(s: Session): boolean {
   if (s.origin !== "butler" || s.fixesSession !== null || s.lessonRunId !== null) return false;
-  return s.butler || s.epicId !== null || s.featureId !== null || s.ticketKey !== null;
+  return s.butler || s.featureId !== null || s.ticketKey !== null;
 }
 
 /** 刚打开、刚唤醒的安静期（e2e 调短）。 */

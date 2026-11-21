@@ -38,6 +38,11 @@ export function normalizeIncoming(raw: unknown): IncomingTicket | null {
       .filter((s): s is { key: string; title: string } => !!s && !!s.key && !!s.title)
       .slice(0, LIMITS.subtasks)
     : [];
+  // 父 epic：{ key, title } 或者只给 key。
+  const e = o.epic;
+  const eo = typeof e === "object" && e !== null && !Array.isArray(e) ? (e as Record<string, unknown>) : null;
+  const epicKey = (typeof e === "string" ? str(e, LIMITS.key) : eo ? str(eo.key, LIMITS.key) : null)?.replace(/\s+/g, "").toUpperCase();
+  const epic = epicKey ? { key: epicKey, title: eo ? (str(eo.title ?? eo.summary, LIMITS.title)?.replace(/\s+/g, " ") ?? null) : null } : null;
   return {
     key,
     title,
@@ -50,6 +55,7 @@ export function normalizeIncoming(raw: unknown): IncomingTicket | null {
     components: strList(o.components, LIMITS.label, LIMITS.components),
     subtasks,
     repo: str(o.repo, LIMITS.repo),
+    ...(epic && { epic }),
   };
 }
 

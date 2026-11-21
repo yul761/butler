@@ -54,14 +54,15 @@ export interface IntakeDeps {
   /** 这个仓库里在跑的 ticket（没归档、有开着的终端或合并闸门的 hold）和它们改过的文件。 */
   activeInRepo: (repoPath: string) => Promise<RunningWork[]>;
   sessionModel: (tier: Tier) => { ok: true; model: string | null } | { ok: false; error: string };
-  createTicket: (i: { key: string; title: string; repoPath: string; startPoint: string | null }) => Promise<{ ok: true; repoId: number; branch: string } | { ok: false; exists: boolean; message: string }>;
+  /** 建 ticket；有父 epic 时建在那个 epic 里（没有就新建一个，BTL-246 §7）。 */
+  createTicket: (i: { key: string; title: string; repoPath: string; startPoint: string | null; epic: { key: string; title: string | null } | null }) => Promise<{ ok: true; repoId: number; branch: string } | { ok: false; exists: boolean; message: string }>;
   /** 已有的 ticket（澄清 session 建的、或者上次建好但没开成）的仓库。 */
   ticketRepo: (ticketKey: string) => { repoId: number; branch: string } | null;
   openSession: (ticketKey: string, repoId: number, model: string | null) => Promise<{ ok: true; termId: string } | { ok: false; message: string }>;
   submit: (termId: string, text: string) => void;
   stack: {
     canStackOn: (repoPath: string, parentBranch: string) => { ok: true } | { ok: false; message: string };
-    stackOn: (p: { repoPath: string; parentBranch: string; branch: string }) => Promise<{ ok: true } | { ok: false; message: string }>;
+    stackOn: (p: { repoPath: string; parentBranch: string; branch: string; ticketKey: string }) => Promise<{ ok: true } | { ok: false; message: string }>;
   };
   hasPr: (ticketKey: string) => boolean;
   /** 开工后 PR 的风险和就绪：只读 G 的表。 */
@@ -72,6 +73,8 @@ export interface IntakeDeps {
   };
   /** 交给开着的 Butler 总控 session；没开着返回 false。 */
   toCoordinator: (text: string) => Promise<boolean>;
+  /** 交给 Jira epic 对应的 Butler epic 的总控（没有这个 epic 就新建；总控没开就按内存放行后打开，BTL-246 §7）。 */
+  toEpicCoordinator?: (epic: { key: string; title: string | null }, repoPath: string, text: string) => Promise<{ ok: true } | { ok: false; message: string }>;
   recordEvent: RecordEvent;
   metricEvents: (since: number, kinds: readonly string[]) => { kind: string; ticketKey: string | null; data: Record<string, unknown> | null }[];
   knownRepos: () => { path: string; slug: string | null }[];
@@ -99,6 +102,8 @@ export class IntakeService {
   private polling = false;
   private lastPollAt: number | null = null;
   private lastPollError: string | null = null;
+  /** 这次拉取新记下的、有父 epic 的项（拉完交给 epic 总控）；不在拉取里时为 null。 */
+  private newInEpic: string[] | null = null;
 
   constructor(private readonly d: IntakeDeps) {}
 
@@ -126,6 +131,7 @@ export class IntakeService {
         return { ok: false, message: r.message };
       }
       this.lastPollError = null;
+      this.newInEpic = [];
       for (const t of r.tickets) {
         try {
           await this.ingest(t, src.kind);
@@ -133,8 +139,10 @@ export class IntakeService {
           this.d.log?.(`intake: ingesting ${t.key} failed`, e);
         }
       }
+      await this.tellEpics(this.newInEpic);
       return { ok: true, seen: r.tickets.length };
     } finally {
+      this.newInEpic = null;
       this.polling = false;
       this.d.onChange?.();
     }
@@ -168,6 +176,7 @@ export class IntakeService {
         return;
       }
       this.d.repo.insert(base);
+      if (t.epic) this.newInEpic?.push(t.key);
     }
     const rec: IntakeRecord = { ...base, title: t.title, url: t.url, contentHash: hash, payload: t, repoPath, repoSlug: slug, attempts: 0 };
     this.d.repo.update(t.key, { title: t.title, url: t.url, contentHash: hash, payload: t, repoPath, repoSlug: slug, attempts: 0, updatedAt: now });
@@ -233,6 +242,8 @@ export class IntakeService {
     const c = r.classification;
     // 这个仓库的策略没开（或者来源关了）：停在 held，不提醒、不开澄清 session。
     if ((!p.enabled || !this.active()) && !r.forceStart) return this.setState(r, "held", "auto_off", null);
+    // 手动档（不自动开工）：有父 epic 的先建进那个 epic，只整理、不开工（BTL-246 §7）。
+    if (!p.autoStart && !r.forceStart) await this.organize(r);
     if (c.clarify) {
       const entering = r.state !== "needs_clarification";
       this.setState(r, "needs_clarification", null, c.missing.join(", "));
@@ -255,6 +266,45 @@ export class IntakeService {
       this.d.recordEvent("intake.queued", { ticketKey: key, repoSlug: r.repoSlug, dedupeKey: `intake.queued:${key}:${this.d.now()}` });
     }
     this.d.enqueue(key);
+  }
+
+  /** 手动档：把有父 epic 的项在 Butler 里建成这个 epic 下的 ticket（不开 session）。建过的、栈里的层、Butler 里已经有的不动。 */
+  private async organize(r: IntakeRecord): Promise<void> {
+    const epic = r.payload.epic;
+    if (!epic || r.ticketKey || r.parentKey !== null || !r.repoPath || this.d.ticketExists(r.key)) return;
+    const c = await this.d.createTicket({ key: r.key, title: r.title, repoPath: r.repoPath, startPoint: null, epic }).catch((e: unknown) => ({
+      ok: false as const, exists: false, message: e instanceof Error ? e.message : String(e),
+    }));
+    if (c.ok) this.d.repo.update(r.key, { ticketKey: r.key, updatedAt: this.d.now() });
+    else this.d.log?.(`intake: organizing ${r.key} into epic ${epic.key} failed: ${c.message}`);
+  }
+
+  /**
+   * 半自动档：这次拉取进了某个 epic、而且要开工的新项，按 epic 各给它的总控发一条（BTL-246 §7）。搁着的不算。
+   * 消息走信箱（BTL-245）：总控在忙就排着，下一次调用工具时收到；关着的接着最近的对话打开再送。
+   * 总控开不了（内存不够等）时，有可恢复的旧总控就把消息留在它的信箱里，下次打开时送进去；连旧总控都没有才跳过、记日志。
+   */
+  private async tellEpics(keys: string[]): Promise<void> {
+    const send = this.d.toEpicCoordinator;
+    if (!send || keys.length === 0) return;
+    const groups = new Map<string, { epic: { key: string; title: string | null }; repoPath: string; items: IntakeRecord[] }>();
+    for (const k of keys) {
+      const r = this.d.repo.get(k);
+      const epic = r?.payload.epic;
+      if (!r || !epic || !r.repoPath || !(PENDING.includes(r.state) || r.state === "started")) continue;
+      const g = groups.get(epic.key) ?? { epic, repoPath: r.repoPath, items: [] };
+      g.items.push(r);
+      groups.set(epic.key, g);
+    }
+    const line = (s: string) => JSON.stringify(s.replace(/\s+/g, " ").trim().slice(0, 200));
+    for (const g of groups.values()) {
+      const m = MAIN_STRINGS[this.d.lang()];
+      // 自动开工的 ticket 要等开工时才建出来：还没建的写明在排队，总控等它出现在 list_tickets 里再分进 feature。
+      const list = g.items.map((r) => `- ${r.key} ${line(r.title)}${this.d.ticketExists(r.key) ? "" : m.intakeEpicQueued}`).join("\n");
+      const text = m.intakeEpicTickets(g.epic.key, g.epic.title ? line(g.epic.title) : null, list);
+      const res = await send(g.epic, g.repoPath, text).catch((e: unknown) => ({ ok: false as const, message: e instanceof Error ? e.message : String(e) }));
+      if (!res.ok) this.d.log?.(`intake: telling the coordinator of epic ${g.epic.key} about ${g.items.map((r) => r.key).join(", ")} skipped: ${res.message}`);
+    }
   }
 
   /** 能拆：至少两个子任务，每个号都合法、Butler 里没有、也还没作为别的接活项记下来（否则层号会断，上层永远等不到）。 */
@@ -459,13 +509,13 @@ export class IntakeService {
     let repo = r.ticketKey ? this.d.ticketRepo(r.ticketKey) : null;
     if (!repo) {
       if (this.d.ticketExists(r.key)) return { ok: false, message: "exists", retry: false, exists: true };
-      const c = await this.d.createTicket({ key: r.key, title: r.title, repoPath: r.repoPath, startPoint: o.startPoint ?? null });
+      const c = await this.d.createTicket({ key: r.key, title: r.title, repoPath: r.repoPath, startPoint: o.startPoint ?? null, epic: r.payload.epic ?? null });
       if (!c.ok) return { ok: false, message: c.message, retry: false, exists: c.exists };
       repo = { repoId: c.repoId, branch: c.branch };
       this.d.repo.update(r.key, { ticketKey: r.key });
       if (cancelled()) return stop;
       if (o.parentBranch) {
-        const s = await this.d.stack.stackOn({ repoPath: r.repoPath, parentBranch: o.parentBranch, branch: c.branch }).catch((e: unknown) => ({ ok: false as const, message: String(e) }));
+        const s = await this.d.stack.stackOn({ repoPath: r.repoPath, parentBranch: o.parentBranch, branch: c.branch, ticketKey: r.key }).catch((e: unknown) => ({ ok: false as const, message: String(e) }));
         if (!s.ok) this.d.log?.(`intake: stacking ${r.key} on ${o.parentBranch} failed: ${s.message}`);
       }
     }

@@ -284,7 +284,7 @@ describe("StackService.define", () => {
     expect(w.svc.canStackOn(w.repo, "a").ok).toBe(false);
     expect(w.svc.canStackOn(w.repo, "b").ok).toBe(true);
     g(w.repo, "branch", "e", "b");
-    const s = await w.svc.stackOn({ repoPath: w.repo, parentBranch: "b", branch: "e", featureId: null, epicId: null });
+    const s = await w.svc.stackOn({ repoPath: w.repo, parentBranch: "b", branch: "e", featureId: null });
     expect(s).toMatchObject({ ok: true, stackId: r.stackId });
     expect(w.repoT.layers(r.stackId!).map((l) => l.branch)).toEqual(["a", "b", "e"]);
   });
@@ -716,7 +716,7 @@ describe("StackService for other workstreams", () => {
     expect(w.svc.stackBelow("https://github.com/acme/app/pull/30", layers[2]!.branch)).toBeNull();
   });
 
-  it("posts the epic overview as an issue only when asked to", async () => {
+  it("posts the stack overview as an issue only when asked to", async () => {
     const w = world({ policy: { overview: "issue", dailyRebase: false } });
     await defineAll(w);
     await w.svc.tick();
@@ -728,7 +728,7 @@ describe("StackService for other workstreams", () => {
   it("builds the progress view", async () => {
     const w = world();
     const id = await defineAll(w);
-    const v = await w.svc.view({ featureId: null, epicId: null });
+    const v = await w.svc.view({ featureId: null });
     expect(v.stacks).toHaveLength(1);
     expect(v.stacks[0]).toMatchObject({ id, autoRebase: true, layers: [{ branch: "a", ticketTitle: "title a" }, {}, {}, {}] });
   });

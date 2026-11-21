@@ -80,20 +80,20 @@ test("Butler control messages a feature coordinator by name, reopening it when i
   await page.locator(".butler-page").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
 
-  // 关着的总控不在 list_sessions 里，list_features 也说它没在跑。
+  // 关着的总控不在 list_sessions 里，list_epics 也说它没在跑。
   expect(JSON.parse((await callTool(page, s, "list_sessions")).text)).toEqual([]);
-  expect(JSON.parse((await callTool(page, s, "list_features")).text)).toMatchObject([{ name: "payment", coordinatorRunning: false, coordinatorSession: null }]);
+  expect(JSON.parse((await callTool(page, s, "list_epics")).text)).toMatchObject([{ name: "payment", coordinatorRunning: false, coordinatorSession: null, features: [] }]);
 
   // 按 feature 名字发：接着原来的总控打开，消息交进去。
-  const sent = await callTool(page, s, "send_message", { feature: "payment", text: "去看一下 PR" });
+  const sent = await callTool(page, s, "send_message", { epic: "payment", text: "去看一下 PR" });
   expect(sent.error).toBe(false);
   expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: coordinator, opened: "resumed" });
   await expect.poll(() => fakeLog(s)).toContain(`interactive resume ${coordinator} `);
   await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toContain("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 去看一下 PR");
   expect(sessionsIn(s, workspace)).toEqual([coordinator]);
 
-  // 现在开着：list_features 给出它的 id，按 id 发直接发进去，不再开新的。
-  await expect.poll(async () => JSON.parse((await callTool(page, s, "list_features")).text)[0].coordinatorSession).toBe(coordinator);
+  // 现在开着：list_epics 给出它的 id，按 id 发直接发进去，不再开新的。
+  await expect.poll(async () => JSON.parse((await callTool(page, s, "list_epics")).text)[0].coordinatorSession).toBe(coordinator);
   await page.waitForTimeout(1500);
   const again = await callTool(page, s, "send_message", { session: coordinator, text: "再看一下" });
   expect(JSON.parse(again.text)).toMatchObject({ queued: true, sessionId: coordinator });
@@ -103,9 +103,9 @@ test("Butler control messages a feature coordinator by name, reopening it when i
 });
 
 /**
- * 刚开的 epic session 没人打过字：claude 停在空输入框上，不会有 Stop。Butler 总控给它发消息不能被当成“忙”挡回来（BTL-190 follow-up D）。
+ * 刚开的 feature 总控没人打过字：claude 停在空输入框上，不会有 Stop。Butler 总控给它发消息不能被当成“忙”挡回来（BTL-190 follow-up D）。
  */
-test("Butler control messages an open epic session nobody has typed into", async ({ makeSandbox, launch }) => {
+test("Butler control messages an open feature coordinator nobody has typed into", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
   s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
@@ -115,13 +115,13 @@ test("Butler control messages an open epic session nobody has typed into", async
   makeGitRepo(join(shop, "frontend"));
   makeGitRepo(join(shop, "backend"));
   const side = page.locator(".sidebar");
-  await create(page, await newButton(page, "newEpic"), S.epicName, "checkout-revamp", shop);
-  const workspace = join(s.dir, "shop-epics", "checkout-revamp");
+  await create(page, await newButton(page, "newFeature"), S.featureName, "checkout-revamp", shop);
+  const workspace = join(s.dir, "shop-features", "checkout-revamp");
   await openTab(page, S.lay.tabControl);
-  await page.locator(".epic-page").getByRole("button", { name: `+ ${S.newEpicSession}`, exact: true }).click();
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);
-  const [epicSession] = sessionsIn(s, workspace);
-  await expect.poll(() => terminalText(page)).toContain(`fake claude ready (${epicSession.slice(0, 8)})`);
+  const [coordinator] = sessionsIn(s, workspace);
+  await expect.poll(() => terminalText(page)).toContain(`fake claude ready (${coordinator.slice(0, 8)})`);
   // 什么都不输入：直接去 Butler 总控那里发。
   await side.getByRole("button", { name: S.butlerNav, exact: true }).click();
   await page.locator(".butler-page").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
@@ -130,12 +130,12 @@ test("Butler control messages an open epic session nobody has typed into", async
 
   const sent = await callTool(page, s, "send_message", { epic: "checkout-revamp", text: "先看一下规划" });
   expect(sent.error).toBe(false);
-  expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: epicSession });
+  expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: coordinator });
   expect(JSON.parse(sent.text).opened).toBeUndefined();
-  await expect.poll(() => flat(messagesIn(s, workspace)[epicSession]?.at(-1))).toContain("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 先看一下规划");
-  expect(sessionsIn(s, workspace)).toEqual([epicSession]);
+  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toContain("Butler 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 先看一下规划");
+  expect(sessionsIn(s, workspace)).toEqual([coordinator]);
 
-  // 回复回流（ws-b）：epic session 这一轮做完，它最后一段回复带着 requestId 经信箱送回 Butler 总控；「消息」里记着已回复（BTL-245）。
+  // 回复回流（ws-b）：epic 总控这一轮做完，它最后一段回复带着 requestId 经信箱送回 Butler 总控；「消息」里记着已回复（BTL-245）。
   const { requestId } = JSON.parse(sent.text) as { requestId: string };
   expect(requestId).toMatch(/\S/);
   const butlerWorkspace = join(s.butlerHome, "workspaces", "_butler");

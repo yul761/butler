@@ -12,7 +12,7 @@ const ticket = (key: string, repos: TicketRepo[], featureId: number | null = nul
   key, title: null, repos, status: "active", statusManual: null, createdAt: 100, archivedAt: null, featureId, ...o,
 });
 const ev = (o: Partial<StageEvent> = {}): StageEvent => ({
-  id: 1, ticketKey: "A-1", repoId: null, prId: null, branch: null, featureId: null, epicId: null, sessionId: null, kind: "first_commit", at: 200, data: {}, ...o,
+  id: 1, ticketKey: "A-1", repoId: null, prId: null, branch: null, featureId: null, sessionId: null, kind: "first_commit", at: 200, data: {}, ...o,
 });
 const prRow = (o: Partial<TicketPr>): TicketPr => ({
   id: 1, ticketKey: "A-1", url: "https://github.com/o/r/pull/1", slug: "o/r", repoId: 5, number: 1, headBranch: "feat", state: "open", review: null,
@@ -21,16 +21,14 @@ const prRow = (o: Partial<TicketPr>): TicketPr => ({
 });
 
 function make(o: {
-  tickets?: Ticket[]; features?: { id: number; epicId: number | null }[];
+  tickets?: Ticket[];
   reports?: PrStagesServiceDeps["reports"]; since?: number | null;
   events?: StageEvent[]; upperDesign?: PrStagesServiceDeps["stages"]["upperDesign"];
   prs?: TicketPr[];
 } = {}) {
   const tickets = o.tickets ?? [];
-  const features = o.features ?? [];
   return new PrStagesService({
     tickets: { get: (k) => tickets.find((t) => t.key === k) ?? null, byFeature: (id) => tickets.filter((t) => t.featureId === id) },
-    features: { byEpic: (id) => features.filter((f) => f.epicId === id), get: (id) => features.find((f) => f.id === id) ?? null },
     stages: { forTicket: (k) => (o.events ?? []).filter((e) => e.ticketKey === k), upperDesign: o.upperDesign ?? (() => []) },
     prs: { byTicket: (k) => (o.prs ?? []).filter((p) => p.ticketKey === k) },
     reports: o.reports ?? (() => []),
@@ -101,13 +99,12 @@ describe("PrStagesService", () => {
     expect(rows.map((r) => [r.repoId, r.repoName])).toEqual([[5, "alpha"], [9, "zeta"]]);
   });
 
-  it("feature scope covers all its tickets; epic scope covers all features' tickets with featureId", () => {
+  it("feature scope covers all its tickets, rows carrying the featureId", () => {
     const svc = make({
-      tickets: [ticket("A-1", [repo(1, "A-1")], 10), ticket("A-2", [repo(2, "A-2")], 10), ticket("B-1", [repo(3, "B-1")], 11), ticket("C-1", [repo(4, "C-1")], 12)],
-      features: [{ id: 10, epicId: 7 }, { id: 11, epicId: 7 }, { id: 12, epicId: 8 }],
+      tickets: [ticket("A-1", [repo(1, "A-1")], 10), ticket("A-2", [repo(2, "A-2")], 10), ticket("B-1", [repo(3, "B-1")], 11)],
     });
     expect(svc.view({ featureId: 10 }).map((t) => t.ticketKey)).toEqual(["A-1", "A-2"]);
-    expect(svc.view({ epicId: 7 }).flatMap((t) => t.rows).map((r) => [r.ticketKey, r.featureId])).toEqual([["A-1", 10], ["A-2", 10], ["B-1", 11]]);
+    expect(svc.view({ featureId: 10 }).flatMap((t) => t.rows).map((r) => [r.ticketKey, r.featureId])).toEqual([["A-1", 10], ["A-2", 10]]);
   });
 
   it("keeps only reports of this repo or with no repo", () => {
@@ -121,13 +118,12 @@ describe("PrStagesService", () => {
     expect(texts(r7)).toEqual(["for 7", "for all"]);
   });
 
-  it("looks up upper design with the feature and epic ids; none without a feature", () => {
-    const seen: [number, number | null][] = [];
-    const upperDesign = (f: number, e: number | null) => (seen.push([f, e]), []);
-    make({ tickets: [ticket("A-1", [repo(1, "A-1")], 10), ticket("A-2", [repo(2, "A-2")])], features: [{ id: 10, epicId: 7 }], upperDesign })
-      .view({ epicId: 7 });
+  it("looks up upper design with the feature id; none without a feature", () => {
+    const seen: number[] = [];
+    const upperDesign = (f: number) => (seen.push(f), []);
+    make({ tickets: [ticket("A-1", [repo(1, "A-1")], 10)], upperDesign }).view({ featureId: 10 });
     make({ tickets: [ticket("A-2", [repo(2, "A-2")])], upperDesign }).view({ ticketKey: "A-2" });
-    expect(seen).toEqual([[10, 7]]);
+    expect(seen).toEqual([10]);
   });
 
   it("design is unknown, not skipped, when skill tracking has no start", () => {
@@ -209,7 +205,7 @@ describe("PrStagesService", () => {
   });
 
   it("each ticket carries its feature id, also without rows", () => {
-    const svc = make({ tickets: [ticket("A-1", [], 10), ticket("B-1", [repo(2, "B-1")], 11)], features: [{ id: 10, epicId: 7 }, { id: 11, epicId: 7 }] });
-    expect(svc.view({ epicId: 7 }).map((t) => [t.ticketKey, t.featureId, t.rows.length])).toEqual([["A-1", 10, 0], ["B-1", 11, 1]]);
+    const svc = make({ tickets: [ticket("A-1", [], 10), ticket("B-1", [repo(2, "B-1")], 10)] });
+    expect(svc.view({ featureId: 10 }).map((t) => [t.ticketKey, t.featureId, t.rows.length])).toEqual([["A-1", 10, 0], ["B-1", 10, 1]]);
   });
 });

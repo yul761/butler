@@ -1,7 +1,7 @@
 import { mkdir, open, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { isHandoffInvocation, isToolResultOnly, textOf } from "../handoff/transcript";
-import { MAIN_STRINGS, M } from "../strings";
+import { M } from "../strings";
 
 /**
  * 换新前的对话尾巴（BTL-190 第 6 点）：/clear 之前 Butler 自己读旧 transcript，摘出 handoff 之前最近的几轮对话写成文件，
@@ -27,7 +27,7 @@ export interface TailTurn {
 
 export interface TailExtract {
   turns: TailTurn[];
-  /** 找到了 Butler 输入的 handoff 请求（ticket / feature 的 /handoff，epic 的那句话）。没找到时 turns 为空。 */
+  /** 找到了 Butler 输入的 handoff 请求（/handoff）。没找到时 turns 为空。 */
   commandFound: boolean;
 }
 
@@ -39,14 +39,9 @@ interface Entry {
   message?: { content?: unknown };
 }
 
-/** 这条 user 消息是不是 Butler 为这次换新输入的 handoff 请求。epic 的那句话按两种语言的开头认（换新途中切了语言也认得）。 */
-export function refreshCommandMatcher(kind: "ticket" | "feature" | "epic"): (content: unknown) => boolean {
-  if (kind !== "epic") return isHandoffInvocation;
-  const heads = Object.values(MAIN_STRINGS).map((s) => s.refreshEpicHandoff.slice(0, 24));
-  return (content) => {
-    const t = textOf(content).trim();
-    return heads.some((h) => t.startsWith(h));
-  };
+/** 这条 user 消息是不是 Butler 为这次换新输入的 handoff 请求：ticket session 和 feature 总控都是 /handoff。 */
+export function refreshCommandMatcher(): (content: unknown) => boolean {
+  return isHandoffInvocation;
 }
 
 const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
@@ -213,10 +208,9 @@ export async function writeRefreshTail(o: {
   transcript: string | null;
   out: string;
   sessionId: string;
-  kind: "ticket" | "feature" | "epic";
 }): Promise<string | null> {
   if (!o.transcript) return null;
-  const { turns } = await readRefreshTail(o.transcript, refreshCommandMatcher(o.kind));
+  const { turns } = await readRefreshTail(o.transcript, refreshCommandMatcher());
   const body = renderRefreshTail(turns, o.sessionId);
   if (body === null) return null;
   await mkdir(dirname(o.out), { recursive: true });

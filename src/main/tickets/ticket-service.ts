@@ -15,7 +15,7 @@ import { M } from "../strings";
 export type TicketErrorCode =
   | "invalid_key" | "exists" | "archived" | "not_git_repo" | "worktree_exists" | "dirty" | "not_found"
   | "invalid_branch" | "empty_repo" | "git_failed" | "sessions_open" | "branch_checked_out" | "busy" | "unbranched_commits"
-  | "repo_exists" | "invalid_name" | "workspace_taken" | "invalid_workspace" | "epic_archived";
+  | "repo_exists" | "invalid_name" | "workspace_taken" | "invalid_workspace";
 
 export class TicketError extends Error {
   constructor(readonly code: TicketErrorCode, message: string) {
@@ -385,11 +385,11 @@ export class TicketService {
     return join(this.d.workspacesDir, ticketFileStem(ticketKey));
   }
 
-  /** hook 发现的 session 在这个 ticket 的哪个仓库里、是不是总控（在工作区目录里）。 */
-  placement(ticketKey: string, cwd: string): { repoId: number | null; coordinator: boolean } {
-    if (samePath(cwd, this.workspacePath(ticketKey))) return { repoId: null, coordinator: true };
+  /** hook 发现的 session 在这个 ticket 的哪个仓库里（工作区目录里的不属于哪个仓库）。 */
+  placement(ticketKey: string, cwd: string): { repoId: number | null } {
+    if (samePath(cwd, this.workspacePath(ticketKey))) return { repoId: null };
     const t = this.d.tickets.get(ticketKey);
-    return { repoId: (t && this.repoForCwd(t, cwd)?.id) ?? null, coordinator: false };
+    return { repoId: (t && this.repoForCwd(t, cwd)?.id) ?? null };
   }
 
   /**

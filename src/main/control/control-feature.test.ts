@@ -3,6 +3,7 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
+import { BlocksRepo } from "../db/blocks-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { SettingsRepo } from "../db/settings-repo";
@@ -24,6 +25,7 @@ async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: Feat
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
   const settings = new SettingsRepo(db);
+  const blocks = new BlocksRepo(db);
   const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
   const featureService = new FeatureService({ features, tickets, now: () => 1 });
   const { factory, spawned } = fakePtyFactory();
@@ -57,7 +59,7 @@ async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: Feat
   };
   const handle = controlHandler({
     mailbox,
-    tickets, sessions, features, ticketService, sessionService,
+    tickets, sessions, features, blocks, ticketService, sessionService,
     refresher: { precheck: () => null, refresh: async (id) => (refreshed.push(id), "done" as const) },
     activity: (id) => activities.get(id) ?? null,
     activityOutput: async () => "out",
@@ -81,7 +83,7 @@ async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: Feat
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed };
+  return { handle, blocks, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -91,9 +93,9 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(r).toEqual({
       v: 1, ok: true,
       value: [
-        { key: "DMS-1", title: "Cart", status: "active", repos: [{ name: "frontend", dir: join(feature.workspaceDir, "frontend-dms-1"), branch: "feature/DMS-1" }] },
+        { key: "DMS-1", title: "Cart", status: "active", feature: null, repos: [{ name: "frontend", dir: join(feature.workspaceDir, "frontend-dms-1"), branch: "feature/DMS-1" }] },
         {
-          key: "DMS-2", title: null, status: "active",
+          key: "DMS-2", title: null, status: "active", feature: null,
           repos: [
             { name: "frontend", dir: join(feature.workspaceDir, "frontend-dms-2"), branch: "feature/DMS-2" },
             { name: "backend", dir: join(feature.workspaceDir, "backend-dms-2"), branch: "feature/DMS-2" },
@@ -132,7 +134,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
   it("refuses a ticket of another feature, an archived ticket and an archived feature", async () => {
     const { handle, base, tickets } = await setup();
     const r = await handle({ ...base, op: "start_session", ticket: "OTH-1", task: "x" });
-    expect(!r.ok && r.error).toContain("这个 feature 下没有 ticket OTH-1");
+    expect(!r.ok && r.error).toContain("这个 epic 下没有 ticket OTH-1");
     expect(!r.ok && r.error).toContain("DMS-1, DMS-2");
     tickets.archive("DMS-1", 5);
     expect(await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "x" })).toMatchObject({ ok: false });
@@ -220,7 +222,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(r).toMatchObject({ ok: true, value: { key: "DMS-5", stacked: true } });
     expect(git(join(feature.workspaceDir, "frontend-dms-5"), "rev-parse", "HEAD")).toBe(parentHead);
     expect(calls.canStackOn).toEqual([[frontend, "feature/DMS-1"]]);
-    expect(calls.stackOn).toEqual([{ repoPath: frontend, parentBranch: "feature/DMS-1", branch: "feature/DMS-5", featureId: feature.id, epicId: null }]);
+    expect(calls.stackOn).toEqual([{ repoPath: frontend, parentBranch: "feature/DMS-1", branch: "feature/DMS-5", featureId: feature.id }]);
     // 父 ticket 不在这个 feature、或者没有这个仓库：什么都不建
     expect(await handle({ ...base, op: "create_ticket", ticket: "DMS-6", repos: ["frontend"], stack_on: "OTH-1" })).toMatchObject({ ok: false });
     expect(await handle({ ...base, op: "create_ticket", ticket: "DMS-6", repos: ["backend"], stack_on: "DMS-1" })).toMatchObject({ ok: false });
@@ -241,7 +243,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
       return r.error;
     };
     expect(await err({})).toContain("frontend, backend");
-    expect(await err({ repos: ["mobile"] })).toContain("这个 feature 没有仓库 mobile");
+    expect(await err({ repos: ["mobile"] })).toContain("这个 epic 没有仓库 mobile");
     expect(await err({ ticket: "cart work", repos: ["frontend"] })).toContain("[A-Z][A-Z0-9]+-\\d+");
     expect(await err({ ticket: "DMS-1", repos: ["frontend"] })).toContain("DMS-1");
     expect(tickets.get("DMS-4")).toBeNull();
@@ -484,5 +486,84 @@ describe("refresh_session from a feature coordinator (plan 16)", () => {
     expect(t.refreshed).toEqual([]);
     expect(await refresh(child)).toEqual({ v: 1, ok: true, value: { started: true } });
     expect(t.refreshed).toEqual([child]);
+  });
+});
+
+describe("features inside an epic: blocks (BTL-246)", () => {
+  const names = (r: unknown) => ((r as { value: { features: { name: string }[] } }).value.features).map((f) => f.name);
+
+  it("creates features in order, before another when asked, and refuses a duplicate name", async () => {
+    const { handle, base, notified } = await setup();
+    expect(await handle({ ...base, op: "create_feature", name: "Payment", description: "cards first" })).toMatchObject({ ok: true, value: { name: "Payment" } });
+    await handle({ ...base, op: "create_feature", name: "Shipping" });
+    await handle({ ...base, op: "create_feature", name: "Refunds", before: "shipping" });
+    expect(notified()).toBe(3);
+    const r = await handle({ ...base, op: "list_features" });
+    expect(names(r)).toEqual(["Payment", "Refunds", "Shipping"]);
+    expect(r).toMatchObject({ ok: true, value: { features: [{ name: "Payment", description: "cards first", position: 1, tickets: [], merged: 0, total: 0 }, {}, {}], notInAFeature: [{ key: "DMS-1" }, { key: "DMS-2" }] } });
+    const dup = await handle({ ...base, op: "create_feature", name: " payment " });
+    expect(dup).toMatchObject({ ok: false });
+    expect((dup as { error: string }).error).toContain("Payment");
+    expect(await handle({ ...base, op: "create_feature", name: "X", before: "nope" })).toMatchObject({ ok: false });
+    expect(names(await handle({ ...base, op: "list_features" }))).toEqual(["Payment", "Refunds", "Shipping"]);
+  });
+
+  it("keeps features apart per epic", async () => {
+    const { handle, base, other } = await setup();
+    await handle({ ...base, op: "create_feature", name: "Payment" });
+    expect(await handle({ v: 1, featureId: other.id, from: null, op: "create_feature", name: "Payment" })).toMatchObject({ ok: true });
+    expect(names(await handle({ v: 1, featureId: other.id, from: null, op: "list_features" }))).toEqual(["Payment"]);
+  });
+
+  it("moves a ticket into a feature and out again; list_features and list_tickets show it", async () => {
+    const { handle, base, tickets } = await setup();
+    await handle({ ...base, op: "create_feature", name: "Payment" });
+    expect(await handle({ ...base, op: "set_ticket_feature", ticket: "dms-2", feature: "payment" })).toMatchObject({ ok: true, value: { ticket: "DMS-2", feature: "Payment" } });
+    expect(tickets.get("DMS-2")!.blockId).not.toBeNull();
+    expect(await handle({ ...base, op: "list_features" })).toMatchObject({
+      ok: true, value: { features: [{ name: "Payment", tickets: [{ key: "DMS-2", title: null, status: "active" }], merged: 0, total: 1 }], notInAFeature: [{ key: "DMS-1" }] },
+    });
+    expect(await handle({ ...base, op: "list_tickets" })).toMatchObject({ ok: true, value: [{ key: "DMS-1", feature: null }, { key: "DMS-2", feature: "Payment" }] });
+    expect(await handle({ ...base, op: "set_ticket_feature", ticket: "DMS-2", feature: null })).toMatchObject({ ok: true, value: { ticket: "DMS-2", feature: null } });
+    expect(tickets.get("DMS-2")!.blockId).toBeNull();
+  });
+
+  it("counts a done ticket and refers to a feature by id", async () => {
+    const { handle, base, tickets } = await setup();
+    const made = await handle({ ...base, op: "create_feature", name: "Payment" });
+    const id = String((made as { value: { id: number } }).value.id);
+    tickets.setStatus("DMS-1", "done", 1);
+    await handle({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: id });
+    expect(await handle({ ...base, op: "list_features" })).toMatchObject({ ok: true, value: { features: [{ name: "Payment", merged: 1, total: 1 }] } });
+  });
+
+  it("refuses a ticket of another epic and a feature that does not exist or belongs to another epic", async () => {
+    const { handle, base, other } = await setup();
+    await handle({ ...base, op: "create_feature", name: "Payment" });
+    const theirs = await handle({ v: 1, featureId: other.id, from: null, op: "create_feature", name: "Theirs" });
+    const theirId = String((theirs as { value: { id: number } }).value.id);
+    expect(await handle({ ...base, op: "set_ticket_feature", ticket: "OTH-1", feature: "Payment" })).toMatchObject({ ok: false });
+    expect(await handle({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: "Nope" })).toMatchObject({ ok: false });
+    expect(await handle({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: theirId })).toMatchObject({ ok: false });
+  });
+
+  it("reorders when every feature is named exactly once", async () => {
+    const { handle, base } = await setup();
+    for (const name of ["A", "B", "C"]) await handle({ ...base, op: "create_feature", name });
+    expect(await handle({ ...base, op: "reorder_features", order: ["c", "A", "b"] })).toMatchObject({ ok: true, value: { order: ["C", "A", "B"] } });
+    expect(names(await handle({ ...base, op: "list_features" }))).toEqual(["C", "A", "B"]);
+    for (const order of [["C", "A"], ["C", "A", "B", "A"], ["C", "A", "A"], ["C", "A", "X"]]) {
+      expect(await handle({ ...base, op: "reorder_features", order }), order.join()).toMatchObject({ ok: false });
+    }
+    expect(names(await handle({ ...base, op: "list_features" }))).toEqual(["C", "A", "B"]);
+  });
+
+  it("creates a ticket straight into a feature, and checks the feature before creating anything", async () => {
+    const { handle, base, tickets } = await setup();
+    await handle({ ...base, op: "create_feature", name: "Payment" });
+    expect(await handle({ ...base, op: "create_ticket", ticket: "DMS-7", repos: ["frontend"], feature: "Payment" })).toMatchObject({ ok: true, value: { key: "DMS-7", feature: "Payment" } });
+    expect(await handle({ ...base, op: "list_tickets" })).toMatchObject({ ok: true, value: [{}, {}, { key: "DMS-7", feature: "Payment" }] });
+    expect(await handle({ ...base, op: "create_ticket", ticket: "DMS-8", repos: ["frontend"], feature: "Nope" })).toMatchObject({ ok: false });
+    expect(tickets.get("DMS-8")).toBeNull();
   });
 });

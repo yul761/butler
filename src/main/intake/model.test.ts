@@ -51,6 +51,11 @@ describe("intake model calls", () => {
     expect(f.calls[0]).toMatchObject({ task: "intake_fetch" });
     expect(f.calls[0]!.args.slice(-2)).toEqual(["--allowedTools", "mcp__tracker__search"]);
     expect(f.calls[0]!.prompt).toContain("project = PROJ AND status = Ready");
+    // BTL-246 §7：要每个 ticket 的父 epic。
+    expect(f.calls[0]!.prompt).toContain("parent epic");
+    const withEpic = { ...tk, epic: { key: "PROJ-1", title: "Epic" } };
+    expect(await fetchFromTracker(fake(() => ok({ tickets: [withEpic, { ...tk, epic: null }] })).run, "/w", "q", ["mcp__t"], "en"))
+      .toEqual({ ok: true, tickets: [withEpic, { ...tk, epic: null }] });
     expect(await fetchFromTracker(f.run, "/w", "q", [], "en")).toEqual({ ok: false, message: "no tracker tools" });
     expect((await fetchFromTracker(fake(() => fail).run, "/w", "q", ["mcp__t"], "en")).ok).toBe(false);
     expect(await fetchFromTracker(fake(() => ok({ nope: 1 })).run, "/w", "q", ["mcp__t"], "en")).toEqual({ ok: false, message: "bad output" });

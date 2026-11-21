@@ -15,7 +15,7 @@ describe("ButlerLayout", () => {
     expect(html).toContain('class="ticket-page butler-page"');
     expect(html).toContain(`<h2>${S.butlerTitle}</h2>`);
     expect(S.butlerTitle).toContain("总控");
-    expect(html).toContain("管所有 epic 的那个 session：每天早上巡检、跨 epic 协调。子 session 的汇报都送到这里。");
+    expect(html).toContain("管所有工作的那个 session：每天早上巡检、跨 epic 协调。子 session 的汇报都送到这里。");
     expect(html).toContain("control-split");
     expect(html).toContain("/ws");
     expect(html).not.toContain("page-tabs");

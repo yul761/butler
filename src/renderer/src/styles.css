@@ -91,7 +91,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .twisty:disabled { visibility: hidden; }
 .section-toggle { display: inline-flex; gap: 6px; align-items: baseline; padding: 0; border: none; background: transparent; color: inherit; font: inherit; }
 .section-toggle .twisty { width: auto; }
-/* feature、epic、Butler 总控页终端上面的部分：一排 tab，一次只显示一块（整体进度、ticket 表、汇报、待你决定……）。
+/* feature、Butler 总控页终端上面的部分：一排 tab，一次只显示一块（整体进度、ticket 表、汇报、待你决定……）。
    tab 条不缩；内容框在空间不够时先缩、自己滚动，不挤掉 tab 条，也不挤占终端（终端区至少占窗口一半高，见 .terminals）。 */
 .page-tabs { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
 .page-tabs-bar { flex-shrink: 0; display: flex; gap: 2px; padding: 0 12px; overflow-x: auto; }
@@ -115,7 +115,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .control-split.right-folded .control-fold { left: auto; right: 4px; transform: none; }
 @media (max-width: 900px) { .control-fold { display: none; } }
 @media (max-width: 900px) { .control-split { grid-template-columns: 1fr; } }
-/* epic、feature「总控」页签：左边是仓库条、session 条和终端（贴边，同 ticket「终端」页签），右边是对话。 */
+/* feature「总控」页签：左边是仓库条、session 条和终端（贴边，同 ticket「终端」页签），右边是对话。 */
 .page-tabs-panel.tab-panel-control { display: flex; flex-direction: column; padding: 0; }
 .tab-panel-control .control-split { flex: 1 0 auto; }
 .control-lede { flex: 0 0 auto; margin: 0; padding: 8px 16px 4px; }
@@ -137,7 +137,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .feature-summary .blocker { color: var(--danger); }
 .feature-summary ul { margin: 2px 0 0; padding-left: 20px; }
 .feature-summary .chip { padding: 0 4px 0 0; border: none; color: var(--accent); }
-/* 规划（epic session 写的）：保留换行，可以收起。 */
+/* feature 的规划：保留换行，可以收起。 */
 .feature-brief { margin-top: 6px; font-size: 12px; color: var(--muted); }
 .feature-brief p { margin: 4px 0 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .summary-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
@@ -165,13 +165,11 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .card { width: 100%; display: flex; gap: 10px; text-align: left; padding: 10px 12px; }
 
 .ticket-page { display: flex; flex-direction: column; height: 100%; }
-/* 空间不够时只有页签（feature、epic、Butler、ticket 页的 tab）缩小、自己滚动；标题栏保持原高。 */
+/* 空间不够时只有页签（feature、Butler、ticket 页的 tab）缩小、自己滚动；标题栏保持原高。 */
 .ticket-page > :not(.page-tabs) { flex-shrink: 0; }
 .ticket-header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .ticket-header h2 { margin: 0; font-size: 15px; }
 .ticket-header .muted { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ticket-header .move-to-epic { display: inline-flex; gap: 6px; align-items: center; flex-shrink: 0; white-space: nowrap; color: var(--muted); }
-.ticket-header .move-to-epic select { max-width: 160px; color: var(--text); }
 .sessions-bar { display: flex; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .session { display: flex; gap: 6px; white-space: nowrap; }
 .session.active { border-color: var(--accent); }
@@ -609,6 +607,13 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-bar > i.turn-external { background: var(--turn-external); }
 .turn-bar > i.turn-done { background: var(--turn-done); }
 .turn-bar > i.turn-idle { background: var(--turn-idle); }
+
+/* epic 里的 feature（BTL-246）：一行一个，展开是它的 ticket 表。名字太长省略，不撑宽页面。 */
+.scope-blocks h3 { margin-bottom: 2px; }
+.scope-block { border-top: 1px solid var(--border); }
+.scope-block > summary { display: flex; gap: 10px; align-items: baseline; padding: 6px 2px; cursor: pointer; }
+.scope-block > summary .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.scope-block > summary .line { flex-shrink: 0; }
 
 /* 侧栏（UI 重做第 2 层）：树在自己的区域里滚动，「总控」「Butler 自己」和防休眠始终看得见；点和数字靠右。 */
 .sidebar .ticket-groups { min-height: 0; }

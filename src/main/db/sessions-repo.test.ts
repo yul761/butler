@@ -183,14 +183,12 @@ describe("SessionsRepo.listConvTargets (UI redesign layer 4)", () => {
   it("picks heads that Butler opened or that belong somewhere, active since the cutoff", () => {
     const { db, repo, run } = setup();
     const feature = Number(db.prepare(`INSERT INTO features (name, workspace_dir, created_at) VALUES ('f', '/w', 1)`).run().lastInsertRowid);
-    const epic = Number(db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES ('e', '/e', 1)`).run().lastInsertRowid);
     for (const k of ["PROJ-1", "PROJ-2", "PROJ-3"]) db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES (?, '/r', 'branch', 'b', 1)`).run(k);
     const add = (id: string, extra: Partial<Parameters<SessionsRepo["insertIfAbsent"]>[0]> = {}) =>
       repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 100, lastActivityAt: 100, ...extra });
     add("butler-origin", { origin: "butler" });
     add("ticket", { ticketKey: "PROJ-1" });
     add("feature", { featureId: feature });
-    add("epic", { epicId: epic });
     add("controller", { butler: true });
     add("stray");
     repo.recordHeadless("headless", "/w", 100);
@@ -199,6 +197,45 @@ describe("SessionsRepo.listConvTargets (UI redesign layer 4)", () => {
     add("new-segment", { ticketKey: "PROJ-2" });
     repo.setReplacedBy("old-segment", "new-segment");
     add("stale", { ticketKey: "PROJ-3", createdAt: 10, lastActivityAt: 10 });
-    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["butler-origin", "controller", "epic", "feature", "new-segment", "ticket"]);
+    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["butler-origin", "controller", "feature", "new-segment", "ticket"]);
+  });
+});
+
+/** 以前的 epic session（BTL-246 去掉了 epic 层）：新代码不写 epic_id，老行只能直接改表做出来。 */
+function legacyEpicSession(db: ReturnType<typeof memDb>, repo: SessionsRepo, id: string, at = 100) {
+  const epic = Number(db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES (?, '/e', 1)`).run(`e-${id}`).lastInsertRowid);
+  repo.insertIfAbsent({ id, ticketKey: null, cwd: "/e", origin: "butler", createdAt: at, lastActivityAt: at });
+  db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epic, id);
+}
+
+describe("SessionsRepo keeps the old epic sessions out (BTL-246)", () => {
+  it("does not list them as unclaimed, as conversation targets or as hibernated", () => {
+    const { db, repo } = setup();
+    legacyEpicSession(db, repo, "epic");
+    repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 100, lastActivityAt: 100 });
+    repo.setHibernated("epic", 100, "idle", null);
+    expect(repo.listUnclaimed(0).map((s) => s.id)).toEqual(["loose"]);
+    expect(repo.listConvTargets(0).map((s) => s.id)).toEqual([]);
+    expect(repo.listHibernated()).toEqual([]);
+  });
+
+  it("keeps a new segment after /clear out too, and never makes it a coordinator or a feature's session", () => {
+    const { db, repo } = setup();
+    const feature = Number(db.prepare(`INSERT INTO features (name, workspace_dir, created_at) VALUES ('f', '/w', 1)`).run().lastInsertRowid);
+    legacyEpicSession(db, repo, "old");
+    repo.insertIfAbsent({ id: "new", ticketKey: null, cwd: "/e", origin: "discovered", createdAt: 200, lastActivityAt: 200, featureId: feature, coordinator: true });
+    repo.setReplacedBy("old", "new", "clear");
+    expect(repo.get("new")).toMatchObject({ coordinator: false, featureId: null });
+    expect(repo.listUnclaimed(0)).toEqual([]);
+    expect(repo.listConvTargets(0)).toEqual([]);
+  });
+
+  it("leaves the other sessions' segments without an epic", () => {
+    const { db, repo } = setup();
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 1 });
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 2 });
+    repo.setReplacedBy("a", "b", "clear");
+    expect(db.prepare(`SELECT epic_id FROM sessions WHERE id = 'b'`).get()).toEqual({ epic_id: null });
+    expect(repo.listUnclaimed(0).map((s) => s.id)).toEqual(["b"]);
   });
 });

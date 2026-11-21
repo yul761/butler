@@ -8,7 +8,7 @@ const options = sessionsOptionsFromEnv(process.env);
 sanitizeEnv(process.env);
 
 if (!options) {
-  process.stderr.write("butler-sessions: BUTLER_SCOPE=butler, BUTLER_TICKET, BUTLER_FEATURE or BUTLER_EPIC, BUTLER_CONTROL_REQUESTS and BUTLER_CONTROL_RESULTS are required\n");
+  process.stderr.write("butler-sessions: BUTLER_SCOPE=butler, BUTLER_TICKET or BUTLER_FEATURE, BUTLER_CONTROL_REQUESTS and BUTLER_CONTROL_RESULTS are required\n");
   process.exit(2);
 }
 const server = new SessionsServer(options);

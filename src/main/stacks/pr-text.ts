@@ -28,7 +28,7 @@ const ZH = {
   stateLabel: { branch_only: "纯分支", draft: "draft", ready: "可以 review", merged: "已合并" } as Record<string, string>,
   reviewNow: "← 现在看这个",
   footer: "_这段由 Butler 维护。_",
-  overviewTitle: (name: string, epic: string | null) => `[stack] ${name}${epic ? `（${epic}）` : ""}`,
+  overviewTitle: (name: string) => `[stack] ${name}`,
   overviewIntro: "按 review 顺序列出这个栈的各层。从标出来的那一层开始看；它合并后 Butler 会把下一层 rebase 好并开成可以 review 的 PR。",
   conflict: (p: { branch: string; files: string[]; onto: string; upstream: string; above: string[]; push: boolean }) =>
     `Butler：给栈做 rebase 时，分支 ${p.branch} 有冲突（${p.files.join("、")}）。真分支都没改。请在这个 worktree 里执行：\n\n` +
@@ -59,7 +59,7 @@ const ZH = {
     noSuchRepo: (wanted: string, names: string) => `没有仓库 ${wanted}。可以用的：${names}`,
     ticketNoRepo: (key: string, repo: string) => `ticket ${key} 没有仓库 ${repo}`,
     notYours: "这个栈不在你管的范围里",
-    stackOnNoTicket: (key: string) => `stack_on：这个 feature 下没有 ticket ${key}`,
+    stackOnNoTicket: (key: string) => `stack_on：这个 epic 下没有 ticket ${key}`,
     stackOnRepo: (key: string, repo: string) => `stack_on：ticket ${key} 没有仓库 ${repo}，新 ticket 的仓库都要是它有的`,
     stackOnFailed: (msg: string) => `ticket 建好了，但没接进栈：${msg}`,
   },
@@ -85,7 +85,7 @@ const EN: StackTexts = {
   stateLabel: { branch_only: "branch", draft: "draft", ready: "ready for review", merged: "merged" },
   reviewNow: "← review this one now",
   footer: "_Maintained by Butler._",
-  overviewTitle: (name, epic) => `[stack] ${name}${epic ? ` (${epic})` : ""}`,
+  overviewTitle: (name) => `[stack] ${name}`,
   overviewIntro: "The layers of this stack in review order. Start with the marked one; when it merges, Butler rebases the next layer and opens it for review.",
   conflict: (p) =>
     `Butler: rebasing the stack hit a conflict on branch ${p.branch} (${p.files.join(", ")}). No real branch was changed. In this worktree, run:\n\n` +
@@ -116,7 +116,7 @@ const EN: StackTexts = {
     noSuchRepo: (wanted, names) => `There is no repository ${wanted}. Available: ${names}`,
     ticketNoRepo: (key, repo) => `Ticket ${key} has no repository ${repo}`,
     notYours: "This stack is outside what you manage",
-    stackOnNoTicket: (key) => `stack_on: this feature has no ticket ${key}`,
+    stackOnNoTicket: (key) => `stack_on: this epic has no ticket ${key}`,
     stackOnRepo: (key, repo) => `stack_on: ticket ${key} has no repository ${repo}; every repository of the new ticket must be one it has`,
     stackOnFailed: (msg) => `The ticket was created but not added to the stack: ${msg}`,
   },

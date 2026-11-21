@@ -36,7 +36,7 @@ describe("renderFeatureTickets", () => {
         "  （还没有 handoff）",
       ].join("\n"),
     );
-    expect(renderFeatureTickets([], "zh")).toBe("（这个 feature 下还没有 ticket）");
+    expect(renderFeatureTickets([], "zh")).toBe("（这个 epic 下还没有 ticket）");
   });
 
   it("lists each ticket with its PRs and the latest handoff (English)", () => {
@@ -54,7 +54,7 @@ describe("renderFeatureTickets", () => {
       ].join("\n"),
     );
     expect(hasChinese(text)).toBe(false);
-    expect(renderFeatureTickets([], "en")).toBe("(this feature has no tickets yet)");
+    expect(renderFeatureTickets([], "en")).toBe("(this epic has no tickets yet)");
   });
 });
 

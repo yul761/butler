@@ -3,7 +3,7 @@ export type ReadonlyDecision = { allow: true } | { allow: false; reason: string 
 /** 记忆类 MCP 工具（任何 server）只要名字以这些后缀结尾就是只读。 */
 export const READONLY_MCP_SUFFIXES: readonly string[] = ["__recall", "__facts", "__why"];
 /** butler-sessions 里只读的工具：所有 list_* 加 session_activity（精确匹配，不含 report / ask_user 等写操作）。 */
-export const READONLY_SESSIONS_TOOLS: readonly string[] = ["list_epics", "list_features", "list_tickets", "list_prs", "list_repos", "list_sessions", "list_inbox", "list_stacks", "session_activity"];
+export const READONLY_SESSIONS_TOOLS: readonly string[] = ["list_features", "list_tickets", "list_prs", "list_repos", "list_sessions", "list_inbox", "list_stacks", "session_activity"];
 
 const SESSIONS_PREFIX = "mcp__butler-sessions__";
 const PLAIN_TOOLS = new Set(["Read", "Grep", "Glob", "TodoWrite", "ToolSearch"]);

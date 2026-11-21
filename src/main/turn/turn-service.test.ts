@@ -13,7 +13,7 @@ const ticket = (key: string, over: Partial<TicketView> = {}): TicketView => ({
   effectiveStatus: "active", sessions: [], hiddenSessions: [], waiting: false, ...over,
 });
 const sv = (id: string, over: Partial<SessionView> = {}): SessionView =>
-  ({ id, ticketKey: "BTL-1", origin: "butler", termId: `t-${id}`, replacedBy: null, coordinator: false, repoId: 1, featureId: null, epicId: null, butler: false, ...over }) as SessionView;
+  ({ id, ticketKey: "BTL-1", origin: "butler", termId: `t-${id}`, replacedBy: null, coordinator: false, repoId: 1, featureId: null, butler: false, ...over }) as SessionView;
 const watched = (over: Partial<WatchedPr> = {}): WatchedPr => ({
   ticketKey: "BTL-1", prId: 1, repoId: 1, repoPath: "/r", branch: "feat", number: 3, url: URL3, state: "open", review: null,
   ci: "failing", headSha: "abc", checkedAt: 10, readError: false, ...over,
@@ -28,13 +28,13 @@ const act = (kind: SessionActivity["kind"], over: Partial<SessionActivity> = {})
   sessionId: "s1", kind, detail: null, background: false, startedAt: 100, lastOutputAt: 200, stuck: false, reason: null, action: null, lastOutput: [], ...over,
 });
 const ask = (id: number, sessionId: string, over: Partial<InboxItem> = {}): InboxItem => ({
-  id, kind: "decision", sessionId, ticketKey: null, featureId: null, epicId: null, text: `q${id}`, options: ["a", "b"], context: null,
+  id, kind: "decision", sessionId, ticketKey: null, featureId: null, text: `q${id}`, options: ["a", "b"], context: null,
   reportKind: null, status: "pending", answer: null, createdAt: 50 + id, resolvedAt: null, ...over,
 });
 
 function fakeDeps(over: Partial<TurnServiceDeps> = {}): TurnServiceDeps {
   return {
-    tickets: () => [], features: () => [], epics: () => [], hibernatedHeads: () => [], coordinators: () => [],
+    tickets: () => [], features: () => [], hibernatedHeads: () => [], coordinators: () => [],
     head: (id) => ({ id }) as never, prs: () => [], prRow: () => null, recipient: () => ({ ok: false, reason: "no_session" }),
     activity: () => null, lastReplyAt: () => null, needsYou: () => ({ reasons: new Map(), categories: new Map() }), decisions: () => [],
     lastReport: () => null, refreshing: () => false, mergeQueued: () => false, risk: () => null, ciUndelivered: () => [],
@@ -186,15 +186,14 @@ describe("TurnService.board", () => {
   it("a coordinator's ask_user is a loose you/answer with the inbox id", () => {
     const c = sv("c1", { ticketKey: null, featureId: 3, coordinator: true });
     const s = new TurnService(fakeDeps({
-      features: () => [{ id: 3, name: "F", epicId: 1, archivedAt: null, tickets: [] } as never],
-      epics: () => [{ id: 1, name: "E", archivedAt: null } as never],
-      coordinators: () => [{ session: c, featureId: 3, epicId: null, target: { page: "feature", id: 3, sessionId: "c1" }, title: "F" }],
-      decisions: () => [ask(7, "c1", { featureId: 3, epicId: 1 })],
+      features: () => [{ id: 3, name: "F", archivedAt: null, tickets: [] } as never],
+      coordinators: () => [{ session: c, featureId: 3, target: { page: "feature", id: 3, sessionId: "c1" }, title: "F" }],
+      decisions: () => [ask(7, "c1", { featureId: 3 })],
       activity: (id) => (id === "c1" ? act("idle") : null),
     }));
     const b = s.board(null);
     expect(b.items).toContainEqual(expect.objectContaining({
-      ticketKey: null, featureId: 3, epicId: 1, turn: { owner: "you", kind: "answer", question: "q7", options: ["a", "b"], askId: 7, sessionId: "c1" }, since: 57,
+      ticketKey: null, featureId: 3, turn: { owner: "you", kind: "answer", question: "q7", options: ["a", "b"], askId: 7, sessionId: "c1" }, since: 57,
     }));
     // 只有那条 ask：总控停着本身不算要你动手
     expect(b.counts.you).toBe(1);
@@ -203,13 +202,13 @@ describe("TurnService.board", () => {
   it("an idle coordinator without asks only shows when it needs you", () => {
     const c = sv("c1", { ticketKey: null, featureId: null, butler: true, coordinator: true });
     const working = new TurnService(fakeDeps({
-      coordinators: () => [{ session: c, featureId: null, epicId: null, target: { page: "butler", sessionId: "c1" }, title: null }],
+      coordinators: () => [{ session: c, featureId: null, target: { page: "butler", sessionId: "c1" }, title: null }],
       activity: () => act("edit"),
     }));
     expect(working.board(null).items).toEqual([]);
-    // 停在提示符等输入的总控（Butler、feature、epic 的）不占一张「轮到你」
+    // 停在提示符等输入的总控（Butler、feature 的）不占一张「轮到你」
     const idle = new TurnService(fakeDeps({
-      coordinators: () => [{ session: c, featureId: null, epicId: null, target: { page: "butler", sessionId: "c1" }, title: null }],
+      coordinators: () => [{ session: c, featureId: null, target: { page: "butler", sessionId: "c1" }, title: null }],
       activity: () => act("idle"), lastReplyAt: () => 500,
     }));
     expect(idle.board(null).items).toEqual([]);
@@ -220,7 +219,7 @@ describe("TurnService.board", () => {
     const c = sv("b1", { ticketKey: null, butler: true, coordinator: true });
     const limit = { kind: "usage_limit" as const, resetsAt: null, message: "limit" };
     const s = new TurnService(fakeDeps({
-      coordinators: () => [{ session: c, featureId: null, epicId: null, target: { page: "butler", sessionId: "b1" }, title: null }],
+      coordinators: () => [{ session: c, featureId: null, target: { page: "butler", sessionId: "b1" }, title: null }],
       activity: () => act("idle", { sessionId: "b1", limit } as never), lastReplyAt: () => 500,
     }));
     const b = s.board(null);
@@ -299,7 +298,7 @@ describe("TurnService.board", () => {
     const s = new TurnService(d);
     const b = s.board(null);
     expect(b.items).toEqual([{
-      ticketKey: null, pr: { repo: "o/b", number: 2, title: "t2", url: "https://github.com/o/b/pull/2" }, epicId: null, featureId: null,
+      ticketKey: null, pr: { repo: "o/b", number: 2, title: "t2", url: "https://github.com/o/b/pull/2" }, featureId: null,
       turn: { owner: "you", kind: "review", author: "amy", title: "t2", url: "https://github.com/o/b/pull/2" }, since: 9, others: 0,
     }]);
     // 第 2 层每次收到 turn:changed 都会不带 filter 重取：不能每次都去补查

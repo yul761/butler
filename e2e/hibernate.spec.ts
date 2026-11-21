@@ -2,7 +2,8 @@ import type { Page } from "@playwright/test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, newButton, openSettingsGroup, openTicketTab, type Sandbox, terminalText, test } from "./fixtures";
+import { DatabaseSync } from "node:sqlite";
+import { completeWizard, create, expect, makeGitRepo, newButton, newTicket, openSettingsGroup, openTab, openTicketTab, type Sandbox, terminalText, test } from "./fixtures";
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const fakeLog = (s: Sandbox) => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
@@ -11,6 +12,16 @@ async function typeLine(page: Page, line: string): Promise<void> {
   await page.locator(".terminal-wrap:visible .xterm").click();
   await page.keyboard.type(line);
   await page.keyboard.press("Enter");
+}
+
+/** 这个 session 被休眠的时间（没休眠是 null）。 */
+function hibernatedAt(s: Sandbox, id: string): number | null {
+  const db = new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000, readOnly: true });
+  try {
+    return (db.prepare("SELECT hibernated_at FROM sessions WHERE id = ?").get(id) as { hibernated_at: number | null } | undefined)?.hibernated_at ?? null;
+  } finally {
+    db.close();
+  }
 }
 
 /** 这个目录里某个 session 收到的用户消息。 */
@@ -26,7 +37,7 @@ function messagesOf(s: Sandbox, cwd: string, id: string): string[] {
  * 休眠（WS-M B）：停着、看不见的总控被结束掉，只留下对话记录；子 session 给它的汇报把它唤醒（claude --resume），
  * 汇报送进去，休眠前的对话还在。
  */
-test("a hibernated coordinator wakes for a report, gets it, and still has its conversation", async ({ makeSandbox, launch }) => {
+test("a hibernated feature coordinator wakes for a report, gets it, and still has its conversation", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
   s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000", BUTLER_HIBERNATE_AFTER_MS: "3000" };
@@ -43,21 +54,14 @@ test("a hibernated coordinator wakes for a report, gets it, and still has its co
   await openSettingsGroup(page, "sessions");
   await expect(page.getByLabel(S.hib.settings.enabled, { exact: true })).toBeChecked();
 
-  // ticket 带一个 worktree 仓库：一个总控、一个普通 session。
-  await (await newButton(page, "newTicket")).click();
-  await page.getByLabel(S.ticketKey, { exact: true }).fill("HIB-1");
-  await page.getByRole("button", { name: S.create, exact: true }).click();
-  await expect(page.getByRole("heading", { name: "HIB-1", exact: true })).toBeVisible();
-  // 仓库条、session 条和终端都在 ticket 页的「终端」页签里（默认停在「概况」）。
-  await openTicketTab(page, "terminal");
-  await page.getByRole("button", { name: `+ ${S.addRepo}`, exact: true }).click();
-  await page.getByRole("textbox", { name: `${S.repo} ${S.pick}`, exact: true }).fill(s.repo);
-  await page.getByRole("radio", { name: S.worktree, exact: true }).check();
-  await page.getByRole("button", { name: S.add, exact: true }).click();
-  await expect(page.locator(".modal")).toHaveCount(0);
-
-  await page.getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
-  const workspace = join(s.butlerHome, "workspaces", "HIB-1");
+  // feature（BTL-246 以后 ticket 没有总控了）：feature 总控说一句话，再去 ticket 页开一个普通 session。
+  const shop = join(s.dir, "shop");
+  makeGitRepo(join(shop, "frontend"));
+  makeGitRepo(join(shop, "backend"));
+  await create(page, await newButton(page, "newFeature"), S.featureName, "hib", shop);
+  const workspace = join(s.dir, "shop-features", "hib");
+  await openTab(page, S.lay.tabControl);
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
   const coordinatorLine = new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(workspace)} `);
   await expect.poll(() => fakeLog(s)).toMatch(coordinatorLine);
   const coordinator = coordinatorLine.exec(fakeLog(s))![1];
@@ -65,13 +69,12 @@ test("a hibernated coordinator wakes for a report, gets it, and still has its co
   await typeLine(page, "remember-me-42");
   await expect.poll(() => terminalText(page)).toContain("收到：remember-me-42");
 
-  // 开一个普通 session：总控的终端看不见了，停够了就休眠。
+  // 去 ticket 页开普通 session：总控的终端看不见了，停够了就休眠。
+  await newTicket(page, "HIB-1", "frontend", "backend");
+  await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
-  const coordinatorButton = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(".place", { hasText: new RegExp(`^${escapeRe(S.coordinator)}$`) }) });
-  await expect(coordinatorButton.locator(".hib-badge")).toHaveText(S.hib.badge, { timeout: 30_000 });
-  await expect(coordinatorButton.locator(".session .action")).toHaveText(S.hib.open);
-  await expect(coordinatorButton.getByRole("button", { name: new RegExp(`^${escapeRe(S.hib.pinNamed(""))}`) })).toBeVisible();
+  await expect.poll(() => hibernatedAt(s, coordinator), { timeout: 30_000 }).not.toBeNull();
 
   // 普通 session 给总控汇报：总控醒来（--resume 同一个 session），汇报送进去。
   const mcpResults = () => [...fakeLog(s).matchAll(/ mcp result (.+)/g)].length;
@@ -80,7 +83,10 @@ test("a hibernated coordinator wakes for a report, gets it, and still has its co
   await expect.poll(() => fakeLog(s), { timeout: 30_000 }).toContain(`interactive resume ${coordinator} `);
   await expect.poll(() => messagesOf(s, workspace, coordinator).at(-1) ?? "", { timeout: 30_000 }).toContain("child-done-7");
 
-  // 切过去（它要是又睡了，切过去也会唤醒）：原来的对话还在。
+  // 回 feature 页切过去（它要是又睡了，切过去也会唤醒）：原来的对话还在。
+  await page.locator(".sidebar .ticket.feature").click();
+  await openTab(page, S.lay.tabControl);
+  const coordinatorButton = page.locator(".feature-page .sessions-bar .session-wrap").first();
   await coordinatorButton.locator(".session").click();
   await expect(coordinatorButton.locator(".hib-badge")).toHaveCount(0, { timeout: 30_000 });
   await expect.poll(() => terminalText(page), { timeout: 30_000 }).toContain(`fake claude ready (${coordinator.slice(0, 8)})`);

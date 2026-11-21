@@ -1,8 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { butlerMcpFile, epicMcpFile, featureMcpFile, hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, FORK_MCP_SUBDIR, removeEpicMcpConfig, removeTerminalMcpConfig, terminalMcpFile, writeTerminalMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { butlerMcpFile, featureMcpFile, hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, FORK_MCP_SUBDIR, removeTerminalMcpConfig, terminalMcpFile, writeTerminalMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
 const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
@@ -44,12 +44,11 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
       },
     });
     const plain = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1" }) });
-    const boss = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: sessions, coordinator: true });
-    expect(boss).toBe(join(mcpDir, "tickets", "coordinator", "PROJ-1.json"));
-    // 叫 PROJ-1-coordinator 的 ticket 也不会和 PROJ-1 的总控配置撞上。
-    expect(ticketMcpFile(mcpDir, "PROJ-1-coordinator")).not.toBe(boss);
+    // 以前 ticket 总控（BTL-246 起没有了）留下的配置：归档时一起删掉。
+    const boss = join(mcpDir, "tickets", "coordinator", "PROJ-1.json");
+    mkdirSync(dirname(boss), { recursive: true });
+    writeFileSync(boss, "{}");
     expect(readFileSync(plain, "utf8")).not.toContain("butler-sessions");
-    expect(readFileSync(boss, "utf8")).not.toContain("BUTLER_MEMBER");
     removeTicketMcpConfigs(mcpDir, "PROJ-1");
     expect(existsSync(plain) || existsSync(boss)).toBe(false);
     removeTicketMcpConfigs(mcpDir, "PROJ-1");
@@ -121,9 +120,9 @@ describe("feature memory and coordinator config (design 2026-10-26)", () => {
     expect(t.env.BUTLER_MEMBER).toBeUndefined();
   });
 
-  it("gives a normal ticket session a member sessions server: only ask_user and report (BTL-190 2+3)", () => {
-    const m = sessionsServer({ launcher, scope: { ticketKey: "A-1", member: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(m.env).toMatchObject({ BUTLER_TICKET: "A-1", BUTLER_MEMBER: "1", BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" });
+  it("gives a ticket session a sessions server scoped to its ticket (BTL-190 2+3)", () => {
+    const m = sessionsServer({ launcher, scope: { ticketKey: "A-1" }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(m.env).toMatchObject({ BUTLER_TICKET: "A-1", BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" });
   });
 
   it("writes and removes the feature's config under mcp/features", () => {
@@ -137,47 +136,6 @@ describe("feature memory and coordinator config (design 2026-10-26)", () => {
   });
 });
 
-describe("epic memory (design 2026-11-01)", () => {
-  const servers = (o: { ticketKey?: string; featureId?: number | null; epicId?: number | null }) => memoryServers({ launcher, statecoreDir: "/sc", ...o });
-
-  it("gives the epic session butler-epic and butler-workspace, and no ticket or feature memory", () => {
-    const epic = servers({ epicId: 4 });
-    expect(Object.keys(epic).sort()).toEqual(["butler-epic", "butler-workspace"]);
-    expect(epic["butler-epic"].env.STATECORE_SCOPE).toBe("epic:4");
-  });
-
-  it("adds butler-epic to the coordinator and the ticket sessions of a feature in an epic", () => {
-    expect(Object.keys(servers({ featureId: 7, epicId: 4 }))).toEqual(["butler-workspace", "butler-feature", "butler-epic"]);
-    const ticket = servers({ ticketKey: "DMS-1", featureId: 7, epicId: 4 });
-    expect(Object.keys(ticket)).toEqual(["butler-memory", "butler-workspace", "butler-feature", "butler-epic"]);
-    expect(ticket["butler-epic"].env.STATECORE_SCOPE).toBe("epic:4");
-  });
-
-  it("leaves features and tickets outside an epic with the servers they had", () => {
-    expect(servers({ featureId: 7, epicId: null })).toEqual(servers({ featureId: 7 }));
-    expect(servers({ ticketKey: "DMS-1", featureId: 7, epicId: null })).toEqual(servers({ ticketKey: "DMS-1", featureId: 7 }));
-    expect(servers({ ticketKey: "A-1", epicId: null })).toEqual(servers({ ticketKey: "A-1" }));
-    expect(Object.keys(servers({ ticketKey: "A-1", featureId: null, epicId: null }))).toEqual(["butler-memory", "butler-workspace"]);
-  });
-
-  it("writes the epic's config under mcp/epics", () => {
-    const mcpDir = tempDir();
-    const file = writeEpicMcpConfig({ mcpDir, epicId: 4, servers: servers({ epicId: 4 }) });
-    expect(file).toBe(epicMcpFile(mcpDir, 4));
-    expect(file).toBe(join(mcpDir, "epics", "4.json"));
-    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers({ epicId: 4 }) });
-    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
-  });
-
-  it("removes the epic's config, and does not mind when there is none", () => {
-    const mcpDir = tempDir();
-    const file = writeEpicMcpConfig({ mcpDir, epicId: 4, servers: servers({ epicId: 4 }) });
-    removeEpicMcpConfig(mcpDir, 4);
-    expect(existsSync(file)).toBe(false);
-    expect(() => removeEpicMcpConfig(mcpDir, 4)).not.toThrow();
-  });
-});
-
 describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
   it("are only ask_user and report of the sessions server", () => {
     expect(SESSIONS_AUTO_ALLOW).toEqual([
@@ -186,29 +144,29 @@ describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
       "mcp__butler-sessions__list_prs", "mcp__butler-sessions__list_sessions", "mcp__butler-sessions__session_activity",
       "mcp__butler-sessions__list_inbox", "mcp__butler-sessions__progress_overview", "mcp__butler-sessions__metrics_overview",
       "mcp__butler-sessions__list_stacks",
+      "mcp__butler-sessions__reorder_features", "mcp__butler-sessions__set_ticket_feature",
       "mcp__butler-sessions__submit_evidence", "mcp__butler-sessions__pre_review_result", "mcp__butler-sessions__pr_assessment",
     ]);
     // 会动别的终端或建东西的不在里面。
-    for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_feature_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode"]) {
+    for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_epic_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode"]) {
       expect(SESSIONS_AUTO_ALLOW).not.toContain(`mcp__butler-sessions__${t}`);
     }
   });
 });
 
-describe("epic sessions server (design 2026-11-01)", () => {
-  it("points the epic session's sessions server at the epic", () => {
-    const s = sessionsServer({ launcher, scope: { epicId: 3 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(s.env.BUTLER_EPIC).toBe("3");
-    expect(s.env.BUTLER_FEATURE).toBeUndefined();
-    expect(s.env.BUTLER_TICKET).toBeUndefined();
-    expect(s.env.BUTLER_FEATURE_EPIC).toBeUndefined();
+describe("feature coordinator sessions server", () => {
+  it("points it at the feature and nothing else", () => {
+    const s = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
+    expect(s.env.BUTLER_FEATURE).toBe("7");
+    for (const k of ["BUTLER_TICKET", "BUTLER_SCOPE"]) expect(s.env[k]).toBeUndefined();
   });
 
-  it("marks a feature coordinator that belongs to an epic", () => {
-    const inEpic = sessionsServer({ launcher, scope: { featureId: 7, epic: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(inEpic.env).toMatchObject({ BUTLER_FEATURE: "7", BUTLER_FEATURE_EPIC: "1" });
-    const plain = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(plain.env.BUTLER_FEATURE_EPIC).toBeUndefined();
+  it("no longer writes the old epic variables (BTL-246)", () => {
+    for (const scope of [{ featureId: 7 }, { ticketKey: "A-1" }, { butler: true as const }]) {
+      const env = sessionsServer({ launcher, scope, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"].env;
+      expect(env.BUTLER_EPIC).toBeUndefined();
+      expect(env.BUTLER_FEATURE_EPIC).toBeUndefined();
+    }
   });
 });
 
@@ -217,7 +175,7 @@ describe("Butler 总控 config (BTL-190 5)", () => {
     expect(Object.keys(memoryServers({ launcher, statecoreDir: "/sc" }))).toEqual(["butler-workspace"]);
     const s = sessionsServer({ launcher, scope: { butler: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
     expect(s.env.BUTLER_SCOPE).toBe("butler");
-    for (const k of ["BUTLER_EPIC", "BUTLER_FEATURE", "BUTLER_TICKET", "BUTLER_MEMBER"]) expect(s.env[k]).toBeUndefined();
+    for (const k of ["BUTLER_FEATURE", "BUTLER_TICKET", "BUTLER_MEMBER"]) expect(s.env[k]).toBeUndefined();
     expect(s.env).toMatchObject({ BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" });
   });
 
@@ -236,7 +194,7 @@ describe("shared MCP config (WS-M H)", () => {
   it("turns the stdio servers into hub routes: memory by scope, butler-sessions with its variables and the terminal as caller", () => {
     const servers = {
       ...memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1", featureId: 3 }),
-      ...sessionsServer({ launcher, scope: { ticketKey: "PROJ-1", member: true }, requestsDir: "/req", resultsDir: "/res" }),
+      ...sessionsServer({ launcher, scope: { ticketKey: "PROJ-1" }, requestsDir: "/req", resultsDir: "/res" }),
     };
     expect(hubRoutes(servers, "term-1")).toEqual({
       "butler-memory": { server: "memory", scope: "ticket:PROJ-1" },
@@ -245,7 +203,7 @@ describe("shared MCP config (WS-M H)", () => {
       "butler-sessions": {
         server: "sessions",
         from: "term-1",
-        env: { BUTLER_TICKET: "PROJ-1", BUTLER_MEMBER: "1", BUTLER_LANG: expect.any(String), BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" },
+        env: { BUTLER_TICKET: "PROJ-1", BUTLER_LANG: expect.any(String), BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" },
       },
     });
   });

@@ -40,7 +40,7 @@ describe("ReviewQueueList (待 review，全部工作页的「更多」里)", () 
 });
 
 describe("AllWorkBody more section", () => {
-  const props = { board: null, epics: [], features: [], tickets: [], unclaimedCount: 0, now: 0, onNewTicket: noop, onNewFeature: noop, onNewEpic: noop, onGo: noop, onOpenTicket: noop };
+  const props = { board: null, features: [], tickets: [], unclaimedCount: 0, now: 0, onNewTicket: noop, onNewFeature: noop, onGo: noop, onOpenTicket: noop };
   it("has the review queue next to stacks and intake when opened", () => {
     // focusMore 打开「更多」；静态渲染里队列还没取到数据，只有标题。
     const h = renderToStaticMarkup(createElement(AllWorkBody, { ...props, focusMore: "stacks" }));

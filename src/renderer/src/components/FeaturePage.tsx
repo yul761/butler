@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
-import type { EpicView, FeatureView, NowTarget } from "../../../shared/types";
+import type { FeatureView, NowTarget } from "../../../shared/types";
 import type { Route } from "../App";
 import { api, ButlerError } from "../api";
 import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
 import type { NameCtx } from "../home-view";
-import { flatGroup, scopeBoardView, scopeTotal, ticketRows, ticketsWithPr } from "../scope-view";
+import { blockGroups, scopeBoardView, scopeTotal, ticketRows, ticketsWithPr } from "../scope-view";
 import { S } from "../strings";
 import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
 import { Messages } from "./MessageList";
-import type { SummaryRunMessage } from "./FeatureSummaryTab";
-import { FeatureSummaryTab } from "./FeatureSummaryTab";
+import { FeatureSummaryTab, type SummaryRunMessage } from "./FeatureSummaryTab";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";
 import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
@@ -19,8 +18,6 @@ import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts"
 
 interface Props {
   feature: FeatureView;
-  /** 可以移进去的 epic（未归档的）。 */
-  epics: EpicView[];
   onOpenTicket: (key: string) => void;
   /** 新建的 ticket：重读列表后跳过去。 */
   onTicketCreated: (key: string) => void;
@@ -42,9 +39,9 @@ const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.
 
 /**
  * feature 页（UI 重做第 3 层，spec §5.2）：标题栏下五个页签——概况、进行中、全部 ticket、总控（终端和对话）、AI 总结。
- * 同 epic 页，范围小一层；前三个共用一份 turn:board（只按这个 feature 取）。
+ * 前三个共用一份 turn:board（只按这个 feature 取）。
  */
-export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, focusSession, landing, focusTerm, landingSeq, onOpenTarget, ctx, onFix, onGo }: Props) {
+export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSession, landing, focusTerm, landingSeq, onOpenTarget, ctx, onFix, onGo }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [newTicket, setNewTicket] = useState(false);
   const showError = (e: unknown) => setError(errorText(e));
@@ -97,24 +94,11 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
         workspaceDir={feature.workspaceDir}
         onRename={(name) => api.renameFeature(feature.id, name)}
         archiveLabel={S.archiveFeature}
-        archivingLabel={feature.epicId === null ? S.archiving : S.archivingSummaries}
+        archivingLabel={S.archiving}
         onArchive={() => api.archiveFeature(feature.id)}
         onError={showError}
-      >
-        {(epics.length > 0 || feature.epicId !== null) && (
-          <label className="move-to-epic" title={S.moveToEpicHint}>
-            {S.moveToEpic}
-            <select
-              value={feature.epicId ?? ""}
-              onChange={(e) => api.moveFeature(feature.id, e.target.value === "" ? null : Number(e.target.value)).catch(showError)}
-            >
-              <option value="">{S.noEpic}</option>
-              {epics.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-            </select>
-          </label>
-        )}
-      </WorkspaceHeader>
-      {/* 页面的错误（改名、归档、移动、打开 session）放在页签外面：停在哪个页签都看得到。 */}
+      />
+      {/* 页面的错误（改名、归档、打开 session）放在页签外面：停在哪个页签都看得到。 */}
       {error && <p className="error">{error}</p>}
 
       <PageTabs
@@ -136,6 +120,8 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
                 emptyText={S.noFeatureTickets}
                 cards={{ ctx, now, onFix, onOpen: openTarget, onGo, onChanged: turn.reload }}
                 onOpenRow={(id) => onOpenTicket(String(id))}
+                blocks={blockGroups(feature.blocks, feature.tickets, ticketRows(feature.tickets, b.items), S)}
+                onOpenTicket={onOpenTicket}
                 onCreate={() => setNewTicket(true)}
               />
             )}</ScopeBoard>,
@@ -150,7 +136,7 @@ export function FeaturePage({ feature, epics, onOpenTicket, onTicketCreated, foc
             label: <>{S.lay.tabTickets}<span className="muted">{feature.tickets.length}</span></>,
             content: (
               <ScopeBoard turn={turn}>
-                {(b) => <ScopeTicketTable groups={flatGroup(ticketRows(feature.tickets, b.items))} onOpenTicket={onOpenTicket} emptyText={S.noFeatureTickets} />}
+                {(b) => <ScopeTicketTable groups={blockGroups(feature.blocks, feature.tickets, ticketRows(feature.tickets, b.items), S)} onOpenTicket={onOpenTicket} emptyText={S.noFeatureTickets} />}
               </ScopeBoard>
             ),
           },

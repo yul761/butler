@@ -6,8 +6,8 @@ import { MIGRATIONS } from "./migrations";
 import { SessionsRepo } from "./sessions-repo";
 import { TicketsRepo } from "./tickets-repo";
 
-const owner = (sessionId: string, o: { ticketKey?: string | null; featureId?: number | null; epicId?: number | null } = {}) => ({
-  sessionId, ticketKey: o.ticketKey ?? null, featureId: o.featureId ?? null, epicId: o.epicId ?? null,
+const owner = (sessionId: string, o: { ticketKey?: string | null; featureId?: number | null } = {}) => ({
+  sessionId, ticketKey: o.ticketKey ?? null, featureId: o.featureId ?? null,
 });
 
 describe("InboxRepo (BTL-190 2+3)", () => {
@@ -19,9 +19,9 @@ describe("InboxRepo (BTL-190 2+3)", () => {
 
   it("stores a decision with options and context, records an answer without resolving, then resolves once", () => {
     const repo = new InboxRepo(memDb());
-    const id = repo.addDecision({ ...owner("s1", { ticketKey: "BTL-1", featureId: 3, epicId: 2 }), question: "Which?", options: ["A", "B"], context: "ctx", createdAt: 10 });
+    const id = repo.addDecision({ ...owner("s1", { ticketKey: "BTL-1", featureId: 3 }), question: "Which?", options: ["A", "B"], context: "ctx", createdAt: 10 });
     expect(repo.get(id)).toMatchObject({
-      kind: "decision", sessionId: "s1", ticketKey: "BTL-1", featureId: 3, epicId: 2, text: "Which?", options: ["A", "B"], context: "ctx",
+      kind: "decision", sessionId: "s1", ticketKey: "BTL-1", featureId: 3, text: "Which?", options: ["A", "B"], context: "ctx",
       reportKind: null, status: "pending", answer: null, createdAt: 10, resolvedAt: null,
     });
     expect(repo.setAnswer(id, "A")).toBe(true);
@@ -36,28 +36,28 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(repo.pendingDecisions()).toEqual([]);
   });
 
-  it("filters decisions and reports by feature or epic; recent reports are newest first and limited", () => {
+  it("filters decisions and reports by feature; recent reports are newest first and limited", () => {
     const repo = new InboxRepo(memDb());
-    const a = repo.addDecision({ ...owner("s1", { featureId: 3, epicId: 2 }), question: "a", options: [], context: null, createdAt: 1 });
-    const b = repo.addDecision({ ...owner("s2", { featureId: 4, epicId: 2 }), question: "b", options: [], context: null, createdAt: 2 });
+    const a = repo.addDecision({ ...owner("s1", { featureId: 3 }), question: "a", options: [], context: null, createdAt: 1 });
+    const b = repo.addDecision({ ...owner("s2", { featureId: 4 }), question: "b", options: [], context: null, createdAt: 2 });
     const c = repo.addDecision({ ...owner("s3", { ticketKey: "X-1" }), question: "c", options: [], context: null, createdAt: 3 });
     expect(repo.get(a)?.options).toEqual([]);
     expect(repo.pendingDecisions({ featureId: 3 }).map((d) => d.id)).toEqual([a]);
-    expect(repo.pendingDecisions({ epicId: 2 }).map((d) => d.id)).toEqual([a, b]);
+    expect(repo.pendingDecisions({ featureId: 4 }).map((d) => d.id)).toEqual([b]);
     expect(repo.pendingDecisions().map((d) => d.id)).toEqual([a, b, c]);
 
-    const r1 = repo.addReport({ ...owner("s1", { featureId: 3, epicId: 2 }), text: "p", kind: "progress", status: "dismissed", createdAt: 5 });
-    const r2 = repo.addReport({ ...owner("s1", { featureId: 3, epicId: 2 }), text: "d", kind: "done", status: "pending", createdAt: 6 });
-    const r3 = repo.addReport({ ...owner("s2", { featureId: 4, epicId: 2 }), text: "b", kind: "blocked", status: "pending", createdAt: 7 });
+    const r1 = repo.addReport({ ...owner("s1", { featureId: 3 }), text: "p", kind: "progress", status: "dismissed", createdAt: 5 });
+    const r2 = repo.addReport({ ...owner("s1", { featureId: 3 }), text: "d", kind: "done", status: "pending", createdAt: 6 });
+    const r3 = repo.addReport({ ...owner("s2", { featureId: 4 }), text: "b", kind: "blocked", status: "pending", createdAt: 7 });
     expect(repo.get(r1)).toMatchObject({ kind: "report", reportKind: "progress", status: "dismissed", resolvedAt: 5 });
     expect(repo.get(r2)).toMatchObject({ reportKind: "done", status: "pending", resolvedAt: null });
     expect(repo.recentReports({ featureId: 3 }, 10).map((r) => r.id)).toEqual([r2, r1]);
-    expect(repo.recentReports({ epicId: 2 }, 2).map((r) => r.id)).toEqual([r3, r2]);
+    expect(repo.recentReports({ featureId: 3 }, 1).map((r) => r.id)).toEqual([r2]);
     expect(repo.recentReports(null, 10).map((r) => r.id)).toEqual([r3, r2, r1]);
     // 翻页（UI 重做第 5 层）：before 是上一页最早一条汇报的 id，只要排在它后面的（created_at, id 都更旧）。
     expect(repo.recentReports(null, 10, r3).map((r) => r.id)).toEqual([r2, r1]);
     expect(repo.recentReports(null, 1, r3).map((r) => r.id)).toEqual([r2]);
-    expect(repo.recentReports({ epicId: 2 }, 10, r2).map((r) => r.id)).toEqual([r1]);
+    expect(repo.recentReports({ featureId: 3 }, 10, r2).map((r) => r.id)).toEqual([r1]);
     expect(repo.recentReports(null, 10, r1)).toEqual([]);
     expect(repo.recentReports(null, 10, undefined).map((r) => r.id)).toEqual([r3, r2, r1]);
     // 不认识的 id、不是汇报的 id、这个范围以外的汇报都当没给（和 conv:list 的 R3 一样）。
@@ -89,19 +89,19 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(repo.get(id)).toMatchObject({ status: "answered", resolvedAt: 6 });
   });
 
-  it("dismissPending ends the pending decisions and reports of a ticket, feature or epic and counts them", () => {
+  it("dismissPending ends the pending decisions and reports of a ticket or feature and counts them", () => {
     const repo = new InboxRepo(memDb());
-    const a = repo.addDecision({ ...owner("s1", { ticketKey: "X-1", featureId: 3, epicId: 2 }), question: "a", options: [], context: null, createdAt: 1 });
-    const r = repo.addReport({ ...owner("s1", { ticketKey: "X-1", featureId: 3, epicId: 2 }), text: "r", kind: "done", status: "pending", createdAt: 2 });
-    const b = repo.addDecision({ ...owner("s2", { ticketKey: "X-2", featureId: 3, epicId: 2 }), question: "b", options: [], context: null, createdAt: 3 });
-    const c = repo.addDecision({ ...owner("s3", { epicId: 2 }), question: "c", options: [], context: null, createdAt: 4 });
+    const a = repo.addDecision({ ...owner("s1", { ticketKey: "X-1", featureId: 3 }), question: "a", options: [], context: null, createdAt: 1 });
+    const r = repo.addReport({ ...owner("s1", { ticketKey: "X-1", featureId: 3 }), text: "r", kind: "done", status: "pending", createdAt: 2 });
+    const b = repo.addDecision({ ...owner("s2", { ticketKey: "X-2", featureId: 3 }), question: "b", options: [], context: null, createdAt: 3 });
+    const c = repo.addDecision({ ...owner("s3", { featureId: 5 }), question: "c", options: [], context: null, createdAt: 4 });
     repo.resolve(b, "answered", 5);
     expect(repo.dismissPending({ ticketKey: "X-1" }, 9)).toBe(2);
     expect(repo.get(a)).toMatchObject({ status: "dismissed", resolvedAt: 9 });
     expect(repo.get(r)?.status).toBe("dismissed");
     expect(repo.dismissPending({ featureId: 3 }, 10)).toBe(0);
     expect(repo.get(b)).toMatchObject({ status: "answered", resolvedAt: 5 });
-    expect(repo.dismissPending({ epicId: 2 }, 11)).toBe(1);
+    expect(repo.dismissPending({ featureId: 5 }, 11)).toBe(1);
     expect(repo.get(c)?.status).toBe("dismissed");
   });
 

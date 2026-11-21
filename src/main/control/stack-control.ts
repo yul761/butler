@@ -6,8 +6,8 @@ import type { StackService } from "../stacks/stack-service";
 import { T } from "../stacks/pr-text";
 import { samePath } from "../tickets/ticket-service";
 
-/** 谁在问：feature 总控、epic session（只能 list_stacks）、Butler 总控。 */
-export type StackScope = { kind: "feature"; featureId: number } | { kind: "epic"; epicId: number } | { kind: "butler" };
+/** 谁在问：feature 总控、Butler 总控。 */
+export type StackScope = { kind: "feature"; featureId: number } | { kind: "butler" };
 
 export interface StackControlDeps {
   service: Pick<StackService, "define" | "view" | "rebaseNow" | "setLayerMode" | "canStackOn" | "stackOn">;
@@ -41,32 +41,29 @@ export class StackControl {
   private scopeTickets(scope: StackScope): Ticket[] {
     const all = this.d.tickets();
     if (scope.kind === "butler") return all;
-    if (scope.kind === "feature") return all.filter((t) => t.featureId === scope.featureId);
-    const fids = new Set(this.d.features.list().filter((f) => f.epicId === scope.epicId).map((f) => f.id));
-    return all.filter((t) => t.featureId !== null && fids.has(t.featureId));
+    return all.filter((t) => t.featureId === scope.featureId);
   }
 
   /**
-   * 看：栈是它的（feature / epic 对得上），或者有一层是它的 ticket。
+   * 看：栈是它的（feature 对得上），或者有一层是它的 ticket。
    * 改（write）：栈是它的，或者每一层都是它的 ticket——别的 feature 的层不能借一层共有的就被 rebase、force push。
    */
   private belongs(scope: StackScope, s: StackView, keys: Set<string>, write = false): boolean {
     if (scope.kind === "butler") return true;
     if (scope.kind === "feature" && s.featureId === scope.featureId) return true;
-    if (scope.kind === "epic" && s.epicId === scope.epicId) return !write;
     const mine = (l: StackView["layers"][number]) => l.ticketKey !== null && keys.has(l.ticketKey);
     return write ? s.layers.filter((l) => l.state !== "merged").every(mine) : s.layers.some(mine);
   }
 
   private async mine(scope: StackScope): Promise<StackView[]> {
     const keys = new Set(this.scopeTickets(scope).map((t) => t.key));
-    const v = await this.d.service.view({ epicId: null, featureId: null });
+    const v = await this.d.service.view({ featureId: null });
     return v.stacks.filter((s) => this.belongs(scope, s, keys));
   }
 
   /** 要改的那个栈（只有改的操作用它）。 */
   private async one(scope: StackScope, id: number): Promise<StackView | string> {
-    const all = await this.d.service.view({ epicId: null, featureId: null });
+    const all = await this.d.service.view({ featureId: null });
     const s = all.stacks.find((x) => x.id === id);
     if (!s) return T().errors.notFound;
     const keys = new Set(this.scopeTickets(scope).map((t) => t.key));
@@ -75,8 +72,6 @@ export class StackControl {
 
   async handle(scope: StackScope, req: StackControlOp): Promise<ControlResult> {
     if (req.op === "list_stacks") return ok((await this.mine(scope)).map(stackOut));
-    // epic session 只能看
-    if (scope.kind === "epic") return fail(T().errors.notYours);
     if (req.op === "stack_define") return this.define(scope, req);
     const s = await this.one(scope, req.stack);
     if (typeof s === "string") return fail(s);
@@ -93,12 +88,12 @@ export class StackControl {
   }
 
   private async after(id: number): Promise<object | null> {
-    const v = await this.d.service.view({ epicId: null, featureId: null });
+    const v = await this.d.service.view({ featureId: null });
     const s = v.stacks.find((x) => x.id === id);
     return s ? stackOut(s) : null;
   }
 
-  private async define(scope: Exclude<StackScope, { kind: "epic" }>, req: Extract<StackControlOp, { op: "stack_define" }>): Promise<ControlResult> {
+  private async define(scope: StackScope, req: Extract<StackControlOp, { op: "stack_define" }>): Promise<ControlResult> {
     const e = T().errors;
     const tickets = this.scopeTickets(scope);
     const feature = scope.kind === "feature" ? this.d.features.get(scope.featureId) : null;
@@ -154,9 +149,8 @@ export class StackControl {
       const only = fids.size === 1 ? [...fids][0]! : null;
       featureId = only ?? null;
     }
-    const epicId = featureId !== null ? (feature ?? this.d.features.get(featureId))?.epicId ?? null : null;
     const r = await this.d.service.define({
-      repoPath, branches, name: req.name ?? null, featureId, epicId, source: "mcp", stackId: req.stack ?? null,
+      repoPath, branches, name: req.name ?? null, featureId, source: "mcp", stackId: req.stack ?? null,
     });
     if (!r.ok) return fail(r.message);
     return ok({ stack: r.stackId ? await this.after(r.stackId) : null });
@@ -187,7 +181,7 @@ export class StackControl {
     for (const sp of startPoints) {
       const r = t.repos.find((x) => samePath(x.repoPath, sp.repoPath));
       if (!r) continue;
-      const res = await this.d.service.stackOn({ repoPath: r.repoPath, parentBranch: sp.ref, branch: r.branch, featureId: f.id, epicId: f.epicId });
+      const res = await this.d.service.stackOn({ repoPath: r.repoPath, parentBranch: sp.ref, branch: r.branch, featureId: f.id });
       if (!res.ok) problems.push(T().errors.stackOnFailed(res.message));
     }
     return problems;

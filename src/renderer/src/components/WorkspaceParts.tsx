@@ -15,7 +15,7 @@ import { SessionCost } from "./SessionCost";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
 
-/** feature 页和 epic 页共用的部分：标题栏，以及页面下半部分的仓库条、session 条和终端。 */
+/** feature 页的标题栏，以及页面下半部分的仓库条、session 条和终端（session 条和终端 Butler 总控页也用）。 */
 
 interface SessionPanesOptions {
   /** 打开 sessionId 这个 session；不给就新开一个。 */

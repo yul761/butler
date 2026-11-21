@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ButlerView, OpenSessionResult } from "../../../shared/types";
-import { api } from "../api";
+import { api, ButlerError } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { defaultConvRoot } from "../ticket-view";
-import { epicErrorText } from "./epic-row";
 import { ControlConversation } from "./ControlConversation";
 import { Messages } from "./MessageList";
 import { ControlSplit } from "./ScopeParts";
@@ -83,7 +82,7 @@ export function ButlerPage({ focusSession }: Props) {
 
 function ButlerArea({ view, focusSession }: Props & { view: ButlerView }) {
   const [error, setError] = useState<string | null>(null);
-  const errorText = (e: unknown) => epicErrorText(e, S);
+  const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
   // 复盘分析 session 和 Butler 总控的共用一组终端：从复盘页「在 Claude 里打开」跳过来时，focusSession 是复盘分析 session。
   const panes = useSessionPanes([...view.sessions, ...view.lessonSessions], {
     openSession: (sessionId) => {

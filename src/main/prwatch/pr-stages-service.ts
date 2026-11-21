@@ -9,11 +9,6 @@ import { derivePrStages, type DeriveInput } from "./pr-stages";
 export interface PrStagesServiceDeps {
   /** byFeature 含已归档的 ticket。 */
   tickets: { get(key: string): Ticket | null; byFeature(featureId: number): Ticket[] };
-  features: {
-    /** 含已归档的 feature。 */
-    byEpic(epicId: number): { id: number; epicId: number | null }[];
-    get(id: number): { id: number; epicId: number | null } | null;
-  };
   stages: Pick<PrStageRepo, "forTicket" | "upperDesign">;
   /** 这个 ticket 链接的 PR。 */
   prs: { byTicket(ticketKey: string): TicketPr[] };
@@ -57,12 +52,11 @@ export class PrStagesService {
       const t = this.d.tickets.get(scope.ticketKey);
       return t ? [t] : [];
     }
-    if ("featureId" in scope) return this.d.tickets.byFeature(scope.featureId);
-    return this.d.features.byEpic(scope.epicId).flatMap((f) => this.d.tickets.byFeature(f.id));
+    return this.d.tickets.byFeature(scope.featureId);
   }
 
   private ticketOf(t: Ticket, since: number | null): PrStagesTicket {
-    const upper = t.featureId === null ? [] : this.d.stages.upperDesign(t.featureId, this.d.features.get(t.featureId)?.epicId ?? null);
+    const upper = t.featureId === null ? [] : this.d.stages.upperDesign(t.featureId);
     const repos = [...t.repos].sort((a, b) => a.id - b.id);
     // 从没读成功过的行（checkedAt 0）只是链接时的说法，不当 PR 显示：handoff 里的 URL 可能是模型编的、永远读不到。读到以后照常显示。
     const prs = this.d.prs.byTicket(t.key).filter((p) => p.checkedAt > 0).sort((a, b) => (b.openedAt ?? b.linkedAt) - (a.openedAt ?? a.linkedAt) || b.id - a.id);

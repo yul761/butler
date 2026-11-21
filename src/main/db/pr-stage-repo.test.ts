@@ -16,7 +16,7 @@ function addRepo(db: Db, key: string): number {
 }
 
 const ev = (o: Partial<Omit<StageEvent, "id">> = {}): Omit<StageEvent, "id"> => ({
-  ticketKey: "T-1", repoId: null, prId: null, branch: null, featureId: null, epicId: null, sessionId: null, kind: "skill", at: 1, data: {}, ...o,
+  ticketKey: "T-1", repoId: null, prId: null, branch: null, featureId: null, sessionId: null, kind: "skill", at: 1, data: {}, ...o,
 });
 
 describe("PrStageRepo", () => {
@@ -41,16 +41,15 @@ describe("PrStageRepo", () => {
     expect([...repo.ticketsWith("first_commit")]).toEqual(["T-1"]);
   });
 
-  it("upperDesign returns feature and epic skill events only", () => {
+  it("upperDesign returns the feature's design skill events only", () => {
     const repo = new PrStageRepo(memDb());
     repo.add(ev({ ticketKey: null, featureId: 3, at: 2, data: { name: "a", category: "design" } }), "f");
-    repo.add(ev({ ticketKey: null, epicId: 9, at: 1, data: { name: "b", category: "design" } }), "e9");
-    repo.add(ev({ ticketKey: null, epicId: 8, at: 1, data: { name: "c", category: "design" } }), "e8");
+    repo.add(ev({ ticketKey: null, featureId: 4, at: 1, data: { name: "b", category: "design" } }), "f4");
     repo.add(ev({ ticketKey: null, featureId: 3, at: 3, data: { name: "r", category: "review" } }), "rev");
     repo.add(ev({ ticketKey: null, featureId: 3, kind: "push", at: 3, data: { category: "design" } }), "nonskill");
     repo.add(ev({ ticketKey: "T-1", featureId: 3, at: 3, data: { name: "t", category: "design" } }), "ticketlvl");
-    expect(repo.upperDesign(3, 9).map((e) => e.data.name)).toEqual(["b", "a"]);
-    expect(repo.upperDesign(3, null).map((e) => e.data.name)).toEqual(["a"]);
+    expect(repo.upperDesign(3).map((e) => e.data.name)).toEqual(["a"]);
+    expect(repo.upperDesign(4).map((e) => e.data.name)).toEqual(["b"]);
   });
 
   const mkPr = (db: Db, n: number): number =>

@@ -7,7 +7,7 @@ import { FirstRunHome, FirstRunHomeView, type FirstRunHomeProps } from "./FirstR
 afterEach(() => setUiLang("zh"));
 
 const HAN = /[一-鿿]/;
-const noop = (): FirstRunHomeProps => ({ onNewTicket: vi.fn(), onNewFeature: vi.fn(), onNewEpic: vi.fn(), onOpenSettings: vi.fn() });
+const noop = (): FirstRunHomeProps => ({ onNewTicket: vi.fn(), onNewFeature: vi.fn(), onOpenSettings: vi.fn() });
 const render = (p: FirstRunHomeProps = noop()) => renderToStaticMarkup(createElement(FirstRunHome, p));
 const text = (html: string) => html.replace(/<[^>]+>/g, " ");
 
@@ -24,12 +24,13 @@ function find(node: ReactNode, testid: string): ReactElement<{ onClick?: () => v
 }
 
 describe("first-run home", () => {
-  it("offers the three ways to start, each with its own button", () => {
+  it("offers the two ways to start, each with its own button", () => {
     const html = render();
     expect(html).toContain('data-testid="first-run-home"');
-    for (const [id, label] of [["first-run-new-ticket", S.newTicket], ["first-run-new-feature", S.newFeature], ["first-run-new-epic", S.newEpic]] as const) {
+    for (const [id, label] of [["first-run-new-ticket", S.newTicket], ["first-run-new-feature", S.newFeature]] as const) {
       expect(html).toMatch(new RegExp(`data-testid="${id}"[^>]*>[^<]*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
     }
+    expect(html).not.toContain("first-run-new-epic");
   });
 
   it("draws the main flow in order", () => {
@@ -63,7 +64,7 @@ describe("first-run home", () => {
   it("calls each callback once from its own button", () => {
     const p = noop();
     const tree = FirstRunHomeView(p);
-    for (const [id, cb] of [["first-run-new-ticket", p.onNewTicket], ["first-run-new-feature", p.onNewFeature], ["first-run-new-epic", p.onNewEpic], ["first-run-settings-link", p.onOpenSettings]] as const) {
+    for (const [id, cb] of [["first-run-new-ticket", p.onNewTicket], ["first-run-new-feature", p.onNewFeature], ["first-run-settings-link", p.onOpenSettings]] as const) {
       const el = find(tree, id);
       expect(el, id).not.toBeNull();
       el!.props.onClick!();

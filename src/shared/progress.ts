@@ -58,7 +58,6 @@ export const PROGRESS_BUCKETS = ["merged", "blocked", "in_review", "in_progress"
 export type ProgressBucket = (typeof PROGRESS_BUCKETS)[number];
 
 export interface ProgressFilter {
-  epicId?: number | null;
   featureId?: number | null;
 }
 
@@ -133,7 +132,6 @@ export interface ProgressFeature {
   /** null = 不属于任何 feature 的 ticket。 */
   id: number | null;
   name: string | null;
-  epicId: number | null;
   /** 汇总的第一句；没有汇总为 null。 */
   line: string | null;
   summaryAt: number | null;
@@ -156,10 +154,9 @@ export interface ProgressFreshness {
 }
 
 export interface ProgressView {
-  filter: { epicId: number | null; featureId: number | null };
-  /** 下拉用：未归档的 epic 和 feature。 */
-  epics: { id: number; name: string }[];
-  features: { id: number; name: string; epicId: number | null }[];
+  filter: { featureId: number | null };
+  /** 下拉用：未归档的 feature。 */
+  features: { id: number; name: string }[];
   counts: Record<ProgressBucket, number> & { total: number };
   stuck: ProgressStuck[];
   stacks: ProgressStackRepo[];

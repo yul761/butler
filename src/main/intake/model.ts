@@ -99,6 +99,8 @@ const FetchTicket = z.object({
   storyPoints: z.number().nullable(),
   components: z.array(z.string()),
   subtasks: z.array(z.object({ key: z.string(), title: z.string() })),
+  /** 父 epic（BTL-246 §7）；没有为 null。 */
+  epic: z.object({ key: z.string(), title: z.string() }).nullable().optional(),
 });
 const FetchSchema = z.object({ tickets: z.array(FetchTicket) });
 const FETCH_JSON = toCliJsonSchema(FetchSchema);
@@ -108,13 +110,13 @@ export function fetchPrompt(query: string, lang: "zh" | "en"): string {
     ? [
       "Use the issue tracker tools you have to list the tickets that match this query. Only read; never comment, assign or change status.",
       `Query: ${query}`,
-      "For each ticket return key, title, the full description as plain text, type, labels, priority, url, story points (null if none), components and subtasks (key and title).",
+      "For each ticket return key, title, the full description as plain text, type, labels, priority, url, story points (null if none), components, subtasks (key and title) and its parent epic (key and title; null if it has none).",
       "Return at most 30 tickets. Answer as JSON.",
     ].join("\n")
     : [
       "用你有的 tracker 工具列出符合这个查询的 ticket。只读：不要评论、不要分配、不要改状态。",
       `查询：${query}`,
-      "每个 ticket 给出 key、标题、完整描述（纯文本）、类型、标签、优先级、链接、故事点（没有为 null）、组件和子任务（key 和标题）。",
+      "每个 ticket 给出 key、标题、完整描述（纯文本）、类型、标签、优先级、链接、故事点（没有为 null）、组件、子任务（key 和标题）和它的父 epic（parent epic：key 和标题，没有为 null）。",
       "最多 30 个。用 JSON 回答。",
     ].join("\n");
 }

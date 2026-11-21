@@ -16,11 +16,10 @@ export interface BoardTicket {
   /** 第一条以后没回答的 ask_user（R6）。 */
   moreAsks: TimedTurn[];
 }
-export interface LooseItem { turn: Turn; since: number; epicId: number | null; featureId: number | null }
+export interface LooseItem { turn: Turn; since: number; featureId: number | null }
 export interface BoardReview { repo: string; number: number; title: string; url: string; author: string; since: number }
 export interface BoardInput {
-  epics: { id: number; name: string }[];
-  features: { id: number; name: string; epicId: number | null }[];
+  features: { id: number; name: string }[];
   tickets: BoardTicket[];
   loose: LooseItem[];
   reviews: BoardReview[];
@@ -32,7 +31,6 @@ export interface BoardInput {
 /** 一个 ticket 算一次的结果：ticket 的 turn、来源 PR、since、别的 PR 个数。counts、items 和 scope 行都用这一份。 */
 interface TicketCalc {
   t: BoardTicket;
-  epicId: number | null;
   turn: Turn;
   pr: BoardPr | null;
   since: number;
@@ -50,7 +48,7 @@ const prRef = (p: { repo: string; number: number; title: string; url: string }) 
 
 const isAsk = (o: TimedTurn) => o.turn.owner === "you" && o.turn.kind === "answer";
 
-function calcTicket(t: BoardTicket, epicId: number | null): TicketCalc {
+function calcTicket(t: BoardTicket): TicketCalc {
   const session = mostUrgent(t.others);
   const r = ticketTurn(t.prs.map((p) => p.turn), session?.turn ?? null);
   // 按引用找来源：PR 的 turn 还是 others 里那条
@@ -58,50 +56,46 @@ function calcTicket(t: BoardTicket, epicId: number | null): TicketCalc {
   const since = pr ? pr.since : session && session.turn === r.turn ? session.since : 0;
   const extraAsks = t.others.filter((o) => o.turn !== r.turn && isAsk(o));
   const youCount = (r.turn.owner === "you" ? 1 : 0) + t.moreAsks.filter((a) => a.turn.owner === "you").length + extraAsks.length;
-  return { t, epicId, turn: r.turn, pr, since, others: r.others, extraAsks, youCount };
+  return { t, turn: r.turn, pr, since, others: r.others, extraAsks, youCount };
 }
 
 const normFilter = normTurnFilter;
 
 export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null): TurnBoard {
   const filter = normFilter(rawFilter);
-  const featureEpic = new Map(input.features.map((f) => [f.id, f.epicId]));
-  const epicOfFeature = (id: number | null) => (id === null ? null : featureEpic.get(id) ?? null);
-  const calcs = input.tickets.map((t) => calcTicket(t, epicOfFeature(t.featureId)));
+  const calcs = input.tickets.map(calcTicket);
 
   // 范围
   const inScope = (c: TicketCalc) =>
     filter === null ? true
       : filter.ticketKey !== undefined ? c.t.key === filter.ticketKey
-        : filter.featureId !== undefined ? c.t.featureId === filter.featureId
-          : c.epicId === filter.epicId;
+        : c.t.featureId === filter.featureId;
   const looseInScope = (l: LooseItem) =>
     filter === null ? true
       : filter.ticketKey !== undefined ? false
-        : filter.featureId !== undefined ? l.featureId === filter.featureId
-          : (l.epicId ?? epicOfFeature(l.featureId)) === filter.epicId;
+        : l.featureId === filter.featureId;
   const scoped = calcs.filter(inScope);
   const loose = input.loose.filter(looseInScope);
 
   const looseItem = (l: LooseItem): TurnItem => ({
-    ticketKey: null, pr: null, epicId: l.epicId ?? epicOfFeature(l.featureId), featureId: l.featureId, turn: l.turn, since: l.since, others: 0,
+    ticketKey: null, pr: null, featureId: l.featureId, turn: l.turn, since: l.since, others: 0,
   });
   const askItem = (c: TicketCalc, a: TimedTurn): TurnItem => ({
-    ticketKey: c.t.key, pr: null, epicId: c.epicId, featureId: c.t.featureId, turn: a.turn, since: a.since, others: 0,
+    ticketKey: c.t.key, pr: null, featureId: c.t.featureId, turn: a.turn, since: a.since, others: 0,
   });
 
   // items
   const items: TurnItem[] = [];
   if (filter === null) {
     for (const c of scoped) {
-      items.push({ ticketKey: c.t.key, pr: c.pr ? prRef(c.pr) : null, epicId: c.epicId, featureId: c.t.featureId, turn: c.turn, since: c.since, others: c.others, ticketLevel: true });
+      items.push({ ticketKey: c.t.key, pr: c.pr ? prRef(c.pr) : null, featureId: c.t.featureId, turn: c.turn, since: c.since, others: c.others, ticketLevel: true });
       for (const a of c.t.moreAsks) items.push(askItem(c, a));
       for (const a of c.extraAsks) items.push(askItem(c, a));
     }
     for (const l of loose) items.push(looseItem(l));
     for (const r of input.reviews) {
       items.push({
-        ticketKey: null, pr: prRef(r), epicId: null, featureId: null,
+        ticketKey: null, pr: prRef(r), featureId: null,
         turn: { owner: "you", kind: "review", author: r.author, title: r.title, url: r.url }, since: r.since, others: 0,
       });
     }
@@ -110,9 +104,9 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
     // ticket 的轮次是从哪一条来的（calcTicket 按引用选的），那一条标上 ticketLevel、带上别的 PR 个数：前端照它显示，不再自己选。
     const own = (c: TicketCalc, turn: Turn) => (turn === c.turn ? { others: c.others, ticketLevel: true as const } : { others: 0 });
     for (const c of scoped) {
-      for (const p of c.t.prs) items.push({ ticketKey: c.t.key, pr: prRef(p), epicId: c.epicId, featureId: c.t.featureId, turn: p.turn, since: p.since, ...own(c, p.turn) });
+      for (const p of c.t.prs) items.push({ ticketKey: c.t.key, pr: prRef(p), featureId: c.t.featureId, turn: p.turn, since: p.since, ...own(c, p.turn) });
       const s = mostUrgent(c.t.others);
-      if (s) items.push({ ticketKey: c.t.key, pr: null, epicId: c.epicId, featureId: c.t.featureId, turn: s.turn, since: s.since, ...own(c, s.turn) });
+      if (s) items.push({ ticketKey: c.t.key, pr: null, featureId: c.t.featureId, turn: s.turn, since: s.since, ...own(c, s.turn) });
       for (const a of c.t.moreAsks) items.push(askItem(c, a));
       // 上面 session 那条已经出了的不重复出
       for (const a of c.extraAsks) if (a !== s) items.push(askItem(c, a));
@@ -150,38 +144,17 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
     const you = cs.reduce((n, c) => n + c.youCount, 0) + looseYou((l) => l.featureId === f.id);
     return row("feature", f.id, f.name, ticketMembers(cs), you);
   };
-  const epicRow = (e: { id: number; name: string }): ScopeTurnRow => {
-    const fs = input.features.filter((f) => f.epicId === e.id);
-    const cs = fs.flatMap((f) => ticketsOfFeature(f.id));
-    const r = row("epic", e.id, e.name, ticketMembers(cs), 0);
-    r.youCount = fs.reduce((n, f) => n + featureRow(f).youCount, 0) + looseYou((l) => l.epicId === e.id && l.featureId === null);
-    // epic 的成员是 feature：每组取活跃 ticket 的 since 的最大值（这一组最近一次动的时间）
-    r.slowest = slowestOf(fs.flatMap((f) => {
-      const act = ticketsOfFeature(f.id).filter((c) => live(c.turn.owner));
-      const top = mostUrgent(act);
-      return top ? [{ name: f.name, owner: top.turn.owner, progressAt: Math.max(...act.map((c) => c.since)) }] : [];
-    }));
-    return r;
-  };
-
   const scopes: ScopeTurnRow[] = [];
   if (filter === null) {
-    for (const e of input.epics) scopes.push(epicRow(e));
-    for (const f of input.features) if (f.epicId === null) scopes.push(featureRow(f));
+    for (const f of input.features) scopes.push(featureRow(f));
     for (const c of calcs) if (c.t.featureId === null) scopes.push(ticketRow(c));
   } else if (filter.ticketKey !== undefined) {
     for (const c of scoped) scopes.push(ticketRow(c));
-  } else if (filter.featureId !== undefined) {
+  } else {
     const f = input.features.find((x) => x.id === filter.featureId);
     if (f) {
       scopes.push(featureRow(f));
       for (const c of scoped) scopes.push(ticketRow(c));
-    }
-  } else {
-    const e = input.epics.find((x) => x.id === filter.epicId);
-    if (e) {
-      scopes.push(epicRow(e));
-      for (const f of input.features) if (f.epicId === e.id) scopes.push(featureRow(f));
     }
   }
 

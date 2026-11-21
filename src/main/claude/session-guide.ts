@@ -5,10 +5,9 @@ import type { Lang } from "../../shared/i18n";
 import type { SessionLesson } from "../../shared/lessons";
 
 /**
- * ticket：ticket session 和修复 session；coordinator：ticket 总控、feature 总控；epic：epic session（BTL-190 第 4 点起单独一种，它开的是 feature 总控）；
- * butler：Butler 总控（BTL-190 第 5 点），只看不建。lessons：复盘分析 session（看一次复盘运行），没有 Butler 的 MCP 工具，也不会被换新。
+ * ticket：ticket session 和修复 session；coordinator：feature 总控；butler：Butler 总控（BTL-190 第 5 点），只看不建。lessons：复盘分析 session（看一次复盘运行），没有 Butler 的 MCP 工具，也不会被换新。
  */
-export type GuideKind = "ticket" | "coordinator" | "epic" | "butler" | "lessons";
+export type GuideKind = "ticket" | "coordinator" | "butler" | "lessons";
 
 /** 每段一个函数，按语言返回一段文字（返回 null 表示这个 kind 不需要）；后续计划往里加段落。 */
 export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | null> = [
@@ -40,7 +39,7 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
         "不要拿它问\"要我继续吗\"\"还有别的吗\"这类话，做完就直接停下。做完一块、或者卡住了，用 report 汇报一句（kind 是 done 或 blocked），管你的总控会收到；中间的进展用 progress。"
       : "When you need the user to answer a specific question or make a decision, call ask_user from butler-sessions (question, optional options, context), then end your turn and wait for the answer to arrive. " +
         "Do not use it for \"shall I continue?\" or \"anything else?\"; when you are done, just stop. When you finish a piece of work or get blocked, send one line with report (kind done or blocked) and your coordinator will get it; use progress for updates along the way.",
-  // 总控和 epic session：子 session 的问题和汇报 Butler 已经处理了。
+  // feature 总控：子 session 的问题和汇报 Butler 已经处理了。
   (lang, kind) =>
     kind === "ticket" || kind === "butler" || kind === "lessons"
       ? null
@@ -54,30 +53,34 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "要给子 session 改任务、告诉它接口变了，用 butler-sessions 的 send_message：消息排进它的信箱，它在忙也会在下一次调用工具时读到，不用等它停下；真要它马上停手才带 interrupt: true。"
         : "To change a child session's task or tell it an interface changed, use send_message from butler-sessions: the message goes into its mailbox and a busy session reads it at its next tool call, so you do not wait for it to stop; pass interrupt: true only when it really has to stop now.",
-  // epic session 用 start_feature 让 feature 开工（BTL-190 第 4 点）。
-  (lang, kind) =>
-    kind !== "epic"
-      ? null
-      : lang === "zh"
-        ? "规划定下来、用户同意开工后，用 start_feature 打开 feature 的总控，它会收到规划并直接建 ticket、开子 session；建 feature 时带 start: true 等于建完马上 start_feature。" +
-          "用户还没同意开工时不要调用。按规划的先后顺序开；能同时开几个只看这台电脑的内存，内存不够时 start_feature 会说还剩多少、要多少，等前面的做完再开。总控已经在跑时不会再开一个，要补充说明就带上 instructions。"
-        : "Once the plan is settled and the user agrees to start, open a feature's coordinator with start_feature: it gets the plan and goes on to create tickets and start child sessions. Passing start: true to create_feature is the same as calling start_feature right after creating. " +
-          "Do not call it before the user agrees to start. Open them in the order the plan sets; how many run at once depends only on this computer's memory, and when memory runs short start_feature says how much is left and how much is needed, so wait for earlier ones to finish. A coordinator that is already running is not opened again, and you can pass instructions to add to what it is doing.",
-  // Butler 总控（BTL-190 第 5 点）：看全部，不建不删；跨 epic 协调用 send_message。
+  // 全局总控（内部叫 Butler 总控，BTL-190 第 5 点）：看全部，不建不删；跨 epic 协调用 send_message。
   (lang, kind) =>
     kind !== "butler"
       ? null
       : lang === "zh"
-        ? "你是 Butler 总控：全局只有一个，看得到所有 epic、feature、ticket、PR 和 session（list_epics、list_features、list_tickets、list_prs、list_sessions、session_activity、list_inbox）；要整体进度、每个 PR 轮到谁，先用 progress_overview，一次就够；用户问 Butler 的效果（PR 周期、评论、人介入、花费，和 Butler 之前比）时用 metrics_overview。" +
-          "除了栈（见下）你不能建、删、结束任何东西；要哪个 epic、feature 做什么，用 send_message 发给它（feature 或 epic 填名字或 id），消息排进它的信箱，它在忙也照样送到（下一次调用工具时读到），终端关着时 Butler 会接着它最近的对话打开再发。" +
-          "它这一轮做完时的回复会以【回复】自动送回给你，不用轮询。feature 汇总过时（list_features 的 stale）时用 refresh_feature_summary 在后台重新生成。" +
-          "各 epic session done / blocked 的汇报会在你停下来时自动送到。list_inbox 里未决的提问已经摆在用户面前，不要再问一遍；需要用户自己做的事（合 PR、回答问题、处理红了的 CI）用 ask_user 列出来，然后结束这一轮。" +
+        ? "你是全局总控：全局只有一个，看得到所有 epic、ticket、PR 和 session（list_epics、list_features、list_tickets、list_prs、list_sessions、session_activity、list_inbox）；要整体进度、每个 PR 轮到谁，先用 progress_overview，一次就够；用户问 Butler 的效果（PR 周期、评论、人介入、花费，和 Butler 之前比）时用 metrics_overview。" +
+          "一个 epic（对应一个 Jira epic）有一个 epic 总控、一个工作区和一份共享记忆；epic 里可以分几个 feature，每个 feature 只是一组 ticket 和一个顺序，没有自己的总控（list_features 看）。" +
+          "除了栈（见下）你不能建、删、结束任何东西；要哪个 epic 做什么，用 send_message 发给它的总控（epic 填名字或 id），消息排进它的信箱，它在忙也照样送到（下一次调用工具时读到），终端关着时 Butler 会接着它最近的对话打开再发。" +
+          "它这一轮做完时的回复会以【回复】自动送回给你，不用轮询。epic 汇总过时（list_epics 的 stale）时用 refresh_epic_summary 在后台重新生成。" +
+          "list_inbox 里未决的提问已经摆在用户面前，不要再问一遍；需要用户自己做的事（合 PR、回答问题、处理红了的 CI）用 ask_user 列出来，然后结束这一轮。" +
           "report 只存下来，不会送给任何人。"
-        : "You are Butler control: there is only one, and it sees every epic, feature, ticket, PR and session (list_epics, list_features, list_tickets, list_prs, list_sessions, session_activity, list_inbox); for the overall progress and whose turn each PR is, start with progress_overview, one call is enough; when the user asks how well Butler is doing (PR cycle time, comments, human interventions, cost, compared with before Butler), use metrics_overview. " +
-          "Apart from stacks (below) you cannot create, delete or end anything; when an epic or feature needs to do something, tell it with send_message (feature or epic by name or id). The message goes into its mailbox and reaches it even while it is busy (at its next tool call); if its terminal is closed, Butler reopens its latest conversation and sends it. " +
-          "Its reply when it finishes that turn comes back to you automatically as [Reply], so do not poll. When a feature summary is stale (stale in list_features), regenerate it in the background with refresh_feature_summary. " +
-          "Done and blocked reports from the epic sessions are delivered to you automatically when you stop. Pending questions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
+        : "You are Butler's global control: there is only one, and it sees every epic, ticket, PR and session (list_epics, list_features, list_tickets, list_prs, list_sessions, session_activity, list_inbox); for the overall progress and whose turn each PR is, start with progress_overview, one call is enough; when the user asks how well Butler is doing (PR cycle time, comments, human interventions, cost, compared with before Butler), use metrics_overview. " +
+          "An epic (one Jira epic) has one epic coordinator, one workspace and one shared memory; an epic can be split into features, and each feature is only a set of tickets and an order, with no coordinator of its own (see list_features). " +
+          "Apart from stacks (below) you cannot create, delete or end anything; when an epic needs to do something, tell its coordinator with send_message (epic by name or id). The message goes into its mailbox and reaches it even while it is busy (at its next tool call); if its terminal is closed, Butler reopens its latest conversation and sends it. " +
+          "Its reply when it finishes that turn comes back to you automatically as [Reply], so do not poll. When an epic summary is stale (stale in list_epics), regenerate it in the background with refresh_epic_summary. " +
+          "Pending questions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
           "report is only stored and is not sent to anyone.",
+  // epic 里的 feature（BTL-246，内部叫 block）：只给 epic 总控（内部还叫 feature 总控）。
+  (lang, kind) =>
+    kind !== "coordinator"
+      ? null
+      : lang === "zh"
+        ? "一个 epic 里可以分几个 feature：每个 feature 是一组 ticket 和一个顺序，没有自己的总控和工作区。list_features 按顺序看每个 feature 的 ticket 和合了几个；" +
+          "create_feature 新建，reorder_features 排顺序，set_ticket_feature 把 ticket 放进（或移出）一个 feature，create_ticket 带 feature 直接建在里面；从 Jira 导入的 ticket 要你来归到 feature 里。" +
+          "按顺序推进：一次推一个 feature，互不相关的可以并行。几个 ticket 都要遵守的约定（接口、命名、拆分方式）用 butler-feature 的 remember 写进 epic 记忆；某个 ticket 自己的进度由它的 session 记在 ticket 记忆（butler-memory）里。"
+        : "An epic can be split into features: each feature is a set of tickets and an order, with no coordinator or workspace of its own. list_features shows each feature's tickets and how many are merged, in order; " +
+          "create_feature makes one, reorder_features sets the order, set_ticket_feature puts a ticket in a feature (or takes it out), and create_ticket with feature creates it there directly; tickets imported from Jira are yours to sort into features. " +
+          "Work in order: push one feature forward at a time, and run unrelated ones in parallel. Conventions several tickets must follow (interfaces, naming, how the work is split) go into epic memory with remember on butler-feature; a ticket's own progress is kept by its session in ticket memory (butler-memory).",
   // 栈式 PR（工作流 K）：feature 总控用 stack_on / stack_define，Butler 总控只有 stack_define 这几个。
   (lang, kind) =>
     kind !== "coordinator" && kind !== "butler"

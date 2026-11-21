@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { S, STRINGS, type UiStrings } from "../src/renderer/src/strings";
-import { completeWizard, expect, makeGitRepo, openTab, openTicketTab, pageTab, terminalText, test, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, expect, makeGitRepo, openArchived, openTab, openTicketTab, pageTab, terminalText, test, type Sandbox, newButton } from "./fixtures";
 
 /** 在沙盒里建 shop/frontend、shop/backend 两个仓库，选上一层目录建 feature「checkout」（两个仓库默认都勾上）。 */
 async function createCheckoutFeature(page: Page, s: Sandbox): Promise<void> {
@@ -141,16 +141,36 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
     const reply = await mcp.call("start_session", { ticket: "DMS-1", task: "build-the-cart" });
     expect(reply.isError).toBeUndefined();
     started = JSON.parse(reply.content[0].text) as typeof started;
-    // 总控直接建 ticket：DMS-3 用 backend，马上出现在侧栏的 feature 下面。
-    const created = await mcp.call("create_ticket", { ticket: "dms-3", title: "Refunds", repos: ["backend"] });
+    // epic 里的 feature（BTL-246）：Cart 排在 Payment 前面；名字不分大小写不能重复。
+    expect(JSON.parse((await mcp.call("create_feature", { name: "Payment" })).content[0].text)).toMatchObject({ name: "Payment" });
+    expect((await mcp.call("create_feature", { name: "Cart", before: "Payment" })).isError).toBeUndefined();
+    expect((await mcp.call("create_feature", { name: "payment" })).isError).toBe(true);
+    expect(JSON.parse((await mcp.call("set_ticket_feature", { ticket: "DMS-1", feature: "Cart" })).content[0].text)).toEqual({ ticket: "DMS-1", feature: "Cart" });
+    // 总控直接建 ticket：DMS-3 用 backend，建在 Payment 里，马上出现在侧栏的 feature 下面。
+    const created = await mcp.call("create_ticket", { ticket: "dms-3", title: "Refunds", repos: ["backend"], feature: "Payment" });
     expect(created.isError).toBeUndefined();
-    expect(JSON.parse(created.content[0].text)).toMatchObject({ key: "DMS-3", repos: [{ name: "backend", dir: join(workspace, "backend-dms-3") }] });
+    expect(JSON.parse(created.content[0].text)).toMatchObject({ key: "DMS-3", feature: "Payment", repos: [{ name: "backend", dir: join(workspace, "backend-dms-3") }] });
+    const blocks = JSON.parse((await mcp.call("list_features")).content[0].text) as { features: { name: string; tickets: { key: string }[] }[]; notInAFeature: { key: string }[] };
+    expect(blocks.features.map((f) => [f.name, f.tickets.map((t) => t.key)])).toEqual([["Cart", ["DMS-1"]], ["Payment", ["DMS-3"]]]);
+    expect(blocks.notInAFeature.map((t) => t.key)).toEqual(["DMS-2"]);
   } finally {
     mcp.close();
   }
   expect(started).toMatchObject({ ticket: "DMS-1", repo: "frontend" });
   await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2", "DMS-3"]);
   expect(existsSync(join(workspace, "backend-dms-3"))).toBe(true);
+  // 概况按 feature 一行一个（顺序同 list_features，最后是不在 feature 里的）；第一个没合完的展开，点开 Payment 看到 DMS-3。
+  await openTab(page, S.lay.tabOverview);
+  const blockRows = page.locator(".feature-page .scope-block");
+  await expect(blockRows.locator("summary .name")).toHaveText(["Cart", "Payment", S.lay.notInAFeature]);
+  await expect(blockRows.nth(0).locator(".ticket-table button.key")).toHaveText(["DMS-1"]);
+  await expect(blockRows.nth(1).locator(".ticket-table")).toBeHidden();
+  await blockRows.nth(1).locator("summary").click();
+  await expect(blockRows.nth(1).locator(".ticket-table button.key")).toHaveText(["DMS-3"]);
+  // 「全部 ticket」也按 feature 分组。
+  await openTab(page, S.lay.tabTickets);
+  await expect(page.locator(".feature-page .ticket-table .group-row")).toHaveText([S.lay.groupHeader("Cart", 0, 1), S.lay.groupHeader("Payment", 0, 1), S.lay.groupHeader(S.lay.notInAFeature, 0, 1)]);
+  await openTab(page, S.lay.tabControl);
   // 子 session 是 DMS-1 的普通 session：在它的 worktree 里，挂 ticket 记忆和 feature 记忆，没有 butler-sessions。
   await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature,butler-sessions cwd=${feWorktree} adddirs= guide=`);
 
@@ -798,4 +818,90 @@ test("live status: a background command stays on the row after its turn ends", a
   await expect(ticketRow(page, "DMS-1").locator(".who")).toHaveText(S.lay.whoYou);
   await openTab(page, S.lay.tabRunning);
   await expect(run).toHaveCount(0);
+});
+
+/**
+ * × 杀掉进程：没有 SessionEnd hook，等待标记只能由退出事件清掉。ticket、feature 两层的点都要消失，feature 页这一行也不再等回话。
+ * 收起侧栏的 feature 时点还在；正在看的 ticket 留在收起的 feature 下面。
+ */
+test("ending a waiting session with × clears the mark on the ticket and its feature", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  await newFeatureTicket(page, "DMS-1", "frontend");
+  const featureRow = page.locator(".sidebar .feature-group > .feature-row");
+  const sidebarTicket = page.locator(".sidebar .feature-tickets .ticket").filter({ has: page.locator(".key", { hasText: /^DMS-1$/ }) });
+  await openTicketTab(page, "terminal");
+  await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  await typeLine(page, "hello");
+  await expect.poll(() => terminalText(page)).toContain("收到：hello");
+  await expect(sidebarTicket.locator(".turn-dot")).toBeVisible();
+  await expect(featureRow.locator(".turn-dot")).toBeVisible();
+
+  // 收起 feature：正在看的 DMS-1 还在下面，feature 行的点还在。
+  await featureRow.locator(".twisty").click();
+  await expect(page.locator(".sidebar .feature-tickets .ticket .key")).toHaveText(["DMS-1"]);
+  await expect(featureRow.locator(".turn-dot")).toBeVisible();
+  await featureRow.locator(".twisty").click();
+
+  const end = page.getByTitle(S.endSession, { exact: true });
+  await end.click();
+  await end.click();
+  await expect(end).toHaveCount(0);
+  await expect(sidebarTicket.locator(".turn-dot")).toHaveCount(0);
+  await expect(featureRow.locator(".turn-dot")).toHaveCount(0);
+  // feature 页：DMS-1 不再轮到你，「概况」页签也不标。
+  await featureRow.locator(".ticket").click();
+  await expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
+  await openTab(page, S.lay.tabTickets);
+  await expect(ticketRow(page, "DMS-1").locator(".who")).not.toHaveText(S.lay.whoYou);
+  await expect(pageTab(page, S.lay.tabOverview)).not.toHaveClass(/\battention\b/);
+  expect(dbRows(s, "SELECT COUNT(*) AS n FROM sessions WHERE waiting_for_input = 1")).toEqual([{ n: 0 }]);
+});
+
+/**
+ * 归档 feature（原来在 epics.spec 里跟着 epic 一起测）：有终端开着时拒绝，什么都不变、错误显示出来；
+ * 终端退出后归档，连同它的 ticket，MCP 配置清掉，侧栏和页面都没了；从「已归档」恢复，一起归档的 ticket 回来，总控能再开，配置重新写好。
+ */
+test("archiving a feature: refused while a terminal is open, then archived with its tickets and restored", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const workspace = join(s.dir, "shop-features", "checkout");
+  const mcpFile = join(s.butlerHome, "mcp", "features", "1.json");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  await newFeatureTicket(page, "DMS-1", "frontend");
+  await page.locator(".sidebar .ticket.feature").click();
+  await expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
+  await newCoordinator(page);
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  expect(existsSync(mcpFile)).toBe(true);
+  const archivedAt = () => dbRows<{ what: string; at: number | null }>(s, "SELECT name AS what, archived_at AS at FROM features UNION ALL SELECT key, archived_at FROM tickets ORDER BY what");
+  const archive = page.locator(".feature-page .ticket-header").getByRole("button", { name: S.archiveFeature, exact: true });
+
+  await archive.click();
+  await expect(page.locator(".feature-page .error")).toHaveText(S.createErrors.sessions_open);
+  await expect(archive).toBeEnabled();
+  expect(archivedAt()).toEqual([{ what: "DMS-1", at: null }, { what: "checkout", at: null }]);
+  expect(existsSync(mcpFile)).toBe(true);
+
+  await typeLine(page, "exit");
+  await expect(page.locator(".terminal-wrap:visible .exited")).toBeVisible();
+  await archive.click();
+  await expect(page.locator(".feature-page")).toHaveCount(0);
+  await expect(page.locator(".sidebar .ticket.feature")).toHaveCount(0);
+  await expect(page.locator(".sidebar button.nav.active")).toHaveAccessibleName(S.home);
+  expect(archivedAt().every((r) => r.at !== null)).toBe(true);
+  expect(existsSync(mcpFile)).toBe(false);
+
+  await openArchived(page);
+  await page.locator("table").last().getByRole("button", { name: S.unarchive, exact: true }).click();
+  await expect(page.getByRole("heading", { name: "checkout", exact: true })).toBeVisible();
+  await expect(page.locator(".sidebar .feature-tickets .ticket .key")).toHaveText(["DMS-1"]);
+  expect(archivedAt().every((r) => r.at === null)).toBe(true);
+  await newCoordinator(page);
+  await expect.poll(() => [...(existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "").matchAll(new RegExp(`interactive new \\S+ mcp=\\S* cwd=${escapeRe(workspace)} `, "g"))].length).toBe(2);
+  expect(existsSync(mcpFile)).toBe(true);
 });

@@ -22,16 +22,6 @@ export const IPC = {
   featuresArchived: "features:archived",
   featuresUnarchive: "features:unarchive",
   featuresOpenSession: "features:openSession",
-  featuresMove: "features:move",
-  epicsList: "epics:list",
-  epicsCreate: "epics:create",
-  epicsRename: "epics:rename",
-  epicsAddRepo: "epics:addRepo",
-  epicsRemoveRepo: "epics:removeRepo",
-  epicsArchive: "epics:archive",
-  epicsArchived: "epics:archived",
-  epicsUnarchive: "epics:unarchive",
-  epicsOpenSession: "epics:openSession",
   /** Butler 总控（BTL-190 第 5 点）。 */
   butlerView: "butler:view",
   butlerOpenSession: "butler:openSession",
@@ -89,7 +79,7 @@ export const IPC = {
   /** 切到首页时调一次：补查请你 review 的 PR（turn:board 不触发查询）。 */
   turnHomeOpened: "turn:home-opened",
   turnChanged: "turn:changed",
-  /** PR 进度（六步进度条和时间线）：一个 ticket、feature 或 epic 范围内每个仓库一行。 */
+  /** PR 进度（六步进度条和时间线）：一个 ticket 或 feature 范围内每个仓库一行。 */
   prStages: "prStages:list",
   /** 在系统浏览器里打开一个 ticket 链接过的 PR（主进程检查主机）。 */
   prOpen: "pr:open",
@@ -157,7 +147,7 @@ export const IPC = {
   backgroundAct: "background:act",
   /** 重发一条递不出去的 CI 结论（工作流 W）：马上再试一次，返回结果（sent 或没递的原因）。 */
   ciResend: "ci:resend",
-  /** 「待你决定」和汇报（BTL-190 第 2+3 点）：一个 feature、一个 epic 或者全部的未决条目和最近的汇报。 */
+  /** 「待你决定」和汇报（BTL-190 第 2+3 点）：一个 feature 或者全部的未决条目和最近的汇报。 */
   inboxList: "inbox:list",
   /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
   inboxAnswer: "inbox:answer",
@@ -247,8 +237,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
   IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
-  IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.featuresMove, IPC.reposScan, IPC.ticketsRecheckCleanup,
-  IPC.epicsList, IPC.epicsCreate, IPC.epicsRename, IPC.epicsAddRepo, IPC.epicsRemoveRepo, IPC.epicsArchive, IPC.epicsArchived, IPC.epicsUnarchive, IPC.epicsOpenSession,
+  IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.reposScan, IPC.ticketsRecheckCleanup,
   IPC.butlerView, IPC.butlerOpenSession, IPC.messagesList, IPC.metricsView,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionsPin, IPC.sessionsWake, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,

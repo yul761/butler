@@ -20,7 +20,7 @@ afterEach(() => setLang("zh"));
 
 describe("extractRefreshTail", () => {
   it("takes the turns before Butler's /handoff and leaves out the command, its output, sidechains, meta and tool results", () => {
-    const r = extractRefreshTail(fixtureLines(), refreshCommandMatcher("ticket"));
+    const r = extractRefreshTail(fixtureLines(), refreshCommandMatcher());
     expect(r.commandFound).toBe(true);
     expect(r.turns).toEqual<TailTurn[]>([
       {
@@ -39,36 +39,29 @@ describe("extractRefreshTail", () => {
     ]);
   });
 
-  it("uses the last handoff request when there were several, and finds the epic request in either language", () => {
+  it("uses the last handoff request when there were several", () => {
     const lines = [
       line(user("第一件事")), line(HANDOFF), line(assistant(said("旧的 handoff"))),
       line(user("第二件事")), line(assistant(said("做完第二件"))),
-      line(user(M().refreshEpicHandoff)), line(assistant(said("写好进度了"))),
+      line(HANDOFF), line(assistant(said("新的 handoff"))),
     ].join("").split("\n");
-    const ticket = extractRefreshTail(lines, refreshCommandMatcher("ticket"));
-    expect(ticket.turns.map((t) => t.user)).toEqual(["第一件事"]);
-    const epic = extractRefreshTail(lines, refreshCommandMatcher("epic"));
-    expect(epic.turns.map((t) => t.user)).toEqual(["第一件事", "/handoff", "第二件事"]);
-    setLang("en");
-    const en = [line(user("one")), line(user(M().refreshEpicHandoff))].join("").split("\n");
-    setLang("zh");
-    expect(extractRefreshTail(en, refreshCommandMatcher("epic")).turns.map((t) => t.user)).toEqual(["one"]);
+    expect(extractRefreshTail(lines, refreshCommandMatcher()).turns.map((t) => t.user)).toEqual(["第一件事", "/handoff", "第二件事"]);
   });
 
   it("returns nothing when the handoff request is not there", () => {
     const lines = [line(user("问题")), line(assistant(said("回答")))].join("").split("\n");
-    expect(extractRefreshTail(lines, refreshCommandMatcher("ticket"))).toEqual({ turns: [], commandFound: false });
+    expect(extractRefreshTail(lines, refreshCommandMatcher())).toEqual({ turns: [], commandFound: false });
   });
 
   it("keeps only the last 8 turns, and starts a turn without a user message when the window cuts into one", () => {
     const lines: string[] = [JSON.stringify(assistant(said("半截的回答")))];
     for (let i = 1; i <= 10; i++) lines.push(JSON.stringify(user(`问题 ${i}`)), JSON.stringify(assistant(said(`回答 ${i}`))));
     lines.push(JSON.stringify(HANDOFF), "{坏行");
-    const r = extractRefreshTail(lines, refreshCommandMatcher("ticket"));
+    const r = extractRefreshTail(lines, refreshCommandMatcher());
     expect(r.turns).toHaveLength(TAIL_TURNS);
     expect(r.turns[0].user).toBe("问题 3");
     expect(r.turns[7]).toEqual({ user: "问题 10", items: [{ text: "回答 10" }] });
-    const short = extractRefreshTail([JSON.stringify(assistant(said("半截的回答"))), JSON.stringify(HANDOFF)], refreshCommandMatcher("ticket"));
+    const short = extractRefreshTail([JSON.stringify(assistant(said("半截的回答"))), JSON.stringify(HANDOFF)], refreshCommandMatcher());
     expect(short.turns).toEqual([{ user: null, items: [{ text: "半截的回答" }] }]);
   });
 });
@@ -88,7 +81,7 @@ describe("toolSummary", () => {
 
 describe("renderRefreshTail", () => {
   it("writes a header that says what it is, then the turns oldest first with one line per tool call", () => {
-    const { turns } = extractRefreshTail(fixtureLines(), refreshCommandMatcher("ticket"));
+    const { turns } = extractRefreshTail(fixtureLines(), refreshCommandMatcher());
     const out = renderRefreshTail(turns, "old-id")!;
     expect(out.startsWith(`# ${M().refreshTail.title}\n\n${M().refreshTail.intro("old-id", 3)}\n\n`)).toBe(true);
     expect(out).toContain("## 用户\n\n把登录页的按钮改成蓝色");
@@ -135,26 +128,28 @@ describe("readRefreshTail / writeRefreshTail", () => {
     // 后面跟着一大段 handoff 之后的输出：第一个 1 MiB 的窗口里看不到 /handoff。
     appendFileSync(file, line(HANDOFF));
     for (let i = 0; i < 150; i++) appendFileSync(file, line(assistant(said("y".repeat(10_000)))));
-    const r = await readRefreshTail(file, refreshCommandMatcher("ticket"));
+    const r = await readRefreshTail(file, refreshCommandMatcher());
     expect(r.commandFound).toBe(true);
     expect(r.turns.map((t) => t.user)).toEqual(["问题 3", "问题 4", "问题 5", "问题 6", "问题 7", "问题 8", "问题 9", "问题 10"]);
   });
 
   it("writes the file (creating the directory, replacing an older one) and returns its path", async () => {
     const out = join(tempDir(), "refresh", "s1.md");
-    expect(await writeRefreshTail({ transcript: FIXTURE, out, sessionId: "old", kind: "ticket" })).toBe(out);
+    expect(await writeRefreshTail({ transcript: FIXTURE, out, sessionId: "old" })).toBe(out);
     expect(readFileSync(out, "utf8")).toContain("开 PR 吧");
     const file = join(tempDir(), "t.jsonl");
     writeFileSync(file, line(user("新的问题")) + line(HANDOFF));
-    expect(await writeRefreshTail({ transcript: file, out, sessionId: "old", kind: "ticket" })).toBe(out);
+    expect(await writeRefreshTail({ transcript: file, out, sessionId: "old" })).toBe(out);
     expect(readFileSync(out, "utf8")).toContain("新的问题");
     expect(readFileSync(out, "utf8")).not.toContain("开 PR 吧");
   });
 
   it("writes nothing without a transcript or without the handoff request", async () => {
     const out = join(tempDir(), "s1.md");
-    expect(await writeRefreshTail({ transcript: null, out, sessionId: "old", kind: "ticket" })).toBeNull();
-    expect(await writeRefreshTail({ transcript: FIXTURE, out, sessionId: "old", kind: "epic" })).toBeNull();
+    expect(await writeRefreshTail({ transcript: null, out, sessionId: "old" })).toBeNull();
+    const file = join(tempDir(), "t.jsonl");
+    writeFileSync(file, line(user("问题")) + line(assistant(said("回答"))));
+    expect(await writeRefreshTail({ transcript: file, out, sessionId: "old" })).toBeNull();
     expect(existsSync(out)).toBe(false);
   });
 });

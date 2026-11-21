@@ -9,7 +9,7 @@ const NOW = 10_000_000;
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: "h", ticketKey: "T-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: "hi", lastActivityAt: 0, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, epicId: null, model: null, butler: false,
+  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false,
   lessonRunId: null, ...over,
 });
 
@@ -62,11 +62,10 @@ describe("hibernateBlock", () => {
 });
 
 describe("hibernatableKind", () => {
-  it("ticket, ticket coordinator, feature coordinator, epic and Butler sessions", () => {
+  it("ticket, ticket coordinator, feature coordinator and Butler sessions", () => {
     expect(hibernatableKind(session())).toBe(true);
     expect(hibernatableKind(session({ coordinator: true }))).toBe(true);
     expect(hibernatableKind(session({ ticketKey: null, featureId: 2 }))).toBe(true);
-    expect(hibernatableKind(session({ ticketKey: null, epicId: 2 }))).toBe(true);
     expect(hibernatableKind(session({ ticketKey: null, butler: true }))).toBe(true);
     expect(hibernatableKind(session({ ticketKey: null }))).toBe(false);
   });

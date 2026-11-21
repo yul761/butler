@@ -167,7 +167,7 @@ describe("firstCommitObservation", () => {
 
   it("keys the first commit by repo and branch, with an :after: suffix for a later round", () => {
     expect(firstCommitObservation(t, 42, null)).toEqual({
-      event: { ticketKey: "BTL-1", repoId: 3, prId: null, branch: "b", featureId: null, epicId: null, sessionId: null, kind: "first_commit", at: 42, data: {} },
+      event: { ticketKey: "BTL-1", repoId: 3, prId: null, branch: "b", featureId: null, sessionId: null, kind: "first_commit", at: 42, data: {} },
       dedupeKey: "3:first_commit:b",
     });
     expect(firstCommitObservation(t, 42, 9).dedupeKey).toBe("3:first_commit:b:after:9");

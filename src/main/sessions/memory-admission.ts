@@ -73,7 +73,7 @@ export function autoReserveMb(totalKb: number | null): number {
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
 
 /**
- * 开新 session 前按内存决定放不放行（工作流 W，替代以前写死的每 ticket 6 个、每 feature 8 个、每 epic 4 个 feature）：
+ * 开新 session 前按内存决定放不放行（工作流 W，替代以前写死的每 ticket 6 个、每 feature 8 个、以前每 epic 4 个 feature）：
  * 可用内存减去已经放行、还在长的 session，再减去这一个的预估占用，还要高于保留线才放行。系统内存压力已经是「严重」时不放行。
  * 硬上限默认关着，只当保险。读内存出错时放行（只看硬上限）并记日志：出错不能挡住干活。
  */

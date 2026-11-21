@@ -31,8 +31,6 @@ export interface SessionCleanupDeps {
   openedAt(termId: string): number;
   /** feature 下面的 ticket 号：feature 总控管这些 ticket 的 session。 */
   ticketsOfFeature(featureId: number): string[];
-  /** epic 下面的 feature：epic session 管这些 feature 的总控、修复 session 和它们 ticket 的 session。 */
-  featuresOfEpic(epicId: number): number[];
   /**
    * 这个 session 有没有还没回答的 ask_user（BTL-190 第 2+3 点）。那一段还没做：不给就当作没有。
    * 做好以后在 index.ts 里接上，有未决的 ask_user 的 session 不关。
@@ -193,7 +191,7 @@ export class SessionCleanup {
     return t ? this.idleSince(t) : this.d.now();
   }
 
-  /** 总控（ticket 总控、feature 总控、epic session）管的、开着终端的子 session 有没有在干活。不是总控的返回 false。 */
+  /** feature 总控管的、开着终端的子 session 有没有在干活。不是总控的返回 false。 */
   private childrenWorking(coord: Session, terms: OpenTerminal[]): boolean {
     return childrenWorking(coord, terms.map((t) => t.head), (id) => working(this.d.activity(id)), this.d);
   }

@@ -30,8 +30,8 @@ const id = (n: number) => `00000000-0000-0000-0000-00000000000${n}`;
 describe("ControlInbox", () => {
   it("answers each request once under the same id and removes the request", async () => {
     const { inbox, put, result, seen, requestsDir } = setup();
-    put(id(1), { v: 1, ticketKey: "P-1", op: "list_repos" });
-    put(id(2), { v: 1, ticketKey: "P-1", op: "list_sessions" });
+    put(id(1), { v: 1, featureId: 7, op: "list_repos" });
+    put(id(2), { v: 1, featureId: 7, op: "list_sessions" });
     put(id(3), "not json");
     put(id(4), { v: 1, ticketKey: "P-1", op: "type_keys" });
     expect(await inbox.drain()).toBe(4);
@@ -46,7 +46,7 @@ describe("ControlInbox", () => {
 
   it("answers a start_session with a malformed model as a bad request and never hands it to the handler", async () => {
     const { inbox, put, result, seen } = setup();
-    put(id(1), { v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "x", model: "bad name!" });
+    put(id(1), { v: 1, featureId: 7, op: "start_session", ticket: "A-1", repo: "api", task: "x", model: "bad name!" });
     put(id(2), { v: 1, featureId: 7, op: "start_session", ticket: "A-1", task: "x", model: "bad name!" });
     await inbox.drain();
     expect(result(id(1))).toEqual({ v: 1, ok: false, error: "请求格式不对" });
@@ -56,7 +56,7 @@ describe("ControlInbox", () => {
 
   it("drops files whose name is not a request id, and ignores unfinished temp files", async () => {
     const { inbox, put, requestsDir, resultsDir } = setup();
-    put("short", { v: 1, ticketKey: "P-1", op: "list_repos" });
+    put("short", { v: 1, featureId: 7, op: "list_repos" });
     writeFileSync(join(requestsDir, `${id(5)}.tmp`), "{");
     await inbox.drain();
     expect(readdirSync(resultsDir)).toEqual([]);
@@ -65,7 +65,7 @@ describe("ControlInbox", () => {
 
   it("does not run requests that are too old for anyone to be waiting on", async () => {
     const { inbox, put, requestsDir, resultsDir, seen } = setup();
-    put(id(8), { v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "x" });
+    put(id(8), { v: 1, featureId: 7, op: "start_session", ticket: "A-1", repo: "api", task: "x" });
     utimesSync(join(requestsDir, `${id(8)}.json`), new Date(Date.now() - 10 * 60_000), new Date(Date.now() - 10 * 60_000));
     await inbox.drain();
     expect(seen).toEqual([]);
@@ -102,9 +102,9 @@ describe("ControlInbox", () => {
         return { v: 1, ok: true, value: null };
       },
     });
-    put(id(1), { v: 1, ticketKey: "P-1", op: "list_repos" });
+    put(id(1), { v: 1, featureId: 7, op: "list_repos" });
     utimesSync(join(requestsDir, `${id(1)}.json`), new Date(996_500), new Date(996_500));
-    put(id(2), { v: 1, ticketKey: "P-1", op: "list_repos" });
+    put(id(2), { v: 1, featureId: 7, op: "list_repos" });
     // 时钟比文件时间早（不同步）：不给负数。
     utimesSync(join(requestsDir, `${id(2)}.json`), new Date(1_002_000), new Date(1_002_000));
     await inbox.drain();

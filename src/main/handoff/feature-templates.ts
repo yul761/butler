@@ -30,7 +30,7 @@ const SCHEMA_DOC = `{
 }`;
 
 const SCHEMA_DOC_EN = `{
-  summary: string,                // one paragraph: where the feature stands overall
+  summary: string,                // one paragraph: where the epic stands overall
   blockers: string[],             // what is in the way; mention tickets by id; [] if nothing
   next_steps: {                   // what comes next; the first item comes first
     ticket: string | null,        // the ticket id this step belongs to; null if it belongs to no single ticket
@@ -66,7 +66,7 @@ export const featureHandoffSchemaDoc = (l: Lang): string => (l === "en" ? SCHEMA
 export const featureHandoffExample = (l: Lang): string => JSON.stringify(l === "en" ? EXAMPLE_VALUE_EN : EXAMPLE_VALUE, null, 2);
 
 /** 晚间批量和"立即更新"用的 prompt。占位符 {{feature}}、{{previous}}、{{tickets}} 由 FeatureSummaryRunner 填充。 */
-const PROMPT = `你在为 Butler 写 feature「{{feature}}」的汇总，显示在 feature 页的"整体进度"里，让人明天早上一打开就知道整体到哪了。
+const PROMPT = `你在为 Butler 写 epic「{{feature}}」的汇总，显示在 epic 页的"整体进度"里，让人明天早上一打开就知道整体到哪了。
 
 要求：
 1. 依据这个 session 的对话（如果有）和下面列出的每个 ticket 的最新 handoff 来写；可以用 \`gh pr view\` 确认 PR 状态。
@@ -78,7 +78,7 @@ const PROMPT = `你在为 Butler 写 feature「{{feature}}」的汇总，显示�
 上一次汇总：
 {{previous}}
 
-这个 feature 下的 ticket：
+这个 epic 下的 ticket：
 {{tickets}}
 
 输出一个 JSON 对象，字段如下：
@@ -88,7 +88,7 @@ ${SCHEMA_DOC}
 ${featureHandoffExample("zh")}
 `;
 
-const PROMPT_EN = `You are writing Butler's summary of the feature "{{feature}}". It is shown as the overall progress on the feature page, so that tomorrow morning one look tells where the feature stands.
+const PROMPT_EN = `You are writing Butler's summary of the epic "{{feature}}". It is shown as the overall progress on the epic page, so that tomorrow morning one look tells where the epic stands.
 
 Requirements:
 1. Base it on this session's conversation (if there is one) and on the latest handoff of each ticket listed below; you may confirm PR states with \`gh pr view\`.
@@ -101,7 +101,7 @@ Requirements:
 Previous summary:
 {{previous}}
 
-Tickets of this feature:
+Tickets of this epic:
 {{tickets}}
 
 Output one JSON object with these fields:
@@ -116,7 +116,7 @@ export const defaultFeatureHandoffPrompt = (l: Lang): string => (l === "en" ? PR
 /** 填进 prompt 的几段固定文字。 */
 const FILL = {
   zh: {
-    noTickets: "（这个 feature 下还没有 ticket）",
+    noTickets: "（这个 epic 下还没有 ticket）",
     firstSummary: "（这是第一次汇总）",
     untitled: "无标题",
     status: (s: string) => `（状态：${s}）`,
@@ -136,7 +136,7 @@ const FILL = {
     turn: (w: string) => `，轮到：${w}`,
   },
   en: {
-    noTickets: "(this feature has no tickets yet)",
+    noTickets: "(this epic has no tickets yet)",
     firstSummary: "(this is the first summary)",
     untitled: "untitled",
     status: (s: string) => ` (status: ${s})`,

@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_LIMIT, EPIC_PLAN_MAX_CHARS, MAX_CREATE_REPOS, MAX_STACK_LAYERS, MESSAGE_LIMIT, parseControlRequest, REASON_LIMIT, sanitizeTask, START_INSTRUCTIONS_LIMIT, taskMessage, TASK_LIMIT } from "./control";
+import { MAX_CREATE_REPOS, MAX_STACK_LAYERS, MESSAGE_LIMIT, parseControlRequest, REASON_LIMIT, sanitizeTask, taskMessage, TASK_LIMIT } from "./control";
 
 describe("parseControlRequest", () => {
-  it("accepts the three operations", () => {
-    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: "s1", op: "list_repos" })).toEqual({ v: 1, ticketKey: "P-1", from: "s1", op: "list_repos" });
-    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "list_sessions" })).toEqual({ v: 1, ticketKey: "P-1", from: null, op: "list_sessions" });
-    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "写接口" })).toMatchObject({ repo: "api", task: "写接口" });
+  it("accepts a ticket session's own requests, and none of the old ticket coordinator's (BTL-246)", () => {
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: "s1", op: "pre_review_result" })).toEqual({ v: 1, ticketKey: "P-1", from: "s1", op: "pre_review_result" });
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "report", text: "done", kind: "done" })).toMatchObject({ op: "report", from: null });
+    for (const op of ["list_repos", "list_sessions", "session_activity", "end_session", "refresh_session"]) {
+      expect(parseControlRequest({ v: 1, ticketKey: "P-1", op, session: "s", reason: "r" })).toBeNull();
+    }
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "写接口" })).toBeNull();
   });
 
   it("rejects other versions, operations and malformed fields", () => {
     for (const bad of [
-      null, "x", { v: 2, ticketKey: "P-1", op: "list_repos" }, { v: 1, op: "list_repos" }, { v: 1, ticketKey: "P-1", op: "send_keys" },
-      { v: 1, ticketKey: "P-1", op: "start_session", repo: "", task: "t" }, { v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "  " },
-      { v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "x".repeat(TASK_LIMIT + 1) },
+      null, "x", { v: 2, featureId: 7, op: "list_repos" }, { v: 1, op: "list_repos" }, { v: 1, ticketKey: "P-1", op: "send_keys" },
+      { v: 1, featureId: 7, op: "start_session", ticket: "", task: "t" }, { v: 1, featureId: 7, op: "start_session", ticket: "A-1", task: "  " },
+      { v: 1, featureId: 7, op: "start_session", ticket: "A-1", task: "x".repeat(TASK_LIMIT + 1) },
     ]) {
       expect(parseControlRequest(bad)).toBeNull();
     }
@@ -40,21 +43,19 @@ describe("taskMessage", () => {
 });
 
 describe("start_session model", () => {
-  it("parses start_session with a model, for a ticket and for a feature", () => {
-    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t", model: "sonnet" })).toMatchObject({ model: "sonnet" });
+  it("parses start_session with a model", () => {
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t", model: "opus" })).toMatchObject({ model: "opus" });
-    expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t" })).not.toHaveProperty("model");
+    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t" })).not.toHaveProperty("model");
   });
 
   it("accepts tiers and model names; whether a name exists is the main process's call", () => {
     for (const model of ["high", "mid", "low", "haiku", "claude-opus-5-5", "corp/gw:fast"]) {
-      expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "t", model })).toMatchObject({ model });
+      expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t", model })).toMatchObject({ model });
     }
   });
 
   it("rejects a malformed model", () => {
     for (const model of ["bad name!", "", "-x", "x".repeat(101), 3, null]) {
-      expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "start_session", repo: "api", task: "t", model })).toBeNull();
       expect(parseControlRequest({ v: 1, featureId: 7, op: "start_session", ticket: "DMS-1", task: "t", model })).toBeNull();
     }
   });
@@ -64,8 +65,7 @@ describe("parseControlRequest for a feature (design 2026-10-26)", () => {
   it("accepts feature requests", () => {
     expect(parseControlRequest({ v: 1, featureId: 7, from: "c", op: "list_tickets" })).toEqual({ v: 1, featureId: 7, from: "c", op: "list_tickets" });
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "session_activity", session: "abc" })).toEqual({ v: 1, featureId: 7, from: null, op: "session_activity", session: "abc" });
-    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "session_activity", session: "abc" })).toEqual({ v: 1, ticketKey: "P-1", from: null, op: "session_activity", session: "abc" });
-    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "session_activity" })).toBeNull();
+    expect(parseControlRequest({ v: 1, featureId: 7, op: "session_activity" })).toBeNull();
     expect(parseControlRequest({ v: 1, featureId: 7, op: "session_activity", session: 3 })).toBeNull();
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "list_sessions" })).toEqual({ v: 1, featureId: 7, from: null, op: "list_sessions" });
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", task: "t" })).toEqual({
@@ -103,42 +103,64 @@ describe("parseControlRequest for a feature (design 2026-10-26)", () => {
   });
 });
 
-describe("parseControlRequest for an epic (design 2026-11-01)", () => {
-  it("accepts epic requests", () => {
-    expect(parseControlRequest({ v: 1, epicId: 3, from: "c", op: "list_features" })).toEqual({ v: 1, epicId: 3, from: "c", op: "list_features" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "list_repos" })).toEqual({ v: 1, epicId: 3, from: null, op: "list_repos" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "checkout", brief: "做结账" })).toEqual({ v: 1, epicId: 3, from: null, op: "create_feature", name: "checkout", brief: "做结账" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", repos: ["a"], brief: "b" })).toMatchObject({ repos: ["a"] });
-    expect(parseControlRequest({ v: 1, epicId: 3, from: "e", op: "set_epic_plan", plan: "先做支付" })).toEqual({ v: 1, epicId: 3, from: "e", op: "set_epic_plan", plan: "先做支付" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "set_epic_plan", plan: "x".repeat(EPIC_PLAN_MAX_CHARS) })).toMatchObject({ op: "set_epic_plan" });
+describe("parseControlRequest for features inside an epic (blocks, BTL-246)", () => {
+  const base = { v: 1, featureId: 7, from: "c" } as const;
+  it("accepts list_features, create_feature, reorder_features and set_ticket_feature", () => {
+    expect(parseControlRequest({ ...base, op: "list_features", x: 1 })).toEqual({ ...base, op: "list_features" });
+    expect(parseControlRequest({ ...base, op: "create_feature", name: "Payment" })).toEqual({ ...base, op: "create_feature", name: "Payment" });
+    expect(parseControlRequest({ ...base, op: "create_feature", name: " Payment ", description: "cards first", before: "Refunds" })).toEqual({
+      ...base, op: "create_feature", name: "Payment", description: "cards first", before: "Refunds",
+    });
+    // id 也可以是数字：统一成字符串。
+    expect(parseControlRequest({ ...base, op: "create_feature", name: "P", before: 3 })).toMatchObject({ before: "3" });
+    expect(parseControlRequest({ ...base, op: "reorder_features", order: ["B", 2, "A"] })).toEqual({ ...base, op: "reorder_features", order: ["B", "2", "A"] });
+    expect(parseControlRequest({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: "Payment" })).toEqual({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: "Payment" });
+    expect(parseControlRequest({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: null })).toEqual({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: null });
+    expect(parseControlRequest({ ...base, op: "create_ticket", ticket: "DMS-9", feature: "Payment" })).toEqual({ ...base, op: "create_ticket", ticket: "DMS-9", feature: "Payment" });
   });
 
-  it("rejects malformed epic requests, and an epicId next to a feature or ticket", () => {
+  it("rejects malformed block requests", () => {
+    expect(parseControlRequest({ ...base, op: "create_feature" })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "create_feature", name: "   " })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "create_feature", name: "x".repeat(101) })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "create_feature", name: "P", description: 5 })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "create_feature", name: "P", description: "x".repeat(2001) })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "create_feature", name: "P", before: "" })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "reorder_features" })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "reorder_features", order: [] })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "reorder_features", order: "A,B" })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "reorder_features", order: ["A", {}] })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "set_ticket_feature", ticket: "DMS-1" })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "set_ticket_feature", feature: "P" })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: 1.5 })).toBeNull();
+    expect(parseControlRequest({ ...base, op: "create_ticket", ticket: "DMS-9", feature: "" })).toBeNull();
+    // 只有 epic 总控有：ticket session 和 Butler 总控都不认。
+    expect(parseControlRequest({ v: 1, ticketKey: "A-1", from: null, op: "create_feature", name: "P" })).toBeNull();
+    expect(parseControlRequest({ v: 1, butler: true, from: null, op: "create_feature", name: "P" })).toBeNull();
+  });
+});
+
+describe("parseControlRequest for a legacy epic session (BTL-246)", () => {
+  it("refuses every request that names an epicId: the old epic layer is gone", () => {
     for (const bad of [
-      { v: 1, epicId: 0, op: "list_features" }, { v: 1, epicId: "3", op: "list_features" }, { v: 1, epicId: 3, op: "send_keys" },
-      { v: 1, epicId: 3, featureId: 2, op: "list_features" }, { v: 1, epicId: 3, ticketKey: "P-1", op: "list_features" },
-      { v: 1, epicId: 3, op: "create_feature", name: "", brief: "b" }, { v: 1, epicId: 3, op: "create_feature", name: "c" },
-      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "x".repeat(BRIEF_LIMIT + 1) },
-      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: "a" },
-      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", repos: Array(MAX_CREATE_REPOS + 1).fill("a") },
-      { v: 1, epicId: 3, op: "set_epic_plan" }, { v: 1, epicId: 3, op: "set_epic_plan", plan: 5 }, { v: 1, epicId: 3, op: "set_epic_plan", plan: "  " },
-      { v: 1, epicId: 3, op: "set_epic_plan", plan: "x".repeat(EPIC_PLAN_MAX_CHARS + 1) },
-      { v: 1, featureId: 3, op: "set_epic_plan", plan: "p" }, { v: 1, ticketKey: "P-1", op: "set_epic_plan", plan: "p" },
+      { v: 1, epicId: 3, op: "list_features" }, { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b" },
+      { v: 1, epicId: 3, op: "set_epic_plan", plan: "p" }, { v: 1, epicId: 3, op: "start_feature", feature: "c" },
+      { v: 1, epicId: 3, op: "list_sessions" }, { v: 1, epicId: 3, op: "end_session", session: "s1", reason: "r" },
+      { v: 1, epicId: 3, op: "ask_user", question: "q" }, { v: 1, epicId: 3, op: "report", text: "t" }, { v: 1, epicId: 4, op: "list_stacks" },
+      { v: 1, featureId: 7, op: "epic_context" }, { v: 1, featureId: 7, op: "set_epic_plan", plan: "p" }, { v: 1, featureId: 3, op: "start_feature", feature: "c" },
     ]) {
-      expect(parseControlRequest(bad)).toBeNull();
+      expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
     }
-  });
-
-  it("accepts epic_context from a feature coordinator", () => {
-    expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "epic_context" })).toEqual({ v: 1, featureId: 7, from: null, op: "epic_context" });
   });
 });
 
 describe("parseControlRequest for end_session (task 11)", () => {
-  const scopes = [{ ticketKey: "P-1" }, { featureId: 7 }, { epicId: 3 }];
+  const scopes = [{ ticketKey: "P-1" }, { featureId: 7 }];
+  // ticket 总控没有了（BTL-246）：end_session、refresh_session 只有 feature 总控有。
+  const coordinatorScopes = [{ featureId: 7 }];
 
-  it("accepts end_session in all three scopes, with a reason up to the limit", () => {
-    for (const scope of scopes) {
+  it("accepts end_session from the coordinator scopes, with a reason up to the limit", () => {
+    for (const scope of coordinatorScopes) {
       expect(parseControlRequest({ v: 1, ...scope, from: "c", op: "end_session", session: "s1", reason: "PR 已合并" })).toEqual({ v: 1, ...scope, from: "c", op: "end_session", session: "s1", reason: "PR 已合并" });
       expect(parseControlRequest({ v: 1, ...scope, op: "end_session", session: "s1", reason: "x".repeat(REASON_LIMIT) })).toMatchObject({ reason: "x".repeat(REASON_LIMIT) });
     }
@@ -155,27 +177,20 @@ describe("parseControlRequest for end_session (task 11)", () => {
     }
   });
 
-  it("accepts refresh_session in all three scopes, and rejects one without a session string (plan 16)", () => {
-    for (const scope of scopes) {
+  it("accepts refresh_session from the coordinator scopes, and rejects one without a session string (plan 16)", () => {
+    for (const scope of coordinatorScopes) {
       expect(parseControlRequest({ v: 1, ...scope, from: "c", op: "refresh_session", session: "s1" })).toEqual({ v: 1, ...scope, from: "c", op: "refresh_session", session: "s1" });
       for (const bad of [{}, { session: "" }, { session: 5 }, { session: "x".repeat(201) }]) {
         expect(parseControlRequest({ v: 1, ...scope, op: "refresh_session", ...bad }), JSON.stringify({ scope, bad }).slice(0, 80)).toBeNull();
       }
     }
   });
-
-  it("accepts list_sessions and session_activity from an epic session", () => {
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "list_sessions" })).toEqual({ v: 1, epicId: 3, from: null, op: "list_sessions" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: "s1" })).toEqual({ v: 1, epicId: 3, from: null, op: "session_activity", session: "s1" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity" })).toBeNull();
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "session_activity", session: 1 })).toBeNull();
-  });
 });
 
 describe("parseControlRequest for ask_user and report (BTL-190 2+3)", () => {
-  const scopes = [{ ticketKey: "BTL-1" }, { featureId: 3 }, { epicId: 2 }];
+  const scopes = [{ ticketKey: "BTL-1" }, { featureId: 3 }];
 
-  it("accepts ask_user in all three scopes, dropping empty options and blank context", () => {
+  it("accepts ask_user in both scopes, dropping empty options and blank context", () => {
     for (const s of scopes) {
       expect(parseControlRequest({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: ["A", "B"], context: "why" }))
         .toEqual({ v: 1, ...s, from: "s1", op: "ask_user", question: "Which?", options: ["A", "B"], context: "why" });
@@ -216,31 +231,6 @@ describe("parseControlRequest for ask_user and report (BTL-190 2+3)", () => {
   });
 });
 
-describe("parseControlRequest for start_feature (BTL-190 4)", () => {
-  it("accepts start_feature with or without instructions, and create_feature with start", () => {
-    expect(parseControlRequest({ v: 1, epicId: 3, from: "e", op: "start_feature", feature: "checkout" })).toEqual({ v: 1, epicId: 3, from: "e", op: "start_feature", feature: "checkout" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "5", instructions: "先做 API" }))
-      .toEqual({ v: 1, epicId: 3, from: null, op: "start_feature", feature: "5", instructions: "先做 API" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT) })).toMatchObject({ op: "start_feature" });
-    // 空白的 instructions 当作没给。
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "  " })).toEqual({ v: 1, epicId: 3, from: null, op: "start_feature", feature: "c" });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: true })).toMatchObject({ op: "create_feature", start: true });
-    expect(parseControlRequest({ v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: false })).not.toHaveProperty("start");
-  });
-
-  it("rejects a malformed start_feature, a non-boolean start, and start_feature outside an epic", () => {
-    for (const bad of [
-      { v: 1, epicId: 3, op: "start_feature" }, { v: 1, epicId: 3, op: "start_feature", feature: "" }, { v: 1, epicId: 3, op: "start_feature", feature: 5 },
-      { v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: 1 },
-      { v: 1, epicId: 3, op: "start_feature", feature: "c", instructions: "x".repeat(START_INSTRUCTIONS_LIMIT + 1) },
-      { v: 1, epicId: 3, op: "create_feature", name: "c", brief: "b", start: "yes" },
-      { v: 1, featureId: 3, op: "start_feature", feature: "c" }, { v: 1, ticketKey: "P-1", op: "start_feature", feature: "c" },
-    ]) {
-      expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
-    }
-  });
-});
-
 describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
   const base = { v: 1, butler: true } as const;
 
@@ -249,35 +239,42 @@ describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
       expect(parseControlRequest({ ...base, from: "b", op })).toEqual({ v: 1, butler: true, from: "b", op });
     }
     expect(parseControlRequest({ ...base, op: "list_tickets" })).toEqual({ v: 1, butler: true, from: null, op: "list_tickets" });
-    expect(parseControlRequest({ ...base, op: "list_tickets", feature: "checkout", epic: "7" }))
-      .toEqual({ v: 1, butler: true, from: null, op: "list_tickets", feature: "checkout", epic: "7" });
+    // epic 过滤（BTL-246：以前叫 feature）；旧的 feature 参数不认，丢掉。
+    expect(parseControlRequest({ ...base, op: "list_tickets", epic: "checkout", feature: "7" }))
+      .toEqual({ v: 1, butler: true, from: null, op: "list_tickets", epic: "checkout" });
+    expect(parseControlRequest({ ...base, op: "list_features", epic: "checkout" })).toEqual({ v: 1, butler: true, from: null, op: "list_features", epic: "checkout" });
     expect(parseControlRequest({ ...base, op: "progress_overview" })).toEqual({ v: 1, butler: true, from: null, op: "progress_overview" });
     expect(parseControlRequest({ ...base, op: "progress_overview", epic: "Q4" })).toEqual({ v: 1, butler: true, from: null, op: "progress_overview", epic: "Q4" });
     expect(parseControlRequest({ ...base, op: "metrics_overview" })).toEqual({ v: 1, butler: true, from: null, op: "metrics_overview" });
     expect(parseControlRequest({ ...base, op: "metrics_overview", days: 365 })).toEqual({ v: 1, butler: true, from: null, op: "metrics_overview", days: 365 });
-    expect(parseControlRequest({ ...base, from: "b", op: "refresh_feature_summary", feature: "3" }))
-      .toEqual({ v: 1, butler: true, from: "b", op: "refresh_feature_summary", feature: "3" });
+    expect(parseControlRequest({ ...base, from: "b", op: "refresh_epic_summary", epic: "3" }))
+      .toEqual({ v: 1, butler: true, from: "b", op: "refresh_epic_summary", epic: "3" });
     expect(parseControlRequest({ ...base, op: "session_activity", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "session_activity", session: "s1" });
     expect(parseControlRequest({ ...base, op: "refresh_session", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "refresh_session", session: "s1" });
     expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "先合 A" }))
       .toEqual({ v: 1, butler: true, from: null, op: "send_message", session: "s1", text: "先合 A" });
+    expect(parseControlRequest({ ...base, op: "send_message", epic: "checkout", text: "先合 A" }))
+      .toEqual({ v: 1, butler: true, from: null, op: "send_message", epic: "checkout", text: "先合 A" });
     expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT) })).toMatchObject({ op: "send_message" });
     expect(parseControlRequest({ ...base, op: "ask_user", question: "合吗？" })).toEqual({ v: 1, butler: true, from: null, op: "ask_user", question: "合吗？" });
     expect(parseControlRequest({ ...base, op: "report", text: "巡检完了" })).toEqual({ v: 1, butler: true, from: null, op: "report", text: "巡检完了", kind: "progress" });
   });
 
-  it("rejects anything that creates, deletes or ends, malformed fields, and butler next to another scope", () => {
+  it("rejects anything that creates, deletes or ends, malformed fields, the old names, and butler next to another scope", () => {
     for (const bad of [
       { ...base, op: "create_feature", name: "c", brief: "b" }, { ...base, op: "create_ticket", ticket: "P-1" }, { ...base, op: "start_session", repo: "r", task: "t" },
       { ...base, op: "start_feature", feature: "c" }, { ...base, op: "end_session", session: "s", reason: "r" }, { ...base, op: "set_epic_plan", plan: "p" },
+      { ...base, op: "set_ticket_feature", ticket: "P-1", feature: null },
       { ...base, op: "send_message", session: "s1" }, { ...base, op: "send_message", session: "s1", text: "  " },
       { ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT + 1) }, { ...base, op: "send_message", text: "t" },
-      { ...base, op: "session_activity" }, { ...base, op: "list_tickets", feature: 3 }, { ...base, op: "list_tickets", epic: "" },
-      { ...base, op: "refresh_feature_summary" }, { ...base, op: "refresh_feature_summary", feature: 3 }, { ...base, op: "progress_overview", feature: "" },
+      // 以前的目标 feature（BTL-246 改叫 epic），和 session、epic 一起给的。
+      { ...base, op: "send_message", feature: "checkout", text: "t" }, { ...base, op: "send_message", session: "s1", epic: "checkout", text: "t" },
+      { ...base, op: "session_activity" }, { ...base, op: "list_tickets", epic: 3 }, { ...base, op: "list_features", epic: "" },
+      { ...base, op: "refresh_feature_summary", feature: "3" }, { ...base, op: "refresh_epic_summary" }, { ...base, op: "refresh_epic_summary", epic: 3 }, { ...base, op: "progress_overview", epic: "" },
       { ...base, op: "metrics_overview", days: 0 }, { ...base, op: "metrics_overview", days: 366 }, { ...base, op: "metrics_overview", days: 2.5 }, { ...base, op: "metrics_overview", days: "7" },
       { v: 1, butler: "yes", op: "list_epics" }, { v: 1, butler: false, op: "list_epics" },
       { ...base, epicId: 3, op: "list_epics" }, { ...base, featureId: 3, op: "list_epics" }, { ...base, ticketKey: "P-1", op: "list_epics" },
-      { v: 1, epicId: 3, op: "list_epics" }, { v: 1, featureId: 3, op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },
+      { v: 1, featureId: 3, op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },
     ]) {
       expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
     }
@@ -307,9 +304,7 @@ describe("parseControlRequest for stacks (workstream K)", () => {
     expect(parseControlRequest({ ...base, op: "stack_layer_mode", stack: 1, branch: "b", mode: "ready" })).toBeNull();
   });
 
-  it("gives an epic only list_stacks, and parses create_ticket's stack_on", () => {
-    expect(parseControlRequest({ v: 1, epicId: 4, op: "list_stacks" })).toEqual({ v: 1, epicId: 4, from: null, op: "list_stacks" });
-    expect(parseControlRequest({ v: 1, epicId: 4, op: "stack_rebase", stack: 1 })).toBeNull();
+  it("gives a ticket session no stack ops, and parses create_ticket's stack_on", () => {
     expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "list_stacks" })).toBeNull();
     expect(parseControlRequest({ v: 1, featureId: 2, op: "create_ticket", ticket: "P-2", stack_on: "P-1" }))
       .toEqual({ v: 1, featureId: 2, from: null, op: "create_ticket", ticket: "P-2", stack_on: "P-1" });

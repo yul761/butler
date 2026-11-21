@@ -7,7 +7,6 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BranchWatchRepo } from "../db/branch-watch-repo";
 import { openDatabase } from "../db/database";
-import { FeaturesRepo } from "../db/features-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { InboxRepo } from "../db/inbox-repo";
 import { JobsRepo } from "../db/jobs-repo";
@@ -44,7 +43,6 @@ describe.skipIf(!file)("real database copy (BUTLER_VERIFY_DB)", () => {
     const db = openDatabase(file!);
     try {
       const tickets = new TicketsRepo(db);
-      const features = new FeaturesRepo(db);
       const sessions = new SessionsRepo(db);
       const settings = new SettingsRepo(db);
       const handoffs = new HandoffsRepo(db);
@@ -94,7 +92,6 @@ describe.skipIf(!file)("real database copy (BUTLER_VERIFY_DB)", () => {
 
       const service = new PrStagesService({
         tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
-        features: { byEpic: (id) => features.listByEpic(id, { includeArchived: true }), get: (id) => features.get(id) },
         stages, prs,
         reports: (key) => inbox.reportsForTicket(key),
         skillTrackingSince: () => skillTrackingSince(settings),

@@ -142,7 +142,7 @@ export function TicketTerminalTab({ ticket, term }: { ticket: TicketView; term: 
   /** 旧目录提示里的“新 session”：开在那个 session 的仓库里。 */
   function newSessionLike(req: OpenSessionRequest) {
     const s = ticket.sessions.find((x) => x.id === req.sessionId);
-    void open(s?.coordinator ? { ticketKey: ticket.key, coordinator: true } : { ticketKey: ticket.key, repoId: s?.repoId ?? pickedRepo?.id });
+    void open({ ticketKey: ticket.key, repoId: s?.repoId ?? pickedRepo?.id });
   }
 
   const sessionSplit = splitSessions(ticket.sessions, VISIBLE_SESSIONS);
@@ -200,7 +200,7 @@ export function TicketTerminalTab({ ticket, term }: { ticket: TicketView; term: 
               onClick={() => (s.termId ? setActive(s.termId) : void open({ ticketKey: ticket.key, sessionId: s.id }))}
             >
               {s.waitingForInput && <span className="badge">●</span>}
-              {sessionPlace(s, ticket.repos, S.coordinator) && <span className="place">{sessionPlace(s, ticket.repos, S.coordinator)}</span>}
+              {sessionPlace(s, ticket.repos) && <span className="place">{sessionPlace(s, ticket.repos)}</span>}
               {s.spawnedBy && <span className="muted" title={S.spawnedByCoordinator}>↳</span>}
               <span className="label">{sessionLabel(s, S.untitledSession)}</span>
               <NoChecksMark reason={s.checksAbsent} />
@@ -240,7 +240,6 @@ export function TicketTerminalTab({ ticket, term }: { ticket: TicketView; term: 
           </select>
         )}
         {pickedRepo && <button className="primary" onClick={() => void open({ ticketKey: ticket.key, repoId: pickedRepo.id })}>+ {S.newSession}</button>}
-        <button title={S.coordinatorHint} onClick={() => void open({ ticketKey: ticket.key, coordinator: true })}>+ {S.newCoordinator}</button>
       </div>
 
       {showHidden && ticket.hiddenSessions.length > 0 && (

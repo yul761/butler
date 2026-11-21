@@ -5,21 +5,20 @@ import { M } from "../strings";
 export interface NameDeps {
   head(sessionId: string): Session | null;
   featureName(featureId: number): string | null;
-  epicName(epicId: number): string | null;
 }
 
-/** "ABC-1"、"feature 登录改版的总控"、"feature 登录改版的修复 session"、"Butler 总控"；null 是 Butler 自己。认不出来的给 id。 */
+/** "ABC-1"、"epic 登录改版 的总控"、"epic 登录改版 的修复 session"、"全局总控"；null 是 Butler 自己。认不出来的给 id。 */
 export function sessionName(d: NameDeps, id: string | null): string {
   const m = M();
   if (id === null) return m.mailboxButlerSelf;
   const h = d.head(id);
   if (!h) return id;
   if (h.ticketKey !== null) return h.ticketKey;
+  // featureId 是 epic（内部是 features 表，BTL-246）。
   if (h.featureId !== null) {
     const name = d.featureName(h.featureId) ?? String(h.featureId);
     return h.fixesSession !== null ? m.mailboxFixName(name) : m.butlerTargetFeature(name);
   }
-  if (h.epicId !== null) return m.butlerTargetEpic(d.epicName(h.epicId) ?? String(h.epicId));
   if (h.butler) return m.mailboxButlerName;
   return id;
 }

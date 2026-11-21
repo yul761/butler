@@ -37,7 +37,6 @@ export interface TurnItem {
   /** 别人请你 review 的 PR 不属于任何 ticket，这里为 null。 */
   ticketKey: string | null;
   pr: { repo: string; number: number; title: string; url: string } | null;
-  epicId: number | null;
   featureId: number | null;
   turn: Turn;
   /** 进入这个状态的时间（epoch ms），用来显示「12 分钟前」。 */
@@ -53,8 +52,8 @@ export interface TurnItem {
 }
 
 export interface ScopeTurnRow {
-  /** epic、feature，或者单独的 ticket。 */
-  kind: "epic" | "feature" | "ticket";
+  /** feature，或者单独的 ticket。 */
+  kind: "feature" | "ticket";
   id: number | string;
   name: string;
   total: number;
@@ -85,14 +84,13 @@ export type CiSendSkip = CiUndeliveredReason | "delivered" | "not_open" | "not_s
  */
 export type TurnSendReason = "not_found" | "not_sendable" | "no_comments" | CiSendSkip;
 
-export type TurnFilter = { epicId?: number; featureId?: number; ticketKey?: string };
+export type TurnFilter = { featureId?: number; ticketKey?: string };
 
-/** filter 为 null 或空对象（值都是 undefined）时不带 filter。几个字段都给了时，按 ticketKey > featureId > epicId 取一个。 */
+/** filter 为 null 或空对象（值都是 undefined）时不带 filter。两个字段都给了时取 ticketKey。 */
 export function normTurnFilter(f: TurnFilter | null | undefined): TurnFilter | null {
   if (!f) return null;
   if (f.ticketKey !== undefined) return { ticketKey: f.ticketKey };
   if (f.featureId !== undefined) return { featureId: f.featureId };
-  if (f.epicId !== undefined) return { epicId: f.epicId };
   return null;
 }
 

@@ -26,7 +26,7 @@ async function setup(opts: {
   workMode?: "branch" | "worktree";
   ready?: () => Promise<void>;
   factory?: PtyFactory;
-  mcpConfig?: (ticketKey: string, opts: { coordinator: boolean }) => string | null;
+  mcpConfig?: (ticketKey: string, opts: { featureId: number | null }) => string | null;
   mcpSettings?: (dirs: string[]) => string | null;
   guidePath?: (kind: GuideKind, repoPaths: string[]) => string | null;
   syncMemory?: (ticketKey: string) => void;
@@ -114,8 +114,6 @@ describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
   it("counts only the repo's own sessions as busy for cleanup", async () => {
     const { service, ticket } = await setup({ workMode: "worktree" });
     const repoId = ticket.repos[0].id;
-    expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(false);
-    await service.open({ ticketKey: "PROJ-1", coordinator: true });
     expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(false);
     await service.open({ ticketKey: "PROJ-1" });
     expect(service.hasRepoTerminal("PROJ-1", repoId)).toBe(true);
@@ -205,12 +203,11 @@ describe("SessionService.open", () => {
     expect(asked).toEqual(["ticket"]);
   });
 
-  it("asks the guide with the ticket's repo paths, and none for the coordinator", async () => {
+  it("asks the guide with the ticket's repo paths", async () => {
     const asked: [string, string[]][] = [];
     const { service, ticket } = await setup({ guidePath: (kind, paths) => (asked.push([kind, paths]), null) });
     await service.open({ ticketKey: "PROJ-1" });
-    await service.open({ ticketKey: "PROJ-1", coordinator: true });
-    expect(asked).toEqual([["ticket", ticket.repos.map((r) => r.repoPath)], ["coordinator", []]]);
+    expect(asked).toEqual([["ticket", ticket.repos.map((r) => r.repoPath)]]);
   });
 
   it("passes the .mcp.json approval settings, asked with the session's folder and the repo roots", async () => {
@@ -659,7 +656,7 @@ describe("SessionService.open after the ticket's work mode changed", () => {
   });
 });
 
-describe("SessionService with several repos and the coordinator", () => {
+describe("SessionService with several repos", () => {
   async function multi() {
     const env = await setup({ workMode: "worktree" });
     const api = makeRepo();
@@ -679,50 +676,39 @@ describe("SessionService with several repos and the coordinator", () => {
     expect(spawned[1].opts.cwd).toBe(web.worktreePath);
   });
 
-  it("opens the coordinator in the ticket workspace with every repo added, and resumes it the same way", async () => {
-    const { service, spawned, sessions, web, apiRepo, ticketService, pty } = await multi();
-    await service.open({ ticketKey: "PROJ-1", coordinator: true });
-    expect(spawned[0].opts.cwd).toBe(ticketService.workspaceDir("PROJ-1"));
-    expect(spawned[0].args).toEqual(["--session-id", "new-1", "--add-dir", web.worktreePath, "--add-dir", apiRepo.worktreePath]);
-    expect(sessions.get("new-1")).toMatchObject({ coordinator: true, repoId: null });
-    pty.kill("new-1");
-    expect(await service.open({ ticketKey: "PROJ-1", sessionId: "new-1" })).toMatchObject({ ok: true });
-    expect(spawned[1].args).toEqual(["--resume", "new-1", "--add-dir", web.worktreePath, "--add-dir", apiRepo.worktreePath]);
+  it("resumes an old ticket coordinator (BTL-246) as a plain ticket session in the ticket workspace", async () => {
+    const asked: string[] = [];
+    const seen: string[] = [];
+    const env = await setup({ workMode: "worktree", guidePath: (kind) => (asked.push(kind), null), mcpConfig: (key) => (seen.push(key), null) });
+    const api = makeRepo();
+    await env.ticketService.addRepo({ ticketKey: "PROJ-1", repoPath: api, workMode: "worktree" });
+    const ws = env.ticketService.workspaceDir("PROJ-1");
+    // 迁移以后的样子：隐藏、没有仓库、coordinator 清掉了。
+    env.sessions.insertIfAbsent({ id: "old-boss", ticketKey: "PROJ-1", cwd: ws, origin: "butler", createdAt: 1, repoId: null });
+    expect(await env.service.open({ ticketKey: "PROJ-1", sessionId: "old-boss" })).toMatchObject({ ok: true });
+    expect(env.spawned[0].opts.cwd).toBe(ws);
+    // 不再给每个仓库一个 --add-dir；工具和说明都是 ticket session 的。
+    expect(env.spawned[0].args).toEqual(["--resume", "old-boss"]);
+    expect(asked).toEqual(["ticket"]);
+    expect(seen).toEqual(["PROJ-1"]);
   });
 
-  it("opens only the coordinator on a ticket without repos", async () => {
-    const { service, spawned, ticketService } = await setup();
+  it("opens nothing on a ticket without repos", async () => {
+    const { service, ticketService } = await setup();
     await ticketService.create({ key: "BARE-1" });
     expect(await service.open({ ticketKey: "BARE-1" })).toEqual({ ok: false, reason: "no_repo" });
-    expect(await service.open({ ticketKey: "BARE-1", coordinator: true })).toMatchObject({ ok: true });
-    expect(spawned[0].args).toEqual(["--session-id", "new-1"]);
   });
 
-  it("tells the memory config whether the session is the coordinator", async () => {
-    const seen: [string, boolean][] = [];
-    const { service } = await setup({ mcpConfig: (key, o) => (seen.push([key, o.coordinator]), null) });
-    await service.open({ ticketKey: "PROJ-1" });
-    await service.open({ ticketKey: "PROJ-1", coordinator: true });
-    expect(seen).toEqual([["PROJ-1", false], ["PROJ-1", true]]);
-  });
-
-  it("hasOpenTerminal counts the ticket's coordinator for every repo", async () => {
-    const { service, web, apiRepo } = await multi();
-    await service.open({ ticketKey: "PROJ-1", coordinator: true });
-    expect(service.hasOpenTerminal("PROJ-1", web.id)).toBe(true);
-    expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(true);
-    expect(service.hasOpenTerminal("PROJ-2", web.id)).toBe(false);
-  });
-
-  it("counts terminals per repo: the repo's own, the coordinator, and sessions of no known repo", async () => {
-    const { service, sessions, web, apiRepo } = await multi();
+  it("counts terminals per repo: the repo's own and sessions of no known repo", async () => {
+    const { service, sessions, web, apiRepo, ticketService } = await multi();
     await service.open({ ticketKey: "PROJ-1", repoId: web.id });
     expect(service.hasOpenTerminal("PROJ-1", web.id)).toBe(true);
     expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(false);
-    await service.open({ ticketKey: "PROJ-1", coordinator: true });
+    sessions.insertIfAbsent({ id: "nowhere", ticketKey: "PROJ-1", cwd: ticketService.workspaceDir("PROJ-1"), origin: "butler", createdAt: 1, repoId: null });
+    await service.open({ ticketKey: "PROJ-1", sessionId: "nowhere" });
     expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(true);
+    expect(service.hasOpenTerminal("PROJ-2", web.id)).toBe(false);
     expect(service.openTerminalCount("PROJ-1")).toBe(2);
-    expect(sessions.get("new-2")?.coordinator).toBe(true);
   });
 
   it("files a claimed session under the repo its directory is in", async () => {
@@ -852,7 +838,7 @@ describe("SessionService.openLessonRun (lessons visibility task 7)", () => {
     // 没有 Butler 的 MCP；仓库加进来，它的 .mcp.json 审批照旧。
     expect(spawned[0].args).toEqual(["--session-id", "new-1", "--settings", "/mcp/approve.json", "--add-dir", repo]);
     expect(guides).toEqual([["lessons", []]]);
-    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, epicId: null, butler: false, coordinator: false, lessonRunId: runId, origin: "butler" });
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, butler: false, coordinator: false, lessonRunId: runId, origin: "butler" });
     await new Promise((r) => setImmediate(r));
     expect(submitted).toEqual([["new-1", M().lessonRunTask(req.file)]]);
   });

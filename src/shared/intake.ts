@@ -56,6 +56,8 @@ export interface IncomingTicket {
   subtasks: { key: string; title: string }[];
   /** 来源直接说了放哪个仓库（file 来源可以写路径）。 */
   repo: string | null;
+  /** 父 epic（BTL-246 §7：按它分组进 Butler 的 epic）；没有时不带这个字段（以前存的 payload 也没有）。 */
+  epic?: { key: string; title: string | null };
 }
 
 /** 一条分类理由：哪一维、哪条规则（或 model / user）、说明。 */

@@ -12,7 +12,7 @@ import {
 const base = (o: Partial<Session> = {}): Session => ({
   id: "x", ticketKey: null, cwd: "/r", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
+  featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 
 /** 一个开着的终端：chain[0] 是终端启动时的 id（termId），最后一个是 head。 */
@@ -37,18 +37,14 @@ interface Term {
   recheckFails: boolean;
 }
 
-function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: boolean; noEndTerminal?: boolean } = {}) {
+function setup(o: { threshold?: number; commandReady?: boolean; noEndTerminal?: boolean } = {}) {
   const state = {
     now: 1_000_000,
     threshold: o.threshold ?? 150_000,
     commandReady: o.commandReady ?? true,
-    epicPlanReady: o.epicPlanReady ?? true,
     memory: true,
     /** 「需要你」还没判断完（needsYouUndecided）。 */
     undecided: false,
-    /** epic scope 里 epic session 写的进度（epicProgress）。 */
-    epicProgress: "做到第一步" as string | null,
-    epicProgressReads: 0,
     /** 读 /handoff 命令文件时发生的事（这期间用户可能开始打字）。 */
     onCommandCheck: null as (() => void) | null,
     /** refreshActivity 读过的 id 和读的时候发生的事（R28：/clear 之后的新 head 要先读一次活动）。 */
@@ -61,7 +57,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
     /** memoryIdle 被等的时刻。 */
     memoryWaits: [] as number[],
     /** writeTail 收到的参数和当时已经输入过几段文字；tailResult 决定它返回什么（默认按终端 id 拼路径）。 */
-    tails: [] as Array<{ oldHeadId: string; termId: string; kind: RefreshKind; typedBefore: number; at: number }>,
+    tails: [] as Array<{ oldHeadId: string; termId: string; typedBefore: number; at: number }>,
     tailResult: (async (termId: string) => tailOf(termId)) as (termId: string) => Promise<string | null>,
     /** 有未决 ask_user 的 session（head id，pendingDecision）。 */
     pendingDecision: new Set<string>(),
@@ -114,12 +110,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
       state.onCommandCheck?.();
       return state.commandReady;
     },
-    epicPlanReady: () => state.epicPlanReady,
     memoryEnabled: () => (state.reads++, state.memory),
-    epicProgress: async () => {
-      state.epicProgressReads++;
-      return state.epicProgress;
-    },
     deliver: async (termId, text, recheck) => {
       const t = terms.find((x) => x.chain[0] === termId);
       if (recheck && !recheck()) return "blocked";
@@ -135,8 +126,8 @@ function setup(o: { threshold?: number; commandReady?: boolean; epicPlanReady?: 
       state.memoryWaits.push(state.now);
       return state.memoryIdle();
     },
-    writeTail: (oldHeadId, termId, kind) => {
-      state.tails.push({ oldHeadId, termId, kind, typedBefore: typed.length, at: state.now });
+    writeTail: (oldHeadId, termId) => {
+      state.tails.push({ oldHeadId, termId, typedBefore: typed.length, at: state.now });
       return state.tailResult(termId);
     },
     notify: () => void notified++,
@@ -263,7 +254,7 @@ describe("SessionRefresher (plan 16)", () => {
     // 只等一次、只写一次：/handoff 输入了、/clear 还没有。
     expect(t.state.memoryWaits).toHaveLength(1);
     expect(t.state.memoryWaits[0]).toBeGreaterThanOrEqual(t.typed[0].at + 30_000);
-    expect(t.state.tails).toEqual([{ oldHeadId: "s1", termId: "s1", kind: "ticket", typedBefore: 1, at: expect.any(Number) as number }]);
+    expect(t.state.tails).toEqual([{ oldHeadId: "s1", termId: "s1", typedBefore: 1, at: expect.any(Number) as number }]);
     expect(t.state.tails[0].at).toBeLessThanOrEqual(t.typed[1].at);
     expect(t.texts()[2]).toBe(M().refreshResume("ticket", "DMS-1", tailOf("s1")));
     expect(t.texts()[2]).toContain(tailOf("s1"));
@@ -356,19 +347,15 @@ describe("SessionRefresher (plan 16)", () => {
       `上下文已由 Butler 换新。先用 recall 调出 DMS-1 最新的 handoff，再读一下 ${path} 里换新前的最近对话，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。`,
     );
     expect(M().refreshResume("feature", "支付", null)).toBe(
-      "上下文已由 Butler 换新。先用 butler-feature 的 recall 调出这个 feature 最新的 handoff，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。",
+      "上下文已由 Butler 换新。先用 butler-feature 的 recall 调出这个 epic 最新的 handoff，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。",
     );
-    expect(M().refreshResume("epic", "E1", path)).toContain(`先用 butler-epic 的 recall 调出这个 epic 最新的 handoff，再读一下 ${path}`);
     // 不再叫它停下来等用户。
     expect(M().refreshResume("ticket", "DMS-1", path)).not.toContain("不要自己开始");
-    expect(M().refreshEpicHandoff).toBe(
-      "Butler 要清空这个 session 的上下文。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
-    );
     // Windows 上的路径（有空格、反斜杠）照样是一行，过了 sanitizeTask 也不变。
     const win = "C:\\Users\\John Doe\\.butler\\refresh\\s1.md";
     for (const lang of ["zh", "en"] as const) {
       setLang(lang);
-      for (const kind of ["ticket", "feature", "epic"] as const) {
+      for (const kind of ["ticket", "feature"] as const) {
         const text = M().refreshResume(kind, "DMS-1", win);
         expect(text).not.toContain("\n");
         expect(sanitizeTask(text)).toBe(text);
@@ -381,47 +368,6 @@ describe("SessionRefresher (plan 16)", () => {
     );
     expect(M().refreshResume("feature", "x", null)).toContain("butler-feature");
     expect(M().refreshResume("feature", "x", null)).not.toContain("read ");
-    expect(M().refreshResume("epic", "x", path)).toContain("butler-epic");
-    expect(M().refreshEpicHandoff).toContain("set_epic_plan");
-  });
-
-  it("waits for the epic session's progress to change for an epic session", async () => {
-    const t = setup();
-    t.addTerm("e1", {
-      kind: "epic", session: { epicId: 7 },
-      reactions: { [M().refreshEpicHandoff]: { ms: 42_000, run: () => (t.state.epicProgress = "做到第二步") } },
-    });
-    const started = t.state.now;
-    expect(await t.r.refresh("e1", "manual")).toBe("done");
-    expect(t.texts()).toEqual([M().refreshEpicHandoff, "/clear", M().refreshResume("epic", "", tailOf("e1"))]);
-    expect(t.typed[1].at - started).toBeGreaterThanOrEqual(42_000);
-    // 每 5 秒查一次，不是每一次 sleep 都查。
-    expect(t.state.epicProgressReads).toBeLessThanOrEqual(1 + Math.ceil(42_000 / 5_000) + 1);
-  });
-
-  it("does not count epic progress that stays the same or becomes null (R29: Butler's own re-render keeps the progress)", async () => {
-    const same = setup();
-    same.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
-    expect(await same.r.refresh("e1", "manual")).toBe("failed");
-    expect(same.texts()).toEqual([M().refreshEpicHandoff]);
-    expect(same.logs.some((l) => l.includes("not stored"))).toBe(true);
-
-    const gone = setup();
-    gone.addTerm("e1", {
-      kind: "epic", session: { epicId: 7 },
-      reactions: { [M().refreshEpicHandoff]: { ms: 10_000, run: () => (gone.state.epicProgress = null) } },
-    });
-    expect(await gone.r.refresh("e1", "manual")).toBe("failed");
-    expect(gone.texts()).toEqual([M().refreshEpicHandoff]);
-
-    // 之前没有进度：第一次写进度就算写完了。
-    const first = setup();
-    first.state.epicProgress = null;
-    first.addTerm("e1", {
-      kind: "epic", session: { epicId: 7 },
-      reactions: { [M().refreshEpicHandoff]: { ms: 10_000, run: () => (first.state.epicProgress = "做到第一步") } },
-    });
-    expect(await first.r.refresh("e1", "manual")).toBe("done");
   });
 
   it("aborts when the guard fails between steps", async () => {
@@ -562,31 +508,16 @@ describe("SessionRefresher (plan 16)", () => {
     const t = setup({ commandReady: false });
     t.addTerm("s1");
     t.addTerm("f1", { kind: "feature", session: { featureId: 3 } });
-    t.addTerm("e1", {
-      kind: "epic", session: { epicId: 7 }, context: 160_000,
-      reactions: { [M().refreshEpicHandoff]: { ms: 10_000, run: () => (t.state.epicProgress = "做到第二步") } },
-    });
     for (let i = 0; i < 4; i++) {
       t.r.autoCheck();
       await t.settle();
     }
-    // 上下文最长的先选：ticket 和 feature 总控都不输入 /handoff，各记一次日志（之后冷却），也不挡住后面的 epic。
+    // ticket 和 feature 总控都不输入 /handoff，各记一次日志（之后冷却）。
     expect(t.typed.filter((x) => x.text === "/handoff")).toEqual([]);
-    expect(t.typed.filter((x) => x.termId === "e1").map((x) => x.text)).toEqual([M().refreshEpicHandoff, "/clear", M().refreshResume("epic", "", tailOf("e1"))]);
+    expect(t.logs.filter((l) => l.includes("f1") && l.includes("/handoff"))).toHaveLength(1);
     expect(t.logs.filter((l) => l.includes("s1") && l.includes("/handoff"))).toHaveLength(1);
     expect(await t.r.refresh("s1", "manual")).toBe("failed");
     expect(t.typed.filter((x) => x.text === "/handoff")).toEqual([]);
-  });
-
-  it("does not auto-refresh epic sessions before the plan fix", async () => {
-    const t = setup({ epicPlanReady: false });
-    t.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
-    t.r.autoCheck();
-    await t.settle();
-    expect(t.typed).toEqual([]);
-    // 手动也不行：epic session 会写一份进度 handoff，把记忆里的规划冲掉。
-    expect(await t.r.refresh("e1", "manual")).toBe("failed");
-    expect(t.typed).toEqual([]);
   });
 
   it("skips the ticket fan-out while refreshing", async () => {
@@ -633,17 +564,15 @@ describe("SessionRefresher (plan 16)", () => {
     t.state.memory = false;
     t.addTerm("s1");
     t.addTerm("f1", { kind: "feature", session: { featureId: 3 } });
-    t.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
     t.r.autoCheck();
     await t.settle();
-    for (const id of ["s1", "f1", "e1"]) {
+    for (const id of ["s1", "f1"]) {
       for (const trigger of ["auto", "coordinator", "manual"] as const) {
         expect(t.r.precheck(id, trigger)).toBe("memory_off");
         expect(await t.r.refresh(id, trigger)).toBe("memory_off");
       }
     }
     expect(t.typed).toEqual([]);
-    expect(t.state.epicProgressReads).toBe(0);
     t.state.memory = true;
     expect(await t.r.refresh("s1", "manual")).toBe("done");
   });
@@ -680,11 +609,6 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.r.precheck("s1", "coordinator")).toBe("cooldown");
     expect(t.r.precheck("s1", "auto")).toBe("cooldown");
     expect(t.r.precheck("s1", "manual")).toBeNull();
-    // epic 规划单独存放之前：哪种触发都 failed。
-    const e = setup({ epicPlanReady: false });
-    e.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
-    expect(e.r.precheck("e1", "manual")).toBe("failed");
-    expect(e.r.precheck("e1", "auto")).toBe("failed");
   });
 
   it("only counts a handoff stored after Butler typed /handoff (review: the user's own /handoff during the checks)", async () => {
@@ -816,20 +740,6 @@ describe("SessionRefresher.close (BTL-190 item 8)", () => {
     expect(t.r.stepOf("s1")).toBeNull();
   });
 
-  it("asks an epic session to write its progress with the idle-close wording", async () => {
-    const t = setup();
-    t.addTerm("e1", {
-      kind: "epic", session: { epicId: 7 },
-      reactions: { [M().idleCloseEpicHandoff]: { ms: 12_000, run: () => (t.state.epicProgress = "做到第二步") } },
-    });
-    expect(await t.r.close("e1", "manual")).toBe("done");
-    expect(t.texts()).toEqual([M().idleCloseEpicHandoff]);
-    expect(t.ended.map((e) => e.termId)).toEqual(["e1"]);
-    expect(M().idleCloseEpicHandoff).not.toBe(M().refreshEpicHandoff);
-    setLang("en");
-    expect(M().idleCloseEpicHandoff).toMatch(/handoff/);
-  });
-
   it("with memory off still has a ticket session write /handoff (the daily brief needs it), without waiting for memory", async () => {
     const t = setup();
     t.addTerm("s1");
@@ -839,15 +749,6 @@ describe("SessionRefresher.close (BTL-190 item 8)", () => {
     expect(t.texts()).toEqual(["/handoff"]);
     expect(t.state.memoryWaits).toEqual([]);
     expect(t.ended.map((e) => e.termId)).toEqual(["s1"]);
-  });
-
-  it("with memory off ends an epic session without typing anything (its handoff tool lives in memory)", async () => {
-    const t = setup();
-    t.addTerm("e1", { kind: "epic", session: { epicId: 7 } });
-    t.state.memory = false;
-    expect(await t.r.close("e1", "auto")).toBe("done");
-    expect(t.texts()).toEqual([]);
-    expect(t.ended.map((e) => e.termId)).toEqual(["e1"]);
   });
 
   it("waits for a background task the handoff turn started, and for the needs-you verdict on the reply, before ending", async () => {
@@ -985,25 +886,14 @@ describe("SessionRefresher.stop (plan 16 review)", () => {
     expect(t.texts()).toEqual(["/handoff"]);
   });
 
-  it("a stop while waiting for epic progress stops reading StateCore", async () => {
-    const t = setup();
-    t.addTerm("e1", { kind: "epic", session: { epicId: 4 }, reactions: { [M().refreshEpicHandoff]: { ms: 12_000, run: () => t.r.stop() } } });
-    expect(await t.r.refresh("e1", "manual")).toBe("failed");
-    const reads = t.state.epicProgressReads;
-    expect(t.texts()).toEqual([M().refreshEpicHandoff]);
-    expect(t.logs.some((m) => m.includes("unexpected error"))).toBe(false);
-    // 停下之后没有再读：最多是停的那一刻正在读的那一次。
-    expect(reads).toBe(4);
-  });
 });
 
 describe("refreshKindOf (plan 16)", () => {
-  it("names ticket sessions, ticket coordinators, feature coordinators and epic sessions, and nothing else", () => {
+  it("names ticket sessions, ticket coordinators and feature coordinators, and nothing else", () => {
     const open = (s: Session) => refreshKindOf(s, true);
     expect(open(base({ ticketKey: "DMS-1" }))).toBe("ticket");
     expect(open(base({ ticketKey: "DMS-1", coordinator: true }))).toBe("ticket");
     expect(open(base({ featureId: 3, coordinator: true }))).toBe("feature");
-    expect(open(base({ epicId: 2 }))).toBe("epic");
     // 修复 session、不是 Butler 开的、没开终端的、什么都不属于的：不换新。
     expect(open(base({ featureId: 3, fixesSession: "s-stuck" }))).toBeNull();
     expect(open(base({ ticketKey: "DMS-1", origin: "discovered" }))).toBeNull();

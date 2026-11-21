@@ -15,7 +15,7 @@ function formatTime(ms: number): string {
 
 /**
  * feature 的「AI 总结」页签（设计文档 2026-10-28）：最新一份 feature 汇总的那段话、卡住的地方、下一步，
- * 以及生成时间、来源和「立即更新」按钮；下面是 epic session 写的规划。只显示最新一份，不做历史。
+ * 以及生成时间、来源和「立即更新」按钮；下面是 feature 的规划（features.brief）。只显示最新一份，不做历史。
  * onRun 返回给人看的结果，不应 reject（reject 了也只显示通用错误）。
  */
 export function FeatureSummaryTab({ feature, onOpenTicket, onRun }: {
@@ -88,7 +88,7 @@ export function FeatureSummaryTab({ feature, onOpenTicket, onRun }: {
   );
 }
 
-/** epic session 建 feature 时写的规划。收起也按 feature 记。规划是数据，只当文字显示。 */
+/** feature 的规划（features.brief，旧数据迁移时并进来的也在这里）。收起也按 feature 记。规划是数据，只当文字显示。 */
 function FeatureBrief({ featureId, brief }: { featureId: number; brief: string }) {
   const [collapsed, toggle] = useCollapsed(`brief:${featureId}`);
   return (

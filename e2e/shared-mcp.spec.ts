@@ -56,6 +56,7 @@ test("with the shared MCP on, a new session reaches butler-sessions through the 
   const listed = await callTool(page, s, "list_sessions");
   expect(listed.error).toBe(false);
   expect(JSON.parse(listed.text)).toEqual([]);
+  expect(JSON.parse((await callTool(page, s, "list_epics")).text)).toEqual([]);
   expect(JSON.parse((await callTool(page, s, "list_features")).text)).toEqual([]);
 
   // 终端退出：它的配置文件删掉（路由也撤了）。

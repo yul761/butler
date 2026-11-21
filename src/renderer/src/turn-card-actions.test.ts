@@ -8,7 +8,7 @@ import { runCardAction, type CardDeps } from "./turn-card-actions";
 const S = STRINGS.zh;
 const pr = { repo: "acme/app", number: 12, title: "Fix", url: "https://gh.example/acme/app/pull/12" };
 const item = (turn: Turn, o: Partial<TurnItem> = {}): TurnItem =>
-  ({ ticketKey: "BTL-1", pr: null, epicId: null, featureId: null, turn, since: 1000, others: 0, ...o });
+  ({ ticketKey: "BTL-1", pr: null, featureId: null, turn, since: 1000, others: 0, ...o });
 const answer: Turn = { owner: "you", kind: "answer", question: "q?", options: ["可以", "不行"], askId: 7, sessionId: "s1" };
 const stuck: Turn = { owner: "you", kind: "stuck", source: "silent", detail: null, sessionId: "s1" };
 const unattended: Turn = { owner: "you", kind: "unattended", why: "ci_failing", canSend: true, sessionId: "s1" };

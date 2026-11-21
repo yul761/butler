@@ -21,12 +21,20 @@ describe("session guide", () => {
     expect(sessionGuide("en", "ticket")).not.toContain("start_session");
   });
 
+  it("epic 总控有 epic 里 feature 的说明（BTL-246）：按顺序推进、约定写进 epic 记忆；别的 session 没有", () => {
+    for (const lang of ["zh", "en"] as const) {
+      const g = sessionGuide(lang, "coordinator");
+      for (const w of ["list_features", "create_feature", "set_ticket_feature", "reorder_features", "butler-feature", "butler-memory"]) expect(g, w).toContain(w);
+      for (const kind of ["ticket", "butler", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("set_ticket_feature");
+    }
+  });
+
   it("feature 总控和 Butler 总控有栈的说明（工作流 K），stack_on 只给 feature 总控", () => {
     for (const lang of ["zh", "en"] as const) {
       expect(sessionGuide(lang, "coordinator")).toContain("stack_on");
       expect(sessionGuide(lang, "butler")).toContain("stack_define");
       expect(sessionGuide(lang, "butler")).not.toContain("stack_on");
-      for (const kind of ["ticket", "epic", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("stack_define");
+      for (const kind of ["ticket", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("stack_define");
     }
   });
 
@@ -35,7 +43,7 @@ describe("session guide", () => {
     expect(sessionGuide("zh", "ticket")).toContain("进度时间线");
     expect(sessionGuide("en", "ticket")).toContain("progress timeline");
     expect(sessionGuide("en", "ticket")).toContain("self-review");
-    for (const kind of ["coordinator", "epic", "butler"] as const) {
+    for (const kind of ["coordinator", "butler"] as const) {
       expect(sessionGuide("zh", kind)).not.toContain("自我 review");
       expect(sessionGuide("en", kind)).not.toContain("self-review");
     }
@@ -61,35 +69,16 @@ describe("session guide", () => {
     expect(sessionGuide("zh", "ticket")).not.toContain("不用你再转述");
   });
 
-  it("epic session 知道 start_feature 怎么用，别的 session 不知道（BTL-190 第 4 点）", () => {
-    for (const lang of ["zh", "en"] as const) {
-      const epic = sessionGuide(lang, "epic");
-      expect(epic).toContain("start_feature");
-      expect(epic).toMatch(/内存|memory/);
-      expect(sessionGuide(lang, "coordinator")).not.toContain("start_feature");
-      expect(sessionGuide(lang, "ticket")).not.toContain("start_feature");
-    }
-    expect(sessionGuide("zh", "epic")).toContain("用户同意开工");
-    expect(sessionGuide("en", "epic")).toContain("user agrees to start");
-  });
-
-  it("epic session 和总控一样有子 session 汇报那一段，但没有 start_session 的模型准则", () => {
-    for (const lang of ["zh", "en"] as const) {
-      const epic = sessionGuide(lang, "epic");
-      expect(epic).toContain(lang === "zh" ? "不用你再转述" : "do not ask them again");
-      expect(epic).toContain("ask_user");
-      expect(epic).toContain('model: "opus"');
-      expect(epic).toContain(lang === "zh" ? "再让你从记忆里接上" : "refresh a session whose context grows too long");
-      expect(epic).not.toContain("start_session");
-    }
-  });
-
-  it("Butler 总控知道自己只看不建，跨 epic 协调用 send_message，epic 的汇报会送到它这里（BTL-190 第 5 点）", () => {
+  it("全局总控知道自己只看不建，跨 epic 协调用 send_message（BTL-190 第 5 点，BTL-246）", () => {
     const zh = sessionGuide("zh", "butler");
-    expect(zh).toContain("Butler 总控");
+    expect(zh).toContain("全局总控");
     expect(zh).toContain("send_message");
     expect(zh).toContain("不能建");
-    expect(zh).toContain("epic session");
+    // BTL-246：一个 epic 有一个总控，epic 里的 feature 只是一组 ticket。
+    expect(zh).toContain("list_epics");
+    expect(zh).toContain("list_features");
+    expect(zh).toContain("refresh_epic_summary");
+    expect(zh).not.toContain("refresh_feature_summary");
     expect(zh).toContain("ask_user");
     expect(zh).toContain("再让你从记忆里接上");
     // 它不 push，也不开子 session。
@@ -97,11 +86,13 @@ describe("session guide", () => {
     expect(zh).not.toContain("start_session");
     expect(zh).not.toContain("start_feature");
     const en = sessionGuide("en", "butler");
-    expect(en).toContain("Butler control");
+    expect(en).toContain("global control");
     expect(en).toContain("send_message");
     expect(en).toContain("cannot create");
+    expect(en).toContain("list_epics");
+    expect(en).not.toContain("refresh_feature_summary");
     expect(/[\u4e00-\u9fff]/.test(en)).toBe(false);
-    for (const kind of ["ticket", "coordinator", "epic"] as const) expect(sessionGuide("zh", kind)).not.toContain("Butler 总控");
+    for (const kind of ["ticket", "coordinator"] as const) expect(sessionGuide("zh", kind)).not.toContain("全局总控");
   });
 
   it("复盘分析 session 没有 Butler 的工具：不提 ask_user、report、记忆和 CI，只留子代理的模型准则（lessons visibility task 7）", () => {
@@ -132,7 +123,7 @@ describe("session guide", () => {
       expect(zh).toContain("- [acme/web] 改 schema 要加迁移");
       expect(sessionGuide("en", "ticket", [{ label: "a/b", text: "x" }])).toContain("- [a/b] x");
       expect(/[\u4e00-\u9fff]/.test(sessionGuide("en", "ticket", [{ label: "a/b", text: "x" }]))).toBe(false);
-      for (const kind of ["coordinator", "epic", "butler"] as const) expect(sessionGuide("zh", kind, lessons)).not.toContain("acme/web");
+      for (const kind of ["coordinator", "butler"] as const) expect(sessionGuide("zh", kind, lessons)).not.toContain("acme/web");
       expect(sessionGuide("zh", "ticket", [])).toBe(sessionGuide("zh", "ticket"));
     });
 

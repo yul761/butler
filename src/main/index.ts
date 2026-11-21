@@ -75,7 +75,7 @@ import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
 import { SessionMessagesRepo } from "./db/session-messages-repo";
-import { Mailbox } from "./mailbox/mailbox";
+import { Mailbox, MAILBOX_BODY_LIMIT } from "./mailbox/mailbox";
 import { broadcastConvention } from "./mailbox/broadcast";
 import { sessionName } from "./mailbox/names";
 import { ExternalAuditRepo } from "./db/external-audit-repo";
@@ -83,11 +83,8 @@ import { ExternalActions } from "./external/actions";
 import { buildProgress } from "./progress/progress-view";
 import type { ProgressFilter, ProgressView } from "../shared/progress";
 import type { Turn } from "../shared/turn";
-import { EpicHistoryRepo } from "./db/epic-history-repo";
-import { EpicsRepo } from "./db/epics-repo";
-import { EpicDigestRunner } from "./epics/epic-digest";
-import { EPIC_HISTORY_READ_ENTRIES } from "./epics/epic-history-view";
-import { EpicService } from "./epics/epic-service";
+import { BlocksRepo } from "./db/blocks-repo";
+import { EpicArchiveRepo } from "./db/epic-archive-repo";
 import { FeaturesRepo } from "./db/features-repo";
 import { currentLang, onLangChange, setLang } from "./i18n";
 import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
@@ -100,9 +97,10 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, removeEpicMcpConfig, writeForkMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeEpicMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { McpHub, spawnHub } from "./memory/mcp-hub";
 import { MemoryService } from "./memory/memory-service";
+import { admitOrRefuse } from "./control/admission";
 import { controlHandler } from "./control/control-handler";
 import { ControlInbox } from "./control/control-inbox";
 import { HookInbox } from "./hooks/inbox";
@@ -472,9 +470,8 @@ async function bootstrap(): Promise<void> {
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
+  const blocks = new BlocksRepo(db);
   const featureForCwd = (cwd: string): number | null => features.byWorkspace(cwd)?.id ?? null;
-  const epics = new EpicsRepo(db);
-  const epicForCwd = (cwd: string): number | null => epics.byWorkspace(cwd)?.id ?? null;
   const settings = new SettingsRepo(db);
   /** 当前语言：BUTLER_LANG > 设置 > 系统首选语言（设计文档 2026-10-26）。 */
   const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), process.env.BUTLER_LANG));
@@ -483,7 +480,6 @@ async function bootstrap(): Promise<void> {
   const followups = new FollowupsRepo(db);
   const jobs = new JobsRepo(db);
   const featureHandoffs = new FeatureHandoffsRepo(db);
-  const epicHistory = new EpicHistoryRepo(db);
   // PR 进度的原始事件：PR 监视和 hook 的 skill 事件共用这一个。
   const prStages = new PrStageRepo(db);
   const memory = new MemoryService({
@@ -493,9 +489,7 @@ async function bootstrap(): Promise<void> {
     followups,
     features,
     featureHandoffs,
-    epics,
-    // sessionService 在后面才建好：回调里才用到。
-    epicRows: (id) => sessionService.epicFeatureRows(id),
+    epicArchive: new EpicArchiveRepo(db),
     sync: new MemorySyncRepo(db),
     enabled: () => memoryOn(settings),
     now: Date.now,
@@ -636,11 +630,11 @@ async function bootstrap(): Promise<void> {
   let sessionsMcpMissingLogged = false;
   /**
    * 记忆 server（记忆开着时）加上 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
-   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）、epic 的（设计文档 2026-11-01）；scope 是总控管的 ticket 或 feature，
+   * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）；scope 是总控管的 ticket 或 feature，
    * 普通 ticket session 是 member（只有 ask_user、report，BTL-190 第 2+3 点）。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null; epicId?: number | null }, scope: { ticketKey: string; member?: boolean } | { featureId: number; epic?: boolean } | { epicId: number } | { butler: true }) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null }, scope: { ticketKey: string } | { featureId: number } | { butler: true }) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -689,22 +683,16 @@ async function bootstrap(): Promise<void> {
   const placeMcp = (termId: string | null, servers: Record<string, StdioServerSpec>, stdio: () => string): string =>
     termId === null ? writeForkMcpConfig({ mcpDir: paths.mcp, servers }) : (sharedMcpConfig(termId, servers) ?? stdio());
   /** 每次打开 session 时重写这个 ticket 的 --mcp-config 文件（设计文档 4.2、8.4）。什么都不挂时返回 null。termId null 见 placeMcp。 */
-  const memoryMcpConfig = (ticketKey: string, opts: { coordinator: boolean; featureId: number | null; epicId: number | null }, termId: string | null): string | null => {
-    const servers = mcpServers({ ticketKey, featureId: opts.featureId, epicId: opts.epicId }, opts.coordinator ? { ticketKey } : { ticketKey, member: true });
+  const memoryMcpConfig = (ticketKey: string, opts: { featureId: number | null }, termId: string | null): string | null => {
+    const servers = mcpServers({ ticketKey, featureId: opts.featureId }, { ticketKey });
     if (Object.keys(servers).length === 0) return null;
-    return placeMcp(termId, servers, () => writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers, coordinator: opts.coordinator }));
+    return placeMcp(termId, servers, () => writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers }));
   };
-  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions；feature 属于 epic 时加 epic 记忆。 */
-  const featureMcpConfig = (featureId: number, epicId: number | null, termId: string | null): string | null => {
-    const servers = mcpServers({ featureId, epicId }, { featureId, epic: epicId !== null });
+  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions。 */
+  const featureMcpConfig = (featureId: number, termId: string | null): string | null => {
+    const servers = mcpServers({ featureId }, { featureId });
     if (Object.keys(servers).length === 0) return null;
     return placeMcp(termId, servers, () => writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers }));
-  };
-  /** epic session：epic 记忆、全局记忆和 epic 模式的 butler-sessions（list_features、list_repos、create_feature，以及各 feature 的 session）。 */
-  const epicMcpConfig = (epicId: number, termId: string | null): string | null => {
-    const servers = mcpServers({ epicId }, { epicId });
-    if (Object.keys(servers).length === 0) return null;
-    return placeMcp(termId, servers, () => writeEpicMcpConfig({ mcpDir: paths.mcp, epicId, servers }));
   };
   /** Butler 总控（BTL-190 第 5 点）：只有全局记忆（butler-workspace）和 Butler 模式的 butler-sessions。 */
   const butlerMcpConfig = (termId: string | null): string | null => {
@@ -1047,7 +1035,7 @@ async function bootstrap(): Promise<void> {
     calibrationAct: (a) => (a.op === "markCalibrated" ? { ok: true, calibratedAt: calibration.markCalibrated() } : calibration.mark(a.lessonId, a.mark, a.since)),
     regroupPrinciples,
   };
-  // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature、epic 不算）；归组建议按 ticket 和 feature 各算一组。
+  // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
     repo: lessonsRepo, batches: lessonBatches, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, runner: lessonRunner, enricher: lessonEnricher, admission: lessonAdmission,
@@ -1055,8 +1043,7 @@ async function bootstrap(): Promise<void> {
       ...new Set(
         repoPathRows<{ repo_path: string }>(
           `SELECT tr.repo_path FROM ticket_repos tr JOIN tickets t ON t.key = tr.ticket_key WHERE t.archived_at IS NULL
-           UNION SELECT fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL
-           UNION SELECT er.repo_path FROM epic_repos er JOIN epics e ON e.id = er.epic_id WHERE e.archived_at IS NULL`,
+           UNION SELECT fr.repo_path FROM feature_repos fr JOIN features f ON f.id = fr.feature_id WHERE f.archived_at IS NULL`,
         ).map((r) => r.repo_path),
       ),
     ],
@@ -1188,12 +1175,10 @@ async function bootstrap(): Promise<void> {
   const transcriptExists = (id: string): boolean => transcriptState(paths.claudeProjects, id) !== "absent";
   const sessionService = new SessionService({
     knownModel: routing.registered,
-    tickets, sessions, settings, ticketService, pty,
+    tickets, sessions, settings, ticketService, pty, blocks,
     activity: (id) => activityMonitor.get(id),
     sessionName: (id) => sessionRegistryName(paths.claudeSessions, id),
     submit: submitTask,
-    // featureRunner 在后面才建好：回调里才用到。
-    epicRefresh: (id) => featureRunner.epicRefresh(id),
     // mergeGate 也在后面才建好。
     dirBusy: (repo): Promise<{ ticket: string; branch: string } | null> => mergeGate.dirBusy(repo),
     ready: () => healthReady,
@@ -1237,11 +1222,10 @@ async function bootstrap(): Promise<void> {
       });
     },
     featureMcpConfig,
-    epicMcpConfig,
     butlerWorkspace: paths.butlerWorkspace,
     butlerMcpConfig,
     lessonsWorkspace: paths.lessonsWorkspace,
-    features, epics, featureHandoffs, handoffs, epicHistory,
+    features, featureHandoffs, handoffs,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
     opened: (termId) => hibernator?.opened(termId),
@@ -1260,7 +1244,6 @@ async function bootstrap(): Promise<void> {
       if (h.butler) return sessionService.openButler({ sessionId: h.id });
       if (h.ticketKey) return sessionService.open({ ticketKey: h.ticketKey, sessionId: h.id });
       if (h.featureId !== null) return sessionService.openFeature({ featureId: h.featureId, sessionId: h.id });
-      if (h.epicId !== null) return sessionService.openEpic({ epicId: h.epicId, sessionId: h.id });
       return Promise.resolve({ ok: false, reason: "no_session" } as const);
     },
     nextModel: (m) => routing.nextModel(m),
@@ -1338,14 +1321,9 @@ async function bootstrap(): Promise<void> {
     costBase,
     log: logger,
   });
-  /** feature 有新汇总时，它所在的 epic 重新渲染 handoff（异步，失败只记日志）。 */
-  const syncEpicOfFeature = (featureId: number) => {
-    const epicId = features.get(featureId)?.epicId ?? null;
-    if (epicId !== null) void memory.syncEpic(epicId);
-  };
   /** feature 汇总入库（设计文档 2026-10-28）：存下有效的汇总后写进 feature 的记忆（异步，失败只记日志），界面刷新。 */
   const ingestFeature = (input: FeatureIngestInput) => {
-    const r = ingestFeatureHandoff({ features, tickets, featureHandoffs, now: Date.now, onValidStored: syncEpicOfFeature }, input);
+    const r = ingestFeatureHandoff({ features, tickets, featureHandoffs, now: Date.now }, input);
     if (r.stored && !r.degraded) void memory.syncFeature(input.featureId);
     if (r.stored) notify();
     return r;
@@ -1408,22 +1386,6 @@ async function bootstrap(): Promise<void> {
     markEffective: markInterruptEffective, notify,
   });
   const interruptsFacade = new InterruptsFacade({ profiles, choices, webhook: webhookStore, notifier, log: notificationLog });
-  /**
-   * epic 的长期记忆（计划 16 任务 6）：每个 epic 每周跟着工作日的晚间任务整理一次，feature 归档时也整理一次。用 Sonnet，不 fork session，
-   * 和卡住判断共用 headless 设置（用量记进 session_usage，退出时取消）。
-   */
-  const epicDigest = new EpicDigestRunner({
-    ...judgeDeps,
-    history: epicHistory, epics, features, featureHandoffs, handoffs, tickets, memory,
-    cwd: () => paths.home,
-  });
-  /**
-   * feature 归档之后（不等它）：对它所在的 epic 整理一次；不属于 epic 的 feature 只整理它自己。
-   * 归档被拒（有终端在跑）的走不到这里；这次没归档成的（例如等汇总期间又被恢复）不整理。重复调用由 runner 跳过：没有新东西就不跑。
-   */
-  const digestArchivedFeature = (featureId: number) => {
-    if (features.get(featureId)?.archivedAt != null) void epicDigest.forFeatureArchived(featureId);
-  };
   const dailyDeps: DailyJobDeps = {
     runner,
     features: featureRunner,
@@ -1431,7 +1393,6 @@ async function bootstrap(): Promise<void> {
     hasTrackerTools: () => trackerTools(settings).length > 0,
     aborted: () => headlessAbort.signal.aborted,
     log: logger,
-    epicDigest,
   };
   const scheduler = new Scheduler({
     jobs,
@@ -1488,7 +1449,7 @@ async function bootstrap(): Promise<void> {
   const discoverOnce = async () => {
     try {
       const found = await scanClaudeProjects(paths.claudeProjects, Date.now() - UNCLAIMED_WINDOW_MS, discoveryHeads);
-      syncDiscovered(found, sessions, Date.now(), featureForCwd, epicForCwd);
+      syncDiscovered(found, sessions, Date.now(), featureForCwd);
       // 只有扫描真的找到了某个待补全 session 的 transcript，才记为本次运行已扫描过。
       for (const f of found) if (discoveryPending.delete(f.id)) discoveryRequested.add(f.id);
       notify();
@@ -1534,7 +1495,7 @@ async function bootstrap(): Promise<void> {
 
   // 合并总控（设计文档 2026-11-04）。等待者记的是 BUTLER_SESSION（打开终端时的 id = termId）；Butler 重开过的终端用链上最新的 id，按 head 找回来。
   const gateRepo = new MergeGateRepo(db);
-  const whoOf = makeWhoOf({ tickets, features, epics });
+  const whoOf = makeWhoOf({ tickets, features });
   const gateTerm = (sessionId: string): string | null => {
     if (pty.isOpen(sessionId)) return sessionId;
     const head = sessions.head(sessionId)?.id;
@@ -1581,7 +1542,6 @@ async function bootstrap(): Promise<void> {
   const costTitleOf = (h: Session): string => {
     if (h.ticketKey) return `${h.ticketKey} ${tickets.get(h.ticketKey)?.title ?? ""}`.trim();
     if (h.featureId !== null) return features.get(h.featureId)?.name ?? `feature ${h.featureId}`;
-    if (h.epicId !== null) return epics.get(h.epicId)?.name ?? `epic ${h.epicId}`;
     return "Butler";
   };
   const costSession = (root: string): CostSessionInfo | null => {
@@ -1674,7 +1634,6 @@ async function bootstrap(): Promise<void> {
     const h = v.sessionId ? sessions.head(v.sessionId) : null;
     if (h?.ticketKey) return { page: "ticket", key: h.ticketKey, sessionId: h.id };
     if (h && h.featureId !== null) return { page: "feature", id: h.featureId, sessionId: h.id };
-    if (h && h.epicId !== null) return { page: "epic", id: h.epicId, sessionId: h.id };
     if (h?.butler) return { page: "butler", sessionId: h.id };
     return v.ticketKey ? { page: "ticket", key: v.ticketKey, sessionId: null } : null;
   };
@@ -1731,10 +1690,7 @@ async function bootstrap(): Promise<void> {
         logger("refresh: reading the /handoff command file failed", e);
         return false;
       }),
-    // epic 的规划已经单独存放（Task 1），epic 总控也可以换新。
-    epicPlanReady: () => true,
     memoryEnabled: () => memoryOn(settings),
-    epicProgress: (id) => memory.epicProgress(id),
     // 和递 CI 结果一样最多等 1 分钟：session 是停着的，输入框应该很快就绪。斜杠命令粘贴进去照样会执行（R26 用真的 claude 验证过）。
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     sessions: openButlerHeads,
@@ -1747,10 +1703,10 @@ async function bootstrap(): Promise<void> {
     // 换新前的对话尾巴：读旧 head 的 transcript，按终端的 id 存（同一个终端下一次换新覆盖它）。
     // 后面再追加 Butler 存下的最近问答（UI 重做第 4 层）：换新前先把旧 session 读到最新，最多等 3 秒（不能让换新卡住）。
     // 只有问答、没有尾巴时文件里就只有问答；refreshResume 的「再读一下这个文件」照样成立。
-    writeTail: async (oldHeadId, termId, kind) => {
+    writeTail: async (oldHeadId, termId) => {
       await Promise.race([convIngester.syncNow(oldHeadId), delay(3000, undefined, { ref: false })]).catch(() => undefined);
       const out = refreshTailPath(paths, termId);
-      const tail = await writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out, sessionId: oldHeadId, kind });
+      const tail = await writeRefreshTail({ transcript: findTranscript(paths.claudeProjects, oldHeadId), out, sessionId: oldHeadId });
       return withRecentQa(out, tail, conv.recentQa(oldHeadId, RECENT_QA_CHARS));
     },
     notify,
@@ -1771,7 +1727,7 @@ async function bootstrap(): Promise<void> {
   // 信箱（BTL-245）：session 之间的消息一律排队存库；在忙的下一次工具调用时由 PostToolUse hook 带进去，停着的直接输入。
   // 回答（ask_user 的）过 answerGuard（不看「需要你」），别的过 deliveryGuard。inboxService 在下面才建好：回调里才用到。
   const mailboxName = (id: string | null): string =>
-    sessionName({ head: (x) => sessions.head(x), featureName: (f) => features.get(f)?.name ?? null, epicName: (e) => epics.get(e)?.name ?? null }, id);
+    sessionName({ head: (x) => sessions.head(x), featureName: (f) => features.get(f)?.name ?? null }, id);
   const mailbox = new Mailbox({
     repo: new SessionMessagesRepo(db),
     root: paths.mailbox,
@@ -1811,17 +1767,11 @@ async function bootstrap(): Promise<void> {
     repo: inboxRepo,
     head: (id) => sessions.head(id),
     ticket: (key) => tickets.get(key),
-    epicOfFeature: (id) => features.get(id)?.epicId ?? null,
-    epicName: (id) => epics.get(id)?.name ?? null,
     termOf: gateTerm,
     openHeads: liveButlerHeads,
     mailbox,
     latestCoordinator: (where) => {
-      const list = "ticket" in where ? sessions.listByTicket(where.ticket).filter((x) => x.coordinator)
-        : "feature" in where ? sessions.listFeatureCoordinators(where.feature)
-        : "epic" in where ? sessions.listByEpic(where.epic)
-        : sessions.listButler();
-      for (const x of list) {
+      for (const x of sessions.listFeatureCoordinators(where.feature)) {
         const h = sessions.head(x.id);
         if (h && !h.dismissed) return h.id;
       }
@@ -1866,11 +1816,9 @@ async function bootstrap(): Promise<void> {
     try {
       if (s.ticketKey !== null) {
         const featureId = tickets.get(s.ticketKey)?.featureId ?? null;
-        const epicId = featureId === null ? null : (features.get(featureId)?.epicId ?? null);
-        return memoryMcpConfig(s.ticketKey, { coordinator: s.coordinator, featureId, epicId }, termId);
+        return memoryMcpConfig(s.ticketKey, { featureId }, termId);
       }
-      if (s.featureId !== null) return featureMcpConfig(s.featureId, features.get(s.featureId)?.epicId ?? null, termId);
-      if (s.epicId !== null) return epicMcpConfig(s.epicId, termId);
+      if (s.featureId !== null) return featureMcpConfig(s.featureId, termId);
       if (s.butler) return butlerMcpConfig(termId);
       return null;
     } catch (e) {
@@ -2005,7 +1953,6 @@ async function bootstrap(): Promise<void> {
     lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
     openedAt: (termId) => pty.openedAt(termId),
     ticketsOfFeature: (id) => tickets.listByFeature(id).map((t) => t.key),
-    featuresOfEpic: (id) => features.listByEpic(id).map((f) => f.id),
     askUserPending: (id) => inboxService.hasPendingDecision(id),
     // 合并排队（等待者记的是 BUTLER_SESSION，换成 head 再对）、ticket 的 PR 的 CI 还在跑：通知只递给开着的终端。
     waitingOnButler: (headId) => {
@@ -2203,7 +2150,6 @@ async function bootstrap(): Promise<void> {
     },
     record: recordEvent,
     onChange: () => notify(),
-    epicName: (id) => epics.get(id)?.name ?? null,
     jobs,
     repos: () => [...new Set(tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)))],
     // 开栈底 PR 时的简报（工作流 G）：G 的 BriefService 建好后填进 stackBriefProvider；关着或没有时为 null。
@@ -2498,8 +2444,11 @@ async function bootstrap(): Promise<void> {
     sessionModel: (tier) => routing.sessionModel(tier),
     createTicket: async (i) => {
       try {
+        // 有父 epic 的建进对应的 Butler epic（按 Jira epic key 去重，没有就新建，BTL-246 §7）。
+        const featureId = i.epic ? await featureService.ensureJiraEpic(i.epic, i.repoPath) : null;
+        if (featureId !== null) notify();
         const t = await ticketService.create({
-          key: i.key, title: i.title, repoPath: i.repoPath, workMode: "worktree", ...(i.startPoint && { startPoints: [{ repoPath: i.repoPath, ref: i.startPoint }] }),
+          key: i.key, title: i.title, repoPath: i.repoPath, workMode: "worktree", ...(featureId !== null && { featureId }), ...(i.startPoint && { startPoints: [{ repoPath: i.repoPath, ref: i.startPoint }] }),
         });
         const r = t.repos[0];
         if (!r) return { ok: false, exists: false, message: "no repo" };
@@ -2528,7 +2477,7 @@ async function bootstrap(): Promise<void> {
     },
     stack: {
       canStackOn: (repoPath, parentBranch) => stackService.canStackOn(repoPath, parentBranch),
-      stackOn: (p) => stackService.stackOn({ ...p, featureId: null, epicId: null }),
+      stackOn: ({ ticketKey, ...p }) => stackService.stackOn({ ...p, featureId: tickets.get(ticketKey)?.featureId ?? null }),
     },
     hasPr: (key) => ticketPrs.byTicket(key).length > 0,
     prOf: (key) => {
@@ -2547,6 +2496,37 @@ async function bootstrap(): Promise<void> {
       const g = deliveryGuard.check(b.id);
       if (!g.ok) return false;
       return (await pty.deliver(g.termId, sanitizeTask(text), { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck: deliveryGuard.recheckAfter(b.id, g) })) === "sent";
+    },
+    toEpicCoordinator: async (epic, repoPath, text) => {
+      const featureId = await featureService.ensureJiraEpic(epic, repoPath);
+      notify();
+      // 排进 epic 总控的信箱（BTL-245）：在忙的下一次调用工具时读到，停着的直接输入，关着的下次打开时第一条读到。
+      // hold：马上要打开它，不让信箱再去唤醒一次（免得两边同时 --resume 同一个 session）。
+      const body = text.slice(0, MAILBOX_BODY_LIMIT);
+      const send = (to: string, hold = false) => mailbox.send({ kind: "butler", from: null, to, featureId, body, hold });
+      const running = sessionService.runningCoordinator(featureId);
+      if (running) {
+        send(running.id);
+        return { ok: true };
+      }
+      // 总控没开：和用户点开一样接着最近那个，开之前按内存放行（工作流 W）。先排进接着的那个的信箱：开不了也不丢。
+      const resume = sessions.listFeatureCoordinators(featureId).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
+      if (resume) send(resume.id, true);
+      const room = await admitOrRefuse(admission, `intake epic ${epic.key}`);
+      if (!room.ok) return resume ? { ok: true } : { ok: false, message: room.error };
+      const r = await sessionService.openFeature({ featureId, ...(resume && { sessionId: resume.id }) }).catch((e: unknown) => ({ ok: false as const, reason: e instanceof Error ? e.message : String(e) }));
+      if (!r.ok || ("alreadyOpen" in r && r.alreadyOpen)) room.release();
+      if (!r.ok) return resume ? { ok: true } : { ok: false, message: r.reason };
+      notify();
+      const head = sessions.head(r.termId)?.id ?? r.termId;
+      // 等内存放行时用户自己点开了：信箱照常送（在忙走 hook，停着直接输入）。
+      if ("alreadyOpen" in r && r.alreadyOpen) {
+        if (!resume) send(head);
+        return { ok: true };
+      }
+      if (!resume) send(head, true);
+      void mailbox.opened(head, r.termId, submitTask).catch((e: unknown) => logger(`intake: epic ${epic.key} message for ${head} failed`, e));
+      return { ok: true };
     },
     recordEvent,
     metricEvents: (since, kinds) => metricsRepo.events(since, kinds),
@@ -2613,6 +2593,9 @@ async function bootstrap(): Promise<void> {
       });
     // 这个 ticket 的 PR 都马上查一次；feature 总控查它所有 ticket 的；别的按仓库。
     const head = sessions.head(stopped);
+    // epic 记忆（BTL-246 §5）：epic 里任何 session 停下来时，笔记快满就把最旧的挪进存档、重新渲染 handoff（永不 reject）。
+    const epicId = head?.featureId ?? (head?.ticketKey ? tickets.get(head.ticketKey)?.featureId : null) ?? null;
+    if (epicId !== null) void memory.syncFeature(epicId);
     // 栈（工作流 K）：这一层有新提交就 rebase 上面的层；没递进去的冲突趁现在补送。
     if (head?.ticketKey) void stackService.sessionStopped(head.ticketKey).catch((e: unknown) => logger(`stacks: after ${stopped} stopped failed`, e));
     if (head?.ticketKey) prWatcher.soonTicket(head.ticketKey);
@@ -2659,7 +2642,7 @@ async function bootstrap(): Promise<void> {
       const effect = applyHookEnvelope(env, {
         sessions, tickets, transcriptState: (id) => transcriptState(paths.claudeProjects, id),
         placement: (key, cwd) => ticketService.placement(key, cwd),
-        featureForCwd, epicForCwd,
+        featureForCwd,
       });
       // Stop 之后看这一轮有没有 /handoff 的输出（异步；失败只记日志，不影响 hook 处理）。
       const stop = stopFromEnvelope(env);
@@ -2757,13 +2740,13 @@ async function bootstrap(): Promise<void> {
       const head = sessions.head(termId);
       return head && head.origin === "butler" ? [{ termId, head }] : [];
     });
-  const scope = { ticketsOfFeature: (id: number) => tickets.listByFeature(id).map((t) => t.key), featuresOfEpic: (id: number) => features.listByEpic(id).map((f) => f.id) };
+  const scope = { ticketsOfFeature: (id: number) => tickets.listByFeature(id).map((t) => t.key) };
   const prPending = (key: string | null, ci: "pending" | "review"): boolean =>
     key != null &&
     prWatcher.statusOf(key).some((p) =>
       ci === "pending" ? (p.state === "open" || p.state === null) && p.ci === "pending" : p.state === "open" && p.ci !== "pending" && p.review !== "approved",
     );
-  // 开新 session 前按内存放行（工作流 W）：取代以前每 ticket、每 feature、每 epic 写死的上限。
+  // 开新 session 前按内存放行（工作流 W）：取代以前每 ticket、每 feature 写死的上限。
   // 只数开着终端的：休眠的 session 进程已经结束，不占内存，也不在 pty.openIds() 里。
   // 每个 session 的预估：有工作流 M 的实测就用开着的 session 的实测平均，没有就用设置里的值。
   // BUTLER_E2E_AVAILABLE_MB 只在没打包时生效（e2e 用）。
@@ -2838,7 +2821,6 @@ async function bootstrap(): Promise<void> {
     const r = head.butler && head.ticketKey === null ? await sessionService.openButler({ sessionId: head.id })
       : head.ticketKey !== null ? await sessionService.open({ ticketKey: head.ticketKey, sessionId: head.id })
       : head.featureId !== null ? await sessionService.openFeature({ featureId: head.featureId, sessionId: head.id })
-      : head.epicId !== null ? await sessionService.openEpic({ epicId: head.epicId, sessionId: head.id })
       : ({ ok: false, reason: "kind" } as const);
     // 唤醒不问内存（要递的消息不能被拒），但记成刚开的，紧接着的 start_session 照样扣掉它（工作流 W）。
     if (r.ok && !r.alreadyOpen) admission.note(`wake ${head.id}`);
@@ -2861,29 +2843,11 @@ async function bootstrap(): Promise<void> {
     },
   };
 
-  // EpicService 要用 FeatureService 归档 / 恢复 feature，FeatureService 又要通知 EpicService 补仓库：回调里才用到 epicService，构造时还不需要。
   const featureService = new FeatureService({
-    features, tickets, epics, db, now: Date.now,
-    onEpicChanged: (id) => void memory.syncEpic(id),
+    features, tickets, db, now: Date.now,
     onTicketArchived: (key) => {
       removeTicketMcpConfigs(paths.mcp, key);
       inboxService.dismissScope({ ticketKey: key });
-    },
-    onRepoAdded: (featureId, repoPath) => epicService.ensureFeatureRepo(featureId, repoPath),
-    refreshBeforeArchive: (ids) => featureRunner.refreshBeforeArchive(ids),
-    log: logger,
-  });
-  const epicService = new EpicService({
-    epics, features, featureService, db, now: Date.now,
-    onEpicChanged: (id) => void memory.syncEpic(id),
-    onArchived: (id, featureIds) => {
-      removeEpicMcpConfig(paths.mcp, id);
-      for (const f of featureIds) removeFeatureMcpConfig(paths.mcp, f);
-      // 归档了的 epic 和它下面的 feature：还未决的「待你决定」和汇报都收起来（BTL-190 第 2+3 点）。
-      inboxService.dismissScope({ epicId: id });
-      for (const f of featureIds) inboxService.dismissScope({ featureId: f });
-      // 一起归档的 feature 逐个排队整理：第一个整理完之后没有新东西，后面的不再跑。
-      for (const f of featureIds) digestArchivedFeature(f);
     },
   });
   // 防休眠：只在内存里，启动时是关的。状态一变，托盘菜单、提示文字和界面都跟着更新。
@@ -2923,18 +2887,16 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
-  /** 总控 session（feature、epic 的总控和 Butler 总控）的 head：开着终端或休眠着的。 */
+  /** 总控 session（feature 总控和 Butler 总控）的 head：开着终端或休眠着的。 */
   const turnCoordinators = () =>
     turnCoordinatorsOf({
       featureViews: () => sessionService.featureViews(),
-      epicViews: () => sessionService.epicViews(),
       runningButler: () => sessionService.runningButler(),
       hibernatedHeads,
     });
   const turnService = new TurnService({
     tickets: () => sessionService.ticketViews(),
     features: () => sessionService.featureViews(),
-    epics: () => sessionService.epicViews(),
     hibernatedHeads,
     coordinators: turnCoordinators,
     head: (id) => sessions.head(id),
@@ -3012,11 +2974,10 @@ async function bootstrap(): Promise<void> {
     onFeatureArchived: (id) => {
       removeFeatureMcpConfig(paths.mcp, id);
       inboxService.dismissScope({ featureId: id });
-      digestArchivedFeature(id);
     },
     recheckCleanup: (key) => cleanupIfMerged(cleanupDeps, handoffs, key),
     autostart,
-    tickets, ticketService, featureService, epicService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
+    tickets, ticketService, featureService, sessionService, activity: activityMonitor, pty, health, followups, handoffs, settings, runner, featureRunner, scheduler, jobs, gateRepo,
     memory,
     externalAudit,
     metrics: (days) => metricsView(days),
@@ -3173,10 +3134,6 @@ async function bootstrap(): Promise<void> {
     },
     prStages: new PrStagesService({
       tickets: { get: (key) => tickets.get(key), byFeature: (id) => tickets.listByFeature(id, { includeArchived: true }) },
-      features: {
-        byEpic: (epicId) => features.listByEpic(epicId, { includeArchived: true }),
-        get: (id) => features.get(id),
-      },
       stages: prStages,
       prs: ticketPrs,
       reports: (key) => inboxRepo.reportsForTicket(key),
@@ -3207,7 +3164,6 @@ async function bootstrap(): Promise<void> {
       const view = buildNowView({
         tickets: sessionService.ticketViews(),
         features: sessionService.featureViews(),
-        epics: sessionService.epicViews(),
         // 休眠着的 Butler 总控照样算（WS-M B）。
         butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
           sessionService.runningButler() ?? hibernatedHeads().find((h) => h.butler && h.ticketKey === null) ?? null,
@@ -3269,8 +3225,7 @@ async function bootstrap(): Promise<void> {
     return buildProgress({
       now: Date.now(),
       tickets: live,
-      features: features.list().map((f) => ({ id: f.id, name: f.name, epicId: f.epicId })),
-      epics: epics.list().map((e) => ({ id: e.id, name: e.name })),
+      features: features.list().map((f) => ({ id: f.id, name: f.name })),
       prs: live.flatMap((t) => prWatcher.statusOf(t.key)),
       summary: (id) => {
         const rec = featureHandoffs.latestValid(id);
@@ -3287,11 +3242,7 @@ async function bootstrap(): Promise<void> {
     requestsDir: paths.controlRequests,
     resultsDir: paths.controlResults,
     handle: controlHandler({
-      tickets, sessions, features, ticketService, sessionService, notify,
-      epics, featureService, epicRows: (id) => sessionService.epicFeatureRows(id),
-      epicHistory: (id) => epicHistory.list(id, EPIC_HISTORY_READ_ENTRIES),
-      syncEpic: (id) => void memory.syncEpic(id),
-      refreshEpic: (id, except) => featureRunner.refreshEpic(id, except),
+      tickets, sessions, features, blocks, ticketService, sessionService, notify,
       activity: (id) => activityMonitor.get(id),
       activityOutput: (id) => activityMonitor.output(id),
       refresher,
@@ -3301,7 +3252,6 @@ async function bootstrap(): Promise<void> {
       // Butler 总控（BTL-190 第 5 点）的只读数据。
       butler: {
         butlerSessions: () => sessions.listButler().map((x) => x.id),
-        epicViews: () => sessionService.epicViews(),
         featureRows: () => sessionService.featureRowsAll(),
         prs: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
         prTurns: () => turnService.prTurns(),
@@ -3340,9 +3290,6 @@ async function bootstrap(): Promise<void> {
       },
       screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
       submit: submitTask,
-      // start_feature 给已经在跑的 feature 总控补充说明（BTL-190 第 4 点）：和递汇报同一道 guard。
-      guard: deliveryGuard,
-      deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
       memoryEnabled: () => memoryOn(settings),
       ticketPattern: () => settings.get("ticketPattern"),
       sessionModel: (m) => routing.sessionModel(m),

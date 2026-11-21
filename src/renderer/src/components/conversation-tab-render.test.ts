@@ -24,7 +24,7 @@ const fork = (over: Partial<ForkView> = {}): ForkView => ({
   messages: [msg(20, { role: "user", text: "为什么？", forkId: 7, turnId: 0 }), msg(21, { text: "因为如此", forkId: 7, turnId: 0 })], ...over,
 });
 const report = (id: number): InboxItemView => ({
-  id, kind: "report", sessionId: "s1", role: "ticket", ticketKey: "T-1", featureId: null, epicId: null, repo: null,
+  id, kind: "report", sessionId: "s1", role: "ticket", ticketKey: "T-1", featureId: null, repo: null,
   text: `汇报${id}`, options: [], context: null, reportKind: "done", answer: null, createdAt: AT, open: true, target: {} as never,
 });
 const actions = (over: Partial<ForkActions> = {}): ForkActions => ({
@@ -98,7 +98,7 @@ describe("ForkBox", () => {
     expect(isDisabled(box({}, { memoryOn: false }), "记进记忆")).toBe(true);
   });
 
-  it("no ticket or feature to remember under (Butler, epic pages): save to memory isn't shown at all", () => {
+  it("no ticket or feature to remember under (the Butler page): save to memory isn't shown at all", () => {
     expect(box({}, { canRemember: false })).not.toContain(S.conv.actRemember);
     expect(box({}, { canRemember: false })).toContain(S.conv.actSend);
     expect(box({}, { canRemember: true })).toContain(S.conv.actRemember);

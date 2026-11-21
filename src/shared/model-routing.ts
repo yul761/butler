@@ -25,7 +25,7 @@ export function isTier(v: unknown): v is Tier {
 export const TASK_IDS = [
   "needs_you", "stuck_judge", "conv_qa",
   "handoff", "feature_summary",
-  "handoff_refresh", "epic_digest",
+  "handoff_refresh",
   "lesson_analyze", "lesson_enrich", "lesson_cluster", "lesson_conflict", "lesson_clarity", "lesson_sample_review", "lesson_classify",
   "check_draft", "repo_scan_infer", "backtest_judge",
   "pre_review", "evidence_verify", "pr_brief",
@@ -74,7 +74,6 @@ export const TASKS: Readonly<Record<TaskId, TaskDef>> = Object.fromEntries(
     t("handoff", "session", "wait", { legacy: "session" }),
     t("feature_summary", "session", "wait", { legacy: "session" }),
     t("handoff_refresh", "mid", "fallback", { legacy: "sonnet" }),
-    t("epic_digest", "mid", "fallback", { legacy: "sonnet" }),
     t("lesson_analyze", "mid", "fallback"),
     t("lesson_enrich", "mid", "fallback"),
     t("lesson_cluster", "mid", "fallback"),

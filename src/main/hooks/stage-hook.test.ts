@@ -10,7 +10,7 @@ import { stageEventFromHook } from "./stage-hook";
 const sess = (o: Partial<Session> = {}): Session => ({
   id: "s1", ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, epicId: null, model: null, butler: false, lessonRunId: null, ...o,
+  featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
 });
 const repo = (...ss: Session[]) => ({ get: (id: string) => ss.find((s) => s.id === id) ?? null });
 const skill = (name: string, o: Partial<HookEnvelope> = {}): HookEnvelope => ({
@@ -26,7 +26,7 @@ describe("stageEventFromHook", () => {
   it("records a design skill of a ticket session with its ticket and repo", () => {
     const o = stageEventFromHook(skill("superpowers:brainstorming"), repo(sess({ ticketKey: "BTL-1", repoId: 7 })));
     expect(o).toEqual({
-      event: { ticketKey: "BTL-1", repoId: 7, prId: null, branch: null, featureId: null, epicId: null, sessionId: "s1", kind: "skill", at: 500, data: { name: "superpowers:brainstorming", category: "design" } },
+      event: { ticketKey: "BTL-1", repoId: 7, prId: null, branch: null, featureId: null, sessionId: "s1", kind: "skill", at: 500, data: { name: "superpowers:brainstorming", category: "design" } },
       dedupeKey: "skill:s1:500:superpowers:brainstorming",
     });
   });
@@ -38,15 +38,12 @@ describe("stageEventFromHook", () => {
     const o = stageEventFromHook(skill("code-review"), repo(sess({ featureId: 3, fixesSession: "t2" }), sess({ id: "t2", ticketKey: "BTL-2", repoId: 9 })));
     expect(o?.event).toMatchObject({ ticketKey: "BTL-2", repoId: 9, featureId: null });
   });
-  it("a fix session whose target has no ticket uses the target's feature or epic", () => {
+  it("a fix session whose target has no ticket uses the target's feature", () => {
     const f = stageEventFromHook(skill("brainstorming"), repo(sess({ featureId: 3, fixesSession: "t2" }), sess({ id: "t2", featureId: 4 })));
-    expect(f?.event).toMatchObject({ ticketKey: null, repoId: null, featureId: 4, epicId: null });
-    const e = stageEventFromHook(skill("brainstorming"), repo(sess({ featureId: 3, fixesSession: "t2" }), sess({ id: "t2", epicId: 5 })));
-    expect(e?.event).toMatchObject({ ticketKey: null, featureId: null, epicId: 5 });
+    expect(f?.event).toMatchObject({ ticketKey: null, repoId: null, featureId: 4 });
   });
-  it("a feature coordinator gives featureId, an epic session epicId", () => {
-    expect(stageEventFromHook(skill("brainstorming"), repo(sess({ featureId: 3 })))?.event).toMatchObject({ ticketKey: null, repoId: null, featureId: 3, epicId: null });
-    expect(stageEventFromHook(skill("brainstorming"), repo(sess({ epicId: 5 })))?.event).toMatchObject({ ticketKey: null, featureId: null, epicId: 5 });
+  it("a feature coordinator gives featureId", () => {
+    expect(stageEventFromHook(skill("brainstorming"), repo(sess({ featureId: 3 })))?.event).toMatchObject({ ticketKey: null, repoId: null, featureId: 3 });
   });
   it("a fix session whose target is missing or unattributed gives null", () => {
     expect(stageEventFromHook(skill("code-review"), repo(sess({ fixesSession: "gone" })))).toBeNull();

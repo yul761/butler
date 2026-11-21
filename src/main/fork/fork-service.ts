@@ -237,7 +237,7 @@ export class ForkService {
     }
   }
 
-  /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有（Butler、epic 页面）就不记（no_scope），也不为它要结论。 */
+  /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有（Butler 页面）就不记（no_scope），也不为它要结论。 */
   async remember(forkId: number): Promise<RememberResult> {
     if (this.remembering.has(forkId)) return "busy";
     if (!this.d.memoryEnabled()) return "disabled";

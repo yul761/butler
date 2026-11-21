@@ -6,7 +6,7 @@ describe("task registry", () => {
     const table: Record<string, [string, string]> = {
       needs_you: ["low", "fallback"], stuck_judge: ["low", "fallback"], conv_qa: ["low", "fallback"],
       handoff: ["session", "wait"], feature_summary: ["session", "wait"],
-      handoff_refresh: ["mid", "fallback"], epic_digest: ["mid", "fallback"],
+      handoff_refresh: ["mid", "fallback"],
       lesson_analyze: ["mid", "fallback"], lesson_enrich: ["mid", "fallback"], lesson_cluster: ["mid", "fallback"],
       lesson_conflict: ["high", "wait"], lesson_clarity: ["mid", "fallback"], lesson_sample_review: ["mid", "wait"],
       lesson_classify: ["low", "fallback"], check_draft: ["high", "wait"], repo_scan_infer: ["mid", "fallback"],
@@ -15,6 +15,8 @@ describe("task registry", () => {
       permission_profile: ["low", "fallback"], intake_classify: ["mid", "fallback"], intake_fetch: ["low", "fallback"], model_probe: ["low", "fallback"],
     };
     expect([...TASK_IDS].sort()).toEqual(Object.keys(table).sort());
+    // 旧 epic 层的整理任务（BTL-246 去掉了）。
+    expect(isTaskId("epic_digest")).toBe(false);
     for (const [id, [tier, policy]] of Object.entries(table)) {
       expect(isTaskId(id)).toBe(true);
       const d = TASKS[id as keyof typeof TASKS];
@@ -27,7 +29,6 @@ describe("task registry", () => {
     expect(TASKS.stuck_judge.legacy).toBe("haiku");
     expect(TASKS.conv_qa.legacy).toBe("haiku");
     expect(TASKS.handoff_refresh.legacy).toBe("sonnet");
-    expect(TASKS.epic_digest.legacy).toBe("sonnet");
     expect(TASKS.lesson_analyze.legacy).toBeNull();
     expect(TASKS.handoff.legacy).toBe("session");
     expect(TASKS.feature_summary.legacy).toBe("session");
