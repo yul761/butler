@@ -26,6 +26,7 @@ import { S } from "./strings";
 import { onboardingReducer } from "./wizard";
 import type { SettingsSection } from "../../shared/settings-layout";
 import type { Turn } from "../../shared/turn";
+import { LIVE_SCOPES } from "./state-bus";
 
 /** 状态变化事件合并的时间窗。 */
 const STATE_DEBOUNCE_MS = 80;
@@ -121,10 +122,11 @@ export function App() {
     void refresh();
     // hook 事件一来一串：合并成一次刷新。
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // 列表、首页都带着 session 的活动和内存读数：这些范围也要听（BTL-242）。
     const off = api.onStateChanged(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void refresh(), STATE_DEBOUNCE_MS);
-    });
+    }, LIVE_SCOPES);
     return () => {
       if (timer) clearTimeout(timer);
       off();

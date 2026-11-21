@@ -36,7 +36,7 @@ import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicySe
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr,
+  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr, type TicketView, type FeatureView,
 } from "../../shared/types";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
@@ -94,6 +94,7 @@ import type { AvailabilityView } from "../../shared/availability";
 import type { RoutingAction, RoutingView, SessionLimitView } from "../../shared/model-routing";
 import type { SwitchResult } from "../routing/session-switch";
 import type { DiagService } from "../diag/diag-service";
+import { isReadChannel } from "./read-channels";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -195,6 +196,10 @@ export interface IpcDeps {
   onInvoked?: (channel: string, args: readonly unknown[], result: unknown) => void;
   /** 性能诊断（BTL-242）。 */
   diag?: Pick<DiagService, "report" | "snapshot" | "export" | "invoke">;
+  /** 写操作的 invoke 前后调（作废视图缓存）。 */
+  onWrite?: () => void;
+  /** 缓存过的视图（BTL-242）；不给就直接调 sessionService。 */
+  views?: { tickets(): TicketView[]; features(): FeatureView[] };
   /** 渲染进程报的终端可见性（WS-M D、E）。 */
   terminalVisible?: (termId: string, visible: boolean) => void;
   /** 内存历史（WS-M A），since 以后的点。 */
@@ -280,16 +285,26 @@ export interface IpcDeps {
 
 export function registerIpc(d: IpcDeps): void {
   // 计时的是 handler 同步跑的那一段（BTL-242）：它占着主进程的事件循环；异步等待（headless claude 等）不算。
+  // 写操作（不是只读通道）调之前和调完都作废视图缓存（BTL-242）：handler 里先写后读、或者写了没 notify 的，都不会读到旧的。
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handle = (channel: string, fn: (...args: any[]) => unknown) =>
-    ipcMain.handle(channel, (_e, ...args: unknown[]) => meteredIpcResult(channel, args, () => {
-      const t0 = performance.now();
+  const handle = (channel: string, fn: (...args: any[]) => unknown) => {
+    const write = !isReadChannel(channel);
+    ipcMain.handle(channel, async (_e, ...args: unknown[]) => {
+      if (write) d.onWrite?.();
       try {
-        return fn(...args);
+        return await meteredIpcResult(channel, args, () => {
+          const t0 = performance.now();
+          try {
+            return fn(...args);
+          } finally {
+            d.diag?.invoke(channel, performance.now() - t0);
+          }
+        }, d.onInvoked);
       } finally {
-        d.diag?.invoke(channel, performance.now() - t0);
+        if (write) d.onWrite?.();
       }
-    }, d.onInvoked));
+    });
+  };
 
   const setFollowupStatus = (id: string, status: FollowupStatus) => {
     if (!(FOLLOWUP_STATUSES as readonly string[]).includes(status)) throw new Error(`unknown followup status: ${String(status)}`);
@@ -300,7 +315,7 @@ export function registerIpc(d: IpcDeps): void {
     d.rederive(f.ticketKey);
   };
 
-  handle(IPC.ticketsList, () => d.sessionService.ticketViews());
+  handle(IPC.ticketsList, () => (d.views ? d.views.tickets() : d.sessionService.ticketViews()));
   handle(IPC.ticketsCreate, async (raw: unknown) => {
     const t = await d.ticketService.create(createTicketArg(raw));
     d.notify();
@@ -356,7 +371,7 @@ export function registerIpc(d: IpcDeps): void {
   });
 
   // feature（设计文档 2026-10-26）
-  handle(IPC.featuresList, () => d.sessionService.featureViews());
+  handle(IPC.featuresList, () => (d.views ? d.views.features() : d.sessionService.featureViews()));
   handle(IPC.featuresCreate, async (raw: unknown) => {
     const f = await d.featureService.create(createFeatureArg(raw));
     d.notify();

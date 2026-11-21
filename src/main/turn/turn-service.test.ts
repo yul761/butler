@@ -409,3 +409,31 @@ describe("TurnService.changed", () => {
     expect(localDayStart(t)).toBe(new Date(2026, 10, 19).getTime());
   });
 });
+
+describe("TurnService input cache (BTL-242)", () => {
+  it("builds the board input once per cache generation, across filters", () => {
+    let views = 0;
+    let gen = 0;
+    const cache = new Map<string, unknown>();
+    const deps = failingPr();
+    const s = new TurnService({
+      ...deps,
+      tickets: () => {
+        views++;
+        return deps.tickets();
+      },
+      cache: <T,>(key: string, build: () => T): T => {
+        const k = `${gen}:${key}`;
+        if (!cache.has(k)) cache.set(k, build());
+        return cache.get(k) as T;
+      },
+    });
+    s.board(null);
+    s.board(null);
+    s.prTurns();
+    expect(views).toBe(1);
+    gen++;
+    s.board(null);
+    expect(views).toBe(2);
+  });
+});

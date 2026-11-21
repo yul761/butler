@@ -10,6 +10,8 @@ import type { DevSendResult, ForkView, RememberResult } from "../../shared/fork"
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
+import { createStateBus } from "./state-bus";
+import type { StateScope } from "../../shared/state-scope";
 import { IPC, type IpcResult } from "../../shared/ipc";
 import type { PrStagesScope, PrStagesTicket } from "../../shared/pr-stages";
 import type { AvailabilityAction, AvailabilityView } from "../../shared/availability";
@@ -70,6 +72,15 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 export const platform = (): string => window.butler.platform;
 export const pathForFile = (file: File): string => window.butler.pathForFile(file);
+
+// 整个渲染进程只挂一个 state:changed 监听（BTL-242）。
+const stateBus = createStateBus();
+let stateBusOn = false;
+function ensureStateBus(): void {
+  if (stateBusOn) return;
+  stateBusOn = true;
+  window.butler.on(IPC.stateChanged, (payload) => stateBus.dispatch(payload));
+}
 
 export const api = {
   listTickets: () => call<TicketView[]>(IPC.ticketsList),
@@ -264,7 +275,11 @@ export const api = {
   dismissActivity: (sessionId: string) => call<void>(IPC.activityDismiss, sessionId),
   onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
   onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
-  onStateChanged: (cb: () => void) => window.butler.on(IPC.stateChanged, cb),
+  /** 不给 scopes 只听 data；跟着 session 活动变的视图传 LIVE_SCOPES（BTL-242）。 */
+  onStateChanged: (cb: (scopes: StateScope[]) => void, scopes?: readonly StateScope[]) => {
+    ensureStateBus();
+    return stateBus.subscribe(cb, scopes);
+  },
   onTurnChanged: (cb: () => void) => window.butler.on(IPC.turnChanged, cb),
   onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
   /** 实况窗口（BTL-190 第 7 点）：开着的 session 新的一次工具调用、记忆读写、回合开始 / 结束。 */

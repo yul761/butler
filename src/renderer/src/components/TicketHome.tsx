@@ -23,6 +23,7 @@ import { useCollapsed } from "./useCollapsed";
 import { runCardAction, sendReasonText, type CardOutcome } from "../turn-card-actions";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
+import { LIVE_SCOPES } from "../state-bus";
 
 export interface TicketHomeProps {
   ticket: TicketView;
@@ -177,7 +178,7 @@ export interface TicketHomeTabProps {
 export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, busy, onBusy }: TicketHomeTabProps) {
   const key = ticket.key;
   const { board, reload } = useTurnBoard({ ticketKey: key });
-  const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key));
+  const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key), { scopes: LIVE_SCOPES });
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
   // 最新一份 handoff 就是这个 ticket 的「状态」：存下新的一份会发 stateChanged，这里跟着重取。

@@ -159,6 +159,23 @@ export class SessionsRepo {
     return rows.map(toSession);
   }
 
+  /** 一次取好几个 ticket 的 session（BTL-242：拼列表时不再每个 ticket 查一次）；每个 ticket 的顺序同 listByTicket，没有 session 的不在 Map 里。 */
+  listByTickets(ticketKeys: readonly string[]): Map<string, Session[]> {
+    const out = new Map<string, Session[]>();
+    if (ticketKeys.length === 0) return out;
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE ticket_key IN (SELECT value FROM json_each(?)) ORDER BY ${RECENCY} DESC, id`)
+      .all(JSON.stringify(ticketKeys)) as unknown as SessionRow[];
+    for (const r of rows) {
+      const s = toSession(r);
+      const key = s.ticketKey as string;
+      const list = out.get(key);
+      if (list) list.push(s);
+      else out.set(key, [s]);
+    }
+    return out;
+  }
+
   /** feature 级 session（ticket_key 为空、feature_id 是这个 feature 的）：总控和修复 session。要选总控（汇总、handoff）用 listFeatureCoordinators。 */
   listByFeature(featureId: number): Session[] {
     const rows = this.db

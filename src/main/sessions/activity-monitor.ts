@@ -18,6 +18,27 @@ import { DebouncedWatch, type WatchFn } from "./transcript-watch";
 /** 活动刷新的间隔：transcript 有 fs.watch 盯着（BTL-190 第 7 点），这个 tick 是退路。 */
 export const ACTIVITY_TICK_MS = 10_000;
 /** transcript 变了以后多久重读（去抖）。 */
+export type ActivityChange = "quiet" | "visible";
+type Change = ActivityChange | "none";
+
+const RANK: Record<Change, number> = { none: 0, quiet: 1, visible: 2 };
+export const maxChange = (a: Change, b: Change): Change => (RANK[a] >= RANK[b] ? a : b);
+
+/** 界面上看不到的字段：最后输出的时间和最后几行（卡住判断、修复任务在主进程里直接读 get()）。 */
+const QUIET_FIELDS = ["lastOutputAt", "lastOutput"] as const;
+
+/** 两次活动比较（BTL-242）：只有 QUIET_FIELDS 变了是 quiet，别的字段变了是 visible；events 是这次取走的事件带来的变化。 */
+export function activityChange(prev: SessionActivity | null, next: SessionActivity, events: Change): Change {
+  if (prev === null) return "visible";
+  if (isDeepStrictEqual(prev, next)) return events;
+  const strip = (a: SessionActivity) => {
+    const o: Record<string, unknown> = { ...a };
+    for (const f of QUIET_FIELDS) delete o[f];
+    return o;
+  };
+  return isDeepStrictEqual(strip(prev), strip(next)) ? maxChange("quiet", events) : "visible";
+}
+
 export const WATCH_DEBOUNCE_MS = 300;
 /** 每个 session 留最近几条工具调用（实况窗口的小终端）。 */
 export const RECENT_TOOLS = 3;
@@ -81,8 +102,11 @@ export interface ActivityDeps {
   /** session 的 transcript 文件；还没有时返回 null。 */
   transcriptFile: (sessionId: string) => string | null;
   judge: (input: StuckInput) => Promise<StuckVerdict | null>;
-  /** 活动变化时调用；内容没变不调。 */
-  notify: () => void;
+  /**
+   * 活动变化时调用；内容没变不调（BTL-242）。visible：界面上看得到的变了（在做什么、卡住、撞限、跟踪的 session 多了少了）；
+   * quiet：只是最后输出的时间和内容、新的工具调用（这些界面从 activity:event 推送拿，不用重取）。主进程里的后续（需要你、自动刷新、等待段）两种都要跑。
+   */
+  notify: (change: ActivityChange) => void;
   /**
    * 实况窗口的信号（BTL-190 第 7 点）：每个新的 tool_use、轮次开始和结束各一条。开始跟踪以前的记录（--resume 重放、Butler 启动前写的）、
    * 文件截短或轮转后重读出来的不推。
@@ -231,7 +255,7 @@ export class ActivityMonitor {
   private readonly wanted = new Set<string>();
   private readonly judging = new Set<string>();
   /** 每个 session 正在做的那次更新：tick 和 refreshSession 撞上时排队，同一段 transcript 不能读两遍（读到的位置会多走）。 */
-  private readonly updating = new Map<string, Promise<boolean>>();
+  private readonly updating = new Map<string, Promise<Change>>();
   /** 全部 session 最近的记忆读写，从旧到新。 */
   private memory: ActivityEvent[] = [];
   private timer: NodeJS.Timeout | null = null;
@@ -266,7 +290,7 @@ export class ActivityMonitor {
       const changed = await this.refresh(now);
       if (this.stopped) return;
       this.startJudges(now);
-      if (changed) this.d.notify();
+      if (changed !== "none") this.d.notify(changed);
     } catch (e) {
       this.d.log?.("activity tick failed", e);
     } finally {
@@ -289,8 +313,8 @@ export class ActivityMonitor {
     if (head?.id !== sessionId || !this.d.pty.openIds().includes(t.termId)) return;
     try {
       // 排队期间 tick 可能已经把它忘了（终端退出）：那就不再读，免得又把它加回来。
-      const changed = await this.serialUpdate(sessionId, () => (this.tracked.has(sessionId) ? this.update(head, t.termId, this.d.now()) : Promise.resolve(false)));
-      if (changed && !this.stopped) this.d.notify();
+      const changed = await this.serialUpdate(sessionId, () => (this.tracked.has(sessionId) ? this.update(head, t.termId, this.d.now()) : Promise.resolve<Change>("none")));
+      if (changed !== "none" && !this.stopped) this.d.notify(changed);
     } catch (e) {
       this.d.log?.(`activity of session ${sessionId} failed`, e);
     }
@@ -304,7 +328,7 @@ export class ActivityMonitor {
   async promptSubmitted(id: string): Promise<void> {
     const head = this.d.sessions.head(id);
     if (!head || this.stopped) return;
-    let started = false;
+    let started: Change = "none";
     if (!this.tracked.has(head.id)) {
       const termId = this.d.pty.openIds().find((term) => this.d.sessions.head(term)?.id === head.id);
       if (termId === undefined) return;
@@ -320,7 +344,8 @@ export class ActivityMonitor {
     t.promptAt = this.d.now();
     t.promptSize = t.transcriptSize;
     await this.refreshSession(head.id);
-    if (started && !this.stopped) this.d.notify();
+    // 开始跟踪一个新的 session：界面上多了一张卡片。
+    if (started !== "none" && !this.stopped) this.d.notify("visible");
   }
 
   /** 这个 session 最近的工具调用（含记忆读写），从旧到新，最多 3 条；没在跟踪为空。 */
@@ -357,30 +382,30 @@ export class ActivityMonitor {
     const t = this.tracked.get(sessionId);
     if (!t) return;
     this.tracker.dismiss(sessionId);
-    if (this.syncVerdict(t)) this.d.notify();
+    if (this.syncVerdict(t)) this.d.notify("visible");
   }
 
   /** 看一遍所有打开的终端，返回有没有内容变化。 */
-  private async refresh(now: number): Promise<boolean> {
+  private async refresh(now: number): Promise<Change> {
     const live = new Map<string, { head: Session; termId: string }>();
     for (const termId of this.d.pty.openIds()) {
       const head = this.d.sessions.head(termId);
       if (head) live.set(head.id, { head, termId });
     }
-    let changed = false;
+    let changed: Change = "none";
     for (const [id, t] of this.tracked) {
       if (live.has(id)) continue;
       t.watch?.close();
       this.tracked.delete(id);
       this.tracker.forget(id);
       this.wanted.delete(id);
-      changed = true;
+      changed = "visible";
     }
     for (const { head, termId } of live.values()) {
       // 读文件的时候可能开始退出了，数据库随后就关
-      if (this.stopped) return false;
+      if (this.stopped) return "none";
       try {
-        if (await this.serialUpdate(head.id, () => this.update(head, termId, now))) changed = true;
+        changed = maxChange(changed, await this.serialUpdate(head.id, () => this.update(head, termId, now)));
       } catch (e) {
         this.d.log?.(`activity of session ${head.id} failed`, e);
       }
@@ -389,7 +414,7 @@ export class ActivityMonitor {
   }
 
   /** 同一个 session 的更新一个接一个做。 */
-  private serialUpdate(id: string, run: () => Promise<boolean>): Promise<boolean> {
+  private serialUpdate(id: string, run: () => Promise<Change>): Promise<Change> {
     const prev = this.updating.get(id);
     const next = prev ? prev.then(run, run) : run();
     this.updating.set(id, next);
@@ -400,7 +425,8 @@ export class ActivityMonitor {
     return next;
   }
 
-  private async update(head: Session, termId: string, now: number): Promise<boolean> {
+  private async update(head: Session, termId: string, now: number): Promise<Change> {
+    const fresh = !this.tracked.has(head.id);
     const t = this.tracked.get(head.id) ?? this.track(head.id, termId);
     t.termId = termId;
     t.cwd = head.cwd;
@@ -427,9 +453,9 @@ export class ActivityMonitor {
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now, probe);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines, limit: state.apiError ? state.apiLimit : null };
-    const changed = recentChanged || !isDeepStrictEqual(next, t.activity);
+    const prev = t.activity;
     t.activity = next;
-    return changed;
+    return fresh ? "visible" : activityChange(prev, next, recentChanged);
   }
 
   /** 新出现的限额记录报给 onLimit：同一条只报一次，太旧的（重放）不报。 */
@@ -457,14 +483,15 @@ export class ActivityMonitor {
    * 取走这次读到的事件：工具调用记进 recent，记忆读写也记进全局的 memory，新的推给界面。
    * 文件截短或轮转以后重读出来的是旧事：recent 清空重来，只推那以后的。返回 recent 有没有变。
    */
-  private takeEvents(t: Tracked, state: TranscriptState, now: number): boolean {
+  private takeEvents(t: Tracked, state: TranscriptState, now: number): Change {
     const pending = state.events.splice(0);
     const restarts = t.tail?.restarts ?? 0;
-    let changed = false;
+    let changed: Change = "none";
     if (restarts !== t.restarts) {
       t.restarts = restarts;
       t.eventsSince = now;
-      changed = t.recent.length > 0;
+      // recent 清空：界面上已有的工具行要收掉，推送做不到，得重取。
+      if (t.recent.length > 0) changed = "visible";
       t.recent = [];
     }
     t.hooklessEndAt = null;
@@ -476,7 +503,7 @@ export class ActivityMonitor {
       if (e.kind === "turn-start") t.turnStartAt = e.at;
       if (e.kind !== "turn-start" && e.kind !== "turn-end") {
         t.recent = [...t.recent, e].slice(-RECENT_TOOLS);
-        changed = true;
+        changed = maxChange(changed, "quiet");
       }
       if (e.kind === "memory-write" || e.kind === "memory-read") {
         this.memory = [...this.memory, e].sort((a, b) => a.at - b.at).slice(-RECENT_MEMORY);
@@ -657,7 +684,7 @@ export class ActivityMonitor {
     // 有了新输出或者转去等人确认：“卡住”已经过时，“没卡住”照样算数，10 分钟静默期要记下。
     if (verdict?.stuck && (t.lastOutputAt !== quietSince || !t.eligible)) return;
     const result = this.tracker.judged(t.id, verdict, this.d.now());
-    if (this.syncVerdict(t)) this.d.notify();
+    if (this.syncVerdict(t)) this.d.notify("visible");
     if (result === "newly_stuck" && verdict) this.d.onStuck({ sessionId: t.id, ...scope, reason: verdict.reason });
   }
 

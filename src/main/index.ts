@@ -7,7 +7,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { cpus, freemem, homedir, release as osRelease, totalmem } from "node:os";
 import { writeFile as writeFileAsync } from "node:fs/promises";
 import { DiagService } from "./diag/diag-service";
-import { diagMode } from "./diag/perf-stats";
+import { Invalidator } from "./diag/invalidator";
+import { ViewCache } from "./diag/view-cache";
+import { isStateScope, type StateChangedPayload } from "../shared/state-scope";
+import { diagMode, perfOp } from "./diag/perf-stats";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sanitizeTask, taskMessage } from "../shared/control";
@@ -554,10 +557,19 @@ async function bootstrap(): Promise<void> {
   const health = new HealthService({ paths, platform: process.platform, env: process.env, settings, bundledHookBin: bundledHookPath(), memoryMcpScript: bundledMemoryMcpPath(), log: logger, onHookBinCurrent: seedSkillTracking });
   // 「谁该动」看板（UI 重做第 1 层）跟着 stateChanged 一起防抖推 turn:changed；TurnService 在下面才建好。
   let turnChanged: (() => void) | null = null;
-  const notify = () => {
-    safeSend(IPC.stateChanged);
-    turnChanged?.();
-  };
+  // 视图缓存（BTL-242）：界面那边的读（列表、首页、看板）在下一次 notify / 写操作 / 1 秒之前共用一份。主进程自己的逻辑不走它。
+  const viewCache = new ViewCache({ now: Date.now });
+  // notify 合并（BTL-242）：一小段时间里的多次 notify 合成一次 state:changed（带上范围），turn:changed 跟着同一次发。
+  // 只是一次内存采样（procs）时看板不用重取。
+  const invalidator = new Invalidator({
+    emit: (scopes) => {
+      safeSend(IPC.stateChanged, { scopes } satisfies StateChangedPayload);
+      if (scopes.includes("data") || scopes.includes("activity")) turnChanged?.();
+    },
+    onChange: () => viewCache.invalidate(),
+  });
+  // 有些地方把 notify 直接当回调传（.then(notify)）：参数不是范围的一律当 data。
+  const notify = (scope?: unknown) => invalidator.notify(isStateScope(scope) ? scope : "data");
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
   // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
@@ -1182,16 +1194,17 @@ async function bootstrap(): Promise<void> {
     judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
-    notify: () => {
+    // 只是输出、工具调用变了（quiet）时界面不用重取（BTL-242）：工具调用另外推给实况窗口；主进程里的后续照常跑。
+    notify: (change) => {
       needsYou.update();
       refresher.autoCheck();
       waitTracker.sync();
-      notify();
+      if (change === "visible") notify("activity");
     },
     // 卡住不再弹系统通知（之后在「现在」页里显示）：只刷新界面，记一次打断（ws-h）。
     onStuck: (info) => {
       interrupts.stuck(info.sessionId, info.ticketKey);
-      notify();
+      notify("activity");
     },
     now: Date.now,
     intervals: activityIntervals(process.env),
@@ -2813,7 +2826,7 @@ async function bootstrap(): Promise<void> {
     onSample: (s) => hibernator?.onSample(s),
     sampleNeeded: () => memoryPressureOn(settings),
     log: logger,
-    changed: notify,
+    changed: () => notify("procs"),
   });
   const procServices = procs;
   // e2e（后台窗口模式下才算数）：BUTLER_HIBERNATE_AFTER_MS 把四种等待的分钟数都换成这么多毫秒，安静期也一起缩短。
@@ -2966,20 +2979,29 @@ async function bootstrap(): Promise<void> {
     repo: reviewRequests,
     away: () => idleSignal.locked() || idleSignal.idleSeconds() >= REVIEW_AWAY_IDLE_SECONDS,
     ghAvailable: () => ghAvailable(),
-    changed: () => turnService.changed(),
+    // 写了 review 请求：看板的输入缓存作废（BTL-242）。
+    changed: () => {
+      viewCache.invalidate();
+      turnService.changed();
+    },
     now: Date.now,
     log: logger,
   });
+  const views = {
+    tickets: viewCache.wrap("tickets", () => perfOp("views.tickets", () => sessionService.ticketViews())),
+    features: viewCache.wrap("features", () => perfOp("views.features", () => sessionService.featureViews())),
+  };
   /** 总控 session（feature 总控和 Butler 总控）的 head：开着终端或休眠着的。 */
   const turnCoordinators = () =>
     turnCoordinatorsOf({
-      featureViews: () => sessionService.featureViews(),
+      featureViews: views.features,
       runningButler: () => sessionService.runningButler(),
       hibernatedHeads,
     });
   const turnService = new TurnService({
-    tickets: () => sessionService.ticketViews(),
-    features: () => sessionService.featureViews(),
+    cache: (key, build) => viewCache.get(key, build),
+    tickets: views.tickets,
+    features: views.features,
     hibernatedHeads,
     coordinators: turnCoordinators,
     head: (id) => sessions.head(id),
@@ -3014,7 +3036,7 @@ async function bootstrap(): Promise<void> {
     emit: () => safeSend(IPC.turnChanged),
     now: Date.now,
   });
-  turnChanged = () => turnService.changed();
+  turnChanged = () => safeSend(IPC.turnChanged);
   // 设置变了以后该跑的：设置页保存、套用自动化档位预设都走这里（BTL-247 抽出来给档位用）。
   const onSettingChanged = (key: EditableSettingKey): void => {
     if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
@@ -3068,6 +3090,8 @@ async function bootstrap(): Promise<void> {
   const keepAwakeSwitch = keepAwake;
   registerIpc({
     diag: diag ?? undefined,
+    onWrite: () => viewCache.invalidate(),
+    views,
     conv,
     fork: forkService,
     devSend: devSender,
@@ -3260,8 +3284,8 @@ async function bootstrap(): Promise<void> {
       const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
       const reasons = needsYou.reasons();
       const view = buildNowView({
-        tickets: sessionService.ticketViews(),
-        features: sessionService.featureViews(),
+        tickets: views.tickets(),
+        features: views.features(),
         // 休眠着的 Butler 总控照样算（WS-M B）。
         butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
           sessionService.runningButler() ?? hibernatedHeads().find((h) => h.butler && h.ticketKey === null) ?? null,
@@ -3601,6 +3625,7 @@ async function bootstrap(): Promise<void> {
     unbindReviewFocus?.();
     reviewPoller.stop();
     turnChanged = null;
+    invalidator.dispose();
     turnService.dispose();
     diag?.stop();
     pty.killAll();

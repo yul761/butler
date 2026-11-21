@@ -2,6 +2,7 @@ import { BUTLER_PARTS, type ButlerPart, type MemoryHistoryPoint, type MemorySnap
 import type { MemorySampleRow } from "../db/memory-samples-repo";
 import { butlerPartOf, childrenIndex, classifyTree, summarize, treeOf, type ProcTable, type TreeProc, type TreeSummary } from "./proc-table";
 import type { SystemMemory } from "./system-memory";
+import { perfOpAsync } from "../diag/perf-stats";
 
 /** 采样间隔（设计 §2）。 */
 export const SAMPLE_INTERVAL_MS = 60_000;
@@ -11,6 +12,8 @@ export const HISTORY_EVERY = 5;
 export const HISTORY_KEEP_MS = 14 * 24 * 3600_000;
 /** 开了或关了一个终端以后多久补采一次（给 claude 起子进程的时间）。 */
 export const SOON_MS = 3_000;
+/** 两次补采之间至少隔这么久（BTL-242）：一下子开好几个终端时，Windows 上每次补采都要起一个 PowerShell。 */
+export const SOON_GAP_MS = 20_000;
 /** 每几次采样清一次过期历史（大约一小时）。 */
 const PRUNE_EVERY = 60;
 
@@ -64,6 +67,8 @@ export interface MemoryMonitorDeps {
    * 「现在」页只在 stateChanged 时重取，不通知的话比最后一个 hook 事件晚到的采样要等下一次事件才显示。
    */
   changed(): void;
+  /** 两次补采之间的最小间隔，默认 SOON_GAP_MS。 */
+  soonGapMs?: number;
 }
 
 /** Electron 的进程类型对应到哪一份。 */
@@ -91,6 +96,8 @@ export class MemoryMonitor {
   private soonTimer: ReturnType<typeof setTimeout> | null = null;
   /** soon() 到点时正好有一次采样在跑：它可能是在终端开之前读的表，跑完再采一次。 */
   private again = false;
+  /** 上一次补采的时间。 */
+  private lastSoonAt = Number.NEGATIVE_INFINITY;
   private readonly hooks: SampleHook[] = [];
 
   constructor(private readonly d: MemoryMonitorDeps) {}
@@ -121,11 +128,14 @@ export class MemoryMonitor {
    */
   soon(delayMs = SOON_MS): void {
     if (this.stopped || this.soonTimer) return;
+    // 离上一次补采不到 soonGapMs：推到满了再采（不丢，读数还是会更新）。
+    const wait = Math.max(delayMs, this.lastSoonAt + (this.d.soonGapMs ?? SOON_GAP_MS) - this.d.now());
     this.soonTimer = setTimeout(() => {
       this.soonTimer = null;
+      this.lastSoonAt = this.d.now();
       if (this.running) this.again = true;
       else void this.tick();
-    }, delayMs);
+    }, wait);
     this.soonTimer.unref?.();
   }
 
@@ -156,7 +166,7 @@ export class MemoryMonitor {
     if (this.running || this.stopped || !this.d.enabled()) return null;
     this.running = true;
     try {
-      return await this.sample();
+      return await perfOpAsync("procs.sample", () => this.sample());
     } catch (e) {
       this.d.log("memory sample failed", e);
       return null;
