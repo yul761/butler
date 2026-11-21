@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { fakeMailbox } from "../mailbox/fake-mailbox";
 import { memDb } from "../test-utils";
 import { CommentItemsRepo } from "../db/comment-items-repo";
 import { TicketPrsRepo } from "../db/ticket-prs-repo";
@@ -30,8 +31,9 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
     threads: 0, compares: 0, replies: [] as string[], prComments: [] as string[], resolves: [] as string[], model: [] as string[][], audits: [] as string[],
     events: [] as { kind: string; dedupeKey?: string; data?: Record<string, unknown> }[],
   };
-  const deliver = vi.fn(async () => "sent" as const);
+  const deliver = vi.fn(async (_term: string, _text: string) => "sent" as const);
   const guard = { ok: o.guardOk ?? true };
+  const mailbox = fakeMailbox({ canDeliver: () => guard.ok, deliver: (_to, body) => void deliver("t1", body), now: () => t });
   const policy = { ...LOOP_POLICY_DEFAULTS, "comments.enabled": true, ...over };
   const d: CommentLoopDeps = {
     items, prs, policy: () => policy, cwdOf: () => "/r",
@@ -56,8 +58,7 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
       }) as CommentLoopDeps["external"]["attempt"],
     },
     recipient: () => ({ ok: true, sessionId: "h1", via: "owner" }),
-    guard: { check: () => (guard.ok ? { ok: true, termId: "t1", headId: "h1" } : { ok: false, block: "working" }) as ReturnType<CommentLoopDeps["guard"]["check"]>, recheckAfter: () => () => true },
-    deliver, busy: new Set(),
+    mailbox,
     recordEvent: (kind, refs) => (calls.events.push({ kind, dedupeKey: refs?.dedupeKey, data: refs?.data }), true),
     changed: () => undefined, now: () => t, log: () => undefined, headOf: (id) => (id === "old-h1" ? "h1" : id),
   };
@@ -73,7 +74,7 @@ function setup(over: Partial<LoopPolicy> = {}, o: { verdicts?: (ids: string[]) =
     await loop.observe([prs.get(row0.id)!], s, { cwd: "/r", slug: "o/r" });
   };
   return {
-    loop, items, prs, tickets, row: row0, calls, deliver, guard, observe, status,
+    loop, items, prs, tickets, row: row0, calls, deliver, guard, observe, status, mailbox,
     advance: (ms: number) => void (t += ms),
     setThreads: (x: ReviewThread[]) => void (threads = x),
     setPatch: (p: string) => void (patch = p),
@@ -317,8 +318,26 @@ describe("CommentLoop", () => {
     s.advance(COMMENT_UNDELIVERED_MS);
     expect(s.loop.waiting()).toMatchObject([{ reason: "undelivered", count: 1 }]);
     s.guard.ok = true;
+    // 信箱自己会在 session 停下时送（BTL-245）；flush 不再排第二条。
     await s.loop.flush();
+    expect(s.mailbox.queued.size).toBe(1);
+    s.mailbox.deliverQueued();
     expect(s.deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("a busy session gets one queued message per PR: new comments replace it, dismissing the last one withdraws it (BTL-245)", async () => {
+    const s = setup({}, { guardOk: false });
+    await s.observe();
+    expect(s.mailbox.queued.size).toBe(1);
+    s.setThreads([thread(), thread({ id: "T2", dbId: 102, body: "Second finding.", line: 40 })]);
+    await s.observe({ reviews: [{ id: "R2", author: "copilot-pull-request-reviewer", state: "COMMENTED", body: "", submittedAt: null }] as PrStatus["reviews"] });
+    expect(s.mailbox.queued.size).toBe(1);
+    const [msg] = [...s.mailbox.queued.values()];
+    expect(msg.body).toContain("Second finding.");
+    expect((msg.meta as { items: number[] }).items).toHaveLength(2);
+    for (const it of s.items.byPr(s.row.id)) await s.loop.act({ op: "dismiss", id: it.id });
+    await s.loop.flush();
+    expect(s.mailbox.queued.size).toBe(0);
   });
 
   it("closes open items when the PR is merged, and skips authors whose policy is off", async () => {

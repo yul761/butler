@@ -2,8 +2,8 @@ import type { CommentItem, CommentItemsRepo } from "../db/comment-items-repo";
 import type { TicketPr, TicketPrsRepo } from "../db/ticket-prs-repo";
 import type { ExternalActions } from "../external/actions";
 import type { Recipient } from "../prwatch/ci-delivery";
-import type { DeliveryGuard } from "../sessions/delivery-guard";
-import type { DeliverResult } from "../sessions/pty-manager";
+import type { Mailbox } from "../mailbox/mailbox";
+import type { SessionMessage } from "../db/session-messages-repo";
 import type { PrStatus } from "../tickets/gh";
 import type { GhWrite, ReviewThread } from "../tickets/gh-loop";
 import { sanitizeTask } from "../../shared/control";
@@ -17,7 +17,7 @@ import { commentView } from "../db/comment-items-repo";
 
 /**
  * 评论闭环（工作流 I，设计补充第 2 节）：PrWatcher 读完一个开着的 PR 调 observe；拉 review thread、分类、按归属策略排队，
- * 递送和 CI 一样过 DeliveryGuard 和 pty.deliver（从不打断忙着的 session），push 以后核对位置、回复、resolve（对外动作开关管着）。
+ * 递送排进 session 的信箱（BTL-245：在忙的下一次工具调用时读到，停着的直接输入），push 以后核对位置、回复、resolve（对外动作开关管着）。
  */
 
 export const COMMENT_GH_TIMEOUT_MS = 30_000;
@@ -51,10 +51,8 @@ export interface CommentLoopDeps {
   model(cwd: string, items: CommentModelItem[]): Promise<CommentVerdicts | null>;
   external: Pick<ExternalActions, "attempt">;
   recipient(ticketKey: string, repoId: number, branch: string): Recipient;
-  guard: Pick<DeliveryGuard, "check" | "recheckAfter">;
-  deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
-  /** 和 CiDelivery 共用：同一个 session 同时只递一条。 */
-  busy: Set<string>;
+  /** 信箱（BTL-245）：每个 PR 一条（ref comments:<prId>），评论多了就替换还在排队的那条；送到后在 on("comments") 里把评论项标成 delivered。 */
+  mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
   recordEvent: RecordEvent;
   /** 评论项变了（界面刷新）。 */
   changed(): void;
@@ -114,7 +112,9 @@ export class CommentLoop {
   /** 正在回复的项：「再回复一次」连点两下不会发两条。 */
   private readonly replying = new Set<number>();
 
-  constructor(private readonly d: CommentLoopDeps) {}
+  constructor(private readonly d: CommentLoopDeps) {
+    d.mailbox.on("comments", (m) => this.commentsDelivered(m));
+  }
 
   /** PrWatcher 读完一个 PR：rows 是所有 ticket 对这个 URL 的行（已经更新过）。不抛错。 */
   async observe(rows: TicketPr[], pr: PrStatus, where: Where): Promise<void> {
@@ -346,6 +346,8 @@ export class CommentLoop {
   async flush(): Promise<void> {
     const byPr = new Map<number, CommentItem[]>();
     for (const i of this.d.items.withState(["queued"])) (byPr.get(i.prId) ?? byPr.set(i.prId, []).get(i.prId)!).push(i);
+    // 信箱里还排着、这边却已经一条都不用送的 PR：撤回。
+    for (const ref of this.d.mailbox.queuedRefs("comments")) if (!byPr.has(Number(ref.slice("comments:".length)))) this.d.mailbox.withdraw(ref);
     for (const [prId, items] of byPr) {
       try {
         await this.deliverPr(prId, items);
@@ -355,11 +357,15 @@ export class CommentLoop {
     }
   }
 
-  private async deliverPr(prId: number, queued: CommentItem[]): Promise<"sent" | string> {
+  private deliverPr(prId: number, queued: CommentItem[]): Promise<"queued" | string> {
+    const ref = `comments:${prId}`;
     const row = this.d.prs.get(prId);
-    if (!row || row.state !== "open" || row.repoId === null || row.headBranch === null || row.headSha === null) return "not_open";
+    if (!row || row.state !== "open" || row.repoId === null || row.headBranch === null || row.headSha === null) {
+      this.d.mailbox.withdraw(ref);
+      return Promise.resolve("not_open");
+    }
     const policy = this.d.policy(row.slug);
-    if (!policy["comments.enabled"]) return "disabled";
+    if (!policy["comments.enabled"]) return Promise.resolve("disabled");
     // 收件的 session：先找这一行的 ticket，没有就找链接同一个 PR 的其他 ticket。
     let to = this.d.recipient(row.ticketKey, row.repoId, row.headBranch);
     for (const other of this.d.prs.byUrl(row.url)) {
@@ -368,13 +374,13 @@ export class CommentLoop {
       const alt = this.d.recipient(other.ticketKey, other.repoId, other.headBranch);
       if (alt.ok) to = alt;
     }
-    if (!to.ok) return to.reason;
-    if (this.d.busy.has(to.sessionId)) return "busy_delivering";
-    const gate = this.d.guard.check(to.sessionId);
-    if (!gate.ok) return `guard:${gate.block}`;
-    // 别的 flush 可能刚送过、你可能刚忽略了：按库里现在的状态再挑一遍。
+    if (!to.ok) return Promise.resolve(to.reason);
+    // 你可能刚忽略了：按库里现在的状态再挑一遍。
     const items = queued.map((i) => this.d.items.get(i.id)).filter((i): i is CommentItem => i !== null && i.state === "queued").slice(0, policy["comments.maxPerDelivery"]);
-    if (items.length === 0) return "nothing";
+    if (items.length === 0) {
+      this.d.mailbox.withdraw(ref);
+      return Promise.resolve("nothing");
+    }
     const m = M();
     const lines = items.map((i) => ({
       where: i.path ? `${i.path}${i.line !== null ? `:${i.line}` : ""}` : m.commentWholePr,
@@ -384,19 +390,28 @@ export class CommentLoop {
     }));
     const counts = { copilot: items.filter((i) => i.who === "copilot").length, human: items.filter((i) => i.who !== "copilot").length };
     const note = this.d.stackNote?.(row) ?? null;
-    const text = sanitizeTask(m.commentDelivery(m.ciWherePr(row.number), lines, counts) + (note ? `\n\n${note}` : ""));
-    this.d.busy.add(to.sessionId);
-    try {
-      const result = await this.d.deliver(gate.termId, text, this.d.guard.recheckAfter(to.sessionId, gate));
-      if (result !== "sent") return `deliver:${result}`;
-      const now = this.d.now();
-      for (const i of items) if (this.d.items.get(i.id)?.state === "queued") this.d.items.update(i.id, { state: "delivered", deliveredAt: now, deliveredSha: row.headSha, deliveredSession: to.sessionId, unchanged: 0, checkedSha: null }, now);
-      this.d.log(`comment loop: sent ${items.length} comment(s) of ${row.url} to ${to.sessionId} (${to.via})`);
-      this.d.changed();
-      return "sent";
-    } finally {
-      this.d.busy.delete(to.sessionId);
+    const body = sanitizeTask(m.commentDelivery(m.ciWherePr(row.number), lines, counts) + (note ? `\n\n${note}` : ""));
+    const old = this.d.mailbox.queuedByRef(ref);
+    // 和排着的那条一样（每轮 PrWatcher 都调）：不动它。
+    if (old && old.body === body && this.d.headOf(old.toSession) === this.d.headOf(to.sessionId)) return Promise.resolve("queued");
+    this.d.mailbox.send({ kind: "comments", from: null, to: to.sessionId, featureId: null, body, ref, meta: { items: items.map((i) => i.id), sha: row.headSha, via: to.via } });
+    return Promise.resolve("queued");
+  }
+
+  /** 信箱把一个 PR 的评论送到了：还在排队的那几条记成 delivered（送到时的 head sha、送给了谁）。 */
+  private commentsDelivered(msg: SessionMessage): void {
+    const meta = msg.meta as { items?: unknown; sha?: unknown; via?: unknown } | null;
+    const ids = Array.isArray(meta?.items) ? meta.items.filter((x): x is number => typeof x === "number") : [];
+    const sha = typeof meta?.sha === "string" ? meta.sha : null;
+    const now = this.d.now();
+    let n = 0;
+    for (const id of ids) {
+      if (this.d.items.get(id)?.state !== "queued") continue;
+      this.d.items.update(id, { state: "delivered", deliveredAt: now, deliveredSha: sha, deliveredSession: msg.toSession, unchanged: 0, checkedSha: null }, now);
+      n++;
     }
+    this.d.log(`comment loop: sent ${n} comment(s) (${msg.ref}) to ${msg.toSession} (${String(meta?.via ?? "")}, ${msg.via})`);
+    this.d.changed();
   }
 
   /** 工作流 K：这个 PR（按记评论项的那一行）还有送进 session、还没核对的评论。K 等它变成 false 再 autosquash。 */
@@ -499,7 +514,8 @@ export class CommentLoop {
       }
     }
     this.d.changed();
-    if (a.op === "send") void this.flush().catch((e: unknown) => this.d.log("comment loop: flush failed", e));
+    // 改了分类或忽略了一条还在排队的：信箱里那条按剩下的重排（一条都不剩就撤回）。
+    if (a.op === "send" || item.state === "queued") void this.flush().catch((e: unknown) => this.d.log("comment loop: flush failed", e));
     const after = this.d.items.get(item.id);
     return after ? commentView(after) : null;
   }

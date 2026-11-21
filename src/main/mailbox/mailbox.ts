@@ -161,6 +161,23 @@ export class Mailbox {
     return { id, state };
   }
 
+  /** 还在排队、ref 以 prefix: 开头的那些 ref。 */
+  queuedRefs(prefix: string): string[] {
+    return this.d.repo.queued().flatMap((m) => (m.ref?.startsWith(`${prefix}:`) ? [m.ref] : []));
+  }
+
+  /** 撤回这个 ref 还在排队的那一条（hook 已经拿走的照样会送到）。 */
+  withdraw(ref: string): void {
+    const m = this.d.repo.queuedByRef(ref);
+    if (!m || this.d.repo.withdraw(ref) === null) return;
+    const term = this.d.termOf(m.toSession);
+    if (term !== null) {
+      this.dropFile(term, m.id);
+      this.syncTerm(term);
+    }
+    this.d.notify();
+  }
+
   /** 这个 ref 还在排队的那一条；没有为 null。 */
   queuedByRef(ref: string): SessionMessage | null {
     return this.d.repo.queuedByRef(ref);

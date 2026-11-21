@@ -96,6 +96,20 @@ describe("Mailbox", () => {
     expect(w.dirFiles("t1")).toBeNull();
   });
 
+  it("withdraw takes a queued message back off the disk and out of the queue; queuedRefs lists by prefix", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.mb.send({ ...msg("t1", "c"), kind: "comments", ref: "comments:4" });
+    w.mb.send({ ...msg("t1", "r"), kind: "review", ref: "prereview:9" });
+    expect(w.mb.queuedRefs("comments")).toEqual(["comments:4"]);
+    w.mb.withdraw("comments:4");
+    expect(w.mb.queuedRefs("comments")).toEqual([]);
+    expect(w.dirFiles("t1")).toHaveLength(1);
+    w.mb.withdraw("prereview:9");
+    expect(w.dirFiles("t1")).toBeNull();
+    expect(w.repo.queued()).toEqual([]);
+  });
+
   it("a stopped target gets every queued message typed in as one input, and the folder is removed", async () => {
     const w = world();
     w.add("t1", false);

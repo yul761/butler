@@ -106,6 +106,12 @@ export class SessionMessagesRepo {
     return r ? toMessage(r) : null;
   }
 
+  /** 撤回还在排队的那一条（来源那边已经没什么可送的了）；返回撤回的 id，没有为 null。 */
+  withdraw(ref: string): string | null {
+    const r = this.db.prepare(`DELETE FROM session_messages WHERE ref = ? AND status = 'queued' RETURNING id`).get(ref) as { id: string } | undefined;
+    return r?.id ?? null;
+  }
+
   /** 全部在排队的，先排的在前。 */
   queued(): SessionMessage[] {
     return (this.db.prepare(`SELECT * FROM session_messages WHERE status = 'queued' ORDER BY queued_at, rowid`).all() as unknown as Row[]).map(toMessage);

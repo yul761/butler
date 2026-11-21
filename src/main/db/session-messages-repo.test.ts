@@ -31,6 +31,9 @@ describe("SessionMessagesRepo", () => {
     repo.delivered("m1", { at: 11, via: "input", toSession: "d", baseReplyId: null });
     expect(repo.queuedByRef("answer:7")).toBeNull();
     expect(repo.enqueue({ ...base, id: "m3", ref: "answer:7" })).toEqual({ id: "m3", replaced: false });
+    expect(repo.withdraw("answer:7")).toBe("m3");
+    expect(repo.withdraw("answer:7")).toBeNull();
+    expect(repo.get("m1")?.status).toBe("delivered");
   });
 
   it("lists recent messages by feature or by sessions, newest first, and prunes old ones", () => {
