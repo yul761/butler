@@ -93,6 +93,7 @@ import type { ClaudeAvailability } from "../claude/availability";
 import type { AvailabilityView } from "../../shared/availability";
 import type { RoutingAction, RoutingView, SessionLimitView } from "../../shared/model-routing";
 import type { SwitchResult } from "../routing/session-switch";
+import type { DiagService } from "../diag/diag-service";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -192,6 +193,8 @@ export interface IpcDeps {
   terminalKeys?: (termId: string, data: string) => void;
   /** 度量（ws-h）：一次成功的 invoke 和它的返回值（手动触发在这里记）。 */
   onInvoked?: (channel: string, args: readonly unknown[], result: unknown) => void;
+  /** 性能诊断（BTL-242）。 */
+  diag?: Pick<DiagService, "report" | "snapshot" | "export" | "invoke">;
   /** 渲染进程报的终端可见性（WS-M D、E）。 */
   terminalVisible?: (termId: string, visible: boolean) => void;
   /** 内存历史（WS-M A），since 以后的点。 */
@@ -276,9 +279,17 @@ export interface IpcDeps {
 }
 
 export function registerIpc(d: IpcDeps): void {
+  // 计时的是 handler 同步跑的那一段（BTL-242）：它占着主进程的事件循环；异步等待（headless claude 等）不算。
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handle = (channel: string, fn: (...args: any[]) => unknown) =>
-    ipcMain.handle(channel, (_e, ...args: unknown[]) => meteredIpcResult(channel, args, () => fn(...args), d.onInvoked));
+    ipcMain.handle(channel, (_e, ...args: unknown[]) => meteredIpcResult(channel, args, () => {
+      const t0 = performance.now();
+      try {
+        return fn(...args);
+      } finally {
+        d.diag?.invoke(channel, performance.now() - t0);
+      }
+    }, d.onInvoked));
 
   const setFollowupStatus = (id: string, status: FollowupStatus) => {
     if (!(FOLLOWUP_STATUSES as readonly string[]).includes(status)) throw new Error(`unknown followup status: ${String(status)}`);
@@ -460,6 +471,9 @@ export function registerIpc(d: IpcDeps): void {
     if (typeof id === "string" && typeof data === "string") d.terminalKeys?.(id, data);
   });
   ipcMain.on(IPC.ptyResize, (_e, id: string, cols: number, rows: number) => d.pty.resize(id, cols, rows));
+  ipcMain.on(IPC.diagRenderer, (_e, report: unknown) => d.diag?.report(report));
+  handle(IPC.diagSnapshot, (reset: unknown) => d.diag?.snapshot(reset === true) ?? null);
+  handle(IPC.diagExport, () => d.diag?.export() ?? null);
   ipcMain.on(IPC.ptyVisible, (_e, id: unknown, visible: unknown) => {
     if (typeof id === "string") d.terminalVisible?.(id, visible === true);
   });

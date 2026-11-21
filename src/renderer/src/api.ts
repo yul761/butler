@@ -34,6 +34,8 @@ import type { MetricsOverview } from "../../shared/metrics";
 import type { InterruptsAction, InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicyOverrides, StackPolicySetResult, StackPolicyView, StacksFilter, StacksView } from "../../shared/stacks";
 import type { EditableSettingKey, EditableSettings } from "../../shared/settings";
+import type { DiagSnapshot } from "../../shared/diag";
+import type { LongTaskTotals } from "./diag";
 import type { FeaturePolicyState, PolicyFamily } from "../../shared/feature-rows";
 import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
@@ -119,6 +121,13 @@ export const api = {
   ptyWrite: (termId: string, data: string) => window.butler.send(IPC.ptyWrite, termId, data),
   ptyResize: (termId: string, cols: number, rows: number) => window.butler.send(IPC.ptyResize, termId, cols, rows),
   ptyVisible: (termId: string, visible: boolean) => window.butler.send(IPC.ptyVisible, termId, visible),
+  /** 这个终端的 xterm 实例销毁了：主进程不再给它推 pty:data（BTL-242）。 */
+  ptyDetach: (termId: string) => window.butler.send(IPC.ptyDetach, termId),
+  /** 性能诊断（BTL-242）。 */
+  diagReport: (totals: LongTaskTotals) => window.butler.send(IPC.diagRenderer, totals),
+  diagSnapshot: (resetMeasure = false) => call<DiagSnapshot | null>(IPC.diagSnapshot, resetMeasure),
+  /** 弹保存对话框写一份诊断文件；返回写到的路径，取消为 null。 */
+  diagExport: () => call<string | null>(IPC.diagExport),
   memUsageHistory: (hours = 24) => call<MemoryHistoryPoint[]>(IPC.memUsageHistory, hours),
   health: () => call<HealthReport>(IPC.healthGet),
   installHooks: () => call<HealthReport>(IPC.healthInstallHooks),

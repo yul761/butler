@@ -18,6 +18,8 @@
 //     输入 /fake-skill <skill 名> 时像 Skill 工具：跑 PostToolUse（tool_name=Skill，带 tool_use_id；也读 --settings 里 matcher 为 Skill 的 hook），打印 skill <名>，这一轮照常结束；
 //     输入 /fake-tool <工具名> [JSON 参数] 时写一条 tool_use 和它的结果，这一轮不结束（实况窗口：工具调用、记忆读写的行和光点）；
 //       之后跑 PostToolUse（tool_name=工具名，也读 --settings 里的 hook）：hook 输出的 additionalContext 记成 additional-context <一行>（信箱，BTL-245）；
+//     输入 /fake-work <秒> <毫秒> 时像一个在干活的 session（BTL-242 的性能场景）：这么多秒里每隔这么多毫秒写一条 tool_use 和结果、
+//       打印约 2KB 的终端输出，到点后结束这一轮；
 //     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
@@ -677,18 +679,43 @@ function interactive() {
       out(`tool ${fakeTool[1]}\n`);
       return;
     }
+    const work = /^\/fake-work (\d+) (\d+)$/.exec(line);
+    if (work) {
+      const until = Date.now() + Number(work[1]) * 1000;
+      const every = Math.max(20, Number(work[2]));
+      let n = 0;
+      const tick = () => {
+        if (Date.now() >= until) {
+          endTurnLater(`做完了 ${n} 步`);
+          return;
+        }
+        n += 1;
+        const toolId = `toolu-w-${process.pid}-${n}`;
+        append({ type: "assistant", uuid: `a-${Date.now()}-${n}`, message: { id: messageId(), role: "assistant", stop_reason: "tool_use", usage: usage(), content: [{ type: "tool_use", id: toolId, name: "Read", input: { file_path: path.join(cwd, `src/file-${n % 50}.ts`) } }] } });
+        append({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: "x".repeat(400) }] } });
+        let text = "";
+        for (let i = 0; i < 20; i++) text += `\x1b[32mwork ${n}.${i}\x1b[0m ${"=".repeat(90)}\n`;
+        out(text);
+        setTimeout(tick, every);
+      };
+      out("working\n");
+      setTimeout(tick, every);
+      return;
+    }
     if (bash) {
       const { toolId, taskId, output } = startBash(bash[2], { run_in_background: true });
       backgroundTask = taskId;
       startBackgroundShell(bash[2]);
       append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] } });
     }
-    const endTurn = (reply) => {
+    function endTurnLater(reply) {
       append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "end_turn", usage: usage(), content: [{ type: "text", text: reply }] } });
       out(`${reply}\n`);
       runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
       out("> ");
-    };
+    }
+    // 写结束这一轮的回复、跑 Stop（函数声明会提升：/fake-work 的定时器在前面就用到它）。
+    const endTurn = endTurnLater;
     const edit = /^\/fake-edit (\S+) (.+)$/.exec(line);
     if (edit) {
       // 像 Write 工具：先写文件，再跑 PostToolUse；tool_response 和 Claude Code 的一样带 originalFile（新文件是 create）。

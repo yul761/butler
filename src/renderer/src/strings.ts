@@ -119,6 +119,10 @@ const ZH = {
       usage: "用量",
       usageValue: (pct: number) => `近期 cache 命中 ${pct}%`,
       unknown: "未知",
+      diagExport: "导出诊断",
+      diagExporting: "正在导出…",
+      diagExported: (path: string) => `已导出到 ${path}`,
+      diagExplain: "Butler 卡顿时，导出一份诊断文件发给开发者：里面有最近一小时的性能计数（事件循环延迟、界面长任务、IPC 次数）和 main.log 的最后 1000 行，不含对话内容。",
     },
   },
   /** 打断与通知（工作流 J）。 */

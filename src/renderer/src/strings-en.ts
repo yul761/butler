@@ -114,6 +114,10 @@ export const EN: UiStrings = {
       usage: "Usage",
       usageValue: (pct: number) => `Recent cache hit rate ${pct}%`,
       unknown: "Unknown",
+      diagExport: "Export diagnostics",
+      diagExporting: "Exporting…",
+      diagExported: (path: string) => `Exported to ${path}`,
+      diagExplain: "If Butler feels slow, export a diagnostics file and send it to the developers. It holds the last hour of performance counters (event loop delay, long UI tasks, IPC counts) and the last 1,000 lines of main.log, with no conversation content.",
     },
   },
   ij: {

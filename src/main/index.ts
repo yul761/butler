@@ -4,7 +4,10 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveB
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { homedir } from "node:os";
+import { cpus, freemem, homedir, release as osRelease, totalmem } from "node:os";
+import { writeFile as writeFileAsync } from "node:fs/promises";
+import { DiagService } from "./diag/diag-service";
+import { diagMode } from "./diag/perf-stats";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sanitizeTask, taskMessage } from "../shared/control";
@@ -331,8 +334,14 @@ if (process.env.BUTLER_HOME?.trim()) app.setPath("userData", join(resolvePaths()
 // Windows 的通知要有 AppUserModelID，否则点击通知没有反应（计划 2 Task 13）。
 if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
+/** 性能诊断（BTL-242）：bootstrap 里装上。 */
+let diag: DiagService | null = null;
+
 function safeSend(channel: string, ...args: unknown[]): void {
-  if (win && canSend(win)) win.webContents.send(channel, ...args);
+  if (win && canSend(win)) {
+    diag?.send(channel, args);
+    win.webContents.send(channel, ...args);
+  }
 }
 
 /** 开发时仓库根目录下的 build/（out/main/index.js 往上两级）。 */
@@ -467,6 +476,35 @@ async function bootstrap(): Promise<void> {
   const paths = resolvePaths();
   await ensureDirs(paths);
   logger = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
+  diag = new DiagService({
+    mode: diagMode(process.env),
+    now: Date.now,
+    log: (line) => logger(line),
+    logFile: join(paths.logs, "main.log"),
+    info: () => ({
+      version: app.getVersion(),
+      versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      platform: process.platform,
+      arch: process.arch,
+      osRelease: osRelease(),
+      cpus: { model: cpus()[0]?.model ?? "", count: cpus().length },
+      memory: { totalMb: Math.round(totalmem() / 1048576), freeMb: Math.round(freemem() / 1048576) },
+      appMetrics: app.getAppMetrics().map((m) => ({ type: m.type, cpu: m.cpu.percentCPUUsage, memoryKb: m.memory.workingSetSize, peakKb: m.memory.peakWorkingSetSize })),
+      mainMemory: { ...process.memoryUsage() },
+    }),
+    pickSavePath: async (defaultName) => {
+      const opts = { defaultPath: defaultSavePath((n) => app.getPath(n), defaultName), filters: [{ name: "JSON", extensions: ["json"] }] };
+      const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+      return r.canceled || !r.filePath ? null : r.filePath;
+    },
+    writeFile: (path, text) => writeFileAsync(path, text, "utf8"),
+    cpuTimes: () => {
+      const t: Record<string, number> = {};
+      for (const m of app.getAppMetrics()) t[m.type] = (t[m.type] ?? 0) + (m.cpu.cumulativeCPUUsage ?? 0);
+      return t;
+    },
+  });
+  diag.start();
   if (!app.isPackaged) process.stderr.on("error", () => { teeBroken = true; });
   // 先用 Butler 自己的 PATH 定下 git 和 gh 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
   const ownPath = process.env[pathKey(process.env)] ?? "";
@@ -3029,6 +3067,7 @@ async function bootstrap(): Promise<void> {
   automationHooks.policy = featurePolicyLayers({ loop: loopPolicyIo, stacks: stackPolicyIo, intake: intakePolicyIo });
   const keepAwakeSwitch = keepAwake;
   registerIpc({
+    diag: diag ?? undefined,
     conv,
     fork: forkService,
     devSend: devSender,
@@ -3563,6 +3602,7 @@ async function bootstrap(): Promise<void> {
     reviewPoller.stop();
     turnChanged = null;
     turnService.dispose();
+    diag?.stop();
     pty.killAll();
     keepAwakeSwitch.set(false);
     tray?.destroy();

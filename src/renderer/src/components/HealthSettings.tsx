@@ -23,6 +23,29 @@ function useExtraHealth(report: HealthReport | null): { gh: boolean | null; cach
   return { gh, cachePct };
 }
 
+/** 「导出诊断」（BTL-242）：弹保存对话框，写一份性能诊断文件。 */
+function DiagExport() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const run = () => {
+    setBusy(true);
+    setMsg(null);
+    api.diagExport().then(
+      (path) => path && setMsg({ ok: true, text: S.set.health.diagExported(path) }),
+      (e: unknown) => setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }),
+    ).finally(() => setBusy(false));
+  };
+  return (
+    <div className="diag-export">
+      <p className="muted">{S.set.health.diagExplain}</p>
+      <div className="actions">
+        <button disabled={busy} onClick={run} data-testid="diag-export">{busy ? S.set.health.diagExporting : S.set.health.diagExport}</button>
+      </div>
+      {msg && <p className={msg.ok ? "ok" : "error"} data-testid="diag-export-result">{msg.text}</p>}
+    </div>
+  );
+}
+
 /** 设置 › 健康检查：claude、hook、/handoff 命令、Butler 的目录、gh、用量，和安装或卸载 hook。 */
 export function HealthSettings({
   report, busy, error, onRecheck, onInstall, onUninstall, scrollToAvailability,
@@ -62,6 +85,7 @@ export function HealthSettings({
         <button className="primary" disabled={busy || report.hooks === "settings_invalid"} onClick={onInstall}>{S.installHooks}</button>
         <button disabled={busy || report.hooks === "missing"} onClick={onUninstall}>{S.uninstallHooks}</button>
       </div>
+      <DiagExport />
     </section>
   );
 }

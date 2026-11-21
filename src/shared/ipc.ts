@@ -57,6 +57,12 @@ export const IPC = {
   ptyResize: "pty:resize",
   /** 终端出现在屏幕上 / 不在了（WS-M D、E）。 */
   ptyVisible: "pty:visible",
+  /** 终端的 xterm 实例销毁了（BTL-242）：主进程不再给它推 pty:data。pty:snapshot 订阅。 */
+  ptyDetach: "pty:detach",
+  /** 性能诊断（BTL-242）：渲染进程每分钟报一次 long task；快照给 e2e 测量；导出写一份诊断文件。 */
+  diagRenderer: "diag:renderer",
+  diagSnapshot: "diag:snapshot",
+  diagExport: "diag:export",
   /** 内存历史曲线（WS-M A）。 */
   memUsageHistory: "memusage:history",
   ptyData: "pty:data",
@@ -260,9 +266,10 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.forkAsk, IPC.forkSendConclusion, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.convSend, IPC.inboxReports,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
   IPC.automationState, IPC.featuresSetAutomationLevel,
+  IPC.diagSnapshot, IPC.diagExport,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
-export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible];
+export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];
 /** 主进程 → 渲染进程。 */
 export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged, IPC.convAppended, IPC.turnChanged, IPC.forkChanged];
 
