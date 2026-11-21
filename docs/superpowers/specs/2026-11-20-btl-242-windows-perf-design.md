@@ -56,19 +56,20 @@ On a Windows work machine (32 GB), Butler 3.1.x feels slow: clicking buttons, sw
 
 - **WebGL renderer** (`@xterm/addon-webgl` 0.19.0, the release that matches xterm 6.0.0). If the addon throws or the context is lost, the terminal falls back to the DOM renderer and the diagnostics record it. The E2E fixtures set `BUTLER_TERMINAL_RENDERER=dom` (exposed through preload) because the E2E tests read `.xterm-rows`. One E2E test runs with the default and checks that a terminal still works.
 - **Keep-alive instead of rebuilding**: `src/renderer/src/terminal-cache.ts` keeps xterm instances for the last 4 terminals the user looked at, as an LRU. Switching back to a cached terminal re-attaches its DOM node and re-fits it, with no snapshot replay. Evicted ones are disposed (the WS-M D memory goal is kept, with a bound of 4). A hidden xterm pauses rendering on its own (IntersectionObserver), so writes to it cost only parsing.
-- **`pty:data` only to attached terminals**: `pty:snapshot` subscribes that terminal and `pty:detach` (new, fire-and-forget) unsubscribes it when the instance is disposed. Main sends `pty:data` only for subscribed terminal ids. Ordering is unchanged: the snapshot reply still follows every data event already sent.
+- **`pty:data` only to attached terminals**: `pty:snapshot` subscribes that terminal and `pty:detach` (new, fire-and-forget) unsubscribes it. Main sends `pty:data` only for subscribed terminal ids. Ordering is unchanged: the snapshot reply still follows every data event already sent.
+- **Resume, not replay** (changed while measuring: cached xterms kept parsing every session's output in the background, so the home page still received all `pty:data`). A cached xterm also unsubscribes when it is taken off the page. `PtyManager` counts each run's output (`epoch` + offset); the snapshot carries that mark, and on re-attach `pty:since(id, mark)` subscribes and returns only the output after the mark. When that part has left the buffer, or the terminal was reopened, it returns a full snapshot with `reset: true`, and the renderer clears the screen and replays it as before.
 - **Replay buffer**: `PtyManager` keeps output as a chunk list with a running length and joins it only on snapshot or exit. The per-chunk `string + data` and `slice` over 256 KB go away; trimming happens at chunk level, followed by the same newline alignment when joined.
 
 ### 7. Renderer work
 
-- Animations on the live window (`stroke-dashoffset`, pulse, blink) get `animation-play-state: paused` when the document is hidden (a `doc-hidden` class on `<html>`, toggled on `visibilitychange`) or the fold is closed. The live window already isn't rendered when its fold is closed.
+- Animations on the live window (`stroke-dashoffset`, pulse, blink) get `animation-play-state: paused` when the document is hidden or the stage is scrolled out of view (`motion.ts`: `visibilitychange` plus an IntersectionObserver, a `motion-paused` class on the stage). The live window already isn't rendered when its fold is closed.
 - `ConversationTab`: the draft lives in a child `Composer` component, so typing no longer re-renders the timeline, and `buildTimeline` is memoized on its inputs.
-- `App`: `allTickets`, `ctx`, and the `liveTickets` set are memoized. `Sidebar`, `HomePage` and the cards they list are wrapped in `React.memo`. The large lists also get stable callbacks where that is cheap.
+- `App`: `allTickets`, `ctx`, and the `liveTickets` set are memoized, and refreshes keep the old arrays when their content is unchanged (`keepSame`, also in `useStateRefetch`), so the memos hold across refreshes. `Sidebar` is wrapped in `React.memo`. `HomePage` is not: it takes many inline callbacks, and after the scope and keepSame changes it re-renders only when its data changes.
 
 ### 8. Windows-specific sampling and I/O
 
 - The memory monitor's "sample soon" (3 s after a terminal opens or exits) is rate-limited: at most one extra sample per 20 s. On Windows the regular interval becomes 120 s (60 s elsewhere). Each sample is timed under `procs.sample`.
-- Background priority's `Add-Type`: checked, and its result is cached per process run (see the plan, task 10).
+- Background priority's `Add-Type`: checked and left as it is. Every EcoQoS change starts its own PowerShell and compiles the type again, which costs roughly a second of CPU in a child process. That happens only when a session's level changes, batched over all pids, not on every sample. Caching the type would need a long-lived PowerShell process, which is not worth it at that rate.
 - Logger: lines go into an in-memory buffer that is written with an async `appendFile` every 250 ms, or at once when the buffer passes 64 KB. `flushSync()` runs at quit and on uncaught errors, so nothing is lost at exit. The directory is created once, not on every line.
 
 ## Not done here
