@@ -12,7 +12,7 @@ const ticket = (key: string, featureId: number | null, repos: [string, string][]
 });
 
 const feature = (id: number, repos: string[]): Feature => ({
-  id, name: `f${id}`, workspaceDir: "/w", createdAt: 1, archivedAt: null, brief: null, briefSentAt: null, automationLevel: null,
+  id, name: `f${id}`, workspaceDir: "/w", createdAt: 1, archivedAt: null, brief: null, automationLevel: null,
   repos: repos.map((repoPath, i) => ({ id: i + 1, featureId: id, repoPath, createdAt: 1 })),
 });
 

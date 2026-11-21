@@ -63,7 +63,7 @@ export interface MailboxDeps {
   termOf(sessionId: string): string | null;
   /** 现在开着的终端。 */
   openTerms(): string[];
-  /** 直接输入前的 guard。answer：这一批里有 ask_user 的回答，不看「需要你」（它就是在等这个回答）。 */
+  /** 直接输入前的 guard。answer：这一批里有 ask_user 的回答、换新以后的「接着做」或用户自己的话，不看「需要你」（它等的就是这些）。 */
   check(sessionId: string, o: { answer: boolean }): DeliveryCheck;
   recheckAfter(sessionId: string, passed: { termId: string }, o: { answer: boolean }): () => boolean;
   deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
@@ -86,6 +86,13 @@ export interface MailboxDeps {
    * 约定广播不为它叫醒谁。
    */
   wake?(headId: string): void;
+  /**
+   * 正在换新的 session（head）：不往磁盘上投影（BTL-248）。换新的 /handoff 那一轮里 hook 送进去的消息会被紧接着的 /clear 清掉；
+   * 直接输入本来就被 guard 的 refreshing 挡着。换新结束后调用方 syncTerm 再 flush。
+   */
+  held?(headId: string): boolean;
+  /** 收件人所在的 epic（ticket 的 session 从 ticket 往上找）：没写 featureId 的消息记在这里，epic 的消息列表看得到。 */
+  featureOf?(headId: string): number | null;
   notify(): void;
   now(): number;
   newId?: () => string;
@@ -148,7 +155,7 @@ export class Mailbox {
     const to = this.headOf(input.to);
     const msg: NewSessionMessage = {
       id: this.d.newId?.() ?? randomUUID(), kind: input.kind, fromSession: input.from === null ? null : this.headOf(input.from), toSession: to,
-      featureId: input.featureId, body: input.body.slice(0, MAILBOX_BODY_LIMIT), queuedAt: (this.lastQueuedAt = Math.max(this.d.now(), this.lastQueuedAt + 1)),
+      featureId: input.featureId ?? this.d.featureOf?.(to) ?? null, body: input.body.slice(0, MAILBOX_BODY_LIMIT), queuedAt: (this.lastQueuedAt = Math.max(this.d.now(), this.lastQueuedAt + 1)),
       interrupt: input.interrupt === true, ref: input.ref, meta: input.meta, expectsReply: EXPECTS_REPLY.has(input.kind),
     };
     const before = input.ref ? this.d.repo.queuedByRef(input.ref) : null;
@@ -211,8 +218,10 @@ export class Mailbox {
   }
 
   /** 这个终端该在磁盘上有的消息（在排队、不在叫停里），先排的在前。 */
+  /** 排给这个 head 的，按排进来的先后；换新以后的「接着做」排最前：新上下文先 recall，再看换新期间来的。 */
   private queuedFor(headId: string): SessionMessage[] {
-    return this.d.repo.queued().filter((m) => this.headOf(m.toSession) === headId);
+    const mine = this.d.repo.queued().filter((m) => this.headOf(m.toSession) === headId);
+    return [...mine.filter((m) => m.kind === "refresh"), ...mine.filter((m) => m.kind !== "refresh")];
   }
 
   private render(m: SessionMessage): string {
@@ -225,7 +234,7 @@ export class Mailbox {
     try {
       const head = this.d.head(termId);
       const dir = this.dirOf(termId);
-      const want = head ? this.queuedFor(head.id).filter((m) => !this.interrupting.has(m.id) && !this.inFlight.has(m.id)) : [];
+      const want = head && !this.d.held?.(head.id) ? this.queuedFor(head.id).filter((m) => !this.interrupting.has(m.id) && !this.inFlight.has(m.id)) : [];
       const names = this.list(dir);
       const present = new Set<string>();
       for (const n of names) {
@@ -238,7 +247,9 @@ export class Mailbox {
       if (missing.length > 0) {
         this.fs.mkdir(dir);
         for (const m of missing) {
-          const file: MailboxFile = { id: m.id, text: this.render(m), intro: M().mailboxIntro, rev: revOf(m) };
+          // 用户自己的话经 hook 送：说明一句是用户说的，不是别的 session 写的（BTL-248）。
+          const text = m.kind === "user" ? `${M().mailboxUser}\n${this.render(m)}` : this.render(m);
+          const file: MailboxFile = { id: m.id, text, intro: M().mailboxIntro, rev: revOf(m) };
           const name = messageFileName(m.queuedAt, m.id);
           // 先写临时文件再改名：hook 不会读到写了一半的。
           this.fs.write(join(dir, `${name}.tmp`), JSON.stringify(file));
@@ -362,18 +373,27 @@ export class Mailbox {
     return true;
   }
 
-  /** 合成一段直接输入的正文；第一条总要送，放不下的留到下一次。 */
+  /**
+   * 合成一段直接输入的正文；第一条总要送，放不下的留到下一次。
+   * 用户在对话 tab 里说的话（kind user）不和 Butler 的消息合在一起：开头是 user 的这一批只要接着的 user，原样输入，
+   * 不加信箱开头，对话里照旧是「你：」；开头不是 user 的这一批碰到 user 就停（BTL-248）。
+   */
   private batch(list: SessionMessage[]): { text: string; ids: SessionMessage[] } {
+    // 换新以后的「接着做」单独原样输入：它是新上下文的第一句话。
+    if (list[0]?.kind === "refresh") return { text: sanitizeTask(list[0].body), ids: [list[0]] };
+    const user = list[0]?.kind === "user";
     const parts: string[] = [];
     const ids: SessionMessage[] = [];
     let size = 0;
     for (const m of list) {
-      const part = this.render(m);
+      if ((m.kind === "user") !== user) break;
+      const part = user ? m.body : this.render(m);
       if (ids.length > 0 && size + part.length > INPUT_LIMIT) break;
       parts.push(part);
       ids.push(m);
       size += part.length + 8;
     }
+    if (user) return { text: sanitizeTask(parts.join("\n\n")), ids };
     return { text: sanitizeTask([M().mailboxIntro.replace("{n}", String(ids.length)), ...parts].join("\n\n---\n\n")), ids };
   }
 
@@ -433,10 +453,19 @@ export class Mailbox {
     if (this.inputting.has(term)) return;
     const queued = this.queuedFor(head).filter((m) => !this.interrupting.has(m.id));
     if (queued.length === 0) return;
-    const answer = queued.some((m) => m.kind === "answer");
-    const gate = this.d.check(head, { answer });
+    // ask_user 的回答、换新以后的「接着做」不看「需要你」：session 等的就是它们。
+    let answer = queued.some((m) => m.kind === "answer" || m.kind === "refresh");
+    let list = queued;
+    let gate = this.d.check(head, { answer });
+    if (!gate.ok && gate.block === "needs_you") {
+      // 用户自己在对话 tab 里说的话也不看：它就是用户在回答。只送这些，Butler 的别的消息接着等。
+      list = queued.filter((m) => m.kind === "user");
+      if (list.length === 0) return;
+      answer = true;
+      gate = this.d.check(head, { answer });
+    }
     if (!gate.ok) return;
-    await this.input(head, gate.termId, queued, this.d.recheckAfter(head, gate, { answer }));
+    await this.input(head, gate.termId, list, this.d.recheckAfter(head, gate, { answer }));
   }
 
   /**
@@ -467,13 +496,15 @@ export class Mailbox {
       const list = forced ? [...claimed.mine.filter((m) => m.id === forced), ...claimed.mine.filter((m) => m.id !== forced)] : claimed.mine;
       const { text, ids } = this.batch(list);
       const at = this.d.now();
-      this.d.typing?.(head, "start");
+      // 用户自己的话不算 Butler 输入的：它的 UserPromptSubmit 照样算用户在终端里回答了。
+      const typing = ids[0]?.kind === "user" ? undefined : this.d.typing;
+      typing?.(head, "start");
       const result = await (submit ? submit(term, text) : this.d.deliver(term, text, recheck)).catch((e: unknown) => {
         // 抛了也要收尾，不然那个 session 下一次 UserPromptSubmit 一直被当成 Butler 的。
-        this.d.typing?.(head, "failed");
+        typing?.(head, "failed");
         throw e;
       });
-      this.d.typing?.(head, result === "sent" ? "sent" : "failed");
+      typing?.(head, result === "sent" ? "sent" : "failed");
       if (result !== "sent") {
         this.d.log(`mailbox: input to ${head}: ${result}`);
         return false;

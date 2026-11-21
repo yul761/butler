@@ -85,7 +85,7 @@ function setup(o: { plan?: FullForkPlan; launch?: boolean; lastTurnAgo?: number 
     onLimit: vi.fn(),
     registry: () => o.registry ?? [],
     changed: vi.fn(),
-    send: vi.fn<ForkDeps["send"]>(async () => ({ ok: true, at: 5 })),
+    send: vi.fn<ForkDeps["send"]>(async () => ({ ok: true, at: 5, state: "idle" })),
     remember: vi.fn<ForkDeps["remember"]>(async () => "written"),
     memoryEnabled: vi.fn<ForkDeps["memoryEnabled"]>(() => true),
     plan: o.plan ?? PLAN,
@@ -1047,7 +1047,7 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     const forkId = await withFork(s);
     s.queue.push(ok({ resultText: "结论：改 A。" }));
     s.deps.changed.mockClear();
-    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5, state: "idle" });
     expect(s.deps.send).toHaveBeenCalledWith("root-1", M().fork.conclusionForDev("结论：改 A。"));
     expect(s.repo.get(forkId)!.summarySentAt).not.toBeNull();
     expect(s.deps.changed).toHaveBeenCalledWith("root-1");
@@ -1061,16 +1061,16 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     let changedAtSend = -1;
     s.deps.send.mockImplementationOnce(async () => {
       changedAtSend = s.deps.changed.mock.calls.length;
-      return { ok: false, reason: "draft" };
+      return { ok: false, reason: "failed" };
     });
     const markSent = vi.spyOn(s.repo, "markSent");
-    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "draft" });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "failed" });
     expect(s.repo.get(forkId)!.summarySentAt).toBeNull();
     expect(s.repo.get(forkId)!.conclusion).toBe("结论：改 A。");
     expect(s.deps.changed.mock.calls.length).toBe(changedAtSend);
     expect(markSent).not.toHaveBeenCalled();
     const runs = s.deps.run.mock.calls.length;
-    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5, state: "idle" });
     expect(s.deps.run).toHaveBeenCalledTimes(runs);
   });
 
@@ -1096,7 +1096,7 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: false, reason: "in_flight" });
     await tick();
     s.held[0].release(ok({ resultText: "c" }));
-    expect(await first).toEqual({ ok: true, at: 5 });
+    expect(await first).toEqual({ ok: true, at: 5, state: "idle" });
     expect(s.deps.send).toHaveBeenCalledTimes(1);
   });
 
@@ -1107,7 +1107,7 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     s.deps.changed.mockImplementation(() => {
       throw new Error("x");
     });
-    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5, state: "idle" });
   });
 
   it("remember：用结论调 rememberText(ticket scope)，返回 written / full", async () => {
@@ -1187,7 +1187,7 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     vi.spyOn(s.repo, "markSent").mockImplementation(() => {
       throw new Error("db");
     });
-    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5 });
+    expect(await s.svc.sendConclusion(forkId)).toEqual({ ok: true, at: 5, state: "idle" });
     expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("markSent"), expect.any(Error));
   });
 });

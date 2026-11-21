@@ -81,8 +81,18 @@ export interface SessionRefresherDeps {
   handoffCommandReady(): Promise<boolean>;
   /** 设置里的记忆开关（memoryEnabled）：关着时 session 换新以后没有 handoff 可以 recall。 */
   memoryEnabled(): boolean;
-  /** recheck 在粘贴前调用（I2）：不通过就什么都不写，返回 blocked。 */
+  /** 输入 /handoff 和 /clear（斜杠命令只能直接输入）。recheck 在粘贴前调用（I2）：不通过就什么都不写，返回 blocked。 */
   deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
+  /**
+   * 「接着做」排进新 head 的信箱（BTL-248，kind refresh）：换新结束（不再算 refreshing）以后才调，信箱照常送，
+   * 和换新期间排着的消息合成一段。
+   */
+  queueResume(headId: string, text: string): void;
+  /**
+   * 换新开始和结束时让信箱重新看这个终端（BTL-248）：开始时删掉磁盘上的投影（换新期间 Mailbox.held 不投影，
+   * 否则 /handoff 那一轮被 hook 带进去的消息会被 /clear 清掉）；结束时重新投影、能送就直接输入。不给就不管。
+   */
+  mailboxSync?(termId: string): void;
   /** 开着终端的 Butler session 的 head，自动检查用。 */
   sessions(): Session[];
   /** 用户上一次往这个终端里输入的时间（PtyManager.lastUserInputAt）：Butler 输入 /handoff 之后用户动过，就不再清空（I3）。 */
@@ -145,11 +155,14 @@ interface Run {
   handoffTypedAt: number | null;
   /** ticket / feature：Butler 输入 /handoff 之后，capture 存下了这个 session 的 /handoff。 */
   stored: boolean;
+  /** /clear 接上了新 id：换新结束时排进信箱的「接着做」。 */
+  resume: string | null;
 }
 
 /**
  * 给上下文太长的 session 换新（计划 16）：写 handoff → 等收进来 → 等记忆写完、存下对话尾巴（BTL-190）→ /clear → 等新 id 接上 → 发接着做的话。
- * 每一步输入之前都要 session 重新停下来、用户没在打字、没有草稿；任何一步失败都停在原地，什么都不再输入，30 分钟内不再自动试。
+ * /handoff 和 /clear 输入之前都要 session 重新停下来、用户没在打字、没有草稿；任何一步失败都停在原地，什么都不再输入，30 分钟内不再自动试。
+ * 「接着做」排进信箱（BTL-248）。
  */
 export class SessionRefresher {
   private readonly runs = new Set<Run>();
@@ -257,7 +270,7 @@ export class SessionRefresher {
     return {
       run: {
         headId: gate.headId, termId: gate.termId, kind, trigger, mode, step: "handoff", ticket: head.ticketKey ?? "",
-        handoffTypedAt: null, stored: false,
+        handoffTypedAt: null, stored: false, resume: null,
       },
     };
   }
@@ -284,6 +297,7 @@ export class SessionRefresher {
     const run = r.run;
     this.runs.add(run);
     this.d.log(`${mode} ${run.headId} (${run.kind}, ${trigger}): started`);
+    this.syncMailbox(run);
     this.changed();
     return run;
   }
@@ -299,7 +313,30 @@ export class SessionRefresher {
       return this.fail(run, "unexpected error", e);
     } finally {
       this.runs.delete(run);
-      if (!this.stopped) this.changed();
+      if (!this.stopped) {
+        this.release(run);
+        this.changed();
+      }
+    }
+  }
+
+  /** 换新结束：「接着做」排进信箱（信箱自己会投影、能送就送）；没有的话让信箱重新看一眼这个终端。 */
+  private release(run: Run): void {
+    if (run.resume === null) return this.syncMailbox(run);
+    const head = this.d.head(run.termId)?.id ?? run.headId;
+    try {
+      this.d.queueResume(head, run.resume);
+    } catch (e) {
+      this.d.log(`${run.mode} ${run.headId}: queueing the resume message failed`, e);
+      this.syncMailbox(run);
+    }
+  }
+
+  private syncMailbox(run: Run): void {
+    try {
+      this.d.mailboxSync?.(run.termId);
+    } catch (e) {
+      this.d.log(`${run.mode} ${run.headId}: syncing the mailbox failed`, e);
     }
   }
 
@@ -324,13 +361,10 @@ export class SessionRefresher {
     }, REFRESH_CLEAR_MS, POLL_MS);
     if (!cleared) return this.fail(run, `no new session id within ${REFRESH_CLEAR_MS / 1000} seconds after /clear`);
 
-    // 第三步：调回 handoff、读对话尾巴，接着做换新前在做的事（BTL-190 第 6 点）。它的回复照常判断「需要你」：
-    // 接着干完以后真要问用户的那一条不能吞掉。
+    // 第三步：调回 handoff、读对话尾巴，接着做换新前在做的事（BTL-190 第 6 点）。BTL-248 起排进新 head 的信箱（换新结束时，
+    // 见 release）：用户刚好在打字也不算失败，信箱等能送的时候再送。它的回复照常判断「需要你」。
     this.setStep(run, "resume");
-    const beforeResume = await this.untilQuiet(run);
-    if (typeof beforeResume === "string") return this.fail(run, `before the resume message: ${beforeResume}`);
-    const typedResume = await this.type(run, M().refreshResume(run.kind, run.ticket, tailPath), beforeResume);
-    if (typedResume) return this.fail(run, `typing the resume message: ${typedResume}`);
+    run.resume = M().refreshResume(run.kind, run.ticket, tailPath);
     return "done";
   }
 

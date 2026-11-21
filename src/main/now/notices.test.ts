@@ -59,7 +59,7 @@ describe("buildNotices", () => {
 
 describe("ciNotices", () => {
   it("turns each undelivered CI result into a notice that opens its ticket", () => {
-    const ci = { item: { kind: "pr" as const, id: 3 }, ticketKey: "T-1", number: 34, branch: "feat/a", reason: "guard:typing" as const, since: 5, sessionId: "s1" };
+    const ci = { item: { kind: "pr" as const, id: 3 }, ticketKey: "T-1", number: 34, branch: "feat/a", reason: "owner_closed" as const, since: 5, sessionId: "s1" };
     expect(ciNotices([ci], (k) => `title of ${k}`)).toEqual([{ kind: "ci_undelivered", ci, title: "title of T-1", target: { page: "ticket", key: "T-1", sessionId: "s1" } }]);
   });
 });

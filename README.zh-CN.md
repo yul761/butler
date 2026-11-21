@@ -55,7 +55,7 @@ Butler 只支持 Claude Code。
 
 Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕，所以不会在信任对话框或权限确认上按回车；交完之后还会确认任务真的提交了。
 
-**信箱。** Butler 开的每个 session 都有一个信箱。Butler 或别的 session 发给它的东西都进信箱：总控的消息、汇报、`ask_user` 的回答、预审结果、PR 评论、回复。消息排在 Butler 的数据库里，重启也不丢，也不会因为对方在忙而被退回。正在干活的 session 在下一次调用工具时收到，走它自己那份 session 设置里的 `PostToolUse` hook，几条合成一次送。停着的 session 用和交第一条任务一样的安全输入送进去：先看屏幕，你在打字时等着，送完再确认真的提交了。总控的消息可以要求叫停：Butler 先按 Esc，再输入进去。一个 session 的信箱空着时，hook 只是一次 shell 判断，不启动 Butler 的 hook 程序（Apple 芯片的 Mac 上约 2 毫秒，直接启动约 28 毫秒）。epic 里一个 session 往 epic 记忆里存了东西，这个 epic 里别的在跑的 session 会收到这条**约定**，写的那个 session 自己不收。每条消息是 **已排队**、**已送达**（工具调用间隙送到，或者直接输入）或 **已回复**。**全局总控** 页面和 epic 的 **总控** tab 上的 **消息（N）** 列出最近的几条。
+**信箱。** Butler 开的每个 session 都有一个信箱。Butler 或别的 session 发给它的东西都进信箱：总控的消息、汇报、`ask_user` 的回答、预审结果、PR 评论、CI 结论、合并通知、栈冲突、每日巡检、花费提醒、换新以后的「接着做」、你在对话 tab 里发的话、回复。消息排在 Butler 的数据库里，重启也不丢，也不会因为对方在忙而被退回。正在干活的 session 在下一次调用工具时收到，走它自己那份 session 设置里的 `PostToolUse` hook，几条合成一次送。停着的 session 用和交第一条任务一样的安全输入送进去：先看屏幕，你在打字时等着，送完再确认真的提交了。总控的消息可以要求叫停：Butler 先按 Esc，再输入进去。一个 session 的信箱空着时，hook 只是一次 shell 判断，不启动 Butler 的 hook 程序（Apple 芯片的 Mac 上约 2 毫秒，直接启动约 28 毫秒）。epic 里一个 session 往 epic 记忆里存了东西，这个 epic 里别的在跑的 session 会收到这条**约定**，写的那个 session 自己不收。每条消息是 **已排队**、**已送达**（工具调用间隙送到，或者直接输入）或 **已回复**。**全局总控** 页面和 epic 的 **总控** tab 上的 **消息（N）** 列出最近的几条。
 
 有几条刻意设下的限制：
 - **通信：** 总控从不直接往别的 session 里打字，而是通过它们的信箱说话（见上面的 **信箱**）；session 之间也共享 ticket 和 epic 记忆。
@@ -102,7 +102,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - 旧 epic 的计划加进它原来每个 feature 的 **规划**，它的规划 session 记在记忆里的内容也复制进每个新 epic 的记忆，放在 **以前的约定** 下（见 [StateCore 记忆](#statecore-记忆)）；
   - 旧 epic 被归档，工作区留在磁盘上；
   - 旧 epic 的规划 session 和每个 ticket 自己的总控被隐藏，留在 **已隐藏** 里；从那里重新打开的这类总控会作为普通的 ticket session 接着跑；
-  - 这些 session 还没送出的汇报、feature 总控还没送给旧规划 session 的汇报被丢掉；ticket session 的汇报照样送给它的 epic 总控。规划 session 还没回答的问题也收掉，因为再没有终端能收到回答；ticket 总控的问题留着等你回答。
+  - 这些 session 还没送出的汇报、这些 epic（原来的 feature）的总控还没送给旧 epic 规划 session 的汇报被丢掉；ticket session 的汇报照样送给它的 epic 总控。规划 session 还没回答的问题也收掉，因为再没有终端能收到回答；ticket 总控的问题留着等你回答。
 - **提问和汇报。** Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所以你不用再在终端里翻找正在等你的那个问题。
   - `ask_user` 记下一件要你拍板的事，可以带选项和背景，然后这一轮结束。
   - `report` 把进展交给 session 上面的总控和你。类型是 `progress`（进展）、`done`（完成）、`blocked`（卡住）或 `choice`（有一个明显该推荐的选项时，session 替你做的选择）。epic 里 ticket 的 session 和修复 session 发的 `done`、`blocked` 汇报，放进 epic 总控的信箱（见上面的 **信箱**）。单独的 ticket、epic 总控和全局总控发的汇报只存不送，并告诉 session 没有管它的总控；全局总控用 `list_inbox` 看得到它们。`progress` 和 `choice` 只存不送。
@@ -116,7 +116,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - **它能做的**只有说话：`send_message` 给 epic 总控带一句话，用 epic 或 session id 指定。ticket 的 session 和修复 session 不能发。总控的终端关着（闲置时被自动关掉了，或者 Butler 重启过）时，Butler 接着它最近的对话打开（epic 从没开过总控就新开一个），再把话交进去。开着的走它的信箱：在干活就在下一次调用工具时收到，停着就在你没在打字时输入进去。带 `interrupt` 时 Butler 先按 Esc。每条消息有一个 `requestId`；对方这一轮做完时，它最后一段回复会以 **【回复】** 开头、写明 `requestId`，输入回全局总控，总控页面上的 **消息（N）** 列出最近 30 条消息（新的在前），每条是 **已排队**、**已送达** 或 **已回复**。`refresh_epic_summary` 在后台重写一份 epic 汇总，和 **立即更新** 一样。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
   - **它不能**建、删或结束任何东西（[栈](docs/configuration.zh-CN.md#栈) 除外），也不能为别的事开 session。这些留给 epic 总控。
   - 只读的工具在 Butler 给它写的设置里是放行的，巡检时不会每个工具都停下来等确认；`send_message`、`refresh_session` 和 `refresh_epic_summary` 照样要确认。
-  - **每天巡检。** 设置 **每天几点让全局总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）全局总控，让它看一遍 PR、CI 和未决的提问，需要的话提醒 epic 总控，并用 `ask_user` 列出要你亲自做的事。全局总控正忙就等它停下来。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#定时与状态)。
+  - **每天巡检。** 设置 **每天几点让全局总控巡检一次**（`butlerPatrolTime`，默认关），到点时 Butler 打开（或接着用）全局总控，让它看一遍 PR、CI 和未决的提问，需要的话提醒 epic 总控，并用 `ask_user` 列出要你亲自做的事。全局总控正忙就排进它的信箱，它下一次调用工具时读到。因为电脑睡眠或 Butler 没开而错过的巡检，当天下一次醒来、解锁或启动时补一次。它每天最多开一次 session。详见[配置 Butler](docs/configuration.zh-CN.md#定时与状态)。
   - 全局总控开着时只在 **轮到你** 页的 **运行情况** 里有自己的实况卡片，不在 **进行中** 里占一行。它停下来等你回话时在该页有一张卡片：这时巡检等着送给它。
   - 全局总控不会被自动换新，也不会因为闲置被自动关闭。
 - **合并总控。** 同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](docs/configuration.zh-CN.md#合并总控)。
@@ -133,7 +133,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
   - 这些运行并不是严格只读的。如果你的设置允许了比如 `Bash(npm:*)` 或一个能写的 MCP 工具，它们也能用。
 
   在 session 里你也可以输入 `/handoff`。在 epic 的总控里，`/handoff` 写的是 epic 的汇总而不是 ticket handoff，之后 Butler 会在后台为这个 epic 里自上次 handoff 以来有动静的 ticket 补写 handoff。
-- **首页。** **轮到你** 页是侧栏的第一项，入口会显示有几件事等你。每件要你处理的事在最上面有一张卡片：等一个确认、一个未决的提问、一条请你决定的回复或真的卡住了的 session，可以合并的 PR、请你 review 的 PR、没人推进的 PR，以及需要你的 Butler 提醒（暂停的花费上限，带 **继续并提高上限**；Claude 限额；30 分钟没送出去的 CI 结果；等你分类的评审评论；栈冲突；要你决定的自动接活）。下面是折叠的 **进行中** 列表，列出每个在跑的 session 在做什么、它的 PR 和 CI，以及已经做了多久；点一行打开它的终端。最下面折叠的 **运行情况** 里有 **Butler 的其他提醒**（只告诉你一声的提醒）、内存卡片、最近合并、最近 24 小时的自动接活记录、用量一行和 **实况**。**实况** 把正在干活的 session 画成 Butler 卡片四周的小终端卡片：每张卡片有 ticket 号、仓库、状态药丸和最近 3 次工具调用，session 写记忆时一个蓝色光点沿虚线流向 Butler，读记忆时一个绿色光点从 Butler 流回 session。在等你的卡片边框变黄并写着 **需要你**。最多画 8 张卡片，没人在干活时会这样写。页面和分组里的"在干活"数字只算真在干活的 session（思考中、跑工具、后台命令）；停下来但开着 PR 的 session 算空闲。动画遵循系统的"减少动态效果"设置；窗口在后台、或者 **实况** 滚出视野时动画暂停。同一个折叠里有一行显示最近 7 天的 token 用量：总量、缓存读取的占比，以及上下文达到 20 万 token 以上的轮次占比。它统计 Butler 开的 session、它们的子 agent，以及 Butler 在后台启动的 `claude` 运行（handoff、epic 汇总、卡住检测），数据读自你本机上 Claude Code 的 transcript。点这一行能看到按类别（**ticket session**、**总控**、**子 agent**、**后台任务**）和按模型的拆分。占比按相对价格加权，只用于比较；Butler 不会换算成钱。
+- **首页。** **轮到你** 页是侧栏的第一项，入口会显示有几件事等你。每件要你处理的事在最上面有一张卡片：等一个确认、一个未决的提问、一条请你决定的回复或真的卡住了的 session，可以合并的 PR、请你 review 的 PR、没人推进的 PR，以及需要你的 Butler 提醒（暂停的花费上限，带 **继续并提高上限**；Claude 限额；30 分钟找不到收件 session 的 CI 结果；等你分类的评审评论；栈冲突；要你决定的自动接活）。下面是折叠的 **进行中** 列表，列出每个在跑的 session 在做什么、它的 PR 和 CI，以及已经做了多久；点一行打开它的终端。最下面折叠的 **运行情况** 里有 **Butler 的其他提醒**（只告诉你一声的提醒）、内存卡片、最近合并、最近 24 小时的自动接活记录、用量一行和 **实况**。**实况** 把正在干活的 session 画成 Butler 卡片四周的小终端卡片：每张卡片有 ticket 号、仓库、状态药丸和最近 3 次工具调用，session 写记忆时一个蓝色光点沿虚线流向 Butler，读记忆时一个绿色光点从 Butler 流回 session。在等你的卡片边框变黄并写着 **需要你**。最多画 8 张卡片，没人在干活时会这样写。页面和分组里的"在干活"数字只算真在干活的 session（思考中、跑工具、后台命令）；停下来但开着 PR 的 session 算空闲。动画遵循系统的"减少动态效果"设置；窗口在后台、或者 **实况** 滚出视野时动画暂停。同一个折叠里有一行显示最近 7 天的 token 用量：总量、缓存读取的占比，以及上下文达到 20 万 token 以上的轮次占比。它统计 Butler 开的 session、它们的子 agent，以及 Butler 在后台启动的 `claude` 运行（handoff、epic 汇总、卡住检测），数据读自你本机上 Claude Code 的 transcript。点这一行能看到按类别（**ticket session**、**总控**、**子 agent**、**后台任务**）和按模型的拆分。占比按相对价格加权，只用于比较；Butler 不会换算成钱。
 - **防止休眠。** 想在你离开、盖子开着的时候让 session 继续跑，就勾上侧栏底部或托盘菜单里的 **防止休眠**。开着时电脑空闲也不会睡眠，屏幕保持亮着。取消勾选、电脑睡眠（合上盖子）或 Butler 退出时它会关掉，Butler 每次启动时它都是关的。合上盖子照样会让 Mac 睡眠；Windows 上取决于你的合盖设置。
 - **记忆。** 进展、决定、未完成的跟进和跨 ticket 的经验都存进本地的 [StateCore](https://github.com/yul761/StateCore)。Butler 开的每个 session 都能 `recall` 它们。ticket 页的 **记录** tab 里有一节 **记忆**，能看到每条记录的历史。
 

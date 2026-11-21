@@ -12,7 +12,7 @@ import { completeWizard, expect, newButton, openSettingsTab, openTicketTab, type
 
 /** 用量扫描、活动 tick、打字之后不自动输入、刚打开的终端不自动换新的间隔（e2e 专用的环境变量，只在后台窗口模式下算数）。 */
 const FAST = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_USAGE_SCAN_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000", BUTLER_REFRESH_OPEN_QUIET_MS: "1000" };
-/** 换新的最后一步输入的那句话的开头（src/main/strings.ts 的 refreshResume）。 */
+/** 换新的最后一步「接着做」里的一句（src/main/strings.ts 的 refreshResume）；BTL-248 起经信箱送，前面有信箱的开头。 */
 const RESUME = "上下文已由 Butler 换新。先用 recall 调出";
 /** 假 claude 的 /handoff 输出（fake-claude.cjs 的 COMMAND_HANDOFF）里做完的事。 */
 const HANDOFF_DONE = "结账页写完";
@@ -23,7 +23,7 @@ const prompts = (s: Sandbox) => [...fakeLog(s).matchAll(/ prompt (.+)$/gm)].map(
 /** /clear 换出来的新 session id。 */
 const clearedIds = (s: Sandbox) => [...fakeLog(s).matchAll(/ clear (\S+)$/gm)].map((m) => m[1]);
 /** 输入按种类归一：换新的那句话只留 "resume"，其余原样（/clear 也是一条输入）。 */
-const steps = (s: Sandbox) => prompts(s).map((p) => (p.startsWith(RESUME) ? "resume" : p));
+const steps = (s: Sandbox) => prompts(s).map((p) => (p.includes(RESUME) ? "resume" : p));
 
 /** 在当前显示的终端里输入一行并回车。 */
 async function typeLine(page: Page, line: string): Promise<void> {
@@ -130,7 +130,7 @@ for (const { title, judgeDelayMs } of [
     // 终端还是同一个，session 栏里当前的 session 换成了新 id；它回了话。
     await expect.poll(() => activeSessionId(page)).toBe(cleared[0]);
     expect(cleared[0]).not.toBe(first);
-    await expect.poll(() => terminalText(page)).toContain(`收到：${RESUME}`);
+    await expect.poll(() => terminalText(page)).toContain(RESUME);
     await expect(page.locator(".terminal-wrap")).toHaveCount(1);
 
     // 3. ticket 页：handoff 历史里多了一条 /handoff 的；记忆里有它（新 session 就是从这里接上的）。
@@ -177,7 +177,7 @@ test("the refresh button works and a draft blocks it", async ({ makeSandbox, lau
     expect(cleared).toHaveLength(1);
     await expect.poll(() => activeSessionId(page)).toBe(cleared[0]);
     expect(cleared[0]).not.toBe(first);
-    await expect.poll(() => terminalText(page)).toContain(`收到：${RESUME}`);
+    await expect.poll(() => terminalText(page)).toContain(RESUME);
     // 做完以后按钮回到 ↻。
     await expect(refreshButton(page)).toHaveText("↻");
 

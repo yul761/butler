@@ -10,7 +10,6 @@ interface FeatureRow {
   created_at: number;
   archived_at: number | null;
   brief: string | null;
-  brief_sent_at: number | null;
   jira_epic_key: string | null;
   automation_level: string | null;
 }
@@ -25,6 +24,12 @@ interface FeatureRepoRow {
 const toRepo = (r: FeatureRepoRow): FeatureRepo => ({ id: Number(r.id), featureId: Number(r.feature_id), repoPath: r.repo_path, createdAt: r.created_at });
 
 /** feature（设计文档 2026-10-26）：一组 ticket 加一个工作区目录。 */
+/** 有 feature_id 列、指着 epic 的表（feature_repos 除外，它跟着 epic 一起删）。有一行指着就不算空 epic。 */
+export const FEATURE_REFS = [
+  "tickets", "sessions", "blocks", "session_messages", "feature_handoffs", "epic_history", "epic_memory_archive",
+  "inbox_items", "pr_stage_events", "stacks", "fork_discussions", "butler_messages",
+] as const;
+
 export class FeaturesRepo {
   constructor(private readonly db: Db) {}
 
@@ -38,7 +43,6 @@ export class FeaturesRepo {
       createdAt: r.created_at,
       archivedAt: r.archived_at,
       brief: r.brief,
-      briefSentAt: r.brief_sent_at,
       jiraEpicKey: r.jira_epic_key,
       automationLevel: isAutomationLevel(r.automation_level) ? r.automation_level : null,
     };
@@ -116,6 +120,26 @@ export class FeaturesRepo {
   /** 只影响以后在这个 feature 下建 ticket 时的选项；已有 ticket 的仓库不动。 */
   removeRepo(id: number): void {
     this.db.prepare(`DELETE FROM feature_repos WHERE id = ?`).run(id);
+  }
+
+  /**
+   * 刚建出来就没用上的 epic（BTL-248）：FEATURE_REFS 里没有一行指着它时连仓库行一起删，返回删没删。
+   */
+  deleteIfEmpty(id: number): boolean {
+    const used = this.db
+      .prepare(`SELECT ${FEATURE_REFS.map((t) => `EXISTS (SELECT 1 FROM ${t} WHERE feature_id = ?)`).join(" OR ")} AS used`)
+      .get(...FEATURE_REFS.map(() => id)) as { used: number };
+    if (used.used) return false;
+    this.db.exec("SAVEPOINT delete_empty_epic");
+    try {
+      this.db.prepare(`DELETE FROM feature_repos WHERE feature_id = ?`).run(id);
+      const res = this.db.prepare(`DELETE FROM features WHERE id = ?`).run(id);
+      this.db.exec("RELEASE delete_empty_epic");
+      return Number(res.changes) > 0;
+    } catch {
+      this.db.exec("ROLLBACK TO delete_empty_epic; RELEASE delete_empty_epic");
+      return false;
+    }
   }
 
   archive(id: number, at: number): void {

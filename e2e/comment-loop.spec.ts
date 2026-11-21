@@ -26,7 +26,7 @@ const fixture = (sha: string, outdated: boolean): FakeGhFixture => ({
 /**
  * 工作流 I 验收：Copilot 的行内评论（带修改建议，规则判成「要改」）自动送进停着的 session；
  * push 之后评论位置过时了（GitHub 标 outdated），Butler 判定已处理，以 gh 回复并 resolve 这个 thread（两个对外动作开关都开着）。
- * 走真实的路径：PrWatcher 读 PR → CommentLoop.observe → gh api graphql 拉 thread → 规则分类 → delivery-guard + pty.deliver。
+ * 走真实的路径：PrWatcher 读 PR → CommentLoop.observe → gh api graphql 拉 thread → 规则分类 → 信箱（Mailbox.send，停着的直接输入）。
  * Windows 上跳过：假 gh 是 sh 包装，resolveGh 只认 gh.exe。
  */
 test("a Copilot comment reaches the session, and after the push it is replied to and resolved", async ({ makeSandbox, launch }) => {

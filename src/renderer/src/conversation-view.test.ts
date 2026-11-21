@@ -5,7 +5,7 @@ import type { InboxItemView } from "../../shared/types";
 import { resetClock } from "./availability-view";
 import { TASK_LIMIT } from "../../shared/control";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
-import { buildTimeline, canRememberIn, costText, draftCheck, errorText, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, modeText, refusalText, rememberText, refusesMemory, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
+import { buildTimeline, canRememberIn, costText, draftCheck, errorText, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, modeText, queuedText, refusalText, rememberText, refusesMemory, sendBlockText, turnBlocks, type TimelineInput } from "./conversation-view";
 import { STRINGS } from "./strings";
 
 const T = STRINGS.zh;
@@ -164,9 +164,14 @@ describe("errorText", () => {
 
 describe("sendBlockText / rememberText / refusalText", () => {
   it("covers every DevSendBlock", () => {
-    const all: DevSendBlock[] = ["closed", "hibernated", "busy", "screen", "needs_you", "typing", "draft", "cost_paused", "refreshing", "exited", "timeout", "blocked", "in_flight", "fork_busy", "no_conclusion", "not_found"];
+    const all: DevSendBlock[] = ["not_found", "failed", "in_flight", "fork_busy", "no_conclusion"];
     for (const t of [STRINGS.zh, STRINGS.en]) for (const r of all) expect(sendBlockText(r, t), r).not.toBe("");
-    expect(sendBlockText("busy", T)).toContain("换新");
+  });
+
+  it("queuedText: idle needs no note; busy and closed say when it arrives (BTL-248)", () => {
+    expect(queuedText("idle", T)).toBeNull();
+    for (const t of [STRINGS.zh, STRINGS.en]) for (const st of ["busy", "closed"] as const) expect(queuedText(st, t)).toBeTruthy();
+    expect(queuedText("busy", T)).toContain("调用工具");
   });
   it("covers every RememberResult", () => {
     const all: RememberResult[] = ["written", "full", "disabled", "failed", "busy", "no_conclusion", "no_scope"];

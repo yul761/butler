@@ -13,7 +13,7 @@ import { completeWizard, expect, newButton, openTicketTab, type Sandbox, termina
 
 /** 用量扫描、活动 tick、打字之后不自动输入、刚打开的终端不自动换新的间隔（同 refresh.spec.ts）。 */
 const FAST = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_USAGE_SCAN_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000", BUTLER_REFRESH_OPEN_QUIET_MS: "1000" };
-/** 换新的最后一步输入的那句话的开头（src/main/strings.ts 的 refreshResume）。 */
+/** 换新的最后一步「接着做」里的一句（src/main/strings.ts 的 refreshResume）；BTL-248 起经信箱送，前面有信箱的开头。 */
 const RESUME = "上下文已由 Butler 换新。先用 recall 调出";
 /** 假 claude 回的结论（fake-claude.cjs 的 FORK_CONCLUSION）里要开发 session 做的事。 */
 const CONCLUSION = "把 X 改成 Y";
@@ -189,14 +189,14 @@ test("a forked discussion answers, continues, sends its conclusion, is remembere
       await button.click();
       await expect.poll(() => prompts(s), { timeout: 2000 }).toContain("/handoff");
     }).toPass({ timeout: 30_000 });
-    await expect.poll(() => prompts(s).some((p) => p.startsWith(RESUME)), { timeout: 90_000 }).toBe(true);
-    await expect.poll(() => terminalText(page)).toContain(`收到：${RESUME}`);
+    await expect.poll(() => prompts(s).some((p) => p.includes(RESUME)), { timeout: 90_000 }).toBe(true);
+    await expect.poll(() => terminalText(page)).toContain(RESUME);
     await openTicketTab(page, "conversation");
     await expect(conv.locator(".feed .sep")).toHaveCount(1);
     await expect(boxes).toHaveCount(2);
     await expect(boxes.first().locator(".msg-a").first()).toHaveText("分叉回答：为什么？");
     // 换新后 Butler 自己输入的那句（refreshResume）不算用户说的话，对话里没有它的「你：」（第 4 层）。
-    expect((await conv.locator(".feed .msg-u").allInnerTexts()).filter((t) => t.startsWith(`${S.conv.you}${RESUME}`))).toEqual([]);
+    expect((await conv.locator(".feed .msg-u").allInnerTexts()).filter((t) => t.includes(RESUME))).toEqual([]);
 
     // 5. 撞限额：带着 FAKE_CLAUDE_FORK 重启，再分叉一次。框里说撞了限额、几点恢复；用户的问题还在。
     // 重启后马上问：启动健康检查还没做完时也不能报「找不到 claude」（fork-handlers 等 healthReady）。

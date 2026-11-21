@@ -162,8 +162,8 @@ describe("ControlSplit / ControlFeed", () => {
   });
   it("the control tab starts with a one-line lede above the split", () => {
     const h = renderToStaticMarkup(createElement(ControlSplit, { lede: S.lay.ctlLede, left: "LEFT", right: "RIGHT" }));
-    expect(S.lay.ctlLede).toBe("总控是帮你拆活、协调各个 ticket 的 session。左边是终端，右边是对话。");
-    expect(STRINGS.en.lay.ctlLede).toBe("The control session splits up work and coordinates the tickets. Terminal on the left, conversation on the right.");
+    expect(S.lay.ctlLede).toBe("epic 总控是帮你拆活、协调这个 epic 里各个 ticket 的 session。左边是终端，右边是对话。");
+    expect(STRINGS.en.lay.ctlLede).toBe("The epic coordinator splits up work and coordinates the tickets in this epic. Terminal on the left, conversation on the right.");
     expect(h).toContain(`<p class="muted control-lede">${S.lay.ctlLede}</p>`);
     expect(h.indexOf(S.lay.ctlLede)).toBeLessThan(h.indexOf("control-split"));
   });

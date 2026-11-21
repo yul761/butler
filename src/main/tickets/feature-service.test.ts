@@ -239,3 +239,78 @@ describe("FeatureService.ensureJiraEpic (BTL-246 §7)", () => {
     expect(features.get(long)!.name.length).toBeLessThanOrEqual(100);
   });
 });
+
+describe("FeatureService.withJiraEpic (BTL-248)", () => {
+  it("removes an epic it just made when the ticket could not be made, and passes the error on", async () => {
+    const { featureService, features } = setup();
+    const { frontend } = shop();
+    await expect(
+      featureService.withJiraEpic({ key: "SHOP-5", title: "Payments" }, frontend, async () => {
+        throw new Error("worktree failed");
+      }),
+    ).rejects.toThrow("worktree failed");
+    expect(features.byJiraEpic("SHOP-5")).toBeNull();
+    expect(features.list().filter((f) => f.jiraEpicKey === "SHOP-5")).toEqual([]);
+  });
+
+  it("keeps an epic that was already there, and keeps the new epic when the ticket is made", async () => {
+    const { featureService, features, ticketService } = setup();
+    const { frontend } = shop();
+    const id = await featureService.ensureJiraEpic({ key: "SHOP-6", title: "Search" }, frontend);
+    await expect(featureService.withJiraEpic({ key: "SHOP-6", title: "Search" }, frontend, async () => Promise.reject(new Error("nope")))).rejects.toThrow("nope");
+    expect(features.get(id)).not.toBeNull();
+    const made = await featureService.withJiraEpic({ key: "SHOP-7", title: "Cart" }, frontend, async (fid) => {
+      await ticketService.create({ key: "SHOP-71", featureId: fid });
+      return fid;
+    });
+    expect(features.get(made)!.jiraEpicKey).toBe("SHOP-7");
+  });
+
+  it("keeps a new epic that something already got attached to before the failure", async () => {
+    const { featureService, features, ticketService } = setup();
+    const { frontend } = shop();
+    let fid = 0;
+    await expect(
+      featureService.withJiraEpic({ key: "SHOP-8", title: "Promo" }, frontend, async (id) => {
+        fid = id;
+        await ticketService.create({ key: "SHOP-81", featureId: id });
+        throw new Error("later step failed");
+      }),
+    ).rejects.toThrow("later step failed");
+    expect(features.get(fid)!.jiraEpicKey).toBe("SHOP-8");
+  });
+
+  it("does not remove a new epic while another intake for it is still making its ticket", async () => {
+    const { featureService, features, ticketService } = setup();
+    const { frontend } = shop();
+    const latch = () => {
+      let open!: () => void;
+      const p = new Promise<void>((r) => (open = r));
+      return { p, open };
+    };
+    const badIn = latch(), badGo = latch(), goodIn = latch(), goodGo = latch();
+    // 第一个建了 epic，正在准备 worktree；第二个这时用上同一个 epic；第一个随后失败。
+    const bad = featureService
+      .withJiraEpic({ key: "SHOP-9", title: "Gift" }, frontend, async () => {
+        badIn.open();
+        await badGo.p;
+        throw new Error("bad ticket");
+      })
+      .catch((e: unknown) => e);
+    await badIn.p;
+    const good = featureService.withJiraEpic({ key: "SHOP-9", title: "Gift" }, frontend, async (id) => {
+      goodIn.open();
+      await goodGo.p;
+      await ticketService.create({ key: "SHOP-91", featureId: id });
+      return id;
+    });
+    await goodIn.p;
+    badGo.open();
+    expect(await bad).toEqual(new Error("bad ticket"));
+    expect(features.byJiraEpic("SHOP-9")).not.toBeNull();
+    goodGo.open();
+    const id = await good;
+    expect(features.get(id)!.jiraEpicKey).toBe("SHOP-9");
+  });
+});
+

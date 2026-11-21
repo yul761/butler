@@ -27,6 +27,9 @@ export const FEATURE_NAME_LIMIT = 100;
  * worktree 放在工作区里。
  */
 export class FeatureService {
+  /** withJiraEpic 里正在用的 epic key：还有几个在做、有没有哪个开始时它还不存在。 */
+  private readonly epicUses = new Map<string, { users: number; fresh: boolean }>();
+
   constructor(private readonly d: FeatureServiceDeps) {}
 
   get(id: number): Feature {
@@ -66,6 +69,39 @@ export class FeatureService {
    * 从 Jira 接进来的 ticket 所属的 epic（BTL-246 §7，内部是 feature）：按 Jira epic 的 key 找没归档的那个，没有就新建一个
    * （名字「KEY 标题」，工作区用默认的；以前那个归档了也新建，工作区目录和归档的错开）。ticket 的仓库加进它的仓库列表。返回 id。
    */
+  /**
+   * 先 ensureJiraEpic 再做 fn（BTL-248）：fn 抛出时，这次新建的 epic 要是还空着（没有 ticket、session、feature 块、消息），
+   * 连仓库行一起删掉，再把错误抛出去。用的是已经有的 epic 时什么都不删。磁盘上没建过东西，也就不用清。
+   */
+  async withJiraEpic<T>(epic: { key: string; title: string | null }, repoPath: string, fn: (featureId: number) => Promise<T>): Promise<T> {
+    // 同一个 epic 别的 intake 还在做（建了 epic、还在准备 worktree）：这个失败了也不能删，最后一个走的再看。
+    // 其中有一个开始时还没有这个 epic，最后一个又失败了，才删（还空着的话）。
+    const use = this.epicUses.get(epic.key) ?? { users: 0, fresh: false };
+    use.users++;
+    if (this.d.features.byJiraEpic(epic.key) === null) use.fresh = true;
+    this.epicUses.set(epic.key, use);
+    const leave = (): boolean => {
+      if (--use.users > 0) return false;
+      this.epicUses.delete(epic.key);
+      return use.fresh;
+    };
+    let id: number;
+    try {
+      id = await this.ensureJiraEpic(epic, repoPath);
+    } catch (e) {
+      leave();
+      throw e;
+    }
+    try {
+      const out = await fn(id);
+      leave();
+      return out;
+    } catch (e) {
+      if (leave()) this.d.features.deleteIfEmpty(id);
+      throw e;
+    }
+  }
+
   async ensureJiraEpic(epic: { key: string; title: string | null }, repoPath: string): Promise<number> {
     const root = await gitRootOf(repoPath);
     const found = this.d.features.byJiraEpic(epic.key);

@@ -60,7 +60,7 @@ export interface CostBreakerDeps {
   kill: (headId: string) => void;
   /** 用户最近一次往这个 session 的终端里打字的时间；没有为 0。 */
   lastUserInputAt: (headId: string) => number;
-  /** 过 DeliveryGuard 往 session 里递一句话；递进去了返回 true（现在递不了返回 false，下次再试）。 */
+  /** 往 session 里递一句话（BTL-248 起排进信箱，总是 true）；返回 false 表示现在递不了，下次再试。 */
   nudge: (headId: string, text: string) => Promise<boolean>;
   /** 调度器：这个 ticket 的后台任务停下 / 可以重新跑了。 */
   scheduler?: { yieldTicket(key: string): void; changed(): void };

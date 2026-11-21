@@ -6,7 +6,7 @@ import type { ForkView } from "../../../shared/fork";
 import type { InboxScope } from "../../../shared/types";
 import { api, ButlerError } from "../api";
 import {
-  buildTimeline, draftCheck, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, refusalText, refusesMemory, rememberText, sendBlockText, turnBlocks,
+  buildTimeline, draftCheck, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, queuedText, refusalText, refusesMemory, rememberText, sendBlockText, turnBlocks,
   type ConvFilter, type ConvLoaded, type ReportsLoaded, type TimelineItem,
 } from "../conversation-view";
 import { reportError } from "../errors";
@@ -320,9 +320,9 @@ export function ConversationTab(p: {
     sendConclusion: (id) => void act(id, "send", async () => {
       const r = await api.forkSendConclusion(id);
       if (!r.ok) return sendBlockText(r.reason, S);
-      // 「已发给 session · 时间」由框里的 summarySentAt 显示；分叉列表重取回来之前先写上。
+      // 「已发给 session · 时间」由框里的 summarySentAt 显示；分叉列表重取回来之前先写上。排进信箱还没送到的另说一句（BTL-248）。
       setForks((fs) => fs.map((f) => (f.id === id ? { ...f, summarySentAt: r.at } : f)));
-      return null;
+      return queuedText(r.state, S);
     }),
     remember: (id) => void act(id, "remember", async () => {
       const { result } = await api.forkRemember(id);
@@ -352,9 +352,13 @@ export function ConversationTab(p: {
     const current = () => gen.current === g;
     try {
       if (target === "dev") {
-        // 这句话由第 4 层从 transcript 记进对话，自己会出现；被挡下时草稿留着。
+        // 排进开发 session 的信箱（BTL-248）：停着的马上原样输入，第 4 层从 transcript 记进对话；在忙、关着的说一句什么时候送到。
+        // 排上了就清草稿，不管这期间切没切 session（草稿是整个 tab 共用的）；被挡下时草稿留着。
         const r = await api.convSend(selected, text);
-        if (r.ok) return { clear: true };
+        if (r.ok) {
+          const queued = current() ? queuedText(r.state, S) : null;
+          return queued === null ? { clear: true } : { clear: true, notice: queued };
+        }
         return current() ? { clear: false, notice: sendBlockText(r.reason, S) } : { clear: false };
       }
       // 同一句还在答时主进程返回已有的 forkId：黄框按分叉列表画，不会多出一个。

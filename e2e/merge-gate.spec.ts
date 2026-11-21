@@ -116,8 +116,13 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
   await expect.poll(() => terminalText(page)).toContain("denied:");
   git(backend, "merge", "-q", "--ff-only", two.branch);
-  // 通知是作为输入交给 claude 的：等它这一轮结束（回了“收到”）再输入下一条。
-  await expect.poll(async () => squash(await terminalText(page))).toContain(squash(`收到：${M().gateMergedNotice("DMS-2（checkout）")}`));
+  // 通知排进信箱、作为输入交给 claude（前面是信箱的说明）：等它这一轮结束（回了“收到”）再输入下一条。
+  await expect
+    .poll(async () => {
+      const t = squash(await terminalText(page));
+      return t.slice(t.lastIndexOf("收到："));
+    })
+    .toContain(squash(M().gateMergedNotice("DMS-2（checkout）")));
 
   // 7. 再合并：这次是 rebase 提醒。同时看着请求目录：审核的命令会写请求文件（第 8 步的对照）。
   const denies = () => fakeLog().split("\n").filter((l) => l.includes(" gate deny "));

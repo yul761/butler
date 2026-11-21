@@ -174,7 +174,7 @@ Butler 内部把它为 ticket 写的状态叫 handoff，`/handoff` 命令沿用�
 | 设置 | 键 | 默认值 | 可填的值和说明 |
 |------|----|--------|----------------|
 | 晚间状态更新的时间 | `nightlyTime` | `16:00` | `HH:MM`，本地时间。如果到点时 Butler 没开、电脑在睡眠或锁屏，会在下次启动、唤醒或解锁时补跑，排在早间刷新之前。 |
-| 每天几点让全局总控巡检一次 | `butlerPatrolTime` | 空（关） | `HH:MM`，本地时间；空 = 关。到点时 Butler 打开（或接着用最近的）全局总控，让它看一遍 PR、CI 和未决的提问，用 `send_message` 提醒该跟进的 epic 总控，用 `ask_user` 列出要你亲自做的事。全局总控正忙就等它停下来；到点时电脑在睡眠或 Butler 没开，当天醒来、解锁或启动时补一次，过了零点不补。如果在当天的巡检时间过了之后才打开这项设置，会马上巡检一次。巡检每天最多开一次 session。上一次巡检列出的提问还没处理时，下一次会等你处理完。全局总控不会被自动换新，也不会因为闲置被自动关闭。 |
+| 每天几点让全局总控巡检一次 | `butlerPatrolTime` | 空（关） | `HH:MM`，本地时间；空 = 关。到点时 Butler 打开（或接着用最近的）全局总控，让它看一遍 PR、CI 和未决的提问，用 `send_message` 提醒该跟进的 epic 总控，用 `ask_user` 列出要你亲自做的事。全局总控正忙就排进它的信箱，它下一次调用工具时读到；到点时电脑在睡眠或 Butler 没开，当天醒来、解锁或启动时补一次，过了零点不补。如果在当天的巡检时间过了之后才打开这项设置，会马上巡检一次。巡检每天最多开一次 session。上一次巡检列出的提问还没处理时，下一次会等你处理完。全局总控不会被自动换新，也不会因为闲置被自动关闭。 |
 | 工作日（只在这些天跑晚间状态更新） | `workingDays` | `1,2,3,4,5`（周一到周五） | 界面上是复选框。存的值是用逗号分隔的 `0`–`6`，`0` 是周日。晚间 handoff 和早间刷新只在这些天运行。 |
 | tracker MCP 工具（更新状态时只能调用这些，一行一个） | `trackerTools` | 空 | 一行一个 MCP 工具名，格式是 `mcp__<server>__<tool>`。只写 `mcp__<server>` 会放开这个 server 的所有工具，除非 server 是只读的，否则别这么写。其他内容，例如 `Bash(...)` 规则或命令行参数，都会被拒绝。handoff 和刷新可以调用这些工具，加上 `Read`、`Grep`、`Glob`、`gh pr view`、`gh pr checks`、`git log` 和 `git status`，再加上你用户级或托管（policy）的 Claude Code 设置允许的工具（见下文）。 |
 | 后台的状态更新也加载本地级的 MCP… | `headlessProjectMcp` | `0`（关） | `1` 或 `0`。见[接入你的 tracker](#接入你的-tracker)。 |
@@ -242,7 +242,7 @@ Butler 自己从不和你的 tracker 通信。handoff 通过公司 Claude Code �
 - 如果它和一个已经被允许合并、但还没合完的分支冲突，会让它等。自己的合并已经被允许过的 session 可以直接再试，不用等。合并锁跟着真实的合并走：
   - 本地的 `git merge` 或 push 会一直锁到命令结束，不管成功还是失败。如果 Butler 一直没收到命令结束的消息，例如你拒绝了权限确认，锁会在 10 分钟后过期。
   - `gh pr merge` 会一直锁到 Butler 看到 PR 已合并（用 `gh pr view` 检查，只查被锁的 PR）或已关闭。如果允许合并 30 秒后 PR 还开着，而且没开 auto-merge，Butler 就认为合并失败了或 `--auto` 被取消了，并释放锁。`gh` 查不了的话，锁在 2 小时后过期。如果一个分支还持有本地合并的锁（比如 push 被拒之后），再对它 `gh pr merge`，这把锁会转成 PR 锁。
-- 被锁住的合并完成后，等待中的 session 会收到可以合并了（rebase 之后）的消息。如果它没完成（合并失败、PR 被关、锁过期），会告诉那个 session 可以再试一次。消息会在 session 等待输入、而且你 30 秒内没在它的终端里打字时输入进去。如果 session 的终端关着，消息最多保留 24 小时，等你再打开这个 session 时送达。
+- 被锁住的合并完成后，等待中的 session 会收到可以合并了（rebase 之后）的消息。如果它没完成（合并失败、PR 被关、锁过期），会告诉那个 session 可以再试一次。消息放进这个 session 的信箱：在干活就在下一次调用工具时读到，停着就在你 30 秒内没在它的终端里打字时输入进去，终端关着就在你再打开这个 session 时送达。
 - 文件夹在用的时候，在共用文件夹里切分支会被拒绝，并写明是哪个 ticket、哪个分支。你自己在界面上点切换分支时，Butler 只提醒，你仍然可以确认。
 
 **出错时放行。** 如果 Butler 没在运行、5 秒内没响应，或者 hook 本身出错，命令照常执行。总控只是一道保险，永远不会成为 session 合并不了的原因。
@@ -725,7 +725,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 
 栈由 epic 总控建。epic 总控调用 `create_ticket` 时带上 `stack_on`，新 ticket 的分支就从另一个 ticket 的分支开出来，并接到那个 ticket 所在栈的顶上（它不在栈里就新建一个）；也可以用 `stack_define` 把已有的分支定成栈。`list_stacks` 看栈，`stack_rebase` 马上 rebase 一次，`stack_layer_mode` 在上面某层要跑 CI 时把它开成 draft PR，或者把 draft 关掉。epic 总控看得到有一层是它的 ticket 的栈，但只能改属于它这个 epic、或者没合并的层都是它的 ticket 的栈。全局总控也有这几个工具，但只接受它自己开着的终端发来的改动。
 
-栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动（或者会被新顶端覆盖的未跟踪文件）、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，等那一层 ticket 的 session 空下来时把冲突文件和要执行的 `git rebase --onto` 命令交给它；只有「强推」开着时才让 session 把结果推上去。下一次 rebase 接着 session 解好的结果做。冲突 30 分钟没交出去、或者 rebase 卡住或回滚了一天，「轮到你」页会提醒。
+栈底的 PR 合并或者 trunk 更新时，Butler 把整栈 rebase 到新的基础上：git 2.38 以上用 `git rebase --update-refs`，旧的 git 一层一层来。rebase 在 `~/.butler/stack-work` 下单独的 worktree 里做，不碰开着的 session。只有分支没在别处签出着未提交的改动（或者会被新顶端覆盖的未跟踪文件）、它的 session 不在忙、远端也没人推过时，Butler 才挪动它，否则稍后再试。挪动之前先把旧的位置存到 `refs/butler/stack-backup/…`，「从备份恢复」可以放回去。有冲突时 Butler 停下、原样复原，把冲突文件和要执行的 `git rebase --onto` 命令放进那一层 ticket 的 session 的信箱（同一层新的冲突换掉还没送的旧冲突）；只有「强推」开着时才让 session 把结果推上去。下一次 rebase 接着 session 解好的结果做。冲突 30 分钟没交出去、或者 rebase 卡住或回滚了一天，「轮到你」页会提醒。
 
 栈底合并后，下一层成了新的栈底：Butler 把它的 base 改成 trunk，`autoOpenBottomPr` 开着时把它开成 ready 的 PR。draft 层打上 `draftLabel` 的 label，标题注明不用 review。
 
@@ -793,7 +793,7 @@ Butler 在本机读最近 30 天的 Claude Code transcript（不会传出本机�
 **按 Jira epic 归组。** 来源是 `tracker` 时，Butler 还会问每个 ticket 的上级 epic（key 和标题）；来源是 `file` 时读 ticket 的 `epic`。有上级 epic 的 ticket 进关联这个 Jira epic 的 Butler epic。没有未归档的 epic 关联它时，Butler 用 Jira epic 的 key 和标题新建一个，工作区放在默认位置（文件夹被占用时依次加 `-2`、`-3`），并加上这个 ticket 的仓库；已归档的 epic 不会拿来再用。epic 还没有的仓库会加进去。没有上级 epic 的 ticket 照样单独放。栈的各层放进拆出它们的那个 ticket 所在的 epic。接下来怎样，看 `autoStart`：
 
 - **关。** 每个有 epic 的 ticket 马上建进那个 epic，不开 session，在队列里继续搁着。不会给 epic 总控发消息：你准备好了，就让它把这些 ticket 分进 feature。已经在 Butler 里的 ticket、栈的各层和没有仓库的 ticket 不会建。
-- **开。** ticket 照常开工，放在自己的 epic 里。每次拉取之后，Butler 给每个 epic 的总控发一条消息，列出新拉来、在排队、在等或已开工的 ticket，让它用 `create_feature` 和 `set_ticket_feature` 把它们分进 feature，用 `reorder_features` 排好顺序，再往前推。总控没在跑时，内存够了 Butler 就打开它（接着它最近的对话）；在跑时，等它停下来、你也没在打字再送。送不了（内存不够、输入框不空）就跳过并记日志，下一次给这个 epic 加了 ticket 的拉取再试。
+- **开。** ticket 照常开工，放在自己的 epic 里。每次拉取之后，Butler 给每个 epic 的总控发一条消息，列出新拉来、在排队、在等或已开工的 ticket，让它用 `create_feature` 和 `set_ticket_feature` 把它们分进 feature，用 `reorder_features` 排好顺序，再往前推。消息放进总控的信箱：在跑时，在干活就在下一次调用工具时读到，停着就直接输入。没在跑时，内存够了 Butler 就打开它（接着它最近的对话），把消息当第一条交进去；内存不够时消息留在信箱里，下次打开时读到。从没开过总控、内存又不够时就跳过并记日志，下一次给这个 epic 加了 ticket 的拉取再试。
 
 ### 什么时候叫你
 

@@ -28,10 +28,8 @@ export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | 
 
 /** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
 export function ciReasonText(reason: string, S: UiStrings): string {
-  const [head, tail] = reason.split(":", 2) as [string, string | undefined];
-  const pick = (m: Record<string, string>, k: string): string | undefined => (Object.prototype.hasOwnProperty.call(m, k) ? m[k] : undefined);
-  const known = tail === undefined ? pick(S.ciReason, head) : head === "guard" ? pick(S.ciGuard, tail) : head === "deliver" ? pick(S.ciDeliver, tail) : undefined;
-  return known ?? S.ciReasonOther(reason);
+  const known: Record<string, string> = S.ciReason;
+  return Object.prototype.hasOwnProperty.call(known, reason) ? known[reason] : S.ciReasonOther(reason);
 }
 
 /** 「现在」页一条提醒的文字和按钮。 */

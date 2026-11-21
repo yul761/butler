@@ -40,7 +40,7 @@ const session = (id: string, o: Partial<SessionView> = {}): SessionView => ({
 } as SessionView);
 const ticket = { key: "K-1", title: "one", repos: [], status: "active", statusManual: null, createdAt: 0, archivedAt: null, featureId: 10, effectiveStatus: "active", sessions: [], hiddenSessions: [], waiting: false } as unknown as TicketView;
 const feature = (o: Partial<FeatureView> = {}): FeatureView => ({
-  id: 10, name: "F", workspaceDir: "/w/f", repos: [], createdAt: 0, archivedAt: null, brief: null, briefSentAt: null, automationLevel: null,
+  id: 10, name: "F", workspaceDir: "/w/f", repos: [], createdAt: 0, archivedAt: null, brief: null, automationLevel: null,
   tickets: [ticket], blocks: [], sessions: [], hiddenSessions: [], waiting: false, summary: null, ticketPrs: {}, activity: {}, ...o,
 });
 const ctx: NameCtx = { features: new Map([[10, "F"]]), tickets: new Map([["K-1", "one"]]) };

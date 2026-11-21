@@ -8,6 +8,7 @@ import type { BranchPr, BranchRuns, CiCheck, PrComment, PrStatus } from "../tick
 import type * as Gh from "../tickets/gh";
 import type * as Git from "../tickets/git";
 import { BranchOwnersRepo } from "../db/branch-owners-repo";
+import { fakeMailbox } from "../mailbox/fake-mailbox";
 import { CiDelivery, pickRecipient } from "./ci-delivery";
 import { PrLinker } from "./pr-links";
 import { derivePrStages } from "./pr-stages";
@@ -549,12 +550,12 @@ describe("PrWatcher: branches", () => {
     await s.w.check();
     s.branches.upsert({ repoId: s.repoId, ticketKey: "BTL-1", branch: "b", ci: "failing", headSha: "z", failed: [], readError: false, checkedAt: s.now() });
     // 还没递出去的结论：换分支之后不再递给新分支的 session。
-    const deliver = vi.fn(async () => "sent" as const);
+    const deliver = vi.fn<(to: string, body: string) => void>();
     const ci = new CiDelivery({
       prs: s.prs, branches: s.branches, currentBranch: (id) => s.tickets.getRepo(id)?.branch ?? null,
-      guard: { check: () => ({ ok: true, termId: "t", headId: "h" }), recheckAfter: () => () => true },
+      mailbox: fakeMailbox({ canDeliver: () => true, deliver, now: s.now }),
       recipient: (_k, id, branch) => pickRecipient({ owner: null, ownerOpen: false, open: [{ id: "h", gitBranch: null, coordinator: false }], ticketBranch: s.tickets.getRepo(id)?.branch ?? null, branch }),
-      deliver, now: s.now, log: () => {},
+      now: s.now, log: () => {},
     });
     s.tickets.updateRepo({ id: s.repoId, workMode: "branch", worktreePath: null, branch: "c" });
     await ci.flush();

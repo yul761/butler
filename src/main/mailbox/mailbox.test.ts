@@ -21,11 +21,13 @@ function world() {
   const replies = new Map<string, { id: string; text: string; at: number | null }>();
   let now = 1_000_000;
   const blocked = new Set<string>();
+  const needsYou = new Set<string>();
   const delivered: { term: string; text: string }[] = [];
   let deliverResult: DeliverResult = "sent";
   const interrupts: string[] = [];
   const typed: string[] = [];
   const woken: string[] = [];
+  const held = new Set<string>();
   const head = (id: string): Session | null => {
     let s = sessions.get(id);
     while (s?.replacedBy) s = sessions.get(s.replacedBy);
@@ -43,11 +45,12 @@ function world() {
   });
   const mb = new Mailbox({
     repo, root, head, termOf, openTerms: () => [...terms.keys()],
-    check: (id): DeliveryCheck => {
+    check: (id, o): DeliveryCheck => {
       const t = termOf(id);
       if (t === null) return { ok: false, block: "closed" };
       const h = head(id)!;
       if (!h.waitingForInput || blocked.has(h.id)) return { ok: false, block: "busy" };
+      if (!o.answer && needsYou.has(h.id)) return { ok: false, block: "needs_you" };
       return { ok: true, termId: t, headId: h.id };
     },
     recheckAfter: () => () => true,
@@ -59,6 +62,8 @@ function world() {
     nameOf: (id) => (id === null ? "Butler" : `S(${id})`),
     typing: (h, phase) => typed.push(`${h}:${phase}`),
     wake: (h) => woken.push(h),
+    held: (h) => held.has(h),
+    featureOf: (h) => (h === "t9" ? 9 : null),
     notify: () => {},
     now: () => now,
     log: () => {},
@@ -69,7 +74,7 @@ function world() {
   };
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
-    root, repo, mb, sessions, terms, replies, blocked, delivered, deliver, interrupts, typed, woken, add, dirFiles,
+    root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, held, add, dirFiles,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -81,6 +86,104 @@ function world() {
 const msg = (to: string, body: string, extra: Record<string, unknown> = {}) => ({ kind: "instruction" as const, from: "boss", to, featureId: 1, body, ...extra });
 
 describe("Mailbox", () => {
+  it("does not project for a held session (being refreshed); once released, sync and flush hand it over", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.held.add("t1");
+    w.mb.send(msg("t1", "after the refresh"));
+    await flushPromises();
+    expect(w.dirFiles("t1")).toBeNull();
+    w.held.delete("t1");
+    w.mb.syncTerm("t1");
+    expect(w.dirFiles("t1")).toHaveLength(1);
+  });
+
+  it("types the user's own words in as they are, never batched with Butler's messages; through the hook they carry a note", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.blocked.add("t1");
+    w.mb.send({ kind: "user", from: null, to: "t1", featureId: null, body: "please also fix the title" });
+    w.mb.send({ kind: "user", from: null, to: "t1", featureId: null, body: "and the footer" });
+    w.mb.send(msg("t1", "CI failed"));
+    await flushPromises();
+    w.blocked.delete("t1");
+    await w.mb.flush("t1");
+    expect(w.delivered.map((d) => d.text)).toEqual(["please also fix the title\n\nand the footer"]);
+    await w.mb.flush("t1");
+    expect(w.delivered).toHaveLength(2);
+    expect(w.delivered[1].text).toContain("CI failed");
+    expect(w.delivered[1].text).not.toContain("footer");
+
+    const b = world();
+    b.add("t2", false);
+    b.mb.send({ kind: "user", from: null, to: "t2", featureId: null, body: "rename it" });
+    const ctx = JSON.parse(b.hook("t2").out).hookSpecificOutput.additionalContext as string;
+    expect(ctx).toContain("rename it");
+    expect(ctx).toMatch(/对话 tab|conversation tab/);
+  });
+
+  it("the user's own words, an answer and a refresh resume go in while the session needs you; Butler's other messages wait", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.mb.send(msg("t1", "CI failed"));
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    w.mb.send({ kind: "user", from: null, to: "t1", featureId: null, body: "yes, go with B" });
+    await flushPromises();
+    // 用户自己的话排在 CI 后面也进去：它不该被「需要你」挡住，CI 那条接着等。
+    expect(w.delivered.map((d) => d.text)).toEqual(["yes, go with B"]);
+    await w.mb.flush("t1");
+    expect(w.delivered).toHaveLength(1);
+    w.needsYou.delete("t1");
+    await w.mb.flush("t1");
+    expect(w.delivered[1].text).toContain("CI failed");
+
+    const u = world();
+    u.add("t2", true);
+    u.needsYou.add("t2");
+    u.mb.send({ kind: "user", from: null, to: "t2", featureId: null, body: "yes, go with B" });
+    await flushPromises();
+    expect(u.delivered.map((d) => d.text)).toEqual(["yes, go with B"]);
+    // 用户自己的话不算 Butler 输入的：它的 UserPromptSubmit 照样算用户回答了。
+    expect(u.typed).toEqual([]);
+
+    const r = world();
+    r.add("t3", true);
+    r.needsYou.add("t3");
+    r.mb.send({ kind: "refresh", from: null, to: "t3", featureId: null, body: "recall the handoff and carry on" });
+    await flushPromises();
+    expect(r.delivered).toHaveLength(1);
+    expect(r.typed).toEqual(["t3:start", "t3:sent"]);
+  });
+
+  it("after a refresh the carry-on message goes in first, ahead of what was queued during the refresh", async () => {
+    const w = world();
+    w.add("t1", true);
+    // 换新期间：不投影，guard 也挡着直接输入（refreshing）。
+    w.held.add("t1");
+    w.blocked.add("t1");
+    w.mb.send({ kind: "user", from: null, to: "t1", featureId: null, body: "also rename it" });
+    await flushPromises();
+    w.held.delete("t1");
+    w.blocked.delete("t1");
+    w.mb.send({ kind: "refresh", from: null, to: "t1", featureId: null, body: "recall the handoff and carry on" });
+    await flushPromises();
+    // 原样输入，不带信箱的说明：它是新上下文的第一句话（session 的名字也从它来）。
+    expect(w.delivered[0].text).toBe("recall the handoff and carry on");
+    await w.mb.flush("t1");
+    expect(w.delivered[1].text).toBe("also rename it");
+  });
+
+  it("a message without an epic is filed under the recipient's epic, so that epic's message list shows it", () => {
+    const w = world();
+    w.add("t9", false);
+    w.mb.send({ kind: "ci", from: null, to: "t9", featureId: null, body: "CI passed", ref: "ci:pr:1" });
+    expect(w.repo.recent({ featureId: 9 }, 5).map((m) => m.body)).toEqual(["CI passed"]);
+    w.mb.send({ ...msg("t9", "from epic 1"), featureId: 1 });
+    expect(w.repo.recent({ featureId: 1 }, 5).map((m) => m.body)).toEqual(["from epic 1"]);
+  });
+
   it("a busy target gets the message through the hook at its next tool call; the sweep records it as delivered via hook", async () => {
     const w = world();
     w.add("t1", false);
