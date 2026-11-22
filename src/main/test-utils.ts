@@ -111,6 +111,32 @@ export function makeRepo(): string {
   return copyRepo(repoTemplate);
 }
 
+/**
+ * BTL-255 的现场：一个带 bare 远端 origin 的仓库，checkout 停在旧分支 feature/OLD（多一个提交），
+ * 本地 main 和 origin/main 都还在初始提交上，而远端的 main 已经多了一个提交（fetch 之后才看得到）。
+ * 返回仓库、bare 远端、初始提交和远端 main 的 SHA。
+ */
+export function makeStaleClone(): { repo: string; remote: string; initSha: string; remoteSha: string; oldSha: string } {
+  const upstream = makeRepo();
+  const remote = tempDir("butler-remote-");
+  const repo = tempDir("butler-clone-");
+  const g = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+  const initSha = g(upstream, "rev-parse", "HEAD");
+  g(remote, "clone", "--quiet", "--bare", upstream, ".");
+  g(repo, "clone", "--quiet", remote, ".");
+  g(repo, "checkout", "--quiet", "-b", "feature/OLD");
+  writeFileSync(join(repo, "old.txt"), "old\n");
+  g(repo, "add", ".");
+  g(repo, "commit", "--quiet", "-m", "old work");
+  const oldSha = g(repo, "rev-parse", "HEAD");
+  writeFileSync(join(upstream, "new.txt"), "new\n");
+  g(upstream, "add", ".");
+  g(upstream, "commit", "--quiet", "-m", "newer main");
+  g(upstream, "push", "--quiet", remote, "main");
+  return { repo, remote, initSha, remoteSha: g(upstream, "rev-parse", "HEAD"), oldSha };
+}
+
 export class FakePty implements PtyProcess {
   pid = 4242;
   written: string[] = [];

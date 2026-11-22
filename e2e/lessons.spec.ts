@@ -16,6 +16,7 @@ test("confirmed lessons reach a ticket session's guide file; rejected and disabl
 
   // 1. 沙盒仓库带 GitHub remote，建一个用它的 ticket。
   execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/web.git"], { cwd: s.repo });
+  execFileSync("git", ["config", "protocol.https.allow", "never"], { cwd: s.repo });
   await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("LES-1");
   await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(s.repo);

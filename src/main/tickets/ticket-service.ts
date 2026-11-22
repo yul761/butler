@@ -7,7 +7,7 @@ import type { TicketsRepo } from "../db/tickets-repo";
 import { ticketFileStem } from "../util/ticket-file";
 import {
   addWorktree, branchExists, checkout, createBranch, currentBranch, detachHead, GitError, gitErrorSummary, hasCommits, isDirty,
-  isValidBranchName, isWorktreeOf, pruneWorktrees, repoRoot, switchTo, unbranchedCommits,
+  isValidBranchName, isWorktreeOf, newBranchBase, pruneWorktrees, repoRoot, switchTo, unbranchedCommits,
 } from "./git";
 import { isValidTicketKey, renderBranch } from "./ticket-key";
 import { M } from "../strings";
@@ -55,6 +55,8 @@ export interface TicketServiceDeps {
   now: () => number;
   /** 总控 session 的工作区目录放在这里面（~/.butler/workspaces）。 */
   workspacesDir: string;
+  /** 写进 main.log（比如新分支的起点 fetch 失败）；不给就不写。 */
+  log?: (msg: string) => void;
 }
 
 
@@ -93,9 +95,17 @@ export function dirsOutsideWorkspace(
   return out;
 }
 
+/** 算好的新分支起点用多久（BTL-255）。 */
+export const BASE_TTL_MS = 60_000;
+
 export class TicketService {
   /** 正在改仓库的 ticket：期间不能再改，也不能打开 session（目录可能正被切换）。 */
   private readonly updatingKeys = new Set<string>();
+  /**
+   * 新分支起点，按仓库：正在算的和 BASE_TTL_MS 之内算好的都直接用，同时或接连建好几个 ticket 只 fetch 一次
+   * （并发 fetch 会抢 ref 锁；离线时也不必每个 ticket 都等一次超时）。
+   */
+  private readonly bases = new Map<string, { at: number; ref: Promise<string> }>();
 
   constructor(private readonly d: TicketServiceDeps) {}
 
@@ -203,16 +213,19 @@ export class TicketService {
     try {
       const exists = await branchExists(root, branch);
       const leftover = this.worktreePath(key, featureId, root);
+      // 新分支没给起点（stack_on 给的是下层的分支）：从远端默认分支开，不从共享 checkout 当前的 HEAD（BTL-255）。
+      const start = input.start ?? (exists ? undefined : await this.baseFor(root));
+      if (!exists) this.d.log?.(`ticket ${key}: new branch ${branch} in ${root} from ${start}`);
       if (input.workMode === "worktree") {
         // 以前移除（或改成分支模式）时留下的 worktree：干净的就接着用。
-        worktreePath = await this.attachWorktree(root, leftover, branch, exists, input.start);
+        worktreePath = await this.attachWorktree(root, leftover, branch, exists, start);
       } else {
         // 留下的 worktree 还占着这个分支：先让它离开，主仓库之后才能检出（没有改动、没有游离提交时）。
         if (exists && existsSync(leftover) && (await isWorktreeOf(root, leftover)) && (await currentBranch(leftover)) === branch) {
           if (await isDirty(leftover)) throw new TicketError("dirty", M().worktreeDirty(leftover));
           await detachHead(leftover);
         }
-        if (!exists) await createBranch(root, branch, input.start);
+        if (!exists) await createBranch(root, branch, start);
       }
     } catch (e) {
       throw asTicketError(e);
@@ -247,13 +260,13 @@ export class TicketService {
     });
   }
 
-  /** updateRepo 的 git 部分，返回新的 worktree 路径（分支模式是 null）。新分支从仓库原来的分支开始。 */
+  /** updateRepo 的 git 部分，返回新的 worktree 路径（分支模式是 null）。新分支从仓库原来的分支开始，原来的分支不在了就从远端默认分支。 */
   private async moveWork(t: TicketRepo, workMode: WorkMode, branch: string): Promise<string | null> {
     const root = t.repoPath;
     if (!(await isValidBranchName(root, branch))) throw new TicketError("invalid_branch", M().invalidBranch(branch));
     try {
       const exists = await branchExists(root, branch);
-      const start = branch !== t.branch && (await branchExists(root, t.branch)) ? t.branch : undefined;
+      const start = exists ? undefined : (await branchExists(root, t.branch)) ? t.branch : await this.baseFor(root);
       if (t.workMode === "worktree" && t.worktreePath && existsSync(t.worktreePath)) {
         if (await isDirty(t.worktreePath)) throw new TicketError("dirty", M().worktreeDirty(t.worktreePath));
         await this.refuseUnbranched(t.worktreePath);
@@ -273,6 +286,19 @@ export class TicketService {
     } catch (e) {
       throw asTicketError(e);
     }
+  }
+
+  /** 新分支的起点（见 newBranchBase）；同一个仓库正在算的、或刚算过的就用那一次的。 */
+  private baseFor(root: string): Promise<string> {
+    const k = norm(root);
+    const hit = this.bases.get(k);
+    if (hit && this.d.now() - hit.at < BASE_TTL_MS) return hit.ref;
+    const ref = newBranchBase(root, (m) => this.d.log?.(m));
+    const entry = { at: Infinity, ref };
+    this.bases.set(k, entry);
+    // 算完才开始计时：算的那 20 秒里来的也算「正在算」。
+    void ref.then(() => (entry.at = this.d.now()), () => this.bases.delete(k));
+    return ref;
   }
 
   /** 游离 HEAD 上有不属于任何分支的提交：切走就只剩 reflog 能找到，拒绝。 */
@@ -339,7 +365,7 @@ export class TicketService {
   }
 
   /**
-   * PR 合并后被自动清理的 worktree（设计文档 2026-10-26）：在原来的路径上从保留的分支重建，分支不在了就从仓库当前 HEAD 新建。
+   * PR 合并后被自动清理的 worktree（设计文档 2026-10-26）：在原来的路径上从保留的分支重建，分支不在了就从远端默认分支新建。
    * 没被清理过就原样返回。
    */
   async ensureWorktree(r: TicketRepo): Promise<TicketRepo> {
@@ -349,7 +375,8 @@ export class TicketService {
       try {
         if (!existsSync(path)) {
           await pruneWorktrees(r.repoPath);
-          await addWorktree(r.repoPath, path, r.branch, !(await branchExists(r.repoPath, r.branch)));
+          const exists = await branchExists(r.repoPath, r.branch);
+          await addWorktree(r.repoPath, path, r.branch, !exists, exists ? undefined : await this.baseFor(r.repoPath));
         } else if (!(await isWorktreeOf(r.repoPath, path))) {
           // 清理之后有人在原来的位置写了文件（比如 feature 总控），那里已经不是 worktree：不接管它，免得 claude 在一个普通目录里干活。
           throw new TicketError("worktree_exists", M().notAWorktreeAnymore(path));

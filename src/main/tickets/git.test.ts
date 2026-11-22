@@ -1,11 +1,11 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { makeRepo, tempDir } from "../test-utils";
+import { makeRepo, makeStaleClone, setOriginUrl, tempDir } from "../test-utils";
 import { applyGitResolution, resetGitBinary, setGitBinary } from "../util/git-path";
 import { execFileSync } from "node:child_process";
 import { renameSync, symlinkSync } from "node:fs";
-import { defaultBranch, fetchQuiet, firstCommitAt, git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, isAncestor, mainRepoRoot, mergeConflicts, scanRepos, upstreamRef } from "./git";
+import { defaultBranch, fetchQuiet, firstCommitAt, git, GIT_SUMMARY_LIMIT, GitError, gitEnv, gitErrorSummary, isAncestor, mainRepoRoot, mergeConflicts, newBranchBase, scanRepos, upstreamRef } from "./git";
 
 describe("git helpers", () => {
   it("only switches git messages to English and keeps the user's locale for everything else", () => {
@@ -203,5 +203,68 @@ describe("merge coordinator helpers", () => {
     expect(await upstreamRef(repo, "main")).toBe("main");
     run(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
     expect(await upstreamRef(repo, "main")).toBe("origin/main");
+  });
+});
+
+describe("newBranchBase (BTL-255)", () => {
+  const sha = (cwd: string, ref: string) => execFileSync("git", ["rev-parse", ref], { cwd, encoding: "utf8" }).trim();
+
+  it("fetches first and starts from the remote's default branch, whatever the checkout is on", async () => {
+    const { repo, remoteSha, oldSha } = makeStaleClone();
+    const logs: string[] = [];
+    expect(await newBranchBase(repo, (m) => logs.push(m))).toBe("origin/main");
+    expect(sha(repo, "origin/main")).toBe(remoteSha);
+    // 共享 checkout 原样不动
+    expect(sha(repo, "HEAD")).toBe(oldSha);
+    expect(execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()).toBe("feature/OLD");
+    expect(logs).toEqual([]);
+  });
+
+  it("follows origin/HEAD to a default branch that is not main", async () => {
+    const { repo } = makeStaleClone();
+    execFileSync("git", ["update-ref", "refs/remotes/origin/develop", "HEAD"], { cwd: repo });
+    execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop"], { cwd: repo });
+    // develop 在远端并不存在：fetch 失败，退回本地的 origin/develop
+    expect(await newBranchBase(repo, () => undefined)).toBe("origin/develop");
+  });
+
+  it("falls back to the local origin/<default> and says so in the log when the fetch fails", async () => {
+    const { repo, initSha } = makeStaleClone();
+    setOriginUrl(repo, join(tempDir(), "gone"));
+    const logs: string[] = [];
+    expect(await newBranchBase(repo, (m) => logs.push(m))).toBe("origin/main");
+    expect(sha(repo, "origin/main")).toBe(initSha);
+    expect(logs.join("\n")).toMatch(/fetch .*failed.*origin\/main/);
+  });
+
+  it("asks the remote for its default branch when the clone has no trace of it (single-branch clone, custom fetch refspec)", async () => {
+    const { repo, remoteSha } = makeStaleClone();
+    execFileSync("git", ["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], { cwd: repo });
+    execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: repo });
+    execFileSync("git", ["config", "remote.origin.fetch", "+refs/heads/feature/OLD:refs/remotes/origin/feature/OLD"], { cwd: repo });
+    execFileSync("git", ["branch", "-D", "main"], { cwd: repo, stdio: "ignore" });
+    expect(await newBranchBase(repo, () => undefined)).toBe("origin/main");
+    expect(sha(repo, "origin/main")).toBe(remoteSha);
+  });
+
+  it("skips an origin/HEAD that points at a branch which is gone and uses origin/main", async () => {
+    const { repo, remoteSha } = makeStaleClone();
+    execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master"], { cwd: repo });
+    expect(await newBranchBase(repo, () => undefined)).toBe("origin/main");
+    expect(sha(repo, "origin/main")).toBe(remoteSha);
+  });
+
+  it("uses the local default branch when there is no remote, not the branch that is checked out", async () => {
+    const repo = makeRepo();
+    execFileSync("git", ["checkout", "-q", "-b", "feature/OLD"], { cwd: repo });
+    expect(await newBranchBase(repo, () => undefined)).toBe("main");
+  });
+
+  it("uses HEAD, and logs it, when there is neither a remote nor a default branch", async () => {
+    const repo = makeRepo();
+    execFileSync("git", ["branch", "-m", "main", "trunk-x"], { cwd: repo });
+    const logs: string[] = [];
+    expect(await newBranchBase(repo, (m) => logs.push(m))).toBe("HEAD");
+    expect(logs.join("\n")).toMatch(/HEAD/);
   });
 });
