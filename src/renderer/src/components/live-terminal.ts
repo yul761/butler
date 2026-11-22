@@ -2,6 +2,7 @@
 // 摘下来时也退订（pty:detach），后台的输出不再发过来、也不解析；挂回来时 pty:since 只补摘下期间的那一段，
 // 补不上（输出太多被截出缓冲、终端重开过）时主进程回整份快照，清屏重放。
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import { api, platform, terminalCacheMaxPref, terminalRendererPref, type PtyMarked } from "../api";
@@ -12,6 +13,19 @@ import { LruCache, TERMINAL_CACHE_MAX } from "../terminal-cache";
 
 /** Ctrl+V 时剪贴板里没有文字（比如截图）：照常把 ^V 交给 claude，由它自己读剪贴板里的图片。 */
 const CTRL_V = "\x16";
+
+/**
+ * 点终端里的链接（BTL-257）：OSC 8 超链接（claude 输出的那种）和普通文本里认出来的 URL 都走这里，
+ * 经 link:open 交给主进程，用系统浏览器打开（主进程只放行 http / https）。不弹 xterm 默认的 confirm，也不用 window.open（新窗口会被拒）。
+ */
+export function openTerminalLink(url: string): void {
+  void api
+    .linkOpen(url)
+    .then((r) => {
+      if (!r.ok) console.warn(`[terminal] link refused: ${url.slice(0, 200)}`);
+    })
+    .catch(reportError);
+}
 
 /** xterm 留的回滚行数（WS-M D）：主进程的快照另外留着 256 KB 的原始输出，第一次挂上时从快照重建。 */
 export const TERMINAL_SCROLLBACK = 3000;
@@ -59,8 +73,17 @@ export class LiveTerminal {
   constructor(readonly termId: string) {
     this.host = document.createElement("div");
     this.host.className = "terminal-host";
-    this.term = new Terminal({ fontFamily: 'Menlo, Consolas, "Cascadia Mono", monospace', fontSize: 13, cursorBlink: true, scrollback: TERMINAL_SCROLLBACK });
+    this.term = new Terminal({
+      fontFamily: 'Menlo, Consolas, "Cascadia Mono", monospace',
+      fontSize: 13,
+      cursorBlink: true,
+      scrollback: TERMINAL_SCROLLBACK,
+      // OSC 8 超链接：不设的话 xterm 先 confirm 再 window.open，新窗口被主进程拒掉，点了什么都没有。
+      linkHandler: { activate: (_e, text) => openTerminalLink(text) },
+    });
     this.term.loadAddon(this.fit);
+    // 普通文本里的 URL（只认 http / https）。
+    this.term.loadAddon(new WebLinksAddon((_e, uri) => openTerminalLink(uri)));
     const input = this.term.onData((d) => api.ptyWrite(termId, d));
     this.offs.push(() => input.dispose());
     // Windows / Linux 的 Ctrl+C / Ctrl+V（见 terminal-keys）。preventDefault 让菜单里的粘贴快捷键不再触发第二次。

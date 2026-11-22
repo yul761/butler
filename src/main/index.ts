@@ -228,6 +228,7 @@ import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
 import { knownPrLookup, openKnownPr } from "./util/github-url";
+import { openExternalLink } from "./util/external-link";
 import { TicketError, TicketService, samePath } from "./tickets/ticket-service";
 import { isValidTicketKey } from "./tickets/ticket-key";
 import type { IntakeSourceKind } from "../shared/intake";
@@ -433,7 +434,11 @@ function createWindow(): BrowserWindow {
   w.webContents.on("will-navigate", (e, url) => {
     if (!isOwnUrl(url)) e.preventDefault();
   });
-  w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // 新窗口一律不开；http / https 链接（比如漏网的 <a target=_blank> 或 window.open）改交给系统浏览器，和终端里点链接走同一个检查（BTL-257）。
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalLink(url, { openExternal: (u) => shell.openExternal(u), log: logger });
+    return { action: "deny" };
+  });
   // 渲染进程整页重新加载（或者崩了）：之前挂的终端都不在了（BTL-242）。
   w.webContents.on("did-start-navigation", (e) => {
     if (e.isMainFrame && !e.isSameDocument) ptySubs.clear();
@@ -3453,6 +3458,7 @@ async function bootstrap(): Promise<void> {
     }),
     // 允许的主机和 lessons 的 openSource 一样，只认 git remote 认出来的仓库（lessons_repos），不认 ticket_prs 自己的 slug。
     prOpen: (url) => openKnownPr(url, { prs: knownPrLookup(ticketPrs, () => reviewRequests.list()), trustedSlugs: () => lessonsRepo.repos().map((r) => r.slug), openExternal: (u) => shell.openExternal(u), log: logger }),
+    linkOpen: (url) => openExternalLink(url, { openExternal: (u) => shell.openExternal(u), log: logger }),
     prWatchList: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
     terminalVisible: (id, v) => procServices.terminalVisible(id, v),
     terminalInput: (id) => procServices.terminalActive(id),

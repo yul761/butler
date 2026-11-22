@@ -27,6 +27,7 @@ import {
 import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { DESCRIPTION_MAX, isFeedbackKind, TITLE_MAX } from "../../shared/feedback";
 import type { FeedbackOpenRequest } from "../feedback/feedback-service";
+import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 /**
  * 渲染进程不可信：IPC 参数在主进程里按运行时类型检查，不合规就抛错（toIpcResult 包装成 { ok: false }）。
@@ -214,6 +215,12 @@ export function prStagesScopeArg(v: unknown): PrStagesScope {
 /** 要打开的 PR 链接：最多 2000 字的字符串（能不能开由 openKnownPr 判断）。 */
 export function prUrlArg(v: unknown): string {
   if (typeof v !== "string" || v.length > 2000) throw new Error("invalid PR url");
+  return v;
+}
+
+/** 终端里点的链接（BTL-257）：1–EXTERNAL_LINK_MAX 字的字符串，超长直接拒绝、不截断。scheme 由 openExternalLink 检查。 */
+export function linkUrlArg(v: unknown): string {
+  if (typeof v !== "string" || v.length === 0 || v.length > EXTERNAL_LINK_MAX) throw new Error("invalid link");
   return v;
 }
 
