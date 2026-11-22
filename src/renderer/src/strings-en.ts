@@ -2426,4 +2426,7 @@ export const EN: UiStrings = {
     stuck: "Stuck? Tell us",
     failed: (detail: string) => `Couldn't finish: ${detail}`,
   },
+  terminalLink: {
+    refused: (url: string) => `This link can't be opened (only http/https, without a user name or password): ${url}`,
+  },
 };

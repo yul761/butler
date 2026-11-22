@@ -2451,6 +2451,10 @@ const ZH = {
     stuck: "卡住了？告诉我们",
     failed: (detail: string) => `没能完成：${detail}`,
   },
+  /** 终端里点的链接（BTL-257）。 */
+  terminalLink: {
+    refused: (url: string) => `这个链接不能打开（只开 http / https，链接里不能带用户名或密码）：${url}`,
+  },
 };
 
 export type UiStrings = typeof ZH;

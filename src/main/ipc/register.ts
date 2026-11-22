@@ -58,6 +58,7 @@ import type { LessonQueueRowView, LessonRunDetail, LessonsState } from "../../sh
 import type { LessonsService } from "../lessons/lessons-service";
 import type { PrStagesService } from "../prwatch/pr-stages-service";
 import type { PrOpenResult } from "../util/github-url";
+import type { LinkOpenResult } from "../util/external-link";
 import type { InboxService } from "../inbox/inbox-service";
 import { addDays, localDate } from "../schedule/calendar";
 import type { Scheduler } from "../schedule/scheduler";
@@ -86,7 +87,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg } from "./validate";
+  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -121,6 +122,8 @@ export interface IpcDeps {
   prStages: Pick<PrStagesService, "view">;
   /** 在系统浏览器里打开 PR 链接：只开 ticket 链接过、主机允许的（openKnownPr）。 */
   prOpen: (url: string) => PrOpenResult;
+  /** 终端里点的链接（BTL-257）：在系统浏览器里打开，只放行 http / https（openExternalLink）。 */
+  linkOpen: (url: string) => LinkOpenResult;
   /** 复盘规矩页。 */
   lessons: Pick<LessonsService, "state" | "act" | "pendingCount" | "runs" | "run">;
   /** 批次历史（契约 4.4）。 */
@@ -554,6 +557,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
   handle(IPC.prStages, (raw: unknown): PrStagesTicket[] => d.prStages.view(prStagesScopeArg(raw)));
   handle(IPC.prOpen, (raw: unknown): PrOpenResult => d.prOpen(prUrlArg(raw)));
+  handle(IPC.linkOpen, (raw: unknown): LinkOpenResult => d.linkOpen(linkUrlArg(raw)));
   handle(IPC.lessonsState, (): LessonsState => d.lessons.state());
   handle(IPC.lessonsAct, (raw: unknown) => d.lessons.act(lessonActionArg(raw)));
   handle(IPC.lessonsRuns, (raw: unknown): LessonQueueRowView[] => d.lessons.runs(lessonSlugArg(raw)));

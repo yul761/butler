@@ -9,6 +9,7 @@
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
 //       和 Claude Code 一样，命令在跑的时候有一个后台 shell 子进程（不真的执行命令，等到完成通知或假 claude 退出）：
 //       Butler 进程树里找不到它的 shell 就当后台任务已经结束（BTL-190 第 1 点）；
+//     输入 /fake-links 时打印三行链接（BTL-257）：一个 https 的 OSC 8 超链接、一个普通文本里的 https URL、一个 file: 的 OSC 8 超链接；
 //     输入 /fake-flood <行数> 时打印这么多行（每行约 100 字节，用来撑满回放缓冲）；
 //     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
 //     输入 /fake-run <命令> 时像 Bash 工具：先跑 PreToolUse（也读 --settings 里的 hook，合并总控的 gate 在那里），拒绝就打印 denied: <理由>，
@@ -610,6 +611,14 @@ function interactive() {
     if (later) {
       setTimeout(() => rl.emit("line", later[2]), Number(later[1]));
       out("> ");
+      return;
+    }
+    if (line === "/fake-links") {
+      // OSC 8：ESC ] 8 ; ; <URL> ESC \ <显示的文字> ESC ] 8 ; ; ESC \（Claude Code 输出的就是这种）。
+      const osc8 = (url, text) => `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
+      out(`${osc8("https://example.com/osc8-target?from=fake", "osc8-link-text")}\n`);
+      out("https://example.com/plain-url\n");
+      out(`${osc8("file:///etc/passwd", "file-link-text")}\n> `);
       return;
     }
     const flood = /^\/fake-flood (\d+)$/.exec(line);

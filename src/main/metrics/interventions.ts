@@ -154,6 +154,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.messagesList, IPC.metricsView, IPC.sessionsUnclaimed, IPC.usageSummary, IPC.ptySnapshot, IPC.ptySince, IPC.healthGet, IPC.dialogPickDir, IPC.diagSnapshot, IPC.diagExport,
   // 发送反馈（BTL-254）：开浏览器、存诊断，不推动工作
   IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,
+  // 终端里点链接（BTL-257）：开浏览器，不推动工作
+  IPC.linkOpen,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.lessonsState, IPC.lessonsRuns, IPC.lessonsPending, IPC.lessonsBatches,
   IPC.lessonsBatch, IPC.policiesGet, IPC.checksView, IPC.checksHits, IPC.configStatus, IPC.availabilityGet, IPC.routingView,
   IPC.sessionsLimits, IPC.nowView, IPC.inboxList, IPC.followupsList, IPC.handoffsList, IPC.settingsGet, IPC.settingsFeaturePolicy,

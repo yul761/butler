@@ -168,6 +168,8 @@ export const api = {
   prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
   prStages: (scope: PrStagesScope) => call<PrStagesTicket[]>(IPC.prStages, scope),
   prOpen: (url: string) => call<{ ok: true } | { ok: false; reason: "bad_url" }>(IPC.prOpen, url),
+  /** 终端里点的链接（BTL-257）：主进程只放行 http / https，交给系统浏览器。 */
+  linkOpen: (url: string) => call<{ ok: true } | { ok: false; reason: "bad_url" }>(IPC.linkOpen, url),
   lessonsState: () => call<LessonsState>(IPC.lessonsState),
   lessonsAct: (a: LessonAction) => call<LessonActResult>(IPC.lessonsAct, a),
   lessonsRuns: (slug: string) => call<LessonQueueRowView[]>(IPC.lessonsRuns, slug),

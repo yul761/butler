@@ -10,7 +10,8 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, openButlerArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openButlerArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 describe("memory IPC arguments", () => {
   it("accepts a ticket key and a StateCore fact id, nothing else", () => {
@@ -148,6 +149,14 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(prUrlArg("https://github.com/a/b/pull/1")).toBe("https://github.com/a/b/pull/1");
     expect(prUrlArg("x".repeat(2000))).toHaveLength(2000);
     for (const bad of [null, 3, {}, ["https://github.com/a/b/pull/1"], "x".repeat(2001)]) expect(() => prUrlArg(bad), JSON.stringify(bad)).toThrow();
+  });
+
+  it("validates a terminal link to open: a non-empty string up to EXTERNAL_LINK_MAX chars, rejected (not truncated) when longer", () => {
+    expect(linkUrlArg("https://example.com/x")).toBe("https://example.com/x");
+    // scheme 由 openExternalLink 检查，这里只管类型和长度。
+    expect(linkUrlArg("file:///etc/passwd")).toBe("file:///etc/passwd");
+    expect(linkUrlArg("x".repeat(EXTERNAL_LINK_MAX))).toHaveLength(EXTERNAL_LINK_MAX);
+    for (const bad of [null, undefined, 3, {}, ["https://example.com"], "", "x".repeat(EXTERNAL_LINK_MAX + 1)]) expect(() => linkUrlArg(bad), JSON.stringify(bad)).toThrow();
   });
 });
 
