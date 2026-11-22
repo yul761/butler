@@ -215,12 +215,13 @@ Electron also keeps its own profile folder, with Chromium's caches and the singl
 
 ## Privacy model
 
-Butler keeps its data in local SQLite files and calls no model of its own. Data leaves your machine only through your own `claude`, plus two channels you switch on yourself: GitHub writes through your `gh` (outward actions) and a notification webhook. Every outward action is listed on the **Audit** page.
+Butler keeps its data in local SQLite files and calls no model of its own. Data leaves your machine only through your own `claude`, a once-a-day update check through your `gh`, and two channels you switch on yourself: GitHub writes through your `gh` (outward actions) and a notification webhook. Every outward action and update check is listed on the **Audit** page.
 
-Butler calls no model of its own and has no API key. All model work, including handoffs, memory notes and review lesson analysis, goes through your own `claude`, under your company's login and settings. Data leaves your machine in only three ways:
+Butler calls no model of its own and has no API key. All model work, including handoffs, memory notes and review lesson analysis, goes through your own `claude`, under your company's login and settings. Data leaves your machine in only four ways:
 
 - **Your `claude`.** The sessions Butler starts and the background runs (handoffs, summaries, checks) are your own Claude Code. What it sends is up to Claude Code and your company's configuration.
 - **Outward actions through your `gh`.** Replies to PR comments, pushes, PR edits and the like. Each kind has its own switch under **Settings → Outward actions**, all off by default, and every action taken, failed or skipped is listed on the **Audit** page.
+- **The update check through your `gh`.** Butler checks for updates once a day through your own `gh` and only tells you. It never downloads or installs anything, sends no HTTP requests itself, and skips quietly without `gh`. Turn it off in **Settings → Basics**; every check is on the **Audit** page.
 - **The notification webhook.** Off by default (**Push notifications**). By default a message names only the kind of event and a count; see [docs/configuration.md](configuration.md#notifications).
 
 A lint rule keeps it this way: no source file may use the network, except the webhook sender (Electron's `net`), the shared MCP's listener (accepts only, on 127.0.0.1) and a test-only recorder. The memory servers get no model key.
@@ -238,7 +239,7 @@ When signing is added, only installers built by [`.github/workflows/release.yml`
 
 This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
-- **Network.** Butler sends no telemetry, has no accounts or license checks, and does not check for updates.
+- **Network.** Butler sends no telemetry and has no accounts or license checks. Once a day it asks GitHub for the latest release through your own `gh` and only tells you; it never downloads or installs anything (see [Privacy model](#privacy-model)).
 - **Claude Code.** Butler starts your own `claude` CLI. That CLI connects to Anthropic, or to whatever endpoint your company configured, under your login and settings.
 - **Outward actions and notifications.** Butler writes to GitHub through your `gh`, or posts to a notification webhook, only for the kinds you switch on, and lists each one on the Audit page (see [Privacy model](#privacy-model)). Butler has no LLM API of its own.
 - **Local data.** Everything Butler stores stays on your machine (see [Where your data lives](#where-your-data-lives)).

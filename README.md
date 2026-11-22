@@ -10,7 +10,7 @@
 - **Answer in one place.** Whenever a session needs you, a card shows up on the **Your turn** page: a question, a permission prompt, a PR ready to merge. A session that has stopped moving gets a card too, with its likely cause.
 - **Sessions share memory.** A convention one session settles, such as an API contract, reaches every other session in the epic. A long session is handed off, cleared and picks up from memory where it left off.
 
-**Local-first.** Butler itself calls no model and sends no telemetry. Your data leaves your machine only through your own `claude` and `gh`.
+**Local-first.** Butler itself calls no model and sends no telemetry. Your data leaves your machine only through your own `claude` and `gh`. Even the once-a-day update check goes through `gh` and only tells you; it never downloads or installs anything.
 
 ## Quick start
 
