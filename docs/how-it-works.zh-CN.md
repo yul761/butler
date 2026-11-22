@@ -10,6 +10,8 @@
 
 每个 ticket 有自己的 worktree 或分支、自己的 Claude Code session（内嵌终端）、PR 状态和合并后的跟进事项。打开 **设置 → 基本 → 显示 Butler 之外开的 session**（`showOutsideSessions`，默认关）以后，最近 7 天里你在 Butler 之外开的 session 会出现在 **全部工作 → 未认领 session** 下，可以把它们挂到某个 ticket 上。关着时 Butler 不扫描 `~/.claude/projects` 去找它们。一个 ticket 可以跨几个仓库（比如一个前端加一个后端）：建 ticket 时可以选仓库也可以不选，之后在 ticket 页上再加。每个仓库有自己的工作方式和分支，之后可以用 **编辑** 修改。新建 session 时会问你在哪个仓库里工作。正在运行的 session（包括总控开的）按钮旁边有个 ×：点两下就结束这个 session。它的对话会保留，再点按钮就能重新打开。没在运行的 session 也可以用同一个 × 隐藏，它只是从列表里拿掉（对话仍在），**已隐藏** 能把它找回来。Butler 开的 session 不会卡在 Claude Code 询问"要启用仓库 `.mcp.json` 里哪些 server"那一步：Butler 会替你启用，你之前在这个仓库里关掉的除外。一个 ticket 的所有 session 共享它的记忆。ticket 没有自己的总控：它的几个 session 各干各的，在 epic 里由 epic 总控（见 [Epic](#epic)）来开、来管。每个 ticket 的 session 都有一个 `butler-sessions` MCP server，提供 `ask_user` 和 `report`（见[提问和汇报](#提问和汇报)），以及 [预审](configuration.zh-CN.md#预审就绪和风险) 用的 `submit_evidence` 和 `pre_review_result`。
 
+新 ticket 的分支从远端的默认分支开：Butler 先 fetch origin，再从 `origin/<默认分支>`（`origin/HEAD`，或者 `main` / `master`）开，不管你的 checkout 停在哪个分支，也不去动它。离线时用上次 fetch 到的，没有远端的仓库从本地的 `main` 开。用 `stack_on` 叠在另一个 ticket 上的，仍从下层 ticket 的分支开。
+
 Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕，所以不会在信任对话框或权限确认上按回车；交完之后还会确认任务真的提交了。
 
 有几条刻意设下的限制：
@@ -166,7 +168,7 @@ epic 的记忆用来放它各个 ticket 共用的约定，比如 API 约定或�
 
 ## Butler 不会碰的东西
 
-- **你的 Claude Code 配置。** 只有当你点安装 hook 时 Butler 才会改它，要么在首次运行向导里，要么在 **设置 → 环境检查 → 安装 / 修复**。这会往你用户级的 `settings.json` 里加四个 hook 和一个 `/handoff` 命令。你的其他 hook 和命令都会保留。记忆从不通过 `claude mcp add` 注册，而是在 Butler 启动每个 session 时通过命令行参数 `--mcp-config` 传入。
+- **你的 Claude Code 配置。** 只有当你点安装 hook 时 Butler 才会改它，要么在首次运行向导里，要么在 **设置 → 环境检查 → 安装 / 修复**。这会往你用户级的 `settings.json` 里加四个 hook（`SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`），并写入 `commands/handoff.md`。你的其他 hook 和命令都会保留，第一次还会把原文件备份为 `settings.json.butler-backup`。Butler 开的 session 还会通过它们自己设置里的 hook 记录 Skill 调用（只记 skill 名），用来判断设计和自我 review 有没有做。记忆从不通过 `claude mcp add` 注册，而是在 Butler 启动每个 session 时通过命令行参数 `--mcp-config` 传入。
 - **你的 tracker 和代码托管平台。** Butler 自己没有 Jira、GitHub 或 Claude 登录。Jira、Linear、GitLab 或其他 tracker 只由你公司的 Claude Code 通过它自己的 MCP server 读取。PR 由 `claude` 用你的 `gh` 读取。
 - **网络。** Butler 自己没有网络代码，只有通知 webhook 的发送和共享 MCP 在 127.0.0.1 上的监听。有一条 lint 规则强制保证这一点；见[隐私模型](#隐私模型)。
 
