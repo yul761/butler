@@ -89,7 +89,8 @@ describe("CI workflows (design 1.3, 11)", () => {
     expect(decide?.id).toBe("signing");
     expect(decide?.if).toBe("runner.os == 'macOS'");
     // The decision sees only whether each secret is set, never its value.
-    for (const n of SIGNING_SECRETS) expect(decide?.env?.[`HAS_${n}`], n).toBe(`\${{ secrets.${n} != '' }}`);
+    // BTL-259: off main and v* tags every secret counts as unset, even a repository-level copy, so only those refs sign.
+    for (const n of SIGNING_SECRETS) expect(decide?.env?.[`HAS_${n}`], n).toBe(`\${{ ${SIGNING_REF} && secrets.${n} != '' }}`);
     expect(decide?.env?.REQUIRE_SIGNING).toBe("${{ github.event_name == 'workflow_dispatch' && inputs.require_signing }}");
 
     const dists = steps.filter((s) => s.run === "pnpm dist");

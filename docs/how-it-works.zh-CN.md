@@ -229,7 +229,7 @@ Butler 自己不调用任何模型，也没有 API key。所有要用模型的�
 
 ## 代码签名
 
-**现状：** 从 4.1.2 起，macOS 安装包按下面说的用 Developer ID 签名并通过 Apple 公证，打开时 Gatekeeper 不会拦（4.1.1 及以前的版本只有 ad-hoc 签名）。Windows 安装包还没有签名，所以第一次打开时 SmartScreen 会拦（怎么放行见 [README](../README.zh-CN.md#安装)）。Butler 也没有自动更新，只在有新版本时提示你。
+**现状：** 从 4.1.2 起，macOS 安装包按下面说的用 Developer ID 签名并通过 Apple 公证，打开时 Gatekeeper 不会拦（4.1.1 及以前的版本、以及没有签名 secret 时打的包只有 ad-hoc 签名，打开时要在 **系统设置 → 隐私与安全性** 里点 **仍要打开**）。Windows 安装包还没有签名，所以第一次打开时 SmartScreen 会拦（怎么放行见 [README](../README.zh-CN.md#安装)）。Butler 也没有自动更新，只在有新版本时提示你。
 
 签名只在 GitHub Actions 上由 [`.github/workflows/release.yml`](../.github/workflows/release.yml) 来做。下面五个签名 secret 是受保护的 GitHub 环境 `release` 的环境 secret，这个环境的部署策略只放行 `main` 分支和 `v*` tag；也只有这些 ref 上的 macOS 构建会用这个环境。有这些 secret 时，macOS 安装包用 Developer ID Application 证书签名（打开 hardened runtime），交给 Apple 公证并 staple，dmg 和 zip 打开时 Gatekeeper 都不会拦。没有时（没设 secret 的 fork、pull request、在其他分支上手动运行、在自己机器上打包），macOS 的 app 只有 ad-hoc 签名。Windows 安装包两种情况下都不签名，它的构建也从不用这个环境。Butler 官方的安装包都是从这个公开仓库的版本 tag 构建的。
 
@@ -237,8 +237,8 @@ Butler 自己不调用任何模型，也没有 API key。所有要用模型的�
 
 你需要付费的 Apple Developer Program 会员。这五个 secret 有两种设法。五个要么都设，要么都不设：只设了一部分时，发版构建会停下，并列出缺了哪几个。
 
-- **设在名为 `release` 的环境里**（推荐，和这个仓库一样）：在 **Settings → Environments** 里建这个环境，把部署分支和 tag 限定为 `main` 和 `v*`，再把 secret 设在上面（`gh secret set 名字 --env release -R owner/repo`）。这样只有 `main` 和 `v*` tag 上的运行能签名。
-- **设成仓库级 secret**（**Settings → Secrets and variables → Actions**，或者 `gh secret set 名字 -R owner/repo`）。这样每个分支上的运行都能用。fork 里没有 `release` 环境时，`main` 或 tag 上的运行第一次用到它，GitHub 会自动建一个空的；仓库级 secret 在里面照样能用。
+- **设在名为 `release` 的环境里**（推荐，和这个仓库一样）：在 **Settings → Environments** 里建这个环境，把部署分支和 tag 限定为 `main` 和 `v*`，再把 secret 设在上面（`gh secret set 名字 --env release -R owner/repo`）。
+- **设成仓库级 secret**（**Settings → Secrets and variables → Actions**，或者 `gh secret set 名字 -R owner/repo`）。fork 里没有 `release` 环境时，`main` 或 tag 上的运行第一次用到它，GitHub 会自动建一个空的；仓库级 secret 在里面照样能用。
 
 | Secret | 是什么 |
 |---|---|
@@ -248,7 +248,7 @@ Butler 自己不调用任何模型，也没有 API key。所有要用模型的�
 | `APPLE_API_KEY_ID` | 这个密钥的 Key ID（10 个字符）。 |
 | `APPLE_API_ISSUER` | 密钥列表上方的 Issuer ID（一个 UUID）。 |
 
-然后不用发版就能试：在 `main` 上手动跑一次这个 workflow，`gh workflow run release.yml --ref main`（或者 **Actions → Release → Run workflow**）。手动运行会构建、签名、公证、检查结果，并把安装包上传成 artifact，不会建 release。**require_signing** 开着时（默认），缺 secret 会直接失败，而不是退回 ad-hoc；在 `main` 和 `v*` tag 以外的 ref 上会一开始就失败，因为签名只在这两处可用。关掉它时，在其他分支上运行，macOS 走 ad-hoc（设了仓库级 secret 的除外）。**Verify the macOS signature and run the packaged app** 这一步会检查：包里每个可执行文件和原生模块都用你的 Team ID 签了名、打开了 hardened runtime；app 和 dmg 都 staple 了公证票据；Gatekeeper 认它们；打出来的 app 能启动。
+然后不用发版就能试：在 `main` 上手动跑一次这个 workflow，`gh workflow run release.yml --ref main`（或者 **Actions → Release → Run workflow**）。手动运行会构建、签名、公证、检查结果，并把安装包上传成 artifact，不会建 release。**require_signing** 开着时（默认），缺 secret 会直接失败，而不是退回 ad-hoc；在 `main` 和 `v*` tag 以外的 ref 上会一开始就失败，因为签名只在这两处可用。关掉它时，在其他分支上运行，macOS 走 ad-hoc。不管 secret 设在哪一级，都只有 `main` 和 `v*` tag 上的运行会签名：在别的 ref 上，workflow 把这些 secret 都当作没设，仓库级的也一样。**Verify the macOS signature and run the packaged app** 这一步会检查：包里每个可执行文件和原生模块都用你的 Team ID 签了名、打开了 hardened runtime；app 和 dmg 都 staple 了公证票据；Gatekeeper 认它们；打出来的 app 能启动。
 
 App Store Connect 密钥只在签名那几步写成 runner 上的一个私有临时文件，用完就删；证书导入一个临时钥匙串，electron-builder 结束时会删掉。两者都不会打进日志。hardened runtime 的 entitlements 在 [`build-resources/entitlements.mac.plist`](../build-resources/entitlements.mac.plist)，每一项为什么要都写在里面。
 

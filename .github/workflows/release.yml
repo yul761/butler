@@ -28,8 +28,9 @@ jobs:
     # BTL-259: the five signing secrets ([contract:mac-signing]) are environment secrets of "release", whose deployment
     # policy allows only the branch main and v* tags. Only the macOS build on such a ref uses it; Windows (never signed)
     # and every other ref get no environment (an empty name means none, so no "not allowed to deploy" failure) and
-    # therefore no signing secrets: macOS falls back to ad-hoc. A fork without this environment gets an empty one created
-    # by GitHub, and repository-level secrets of the same names still apply there.
+    # therefore no signing secrets: macOS falls back to ad-hoc (the signing decision below also ignores repository-level
+    # copies there). A fork without this environment gets an empty one created by GitHub, and repository-level secrets
+    # of the same names still apply there.
     environment: ${{ startsWith(matrix.os, 'macos') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'release' || '' }}
     # Notarization waits on Apple's queue twice (the app inside electron-builder, then the dmg, up to 45 minutes).
     timeout-minutes: 120
@@ -76,17 +77,18 @@ jobs:
       - run: pnpm build:hook
       # BTL-258: Developer ID when all five signing secrets ([contract:mac-signing]) are set, ad-hoc when none is (forks,
       # and since BTL-259 any ref but main and v* tags), and a failure when only some are. Only whether each secret is set
-      # reaches this step, never its value.
+      # reaches this step, never its value. On any other ref a secret counts as unset even if a repository-level copy
+      # exists, so signing happens only on main and v* tags wherever the secrets are kept.
       - name: Decide how to sign the macOS build
         id: signing
         if: runner.os == 'macOS'
         shell: bash
         env:
-          HAS_CSC_LINK: ${{ secrets.CSC_LINK != '' }}
-          HAS_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' }}
-          HAS_APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 != '' }}
-          HAS_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' }}
-          HAS_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+          HAS_CSC_LINK: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.CSC_LINK != '' }}
+          HAS_CSC_KEY_PASSWORD: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.CSC_KEY_PASSWORD != '' }}
+          HAS_APPLE_API_KEY_P8: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.APPLE_API_KEY_P8 != '' }}
+          HAS_APPLE_API_KEY_ID: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.APPLE_API_KEY_ID != '' }}
+          HAS_APPLE_API_ISSUER: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && secrets.APPLE_API_ISSUER != '' }}
           REQUIRE_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.require_signing }}
         run: node scripts/mac-signing.cjs release
       # notarytool needs the App Store Connect API key as a file. It lives in a private directory under the runner temp
