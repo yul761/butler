@@ -55,6 +55,8 @@ test("clicking a link in the terminal opens it in the system browser, without a 
   // 1. OSC 8 超链接：打开的是链接的目标，不是显示的文字。
   await hoverLink(page, "osc8-link-text");
   await expect.poll(() => pointer(page)).toBe(true);
+  // 显示的文字不是目标：悬停时把目标亮出来。
+  await expect(page.locator(".terminal-wrap:visible .terminal-host")).toHaveAttribute("title", "https://example.com/osc8-target?from=fake");
   await page.mouse.down();
   await page.mouse.up();
   await expect.poll(() => opened(app)).toEqual(["https://example.com/osc8-target?from=fake"]);
@@ -74,6 +76,7 @@ test("clicking a link in the terminal opens it in the system browser, without a 
   const refuse = (url: string) => page.evaluate(([ch, u]) => (window as unknown as { butler: { invoke: (c: string, ...a: unknown[]) => Promise<unknown> } }).butler.invoke(ch, u), [IPC.linkOpen, url] as const);
   expect(await refuse("file:///etc/passwd")).toEqual({ ok: true, value: { ok: false, reason: "bad_url" } });
   expect(await refuse("javascript:alert(1)")).toEqual({ ok: true, value: { ok: false, reason: "bad_url" } });
+  expect(await refuse("https://github.com@evil.example/")).toEqual({ ok: true, value: { ok: false, reason: "bad_url" } });
 
   // 4. 兜底：漏网的 window.open 也交给系统浏览器（只限 http / https），不开新窗口。
   await page.evaluate(() => {

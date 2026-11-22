@@ -10,6 +10,7 @@ import { setXtermRenderer } from "../diag";
 import { reportError } from "../errors";
 import { clipboardAction } from "../terminal-keys";
 import { LruCache, TERMINAL_CACHE_MAX } from "../terminal-cache";
+import { S } from "../strings";
 
 /** Ctrl+V 时剪贴板里没有文字（比如截图）：照常把 ^V 交给 claude，由它自己读剪贴板里的图片。 */
 const CTRL_V = "\x16";
@@ -22,7 +23,8 @@ export function openTerminalLink(url: string): void {
   void api
     .linkOpen(url)
     .then((r) => {
-      if (!r.ok) console.warn(`[terminal] link refused: ${url.slice(0, 200)}`);
+      // 主进程拒了（比如带用户名的链接）：在顶部错误条上说一声，不然看着和「点了没反应」一样。
+      if (!r.ok) reportError(S.terminalLink.refused(url.length > 200 ? `${url.slice(0, 200)}…` : url));
     })
     .catch(reportError);
 }
@@ -79,7 +81,16 @@ export class LiveTerminal {
       cursorBlink: true,
       scrollback: TERMINAL_SCROLLBACK,
       // OSC 8 超链接：不设的话 xterm 先 confirm 再 window.open，新窗口被主进程拒掉，点了什么都没有。
-      linkHandler: { activate: (_e, text) => openTerminalLink(text) },
+      // 显示的文字可能和真正的目标不一样：悬停时用 title 把目标亮出来（原来 confirm 框里能看到）。
+      linkHandler: {
+        activate: (_e, text) => openTerminalLink(text),
+        hover: (_e, text) => {
+          this.host.title = text;
+        },
+        leave: () => {
+          this.host.removeAttribute("title");
+        },
+      },
     });
     this.term.loadAddon(this.fit);
     // 普通文本里的 URL（只认 http / https）。
