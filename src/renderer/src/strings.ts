@@ -2442,6 +2442,7 @@ const ZH = {
     savedTo: (name: string) => `诊断已存到下载目录：${name}，并在文件夹里选中了。把它拖进 issue 的「Diagnostics」框。`,
     truncated: "描述太长，链接里只带了前面一部分；完整的内容已复制到剪贴板，可以粘贴到 GitHub 上。",
     stuck: "卡住了？告诉我们",
+    failed: (detail: string) => `没能完成：${detail}`,
   },
 };
 

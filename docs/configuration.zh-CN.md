@@ -66,7 +66,7 @@ Butler 只会通过这几个按钮，以及首次启动向导里的同一步，�
 
 菜单栏的 **帮助 → 发送反馈…**，和 **设置 › 关于** 里的同一个按钮，会打开一个小表单：选反馈的类型（bug、想法、首次使用时遇到的问题），标题可以不填，再写几句描述。点 **在 GitHub 上打开** 会在浏览器里打开 github.com/yul761/butler 的新 issue 页，套好对应的模板，填好你写的内容，以及 Butler 版本、系统和版本、架构、Claude Code 版本（拿不到就写 `unknown`）。Butler 自己不往外发任何东西：issue 由你看过以后自己点 **Submit**。内容太长、链接放不下时，描述会被截断，全文复制到剪贴板，粘贴进去就行。
 
-**附上诊断** 默认不勾。勾上以后，Butler 生成一份和 **导出诊断** 一样的文件，但把用户目录、所有绝对路径、仓库名、ticket 号和标题、epic 名、分支名都换成 `<path>`、`<repo>` 这样的占位符。你先看到完整内容；点 **存到下载目录，打开 GitHub** 以后才存进下载目录，文件名是 `butler-diagnostics-redacted-<时间>.json`，并在 Finder 或资源管理器里选中。把它拖进 issue 的 **Diagnostics** 框。提问和开放的讨论请去 [Discussions](https://github.com/yul761/butler/discussions)。
+**附上诊断** 默认不勾。勾上以后，Butler 生成一份和 **导出诊断** 一样的文件，但把用户目录、所有绝对路径、仓库名、ticket 号和标题、epic 名、分支名、网址、邮箱和公司内部的主机名都换成 `<path>`、`<repo>` 这样的占位符，日志里引号括起来的内容和非英文的文字换成 `<text>`。你先看到完整内容；点 **存到下载目录，打开 GitHub** 以后才存进下载目录，文件名是 `butler-diagnostics-redacted-<时间>.json`，并在 Finder 或资源管理器里选中。把它拖进 issue 的 **Diagnostics** 框。提问和开放的讨论请去 [Discussions](https://github.com/yul761/butler/discussions)。
 
 ## 常规
 

@@ -269,7 +269,7 @@ export class MemoryService {
 
   private trimArchive(featureId: number): void {
     const dropped = this.d.epicArchive?.trim(featureId, EPIC_ARCHIVE_MAX) ?? [];
-    if (dropped.length > 0) this.log(`memory ${featureScope(featureId)}: archive full, dropped ${dropped.length} oldest note(s): ${dropped.map((e) => JSON.stringify(e.text.slice(0, 80))).join(", ")}`);
+    if (dropped.length > 0) this.log(`memory ${featureScope(featureId)}: archive full, dropped ${dropped.length} oldest note(s)`);
   }
 
   /**

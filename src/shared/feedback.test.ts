@@ -59,6 +59,16 @@ describe("feedbackUrl", () => {
     expect(params(url).get("environment")).toContain("Butler: 4.0.0");
   });
 
+  it("a long Chinese title is cut so the description still gets most of the link", () => {
+    const { url, truncated } = feedbackUrl({ kind: "bug", title: "很长的标题".repeat(40), description: "描述".repeat(500) }, env);
+    expect(truncated).toBe(true);
+    expect(url.length).toBeLessThanOrEqual(FEEDBACK_URL_MAX);
+    const p = params(url);
+    expect(p.get("title")!.endsWith("…")).toBe(true);
+    expect(p.get("description")!.endsWith("…(truncated)")).toBe(true);
+    expect(p.get("description")!.length).toBeGreaterThan(50);
+  });
+
   it("isFeedbackKind", () => {
     expect(isFeedbackKind("bug")).toBe(true);
     expect(isFeedbackKind("question")).toBe(false);

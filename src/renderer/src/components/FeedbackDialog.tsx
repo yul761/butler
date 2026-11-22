@@ -18,6 +18,8 @@ export function FeedbackDialog({ request, onClose }: { request: FeedbackRequest;
   const [step, setStep] = useState<Step>({ at: "form" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 这次预览已经存下的文件：之后打开浏览器失败了再点，只重开浏览器，不再存一份。 */
+  const [savedName, setSavedName] = useState<string | null>(null);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -25,7 +27,7 @@ export function FeedbackDialog({ request, onClose }: { request: FeedbackRequest;
     try {
       await fn();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(S.feedback.failed(e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }
@@ -38,14 +40,23 @@ export function FeedbackDialog({ request, onClose }: { request: FeedbackRequest;
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (attach) void run(async () => setStep({ at: "preview", text: await api.feedbackDiagPreview() }));
+    if (attach)
+      void run(async () => {
+        const text = await api.feedbackDiagPreview();
+        setSavedName(null);
+        setStep({ at: "preview", text });
+      });
     else void run(() => openIssue(null));
   }
 
   const confirmSave = () =>
     void run(async () => {
-      const saved = await api.feedbackDiagSave();
-      await openIssue(saved.name);
+      let name = savedName;
+      if (name === null) {
+        name = (await api.feedbackDiagSave()).name;
+        setSavedName(name);
+      }
+      await openIssue(name);
     });
 
   return (

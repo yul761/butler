@@ -2417,5 +2417,6 @@ export const EN: UiStrings = {
     savedTo: (name: string) => `Diagnostics saved to your Downloads folder as ${name} and selected in the folder. Drag it into the issue's "Diagnostics" box.`,
     truncated: "The description was too long for the link, so only the beginning is in it. The full text is on your clipboard; paste it on GitHub.",
     stuck: "Stuck? Tell us",
+    failed: (detail: string) => `Couldn't finish: ${detail}`,
   },
 };

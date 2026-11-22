@@ -22,6 +22,8 @@ export const TITLE_MAX = 200;
 /** 渲染进程送来的描述先按这个上限截（主进程校验用），再按链接长度截。 */
 export const DESCRIPTION_MAX = 20_000;
 export const TRUNCATED_MARK = "\n\n…(truncated)";
+/** 截的时候标题在链接里最多占多少个字符（编码以后）。 */
+export const TITLE_URL_BUDGET = 600;
 
 export interface FeedbackEnv {
   butler: string;
@@ -87,7 +89,10 @@ export function feedbackUrl(d: FeedbackDraft, env: FeedbackEnv, max = FEEDBACK_U
   const full = build(d, env, title, description);
   if (full.length <= max) return { url: full, truncated: false };
 
-  const withDesc = (part: string) => build(d, env, title, part ? `${part}${TRUNCATED_MARK}` : "");
+  // 标题最多占链接里 TITLE_URL_BUDGET 个字符，免得一个长长的中文标题把描述（模板里唯一必填的）整个挤掉。
+  const encoded = (x: string) => new URLSearchParams({ t: x }).toString().length - 2;
+  const shortTitle = encoded(title) <= TITLE_URL_BUDGET ? title : `${longestFit(title, (p) => encoded(`${p}…`) <= TITLE_URL_BUDGET)}…`;
+  const withDesc = (part: string) => build(d, env, shortTitle, part ? `${part}${TRUNCATED_MARK}` : "");
   const desc = description ? longestFit(description, (p) => withDesc(p).length <= max) : "";
   if (withDesc(desc).length <= max) return { url: withDesc(desc), truncated: true };
 

@@ -154,3 +154,89 @@ describe("redactText: speed", () => {
     expect(out[5]).toBe("2026-11-21T00:00:00.000Z session 5 started <title> in <path>");
   });
 });
+
+describe("redactText: review findings", () => {
+  it("emails and hosts are replaced whole even when they contain a known name", () => {
+    const t = terms({ users: ["alice"], repos: ["payroll", "jira"] });
+    expect(redactText("author alice@acme-corp.com pushed", t)).toBe("author <email> pushed");
+    expect(redactText("bob.smith@payroll.acme-corp.com", t)).toBe("<email>");
+    expect(redactText("open https://jira.acme-corp.com now", t)).toBe("open <url> now");
+  });
+
+  it("known names never rewrite a placeholder", () => {
+    const t = terms({ repos: ["url", "path", "email"] });
+    expect(redactText("see https://x.example.com and /tmp/a", t)).toBe("see <url> and <path>");
+  });
+
+  it("Chinese names are replaced without spaces around them", () => {
+    const t = terms({ epics: ["猎鹰计划"], titles: ["修复工资导出"], repos: ["acme", "payroll-svc"] });
+    expect(redactText("epic 猎鹰计划启动", t)).toBe("epic <epic>启动");
+    expect(redactText("开始修复工资导出", t)).toBe("开始<title>");
+    expect(redactText("在acme仓库里", t)).toBe("在<repo>仓库里");
+    expect(redactText("帮我修复payroll-svc的导出", t)).toBe("帮我修复<repo>的导出");
+    // ASCII 的词还是要整词：acme 不换 acmeville 里的那段。
+    expect(redactText("acmeville", t)).toBe("acmeville");
+  });
+
+  it("bare company hostnames are replaced, public ones and file names stay", () => {
+    expect(redactText("ssh: Could not resolve hostname github.acme-corp.com: nodename", NONE)).toBe("ssh: Could not resolve hostname <host>: nodename");
+    expect(redactText("gh: HTTP 401 for host ghe.acmecorp.internal", NONE)).toBe("gh: HTTP 401 for host <host>");
+    expect(redactText("fetched github.com and api.anthropic.com, wrote main.log and index.ts", NONE)).toBe("fetched github.com and api.anthropic.com, wrote main.log and index.ts");
+    expect(redactText("at async LessonRunner.process (node:internal)", NONE)).toBe("at async LessonRunner.process (node:internal)");
+  });
+
+  it("words between two path pieces count as one path", () => {
+    expect(redactText("C:\\Users\\alice\\Code\\Acme Secret Corp\\x.ts", NONE)).toBe("<path>");
+    expect(redactText("open /Users/a/OneDrive - Acme Corp/notes.md done", NONE)).toBe("open <path> done");
+  });
+
+  it("keys with underscores count as tickets", () => {
+    expect(redactText("MY_PROJ-12 done", NONE)).toBe("<ticket> done");
+  });
+
+  it("common branch names and Butler's own name stay readable", () => {
+    const t = terms({ branches: ["main", "feature/x"], repos: ["Butler", "acme"] });
+    expect(redactText("butler: merged into main from acme", t)).toBe("butler: merged into main from <repo>");
+  });
+});
+
+describe("redactedDiagnostics: log free text", () => {
+  const file = (logTail: string[]) => ({
+    kind: "butler-diagnostics", schema: 1, generatedAt: "2026-11-21T00:00:00.000Z",
+    app: { version: "4.0.0", versions: {}, mode: "on" }, system: { platform: "darwin", arch: "arm64", osRelease: "25.2.0", cpus: { model: "M", count: 1 }, memory: { totalMb: 1, freeMb: 1 } },
+    processes: [], mainMemory: {}, perf: { current: {}, history: [] }, logTail,
+  }) as never;
+
+  it("quoted text and non-ASCII words in the log are replaced", () => {
+    const out = redactedDiagnostics(file([
+      'memory epic:3: dropped 1 oldest note(s): "we signed with Big Bank, live at month end"',
+      'title "Fix \\"export\\" bug" saved',
+      "fork failed: 我们和招商银行签了合同 retry",
+      "José renamed it",
+    ]), NONE);
+    expect(out.logTail).toEqual([
+      'memory epic:3: dropped 1 oldest note(s): "<text>"',
+      'title "<text>" saved',
+      "fork failed: <text> retry",
+      "<text> renamed it",
+    ]);
+  });
+
+  it("plain English log lines are left alone", () => {
+    const line = "2026-11-21T00:00:00.000Z perf: 60s eld p50=0.8 p99=2.5 → ok";
+    expect(redactedDiagnostics(file([line]), NONE).logTail).toEqual([line]);
+  });
+});
+
+describe("collectRedactTerms: more columns", () => {
+  it("reads titles, branches, ticket keys, epic block names and repo dirs from the other tables", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(db as never);
+    const cols = (table: string) => (db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[]).map((c) => c.name);
+    expect(cols("sessions")).toContain("git_branch");
+    expect(cols("blocks")).toContain("name");
+    const t = collectRedactTerms(db as never, { paths: ["/Users/alice/Library/Application Support/Butler"] });
+    // 额外传进来的目录不拿最后一段当仓库名。
+    expect(t.repos).not.toContain("Butler");
+  });
+});
