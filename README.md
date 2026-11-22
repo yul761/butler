@@ -80,6 +80,10 @@ Every setting is described in [docs/configuration.md](docs/configuration.md), in
 2. Delete the app: drag it out of Applications on macOS, or use Settings → Apps → Butler → Uninstall on Windows.
 3. To remove your data too, delete `~/.butler` and Electron's profile folder (`~/Library/Application Support/butler` on macOS, `%APPDATA%\butler` on Windows). On macOS, if you saved a webhook address, also delete the "butler Safe Storage" item in Keychain Access.
 
+## Feedback
+
+Found a bug or have an idea? **Help → Send Feedback…** opens a prefilled GitHub issue in your browser; you submit it yourself. Diagnostics are optional, redacted, and shown to you before they're saved. Questions go to [Discussions](https://github.com/yul761/butler/discussions).
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -80,6 +80,10 @@
 2. 删除 app：macOS 上把它从"应用程序"里拖出去；Windows 上在 设置 → 应用 → Butler → 卸载。
 3. 如果也要删除数据，删掉 `~/.butler` 和 Electron 的配置文件夹（macOS 上是 `~/Library/Application Support/butler`，Windows 上是 `%APPDATA%\butler`）。在 macOS 上，如果你保存过 webhook 地址，还要在"钥匙串访问"里删掉"butler Safe Storage"这一项。
 
+## 反馈
+
+发现 bug 或有想法？**帮助 → 发送反馈…** 会在浏览器里打开填好的 GitHub issue，由你自己提交；诊断可选，脱敏后先给你看再存。有问题可以去 [Discussions](https://github.com/yul761/butler/discussions) 问。
+
 ## 开发
 
 见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
