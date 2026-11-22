@@ -33,6 +33,7 @@ function seedHistory(s: Sandbox): void {
 test("the wizard's permission step offers read-only commands from history and confirmed ones reach the session's --settings", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   execFileSync("git", ["remote", "add", "origin", FAKE_GH_ORIGIN], { cwd: s.repo, stdio: "ignore" });
+  execFileSync("git", ["config", "protocol.https.allow", "never"], { cwd: s.repo, stdio: "ignore" });
   seedHistory(s);
   const { page } = await launch(s);
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");

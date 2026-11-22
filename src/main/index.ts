@@ -562,7 +562,7 @@ async function bootstrap(): Promise<void> {
     onSynced: (key) => safeSend(IPC.memoryChanged, key),
     log: logger,
   });
-  const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces });
+  const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces, log: (m) => logger(m) });
   // hook 程序是当前版本（启动时刚换好或本来就是，或健康页刚装好）才看得到 skill 调用：从这时起记「开始记 skill 的时间」。幂等，不会往后移。
   const seedSkillTracking = () => {
     try {

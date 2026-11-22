@@ -132,7 +132,10 @@ const NPM_STYLE_SHIM = [
  */
 const FAKE_LOGIN_SHELL = '#!/bin/sh\nfor last; do :; done\nexec /bin/sh -c "$last"\n';
 
-/** 在 path 建一个带一个提交、当前分支为 main 的 git 仓库（目录会被建出来，可以多层）；给了 origin 就加上这个 remote（只加，不 fetch）。 */
+/**
+ * 在 path 建一个带一个提交、当前分支为 main 的 git 仓库（目录会被建出来，可以多层）；给了 origin 就加上这个 remote（只加，不 fetch）。
+ * 有 origin 时关掉 https：新建 ticket 时 Butler 会先 fetch 远端（BTL-255），这样立刻失败、退回本地 main，不连网。
+ */
 export function makeGitRepo(path: string, origin?: string): string {
   mkdirSync(path, { recursive: true });
   const git = (...a: string[]) =>
@@ -141,7 +144,10 @@ export function makeGitRepo(path: string, origin?: string): string {
   writeFileSync(join(path, "README.md"), "e2e\n");
   git("add", ".");
   git("commit", "-q", "-m", "init");
-  if (origin) git("remote", "add", "origin", origin);
+  if (origin) {
+    git("remote", "add", "origin", origin);
+    git("config", "protocol.https.allow", "never");
+  }
   return path;
 }
 

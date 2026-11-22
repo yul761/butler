@@ -93,9 +93,12 @@ export async function isDirty(cwd: string): Promise<boolean> {
   return (await git(cwd, ["status", "--porcelain"])).length > 0;
 }
 
-/** 新建分支时从 start 开始（省略就是当前 HEAD）。 */
+/**
+ * 新建分支时从 start 开始（省略就是当前 HEAD）。给了 start 时不设上游（--no-track）：start 常是 origin/main，
+ * 设成上游的话 session 里的 git push / pull 会对着 main（BTL-255）。
+ */
 export async function addWorktree(repo: string, path: string, branch: string, createBranch: boolean, start?: string): Promise<void> {
-  await git(repo, createBranch ? ["worktree", "add", "-b", branch, path, ...(start ? [start] : [])] : ["worktree", "add", path, branch]);
+  await git(repo, createBranch ? ["worktree", "add", ...(start ? ["--no-track"] : []), "-b", branch, path, ...(start ? [start] : [])] : ["worktree", "add", path, branch]);
 }
 
 /** 让 worktree 离开它的分支（HEAD 停在同一个提交上），分支就能在别处检出；目录和里面的文件原样保留。 */
@@ -124,9 +127,9 @@ export async function pruneWorktrees(repo: string): Promise<void> {
   await git(repo, ["worktree", "prune"]);
 }
 
-/** 在 cwd 里切到 branch；分支不存在时从当前 HEAD 新建。 */
+/** 在 cwd 里切到 branch；分支不存在时从 start（省略就是当前 HEAD）新建，不设上游。 */
 export async function switchTo(cwd: string, branch: string, create: boolean, start?: string): Promise<void> {
-  await git(cwd, create ? ["checkout", "-b", branch, ...(start ? [start] : [])] : ["checkout", branch]);
+  await git(cwd, create ? ["checkout", ...(start ? ["--no-track"] : []), "-b", branch, ...(start ? [start] : [])] : ["checkout", branch]);
 }
 
 /** HEAD 上不属于任何分支的提交数（游离 HEAD 上新做的提交）。离开这个 HEAD 之后它们只剩 reflog 能找到。 */
@@ -150,8 +153,9 @@ export async function isWorktreeOf(repo: string, path: string): Promise<boolean>
     .some((l) => norm(l.slice("worktree ".length)) === want);
 }
 
+/** 从 start（省略就是当前 HEAD）新建分支，不设上游。 */
 export async function createBranch(cwd: string, branch: string, start?: string): Promise<void> {
-  await git(cwd, ["branch", branch, ...(start ? [start] : [])]);
+  await git(cwd, ["branch", ...(start ? ["--no-track"] : []), branch, ...(start ? [start] : [])]);
 }
 
 export async function checkout(cwd: string, branch: string): Promise<void> {
@@ -190,7 +194,7 @@ export function gitErrorSummary(e: GitError): string {
   return line.replace(/^(fatal|error):\s*/i, "").slice(0, GIT_SUMMARY_LIMIT);
 }
 
-/** 不抛错的 git：连退出码一起返回（merge-tree 有冲突时退出码是 1，输出在 stdout 里）。超时会杀掉子进程。 */
+/** 不抛错的 git：连退出码一起返回（merge-tree 有冲突时退出码是 1，输出在 stdout 里）。超时会杀掉子进程。从不弹凭据提示（终端和 Git Credential Manager 的窗口都不弹）。 */
 function gitRaw(cwd: string, args: string[], timeoutMs?: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((done) => {
     let bin: string;
@@ -203,7 +207,7 @@ function gitRaw(cwd: string, args: string[], timeoutMs?: number): Promise<{ code
     execFile(
       bin,
       [...GIT_SAFE_ARGS, ...args],
-      { cwd, env: { ...gitEnv(process.env), GIT_TERMINAL_PROMPT: "0" }, windowsHide: true, maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs },
+      { cwd, env: { ...gitEnv(process.env), GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, windowsHide: true, maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs },
       (err, stdout, stderr) => {
         const code = err ? (typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : null) : 0;
         done({ code, stdout: String(stdout), stderr: String(stderr) });
@@ -261,6 +265,47 @@ export async function defaultBranch(repo: string): Promise<string> {
   const r = await gitRaw(repo, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   const ref = r.code === 0 ? r.stdout.trim() : "";
   return ref.startsWith("refs/remotes/origin/") ? ref.slice("refs/remotes/origin/".length) : "main";
+}
+
+export const BASE_FETCH_TIMEOUT_MS = 20_000;
+
+/**
+ * 新 ticket 分支的起点（BTL-255）：远端的默认分支，不看 checkout 现在停在哪个分支，也不动它的工作区。
+ * - 有 origin：本地先看默认分支叫什么（origin/HEAD 指向、且还在的那个，否则 origin/main、origin/master）；
+ *   本地看不出来（比如单分支或浅克隆）就 `ls-remote --symref` 问远端。然后用明确的 refspec 只 fetch 那一个分支
+ *   （不受 remote.origin.fetch 的限制）。fetch 失败照样用本地的 origin/<name>，在日志里写明。
+ * - 没有 origin 或远端上没有默认分支：本地默认分支（init.defaultBranch、main、master），都没有才用 HEAD（写日志）。
+ */
+export async function newBranchBase(repo: string, log: (msg: string) => void, timeoutMs = BASE_FETCH_TIMEOUT_MS): Promise<string> {
+  const exists = async (ref: string) => (await gitRaw(repo, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).code === 0;
+  const remotes = (await gitRaw(repo, ["remote"])).stdout.split(/\r?\n/).map((s) => s.trim());
+  if (remotes.includes("origin")) {
+    let name: string | null = null;
+    const head = await gitRaw(repo, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+    const target = head.code === 0 ? head.stdout.trim() : "";
+    // origin/HEAD 可能还指着远端已经删掉（fetch.prune 删了本地这份）的分支：只信还在的。
+    if (target.startsWith("refs/remotes/origin/") && (await exists(target))) name = target.slice("refs/remotes/origin/".length);
+    for (const b of ["main", "master"]) if (!name && (await exists(`refs/remotes/origin/${b}`))) name = b;
+    let reachable = true;
+    if (!name) {
+      const r = await gitRaw(repo, ["ls-remote", "--symref", "origin", "HEAD"], timeoutMs);
+      reachable = r.code === 0;
+      const m = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(r.stdout);
+      if (m) name = m[1];
+    }
+    if (name) {
+      const fetched = (await gitRaw(repo, ["fetch", "--quiet", "--no-tags", "origin", `+refs/heads/${name}:refs/remotes/origin/${name}`], timeoutMs)).code === 0;
+      if (await exists(`refs/remotes/origin/${name}`)) {
+        if (!fetched) log(`new branch base: fetch from origin failed in ${repo}; using the local origin/${name}, which may be out of date`);
+        return `origin/${name}`;
+      }
+    }
+    log(`new branch base: ${reachable ? "no default branch found on origin" : "origin can't be reached"} in ${repo}; using the local default branch`);
+  }
+  const def = (await gitRaw(repo, ["config", "--get", "init.defaultBranch"])).stdout.trim();
+  for (const b of [def, "main", "master"].filter(Boolean)) if (await exists(`refs/heads/${b}`)) return b;
+  log(`new branch base: no default branch on origin or locally (main/master) in ${repo}; using HEAD`);
+  return "HEAD";
 }
 
 /**

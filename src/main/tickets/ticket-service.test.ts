@@ -6,7 +6,7 @@ import { FeaturesRepo } from "../db/features-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import type { Ticket } from "../../shared/types";
 import { TicketsRepo } from "../db/tickets-repo";
-import { insertTicket, type LegacyTicket, makeRepo, memDb, tempDir } from "../test-utils";
+import { insertTicket, type LegacyTicket, makeRepo, makeStaleClone, memDb, tempDir } from "../test-utils";
 import { branchExists, currentBranch, git } from "./git";
 import { TicketError, TicketService } from "./ticket-service";
 
@@ -481,5 +481,87 @@ describe("TicketService.ghWorkDir", () => {
     expect(service.ghWorkDir({ ...base, worktreePath: "/wt", worktreeRemovedAt: null })).toBe("/wt");
     expect(service.ghWorkDir({ ...base, worktreePath: "/wt", worktreeRemovedAt: 5 })).toBe("/repo");
     expect(service.ghWorkDir({ ...base, worktreePath: null, worktreeRemovedAt: null })).toBe("/repo");
+  });
+});
+
+describe("TicketService new branches start from the remote's default branch (BTL-255)", () => {
+  const out = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  const upstreamOf = (cwd: string, branch: string) => {
+    try {
+      return execFileSync("git", ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      return null;
+    }
+  };
+
+  it("opens a new worktree on origin/main even when the shared checkout is on an old branch and local main is behind", async () => {
+    const { service } = setup();
+    const { repo, remoteSha, oldSha, initSha } = makeStaleClone();
+    const t = await service.create({ key: "PROJ-255", repoPath: repo, workMode: "worktree" });
+    const wt = only(t).worktreePath!;
+    expect(out(wt, "rev-parse", "HEAD")).toBe(remoteSha);
+    expect(existsSync(join(wt, "new.txt"))).toBe(true);
+    expect(existsSync(join(wt, "old.txt"))).toBe(false);
+    expect(upstreamOf(wt, "feature/PROJ-255")).toBeNull();
+    // 共享 checkout 不动：还在旧分支上，本地 main 也没被改
+    expect(await currentBranch(repo)).toBe("feature/OLD");
+    expect(out(repo, "rev-parse", "HEAD")).toBe(oldSha);
+    expect(out(repo, "rev-parse", "main")).toBe(initSha);
+  });
+
+  it("creates a branch-mode ticket's branch on origin/main too, without switching the checkout", async () => {
+    const { service } = setup();
+    const { repo, remoteSha } = makeStaleClone();
+    await service.create({ key: "PROJ-256", repoPath: repo, workMode: "branch" });
+    expect(out(repo, "rev-parse", "feature/PROJ-256")).toBe(remoteSha);
+    expect(upstreamOf(repo, "feature/PROJ-256")).toBeNull();
+    expect(await currentBranch(repo)).toBe("feature/OLD");
+  });
+
+  it("starts a repo added later from origin/main as well", async () => {
+    const { service } = setup();
+    const { repo, remoteSha } = makeStaleClone();
+    await service.create({ key: "PROJ-257" });
+    const r = await service.addRepo({ ticketKey: "PROJ-257", repoPath: repo, workMode: "worktree" });
+    expect(out(r.worktreePath!, "rev-parse", "HEAD")).toBe(remoteSha);
+  });
+
+  it("keeps an explicit start point (stack_on) and does not fetch for it", async () => {
+    const { service } = setup();
+    const { repo, oldSha, initSha } = makeStaleClone();
+    const t = await service.create({ key: "PROJ-258", repoPath: repo, workMode: "worktree", startPoints: [{ repoPath: repo, ref: "feature/OLD" }] });
+    expect(out(only(t).worktreePath!, "rev-parse", "HEAD")).toBe(oldSha);
+    expect(out(repo, "rev-parse", "origin/main")).toBe(initSha);
+  });
+
+  it("several tickets created at once all land on origin/main", async () => {
+    const { service } = setup();
+    const { repo, remoteSha } = makeStaleClone();
+    const ts = await Promise.all(["PROJ-260", "PROJ-261", "PROJ-262"].map((key) => service.create({ key, repoPath: repo, workMode: "worktree" })));
+    for (const t of ts) expect(out(only(t).worktreePath!, "rev-parse", "HEAD")).toBe(remoteSha);
+  });
+
+  it("logs and falls back to the local origin/main when the remote can't be reached", async () => {
+    const db = memDb();
+    const logs: string[] = [];
+    const service = new TicketService({ tickets: new TicketsRepo(db), settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("butler-ws-"), log: (m) => logs.push(m) });
+    const { repo, initSha } = makeStaleClone();
+    execFileSync("git", ["remote", "set-url", "origin", join(tempDir(), "gone")], { cwd: repo });
+    const t = await service.create({ key: "PROJ-263", repoPath: repo, workMode: "worktree" });
+    expect(out(only(t).worktreePath!, "rev-parse", "HEAD")).toBe(initSha);
+    // 接着再建一个：用刚才算好的起点，不再等一次 fetch 失败
+    await service.create({ key: "PROJ-264", repoPath: repo, workMode: "worktree" });
+    expect(logs.filter((m) => /fetch from origin failed.*origin\/main/.test(m))).toHaveLength(1);
+    expect(logs.filter((m) => /new branch feature\/PROJ-26[34] .* from origin\/main/.test(m))).toHaveLength(2);
+  });
+
+  it("starts a renamed branch from origin/main when the ticket's old branch is gone", async () => {
+    const { service, repoOf } = setup();
+    const { repo, remoteSha } = makeStaleClone();
+    await service.create({ key: "PROJ-265", repoPath: repo, workMode: "branch" });
+    execFileSync("git", ["branch", "-D", "feature/PROJ-265"], { cwd: repo, stdio: "ignore" });
+    await service.updateRepo({ repoId: repoOf("PROJ-265").id, branch: "fix/PROJ-265" }, { terminalsOpen: false });
+    expect(out(repo, "rev-parse", "fix/PROJ-265")).toBe(remoteSha);
+    expect(await currentBranch(repo)).toBe("feature/OLD");
   });
 });
