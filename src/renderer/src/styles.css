@@ -522,6 +522,7 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .first-run-note { color: var(--muted); font-size: 11px; font-weight: normal; }
 .first-run-defaults { font-size: 13px; }
 .first-run-defaults button.link { color: var(--accent); }
+.wizard-stuck button.link { color: var(--accent); }
 .routing-settings section { margin: 14px 0; }
 .routing-settings th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 6px; }
 .routing-settings .ticket-table tr { cursor: default; }
