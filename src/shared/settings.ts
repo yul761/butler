@@ -97,6 +97,8 @@ export const EDITABLE_SETTINGS = [
   "automationLevel",
   // 更新提示（BTL-253）：每天经你的 gh 查一次 GitHub 上有没有新版本。默认开。
   "updateCheckEnabled",
+  // BTL-256：Butler 重启后把上次退出时在工作、在等回复的、总控管的 session 自动恢复。
+  "autoResumeAfterRestart",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

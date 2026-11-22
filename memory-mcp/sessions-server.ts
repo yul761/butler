@@ -450,7 +450,9 @@ export const FEATURE_TOOLS = [
   },
   {
     name: "list_sessions",
-    description: "列出这个 epic 的 session（epic 总控、修复 session 和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启、此刻的活动（activity，不含输出；输出用 session_activity），以及最后一条回复的结尾（last_reply）。修复 session 的 fixes 是它在解决的卡住 session 的 id，其他行是 null。",
+    description: "列出这个 epic 的 session（epic 总控、修复 session 和每个 ticket 的）：属于哪个 ticket、哪个仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启、此刻的活动（activity，不含输出；输出用 session_activity），以及最后一条回复的结尾（last_reply）。修复 session 的 fixes 是它在解决的卡住 session 的 id，其他行是 null。" +
+      "wake 说终端关着时给它发消息会怎样：running 开着；hibernated 休眠着，有消息就叫醒；resumes 关着，有消息时 Butler 在后台恢复它；resuming 正在恢复；" +
+      "waiting_memory 内存不够、等着；resume_failed 恢复失败过、暂时不再试；ended_by_user 用户自己结束的，不自动恢复；not_managed 不是总控开的，下次打开时才送。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -559,7 +561,9 @@ export const FEATURE_TOOLS_EN = [
   },
   {
     ...FEATURE_TOOLS[4],
-    description: "List this epic's sessions (the epic coordinator's, fix sessions, and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that) and the end of its last reply (last_reply). On a fix session, fixes is the id of the stuck session it is resolving; on other rows it is null.",
+    description: "List this epic's sessions (the epic coordinator's, fix sessions, and every ticket's): ticket, repo, first message, whether it is running, whether it waits for the user, last activity, and whether the coordinator started it, plus its current activity (without output; use session_activity for that) and the end of its last reply (last_reply). On a fix session, fixes is the id of the stuck session it is resolving; on other rows it is null. " +
+      "wake says what a message does when its terminal is closed: running (open); hibernated (woken by a message); resumes (closed; Butler resumes it in the background when a message arrives); resuming (being resumed); " +
+      "waiting_memory (memory is short, waiting); resume_failed (resuming failed, not retrying for now); ended_by_user (the user ended it, not resumed on its own); not_managed (not started by a coordinator, delivered the next time it opens).",
   },
   {
     ...FEATURE_TOOLS[5],
@@ -618,7 +622,11 @@ export const FEATURE_SEND_TOOL = {
   name: "send_message",
   description:
     `给这个 epic 的一个 ticket session 或修复 session 发一条消息（最多 ${MESSAGE_LIMIT} 字符）：改主意了、接口变了、要它先做别的。` +
-    "消息排进它的信箱，不会因为它在忙被拒：它在干活就在下一次调用工具时读到，停着就直接输入，终端关着就等下次打开再送。" +
+    "消息排进它的信箱，不会因为它在忙被拒：它在干活就在下一次调用工具时读到，停着就直接输入。" +
+    "终端关着（比如 Butler 重启过）时，总控开的 session 会在后台接着原来的对话恢复（和 start_session 一样先看内存），起来以后送进去；返回值的 wake 说清楚：" +
+    "resuming 正在恢复，送到时你会收到一条「【回执】」；waiting_memory 内存不够，消息排着，内存够了再试（wakeError 说差多少）；" +
+    "ended_by_user 用户自己点 × 结束的，不自动恢复，用户打开时送到；resume_failed 恢复失败过（wakeError 是原因），用户打开时送到；not_managed 不是总控开的，下次打开时送到。" +
+    "后台恢复失败时也会发「【回执】」告诉你原因。" +
     "interrupt: true 先按 Esc 叫停它手上的事再送（只在真要它马上停下时用，比如它在做的方向错了）。" +
     "返回 requestId；它读到之后这一轮的最后一段回复会以「【回复】」开头自动送回给你，不用去轮询 session_activity。",
   inputSchema: {
@@ -637,7 +645,11 @@ export const FEATURE_SEND_TOOL_EN = {
   ...FEATURE_SEND_TOOL,
   description:
     `Send a message (at most ${MESSAGE_LIMIT} characters) to one of this epic's ticket sessions or fix sessions: a change of plan, an interface that changed, something to do first. ` +
-    "It goes into its mailbox and is never refused for being busy: a working session reads it at its next tool call, a stopped one gets it typed in, and a closed one gets it the next time it opens. " +
+    "It goes into its mailbox and is never refused for being busy: a working session reads it at its next tool call, and a stopped one gets it typed in. " +
+    "When the terminal is closed (for example after Butler restarted), a session a coordinator started is resumed in the background on its conversation (after the same memory check as start_session) and gets the message once it is up; the wake field in the result says which: " +
+    "resuming (being resumed; you get a \"[Receipt]\" when it is delivered); waiting_memory (memory is short; the message stays queued and Butler tries again when there is room; wakeError says how short); " +
+    "ended_by_user (the user ended it with ×; not resumed, delivered when the user opens it); resume_failed (resuming failed earlier, wakeError says why; delivered when the user opens it); not_managed (not started by a coordinator; delivered the next time it opens). " +
+    "If resuming fails in the background you also get a \"[Receipt]\" with the reason. " +
     "interrupt: true presses Esc to stop what it is doing first (only when it really has to stop now, for example when it is heading the wrong way). " +
     "It returns a requestId; the last reply it writes in the turn after reading it comes back to you automatically, starting with \"[Reply]\", so you do not need to poll session_activity.",
   inputSchema: {
@@ -719,6 +731,7 @@ export const BUTLER_TOOLS = [
       "目标给 epic（发给它的总控）或 session 两者之一；epic 用名字或 id（list_epics 里的）。epic 里的 feature 没有自己的总控，要它做什么告诉 epic 总控。" +
       "消息一律排进它的信箱，不会因为它在忙被拒：它在干活就在下一次调用工具时读到，停着就直接输入，用户正在输入时等用户打完。" +
       "终端关着（比如闲置时被自动关掉了）也能发：Butler 接着它最近的对话打开（epic 从没开过总控就新开一个），再把消息交进去。" +
+      "用户自己点 × 结束的总控不替用户打开，消息排着，返回 wake: ended_by_user；内存不够时返回 wake: waiting_memory，消息排着，内存够了 Butler 在后台恢复它再送。" +
       "interrupt: true 先按 Esc 叫停它手上的事再送（只在真要它马上停下时用）。不能发给 ticket 的 session 和修复 session，要它们做什么就告诉管它们的总控。" +
       "消息前面会带上「Butler 总控发来的消息」。返回 requestId；它读到之后这一轮的最后一段回复会以「【回复】」开头自动送回给你，带同一个 requestId，不用去轮询 session_activity。",
     inputSchema: {
@@ -858,6 +871,7 @@ export const BUTLER_TOOLS_EN = [
       `Send a message (at most ${MESSAGE_LIMIT} characters) to an epic coordinator, to coordinate across epics: for example, tell it another epic's interface changed, or which PR to merge first. ` +
       "Give exactly one target: epic (its coordinator) or session; epic takes a name or id from list_epics. Features inside an epic have no coordinator of their own; tell the epic's coordinator instead. " +
       "A closed terminal (for example one closed for being idle) is fine: Butler reopens its latest conversation (or opens a new coordinator if the epic never had one) and hands it the message. " +
+      "A coordinator the user ended with × is not reopened for them: the message stays queued and the result says wake: ended_by_user. When memory is short the result says wake: waiting_memory; the message stays queued and Butler resumes it in the background once there is room. " +
       "Every message goes into its mailbox and is never refused for being busy: a working target reads it at its next tool call, a stopped one gets it typed in, and Butler waits while the user is typing. " +
       "interrupt: true presses Esc to stop what it is doing first (only when it really has to stop now). Ticket sessions and fix sessions cannot be messaged; tell the coordinator that manages them instead. " +
       "The message is prefixed with \"Message from Butler control\". It returns a requestId; the last reply the target writes in the turn after reading it comes back to you automatically, starting with \"[Reply]\" and carrying the same requestId, so you do not need to poll session_activity.",

@@ -21,7 +21,7 @@ describe("3.0.0 defaults: nothing new acts on its own", () => {
       "routingAutoSwitch", "backgroundPriority", "hibernateEnabled", "memoryPressureEnabled", "sharedMcp",
       "refreshMemoryMb", "preReviewEnabled", "lessonsAutoAdmit", "lessonsPrinciples", "lessonsCoreGuide",
       "interruptChoiceRule", "interruptChoiceDefaults", "interruptSelfServe", "notifyDetails", "configBackupIntervalDays",
-      "sessionMaxRunning", "showOutsideSessions",
+      "sessionMaxRunning", "showOutsideSessions", "autoResumeAfterRestart",
     ] as const) expect(SETTING_DEFAULTS[key], key).toBe("0");
     expect(SETTING_DEFAULTS.routingQuotas).toBe("");
     expect(SETTING_DEFAULTS.intakeSource).toBe("none");

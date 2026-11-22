@@ -108,6 +108,8 @@ export interface IpcDeps {
   usage: Pick<UsageRepo, "since">;
   sessions: Pick<SessionsRepo, "get">;
   pty: PtyManager;
+  /** 用户在界面上点 × 结束一个终端之前（BTL-256：记成用户结束，之后不自动恢复）。 */
+  userEnded?: (termId: string) => void;
   health: HealthService;
   followups: FollowupsRepo;
   handoffs: HandoffsRepo;
@@ -502,7 +504,10 @@ export function registerIpc(d: IpcDeps): void {
   ipcMain.on(IPC.ptyDetach, (_e, id: unknown) => {
     if (typeof id === "string") d.ptySubs?.detach(id);
   });
-  handle(IPC.ptyKill, (id: string) => d.pty.kill(id));
+  handle(IPC.ptyKill, (id: string) => {
+    if (d.pty.isOpen(id)) d.userEnded?.(id);
+    d.pty.kill(id);
+  });
   ipcMain.on(IPC.ptyWrite, (_e, id: string, data: string) => {
     d.pty.write(id, data);
     d.terminalInput?.(id);

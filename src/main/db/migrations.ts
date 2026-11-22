@@ -1535,4 +1535,10 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE features DROP COLUMN brief_sent_at;
   `,
+  // BTL-256：用户点 × 结束的时间（不自动恢复，再打开时清掉）；终端开着的时间（Butler 运行时终端退出清掉，退出 Butler 时不清：
+  // 下次启动时还带着的就是上次退出时开着的，「重启后自动恢复」用它）。
+  `
+  ALTER TABLE sessions ADD COLUMN user_ended_at INTEGER;
+  ALTER TABLE sessions ADD COLUMN term_open_at INTEGER;
+  `,
 ];

@@ -68,6 +68,11 @@ export function BasicSettings({ report, onHealth, onRerunWizard }: { report: Hea
         {S.showOutsideSessions}
       </label>
       <p className="muted">{S.showOutsideSessionsHelp}</p>
+      <label className="inline">
+        <input type="checkbox" data-testid="setting-autoResumeAfterRestart" checked={current.autoResumeAfterRestart === "1"} onChange={(e) => void save("autoResumeAfterRestart", e.target.checked ? "1" : "0")} />
+        {S.autoResumeAfterRestart}
+      </label>
+      <p className="muted">{S.autoResumeAfterRestartHelp}</p>
 
       <h2>{S.memorySettings}</h2>
       <label className="inline">

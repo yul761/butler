@@ -153,6 +153,11 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       if (!svc.openFeature) return fail(M().ctlStartUnavailable);
       const given = target.session && target.session.coordinator && target.session.replacedBy === null ? target.session : undefined;
       const resume = given ?? d.sessions.listFeatureCoordinators(f.id).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
+      // 用户点 × 结束的（BTL-256）：不替用户再打开，消息排着，用户打开时送到。
+      if (resume && resume.userEndedAt != null) {
+        const r = enqueue(resume.id, text, featureId, false);
+        return ok({ queued: true, sessionId: resume.id, requestId: r.id, state: r.state, wake: "ended_by_user", note: `${M().mailboxWakeNote("ended_by_user")}${M().mailboxReplyNote}` });
+      }
       const openFeature = svc.openFeature.bind(svc);
       const open = (): Promise<OpenSessionResult> => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
       // 先排进接着的那个的信箱：打开时一起送；打不开也不丢。
@@ -172,7 +177,11 @@ export function butlerControl(d: ControlHandlerDeps, h: ButlerControlHelpers): (
       try {
         // 要新开一个终端：和 start_session 一样先按内存放行（工作流 W）。
         room = await admitOrRefuse(d.admission, `send_message ${key}`);
-        if (!room.ok) return failed(room.error);
+        if (!room.ok) {
+          // 内存不够（BTL-256）：消息排着，内存腾出来以后信箱叫后台恢复时再送。
+          if (early) return queued(early, resume!.id, { openError: room.error, wake: "waiting_memory", wakeError: room.error });
+          return fail(room.error);
+        }
         r = await open();
       } catch (err) {
         if (room?.ok) room.release();

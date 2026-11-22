@@ -170,6 +170,7 @@ import { transcriptCostBase } from "./fork/cost-base";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
+import { Resumer, restartOrder, resumable } from "./sessions/resumer";
 import { childrenWorking } from "./sessions/managed-by";
 import { needsDiscovery, scanClaudeProjects, syncDiscovered, TranscriptLocator, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { fillBranchFromCwd, outsideSessionsOn } from "./sessions/outside-sessions";
@@ -669,6 +670,8 @@ async function bootstrap(): Promise<void> {
   let hibernator: Hibernator | null = null;
   // 内存准入（工作流 W）：要等 procs 建好才装（实测要 M 的内存采样）；后台队列在那之后才 start，用的时候一定装好了。
   let memoryAdmission: MemoryAdmission | null = null;
+  // 后台恢复关着的 session（BTL-256）：和休眠一样，等下面的服务都建好才装。
+  let resumer: Resumer | null = null;
   /** 休眠着的 head（Butler 结束了它的终端，等事情来了再 --resume）。 */
   const hibernatedHeads = (): Session[] => sessions.listHibernated();
   /** 这条链休眠着（正在休眠、正在唤醒的也算）。 */
@@ -679,10 +682,15 @@ async function bootstrap(): Promise<void> {
     data: (id, data) => {
       if (ptySubs.has(id)) safeSend(IPC.ptyData, id, data);
     },
-    opened: (id) => procs?.terminalOpened(id),
+    opened: (id) => {
+      procs?.terminalOpened(id);
+      // 重启后自动恢复（BTL-256）：记下终端开着；Butler 运行时退出才清，退出 Butler 时留着，下次启动看得到。
+      sessions.markTermOpen(id, Date.now());
+    },
     exit: (id, code) => {
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
+      if (!quitState.quitting) sessions.clearTermOpen(id);
       procs?.terminalExited(id);
       // 共享 MCP（WS-M H）：撤掉这个终端的路由，删掉它的配置文件。
       mcpHub.removeTerminal(id);
@@ -1380,7 +1388,13 @@ async function bootstrap(): Promise<void> {
     features, featureHandoffs, handoffs,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
     syncMemory: (key) => void memory.syncTicket(key),
-    opened: (termId) => hibernator?.opened(termId),
+    opened: (termId) => {
+      hibernator?.opened(termId);
+      // 又打开了（用户点开、总控、后台恢复）：不再算用户结束，恢复失败的记录也清掉（BTL-256）。
+      const h = sessions.head(termId);
+      if (h?.userEndedAt != null) sessions.setUserEnded(h.id, null);
+      resumer?.opened(termId);
+    },
     hidden: (id) => hibernator?.forget(id),
     recordEvent,
     log: logger,
@@ -1410,6 +1424,8 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     logger("pruning empty sessions failed", e);
   }
+  // 上次退出（或崩溃）时开着终端的 session（BTL-256）：读完清掉，「重启后自动恢复」开着时启动完再恢复它们。
+  const openAtLastQuit = sessions.takeTermOpen();
 
   const transcriptMtime = (id: string): number | null => {
     const file = transcriptLocator.find(id);
@@ -1885,8 +1901,12 @@ async function bootstrap(): Promise<void> {
   // 回答（ask_user 的）过 answerGuard（不看「需要你」），别的过 deliveryGuard。inboxService 在下面才建好：回调里才用到。
   const mailboxName = (id: string | null): string =>
     sessionName({ head: (x) => sessions.head(x), featureName: (f) => features.get(f)?.name ?? null }, id);
+  const messagesRepo = new SessionMessagesRepo(db);
+  /** 这个 head 有别的 session 发来、还排着的消息（约定广播不算）。 */
+  const hasSessionMail = (headId: string): boolean =>
+    messagesRepo.queued().some((m) => m.fromSession !== null && m.kind !== "convention" && (sessions.head(m.toSession)?.id ?? m.toSession) === headId);
   const mailbox = new Mailbox({
-    repo: new SessionMessagesRepo(db),
+    repo: messagesRepo,
     root: paths.mailbox,
     head: (id) => sessions.head(id),
     termOf: gateTerm,
@@ -1916,11 +1936,15 @@ async function bootstrap(): Promise<void> {
     },
     nameOf: mailboxName,
     typing: (h, phase) => inboxService.butlerTyping(h, phase),
-    // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；熔断压着的不叫。
+    // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；真关了的、总控管的在后台恢复（BTL-256）。熔断压着的不叫。
+    // 真关了的只为别的 session 发来的消息恢复（总控的指示、汇报……）：CI、合并这类 Butler 自己的通知排着等下次打开，
+    // 免得总控刚 end_session 的 session 被下一条通知又拉起来。
     wake: (id) => {
-      if (costBreaker?.sessionPaused(id) || !hibernator || !isHibernated(id)) return;
-      void hibernator.wake(id, "delivery");
+      if (costBreaker?.sessionPaused(id) || quitState.quitting) return;
+      if (hibernator && isHibernated(id)) void hibernator.wake(id, "delivery");
+      else if (resumer && hasSessionMail(id)) void resumer.request(id, "mail");
     },
+    delivered: (m) => resumer?.delivered(m),
     notify,
     now: Date.now,
     log: logger,
@@ -2964,19 +2988,74 @@ async function bootstrap(): Promise<void> {
     log: logger,
     ...(hibernateAfterMs > 0 && { quiet: { openMs: hibernateAfterMs, wakeMs: hibernateAfterMs } }),
   });
-  /** 按种类 --resume 一个休眠的 head（不 force：分支对不上就算唤醒失败，交给用户）。 */
-  const openHibernated = async (head: Session): Promise<{ ok: true; termId: string } | { ok: false; reason: string }> => {
+  /** 按种类 --resume 一个 head（不 force：分支对不上就算打不开，交给用户）。 */
+  const openByKind = async (head: Session): Promise<{ ok: true; termId: string; alreadyOpen: boolean } | { ok: false; reason: string }> => {
     const r = head.butler && head.ticketKey === null ? await sessionService.openButler({ sessionId: head.id })
       : head.ticketKey !== null ? await sessionService.open({ ticketKey: head.ticketKey, sessionId: head.id })
       : head.featureId !== null ? await sessionService.openFeature({ featureId: head.featureId, sessionId: head.id })
       : ({ ok: false, reason: "kind" } as const);
+    return r.ok ? { ok: true, termId: r.termId, alreadyOpen: r.alreadyOpen } : { ok: false, reason: r.reason };
+  };
+  /** 唤醒一个休眠的 head。 */
+  const openHibernated = async (head: Session): Promise<{ ok: true; termId: string } | { ok: false; reason: string }> => {
+    const r = await openByKind(head);
     // 唤醒不问内存（要递的消息不能被拒），但记成刚开的，紧接着的 start_session 照样扣掉它（工作流 W）。
     if (r.ok && !r.alreadyOpen) admission.note(`wake ${head.id}`);
-    return r.ok ? { ok: true, termId: r.termId } : { ok: false, reason: r.reason };
+    return r.ok ? { ok: true, termId: r.termId } : r;
   };
+  // 后台恢复关着的 session（BTL-256）：和 start_session 一样先问内存，按种类 --resume，等 SessionStart；起来以后信箱照常送。
+  const resumableCtx = {
+    ticketArchived: (key: string) => {
+      const t = tickets.get(key);
+      return !t || t.archivedAt !== null;
+    },
+    epicArchived: (id: number) => {
+      const f = features.get(id);
+      return !f || f.archivedAt !== null;
+    },
+  };
+  const theResumer = resumer = new Resumer({
+    head: (id) => sessions.head(id),
+    running: (id) => gateTerm(id) !== null,
+    resumable: (h) => resumable(h, resumableCtx),
+    transcript: (id) => transcriptLocator.state(id),
+    admit: (what) => admitOrRefuse(admission, what),
+    open: openByKind,
+    started: (termId) => pty.started(termId),
+    isOpen: (termId) => pty.isOpen(termId),
+    setWakeError: (id, error, at) => sessions.setWakeError(id, error, at),
+    waitingSenders: (headId) => messagesRepo.queued().flatMap((m) =>
+      m.fromSession !== null && (m.kind === "instruction" || m.kind === "butler") && (sessions.head(m.toSession)?.id ?? m.toSession) === headId
+        ? [{ id: m.id, from: m.fromSession, featureId: m.featureId }] : []),
+    receipt: (to, featureId, body) => void mailbox.send({ kind: "reply", from: null, to, featureId, body }),
+    nameOf: mailboxName,
+    notify,
+    now: Date.now,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    log: logger,
+  });
+  // 重启后自动恢复（BTL-256，设置 autoResumeAfterRestart，默认关）：上次退出时开着终端、总控管的 session，
+  // 有未读信箱消息的最先，然后是 ticket 有 PR 开着的；一个一个问内存，第一次不够就停下。
+  if (settings.get("autoResumeAfterRestart") === "1" && openAtLastQuit.length > 0) {
+    void healthReady.then(async () => {
+      const seen = new Set<string>();
+      const heads = openAtLastQuit.flatMap((id) => {
+        const h = sessions.head(id);
+        if (!h || seen.has(h.id)) return [];
+        seen.add(h.id);
+        return !h.hibernatedAt && h.userEndedAt == null && resumable(h, resumableCtx) ? [h] : [];
+      });
+      const mail = new Set(messagesRepo.queued().flatMap((m) => (m.kind === "convention" ? [] : [sessions.head(m.toSession)?.id ?? m.toSession])));
+      const order = restartOrder(heads, (id) => mail.has(id), (h) => h.ticketKey !== null && prWatcher.statusOf(h.ticketKey).some((p) => p.state === "open" || p.state === null));
+      logger(`resume after restart: ${order.length} of ${openAtLastQuit.length} session(s) open at the last quit`);
+      const r = await theResumer.resumeAll(order);
+      if (r.waitingMemory.length > 0) logger(`resume after restart: memory ran short, left closed: ${r.waitingMemory.join(", ")}`);
+    }).catch((e: unknown) => logger("resume after restart failed", e));
+  }
   windowShownHook = () => procServices.windowShown();
   shutdownSessions = () => {
     hibernator?.stop();
+    resumer?.stop();
     void procServices.stop();
     refresher.stop();
     pty.killAll();
@@ -3182,6 +3261,10 @@ async function bootstrap(): Promise<void> {
   registerIpc({
     diag: diag ?? undefined,
     feedback,
+    userEnded: (termId) => {
+      const h = sessions.head(termId);
+      if (h) sessions.setUserEnded(h.id, Date.now());
+    },
     onWrite: () => viewCache.invalidate(),
     ptySubs,
     views,
@@ -3512,8 +3595,11 @@ async function bootstrap(): Promise<void> {
         submit: (id, raw) => preReview.submitEvidence(id, raw),
         latest: (id) => preReview.latestForSession(id),
       },
-      // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。
+      // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。不记成用户结束（BTL-256）。
       kill: (termId) => pty.kill(termId),
+      // 后台恢复（BTL-256）：信箱已经调过同一个请求，这里拿到同一个结果；熔断压着的不恢复。
+      resume: async (id) => (costBreaker?.sessionPaused(id) ? null : isHibernated(id) ? { state: "hibernated" } : (resumer?.request(id, "mail") ?? null)),
+      wakeState: (id) => (isHibernated(id) ? "hibernated" : (resumer?.status(id) ?? "not_managed")),
       endHibernated: (id) => {
         const h = sessions.get(id);
         hibernator?.forget(id, "ended by end_session");

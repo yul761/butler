@@ -33,6 +33,7 @@ interface SessionRow {
   pinned?: number;
   wake_error?: string | null;
   wake_error_at?: number | null;
+  user_ended_at?: number | null;
 }
 
 function toSession(r: SessionRow): Session {
@@ -64,6 +65,7 @@ function toSession(r: SessionRow): Session {
     pinned: r.pinned === 1,
     wakeError: r.wake_error ?? null,
     wakeErrorAt: r.wake_error_at == null ? null : Number(r.wake_error_at),
+    userEndedAt: r.user_ended_at == null ? null : Number(r.user_ended_at),
   };
 }
 
@@ -274,6 +276,27 @@ export class SessionsRepo {
   /** 自动唤醒失败：记下原因和时间（「现在」页提醒，10 分钟内不再自动唤醒）。error 为 null 时清掉。 */
   setWakeError(id: string, error: string | null, at: number | null): void {
     this.db.prepare(`UPDATE sessions SET wake_error = ?, wake_error_at = ? WHERE id = ?`).run(error, error === null ? null : at, id);
+  }
+
+  /** 用户点 × 结束（BTL-256）：at 为 null 时清掉（又打开了）。 */
+  setUserEnded(id: string, at: number | null): void {
+    this.db.prepare(`UPDATE sessions SET user_ended_at = ? WHERE id = ?`).run(at, id);
+  }
+
+  /** 终端开着（BTL-256）：打开时写上，Butler 运行时终端退出清掉，退出 Butler 时不清。 */
+  markTermOpen(id: string, at: number): void {
+    this.db.prepare(`UPDATE sessions SET term_open_at = ? WHERE id = ?`).run(at, id);
+  }
+
+  clearTermOpen(id: string): void {
+    this.db.prepare(`UPDATE sessions SET term_open_at = NULL WHERE id = ? AND term_open_at IS NOT NULL`).run(id);
+  }
+
+  /** 启动时：上次退出时还开着终端的 session id（终端用的 id，不一定是 head），读完全部清掉。 */
+  takeTermOpen(): string[] {
+    const ids = (this.db.prepare(`SELECT id FROM sessions WHERE term_open_at IS NOT NULL ORDER BY term_open_at, id`).all() as { id: string }[]).map((r) => r.id);
+    this.db.prepare(`UPDATE sessions SET term_open_at = NULL WHERE term_open_at IS NOT NULL`).run();
+    return ids;
   }
 
   setPinned(id: string, pinned: boolean): void {
