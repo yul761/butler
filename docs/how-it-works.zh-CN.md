@@ -54,7 +54,7 @@ feature 是一个轻量的分块：一个名字、可选的说明、在 epic 里
 
 ![epic 页，ticket 按 feature 分块](media/epic.zh-CN.png)
 
-epic 页有五个 tab：**概况**、**进行中**、**全部 ticket**、**总控** 和 **状态**。同一时间只显示一个，都不会收起，页面记着上次停在哪个 tab。**概况** 先是一行进度（合了几个 ticket、几件事轮到你）和最慢的 ticket，然后是 **这个范围里轮到你的** 下的卡片。再往下，epic 有了 feature 以后，**feature** 一节按顺序每个 feature 一行，可以展开收起，写着它的 ticket 合了几个；展开后用和 **全部 ticket** 一样的列显示它的 ticket，第一个还没全合的 feature 默认展开。不在任何 feature 里的 ticket 放在最后一行 **不在任何 feature 里**。还没有 feature 的 epic 则每个 ticket 一行，写着它的 PR 合了几个（或者 **还没开 PR**），还有一条按每个 PR 轮到谁上色的进度条。有卡片在等你时，**概况** 这个 tab 名会标红。**进行中** 列出此刻不用你动手、正在往前走的事：agent 在干活，或者在等 CI、某位 reviewer、合并队列、栈里下面那层 PR，写明是谁、这样多久了。**全部 ticket** 是下面说的表格，按同样的顺序按 feature 分组。**总控** 左边是仓库、总控 session 和终端，右边是这个 epic 里 session 的汇报。**状态** 里是跨 epic 里所有 ticket 的汇总，写着卡在哪里、下一步做什么；epic 有规划时还有它的 **规划**。汇总由晚间任务为有新动静的 epic 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。
+epic 页有五个 tab：**概况**、**进行中**、**全部 ticket**、**总控** 和 **状态**。同一时间只显示一个，都不会收起，页面记着上次停在哪个 tab。**概况** 先是一行进度（合了几个 ticket、几件事轮到你）和最慢的 ticket，然后是 **这个范围里轮到你的** 下的卡片。再往下，epic 有了 feature 以后，**feature** 一节按顺序每个 feature 一行，可以展开收起，写着它的 ticket 合了几个；展开后用和 **全部 ticket** 一样的列显示它的 ticket，第一个还没全合的 feature 默认展开。不在任何 feature 里的 ticket 放在最后一行 **不在任何 feature 里**。还没有 feature 的 epic 则每个 ticket 一行，写着它的 PR 合了几个（或者 **还没开 PR**），还有一条按每个 PR 轮到谁上色的进度条。有卡片在等你时，**概况** 这个 tab 名会标红。**进行中** 列出此刻不用你动手、正在往前走的事：agent 在干活，或者在等 CI、某位 reviewer、合并队列、栈里下面那层 PR，写明是谁、这样多久了。**全部 ticket** 是下面说的表格，按同样的顺序按 feature 分组。**总控** 左边是仓库、总控 session 和终端，右边是对话：你和总控的来回，这个 epic 里 session 的汇报按时间穿插在里面。**状态** 里是跨 epic 里所有 ticket 的汇总，写着卡在哪里、下一步做什么；epic 有规划时还有它的 **规划**。汇总由晚间任务为有新动静的 epic 生成，或者在总控里输入 `/handoff`，或者点 **立即更新**。它从不显示完成百分比。
 
 **全部 ticket** 每个 ticket 一行：谁该动（你、agent，或者外面的人和事，比如 CI 或点了名的 reviewer），**现在怎么样**（这一轮的那句话，比如"agent 在修 CI"或"在等某某 review"），以及它的 PR。每行显示这个 ticket 的轮次（见 [PR 进度](#pr-进度)），ticket 还有别的开着的 PR 时后面跟着"· 另有 N 个 PR"。epic 有 feature 时，每个 feature 有一行标题，写着名字和它的 ticket 合了几个。点一行打开这个 ticket。
 
@@ -62,13 +62,13 @@ epic 页有五个 tab：**概况**、**进行中**、**全部 ticket**、**总�
 
 ### 卡住的 session
 
-没有固定的超时，所以一个还在干活的慢 pre-push hook 不会被打扰。Butler 每 3 分钟看一次 epic 里每个 ticket 的运行中 session。如果 transcript、命令输出和 session 子进程的 CPU 占用连续两次都没变化，Butler 会用你自己的 `claude`（不带任何工具）问一次：这个 session 是不是真卡住了。它会发送当前动态、最后一条命令的输出和终端末尾的内容。如果答案是"是"，**轮到你** 页和它所在 epic 的 **这个范围里轮到你的** 里会出现一张 **卡住了** 卡片，侧栏里这个 ticket 和它的 epic 也会显示卡住的圆点。不会弹系统通知。卡片写着哪里不对，有建议时也写上建议怎么做，按钮有：
+没有固定的超时，所以一个还在干活的慢 pre-push hook 不会被打扰。Butler 每 3 分钟看一次它开的每个运行中的 session，总控和不在 epic 里的 ticket 也算。如果 transcript、命令输出和 session 子进程的 CPU 占用连续两次都没变化，Butler 会用你自己的 `claude`（不带任何工具）问一次：这个 session 是不是真卡住了。它会发送当前动态、最后一条命令的输出和终端末尾的内容。如果答案是"是"，**轮到你** 页和它所在 epic 的 **这个范围里轮到你的** 里会出现一张 **卡住了** 卡片，侧栏里这个 ticket 和它的 epic 也会显示卡住的圆点。不会弹系统通知。卡片写着哪里不对，有建议时也写上建议怎么做，按钮有：
 
 - **去看看** 打开 ticket 页，落在卡住的 session 的终端上。
 - **开修复 session** 在 epic 的工作区里开一个新 session，把详情交给它。卡住的 session 保持运行，两者共用它的 worktree，所以新 session 的任务里写明：切分支或停进程前先告诉卡住的 session，杀任何东西前先问你，问题解决后告诉总控。
 - **没事，忽略** 拿掉这张卡片。只有当这个 session 再动起来、然后又卡住时，卡片才会回来。只有因为"很久没输出"判成卡住时才有这个按钮，因为只有这种可能是误判（比如在跑很长的测试）。
 
-session 有新动态时卡片也会自己消失。不经你点击，什么都不会去修；卡住标记只存在内存里，所以 Butler 重启后会重新检查。卡住检查只看 ticket 的 session，不看总控。
+session 有新动态时卡片也会自己消失。不经你点击，什么都不会去修；卡住标记只存在内存里，所以 Butler 重启后会重新检查。修复 session、复盘分析的 session，以及已归档的 ticket 或 epic 里的 session 不检查。
 
 ### 从 Jira 来
 
@@ -90,7 +90,7 @@ Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所�
 
 - `ask_user` 记下一件要你拍板的事，可以带选项和背景，然后这一轮结束。
 - `report` 把进展交给 session 上面的总控和你。类型是 `progress`（进展）、`done`（完成）、`blocked`（卡住）或 `choice`（有一个明显该推荐的选项时，session 替你做的选择）。epic 里 ticket 的 session 和修复 session 发的 `done`、`blocked` 汇报，放进 epic 总控的信箱（见[信箱](#信箱)）。单独的 ticket、epic 总控和全局总控发的汇报只存不送，并告诉 session 没有管它的总控；全局总控用 `list_inbox` 看得到它们。`progress` 和 `choice` 只存不送。
-- epic 的 **总控** tab 右边按时间顺序（旧的在前）列出它的 session 的汇报，标明是谁、什么时候；**全局总控** 页显示所有地方最近的 30 条汇报。未决的 `ask_user` 问题在 **轮到你** 页和它所在 epic 的 **这个范围里轮到你的** 下是一张卡片，显示问题、最多两个选项按钮和 **去看看**（打开那个 session 的终端）。在 ticket 的 **概况** tab 里，还开着的 session 问的问题就是这个 ticket 的轮次，占最上面一行，只有一个 **去回答** 按钮，点了切到 **终端** tab。别的提问（同一个 session 后来又问的，或者发问的 session 已经结束了的）在下面各占一行，带最多两个选项按钮和 **去看看**；这里的 **去看看** 只切到 **终端** tab，不会换到发问的那个 session。没有回答框：第三个及以后的选项，或者想用自己的话回答，都在终端里答。
+- epic 的 **总控** tab 右边，它的 session 的汇报按时间穿插在和总控的对话里，标明是谁、什么时候（还没有总控 session 时只列汇报）；**全局总控** 页也一样，带上所有地方最近的 30 条汇报。未决的 `ask_user` 问题在 **轮到你** 页和它所在 epic 的 **这个范围里轮到你的** 下是一张卡片，显示问题、最多两个选项按钮和 **去看看**（打开那个 session 的终端）。在 ticket 的 **概况** tab 里，还开着的 session 问的问题就是这个 ticket 的轮次，占最上面一行，只有一个 **去回答** 按钮，点了切到 **终端** tab。别的提问（同一个 session 后来又问的，或者发问的 session 已经结束了的）在下面各占一行，带最多两个选项按钮和 **去看看**；这里的 **去看看** 只切到 **终端** tab，不会换到发问的那个 session。没有回答框：第三个及以后的选项，或者想用自己的话回答，都在终端里答。
 - 点按钮的回答放进 session 的信箱，送的时候是"你问的『…』，用户的回答：…"：在干活的 session 下一次调用工具时收到，停着的直接输入进去。点完以后，卡片或那一行会写明正在送。ticket **概况** 里的提问行切到别的 tab 再回来，这个状态还在；送进去之前离开这个 ticket 再回来，问题会重新出现，再答一次会换掉之前的回答。如果你先在终端里回答了，卡片自己消失。
 - session 这边，只有真要你拍板的事才有卡片：屏幕上的权限确认、提问或退出计划模式的确认，未决的 `ask_user`，真的卡住的 session，以及确实在请你决定的回复。"要我继续吗？""还有别的吗？"这类回复不算，总控也不会为子 session 已经提过的事再出现一张。PR 也会出卡片（**可以合并**、**要你 review**，以及 **没人推进**，比如 CI 挂了没有 session 在修），需要你的 Butler 提醒也是（**Butler 要你点一下**，见[「轮到你」页](#轮到你页)）。侧栏 **轮到你** 旁边的数字是所有这些卡片的个数。
 - 这两个工具在 Butler 给 session 写的设置里是放行的，第一次用不会弹权限确认；同一个 server 的其他工具照样要确认。
@@ -111,7 +111,7 @@ Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所�
 
 ## 全局总控
 
-一个在所有 epic 之上的全局 session，从侧栏的 **全局总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面 **全局总控** 没有 tab：左边是这个 session 和它的终端，右边按时间顺序（旧的在前）列出所有 epic 和 ticket 的汇报，下面是折叠的 **消息（N）**。
+一个在所有 epic 之上的全局 session，从侧栏的 **全局总控** 打开。它的工作目录是 `~/.butler/workspaces/_butler`，用的是 workspace 记忆。同一时间只有一个：已经开着时，点按钮会切到它，想换另一段对话要先在终端里退出。它的页面 **全局总控** 没有 tab：左边是这个 session 和它的终端，右边是对话，所有 epic 和 ticket 的汇报按时间穿插在里面，下面是折叠的 **消息（N）**。
 
 - **它能看**所有 epic、epic 里的 feature 和每个 ticket，每个 PR 的 review 和 CI 状态，每个开着的 session 在做什么、是不是需要你，以及未决的提问和最近的汇报（`list_epics`、`list_features`、`list_tickets`、`list_prs`、`list_sessions`、`session_activity`、`list_inbox`）。`list_epics` 给出每个 epic 的状态、Jira epic、总控 session、汇总和卡点，按顺序列出它的 feature 和各自的 ticket 合了几个，还标明汇总是不是过时了。`list_prs` 还带着每个 PR 的 base 和 head 分支、是不是草稿、请了谁 review、谁 review 过、能不能合并和 label。`progress_overview` 一次返回整个进度总览：各格数字、每个开着的 PR 轮到谁、等了多久、PR 叠放、PR 表和每个 epic 的一句进度。`metrics_overview` 返回 **效果与花费** 页：每个 Butler PR 的周期、评论、人介入和花费，和你在 Butler 之前自己合并的 PR 比；session 停下来等你的原因；钱花在哪。
 - **它能做的**只有说话：`send_message` 给 epic 总控带一句话，用 epic 或 session id 指定。ticket 的 session 和修复 session 不能发。总控的终端关着（闲置时被自动关掉了，或者 Butler 重启过）时，Butler 接着它最近的对话打开（epic 从没开过总控就新开一个），再把话交进去。开着的走它的信箱：在干活就在下一次调用工具时收到，停着就在你没在打字时输入进去。带 `interrupt` 时 Butler 先按 Esc。每条消息有一个 `requestId`；对方这一轮做完时，它最后一段回复会以 **【回复】** 开头、写明 `requestId`，输入回全局总控，总控页面上的 **消息（N）** 列出最近 30 条消息（新的在前），每条是 **已排队**、**已送达** 或 **已回复**。`refresh_epic_summary` 在后台重写一份 epic 汇总，和 **立即更新** 一样。`refresh_session` 给某个 session 换新。`ask_user` 和 `report` 和别的 session 一样；它自己的汇报只存着。
@@ -123,7 +123,7 @@ Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所�
 
 ## 合并总控
 
-同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突，冲突的那个先合进去之前，会先拦下这次合并。详见[配置 Butler](configuration.zh-CN.md#合并总控)。
+同一个仓库里的两个 ticket 快要撞车时，Butler 会在合并前介入。它盯着自己开的 session，不管属于哪个 epic 或 ticket，只检查合并进目标分支，以及在共用文件夹里切分支这两类操作。它用 git 判断分支是否冲突。先到先合：先合的那个放行，另一个 ticket 会被告知之后要 rebase；和一个正在进行的合并冲突时，要等那个合完。详见[配置 Butler](configuration.zh-CN.md#合并总控)。
 
 ## session 的收尾和换新
 
@@ -135,7 +135,7 @@ Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所�
 
 ## 复盘与规矩
 
-Butler 会读你已合并 PR 上的 review 评论（经 `gh` 和你自己的 `claude`），为每个仓库提炼出规矩，比如“改 schema 要加迁移”。在侧栏打开 **review 经验** 查看：页面上只有 **待确认** 列表，跨所有仓库和产品，每条写着属于哪里、为什么和出处 PR，等你确认、编辑后确认或驳回，侧栏上的数字是待确认的条数。其余的都在默认收起的 **高级** 里：按仓库和产品看全部规矩、筛选和批量、批次和撤销、准入策略、产品、导入导出、向导、校准、检查和回测。在某个仓库上点 **分析历史**，会回头分析它过去的 PR，之后新合并的 PR 会自动接着分析。相关的仓库可以归成一个产品，产品的规矩对它的所有仓库都生效。只有你确认过的规矩才会送出去，而且只送给 Butler 开的 ticket session 和修复 session，放在 session 说明里（每个 session 最多 30 条，出现次数多的优先）。规矩改了以后，下一次打开或恢复 session 时才生效，已经开着的 session 不受影响。规矩只存在 Butler 里，不会写进你的仓库（不写 `CLAUDE.md`，也不写 `.github/copilot-instructions.md`）。
+Butler 会读你已合并 PR 上的 review 评论（经 `gh` 和你自己的 `claude`），为每个仓库提炼出规矩，比如“改 schema 要加迁移”。在侧栏打开 **复盘与规矩** 查看：页面上只有 **待确认** 列表，跨所有仓库和产品，每条写着属于哪里、为什么和出处 PR，等你确认、编辑后确认或驳回，侧栏上的数字是待确认的条数。其余的都在默认收起的 **高级** 里：按仓库和产品看全部规矩、筛选和批量、批次和撤销、准入策略、产品、导入导出、向导、校准、检查和回测。在某个仓库上点 **分析历史**，会回头分析它过去的 PR，之后新合并的 PR 会自动接着分析。相关的仓库可以归成一个产品，产品的规矩对它的所有仓库都生效。只有你确认过的规矩才会送出去，而且只送给 Butler 开的 ticket session 和修复 session，放在 session 说明里（每个 session 最多 30 条，出现次数多的优先）。规矩改了以后，下一次打开或恢复 session 时才生效，已经开着的 session 不受影响。规矩只存在 Butler 里，不会写进你的仓库（不写 `CLAUDE.md`，也不写 `.github/copilot-instructions.md`）。
 
 ## 状态和晚间交接
 
@@ -164,11 +164,11 @@ epic 的记忆用来放它各个 ticket 共用的约定，比如 API 约定或�
 
 ## 界面语言
 
-界面有中文和英文两种。首次启动时跟随系统语言（中文系统用中文，其他用英文），之后可以在 **设置 → 常规 → 语言 / Language** 或首次运行向导里改。语言也会切换 Butler 发给 `claude` 的默认提示词，所以 handoff 和记忆会用这种语言来写；你自己改过的提示词不变。从 1.2.0 或更早版本升级上来的安装保持中文，直到你手动改。切换之后，在环境检查里点一次 **安装 / 修复**，`/handoff` 命令就会换成新语言。这些文档引用的是中文界面的标签；[英文版](how-it-works.md)引用的是英文界面的标签。
+界面有中文和英文两种。首次启动时跟随系统语言（中文系统用中文，其他用英文），之后可以在 **设置 → 基本 → 语言 / Language** 或首次运行向导里改。语言也会切换 Butler 发给 `claude` 的默认提示词，所以 handoff 和记忆会用这种语言来写；你自己改过的提示词不变。从 1.2.0 或更早版本升级上来的安装保持中文，直到你手动改。切换之后，在环境检查里点一次 **安装 / 修复**，`/handoff` 命令就会换成新语言。这些文档引用的是中文界面的标签；[英文版](how-it-works.md)引用的是英文界面的标签。
 
 ## Butler 不会碰的东西
 
-- **你的 Claude Code 配置。** 只有当你点安装 hook 时 Butler 才会改它，要么在首次运行向导里，要么在 **设置 → 环境检查 → 安装 / 修复**。这会往你用户级的 `settings.json` 里加四个 hook（`SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`），并写入 `commands/handoff.md`。你的其他 hook 和命令都会保留，第一次还会把原文件备份为 `settings.json.butler-backup`。Butler 开的 session 还会通过它们自己设置里的 hook 记录 Skill 调用（只记 skill 名），用来判断设计和自我 review 有没有做。记忆从不通过 `claude mcp add` 注册，而是在 Butler 启动每个 session 时通过命令行参数 `--mcp-config` 传入。
+- **你的 Claude Code 配置。** 只有当你点安装 hook 时 Butler 才会改它，要么在首次运行向导里，要么在 **设置 → 健康检查 → 安装 / 修复**。这会往你用户级的 `settings.json` 里加四个 hook（`SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`），并写入 `commands/handoff.md`。你的其他 hook 和命令都会保留，第一次还会把原文件备份为 `settings.json.butler-backup`。Butler 开的 session 还会通过它们自己设置里的 hook 记录 Skill 调用（只记 skill 名），用来判断设计和自我 review 有没有做。记忆从不通过 `claude mcp add` 注册，而是在 Butler 启动每个 session 时通过命令行参数 `--mcp-config` 传入。
 - **你的 tracker 和代码托管平台。** Butler 自己没有 Jira、GitHub 或 Claude 登录。Jira、Linear、GitLab 或其他 tracker 只由你公司的 Claude Code 通过它自己的 MCP server 读取。PR 由 `claude` 用你的 `gh` 读取。
 - **网络。** Butler 自己没有网络代码，只有通知 webhook 的发送和共享 MCP 在 127.0.0.1 上的监听。有一条 lint 规则强制保证这一点；见[隐私模型](#隐私模型)。
 
@@ -186,8 +186,8 @@ epic 的记忆用来放它各个 ticket 共用的约定，比如 API 约定或�
 | `~/.butler/workspaces/_butler/` | 全局总控的工作目录 |
 | `~/.butler/mcp/butler.json` | 全局总控的 `--mcp-config` 文件 |
 | `~/.butler/refresh/<session>.md` | 换新前存下的最近几轮对话，换新后读回；随 session 一起删除 |
-| `~/.butler/mcp/project-*.json`、`local-*.json` | 给无人值守运行用的 MCP server 配置副本。只有开启 **后台 handoff 也加载本地级的 MCP…**（`headlessProjectMcp`）时才会写。因为可能含有 token，这些是私有文件。 |
-| `~/.butler/logs/main.log` | 日志。**设置 → 环境检查 → 导出诊断** 会把它的最后几行和性能计数一起存下来，反馈「Butler 卡」时附上（见[配置说明](configuration.zh-CN.md#导出诊断)）。 |
+| `~/.butler/mcp/project-*.json`、`local-*.json` | 给无人值守运行用的 MCP server 配置副本。只有开启 **后台的状态更新也加载本地级的 MCP…**（`headlessProjectMcp`）时才会写。因为可能含有 token，这些是私有文件。 |
+| `~/.butler/logs/main.log` | 日志。**设置 → 健康检查 → 导出诊断** 会把它的最后几行和性能计数一起存下来，反馈「Butler 卡」时附上（见[配置说明](configuration.zh-CN.md#导出诊断)）。 |
 
 epic 的工作区不在 `~/.butler` 下：它在你的仓库旁边（见 [Epic](#epic)），放着这个 epic 的 worktree。升级时被归档的旧 epic，工作区留在原处。
 
@@ -201,7 +201,7 @@ Windows 上 `~` 是 `%USERPROFILE%`。设置 `BUTLER_HOME` 可以换一个文件
 - `~/.claude/projects` 下的 session transcript：未认领 session（只在 **显示 Butler 之外开的 session** 打开时扫描）、`/handoff` 的输出和 epic 页的实时状态
 - Claude Code 在系统临时目录（macOS 上是 `/private/tmp`）下 `claude-<uid>/<project>/<session>/tasks/` 里写的命令输出文件：实时状态和卡住检测
 - `~/.claude/sessions/` 里的 session 登记文件：运行中 session 的名字，这样修复 session 才能给它发消息
-- 开启 **后台 handoff 也加载本地级的 MCP…**（`headlessProjectMcp`）时，仓库的 `.mcp.json` 和 `.claude/settings.local.json`，用来找到你批准过的 server
+- 开启 **后台的状态更新也加载本地级的 MCP…**（`headlessProjectMcp`）时，仓库的 `.mcp.json` 和 `.claude/settings.local.json`，用来找到你批准过的 server
 
 transcript、输出文件和登记文件都是 Claude Code 的内部文件，更新可能会改变它们。Butler 读不了时，实时状态会退回到只显示命令和它跑了多久。
 
@@ -228,9 +228,11 @@ Butler 自己不调用任何模型，也没有 API key。所有要用模型的�
 
 ## 代码签名
 
-**现状：** 安装包都没有代码签名。macOS 版只有 ad-hoc 签名，没有公证；Windows 安装包没有签名。所以第一次打开时 Gatekeeper 和 SmartScreen 会拦（怎么放行见 [README](../README.zh-CN.md#安装)），Butler 也没有自动更新。
+**现状：** 安装包都没有代码签名。macOS 版只有 ad-hoc 签名，没有公证；Windows 安装包没有签名。所以第一次打开时 Gatekeeper 和 SmartScreen 会拦（怎么放行见 [README](../README.zh-CN.md#安装)）。Butler 也没有自动更新，只在有新版本时提示你。
 
 以后加上签名时，只签 GitHub Actions 上由 [`.github/workflows/release.yml`](../.github/workflows/release.yml) 从这个公开仓库的版本 tag 构建出来的安装包。任何人在自己机器上做的构建都不会被签名。
+
+团队角色：
 
 - **提交者和审阅者：** [@yul761](https://github.com/yul761)
 - **审批者：** [@yul761](https://github.com/yul761)

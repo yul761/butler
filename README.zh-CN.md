@@ -2,21 +2,21 @@
 
 **和一个总控对话。它替你管好各个 Claude Code session，只在轮到你的时候叫你。**
 
-![描述一个 epic，总控拆成几个 ticket，session 开工，「轮到你」页上出现卡片，点一下合并](docs/media/demo.zh-CN.gif)
+![描述一个 epic，总控拆成几个 ticket，session 开工，「轮到你」页上出现卡片，PR 可以合并了](docs/media/demo.zh-CN.gif)
 
 **下载：** [macOS（Apple silicon）](https://github.com/yul761/butler/releases/latest) · [Windows](https://github.com/yul761/butler/releases/latest) · MIT · [butler.statecore.io](https://butler.statecore.io) · [English](README.md) | **简体中文**
 
-- **交出去的是一块活，不是一条提示词。** 把一个 epic 讲给它的总控听。总控把活拆成几个 ticket，每个 ticket 有自己的 session 和 git worktree。PR 按顺序合，一个合并会和另一个 ticket 的分支撞车时，会先等那个合进去。
+- **交出去的是一块活，不是一条提示词。** 把一个 epic 讲给它的总控听。总控把活拆成几个 ticket，每个 ticket 有自己的 session 和 git worktree。总控按顺序推进，每次合并之前 Butler 都会检查：两个分支冲突时，先合的先合，另一个 ticket 会被告知要 rebase。
 - **在一个地方回答。** session 需要你的时候，**轮到你** 页上就会出现一张卡片：一个问题、一个权限确认、一个可以合并的 PR。停住不动的 session 也会有一张卡片，附上可能的原因。
-- **session 共享记忆。** 一个 session 定下的约定，比如 API 约定，这个 epic 里其他 session 都能看到。上下文太长的 session 会先写交接、清空，再从记忆里接着做。
+- **session 共享记忆。** 一个 session 存进 epic 记忆的约定，比如 API 约定，会发给这个 epic 里其他正在跑的 session。上下文太长的 session 会先写交接、清空，再从记忆里接着做。
 
-**本地优先。** Butler 自己不调用任何模型，也不发遥测。数据只会经你自己的 `claude` 和 `gh` 离开你的电脑。连每天一次的更新检查也走 `gh`，只提示，不下载不安装。
+**本地优先。** Butler 自己没有模型，也没有 API key：后台的活都经你自己的 `claude` 做，也不发遥测。数据只会经你自己的 `claude`、`git` 和 `gh` 离开你的电脑，另外就是你自己设了的通知 webhook。连每天一次的更新检查也走 `gh`，只提示，不下载不安装。
 
 ## 快速开始
 
 1. 下载、安装并打开 Butler（第一次打开要多点一下，见[安装](#安装)）。向导 **欢迎使用 Butler** 会检查 Claude Code、装好 Butler 的 hook。
 2. 在 **全部工作** 页点 **+ 新建 epic**，起个名字，选好仓库。
-3. 在 epic 的 **总控** tab 里打开一个 **总控 session**，把要做的活讲给它听。总控会建好 ticket，在每个 ticket 里开 session。你在 **轮到你** 页回答问题，点一下合并。
+3. 在 epic 的 **总控** tab 里点 **+ 总控 session**，把要做的活讲给它听。总控会建好 ticket，在每个 ticket 里开 session。你在 **轮到你** 页回答问题，把它说可以合的 PR 合进去。
 
 [Butler 是怎么工作的](docs/how-it-works.zh-CN.md) · [和并排开几个 session 有什么不同](docs/compare.zh-CN.md) · [配置说明](docs/configuration.zh-CN.md)
 
@@ -24,6 +24,7 @@
 
 - Apple silicon 的 macOS，或 Windows 10/11 x64。Intel Mac 可以[从源码构建](CONTRIBUTING.zh-CN.md)。
 - 已安装并登录 Claude Code：终端里 `claude --version` 要能运行。
+- 可选：在 Claude Code 里配置好一个 tracker MCP server（Jira、Linear、GitLab……），handoff 就能读到 ticket 状态。
 - `PATH` 上有 Git。Windows 上请安装 **Git for Windows**：Claude Code 通过 Git Bash 运行 hook，Butler 找不到 `git.exe` 时不会运行 git。
 
 ## 安装
@@ -33,13 +34,15 @@
 - macOS：`Butler-x.y.z-arm64.dmg`（或 `Butler-x.y.z-arm64-mac.zip`），约 170 MB
 - Windows：`Butler-Setup-x.y.z.exe`，约 140 MB
 
+装好以后 macOS 版约占 455 MB，其中约 140 MB 是 `butler-hook`，也就是 Claude Code 每次触发 hook 时运行的程序；安装 hook 时会把它复制到 `~/.butler/bin`。
+
 安装包还没有代码签名（见[代码签名](docs/how-it-works.zh-CN.md#代码签名)），所以第一次打开要多做一步。
 
 ### macOS（Gatekeeper）
 
 1. 打开 `.dmg`，把 Butler 拖进"应用程序"。
 2. 打开 Butler。macOS 会拒绝，提示 Apple 无法验证这个 app。
-3. 打开 **系统设置 → 隐私与安全性**，往下滚到关于 Butler 的提示，点 **仍要打开** 并确认。或者在终端里运行：
+3. 打开 **系统设置 → 隐私与安全性**，往下滚到关于 Butler 的提示，点 **仍要打开** 并确认。在 macOS 14 及更早版本上，也可以在"应用程序"里右键（Control-点按）Butler，选 **打开**，再点一次 **打开**。或者在终端里运行：
 
    ```sh
    xattr -dr com.apple.quarantine /Applications/Butler.app
@@ -53,7 +56,7 @@
 2. SmartScreen 提示"Windows 已保护你的电脑"。点 **更多信息 → 仍要运行**。
 3. 选"仅为我安装"（不需要管理员权限）。
 
-如果开着 Windows 11 的**智能应用控制**，它会拦下未签名的 app，而且没法放行，开着它时装不了 Butler。
+如果开着 Windows 11 的**智能应用控制**，它会拦下未签名的 app，而且没法放行，开着它时装不了 Butler。关掉它之前请先看 Microsoft 的说明。
 
 升级时下载新版本，直接覆盖安装。你在 `~/.butler` 里的数据会保留。每个版本改了什么见 [release notes](https://github.com/yul761/butler/releases)。
 
@@ -62,8 +65,10 @@
 向导 **欢迎使用 Butler** 有三步：
 
 1. **检查 Claude Code。** Butler 在你登录 shell 的 `PATH` 上找 `claude`，或者由你给出绝对路径。
-2. **安装 hook。** Butler 把四个 hook 和一个 `/handoff` 命令合并进你用户级的 Claude Code 设置，保留你自己的 hook，并先做一份备份。这些 hook 只往 `~/.butler/inbox` 里放小 JSON 文件，从不访问网络。用 **设置 → 环境检查 → 卸载** 可以移除。
+2. **安装 hook。** Butler 把四个 hook 和一个 `/handoff` 命令合并进你用户级的 Claude Code 设置，保留你自己的 hook，并先做一份备份。这些 hook 只往 `~/.butler/inbox` 里放小 JSON 文件，从不访问网络，退出码永远是 0。用 **设置 → 健康检查 → 卸载** 可以移除。
 3. **完成。** tracker 的 MCP 工具和权限档案是可选的，放在设置里。
+
+以后可以在 **设置 → 基本** 里重新运行向导。
 
 不要再另外安装 StateCore 自己的 Claude Code 采集插件：Butler 已经给它开的 session 配好了 StateCore 记忆，两个都装会把记忆记两遍。
 
@@ -71,9 +76,9 @@
 
 ## 卸载
 
-1. **设置 → 环境检查 → 卸载** 会从 Claude Code 里移除 Butler 的 hook 和 `/handoff` 命令。
+1. **设置 → 健康检查 → 卸载** 会从 Claude Code 里移除 Butler 的 hook 和 `/handoff` 命令。
 2. 删除 app：macOS 上把它从"应用程序"里拖出去；Windows 上在 设置 → 应用 → Butler → 卸载。
-3. 如果也要删除数据，删掉 `~/.butler` 和 Electron 的配置文件夹（macOS 上是 `~/Library/Application Support/butler`，Windows 上是 `%APPDATA%\butler`）。
+3. 如果也要删除数据，删掉 `~/.butler` 和 Electron 的配置文件夹（macOS 上是 `~/Library/Application Support/butler`，Windows 上是 `%APPDATA%\butler`）。在 macOS 上，如果你保存过 webhook 地址，还要在"钥匙串访问"里删掉"butler Safe Storage"这一项。
 
 ## 开发
 
