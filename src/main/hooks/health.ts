@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
+import path from "node:path";
 import type { GhAuthState, HandoffCommandStatus, HealthReport, HookStatus } from "../../shared/types";
 import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "../handoff/command";
 import { probeClaude } from "../claude/capabilities";
@@ -129,20 +130,25 @@ export class HealthService {
   }
 
   async refresh(): Promise<HealthReport> {
-    const pathValue = await (this.d.readPath ?? (() => readLoginShellPath(this.d.platform, this.d.env)))();
+    const shellPath = await (this.d.readPath ?? (() => readLoginShellPath(this.d.platform, this.d.env)))();
     // 用户目录只从环境变量拿（测试给的 env 里没有就不回退，不会摸到真的用户目录）。
     const home = (this.d.platform === "win32" ? this.d.env.USERPROFILE : this.d.env.HOME) || undefined;
     const fallbacks = wellKnownClaudePaths(this.d.platform, { home, appData: this.d.env.APPDATA });
-    const path = locateClaude({ override: this.d.settings.get("claudePath"), pathValue, platform: this.d.platform, fallbacks });
+    const claudePath = locateClaude({ override: this.d.settings.get("claudePath"), pathValue: shellPath, platform: this.d.platform, fallbacks });
+    // 在常见安装位置找到的（不在 PATH 上）：把它的目录加到 session 的 PATH 前面，session 里按名字调 claude 也找得到。
+    const viaFallback = claudePath !== null && fallbacks.includes(claudePath) && this.d.settings.get("claudePath").trim() === "";
+    const pathValue = viaFallback
+      ? [(this.d.platform === "win32" ? path.win32 : path.posix).dirname(claudePath), shellPath].filter(Boolean).join(this.d.platform === "win32" ? ";" : ":")
+      : shellPath;
     const [claude, gh] = await Promise.all([
-      probeClaude(path, withPath(this.d.env, pathValue), this.d.run),
+      probeClaude(claudePath, withPath(this.d.env, pathValue), this.d.run),
       this.d.gh ? this.d.gh(pathValue).catch((): GhAuthState => "missing") : Promise.resolve<GhAuthState>("missing"),
     ]);
     const { paths } = this.d;
     const claudeLogin = claude.error === null
       ? await claudeLoginState({ claudeJson: paths.claudeJson, claudeConfigDir: paths.claudeConfigDir, claudeSettings: paths.claudeSettings, env: this.d.env })
       : null;
-    this.state = { path, pathValue };
+    this.state = { path: claudePath, pathValue };
     this.lastClaudeVersion = claude.version ?? null;
     this.optional = claude.error === null ? { model: claude.flags["--model"] === true, effort: claude.flags["--effort"] === true } : { model: true, effort: false };
 

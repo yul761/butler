@@ -583,7 +583,7 @@ async function bootstrap(): Promise<void> {
     // 先用登录 shell 的 PATH 重新找 gh，再看它登没登录（向导第 1 步、环境检查，BTL-249）。
     gh: (pathValue) => {
       applyGhResolution(resolveGh(pathValue, process.platform), process.platform, (m) => logger(m));
-      return ghAuthState(5000);
+      return ghAuthState(3000);
     },
   });
   // 「谁该动」看板（UI 重做第 1 层）跟着 stateChanged 一起防抖推 turn:changed；TurnService 在下面才建好。

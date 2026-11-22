@@ -18,6 +18,8 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [claudePath, setClaudePath] = useState("");
   const [savedClaudePath, setSavedClaudePath] = useState("");
+  /** 点过「安装并继续」但没装上：给一个「下一步」，不让人只能「稍后再说」。 */
+  const [installFailed, setInstallFailed] = useState(false);
 
   // 只采用最近一次检测的结果：启动时的检测在 Windows 上可能很慢（经 cmd.exe 跑 claude --version / --help），
   // 用户在它返回之前改了 claude 路径并重新检测时，晚到的旧结果不能盖掉新结果。
@@ -81,7 +83,12 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       const r = await api.installHooks();
       if (seq !== runSeq.current) return;
       setReport(r);
-      if (r.hooks === "installed") setStep(nextStep("hooks"));
+      // 装的时候用户可能已经点了「上一步」：只在还停在 hook 这一步时往前走。
+      if (r.hooks === "installed") setStep((cur) => (cur === "hooks" ? nextStep("hooks") : cur));
+      else {
+        setInstallFailed(true);
+        setMessage(S.wizardHooksNotInstalled);
+      }
     } catch (e) {
       if (seq === runSeq.current) setMessage(errorText(e));
     } finally {
@@ -162,14 +169,19 @@ export function Wizard({ onDone }: { onDone: () => void }) {
 
       {message && <p className="muted">{message}</p>}
       <div className="actions">
-        {step !== "claude" && step !== "done" && <button onClick={() => setStep(prevStep(step))}>{S.wizardBack}</button>}
+        {step !== "claude" && step !== "done" && <button disabled={busy} onClick={() => setStep(prevStep(step))}>{S.wizardBack}</button>}
         {step === "done" ? (
           <button className="primary" onClick={() => void finish(false)}>{S.wizardFinish}</button>
         ) : step === "hooks" && !hooksReady ? (
-          // 不装 hook，「轮到你」和状态都不工作（BTL-249）：主按钮先装再走；真想跳过点「稍后再说」。
-          <button className="primary" disabled={busy || report?.hooks === "settings_invalid"} onClick={() => void installAndContinue()}>
-            {S.wizardHooksInstallNext}
-          </button>
+          // 不装 hook，「轮到你」和状态都不工作（BTL-249）：主按钮先装再走。装不上（或 settings.json 读不了）时再给一个「下一步」。
+          <>
+            <button className="primary" disabled={busy || report?.hooks === "settings_invalid"} onClick={() => void installAndContinue()}>
+              {S.wizardHooksInstallNext}
+            </button>
+            {(installFailed || report?.hooks === "settings_invalid") && (
+              <button disabled={busy} onClick={() => setStep(nextStep(step))}>{S.wizardNext}</button>
+            )}
+          </>
         ) : (
           <button className="primary" disabled={busy || !canAdvance(step, report)} onClick={() => setStep(nextStep(step))}>
             {S.wizardNext}

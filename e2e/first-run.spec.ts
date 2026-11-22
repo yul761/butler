@@ -37,7 +37,10 @@ test("first run on a fresh machine: wizard, a ticket with no repo, the first ses
   const next = page.getByRole("button", { name: S.wizardNext, exact: true });
   await expect(next).toBeEnabled();
   writeFileSync(join(s.claudeConfigDir, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "someone@example.com" } }));
-  await page.getByRole("button", { name: S.recheck, exact: true }).click();
+  const recheck = page.getByRole("button", { name: S.recheck, exact: true });
+  await recheck.click();
+  // 检测中提示也是藏着的：等检测做完（按钮重新能点；点下去的那一下 React 已经同步把它设成了不能点）再看提示还在不在。
+  await expect(recheck).toBeEnabled();
   await expect(login).toHaveCount(0);
   await expect(kvValue(page, S.claudePath)).toHaveText(s.claudePath);
   await next.click();

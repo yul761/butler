@@ -466,7 +466,7 @@ export const EN: UiStrings = {
   featureSummaryStoredDegraded: "Incomplete status: claude's output did not pass validation. The original text was saved.",
   featureSummarySkipped: {
     nothing_to_summarize: "Nothing to summarize yet: open a coordinator session first, or update the status of a ticket.",
-    rate_limited: "Your company's Claude quota is used up or rate limited. Try again later.",
+    rate_limited: "Your Claude quota is used up or rate limited. Try again later.",
   } as Record<string, string>,
   featureSummaryFailed: (m: string) => `Status update failed: ${m}`,
   noPr: "No PR yet",
@@ -801,7 +801,7 @@ export const EN: UiStrings = {
   handoffStored: "Status updated.",
   handoffDegraded: "Incomplete status: claude's output did not pass validation. The raw text was saved.",
   handoffSkipped: {
-    rate_limited: "Your company's Claude quota is used up or rate limited. Try again later.",
+    rate_limited: "Your Claude quota is used up or rate limited. Try again later.",
     no_session: "This ticket has no session to summarize yet.",
   } as Record<string, string>,
   handoffFailed: (m: string) => `Status update failed: ${m}`,
@@ -1529,7 +1529,7 @@ export const EN: UiStrings = {
   generalFields: { claudePath: "claude path", branchTemplate: "Branch template", ticketPattern: "Ticket id pattern" } as Record<string, string>,
   generalPlaceholders: { claudePath: "Empty: find it on the login shell's PATH", branchTemplate: "feature/{key}", ticketPattern: "[A-Z][A-Z0-9]+-\\d+" } as Record<string, string>,
   generalHelp: {
-    claudePath: "Enter the absolute path if your company's claude is not on PATH. Saving checks it again.",
+    claudePath: "Enter the absolute path if claude is not on PATH. Saving checks it again.",
     branchTemplate: "Used when a branch is created. You can use {key} (the ticket id), {key_lower} (the ticket id in lower case) and {title} (the title in lower-case letters, digits and -; left out when it has none), for example {key_lower}-{title}.",
     ticketPattern: "Recognises ticket ids (new tickets and claiming sessions). Avoid patterns that can hang, such as (a+)+.",
   } as Record<string, string>,
@@ -1576,6 +1576,7 @@ export const EN: UiStrings = {
   wizardHooksTitle: "Install the hooks and the /handoff command",
   wizardHooksHelp: (home: string) => `Butler merges a few hooks into your user-level Claude Code settings (your own are kept) and adds a /handoff command. They are how Butler knows when a session stops to wait for you and when it is working; without them, “Your turn” won't tell you. They only write events into Butler's data folder (${home}), never go online and never block Claude Code. You can uninstall them in Settings with one click at any time.`,
   wizardHooksInstallNext: "Install and continue",
+  wizardHooksNotInstalled: "The hooks were not installed; the status above says why. Fix it and click “Install and continue” again, or click “Next” for now and install them later under Settings › Health check.",
   wizardDoneTitle: "All set",
   wizardDoneHelp: "Click “Get started” to go to the home page and pick a way to start the first thing there. How much Butler does for you is chosen in Settings › Automation, and it starts at Manual. Every night Butler updates the status of each ticket with activity. You can change all of this in Settings later, and rerun this wizard from there. If you use a tracker such as Jira or Linear, tick its MCP query tools under Settings › Advanced › Schedule & status; to let sessions run the read-only commands you use often without asking, confirm them in the permission profile under Settings › Advanced › Interruptions & notifications.",
   prStage: { design: "Design", dev: "Develop", self_review: "Self-review", ci: "CI", peer_review: "Peer review", merge: "Merge" } as Record<PrStageId, string>,
@@ -2244,7 +2245,6 @@ export const EN: UiStrings = {
     nameSep: ", ",
     lastSaid: "What the agent said last",
     lastSaidNone: "Not available (the last line can't be read while the terminal is closed)",
-    lastSaidNoSession: "No session yet.",
     firstSessionHint: "This ticket has no session yet. Start one and Claude begins work on its branch; when it stops to wait for you, “Your turn” tells you.",
     firstSessionNoRepo: "This ticket has no repo yet. Add one first (Claude works there), and then you can start a session.",
     startFirstSession: "Start the first session",
