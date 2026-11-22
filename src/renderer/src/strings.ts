@@ -2152,7 +2152,7 @@ const ZH = {
     never: "还没查过",
     checkNow: "检查更新",
     checking: "正在检查…",
-    resultLatest: (current: string, latest: string) => (current === latest ? `已是最新版本（${current}）。` : `已是最新版本：你在用 ${current}，GitHub 上最新的正式版是 ${latest}。`),
+    resultLatest: (current: string, latest: string) => (current === latest ? `已是最新版本（${current}）。` : `已是最新版本（你在用 ${current}；GitHub 上最新发布的是 ${latest}）。`),
     resultAvailable: (v: string) => `有新版本：${v}。顶部的提示条里能看更新说明、去下载。`,
     resultFailed: "没查成：",
     reasons: {

@@ -234,7 +234,8 @@ export function runGhDetail(
         stdout: e ? null : String(stdout),
         stderr: String(stderr ?? ""),
         spawnError: e && typeof e.code === "string" ? e.code : null,
-        timedOut: e?.killed === true,
+        // 超过 maxBuffer 时 Node 也会杀掉进程（killed）：那不是超时。
+        timedOut: e?.killed === true && e.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
       });
     });
   });

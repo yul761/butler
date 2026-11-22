@@ -18,7 +18,7 @@ function initialTab(section: SettingsSection | undefined): SettingsTabId {
 }
 
 /** 设置页（UI 重做 spec §5.3）：基本 / 功能 / 高级 / 健康检查 / 关于（BTL-253）。 */
-export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => void; section?: SettingsSection }) {
+export function SettingsPage({ onRerunWizard, section, nonce }: { onRerunWizard: () => void; section?: SettingsSection; nonce?: number }) {
   const [tab, setTab] = useState<SettingsTabId>(() => initialTab(section));
   const [openGroup, setOpenGroup] = useState<AdvancedGroupId | null>(() => sectionTarget(section).group);
   useEffect(() => {
@@ -26,7 +26,7 @@ export function SettingsPage({ onRerunWizard, section }: { onRerunWizard: () => 
     const t = sectionTarget(section);
     setTab(t.tab);
     setOpenGroup(t.group);
-  }, [section]);
+  }, [section, nonce]);
   const [report, setReport] = useState<HealthReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

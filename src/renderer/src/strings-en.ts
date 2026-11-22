@@ -2133,7 +2133,7 @@ export const EN: UiStrings = {
     never: "Never",
     checkNow: "Check for updates",
     checking: "Checking…",
-    resultLatest: (current: string, latest: string) => (current === latest ? `You're up to date (${current}).` : `You're up to date: you run ${current}; the latest release on GitHub is ${latest}.`),
+    resultLatest: (current: string, latest: string) => (current === latest ? `You're up to date (${current}).` : `You're up to date (you run ${current}; the latest on GitHub is ${latest}).`),
     resultAvailable: (v: string) => `A new version is out: ${v}. The bar at the top has the release notes and the download link.`,
     resultFailed: "Couldn't check: ",
     reasons: {

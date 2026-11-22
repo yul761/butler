@@ -1,6 +1,7 @@
 import type { Lang } from "../shared/i18n";
 import { formatDuration } from "../shared/text";
 import type { InboxRole, RefreshRefusal } from "../shared/types";
+import type { UpdateFailReason } from "../shared/update";
 import { currentLang } from "./i18n";
 
 /**
@@ -82,6 +83,7 @@ const ZH = {
   update: {
     auditFound: (latest: string, newer: boolean) => (newer ? `GitHub 上的最新版本是 ${latest}，比当前新` : `GitHub 上的最新版本是 ${latest}，已是最新`),
     auditFailed: "检查更新没查成",
+    reasons: { no_gh: "没找到 gh", not_logged_in: "gh 没登录", offline: "连不上 GitHub", rate_limited: "被 GitHub 限流", no_release: "还没有发布过 release", bad_response: "GitHub 的回复看不懂", failed: "gh 出错" } as Record<UpdateFailReason, string>,
   },
   startupFailed: "Butler 启动失败",
   claudeMissingCheck: "找不到 claude 命令，请先在“环境检查”里确认 claude 路径",
@@ -706,6 +708,7 @@ const EN: MainStrings = {
   update: {
     auditFound: (latest: string, newer: boolean) => (newer ? `The latest version on GitHub is ${latest}, newer than this one` : `The latest version on GitHub is ${latest}; this one is up to date`),
     auditFailed: "Could not check for updates",
+    reasons: { no_gh: "gh not found", not_logged_in: "gh not logged in", offline: "couldn't reach GitHub", rate_limited: "rate-limited by GitHub", no_release: "no release yet", bad_response: "unreadable reply from GitHub", failed: "gh failed" } as Record<UpdateFailReason, string>,
   },
   startupFailed: "Butler could not start",
   claudeMissingCheck: "The claude command was not found. Check the claude path under “Environment check” first",

@@ -34,13 +34,14 @@ test.describe("update notice", () => {
     await expect(page.getByTestId("external-audit").locator("tbody tr").first()).toContainText(S.update.auditKind);
 
     // 重启：24 小时内不再查，跳过的版本也不再提示。
-    const probes = () => ghCalls(s).filter((a) => a[0] === "--version").length;
-    const before = probes();
+    // 更新检查和「请你 review」的轮询都在健康检查之后才开始：等到这次启动的 review 查询出现（说明已经过了 healthReady），
+    // 再留几秒给 gh 探测和更新检查（本该什么都不查）。
+    const reviewSearches = () => ghCalls(s).filter((a) => a[0] === "search" && a[1] === "prs").length;
+    const before = reviewSearches();
     await first.app.close();
     const second = await launch(s);
-    // 更新检查在 gh 探测完之后才开始：等到这次启动的探测出现，再留一点时间给它（本该什么都不做）。
-    await expect.poll(probes, { timeout: 30_000 }).toBeGreaterThan(before);
-    await second.page.waitForTimeout(2000);
+    await expect.poll(reviewSearches, { timeout: 30_000 }).toBeGreaterThan(before);
+    await second.page.waitForTimeout(3000);
     await expect(second.page.getByTestId("update-banner")).toBeHidden();
     expect(releaseCalls(ghCalls(s))).toHaveLength(1);
 

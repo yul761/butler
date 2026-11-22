@@ -977,7 +977,8 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     notify: () => notify(),
     log: logger,
-    text: { found: (latest, newer) => M().update.auditFound(latest, newer), failed: M().update.auditFailed },
+    ready: () => healthReady.then(() => ghProbed),
+    text: () => ({ found: M().update.auditFound, failed: M().update.auditFailed, reasons: M().update.reasons }),
   });
   const openRelease = (): void => {
     const cached = updateChecker.latestUrl();

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReleaseInfo } from "../../shared/update";
 import type { LatestReleaseResult } from "./release-source";
-import { UPDATE_CHECK_INTERVAL_MS, UpdateChecker, type UpdateAuditEntry, type UpdateSettingKey } from "./update-checker";
+import { UPDATE_CHECK_INTERVAL_MS, UpdateChecker, type UpdateAuditEntry, type UpdateCheckerDeps, type UpdateSettingKey } from "./update-checker";
 
 const DAY = 24 * 3600_000;
 const rel = (version: string): ReleaseInfo => ({ version, tag: `v${version}`, url: `https://github.com/yul761/butler/releases/tag/v${version}`, publishedAt: 1, notes: `notes ${version}` });
 const ok = (version: string, extra: Partial<{ draft: boolean; prerelease: boolean }> = {}): LatestReleaseResult => ({ ok: true, release: rel(version), draft: false, prerelease: false, ...extra });
 
-function setup(o: { results?: LatestReleaseResult[]; gh?: boolean; settings?: Partial<Record<UpdateSettingKey, string>>; current?: string } = {}) {
+function setup(o: { results?: LatestReleaseResult[]; gh?: boolean; settings?: Partial<Record<UpdateSettingKey, string>>; current?: string; deps?: Partial<UpdateCheckerDeps> } = {}) {
   const store: Record<string, string> = { updateCheckEnabled: "1", updateLastCheckAt: "", updateLatest: "", updateSkippedVersion: "", ...o.settings };
   const results = [...(o.results ?? [ok("4.1.0")])];
   const audit: UpdateAuditEntry[] = [];
@@ -24,6 +24,7 @@ function setup(o: { results?: LatestReleaseResult[]; gh?: boolean; settings?: Pa
     now: () => now,
     notify: () => { notified++; },
     log: () => undefined,
+    ...o.deps,
   });
   return {
     checker, store, audit,
@@ -198,5 +199,73 @@ describe("UpdateChecker.start", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("UpdateChecker review fixes", () => {
+  it("shows a version found by a manual check even after it was skipped or closed", async () => {
+    const t = setup();
+    await t.checker.autoCheck();
+    t.checker.skip("4.1.0");
+    t.checker.dismiss("4.1.0");
+    expect(t.checker.view().banner).toBeNull();
+    expect((await t.checker.checkNow()).kind).toBe("available");
+    expect(t.checker.view().banner?.version).toBe("4.1.0");
+    // 再跳过一次：这次算数。
+    t.checker.skip("4.1.0");
+    expect(t.checker.view().banner).toBeNull();
+  });
+
+  it("treats a check time in the future as stale (the clock was wrong back then)", async () => {
+    const t = setup({ settings: { updateLastCheckAt: String(10 * DAY + 30 * DAY) } });
+    await t.checker.autoCheck();
+    expect(t.fetches()).toBe(1);
+  });
+
+  it("does not claim up to date when a version can't be compared", async () => {
+    const t = setup({ results: [{ ok: true, release: { ...rel("4.1.0"), tag: "nightly", version: "nightly" }, draft: false, prerelease: false }] });
+    expect(await t.checker.checkNow()).toMatchObject({ kind: "failed", reason: "bad_response" });
+    const dev = setup({ current: "dev" });
+    expect((await dev.checker.checkNow()).kind).toBe("failed");
+  });
+
+  it("waits for gh to be probed before deciding it isn't there", async () => {
+    let ready!: () => void;
+    let gh = false;
+    const t = setup({ deps: { ready: () => new Promise<void>((r) => (ready = r)), ghAvailable: () => gh } });
+    const p = t.checker.checkNow();
+    gh = true;
+    ready();
+    expect((await p).kind).toBe("available");
+  });
+
+  it("writes nothing for a check that finishes after stop()", async () => {
+    let finish!: (r: LatestReleaseResult) => void;
+    const t = setup({ deps: { fetchLatest: () => new Promise((r) => (finish = r)) } });
+    const p = t.checker.autoCheck();
+    await Promise.resolve();
+    t.checker.stop();
+    finish(ok("4.1.0"));
+    await p;
+    expect(t.store.updateLastCheckAt).toBe("");
+    expect(t.audit).toEqual([]);
+  });
+
+  it("never rejects, even when the settings store throws", async () => {
+    const t = setup({ deps: { settings: { get: () => "", set: () => { throw new Error("db closed"); } } } });
+    expect(await t.checker.checkNow()).toMatchObject({ kind: "failed", reason: "failed", detail: "db closed" });
+  });
+
+  it("writes the failure reason in the current language", async () => {
+    let lang = "a";
+    const reasons = (p: string) => ({ no_gh: p, not_logged_in: p, offline: `${p}-offline`, rate_limited: p, no_release: p, bad_response: p, failed: p });
+    const t = setup({
+      results: [{ ok: false, reason: "offline", detail: "" }],
+      deps: { text: () => ({ found: () => "f", failed: `failed-${lang}`, reasons: reasons(lang) }) },
+    });
+    await t.checker.checkNow();
+    lang = "b";
+    await t.checker.checkNow();
+    expect(t.audit.map((e) => [e.summary, e.error])).toEqual([["failed-a", "a-offline"], ["failed-b", "b-offline"]]);
   });
 });
