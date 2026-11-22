@@ -49,4 +49,4 @@ claude 不在 PATH 靠的是沙盒的新选项 `claudeOffPath`：假 claude 放�
 ## 自查后留下的
 
 - gh 2.17 以前没有 `gh auth token`，会被当成「没登录」。提示里的 `gh auth login` 对这些人没用，但 gh 2.17 是 2022 年的版本，先不区分。
-- 「轮到你」里不到一分钟的 review 行只写「刚刚」，不写「刚刚问的」。
+- ~~「轮到你」里不到一分钟的 review 行只写「刚刚」~~：BTL-251（#79）已在 main 上改成「刚刚请你」/“asked just now”，rebase 时用了它的 `agoText`。

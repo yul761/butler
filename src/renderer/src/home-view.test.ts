@@ -162,11 +162,6 @@ describe("locationOf", () => {
   it("an unknown start time has no age", () => {
     expect(locationOf(item(merge, { since: 0 }), ctx, now, S).age).toBe("");
   });
-  it("under a minute is just now, not just now ago", () => {
-    const fresh = now - 10_000;
-    expect(locationOf(item(merge, { since: fresh }), ctx, now, S).age).toBe(S.durationNow);
-    expect(locationOf(item(review, { ticketKey: null, pr, since: fresh }), ctx, now, S).age).toBe(S.durationNow);
-  });
 });
 
 describe("visibleScopes", () => {
