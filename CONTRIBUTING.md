@@ -40,6 +40,7 @@ With a fresh `CLAUDE_CONFIG_DIR`, you may need to log in to `claude` once under 
 | `pnpm build:hook` | The `butler-hook` executable for this platform (needs the Node in `.node-version`) |
 | `pnpm e2e` | Runs `pnpm build` and `pnpm build:hook` first, then the Playwright-for-Electron tests |
 | `pnpm e2e:only` | The same tests without rebuilding |
+| `pnpm demo:record` | Records the README animation and screenshots into `docs/media/` (macOS or Linux, needs `ffmpeg`; see [Recording the demo media](docs/demo-media.md)). Not run in CI |
 | `pnpm dist` | Unsigned installers into `dist/`, for this platform only (macOS: arm64 dmg and zip; Windows: x64 NSIS). It packages what is already built, so run `pnpm build && pnpm build:hook` first. |
 
 The E2E tests are sandboxed. Each test gets its own temporary `BUTLER_HOME`, `CLAUDE_CONFIG_DIR`, home folder and temp folder, and uses a fake `claude` (`e2e/fake-claude`). They never run a real `claude` or read your real data.

@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["src/**/*.test.ts", "hook/**/*.test.ts", "memory-mcp/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "hook/**/*.test.ts", "memory-mcp/**/*.test.ts", "e2e/demo/*.test.ts"],
     environment: "node",
     passWithNoTests: true,
     // Windows runners spawn git / open StateCore several times slower; the 5 s default timed out tests there

@@ -125,16 +125,22 @@ export function lookTarget(item: TurnItem): NowTarget | null {
   return { page: "butler", sessionId };
 }
 
+/** 「N 分钟前」；不到一分钟就是「刚刚」，不拼成「刚刚前」/“just now ago”。 */
+function agoText(ms: number, S: UiStrings, ago: (d: string) => string, now: string = S.durationNow): string {
+  const d = formatDuration(ms, S);
+  return d === S.durationNow ? now : ago(d);
+}
+
 export interface NameCtx { features: Map<number, string>; tickets: Map<string, string | null> }
 
 /** path 是整行（放进 title）；显示时 scope 可以省略，key（ticket 号）单独放、不省略。 */
 export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrings): { path: string; scope: string; key: string | null; age: string } {
-  const d = item.since > 0 ? formatDuration(now - item.since, S) : null;
+  const since = item.since > 0 ? now - item.since : null;
   const t = item.turn;
   if (t.owner === "you" && t.kind === "review") {
     const where = item.pr ? `${item.pr.repo}#${item.pr.number}` : t.title;
     const path = `${where} · ${t.author}`;
-    return { path, scope: path, key: null, age: d === null ? "" : S.hm.reviewAgo(d) };
+    return { path, scope: path, key: null, age: since === null ? "" : agoText(since, S, S.hm.reviewAgo, S.hm.reviewNow) };
   }
   const parts: string[] = [];
   const feature = item.featureId === null ? undefined : ctx.features.get(item.featureId);
@@ -142,7 +148,7 @@ export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrin
   if (parts.length === 0 && item.ticketKey === null && item.featureId === null) parts.push(S.butlerNav);
   const scope = parts.join(" › ");
   const key = item.ticketKey;
-  const age = d === null ? "" : S.hm.ago(d);
+  const age = since === null ? "" : agoText(since, S, S.hm.ago);
   if (key === null) return { path: scope, scope, key, age };
   return { path: scope ? `${scope} › ${key}` : key, scope: scope ? `${scope} › ` : "", key, age };
 }
@@ -228,7 +234,7 @@ export function runningRows(items: TurnItem[], S: UiStrings, now: number): Runni
     rows.push({ since: i.since, row: {
       // 不属于 ticket 的（feature 的总控）同页可以有好几个在干活：key 带上 session。
       key: `${i.ticketKey ?? ""}|${pr}|${t.kind}${i.ticketKey === null ? `|${sessionOf(t) ?? ""}` : ""}`, ticketKey: i.ticketKey, owner: t.owner, who,
-      sentence: i.others > 0 ? `${turnSentence(t, i, S)} · ${S.lay.morePrs(i.others)}` : turnSentence(t, i, S), age: i.since > 0 ? S.hm.ago(formatDuration(now - i.since, S)) : "",
+      sentence: i.others > 0 ? `${turnSentence(t, i, S)} · ${S.lay.morePrs(i.others)}` : turnSentence(t, i, S), age: i.since > 0 ? agoText(now - i.since, S, S.hm.ago) : "",
     } });
   }
   return rows.sort((a, b) => a.since - b.since).map((r) => r.row);

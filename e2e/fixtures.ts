@@ -229,7 +229,7 @@ const PASS_THROUGH = /^(LANG|LANGUAGE|LC_[A-Z_]+|DISPLAY)$/;
 const WINDOWS_SYSTEM = ["SystemRoot", "windir", "ComSpec", "PATHEXT", "SystemDrive", "PSModulePath"];
 
 /** 启动给 Butler 的环境：只有白名单里的变量；HOME / 用户目录 / 临时目录 / PATH / SHELL / 数据目录全部指向沙盒。 */
-function sandboxEnv(s: Sandbox): Record<string, string> {
+export function sandboxEnv(s: Sandbox): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined && (PASS_THROUGH.test(k) || (isWin && WINDOWS_SYSTEM.some((w) => w.toLowerCase() === k.toLowerCase())))) env[k] = v;
