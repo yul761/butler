@@ -16,7 +16,7 @@ The Settings page has these sections, in order:
 
 The **Automation** tab is described under [Automation level](#automation-level). Four more tabs sit at the top of the Settings page: **Model routing** (see [Model routing](#model-routing)), **Comments & CI** (see [Comments and CI](#comments-and-ci)), **Interruptions & notifications** (see [Interruptions and notifications](#interruptions-and-notifications)) and **Stacks** (see [Stacks](#stacks)).
 
-The merge coordinator and the `end_session` tool for epic coordinators are described under [Merge coordinator](#merge-coordinator) and in the [README](../README.md); neither has a setting.
+The merge coordinator and the `end_session` tool for epic coordinators are described under [Merge coordinator](#merge-coordinator) and in [How Butler works](how-it-works.md#merge-coordinator); neither has a setting.
 
 The audit log has its own page, **Audit**, in the sidebar. The **Effect** page has no setting either; see [Effect page](#effect-page).
 

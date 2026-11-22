@@ -42,6 +42,8 @@ const DOC_PAIRS = [
   ["CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md"],
   ["docs/configuration.md", "docs/configuration.zh-CN.md"],
   ["docs/demo-media.md", "docs/demo-media.zh-CN.md"],
+  ["docs/how-it-works.md", "docs/how-it-works.zh-CN.md"],
+  ["docs/compare.md", "docs/compare.zh-CN.md"],
 ] as const;
 
 describe("open-source docs (design 12)", () => {
@@ -57,6 +59,22 @@ describe("open-source docs (design 12)", () => {
     for (const [doc, zh] of [["README.md", false], ["README.zh-CN.md", true]] as const) {
       const readme = read(doc);
       for (const s of required(zh)) expect(readme, `${doc}: ${s}`).toContain(s);
+    }
+  });
+
+  it("says what Butler is on the README's first screen, above everything but the quick start", () => {
+    const cases = [
+      { doc: "README.md", line: "Talk to one coordinator. It runs your Claude Code sessions and only pings you when it's your turn.", gif: "docs/media/demo.gif", docs: ["docs/how-it-works.md", "docs/compare.md", "docs/configuration.md"] },
+      { doc: "README.zh-CN.md", line: "和一个总控对话。它替你管好各个 Claude Code session，只在轮到你的时候叫你。", gif: "docs/media/demo.zh-CN.gif", docs: ["docs/how-it-works.zh-CN.md", "docs/compare.zh-CN.md", "docs/configuration.zh-CN.md"] },
+    ];
+    for (const c of cases) {
+      const text = read(c.doc);
+      // 首屏：第一个不是「快速开始」的二级标题之前。
+      const firstScreen = text.slice(0, text.search(/^## (?!Quick start|快速开始)/m));
+      for (const s of [c.line, `](${c.gif})`, "https://github.com/yul761/butler/releases/latest", "MIT", ...c.docs.map((d) => `](${d})`)]) {
+        expect(firstScreen, `${c.doc}: ${s}`).toContain(s);
+      }
+      expect(text, c.doc).not.toMatch(/^## (New in|.*新增)/m);
     }
   });
 
