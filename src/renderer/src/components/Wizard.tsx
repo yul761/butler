@@ -5,6 +5,7 @@ import { reportError } from "../errors";
 import { savedWizardStep, saveWizardStep, setWizardSkipped } from "../local-prefs";
 import { S } from "../strings";
 import { LanguagePicker } from "./LanguagePicker";
+import { StuckLink } from "./FeedbackDialog";
 import { canAdvance, nextStep, prevStep, stepNumber, type WizardStep } from "../wizard";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -97,6 +98,16 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   }
 
   const { n, total } = stepNumber(step);
+  /**
+   * 这一步过不去（找不到能用的 claude、hook 装不上、检测出错）：给「卡住了？告诉我们」（BTL-254），打开首次使用的反馈表单。
+   * 「看起来没登录」只是提醒（用 API key 的不用管），不算卡住。
+   */
+  const stuck =
+    !busy &&
+    step !== "done" &&
+    (message !== null ||
+      (step === "claude" && report !== null && !canAdvance("claude", report)) ||
+      (step === "hooks" && (installFailed || report?.hooks === "settings_invalid")));
 
   return (
     <div className="page wizard" data-testid="wizard">
@@ -168,6 +179,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       )}
 
       {message && <p className="muted">{message}</p>}
+      {stuck && <p className="wizard-stuck"><StuckLink step={step} /></p>}
       <div className="actions">
         {step !== "claude" && step !== "done" && <button disabled={busy} onClick={() => setStep(prevStep(step))}>{S.wizardBack}</button>}
         {step === "done" ? (

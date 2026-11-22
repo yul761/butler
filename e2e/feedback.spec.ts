@@ -106,3 +106,34 @@ test("attached diagnostics are redacted, shown first, then saved to Downloads an
   expect(u.searchParams.get("diagnostics")).toContain(files[0]);
   expect(existsSync(saved)).toBe(true);
 });
+
+test("a failed wizard step offers “Stuck? Tell us”, which opens a first-run issue for that step", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const { app, page } = await launch(s);
+  await expect(page.getByTestId("wizard")).toBeVisible();
+  // claude 找到了：这一步没卡住，不给链接。
+  await expect(page.getByRole("button", { name: S.wizardNext, exact: true })).toBeEnabled();
+  await expect(page.getByTestId("feedback-stuck")).toHaveCount(0);
+
+  await stubShell(app, join(s.dir, "downloads"));
+  await page.getByPlaceholder(S.generalPlaceholders.claudePath, { exact: true }).fill(join(s.dir, "no-such-claude"));
+  await page.getByRole("button", { name: S.save, exact: true }).click();
+  await expect(page.getByText(S.wizardClaudeMissing, { exact: true })).toBeVisible();
+  await page.getByTestId("feedback-stuck").click();
+
+  await expect(page.getByTestId("feedback-dialog")).toBeVisible();
+  await expect(page.getByTestId("feedback-kind-first-run")).toBeChecked();
+  await page.getByTestId("feedback-title").fill("claude not found");
+  await page.getByTestId("feedback-description").fill("Installed with npm.");
+  await page.getByTestId("feedback-submit").click();
+  await expect(page.getByTestId("feedback-done")).toBeVisible();
+
+  const { opened } = await recorded(app);
+  expect(opened).toHaveLength(1);
+  const u = new URL(opened[0]);
+  expect(u.searchParams.get("template")).toBe("first-run.yml");
+  expect(u.searchParams.get("step")).toBe("claude");
+  // 对话框关掉以后还在向导里。
+  await page.getByRole("button", { name: S.feedback.close, exact: true }).click();
+  await expect(page.getByTestId("wizard")).toBeVisible();
+});
