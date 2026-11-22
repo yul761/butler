@@ -20,6 +20,7 @@ import type { FeatureId } from "../../shared/feature-rows";
 import type { CheckAbsenceReason, CheckMode, CheckOutcome, CheckSeverity, CheckStage, CheckType, CheckVerdict, ChecksBulkOp } from "../../shared/checks";
 import { EN, EN_STATUS } from "./strings-en";
 import type { ExternalActionKind, ExternalOutcome } from "../../shared/external";
+import type { UpdateFailReason } from "../../shared/update";
 import type { InterruptCategory } from "../../shared/metrics";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
@@ -51,7 +52,7 @@ const ZH = {
   },
   /** 设置页（UI 重做第 6 层）：四个 tab、高级里的分组、健康检查。 */
   set: {
-    tabs: { basic: "基本", features: "自动化", advanced: "高级", health: "健康检查" } as Record<SettingsTabId, string>,
+    tabs: { basic: "基本", features: "自动化", advanced: "高级", health: "健康检查", about: "关于" } as Record<SettingsTabId, string>,
     groups: {
       schedule: "定时与状态",
       sessions: "Session 与内存",
@@ -2134,6 +2135,37 @@ const ZH = {
   externalAuditNone: "还没有对外动作的记录。",
   externalOutcome: { done: "做了", failed: "失败", skipped: "跳过（开关关着）" } as Record<ExternalOutcome, string>,
   externalCols: { time: "时间", kind: "动作", where: "位置", target: "目标", summary: "内容", outcome: "结果", payload: "详细内容" },
+  /** 更新提示（BTL-253）：顶部提示条、设置 › 基本的开关、设置 › 关于。 */
+  update: {
+    auditKind: "检查更新",
+    checkEnabled: "检查更新",
+    checkEnabledHelp: "每天经你的 gh 查一次 GitHub 上有没有 Butler 的新版本，有就在顶部提示。只提示，不下载、不安装；没装 gh、没登录、离线、被限流时静默跳过。每次查询记在 审计 页。这一项默认开着：它只读，不在 GitHub 上留下任何东西。",
+    available: (v: string) => `Butler ${v} 可用`,
+    notes: "更新说明",
+    noNotes: "这一版没有写更新说明。",
+    download: "下载",
+    skip: "跳过这个版本",
+    close: "关闭",
+    aboutHeading: "关于 Butler",
+    currentVersion: "当前版本",
+    lastChecked: "上次检查",
+    never: "还没查过",
+    checkNow: "检查更新",
+    checking: "正在检查…",
+    resultLatest: (current: string, latest: string) => (current === latest ? `已是最新版本（${current}）。` : `已是最新版本：你在用 ${current}，GitHub 上最新的正式版是 ${latest}。`),
+    resultAvailable: (v: string) => `有新版本：${v}。顶部的提示条里能看更新说明、去下载。`,
+    resultFailed: "没查成：",
+    reasons: {
+      no_gh: "没找到 gh（GitHub CLI）。装上并登录后就能检查。",
+      not_logged_in: "gh 还没登录 GitHub。在终端里运行 gh auth login。",
+      offline: "连不上 GitHub（离线或网络超时）。",
+      rate_limited: "GitHub 接口被限流了，过一会儿再试。",
+      no_release: "GitHub 上还没有发布过正式版。",
+      bad_response: "GitHub 的回复看不懂。",
+      failed: "gh 出错了。",
+    } as Record<UpdateFailReason, string>,
+    autoOff: "自动检查关着（设置 › 基本）。这里手动检查照常可用。",
+  },
   /** 自动接活（工作流 N）。 */
   ik: {
     title: "自动接活",

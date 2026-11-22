@@ -1,4 +1,4 @@
-import { EXTERNAL_ACTIONS, type ExternalActionEntry, type ExternalActionKind, type ExternalOutcome } from "../../shared/external";
+import { AUDIT_KINDS, type AuditKind, type ExternalActionEntry, type ExternalOutcome } from "../../shared/external";
 import type { Db } from "./database";
 
 /** 审计里每段文本的上限：内容异常大时也不会把数据库撑爆。 */
@@ -27,7 +27,7 @@ function cap(s: string | null | undefined, limit = AUDIT_TEXT_LIMIT): string | n
   return s.slice(0, end);
 }
 
-const isKind = (k: string): k is ExternalActionKind => (EXTERNAL_ACTIONS as readonly string[]).includes(k);
+const isKind = (k: string): k is AuditKind => (AUDIT_KINDS as readonly string[]).includes(k);
 
 export type NewExternalAction = Omit<ExternalActionEntry, "id">;
 
@@ -46,15 +46,15 @@ export class ExternalAuditRepo {
   }
 
   /** 新的在前；kind 给了只看那一种。 */
-  list(opts: { limit?: number; kind?: ExternalActionKind } = {}): ExternalActionEntry[] {
+  list(opts: { limit?: number; kind?: AuditKind } = {}): ExternalActionEntry[] {
     const limit = Math.max(1, Math.min(opts.limit ?? 200, 1000));
     // 以后的版本加了新种类、又退回老版本时，不认识的种类不显示（在 SQL 里筛，LIMIT 才准）。
-    const kinds = opts.kind ? [opts.kind] : [...EXTERNAL_ACTIONS];
+    const kinds = opts.kind ? [opts.kind] : [...AUDIT_KINDS];
     const rows = this.db
       .prepare(`SELECT * FROM external_action_audit WHERE kind IN (${kinds.map(() => "?").join(", ")}) ORDER BY ts DESC, id DESC LIMIT ?`)
       .all(...kinds, limit) as unknown as Row[];
     return rows.filter((r) => isKind(r.kind)).map((r) => ({
-      id: Number(r.id), ts: Number(r.ts), kind: r.kind as ExternalActionKind, repoSlug: r.repo_slug, ticketKey: r.ticket_key, target: r.target,
+      id: Number(r.id), ts: Number(r.ts), kind: r.kind as AuditKind, repoSlug: r.repo_slug, ticketKey: r.ticket_key, target: r.target,
       summary: r.summary, payload: r.payload, outcome: r.outcome, error: r.error,
     }));
   }

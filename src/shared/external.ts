@@ -39,6 +39,13 @@ export const EXTERNAL_ACTION_SETTINGS = {
 } as const satisfies Record<ExternalActionKind, string>;
 export type ExternalActionSetting = (typeof EXTERNAL_ACTION_SETTINGS)[ExternalActionKind];
 
+/**
+ * 审计表里的种类：对外动作，再加只读的更新检查（BTL-253，经你的 gh 查 GitHub 上的最新 release）。
+ * 更新检查不是对外动作：没有 external* 开关，不经过 ExternalActions.attempt，只记一笔。
+ */
+export const AUDIT_KINDS = [...EXTERNAL_ACTIONS, "update_check"] as const;
+export type AuditKind = (typeof AUDIT_KINDS)[number];
+
 export const EXTERNAL_OUTCOMES = ["done", "failed", "skipped"] as const;
 export type ExternalOutcome = (typeof EXTERNAL_OUTCOMES)[number];
 
@@ -46,7 +53,7 @@ export type ExternalOutcome = (typeof EXTERNAL_OUTCOMES)[number];
 export interface ExternalActionEntry {
   id: number;
   ts: number;
-  kind: ExternalActionKind;
+  kind: AuditKind;
   repoSlug: string | null;
   ticketKey: string | null;
   /** 目标：PR、评论、issue 的链接之类。 */

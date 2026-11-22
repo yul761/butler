@@ -226,6 +226,12 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; word-break: break-all; }
+/* 更新提示条（BTL-253）：在错误条下面，不挡内容。 */
+.update-banner { padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--accent); }
+.update-banner-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.update-banner-actions { display: flex; gap: 8px; }
+.update-banner details summary { cursor: pointer; color: var(--muted); }
+.update-notes { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; margin: 6px 0; }
 .error-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--danger); color: var(--danger); position: relative; z-index: 20; }
 
 .chip { font-weight: 600; background: transparent; }

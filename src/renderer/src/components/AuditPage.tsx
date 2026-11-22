@@ -37,7 +37,7 @@ export function ExternalAuditList({ entries }: { entries: ExternalActionEntry[] 
         {entries.map((e) => (
           <tr key={e.id} className={`outcome-${e.outcome}`}>
             <td>{formatTime(e.ts)}</td>
-            <td>{S.externalActions[e.kind].label}</td>
+            <td>{e.kind === "update_check" ? S.update.auditKind : S.externalActions[e.kind].label}</td>
             <td>{[e.repoSlug, e.ticketKey].filter(Boolean).join(" · ") || "—"}</td>
             <td>{e.target ?? "—"}</td>
             <td>

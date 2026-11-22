@@ -216,6 +216,11 @@ import { readProcTable } from "./procs/proc-table";
 import { MemorySamplesRepo } from "./db/memory-samples-repo";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
+import { appMenuTemplate } from "./app-menu";
+import { UpdateChecker } from "./update/update-checker";
+import { latestRelease } from "./update/release-source";
+import { isButlerReleaseUrl, releasesLatestUrl } from "../shared/butler-repo";
+import type { AppMenuAction } from "../shared/update";
 import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
 import { applyGitResolution, resolveGit } from "./util/git-path";
@@ -594,13 +599,15 @@ async function bootstrap(): Promise<void> {
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
   // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
   // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
+  /** 登录 shell 的 PATH 下 gh 探测完（BTL-253 的更新检查等它，免得 gh 明明装了却被当成没装）。 */
+  let ghProbed: Promise<void> = Promise.resolve();
   const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
     () => {
       if (health.hookBinCurrent() && existsSync(paths.hookBin)) seedSkillTracking();
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       applyGhResolution(resolveGh(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
       notify();
-      void probeGh(5000).then(() => notify()).catch((e: unknown) => logger("gh probe notify failed", e));
+      ghProbed = probeGh(5000).then(() => notify()).catch((e: unknown) => logger("gh probe notify failed", e));
     },
     (e: unknown) => {
       logger("initial health refresh failed", e);
@@ -960,6 +967,35 @@ async function bootstrap(): Promise<void> {
     cutoff: (now) => auditCutoff(now, auditRetentionDays(settings)),
     log: logger,
   });
+  // 更新提示（BTL-253）：每天最多一次经你的 gh 查 GitHub 上的最新 release，只提示不下载。每次查询记进审计（只读，没有对外开关）。
+  const updateChecker = new UpdateChecker({
+    current: app.getVersion(),
+    settings: { get: (k) => settings.get(k), set: (k, v) => settings.set(k, v) },
+    ghAvailable: () => ghAvailable(),
+    fetchLatest: () => latestRelease(),
+    audit: (e) => void externalActions.record("update_check", { target: e.target, summary: e.summary, outcome: e.outcome, error: e.error }),
+    now: Date.now,
+    notify: () => notify(),
+    log: logger,
+    text: { found: (latest, newer) => M().update.auditFound(latest, newer), failed: M().update.auditFailed },
+  });
+  const openRelease = (): void => {
+    const cached = updateChecker.latestUrl();
+    void shell.openExternal(cached && isButlerReleaseUrl(cached) ? cached : releasesLatestUrl());
+  };
+  // 应用菜单（BTL-253 / 254）：标准几项加「帮助」。「检查更新…」在主进程查，再让界面打开设置 › 关于看结果（不弹原生对话框）。
+  const menuAction = (action: AppMenuAction): void => {
+    showWindow();
+    safeSend(IPC.appMenu, action);
+  };
+  const installAppMenu = (): void => {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate({
+      platform: process.platform,
+      help: [{ label: M().menu.checkUpdates, click: () => { menuAction("checkUpdates"); void updateChecker.checkNow(); } }],
+    })));
+  };
+  installAppMenu();
+  onLangChange(installAppMenu);
   // 导出成 lint：写进 <BUTLER_HOME>/exports/<id> 的 worktree 就停；推送和开 PR 只经对外动作开关（契约 4.8），做没做都记进审计。
   const checkExporter = new CheckExporter({
     repo: baselinesRepo,
@@ -3107,6 +3143,13 @@ async function bootstrap(): Promise<void> {
     devSend: devSender,
     forkReady: () => healthReady,
     keepAwake: keepAwakeSwitch,
+    update: {
+      view: () => updateChecker.view(),
+      checkNow: () => updateChecker.checkNow(),
+      skip: (v) => updateChecker.skip(v),
+      dismiss: (v) => updateChecker.dismiss(v),
+      openRelease,
+    },
     onArchived: (key) => {
       removeTicketMcpConfigs(paths.mcp, key);
       inboxService.dismissScope({ ticketKey: key });
@@ -3455,6 +3498,10 @@ async function bootstrap(): Promise<void> {
   }
   holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
   // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
+  // 更新检查（BTL-253）等 gh 按登录 shell 的 PATH 探测完再开始。
+  void healthReady.then(() => ghProbed).then(() => {
+    if (!headlessAbort.signal.aborted) updateChecker.start();
+  });
   void healthReady.then(() => {
     if (headlessAbort.signal.aborted) return;
     prWatcher.start();
@@ -3592,6 +3639,7 @@ async function bootstrap(): Promise<void> {
   app.on("will-quit", () => {
     // 正常情况下 before-quit 已经停过；没经过 before-quit 的退出也要在关数据库之前停下。
     refresher.stop();
+    updateChecker.stop();
     hibernator?.stop();
     mcpHub.stop();
     clearInterval(discoveryTimer);

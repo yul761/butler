@@ -15,6 +15,7 @@ import { HomePage } from "./components/HomePage";
 import { FirstRunHome } from "./components/FirstRunHome";
 import { useTurnBoard } from "./components/useTurnBoard";
 import { EffectPage } from "./components/EffectPage";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { scopeDots } from "./sidebar-view";
@@ -85,6 +86,10 @@ export function App() {
     api.keepAwake().then(setKeepAwake, reportError);
     return api.onKeepAwakeChanged(setKeepAwake);
   }, []);
+  // 应用菜单（BTL-253 / 254）：「检查更新…」在主进程查，这里打开设置 › 关于看结果。
+  useEffect(() => api.onAppMenu((action) => {
+    if (action === "checkUpdates") setRoute({ page: "settings", section: "about" });
+  }), []);
   /** 每次 refresh 的序号：只有最新一次的结果写进状态（hook 事件密集时，慢的旧响应不会盖掉新的）。 */
   const refreshSeq = useRef(0);
   /** 重读 ticket 列表和「现在」页；列表失败时报错并返回 false。 */
@@ -212,6 +217,7 @@ export function App() {
             <button onClick={() => setError(null)}>{S.close}</button>
           </div>
         )}
+        <UpdateBanner />
         {onboarding === null ? null : onboarding ? (
           <Wizard
             onDone={() => {

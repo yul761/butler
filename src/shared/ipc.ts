@@ -241,6 +241,14 @@ export const IPC = {
   // 自动化档位（BTL-247）：全局档位的显示（读）和 epic 自己选的档位（写）。全局档位本身走 settings:set。
   automationState: "automation:state",
   featuresSetAutomationLevel: "features:setAutomationLevel",
+  // 更新提示（BTL-253）：状态（读）、手动检查、跳过这个版本、关闭提示条、在浏览器里打开 release 页。
+  updateState: "update:state",
+  updateCheck: "update:check",
+  updateSkip: "update:skip",
+  updateDismiss: "update:dismiss",
+  updateOpenRelease: "update:openRelease",
+  /** 应用菜单点了要界面做的事（BTL-253 / 254）：参数是 AppMenuAction。 */
+  appMenu: "app:menu",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -268,11 +276,12 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.forkAsk, IPC.forkSendConclusion, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.convSend, IPC.inboxReports,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,
   IPC.automationState, IPC.featuresSetAutomationLevel,
+  IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease,
   IPC.diagSnapshot, IPC.diagExport,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];
 /** 主进程 → 渲染进程。 */
-export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged, IPC.convAppended, IPC.turnChanged, IPC.forkChanged];
+export const EVENT_CHANNELS: readonly string[] = [IPC.ptyData, IPC.ptyExit, IPC.stateChanged, IPC.activityEvent, IPC.memoryChanged, IPC.appKeepAwakeChanged, IPC.convAppended, IPC.turnChanged, IPC.forkChanged, IPC.appMenu];
 
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };

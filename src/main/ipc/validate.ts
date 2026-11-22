@@ -44,6 +44,12 @@ export function factIdArg(v: unknown): string {
 }
 
 /** 开关：只接受真正的布尔值。 */
+/** 更新提示里的版本号（BTL-253）：跳过、关闭的那一版。 */
+export function versionArg(v: unknown): string {
+  if (typeof v !== "string" || !/^[vV]?\d{1,6}\.\d{1,6}\.\d{1,6}([-+][0-9A-Za-z.+-]{1,60})?$/.test(v.trim())) throw new Error("invalid version");
+  return v.trim();
+}
+
 export function boolArg(v: unknown): boolean {
   if (typeof v !== "boolean") throw new Error("invalid switch value");
   return v;

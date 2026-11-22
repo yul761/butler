@@ -12,6 +12,7 @@ import type { FileScope, SectionApplyCounts } from "../../shared/config-io";
 import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason, LessonRunStatus } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { ExternalActionKind, ExternalOutcome } from "../../shared/external";
+import type { UpdateFailReason } from "../../shared/update";
 import type { InterruptCategory } from "../../shared/metrics";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
@@ -47,7 +48,7 @@ export const EN: UiStrings = {
     openFeatureSettings: "To let it do more, choose Semi-automatic in Settings › Automation, or turn features on one by one under Advanced there",
   },
   set: {
-    tabs: { basic: "Basics", features: "Automation", advanced: "Advanced", health: "Health check" } as Record<SettingsTabId, string>,
+    tabs: { basic: "Basics", features: "Automation", advanced: "Advanced", health: "Health check", about: "About" } as Record<SettingsTabId, string>,
     groups: {
       schedule: "Schedule & status",
       sessions: "Sessions & memory",
@@ -2116,6 +2117,36 @@ export const EN: UiStrings = {
   externalAuditNone: "No outward actions recorded yet.",
   externalOutcome: { done: "Done", failed: "Failed", skipped: "Skipped (switch off)" } as Record<ExternalOutcome, string>,
   externalCols: { time: "Time", kind: "Action", where: "Where", target: "Target", summary: "What", outcome: "Result", payload: "Details" },
+  update: {
+    auditKind: "Update check",
+    checkEnabled: "Check for updates",
+    checkEnabledHelp: "Once a day, Butler uses your gh to ask GitHub whether a new Butler version is out, and shows a bar at the top if so. It only tells you; it never downloads or installs anything. Without gh, when gh is not logged in, offline or rate-limited it skips quietly. Every check is listed on the Audit page. This one is on by default: it only reads, and leaves nothing on GitHub.",
+    available: (v: string) => `Butler ${v} is available`,
+    notes: "Release notes",
+    noNotes: "This release has no notes.",
+    download: "Download",
+    skip: "Skip this version",
+    close: "Close",
+    aboutHeading: "About Butler",
+    currentVersion: "Current version",
+    lastChecked: "Last checked",
+    never: "Never",
+    checkNow: "Check for updates",
+    checking: "Checking…",
+    resultLatest: (current: string, latest: string) => (current === latest ? `You're up to date (${current}).` : `You're up to date: you run ${current}; the latest release on GitHub is ${latest}.`),
+    resultAvailable: (v: string) => `A new version is out: ${v}. The bar at the top has the release notes and the download link.`,
+    resultFailed: "Couldn't check: ",
+    reasons: {
+      no_gh: "gh (GitHub CLI) was not found. Install it and log in to check.",
+      not_logged_in: "gh is not logged in to GitHub. Run gh auth login in a terminal.",
+      offline: "Couldn't reach GitHub (offline or timed out).",
+      rate_limited: "GitHub's API rate limit was hit. Try again later.",
+      no_release: "There is no release on GitHub yet.",
+      bad_response: "GitHub's reply could not be read.",
+      failed: "gh failed.",
+    } as Record<UpdateFailReason, string>,
+    autoOff: "Automatic checks are off (Settings › Basics). Checking here still works.",
+  },
   /** Automatic intake (workstream N). */
   ik: {
     title: "Automatic intake",

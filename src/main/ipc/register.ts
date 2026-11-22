@@ -86,7 +86,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
+  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -95,6 +95,7 @@ import type { RoutingAction, RoutingView, SessionLimitView } from "../../shared/
 import type { SwitchResult } from "../routing/session-switch";
 import type { DiagService } from "../diag/diag-service";
 import { isReadChannel } from "./read-channels";
+import type { UpdateCheckResult, UpdateView } from "../../shared/update";
 import type { PtySubscriptions } from "../sessions/pty-subscriptions";
 
 export interface IpcDeps {
@@ -254,6 +255,8 @@ export interface IpcDeps {
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   /** 防休眠开关（只在内存里，启动时是关的）。 */
   keepAwake: { isOn(): boolean; set(on: boolean): void };
+  /** 更新提示（BTL-253）。 */
+  update: { view(): UpdateView; checkNow(): Promise<UpdateCheckResult>; skip(version: string): void; dismiss(version: string): void; openRelease(): void };
   /** followup 状态变化后重新推导 ticket 状态。 */
   rederive: (ticketKey: string) => void;
   detectTrackerTools: () => Promise<McpProbe>;
@@ -843,6 +846,12 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.appLanguage, () => currentLang());
   handle(IPC.appAutostartSet, (on: unknown) => d.autostart.set(boolArg(on)));
   handle(IPC.appKeepAwakeGet, () => d.keepAwake.isOn());
+  // 更新提示（BTL-253）：只读的状态和手动检查；release 页只开缓存里那一条（openRelease 自己查链接）。
+  handle(IPC.updateState, () => d.update.view());
+  handle(IPC.updateCheck, () => d.update.checkNow());
+  handle(IPC.updateSkip, (v: unknown) => d.update.skip(versionArg(v)));
+  handle(IPC.updateDismiss, (v: unknown) => d.update.dismiss(versionArg(v)));
+  handle(IPC.updateOpenRelease, () => d.update.openRelease());
   handle(IPC.appKeepAwakeSet, (on: unknown) => {
     d.keepAwake.set(boolArg(on));
     return d.keepAwake.isOn();

@@ -1,7 +1,7 @@
 // 对外动作的开关和审计（契约 4.8，设计文档 2026-11-17 ws-b 第 5 节）。
 // 会在 GitHub 或别的外部服务上留下东西的动作（回评论、改 PR、强推、发 issue、推送通知……）一律先问 allowed，
 // 做没做都 record。接入的 workstream 用 attempt：开关关着时不跑，只记一笔 skipped。
-import { EXTERNAL_ACTION_SETTINGS, EXTERNAL_ACTIONS, type ExternalActionKind, type ExternalActionSetting, type ExternalOutcome } from "../../shared/external";
+import { EXTERNAL_ACTION_SETTINGS, EXTERNAL_ACTIONS, type AuditKind, type ExternalActionKind, type ExternalActionSetting, type ExternalOutcome } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
 
 export { EXTERNAL_ACTIONS, type ExternalActionKind };
@@ -57,8 +57,8 @@ export class ExternalActions {
     return (v ?? this.d.setting(key)).trim() === "1";
   }
 
-  /** 记一笔审计；返回审计 id。写审计失败只记日志（返回 0），不影响调用方。 */
-  record(kind: ExternalActionKind, detail: ExternalDetail & { outcome: ExternalOutcome; error?: string | null }): number {
+  /** 记一笔审计；返回审计 id。写审计失败只记日志（返回 0），不影响调用方。update_check（BTL-253）只读，直接记。 */
+  record(kind: AuditKind, detail: ExternalDetail & { outcome: ExternalOutcome; error?: string | null }): number {
     try {
       const now = this.d.now();
       this.prune(now);

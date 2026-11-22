@@ -72,6 +72,17 @@ const ZH = {
   trayKeepAwake: "防止休眠",
   trayTooltipKeepAwake: "Butler · 防休眠中",
   trayQuit: "退出",
+  /** 应用菜单（BTL-253 / 254）：系统标准的几项用 role，系统自己翻译；这里只有「帮助」和 Butler 自己加的项。 */
+  menu: {
+    help: "帮助",
+    checkUpdates: "检查更新…",
+    sendFeedback: "发送反馈…",
+  },
+  /** 更新检查（BTL-253）记进审计的摘要。 */
+  update: {
+    auditFound: (latest: string, newer: boolean) => (newer ? `GitHub 上的最新版本是 ${latest}，比当前新` : `GitHub 上的最新版本是 ${latest}，已是最新`),
+    auditFailed: "检查更新没查成",
+  },
   startupFailed: "Butler 启动失败",
   claudeMissingCheck: "找不到 claude 命令，请先在“环境检查”里确认 claude 路径",
   claudeMissing: "找不到 claude 命令",
@@ -687,6 +698,15 @@ const EN: MainStrings = {
   trayKeepAwake: "Keep awake",
   trayTooltipKeepAwake: "Butler · keeping awake",
   trayQuit: "Quit",
+  menu: {
+    help: "Help",
+    checkUpdates: "Check for Updates…",
+    sendFeedback: "Send Feedback…",
+  },
+  update: {
+    auditFound: (latest: string, newer: boolean) => (newer ? `The latest version on GitHub is ${latest}, newer than this one` : `The latest version on GitHub is ${latest}; this one is up to date`),
+    auditFailed: "Could not check for updates",
+  },
   startupFailed: "Butler could not start",
   claudeMissingCheck: "The claude command was not found. Check the claude path under “Environment check” first",
   claudeMissing: "The claude command was not found",

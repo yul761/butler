@@ -8,7 +8,7 @@ import { useSettingsForm } from "./useSettingsForm";
 
 const TEXT_FIELDS = ["claudePath", "branchTemplate", "ticketPattern"] as const;
 
-/** 设置 › 基本：语言、claude 路径、分支和 ticket 号、开机启动、显示 Butler 之外开的 session、记忆、换新阈值、重新运行向导。 */
+/** 设置 › 基本：语言、claude 路径、分支和 ticket 号、检查更新、开机启动、显示 Butler 之外开的 session、记忆、换新阈值、重新运行向导。 */
 export function BasicSettings({ report, onHealth, onRerunWizard }: { report: HealthReport; onHealth: (r: HealthReport) => void; onRerunWizard: () => void }) {
   const [autostart, setAutostart] = useState<AutostartState | null>(null);
   const form = useSettingsForm((k) => {
@@ -53,6 +53,11 @@ export function BasicSettings({ report, onHealth, onRerunWizard }: { report: Hea
           </div>
         </div>
       ))}
+      <label className="inline">
+        <input type="checkbox" data-testid="setting-updateCheckEnabled" checked={current.updateCheckEnabled !== "0"} onChange={(e) => void save("updateCheckEnabled", e.target.checked ? "1" : "0")} />
+        {S.update.checkEnabled}
+      </label>
+      <p className="muted">{S.update.checkEnabledHelp}</p>
       <label className="inline">
         <input type="checkbox" disabled={!autostart?.supported} checked={autostart?.enabled ?? false} onChange={(e) => void toggleAutostart(e.target.checked)} />
         {S.autostart}

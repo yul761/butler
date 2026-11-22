@@ -196,6 +196,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.intakeView, IPC.intakeEffect, IPC.intakePolicyGet, IPC.intakePolicySet, IPC.intakeClassify,
   // 自动化档位（BTL-247）：读档位、给 epic 选档位都是搭环境
   IPC.automationState, IPC.featuresSetAutomationLevel,
+  // 更新提示（BTL-253）：查更新、跳过、关提示条、开 release 页都和工作无关
+  IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease,
 ]);
 
 /** 这个通道算不算手动触发。 */

@@ -88,5 +88,8 @@ test("a fresh install that changes no settings behaves like 2.1.0 and leaves not
   expect(unsupportedGhCalls(s)).toEqual([]);
 
   await page.locator(".sidebar").getByRole("button", { name: S.audit, exact: true }).click();
-  await expect(page.getByTestId("external-audit")).toContainText(S.externalAuditNone);
+  // 审计里只有只读的检查更新（BTL-253，唯一默认开的；假 gh 没有 release，记一条没查成），没有任何对外动作。
+  const kinds = page.getByTestId("external-audit").locator("tbody tr td:nth-child(2)");
+  await expect(kinds.first()).toHaveText(S.update.auditKind);
+  expect(new Set(await kinds.allTextContents())).toEqual(new Set([S.update.auditKind]));
 });

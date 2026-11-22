@@ -4,7 +4,8 @@
  */
 import type { EditableSettingKey } from "./settings";
 
-export const SETTINGS_TABS = ["basic", "features", "advanced", "health"] as const;
+/** about：版本和检查更新（BTL-253），BTL-254 的发送反馈也在这里。没有设置项放在那。 */
+export const SETTINGS_TABS = ["basic", "features", "advanced", "health", "about"] as const;
 export type SettingsTabId = (typeof SETTINGS_TABS)[number];
 
 export const ADVANCED_GROUPS = [
@@ -47,6 +48,7 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   refreshThresholdTokens: basic,
   onboardingDone: basic,
   showOutsideSessions: basic,
+  updateCheckEnabled: basic,
   // 自动化（tab id 仍是 features）：全局档位
   automationLevel: { tab: "features" },
   // 高级 › 定时与 handoff

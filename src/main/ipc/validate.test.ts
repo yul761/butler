@@ -10,7 +10,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, openButlerArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, openButlerArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
 
 describe("memory IPC arguments", () => {
   it("accepts a ticket key and a StateCore fact id, nothing else", () => {
@@ -24,6 +24,14 @@ describe("memory IPC arguments", () => {
     expect(boolArg(true)).toBe(true);
     expect(boolArg(false)).toBe(false);
     for (const bad of ["true", 1, null, undefined]) expect(() => boolArg(bad)).toThrow();
+  });
+});
+
+describe("update IPC arguments (BTL-253)", () => {
+  it("accepts a version number and nothing else", () => {
+    expect(versionArg("4.1.0")).toBe("4.1.0");
+    expect(versionArg(" v4.1.0-rc.1 ")).toBe("v4.1.0-rc.1");
+    for (const bad of [undefined, 4, "", "latest", "4.1", "4.1.0 && rm", "4.1.0-" + "x".repeat(70)]) expect(() => versionArg(bad), String(bad)).toThrow();
   });
 });
 
