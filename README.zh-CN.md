@@ -14,7 +14,7 @@
 
 ## 快速开始
 
-1. 下载、安装并打开 Butler（第一次打开要多点一下，见[安装](#安装)）。向导 **欢迎使用 Butler** 会检查 Claude Code、装好 Butler 的 hook。
+1. 装好 Claude Code 并登录一次：在终端里运行 `claude`。然后下载、安装并打开 Butler（第一次打开要多点一下，见[安装](#安装)）。向导 **欢迎使用 Butler** 会检查 Claude Code、装好 Butler 的 hook。
 2. 在 **全部工作** 页点 **+ 新建 epic**，起个名字，选好仓库。
 3. 在 epic 的 **总控** tab 里点 **+ 总控 session**，把要做的活讲给它听。总控会建好 ticket，在每个 ticket 里开 session。你在 **轮到你** 页回答问题，把它说可以合的 PR 合进去。
 
@@ -24,6 +24,7 @@
 
 - Apple silicon 的 macOS，或 Windows 10/11 x64。Intel Mac 可以[从源码构建](CONTRIBUTING.zh-CN.md)。
 - 已安装并登录 Claude Code：终端里 `claude --version` 要能运行。
+- 可选：GitHub CLI（`gh`），并用 `gh auth login` 登录。不装 session 照样能用，只是 PR、CI、review 相关的功能不工作。
 - 可选：在 Claude Code 里配置好一个 tracker MCP server（Jira、Linear、GitLab……），handoff 就能读到 ticket 状态。
 - `PATH` 上有 Git。Windows 上请安装 **Git for Windows**：Claude Code 通过 Git Bash 运行 hook，Butler 找不到 `git.exe` 时不会运行 git。
 
@@ -62,13 +63,16 @@
 
 ## 首次运行
 
-向导 **欢迎使用 Butler** 有三步：
+打开 Butler 之前，先装好 Claude Code 并登录一次：在终端里运行 `claude`，按提示登录。GitHub CLI（`gh`）可装可不装，见[系统要求](#系统要求)。
 
-1. **检查 Claude Code。** Butler 在你登录 shell 的 `PATH` 上找 `claude`，或者由你给出绝对路径。
-2. **安装 hook。** Butler 把四个 hook 和一个 `/handoff` 命令合并进你用户级的 Claude Code 设置，保留你自己的 hook，并先做一份备份。这些 hook 只往 `~/.butler/inbox` 里放小 JSON 文件，从不访问网络，退出码永远是 0。用 **设置 → 健康检查 → 卸载** 可以移除。
-3. **完成。** tracker 的 MCP 工具和权限档案是可选的，放在设置里。
+向导 **欢迎使用 Butler** 只有两步：
 
-以后可以在 **设置 → 基本** 里重新运行向导。
+1. **检查 Claude Code。** Butler 在你登录 shell 的 `PATH` 上找 `claude`，找不到再看常见的安装位置（`~/.local/bin`、`~/.claude/local`；Windows 上 `%USERPROFILE%\.local\bin` 和 `%APPDATA%\npm`），或者由你给出绝对路径。它还会检查 `claude --help` 是否列出了 Butler 依赖的参数，没有能用的 `claude` 就无法继续。`claude` 看起来还没登录时会提示你，也会写出 `gh` 装了没有、登录了没有，这两样都不拦下一步。
+2. **安装 hook 和 /handoff 命令。** 点 **安装并继续**。Butler 把四个 hook 和一个 `/handoff` 命令合并进你用户级的 Claude Code 设置，保留你自己的 hook，并先做一份备份。没有它们，**轮到你** 和状态都不工作。这些 hook 只往 Butler 数据目录（默认 `~/.butler`，设了 `BUTLER_HOME` 就是那里）的 `inbox` 里放小 JSON 文件，从不访问网络，退出码永远是 0。用 **设置 → 健康检查 → 卸载** 可以移除。
+
+然后是 **准备好了**，点 **开始使用** 进入首页。可以像[快速开始](#快速开始)那样从一个 epic 开始，也可以只开一个 ticket：新建 ticket，给它添加一个仓库（Claude 在那里干活），在它的概况上点 **开第一个 session**。session 停下来等你时，**轮到你** 里会出现它。
+
+有两样不在向导里，之后在设置页配：tracker（Jira、Linear、GitLab……）的只读 MCP 工具在 **设置 → 高级 → 定时与状态**；[权限档案](docs/configuration.zh-CN.md#权限档案) 在 **设置 → 高级 → 打断与通知**。向导可以在 **设置 → 基本** 里重新运行。
 
 不要再另外安装 StateCore 自己的 Claude Code 采集插件：Butler 已经给它开的 session 配好了 StateCore 记忆，两个都装会把记忆记两遍。
 

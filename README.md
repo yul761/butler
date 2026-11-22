@@ -14,7 +14,7 @@
 
 ## Quick start
 
-1. Download Butler, install it and open it (the first launch needs one extra click, see [Install](#install)). The **Welcome to Butler** wizard checks Claude Code and installs Butler's hooks.
+1. Install Claude Code and log in once: run `claude` in a terminal. Then download Butler, install it and open it (the first launch needs one extra click, see [Install](#install)). The **Welcome to Butler** wizard checks Claude Code and installs Butler's hooks.
 2. On the **All work** page, click **+ New epic**, give it a name and pick its repos.
 3. On the epic's **Control** tab, click **+ Coordinator session** and describe the work. The coordinator creates the tickets and starts a session in each one. You answer on **Your turn** and merge the PRs it says are ready.
 
@@ -24,6 +24,7 @@
 
 - macOS on Apple silicon, or Windows 10/11 x64. Intel Macs can [build from source](CONTRIBUTING.md).
 - Claude Code installed and logged in: `claude --version` must work in a terminal.
+- Optional: the GitHub CLI (`gh`), logged in with `gh auth login`. Sessions work without it, but PR, CI and review features don't.
 - Optional: a tracker MCP server (Jira, Linear, GitLab, …) set up in Claude Code, so handoffs can read ticket status.
 - Git on `PATH`. On Windows, install **Git for Windows**: Claude Code runs hooks through Git Bash, and Butler won't run git if it can't find `git.exe`.
 
@@ -62,13 +63,16 @@ To upgrade, download the new version and install it over the old one. Your data 
 
 ## First run
 
-The **Welcome to Butler** wizard has three steps:
+Before you open Butler, install Claude Code and log in once: run `claude` in a terminal and follow the login steps. The GitHub CLI (`gh`) is optional; see [Requirements](#requirements).
 
-1. **Check Claude Code.** Butler finds `claude` on your login shell's `PATH`, or you give it the absolute path.
-2. **Install the hooks.** Butler merges four hooks and a `/handoff` command into your user-level Claude Code settings, keeps your own hooks and saves a backup first. The hooks only drop small JSON files into `~/.butler/inbox`; they never touch the network and always exit 0. **Settings → Health check → Uninstall** removes them.
-3. **Done.** The tracker MCP tools and the permission profile are optional and live in Settings.
+The **Welcome to Butler** wizard has two steps:
 
-You can run the wizard again from **Settings → Basics**.
+1. **Check Claude Code.** Butler finds `claude` on your login shell's `PATH`, then in the usual install locations (`~/.local/bin`, `~/.claude/local`; on Windows `%USERPROFILE%\.local\bin` and `%APPDATA%\npm`), or you give it the absolute path. It also checks that `claude --help` lists the flags Butler relies on; you can't continue without a working `claude`. It tells you when `claude` doesn't look logged in yet, and whether `gh` is installed and logged in; neither stops you.
+2. **Install the hooks and the /handoff command.** Click **Install and continue**. Butler merges four hooks and a `/handoff` command into your user-level Claude Code settings, keeps your own hooks and saves a backup first. Without them, **Your turn** and status don't work. The hooks only drop small JSON files into the `inbox` folder of Butler's data folder (`~/.butler` unless you set `BUTLER_HOME`); they never touch the network and always exit 0. **Settings → Health check → Uninstall** removes them.
+
+Then **All set** and **Get started** take you to the home page. Start with an epic as in [Quick start](#quick-start), or with a single ticket: create a ticket, add a repository to it (Claude works there) and click **Start the first session** on its overview. When the session stops to wait for you, it shows up on **Your turn**.
+
+Two things are set up later in Settings, not in the wizard: your tracker's read-only MCP tools (Jira, Linear, GitLab, …) under **Settings → Advanced → Schedule & status**, and the [permission profile](docs/configuration.md#permission-profile) under **Settings → Advanced → Interruptions & notifications**. You can run the wizard again from **Settings → Basics**.
 
 Don't also install StateCore's own Claude Code capture plugin: Butler already gives its sessions StateCore memory, and with both, memory is recorded twice.
 
