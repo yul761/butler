@@ -19,6 +19,7 @@ interface Job {
   "runs-on": string;
   needs?: string | string[];
   if?: string;
+  environment?: string;
   env?: Record<string, string>;
   permissions?: Record<string, string>;
   strategy?: { "fail-fast"?: boolean; matrix: { os: string[] } };
@@ -34,6 +35,8 @@ interface Workflow {
 const runs = (job: Job) => job.steps.map((s) => s.run ?? "").filter(Boolean);
 const SIGNING_SECRETS = ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_API_KEY_P8", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"];
 const DEVELOPER_ID = "steps.signing.outputs.mode == 'developer-id'";
+/** BTL-259：环境 release 的部署策略只放行分支 main 和 v* tag，workflow 里判断「这次能不能签名」用的是同一个条件。 */
+const SIGNING_REF = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))";
 
 describe("CI workflows (design 1.3, 11)", () => {
   const ci = parse(read(".github/workflows/ci.yml")) as Workflow;
@@ -142,6 +145,30 @@ describe("CI workflows (design 1.3, 11)", () => {
   it("can be run by hand to try the signing, failing instead of falling back to ad-hoc", () => {
     const input = release.on.workflow_dispatch?.inputs?.require_signing;
     expect(input).toMatchObject({ type: "boolean", default: true });
+  });
+
+  it("takes the signing secrets only from the protected environment release, and only for macOS on main or a v* tag (BTL-259)", () => {
+    // An expression that comes out empty means no environment: Windows and every other ref run without one, so they are
+    // never refused with "not allowed to deploy", and they get no environment secrets (macOS goes ad-hoc).
+    expect(release.jobs.build.environment).toBe(`\${{ startsWith(matrix.os, 'macos') && ${SIGNING_REF} && 'release' || '' }}`);
+    // The release job runs only for a pushed v* tag, which the environment allows; it needs it to tell whether CSC_LINK is set.
+    expect(release.jobs.release.environment).toBe("release");
+    expect(ci.jobs.test.environment).toBeUndefined();
+    expect(ci.jobs.package.environment).toBeUndefined();
+  });
+
+  it("fails a manual run that requires signing on any ref but main or a v* tag, before building anything (BTL-259)", () => {
+    const steps = release.jobs.build.steps;
+    const guard = steps.find((s) => s.name === "Signing needs main or a v* tag");
+    // Same ref condition as the environment, negated: the guard fires exactly where the environment is not used.
+    expect(guard?.if).toBe(
+      "runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.require_signing && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v')",
+    );
+    expect(guard?.shell).toBe("bash");
+    expect(guard?.run).toContain("::error::require_signing is on, but signing is only available on main or a v* tag");
+    expect(guard?.run).toContain("exit 1");
+    expect(guard?.env).toBeUndefined();
+    expect(steps.indexOf(guard as Step)).toBe(0);
   });
 
   it("checks Git Bash on Windows and uploads E2E logs when the suite fails", () => {

@@ -37,19 +37,9 @@ Download the latest release from the [Releases page](https://github.com/yul761/b
 
 Installed, the macOS app takes about 455 MB. About 140 MB of that is `butler-hook`, the program Claude Code runs for each hook; installing the hooks copies it to `~/.butler/bin`.
 
-The builds are not code-signed yet (see [Code signing](docs/how-it-works.md#code-signing)), so the first launch needs one extra step.
+On macOS, open the `.dmg` and drag Butler into Applications. The macOS build is signed with Developer ID and notarized by Apple, so it opens with a double-click.
 
-### macOS (Gatekeeper)
-
-1. Open the `.dmg` and drag Butler into Applications.
-2. Open Butler. macOS refuses: it says Apple cannot verify the app.
-3. Open **System Settings → Privacy & Security**, scroll down to the message about Butler, click **Open Anyway** and confirm. On macOS 14 and earlier you can instead right-click (Control-click) Butler in Applications, choose **Open**, then **Open** again. Or, in a terminal:
-
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Butler.app
-   ```
-
-If macOS says Butler "is damaged and can't be opened", there is no **Open Anyway** button: use the `xattr` command. Repeat this after every new download.
+The Windows installer is not code-signed yet (see [Code signing](docs/how-it-works.md#code-signing)), so its first launch needs one extra step.
 
 ### Windows (SmartScreen)
 

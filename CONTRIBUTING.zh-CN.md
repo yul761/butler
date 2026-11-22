@@ -55,7 +55,7 @@ E2E 测试是沙箱化的。每个测试都有自己的临时 `BUTLER_HOME`、`C
 
 - **第一次发布之后不要改 `APP_ID`（`io.statecore.butler`）。** 它在 `src/main/app-id.ts` 里，必须和 `electron-builder.yml` 里的 `appId` 相同，有测试会检查。Windows 把它当作通知、开始菜单快捷方式和开机自启用的 AppUserModelID。
 - **图标是生成出来的。** SVG 源文件在 `build-resources/icon-src/`；`pnpm icons` 会生成 `build-resources/icon.png`（macOS）、多尺寸的 `build-resources/icon.ico`（Windows；32 px 及以下用简化的托盘图案）和 `src/main/tray-icons.ts`。生成的文件要提交。有测试会检查每个图标的背景和深色、浅色任务栏都有足够的对比度。不要把打包资源放进 `build/`：那里放的是 hook 和记忆 MCP 的构建产物。
-- 签名（BTL-258）：有五个签名 secret 时，`release.yml` 用 Developer ID 给 macOS 安装包签名、公证并 staple，见[给 fork 的 macOS 安装包签名](docs/how-it-works.zh-CN.md#给-fork-的-macos-安装包签名)。没有时，macOS 安装包在 `scripts/after-pack.cjs` 里做 ad-hoc 签名（完全不签名的 arm64 app 启动不了）；走哪一种由 `scripts/mac-signing.cjs` 决定，不会两种都做。Windows 不签名。README 里说明了用户怎么绕过 Gatekeeper 和 SmartScreen。
+- 签名（BTL-258、BTL-259）：有五个签名 secret 时，`release.yml` 用 Developer ID 给 macOS 安装包签名、公证并 staple。这些 secret 放在受保护的环境 `release` 里，只有 `main` 和 `v*` tag 能用，其他分支上的运行 macOS 走 ad-hoc；见[给 fork 的 macOS 安装包签名](docs/how-it-works.zh-CN.md#给-fork-的-macos-安装包签名)。没有时，macOS 安装包在 `scripts/after-pack.cjs` 里做 ad-hoc 签名（完全不签名的 arm64 app 启动不了）；走哪一种由 `scripts/mac-signing.cjs` 决定，不会两种都做。Windows 不签名。README 里说明了 Windows 用户怎么绕过 SmartScreen。
 
 ## 架构概览
 

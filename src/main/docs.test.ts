@@ -54,11 +54,20 @@ describe("open-source docs (design 12)", () => {
     }
   });
 
-  it("explains how to open the unsigned build and what not to install alongside, in both READMEs", () => {
-    const required = (zh: boolean) => ["Gatekeeper", "SmartScreen", "xattr -dr com.apple.quarantine", "~/.butler", "StateCore", zh ? "docs/configuration.zh-CN.md" : "docs/configuration.md", zh ? "CONTRIBUTING.zh-CN.md" : "CONTRIBUTING.md"];
+  it("explains how to open the unsigned Windows build and what not to install alongside, in both READMEs", () => {
+    const required = (zh: boolean) => [
+      "SmartScreen",
+      zh ? "macOS 版用 Developer ID 签名并通过 Apple 公证，双击即可打开" : "The macOS build is signed with Developer ID and notarized by Apple, so it opens with a double-click",
+      "~/.butler",
+      "StateCore",
+      zh ? "docs/configuration.zh-CN.md" : "docs/configuration.md",
+      zh ? "CONTRIBUTING.zh-CN.md" : "CONTRIBUTING.md",
+    ];
     for (const [doc, zh] of [["README.md", false], ["README.zh-CN.md", true]] as const) {
       const readme = read(doc);
       for (const s of required(zh)) expect(readme, `${doc}: ${s}`).toContain(s);
+      // BTL-259: since 4.1.2 the macOS build is signed and notarized, so the READMEs no longer teach getting past Gatekeeper.
+      for (const s of ["Gatekeeper", "xattr", "com.apple.quarantine"]) expect(readme, `${doc}: ${s}`).not.toContain(s);
     }
   });
 

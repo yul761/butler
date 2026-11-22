@@ -37,19 +37,9 @@
 
 装好以后 macOS 版约占 455 MB，其中约 140 MB 是 `butler-hook`，也就是 Claude Code 每次触发 hook 时运行的程序；安装 hook 时会把它复制到 `~/.butler/bin`。
 
-安装包还没有代码签名（见[代码签名](docs/how-it-works.zh-CN.md#代码签名)），所以第一次打开要多做一步。
+在 macOS 上，打开 `.dmg`，把 Butler 拖进"应用程序"。macOS 版用 Developer ID 签名并通过 Apple 公证，双击即可打开。
 
-### macOS（Gatekeeper）
-
-1. 打开 `.dmg`，把 Butler 拖进"应用程序"。
-2. 打开 Butler。macOS 会拒绝，提示 Apple 无法验证这个 app。
-3. 打开 **系统设置 → 隐私与安全性**，往下滚到关于 Butler 的提示，点 **仍要打开** 并确认。在 macOS 14 及更早版本上，也可以在"应用程序"里右键（Control-点按）Butler，选 **打开**，再点一次 **打开**。或者在终端里运行：
-
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Butler.app
-   ```
-
-如果 macOS 提示 Butler "已损坏，无法打开"，就不会有 **仍要打开** 按钮，请用 `xattr` 命令。每次下载新版本后都要重复一遍。
+Windows 安装包还没有代码签名（见[代码签名](docs/how-it-works.zh-CN.md#代码签名)），所以第一次打开要多做一步。
 
 ### Windows（SmartScreen）
 

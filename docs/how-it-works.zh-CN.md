@@ -208,7 +208,7 @@ transcript、输出文件和登记文件都是 Claude Code 的内部文件，更
 
 通知 webhook 的地址用系统钥匙串加密（macOS 钥匙串 / Windows DPAPI），界面上只显示它的主机名。Butler 只在你保存 webhook 地址、发送通知，以及打开高级设置里的 **打断与通知**（那里显示 webhook 的主机名）时才会用到钥匙串。如果你从没设置过 webhook，Butler 从不碰钥匙串。
 
-在 macOS 上，可能会弹框问 Butler 能否使用钥匙串里的"butler Safe Storage"（Electron 用 app 的内部名 `butler` 来命名这一项）。点 **始终允许**。4.1.1 及以前的版本、以及没有签名 secret 时打的包都是 ad-hoc 签名，不是 Developer ID 签名，所以 macOS 把每个新版本都当作不同的 app，每次升级后都会再问一次；签了名的版本会保留这个授权。如果点了 **拒绝**，Butler 读不了已保存的地址；重新输入一次即可。
+在 macOS 上，可能会弹框问 Butler 能否使用钥匙串里的"butler Safe Storage"（Electron 用 app 的内部名 `butler` 来命名这一项）。点 **始终允许**。从 4.1.2 起发布的版本用 Developer ID 签名，升级后 macOS 会保留这个授权；从 4.1.1 及以前的版本第一次升上来时会再问一次。那些旧版本、以及没有签名 secret 时打的包只有 ad-hoc 签名，macOS 把它们的每个新版本都当作不同的 app，每次升级后都会再问一次。如果点了 **拒绝**，Butler 读不了已保存的地址；重新输入一次即可。
 
 从 3.x 升级时，`app.db` 里的个人 API key、它的设置、敏感词列表和 LLM 调用日志会被删掉。Butler 已经没有地方显示或清除它们了。
 
@@ -229,13 +229,16 @@ Butler 自己不调用任何模型，也没有 API key。所有要用模型的�
 
 ## 代码签名
 
-**现状：** 4.1.1 及以前的版本没有代码签名：macOS 版只有 ad-hoc 签名，没有公证。从下一个版本起，macOS 安装包按下面说的签名并公证。Windows 安装包没有签名。所以第一次打开时 Gatekeeper 和 SmartScreen 会拦（怎么放行见 [README](../README.zh-CN.md#安装)）。Butler 也没有自动更新，只在有新版本时提示你。
+**现状：** 从 4.1.2 起，macOS 安装包按下面说的用 Developer ID 签名并通过 Apple 公证，打开时 Gatekeeper 不会拦（4.1.1 及以前的版本只有 ad-hoc 签名）。Windows 安装包还没有签名，所以第一次打开时 SmartScreen 会拦（怎么放行见 [README](../README.zh-CN.md#安装)）。Butler 也没有自动更新，只在有新版本时提示你。
 
-签名只在 GitHub Actions 上由 [`.github/workflows/release.yml`](../.github/workflows/release.yml) 来做。仓库设了下面五个签名 secret 时，它打出来的 macOS 安装包用 Developer ID Application 证书签名（打开 hardened runtime），交给 Apple 公证并 staple，dmg 和 zip 打开时 Gatekeeper 都不会拦。没有这些 secret 时（fork、pull request、在自己机器上打包），macOS 的 app 和以前一样只有 ad-hoc 签名。Windows 安装包两种情况下都不签名。Butler 官方的安装包都是从这个公开仓库的版本 tag 构建的。
+签名只在 GitHub Actions 上由 [`.github/workflows/release.yml`](../.github/workflows/release.yml) 来做。下面五个签名 secret 是受保护的 GitHub 环境 `release` 的环境 secret，这个环境的部署策略只放行 `main` 分支和 `v*` tag；也只有这些 ref 上的 macOS 构建会用这个环境。有这些 secret 时，macOS 安装包用 Developer ID Application 证书签名（打开 hardened runtime），交给 Apple 公证并 staple，dmg 和 zip 打开时 Gatekeeper 都不会拦。没有时（没设 secret 的 fork、pull request、在其他分支上手动运行、在自己机器上打包），macOS 的 app 只有 ad-hoc 签名。Windows 安装包两种情况下都不签名，它的构建也从不用这个环境。Butler 官方的安装包都是从这个公开仓库的版本 tag 构建的。
 
 ### 给 fork 的 macOS 安装包签名
 
-你需要付费的 Apple Developer Program 会员。在仓库里设这五个 secret（**Settings → Secrets and variables → Actions**，或者 `gh secret set 名字 -R owner/repo`）。五个要么都设，要么都不设：只设了一部分时，发版构建会停下，并列出缺了哪几个。
+你需要付费的 Apple Developer Program 会员。这五个 secret 有两种设法。五个要么都设，要么都不设：只设了一部分时，发版构建会停下，并列出缺了哪几个。
+
+- **设在名为 `release` 的环境里**（推荐，和这个仓库一样）：在 **Settings → Environments** 里建这个环境，把部署分支和 tag 限定为 `main` 和 `v*`，再把 secret 设在上面（`gh secret set 名字 --env release -R owner/repo`）。这样只有 `main` 和 `v*` tag 上的运行能签名。
+- **设成仓库级 secret**（**Settings → Secrets and variables → Actions**，或者 `gh secret set 名字 -R owner/repo`）。这样每个分支上的运行都能用。fork 里没有 `release` 环境时，`main` 或 tag 上的运行第一次用到它，GitHub 会自动建一个空的；仓库级 secret 在里面照样能用。
 
 | Secret | 是什么 |
 |---|---|
@@ -245,7 +248,7 @@ Butler 自己不调用任何模型，也没有 API key。所有要用模型的�
 | `APPLE_API_KEY_ID` | 这个密钥的 Key ID（10 个字符）。 |
 | `APPLE_API_ISSUER` | 密钥列表上方的 Issuer ID（一个 UUID）。 |
 
-然后不用发版就能试：在任意分支上手动跑一次这个 workflow，`gh workflow run release.yml --ref <分支>`（或者 **Actions → Release → Run workflow**）。手动运行会构建、签名、公证、检查结果，并把安装包上传成 artifact，不会建 release。**require_signing** 开着时（默认），缺 secret 会直接失败，而不是退回 ad-hoc。**Verify the macOS signature and run the packaged app** 这一步会检查：包里每个可执行文件和原生模块都用你的 Team ID 签了名、打开了 hardened runtime；app 和 dmg 都 staple 了公证票据；Gatekeeper 认它们；打出来的 app 能启动。
+然后不用发版就能试：在 `main` 上手动跑一次这个 workflow，`gh workflow run release.yml --ref main`（或者 **Actions → Release → Run workflow**）。手动运行会构建、签名、公证、检查结果，并把安装包上传成 artifact，不会建 release。**require_signing** 开着时（默认），缺 secret 会直接失败，而不是退回 ad-hoc；在 `main` 和 `v*` tag 以外的 ref 上会一开始就失败，因为签名只在这两处可用。关掉它时，在其他分支上运行，macOS 走 ad-hoc（设了仓库级 secret 的除外）。**Verify the macOS signature and run the packaged app** 这一步会检查：包里每个可执行文件和原生模块都用你的 Team ID 签了名、打开了 hardened runtime；app 和 dmg 都 staple 了公证票据；Gatekeeper 认它们；打出来的 app 能启动。
 
 App Store Connect 密钥只在签名那几步写成 runner 上的一个私有临时文件，用完就删；证书导入一个临时钥匙串，electron-builder 结束时会删掉。两者都不会打进日志。hardened runtime 的 entitlements 在 [`build-resources/entitlements.mac.plist`](../build-resources/entitlements.mac.plist)，每一项为什么要都写在里面。
 
@@ -265,9 +268,9 @@ App Store Connect 密钥只在签名那几步写成 runner 上的一个私有临
 
 ## 已知问题
 
-- 构建没有签名（见[代码签名](#代码签名)）。macOS 版只支持 Apple silicon。
+- Windows 安装包没有签名（见[代码签名](#代码签名)）。macOS 版只支持 Apple silicon。
 - 没有自动更新。
-- ad-hoc 签名的版本（4.1.1 及以前），每次升级后 macOS 都会再问一次能否访问钥匙串里已保存的 webhook 地址。没保存 webhook 就不会弹。
+- 从 ad-hoc 签名的版本（4.1.1 及以前）第一次升到签了名的版本时，macOS 会再问一次能否访问钥匙串里已保存的 webhook 地址；之后升级不再问。没保存 webhook 就不会弹。
 - **实时状态的局限。** 管道接到 `| tail` 的命令在结束前什么都不输出，所以状态里看不到它的输出。在 Windows 上，Butler 不检查子进程的 CPU，也可能找不到命令的输出，所以状态可能只显示命令和它跑了多久。
 - **Windows 上用 npm 安装的 Claude Code。** Butler 不经过 `cmd.exe`，直接启动 npm/pnpm 的 `claude.cmd` shim 指向的目标，可能是原生的 `claude.exe`，也可能是 `node <script>`。
   - 如果 Claude Code 是用 `--ignore-scripts` 安装的，或者缺了原生的可选包，`bin\claude.exe` 只是一个小小的占位文件。
