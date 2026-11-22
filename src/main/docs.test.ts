@@ -41,6 +41,7 @@ const DOC_PAIRS = [
   ["README.md", "README.zh-CN.md"],
   ["CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md"],
   ["docs/configuration.md", "docs/configuration.zh-CN.md"],
+  ["docs/demo-media.md", "docs/demo-media.zh-CN.md"],
 ] as const;
 
 describe("open-source docs (design 12)", () => {

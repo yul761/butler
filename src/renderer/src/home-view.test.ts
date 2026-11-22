@@ -131,6 +131,12 @@ describe("prUrl and lookTarget", () => {
 describe("locationOf", () => {
   const ctx: NameCtx = { features: new Map([[2, "Feature名"]]), tickets: new Map([["BTL-1", "标题"]]) };
   const now = 1000 + 12 * MIN;
+  it("says just now (asked just now for a review), not just now ago, under a minute", () => {
+    for (const T of [STRINGS.zh, STRINGS.en]) {
+      expect(locationOf(item(merge, { featureId: 2, since: now - 20_000 }), ctx, now, T).age).toBe(T.durationNow);
+      expect(locationOf(item(review, { pr, since: now - 20_000 }), ctx, now, T).age).toBe(T.hm.reviewNow);
+    }
+  });
   it("writes feature › ticket", () => {
     const l = locationOf(item(merge, { featureId: 2 }), ctx, now, S);
     expect(l.path).toBe("Feature名 › BTL-1");

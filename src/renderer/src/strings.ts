@@ -397,6 +397,7 @@ const ZH = {
     },
     ago: (d: string) => `${d}前`,
     reviewAgo: (d: string) => `请你 ${d} 了`,
+    reviewNow: "刚刚请你",
     scopesHeading: "各个 epic",
     scopeLine: (total: number, merged: number, slowest: string | null) => `${total} 个里合了 ${merged} 个${slowest === null ? "" : ` · 最慢的是「${slowest}」`}`,
     scopeEmpty: "还没有 ticket",

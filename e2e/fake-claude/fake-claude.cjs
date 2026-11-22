@@ -30,6 +30,9 @@
 //     每条 assistant 记录都带 usage：上下文是 FAKE_CLAUDE_CONTEXT_TOKENS（e2e 用它撑过换新的阈值），/clear 之后从头算，回到 CLEARED_CONTEXT；
 //     交互日志另有 interactive-allow <id> <JSON>：--settings 文件里 permissions.allow 的内容；
 //     交互日志 interactive new/resume 行末尾带 guide=<--append-system-prompt-file 的路径>（没有就是空）；
+//     FAKE_CLAUDE_SCRIPT 指向一个剧本（JSON，只给演示录制用，BTL-251）时：banner 换掉就绪行和 mcp 行；收到的输入里含某条规则的 when，
+//       就回它的 reply（没有 reply 就不回、这一轮不结束），再按 then 里每一步的 after（毫秒，从收到起算）把 line 当成输入；
+//       这些输入不写进 transcript 的用户消息、不跑 UserPromptSubmit，这一步结束这一轮时回的话换成它的 say；
 //     输入 /fake-recall 时把 transcript 里用户说过的话列出来（日志 fake-recall <JSON>）：--resume 以后看得出原来的对话还在；
 //     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
@@ -141,6 +144,8 @@ const STUCK_VERDICT = {
 };
 /** /fake-ask 的回复：停下来问用户。 */
 const ASK_REPLY = "要把它拆成两个 PR 吗？";
+/** 演示剧本（FAKE_CLAUDE_SCRIPT，见文件开头）：{ banner?, rules: [{ when, reply?, then?: [{ after, line, say? }] }] }。 */
+const SCRIPT = process.env.FAKE_CLAUDE_SCRIPT ? JSON.parse(fs.readFileSync(process.env.FAKE_CLAUDE_SCRIPT, "utf8")) : null;
 /** /fake-bash 和 /fake-bg 写进输出文件的内容：比面板的 6 行多。 */
 const COMMAND_OUTPUT = Array.from({ length: 8 }, (_, i) => `step ${i + 1} of 8`);
 
@@ -524,8 +529,12 @@ function interactive() {
   }
   log(`interactive-allow ${sessionId} ${JSON.stringify(allow)}`);
   runHooks("SessionStart", { session_id: sessionId, cwd, source: has("--resume") ? "resume" : "startup", transcript_path: transcript });
-  out(`fake claude ready (${sessionId.slice(0, 8)})\n`);
-  if (mcp) out(`mcp: ${servers.join(", ")}\n`);
+  if (SCRIPT && SCRIPT.banner) {
+    out(`${SCRIPT.banner}\n`);
+  } else {
+    out(`fake claude ready (${sessionId.slice(0, 8)})\n`);
+    if (mcp) out(`mcp: ${servers.join(", ")}\n`);
+  }
   out("> ");
   /** assistant 记录的 message.id：和 Claude Code 一样每条回复一个（「需要你」按它每条只判断一次）。 */
   let messages = 0;
@@ -563,6 +572,8 @@ function interactive() {
   // 只有等到 Butler 随后的回车才会到，所以读到结束标记就提交。
   let pasting = null;
   let pasted = null;
+  /** 剧本排进来的输入（行 → 这一步的 say）：不算用户说的话。 */
+  const scripted = new Map();
   rl.on("line", (raw) => {
     if (raw.includes("\x1b[200~") || pasting) {
       const text = raw.replace("\x1b[200~", "");
@@ -580,6 +591,17 @@ function interactive() {
     }
     // 每条收到的输入都记一笔（JSON 字符串）：e2e 按顺序核对 Butler 往终端里输入了什么，屏幕上的早已滚走。
     log(`prompt ${JSON.stringify(line)}`);
+    const step = scripted.get(line);
+    scripted.delete(line);
+    const rule = !step && SCRIPT ? (SCRIPT.rules || []).find((r) => line.includes(r.when)) : undefined;
+    if (rule) {
+      for (const t of rule.then || []) {
+        setTimeout(() => {
+          scripted.set(t.line, { say: t.say });
+          rl.emit("line", t.line);
+        }, t.after || 0);
+      }
+    }
     if (line === "exit") {
       runHooks("SessionEnd", { session_id: sessionId, cwd, reason: "exit", transcript_path: transcript });
       process.exit(0);
@@ -641,10 +663,19 @@ function interactive() {
         // 没装命令文件也照样回代码块。
       }
       append({ type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: body }] } });
-    } else {
+    } else if (!step) {
       append({ type: "user", message: { role: "user", content: line } });
     }
-    runHooks("UserPromptSubmit", { session_id: sessionId, cwd, prompt: line, transcript_path: transcript });
+    if (!step) runHooks("UserPromptSubmit", { session_id: sessionId, cwd, prompt: line, transcript_path: transcript });
+    if (rule) {
+      if (rule.reply !== undefined) {
+        append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "end_turn", usage: usage(), content: [{ type: "text", text: rule.reply }] } });
+        out(`${rule.reply}\n`);
+        runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });
+        out("> ");
+      }
+      return;
+    }
     if (bash && bash[1] === "bash") {
       // 前台命令在跑：没有结果，这一轮不结束，也不打印新的提示符。
       startBash(bash[2], {});
@@ -708,7 +739,8 @@ function interactive() {
       startBackgroundShell(bash[2]);
       append({ type: "user", toolUseResult: { backgroundTaskId: taskId }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: `Command running in background with ID: ${taskId}. Output is being written to: ${output}. You will be notified when it completes \u2014 do not poll that file or sleep while waiting.` }] } });
     }
-    function endTurnLater(reply) {
+    function endTurnLater(said) {
+      const reply = step && step.say !== undefined ? step.say : said;
       append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: "end_turn", usage: usage(), content: [{ type: "text", text: reply }] } });
       out(`${reply}\n`);
       runHooks("Stop", { session_id: sessionId, cwd, stop_hook_active: false, transcript_path: transcript });

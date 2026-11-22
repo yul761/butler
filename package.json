@@ -25,7 +25,9 @@
     "pree2e": "pnpm build && pnpm build:hook",
     "e2e": "playwright test",
     "e2e:only": "playwright test",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "demo:record": "pnpm build && pnpm build:hook && pnpm demo:record:only",
+    "demo:record:only": "playwright test -c playwright.demo.config.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

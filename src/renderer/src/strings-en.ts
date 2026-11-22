@@ -390,6 +390,7 @@ export const EN: UiStrings = {
     },
     ago: (d: string) => `${d} ago`,
     reviewAgo: (d: string) => `asked ${d} ago`,
+    reviewNow: "asked just now",
     scopesHeading: "Epics",
     scopeLine: (total: number, merged: number, slowest: string | null) => `${merged} of ${total} merged${slowest === null ? "" : ` · slowest: "${slowest}"`}`,
     scopeEmpty: "No tickets yet",

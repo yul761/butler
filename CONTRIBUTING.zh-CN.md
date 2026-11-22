@@ -40,6 +40,7 @@ BUTLER_HOME=/tmp/butler-dev CLAUDE_CONFIG_DIR=/tmp/claude-dev pnpm dev
 | `pnpm build:hook` | 当前平台的 `butler-hook` 可执行文件（需要 `.node-version` 里的 Node） |
 | `pnpm e2e` | 先运行 `pnpm build` 和 `pnpm build:hook`，再跑 Playwright-for-Electron 测试 |
 | `pnpm e2e:only` | 同样的测试，但不重新构建 |
+| `pnpm demo:record` | 把 README 的动图和截图录到 `docs/media/`（macOS 或 Linux，需要 `ffmpeg`；见[录制演示素材](docs/demo-media.zh-CN.md)）。不进 CI |
 | `pnpm dist` | 把未签名的安装包输出到 `dist/`，只限当前平台（macOS：arm64 的 dmg 和 zip；Windows：x64 NSIS）。它只打包已经构建好的东西，所以先运行 `pnpm build && pnpm build:hook`。 |
 
 E2E 测试是沙箱化的。每个测试都有自己的临时 `BUTLER_HOME`、`CLAUDE_CONFIG_DIR`、home 文件夹和临时文件夹，用的是假的 `claude`（`e2e/fake-claude`）。它们从不运行真实的 `claude`，也不读你的真实数据。
