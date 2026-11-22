@@ -13,13 +13,18 @@ import { SessionService } from "../sessions/session-service";
 import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { FeatureService } from "../tickets/feature-service";
 import { TicketService } from "../tickets/ticket-service";
-import { controlHandler } from "./control-handler";
+import { controlHandler, type ControlHandlerDeps } from "./control-handler";
 import type { SendInput } from "../mailbox/mailbox";
 import { StackControl, type StackControlDeps } from "./stack-control";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
-async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: FeaturesRepo }) => StackControl } = {}) {
+async function setup(opts: {
+  stacks?: (d: { tickets: TicketsRepo; features: FeaturesRepo }) => StackControl;
+  mailState?: "busy" | "idle" | "closed";
+  resume?: ControlHandlerDeps["resume"];
+  wakeState?: ControlHandlerDeps["wakeState"];
+} = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -53,7 +58,7 @@ async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: Feat
   const refreshed: string[] = [];
   const mailed: SendInput[] = [];
   const mailbox = {
-    send: (x: SendInput) => (mailed.push(x), { id: `m${mailed.length}`, state: "busy" as const }),
+    send: (x: SendInput) => (mailed.push(x), { id: `m${mailed.length}`, state: opts.mailState ?? ("busy" as const) }),
     opened: async () => true,
     views: () => [],
   };
@@ -69,6 +74,8 @@ async function setup(opts: { stacks?: (d: { tickets: TicketsRepo; features: Feat
     screenNeedsUser: (termId) => needsUser.has(termId),
     lastReply: (id) => replies.get(id) ?? null,
     ...(opts.stacks && { stacks: opts.stacks({ tickets, features }) }),
+    ...(opts.resume && { resume: opts.resume }),
+    ...(opts.wakeState && { wakeState: opts.wakeState }),
     log: (m) => void logs.push(m),
   });
   const parent = join(tempDir("butler-code-"), "shop");
@@ -322,6 +329,42 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     sessions.insertIfAbsent({ id: "kid-new", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
     sessions.setReplacedBy(kid, "kid-new");
     expect(await handle({ ...from, op: "send_message", session: kid, text: "y" })).toMatchObject({ ok: true, value: { sessionId: "kid-new" } });
+  });
+
+  it("send_message to a closed session says whether Butler is resuming it, waiting for memory, or the user ended it (BTL-256)", async () => {
+    const answers: Record<string, Awaited<ReturnType<NonNullable<ControlHandlerDeps["resume"]>>>> = {};
+    const asked: string[] = [];
+    const { handle, base, sessionService, feature, sessions } = await setup({
+      mailState: "closed",
+      resume: async (id) => (asked.push(id), answers[id] ?? null),
+      wakeState: (id) => (id === "fix" ? "ended_by_user" : "resumes"),
+    });
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const from = { ...base, from: c.termId };
+    for (const id of ["a", "b", "fix", "d"]) {
+      sessions.insertIfAbsent({ id, ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "x" });
+    }
+    answers.a = { state: "resuming" };
+    answers.b = { state: "waiting_memory", error: "only 1 GB free" };
+    answers.fix = { state: "ended_by_user" };
+    answers.d = { state: "running" };
+    const a = await handle({ ...from, op: "send_message", session: "a", text: "x" });
+    expect(a).toMatchObject({ ok: true, value: { state: "closed", wake: "resuming" } });
+    expect((a as { value: { note: string } }).value.note).toContain("后台恢复");
+    expect(await handle({ ...from, op: "send_message", session: "b", text: "x" }))
+      .toMatchObject({ ok: true, value: { wake: "waiting_memory", wakeError: "only 1 GB free" } });
+    expect(await handle({ ...from, op: "send_message", session: "fix", text: "x" })).toMatchObject({ ok: true, value: { wake: "ended_by_user" } });
+    // 恢复的时候发现已经开着了：按开着的说。
+    const d = await handle({ ...from, op: "send_message", session: "d", text: "x" });
+    expect(d).toMatchObject({ ok: true, value: { state: "idle" } });
+    expect((d as { value: object }).value).not.toHaveProperty("wake");
+    expect(asked).toEqual(["a", "b", "fix", "d"]);
+    const rows = await handle({ ...from, op: "list_sessions" });
+    if (!rows.ok) throw new Error(rows.error);
+    const byId = new Map((rows.value as { id: string; wake?: string }[]).map((r) => [r.id, r.wake]));
+    expect(byId.get("fix")).toBe("ended_by_user");
+    expect(byId.get("a")).toBe("resumes");
   });
 
   it("send_message refuses sessions outside this feature, the coordinator itself, and callers that are not its coordinator (BTL-245)", async () => {

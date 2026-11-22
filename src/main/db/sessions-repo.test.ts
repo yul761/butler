@@ -263,3 +263,30 @@ describe("SessionsRepo.listByTickets (BTL-242)", () => {
     expect(repo.listByTickets([])).toEqual(new Map());
   });
 });
+
+describe("SessionsRepo resume bookkeeping (BTL-256)", () => {
+  const add = (repo: SessionsRepo, id: string, at = 1) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+
+  it("records and clears that the user ended a session", () => {
+    const { repo } = setup();
+    add(repo, "a");
+    expect(repo.get("a")?.userEndedAt).toBeNull();
+    repo.setUserEnded("a", 5);
+    expect(repo.get("a")?.userEndedAt).toBe(5);
+    repo.setUserEnded("a", null);
+    expect(repo.get("a")?.userEndedAt).toBeNull();
+  });
+
+  it("takeTermOpen returns the terminals still marked open and clears them", () => {
+    const { repo } = setup();
+    add(repo, "a");
+    add(repo, "b", 2);
+    add(repo, "c", 3);
+    repo.markTermOpen("b", 20);
+    repo.markTermOpen("a", 10);
+    repo.markTermOpen("c", 30);
+    repo.clearTermOpen("c");
+    expect(repo.takeTermOpen()).toEqual(["a", "b"]);
+    expect(repo.takeTermOpen()).toEqual([]);
+  });
+});

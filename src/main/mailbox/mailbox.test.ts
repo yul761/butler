@@ -27,6 +27,7 @@ function world() {
   const interrupts: string[] = [];
   const typed: string[] = [];
   const woken: string[] = [];
+  const deliveredMsgs: { id: string; via: string | null }[] = [];
   const held = new Set<string>();
   const head = (id: string): Session | null => {
     let s = sessions.get(id);
@@ -62,6 +63,7 @@ function world() {
     nameOf: (id) => (id === null ? "Butler" : `S(${id})`),
     typing: (h, phase) => typed.push(`${h}:${phase}`),
     wake: (h) => woken.push(h),
+    delivered: (m) => deliveredMsgs.push({ id: m.id, via: m.via }),
     held: (h) => held.has(h),
     featureOf: (h) => (h === "t9" ? 9 : null),
     notify: () => {},
@@ -74,7 +76,7 @@ function world() {
   };
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
-    root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, held, add, dirFiles,
+    root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, deliveredMsgs, held, add, dirFiles,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -481,5 +483,15 @@ describe("Mailbox", () => {
     await flushPromises();
     expect(w.woken).toEqual(["z"]);
     expect(w.repo.queued()).toHaveLength(2);
+  });
+
+  it("tells the delivered callback about each message it delivers (BTL-256)", async () => {
+    const w = world();
+    w.add("t1", true);
+    const a = w.mb.send(msg("t1", "one"));
+    const b = w.mb.send(msg("t1", "two"));
+    await flushPromises();
+    await w.mb.flush("t1");
+    expect(w.deliveredMsgs).toEqual([{ id: a.id, via: "input" }, { id: b.id, via: "input" }]);
   });
 });

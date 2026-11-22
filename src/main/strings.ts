@@ -339,6 +339,25 @@ const ZH = {
         ? "消息排进了它的信箱：它停着，Butler 马上把消息输入进去。"
         : "消息排进了它的信箱：它的终端关着，下次打开时第一件事就是读这条。",
   mailboxReplyNote: "它读到之后这一轮的最后一段回复会以【回复】自动送回给你（带同一个 requestId）。",
+  // BTL-256：给关着的 session 发消息时在后台恢复它。
+  mailboxWakeNote: (wake: "resuming" | "waiting_memory" | "ended_by_user" | "resume_failed" | "not_managed" | "hibernated", error?: string): string =>
+    wake === "resuming"
+      ? "它的终端关着：Butler 正在后台恢复它（接着原来的对话），起来以后马上把消息送进去，送到时你会收到一条【回执】。"
+      : wake === "waiting_memory"
+        ? `它的终端关着，现在内存不够，Butler 没有恢复它（${error ?? ""}）。消息排着，内存够了 Butler 会再试；急的话结束几个用不着的 session。`
+        : wake === "ended_by_user"
+          ? "用户自己结束了这个 session，Butler 不自动恢复它。消息排着，用户打开它时会送到；真要它接着做，用 ask_user 问用户。"
+          : wake === "resume_failed"
+            ? `Butler 之前没能恢复它（${error ?? ""}），暂时不再自动试。消息排着，用户打开它时会送到。`
+            : wake === "hibernated"
+              ? "它在休眠，Butler 正在叫醒它，醒来就送。"
+              : "它不是总控开的 session，Butler 不自动恢复它。消息排着，下次打开时送到。",
+  resumeReceiptDelivered: (name: string, ids: string[]) => `【回执】${name} 的终端原来关着，Butler 已在后台恢复它（接着原来的对话），你的消息 ${ids.join("、")} 已经送到。它的回复会以【回复】另外送来。`,
+  resumeReceiptFailed: (name: string, ids: string[], why: string, retry: boolean) =>
+    `【回执】Butler 没能在后台恢复 ${name}：${why}。你的消息 ${ids.join("、")} 还排在它的信箱里，用户打开它时会送到。${retry ? "过 10 分钟 Butler 会再试一次。" : "Butler 不再自动试；要它接着做，用 ask_user 告诉用户。"}`,
+  resumeNoTranscript: "原来的对话记录找不到了",
+  resumeOpenFailed: (reason: string) => `打不开（${reason}）`,
+  resumeExited: "claude --resume 还没起来就退出了",
   mailboxNotYours: (id: string) => `${id} 不是这个 epic 的 ticket session 或修复 session（list_sessions 里看得到的才行）`,
   ctlSummaryStarted: "已经在后台重新生成这个 epic 的汇总（会先给有新活动的 ticket 跑 handoff），通常几分钟。生成完再用 list_epics 看新的 summaryAt。",
   ctlSummaryRunning: "这个 epic 的汇总正在生成，等它跑完再用 list_epics 看。",
@@ -941,6 +960,24 @@ const EN: MainStrings = {
         ? "The message is in its mailbox. It is stopped, so Butler is typing the message in now."
         : "The message is in its mailbox. Its terminal is closed; reading this message is the first thing it does when it opens.",
   mailboxReplyNote: "The last reply it writes in the turn after reading it comes back to you automatically as [Reply] with the same requestId.",
+  mailboxWakeNote: (wake: "resuming" | "waiting_memory" | "ended_by_user" | "resume_failed" | "not_managed" | "hibernated", error?: string): string =>
+    wake === "resuming"
+      ? "Its terminal is closed. Butler is resuming it in the background (continuing its conversation) and types the message in as soon as it is up; you get a [Receipt] when it is delivered."
+      : wake === "waiting_memory"
+        ? `Its terminal is closed and memory is short right now, so Butler did not resume it (${error ?? ""}). The message stays queued and Butler tries again when there is room; end a few sessions you no longer need if it is urgent.`
+        : wake === "ended_by_user"
+          ? "The user ended this session, so Butler does not resume it on its own. The message stays queued and is delivered when the user opens it; if it really should continue, ask the user with ask_user."
+          : wake === "resume_failed"
+            ? `Butler could not resume it earlier (${error ?? ""}) and is not retrying for now. The message stays queued and is delivered when the user opens it.`
+            : wake === "hibernated"
+              ? "It is hibernating; Butler is waking it and delivers the message when it is up."
+              : "It is not a session a coordinator started, so Butler does not resume it on its own. The message stays queued and is delivered the next time it opens.",
+  resumeReceiptDelivered: (name: string, ids: string[]) => `[Receipt] ${name}'s terminal was closed. Butler resumed it in the background (continuing its conversation) and delivered your message ${ids.join(", ")}. Its reply comes separately as [Reply].`,
+  resumeReceiptFailed: (name: string, ids: string[], why: string, retry: boolean) =>
+    `[Receipt] Butler could not resume ${name} in the background: ${why}. Your message ${ids.join(", ")} is still queued in its mailbox and is delivered when the user opens it. ${retry ? "Butler tries once more in 10 minutes." : "Butler will not retry on its own; if it should continue, tell the user with ask_user."}`,
+  resumeNoTranscript: "its conversation transcript is gone",
+  resumeOpenFailed: (reason: string) => `it could not be opened (${reason})`,
+  resumeExited: "claude --resume exited before it started",
   mailboxNotYours: (id: string) => `${id} is not a ticket or fix session of this epic (only the ones list_sessions shows)`,
   ctlSummaryStarted: "Butler is regenerating this epic's summary in the background (it runs handoffs for tickets with new activity first); it usually takes a few minutes. Check list_epics for the new summaryAt afterwards.",
   ctlSummaryRunning: "This epic's summary is already being generated. Check list_epics once it finishes.",

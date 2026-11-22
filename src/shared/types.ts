@@ -148,6 +148,8 @@ export interface Session {
   /** 上一次自动唤醒失败的原因（下一次成功打开时清掉）。 */
   wakeError?: string | null;
   wakeErrorAt?: number | null;
+  /** 用户点 × 结束的时间（BTL-256）：有消息时也不自动恢复；再打开时清掉。 */
+  userEndedAt?: number | null;
 }
 
 /** 休眠时 session 在等什么（WS-M B）：you 等你、ci 等 CI、review 等 review、idle 闲着；pressure 内存紧张，memory 内存过大重启。 */

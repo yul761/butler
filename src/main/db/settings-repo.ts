@@ -200,6 +200,8 @@ export const SETTING_DEFAULTS = {
   updateLatest: "",
   /** BTL-253：「跳过这个版本」跳过的版本号；空 = 没跳过。不在设置页上。 */
   updateSkippedVersion: "",
+  /** BTL-256：重启后自动恢复之前在工作的 session（总控管的）。默认关。 */
+  autoResumeAfterRestart: "0",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

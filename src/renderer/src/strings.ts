@@ -1548,6 +1548,8 @@ const ZH = {
   autostart: "开机时自动启动 Butler",
   autostartUnsupported: "只有安装好的 Butler 才能设置开机自启（开发模式下不可用）。",
   showOutsideSessions: "显示 Butler 之外开的 session",
+  autoResumeAfterRestart: "重启后自动恢复之前在工作的 session",
+  autoResumeAfterRestartHelp: "打开后，Butler 启动时把上次退出时还开着终端（在工作或在等回复）、由总控管的 session 在后台接着原来的对话恢复回来：有未读消息的最先，然后是有 PR 在等的。每开一个都先看内存够不够，不够就停下，剩下的等有消息来再恢复。你自己点 × 结束的不会恢复。不管开没开，总控给关着的 session 发消息时 Butler 都会在后台恢复它。",
   showOutsideSessionsHelp: "打开后，Butler 每 5 分钟看一遍 ~/.claude/projects，把最近 7 天你在 Butler 之外开的 Claude Code session 列在 全部工作 › 未认领 session 下，可以认领到 ticket。关着时不去那里找它们。",
   sessionSettings: "同时开几个 session",
   sessionMemoryReserveMb: "开新 session 后至少留给系统的内存（MB）",

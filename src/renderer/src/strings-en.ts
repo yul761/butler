@@ -1536,6 +1536,8 @@ export const EN: UiStrings = {
   autostart: "Start Butler at login",
   autostartUnsupported: "Only an installed Butler can start at login (not available in development mode).",
   showOutsideSessions: "Show sessions started outside Butler",
+  autoResumeAfterRestart: "Resume the sessions that were working after a restart",
+  autoResumeAfterRestartHelp: "When on, Butler resumes the coordinator-managed sessions whose terminals were still open when it last quit (working or waiting for a reply), continuing their conversations in the background: ones with unread messages first, then ones with a PR waiting. It checks memory before each one and stops when it runs short; the rest resume when a message arrives. Sessions you ended with × are not resumed. Either way, Butler resumes a closed session in the background when a coordinator sends it a message.",
   showOutsideSessionsHelp: "When on, Butler looks through ~/.claude/projects every 5 minutes and lists the Claude Code sessions you started outside Butler in the last 7 days under All work › Unclaimed sessions, so you can claim them for a ticket. When off, it doesn't look through that folder for them.",
   sessionSettings: "How many sessions run at once",
   sessionMemoryReserveMb: "Memory to keep free after opening a session (MB)",

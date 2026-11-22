@@ -406,6 +406,26 @@ describe("Butler 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(repo.get(first.requestId)?.status).toBe("delivered");
   });
 
+  it("does not reopen a coordinator the user ended; the message waits for the user (BTL-256)", async () => {
+    const { call, opened, repo, sessions } = setup();
+    sessions.setUserEnded("dc", 123);
+    const r = value<{ requestId: string; wake: string; note: string }>(await call({ op: "send_message", epic: "docs", text: "看一下" }));
+    expect(r.wake).toBe("ended_by_user");
+    expect(r.note).toContain("用户自己结束");
+    expect(opened).toEqual([]);
+    expect(repo.get(r.requestId)?.status).toBe("queued");
+  });
+
+  it("says waiting_memory when memory is too short to reopen a coordinator (BTL-256)", async () => {
+    const admission = new MemoryAdmission({
+      read: async () => ({ totalKb: 64 * 1024 * 1024, availableKb: 2500 * 1024, source: "vm_stat", pressure: "normal" }),
+      settings: () => ({ reserveMb: 2048, sessionMb: 1024, maxRunning: 0 }),
+      running: () => 0, now: () => 0, log: () => undefined,
+    });
+    const { call } = setup({ admission });
+    expect(value(await call({ op: "send_message", epic: "docs", text: "看一下" }))).toMatchObject({ wake: "waiting_memory", wakeError: expect.stringContaining("内存不够") });
+  });
+
   it("refuses ticket and fix sessions, itself and unknown ones", async () => {
     const { call, delivered } = setup();
     expect(err(await call({ op: "send_message", session: "c1", text: "t" }))).toContain("epic 总控");

@@ -24,6 +24,7 @@ import { startRefresh, type SessionRefresher } from "../sessions/session-refresh
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
 import type { Mailbox } from "../mailbox/mailbox";
+import type { ResumeStart, WakeState } from "../sessions/resumer";
 
 export interface ControlHandlerDeps {
   tickets: TicketsRepo;
@@ -57,6 +58,13 @@ export interface ControlHandlerDeps {
    * 信箱（BTL-245）：Butler 总控和 feature 总控的 send_message 一律排队，不再因为对方在忙被拒。不给时 send_message 报「没开」。
    */
   mailbox?: Pick<Mailbox, "send" | "opened" | "views">;
+  /**
+   * 后台恢复关着的 session（BTL-256）：send_message 的目标终端关着时等这一次准入和打开的结果，返回值里写清楚。
+   * 熔断压着、没接时为 null（不写 wake）。
+   */
+  resume?: (sessionId: string) => Promise<ResumeStart | null>;
+  /** list_sessions 每行的 wake：关着的收到消息时会怎样。 */
+  wakeState?: (sessionId: string) => WakeState;
   /** ask_user、report（BTL-190 第 2+3 点）；不给就拒绝。 */
   inbox?: Pick<InboxService, "ask" | "report">;
   /** Butler 总控的请求（BTL-190 第 5 点）；不给就拒绝。 */
@@ -179,6 +187,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     waitingForInput: s.waitingForInput,
     lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
     startedByCoordinator: s.spawnedBy !== null,
+    // BTL-256：关着的收到消息时会怎样（running、resumes、ended_by_user……）。
+    ...(d.wakeState && { wake: d.wakeState(s.id) }),
     activity: listedActivity(s.id),
     last_reply: lastReply(s.id),
     };
@@ -391,7 +401,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
    * feature 总控的 send_message（BTL-245）：只能发给这个 feature 的 ticket session 和修复 session，排进它的信箱。
    * 从不因为它在忙被拒；终端关着时排着，下次打开再送。from 必须是这个 feature 开着终端的总控。
    */
-  const featureSend = (f: Feature, own: Ticket[], req: Extract<FeatureControlRequest, { op: "send_message" }>): ControlResult => {
+  const featureSend = async (f: Feature, own: Ticket[], req: Extract<FeatureControlRequest, { op: "send_message" }>): Promise<ControlResult> => {
     if (!d.mailbox) return fail(M().ctlStartUnavailable);
     const h = req.from ? d.sessions.head(req.from) : null;
     if (!h || h.featureId !== f.id || !h.coordinator || !d.sessionService.termIdOf(h.id)) return fail(M().ctlInboxNotYours);
@@ -402,7 +412,17 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const interrupt = req.interrupt === true;
     const body = sanitizeTask(M().mailboxInstruction(M().butlerTargetFeature(f.name), req.text, interrupt));
     const r = d.mailbox.send({ kind: "instruction", from: h.id, to: t.id, featureId: f.id, body, interrupt });
-    return ok({ queued: true, sessionId: t.id, requestId: r.id, state: r.state, note: `${M().mailboxSendNote(r.state)}${M().mailboxReplyNote}` });
+    // 终端关着（BTL-256）：信箱已经叫恢复了（同一个请求），这里等准入和打开的结果，告诉总控是在恢复、等内存还是用户结束了。
+    const w = r.state === "closed" && d.resume ? await d.resume(t.id) : null;
+    if (w && w.state !== "running") {
+      const error = "error" in w ? w.error : undefined;
+      return ok({
+        queued: true, sessionId: t.id, requestId: r.id, state: r.state, wake: w.state, ...(error !== undefined && { wakeError: error }),
+        note: `${M().mailboxWakeNote(w.state, error)}${M().mailboxReplyNote}`,
+      });
+    }
+    const state = w?.state === "running" ? "idle" : r.state;
+    return ok({ queued: true, sessionId: t.id, requestId: r.id, state, note: `${M().mailboxSendNote(state)}${M().mailboxReplyNote}` });
   };
 
   const featureRequest = async (req: NonInbox<FeatureControlRequest>): Promise<ControlResult> => {

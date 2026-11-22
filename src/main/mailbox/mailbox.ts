@@ -91,6 +91,8 @@ export interface MailboxDeps {
    * 直接输入本来就被 guard 的 refreshing 挡着。换新结束后调用方 syncTerm 再 flush。
    */
   held?(headId: string): boolean;
+  /** 每送到一条（hook 或直接输入）都调一次（BTL-256：后台恢复以后给发送方回执）。 */
+  delivered?(m: SessionMessage): void;
   /** 收件人所在的 epic（ticket 的 session 从 ticket 往上找）：没写 featureId 的消息记在这里，epic 的消息列表看得到。 */
   featureOf?(headId: string): number | null;
   notify(): void;
@@ -365,6 +367,11 @@ export class Mailbox {
       } catch (e) {
         this.d.log(`mailbox: delivered handler for ${m.ref} failed`, e);
       }
+    }
+    try {
+      this.d.delivered?.({ ...m, status: "delivered", deliveredAt: at, via });
+    } catch (e) {
+      this.d.log(`mailbox: delivered callback for ${m.id} failed`, e);
     }
     // 送达的记账晚于对方停下来（假 claude、很短的一轮）：马上补查一次回复。
     if (m.expectsReply && (this.stoppedAt.get(target) ?? -Infinity) >= at) {
