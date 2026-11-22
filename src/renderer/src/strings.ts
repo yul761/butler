@@ -2416,6 +2416,33 @@ const ZH = {
     },
     forkTag: "讨论",
   },
+  /** 发送反馈（BTL-254）。 */
+  feedback: {
+    open: "发送反馈…",
+    title: "发送反馈",
+    intro: "Butler 会在浏览器里打开一个填好的 GitHub issue 页，你看过以后在 GitHub 上点提交。Butler 自己不往外发任何东西。",
+    kind: "类型",
+    kinds: { bug: "出了问题（bug）", idea: "想法", "first-run": "首次使用卡住了" } as Record<"bug" | "idea" | "first-run", string>,
+    summary: "一句话标题（选填）",
+    description: "描述（选填）",
+    descriptionHint: "发生了什么、你本来想做什么。不要贴公司代码或项目名。",
+    envNote: "issue 里会带上 Butler 版本、系统和版本、架构、Claude Code 版本。",
+    attach: "附上诊断",
+    attachHint: "导出一份脱敏的诊断：家目录、路径、仓库名、ticket 标题、epic 名、分支名都会换成占位符。存之前先给你看内容。",
+    openGithub: "在 GitHub 上打开",
+    next: "下一步：看诊断内容",
+    building: "正在准备…",
+    previewTitle: "要附上的诊断",
+    previewIntro: "下面就是会存到下载目录的全部内容，确认里面没有你不想公开的东西。",
+    saveAndOpen: "存到下载目录，打开 GitHub",
+    back: "返回",
+    cancel: "取消",
+    close: "关闭",
+    opened: "已经在浏览器里打开了 issue 页，检查一下内容，在 GitHub 上点「Submit new issue」提交。",
+    savedTo: (name: string) => `诊断已存到下载目录：${name}，并在文件夹里选中了。把它拖进 issue 的「Diagnostics」框。`,
+    truncated: "描述太长，链接里只带了前面一部分；完整的内容已复制到剪贴板，可以粘贴到 GitHub 上。",
+    stuck: "卡住了？告诉我们",
+  },
 };
 
 export type UiStrings = typeof ZH;

@@ -86,7 +86,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openButlerArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg } from "./validate";
+  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -94,6 +94,7 @@ import type { AvailabilityView } from "../../shared/availability";
 import type { RoutingAction, RoutingView, SessionLimitView } from "../../shared/model-routing";
 import type { SwitchResult } from "../routing/session-switch";
 import type { DiagService } from "../diag/diag-service";
+import type { FeedbackService } from "../feedback/feedback-service";
 import { isReadChannel } from "./read-channels";
 import type { UpdateCheckResult, UpdateView } from "../../shared/update";
 import type { PtySubscriptions } from "../sessions/pty-subscriptions";
@@ -198,6 +199,8 @@ export interface IpcDeps {
   onInvoked?: (channel: string, args: readonly unknown[], result: unknown) => void;
   /** 性能诊断（BTL-242）。 */
   diag?: Pick<DiagService, "report" | "snapshot" | "export" | "invoke">;
+  /** 「发送反馈」（BTL-254）。 */
+  feedback?: Pick<FeedbackService, "open" | "previewDiagnostics" | "saveDiagnostics">;
   /** 渲染进程挂着的终端（pty:snapshot 挂、pty:detach 摘）。 */
   ptySubs?: Pick<PtySubscriptions, "attach" | "detach">;
   /** 写操作的 invoke 前后调（作废视图缓存）。 */
@@ -509,6 +512,18 @@ export function registerIpc(d: IpcDeps): void {
   ipcMain.on(IPC.diagRenderer, (_e, report: unknown) => d.diag?.report(report));
   handle(IPC.diagSnapshot, (reset: unknown) => d.diag?.snapshot(reset === true) ?? null);
   handle(IPC.diagExport, () => d.diag?.export() ?? null);
+  handle(IPC.feedbackOpen, (r: unknown) => {
+    if (!d.feedback) throw new Error("feedback unavailable");
+    return d.feedback.open(feedbackOpenArg(r));
+  });
+  handle(IPC.feedbackDiagPreview, () => {
+    if (!d.feedback) throw new Error("feedback unavailable");
+    return d.feedback.previewDiagnostics();
+  });
+  handle(IPC.feedbackDiagSave, () => {
+    if (!d.feedback) throw new Error("feedback unavailable");
+    return d.feedback.saveDiagnostics();
+  });
   ipcMain.on(IPC.ptyVisible, (_e, id: unknown, visible: unknown) => {
     if (typeof id === "string") d.terminalVisible?.(id, visible === true);
   });

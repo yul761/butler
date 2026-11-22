@@ -4,6 +4,7 @@ import { api } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
+import { FeedbackButton } from "./FeedbackDialog";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -14,7 +15,7 @@ export function updateResultText(r: UpdateCheckResult): string {
   return S.update.resultFailed + S.update.reasons[r.reason];
 }
 
-/** 设置 › 关于（BTL-253）：当前版本、上次检查、手动检查更新和结果。BTL-254 在这里加「发送反馈」。 */
+/** 设置 › 关于（BTL-253）：当前版本、上次检查、手动检查更新和结果。以及「发送反馈」（BTL-254）。 */
 export function AboutSettings() {
   const view = useStateRefetch("update", api.updateState);
   const [busy, setBusy] = useState(false);
@@ -42,6 +43,7 @@ export function AboutSettings() {
       </dl>
       <div className="actions">
         <button data-testid="update-check-now" disabled={checking} onClick={() => void check()}>{checking ? S.update.checking : S.update.checkNow}</button>
+        <FeedbackButton />
       </div>
       {!checking && result && (
         <p data-testid="update-check-result" className={result.kind === "failed" ? "error" : undefined}>

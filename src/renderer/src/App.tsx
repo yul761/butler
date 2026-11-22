@@ -23,6 +23,8 @@ import { TicketPage } from "./components/TicketPage";
 import { LessonsPage } from "./components/LessonsPage";
 import { UnclaimedPage } from "./components/UnclaimedPage";
 import { Wizard } from "./components/Wizard";
+import { FeedbackDialog } from "./components/FeedbackDialog";
+import { onOpenFeedback, openFeedback, type FeedbackRequest } from "./feedback-bus";
 import { S } from "./strings";
 import { onboardingReducer } from "./wizard";
 import type { SettingsSection } from "../../shared/settings-layout";
@@ -86,10 +88,22 @@ export function App() {
     api.keepAwake().then(setKeepAwake, reportError);
     return api.onKeepAwakeChanged(setKeepAwake);
   }, []);
-  // 应用菜单（BTL-253 / 254）：「检查更新…」在主进程查，这里打开设置 › 关于看结果。
-  useEffect(() => api.onAppMenu((action) => {
-    if (action === "checkUpdates") setRoute({ page: "settings", section: "about", nonce: Date.now() });
-  }), []);
+  /**
+   * 发送反馈（BTL-254）：菜单、设置「关于」、向导失败的步骤都打开这一个对话框。
+   * 应用菜单（BTL-253 / 254）：「检查更新…」在主进程查，这里打开设置 › 关于看结果；「发送反馈…」打开反馈对话框。
+   */
+  const [feedback, setFeedback] = useState<FeedbackRequest | null>(null);
+  useEffect(() => {
+    const off = onOpenFeedback(setFeedback);
+    const offMenu = api.onAppMenu((action) => {
+      if (action === "checkUpdates") setRoute({ page: "settings", section: "about", nonce: Date.now() });
+      else if (action === "sendFeedback") openFeedback();
+    });
+    return () => {
+      off();
+      offMenu();
+    };
+  }, []);
   /** 每次 refresh 的序号：只有最新一次的结果写进状态（hook 事件密集时，慢的旧响应不会盖掉新的）。 */
   const refreshSeq = useRef(0);
   /** 重读 ticket 列表和「现在」页；列表失败时报错并返回 false。 */
@@ -310,6 +324,7 @@ export function App() {
           }}
         />
       )}
+      {feedback && <FeedbackDialog key={`${feedback.kind ?? ""}:${feedback.step ?? ""}`} request={feedback} onClose={() => setFeedback(null)} />}
     </div>
   );
 }

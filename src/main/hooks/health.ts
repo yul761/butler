@@ -68,6 +68,12 @@ export class HealthService {
     return this.optional;
   }
 
+  /** 最近一次 refresh 探测到的 claude 版本（「发送反馈」预填用，BTL-254）；还没探测或失败是 null。 */
+  claudeVersion(): string | null {
+    return this.lastClaudeVersion;
+  }
+  private lastClaudeVersion: string | null = null;
+
   hookBinCurrent(): boolean {
     return this.binCurrent;
   }
@@ -124,6 +130,7 @@ export class HealthService {
     const path = locateClaude({ override: this.d.settings.get("claudePath"), pathValue, platform: this.d.platform });
     const claude = await probeClaude(path, withPath(this.d.env, pathValue), this.d.run);
     this.state = { path, pathValue };
+    this.lastClaudeVersion = claude.version ?? null;
     this.optional = claude.error === null ? { model: claude.flags["--model"] === true, effort: claude.flags["--effort"] === true } : { model: true, effort: false };
 
     let hooks: HookStatus;

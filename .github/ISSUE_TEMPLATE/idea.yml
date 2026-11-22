@@ -1,0 +1,21 @@
+name: Idea
+description: Suggest something Butler could do, or do better.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Your idea
+      description: What would you like Butler to do, and what problem would it solve for you?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Filled in by Butler's "Send feedback…".
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Optional. Drag the redacted diagnostics file here if it helps explain the idea.

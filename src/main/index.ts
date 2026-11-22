@@ -1,12 +1,14 @@
 import { METRICS_DAYS_DEFAULT, type MetricsOverview } from "../shared/metrics";
 import { execFile } from "node:child_process";
-import { app, BrowserWindow, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, powerMonitor, powerSaveBlocker, shell, Tray } from "electron";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { cpus, freemem, homedir, release as osRelease, totalmem } from "node:os";
+import { cpus, freemem, homedir, release as osRelease, tmpdir, totalmem, userInfo } from "node:os";
 import { writeFile as writeFileAsync } from "node:fs/promises";
 import { DiagService } from "./diag/diag-service";
+import { collectRedactTerms } from "./diag/redact";
+import { FeedbackService, osName } from "./feedback/feedback-service";
 import { Invalidator } from "./diag/invalidator";
 import { PtySubscriptions } from "./sessions/pty-subscriptions";
 import { ViewCache } from "./diag/view-cache";
@@ -992,7 +994,11 @@ async function bootstrap(): Promise<void> {
   const installAppMenu = (): void => {
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate({
       platform: process.platform,
-      help: [{ label: M().menu.checkUpdates, click: () => { menuAction("checkUpdates"); void updateChecker.checkNow(); } }],
+      help: [
+        { label: M().menu.checkUpdates, click: () => { menuAction("checkUpdates"); void updateChecker.checkNow(); } },
+        { type: "separator" },
+        { label: M().menu.sendFeedback, click: () => menuAction("sendFeedback") },
+      ],
     })));
   };
   installAppMenu();
@@ -3134,8 +3140,48 @@ async function bootstrap(): Promise<void> {
   };
   automationHooks.policy = featurePolicyLayers({ loop: loopPolicyIo, stacks: stackPolicyIo, intake: intakePolicyIo });
   const keepAwakeSwitch = keepAwake;
+  // 「发送反馈」（BTL-254）：链接只开 github.com/yul761/butler；诊断脱敏后先给用户看，确认了再存进下载目录。
+  const feedback = new FeedbackService({
+    env: () => {
+      let sys: string | null;
+      try {
+        sys = process.getSystemVersion();
+      } catch {
+        sys = null;
+      }
+      return { butler: app.getVersion(), os: osName(process.platform, sys), platform: process.platform, arch: process.arch, claude: health.claudeVersion() ?? "unknown" };
+    },
+    openExternal: (url) => shell.openExternal(url),
+    copyText: (text) => clipboard.writeText(text),
+    buildDiagnostics: async () => {
+      if (!diag) throw new Error("diagnostics unavailable");
+      return diag.build();
+    },
+    redactTerms: () => {
+      const safe = <T,>(f: () => T, fallback: T): T => {
+        try {
+          return f();
+        } catch {
+          return fallback;
+        }
+      };
+      return collectRedactTerms(db, {
+        home: [homedir()],
+        users: [safe(() => userInfo().username, "")],
+        paths: [paths.home, paths.claudeConfigDir, tmpdir(), ...(["userData", "temp", "downloads", "documents", "desktop", "exe"] as const).map((n) => safe(() => app.getPath(n), ""))],
+        slugs: safe(() => lessonsRepo.repos().map((r) => r.slug), [] as string[]),
+      });
+    },
+    downloadsDir: () => app.getPath("downloads"),
+    exists: (p) => existsSync(p),
+    writeFile: (p, text) => writeFileAsync(p, text, "utf8"),
+    showItemInFolder: (p) => shell.showItemInFolder(p),
+    now: Date.now,
+    log: logger,
+  });
   registerIpc({
     diag: diag ?? undefined,
+    feedback,
     onWrite: () => viewCache.invalidate(),
     ptySubs,
     views,

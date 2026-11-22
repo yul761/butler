@@ -1,0 +1,27 @@
+# BTL-254 Feedback entry — design addendum
+
+Date: 2026-11-21. Scope: a "Send feedback…" dialog that opens a prefilled GitHub issue in the browser, an optional redacted diagnostics file, and issue templates.
+
+## What the user sees
+
+- Entry points: the application menu **Help → Send feedback…**, a **Send feedback…** button in **Settings → About**, and (once BTL-249's wizard work is in) a **Stuck? Tell us** link on every failed first-run step, which opens the dialog with the kind preset to *First-run problem*.
+- The dialog has a kind (Bug / Idea / First-run problem), an optional one-line title, an optional description and an **Attach diagnostics** checkbox that starts **unchecked**.
+- **Open on GitHub** opens `https://github.com/yul761/butler/issues/new?template=<kind>.yml&…` in the system browser. Butler sends nothing itself: the user reviews and clicks **Submit** on GitHub.
+- With **Attach diagnostics** checked, Butler first builds a redacted diagnostics file and shows its full text in the dialog. Only after the user confirms does it save the file to the Downloads folder, select it in Finder / Explorer and open the issue page; the dialog then tells the user to drag the file into the issue. A URL cannot carry an attachment.
+- The existing **Export diagnostics** in Settings → Health is unchanged. It stays unredacted and is for the user's own use.
+
+## Decisions
+
+1. **Egress.** `src/main/egress-lint.test.ts` explicitly allows Electron `shell`. Opening a browser tab is what `openKnownPr` already does. The URL goes only to the hard-coded `github.com/yul761/butler` and is built in the main process from the user's own text, so the renderer can't pick the target. It does not go through `ExternalActions.attempt`, because Butler writes nothing to GitHub: the user submits. No new setting is needed, since nothing happens until the user clicks.
+2. **Prefill.** Issue forms are prefilled by field id through query parameters (`title`, `description`, `environment`, `diagnostics`; the first-run template also has `step`). The environment block holds the Butler version, OS name and version (`process.getSystemVersion()`), platform, architecture and the Claude Code version. The Claude Code version comes from the last health check and reads `unknown` when there hasn't been one or it failed.
+3. **URL length.** The URL is capped at 2000 characters. Windows `ShellExecute` (which `shell.openExternal` uses) is unreliable above roughly 2048 characters, and CJK text grows ninefold when percent-encoded. When the URL is too long, the description is cut first (on code-point boundaries, found by binary search) and then the title, and a `…(truncated)` marker is added. The dialog says the text was cut, and the full description is copied to the clipboard so the user can paste it on GitHub.
+4. **Redaction (`src/main/diag/redact.ts`).** This errs towards removing too much. Every string in the diagnostics object is redacted, object keys included, not only `logTail`. In order:
+   1. Known terms are replaced with placeholders, longest first and case-insensitive. The home folder becomes `~`. Ticket titles become `<title>`, epic names `<epic>`, repository slugs, owners and directory names `<repo>`, branches `<branch>`, ticket keys `<ticket>`, and Butler / Claude / temp / app-data folders `<path>`. Each path term is matched with `/`, `\` and JSON-escaped `\\` separators. The terms come straight from the database: every table's `repo_path`, `worktree_path`, `workspace_dir`, `cwd`, `branch`, `head_branch`, `base_branch`, `repo_slug`, `slug` and `ticket_key` columns, plus `tickets.title`, `tickets.key` and `features.name`. Reading `PRAGMA table_info` means columns added later are covered too.
+   2. URLs become `<url>` and email addresses `<email>`.
+   3. Generic paths become `<path>`: Windows drive paths (`C:\…`, `c:/…`), UNC paths (`\\server\share`) and any token that contains `/` or `\` and a letter. That last rule covers POSIX absolute paths, `~/…`, relative paths, `owner/repo` and `feature/x` branches.
+   4. Anything shaped like a ticket key (`[A-Z][A-Z0-9]{1,9}-\d+`) becomes `<ticket>`. This also turns `SHA-256` into a placeholder; that loss is accepted.
+   5. The OS user name (and the last segment of the home folder) becomes `<user>` wherever it stands as a word.
+   The output gains `redacted: true` and is saved as `butler-diagnostics-redacted-<stamp>.json` (with `-1`, `-2` … when that name is taken).
+5. **Preview then save.** `feedback:diagPreview` builds and redacts the file and keeps the text in the main process. `feedback:diagSave` writes exactly that kept text, so the renderer never hands main the content to write. Saving without a preview is an error.
+6. **Menu and About.** Agreed with BTL-253 ([contract:help-menu-about] in the epic memory): BTL-253 owns `src/main/app-menu.ts`, `installAppMenu` and the **About** settings tab (`AboutSettings.tsx`). This ticket adds `M().menu.sendFeedback` after **Check for updates…**, with a separator between them, and puts `<FeedbackButton />` in About's actions. The menu sends the `feedback:show` event; the renderer opens the dialog.
+7. **Templates.** `.github/ISSUE_TEMPLATE/bug.yml`, `idea.yml` and `first-run.yml` are issue forms whose only required field is `description`. `config.yml` keeps blank issues on and links "Questions & discussion" to GitHub Discussions. Labels: `bug`, `enhancement` and `first-run`. The `first-run` label may not exist in the repo yet, in which case GitHub ignores it.
