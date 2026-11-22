@@ -23,7 +23,8 @@ jobs:
       matrix:
         os: [macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Notarization waits on Apple's queue twice (the app inside electron-builder, then the dmg, up to 45 minutes).
+    timeout-minutes: 120
     env:
       # Never pick up a signing identity from the runner's keychain. Windows stays unsigned; the macOS Developer ID build
       # turns discovery on for the packaging step only, where the only identity is the one imported from CSC_LINK.

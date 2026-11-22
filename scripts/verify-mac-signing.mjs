@@ -160,8 +160,10 @@ export function verifyMacSigning(distDir, mode) {
       } finally {
         execFileSync("hdiutil", ["detach", mount, "-force"], { stdio: "ignore" });
       }
+      const sig = parseCodesignDisplay(both(run("codesign", ["-dv", "--verbose=4", file])));
+      // ad-hoc 打包时 electron-builder 不能拿钥匙串里的证书给 dmg 签名，否则 dmg 和里面的 app 签名不一致。
+      if (mode === "ad-hoc" && sig.authority) problems.push(`${dmg}: signed with ${sig.authority} although the app is ad-hoc signed`);
       if (mode === "developer-id") {
-        const sig = parseCodesignDisplay(both(run("codesign", ["-dv", "--verbose=4", file])));
         if (!sig.signed || !sig.authority?.startsWith("Developer ID Application:")) problems.push(`${dmg}: not signed with Developer ID`);
         const staple = run("xcrun", ["stapler", "validate", file]);
         if (staple.status !== 0) problems.push(`${dmg}: no valid stapled notarization ticket:\n${both(staple).trim()}`);
