@@ -20,7 +20,7 @@ Butler 给新 session 交第一条任务之前，会先看真实的终端屏幕�
 
 ## 信箱
 
-Butler 开的每个 session 都有一个信箱。Butler 或别的 session 发给它的东西都进信箱：总控的消息、汇报、`ask_user` 的回答、预审结果、PR 评论、CI 结论、合并通知、栈冲突、每日巡检、花费提醒、换新以后的「接着做」、你在对话 tab 里发的话、回复。消息排在 Butler 的数据库里，重启也不丢，也不会因为对方在忙而被退回。正在干活的 session 在下一次调用工具时收到，走它自己那份 session 设置里的 `PostToolUse` hook，几条合成一次送。停着的 session 用和交第一条任务一样的安全输入送进去：先看屏幕，你在打字时等着，送完再确认真的提交了。总控的消息可以要求叫停：Butler 先按 Esc，再输入进去。一个 session 的信箱空着时，hook 只是一次 shell 判断，不启动 Butler 的 hook 程序（Apple 芯片的 Mac 上约 2 毫秒，直接启动约 28 毫秒）。epic 里一个 session 往 epic 记忆里存了东西，这个 epic 里别的在跑的 session 会收到这条**约定**，写的那个 session 自己不收。每条消息是 **已排队**、**已送达**（工具调用间隙送到，或者直接输入）或 **已回复**。**全局总控** 页面和 epic 的 **总控** tab 上的 **消息（N）** 列出最近的几条。
+Butler 开的每个 session 都有一个信箱。Butler 或别的 session 发给它的东西都进信箱：总控的消息、汇报、`ask_user` 的回答、预审结果、PR 评论、CI 结论、合并通知、栈冲突、每日巡检、花费提醒、换新以后的「接着做」、你在对话 tab 里发的话、回复。消息排在 Butler 的数据库里，重启也不丢，也不会因为对方在忙而被退回。正在干活的 session 在下一次调用工具时收到，走它自己那份 session 设置里的 `PostToolUse` hook，几条合成一次送。关着的 session 先恢复（见 [session 的收尾和换新](#session-的收尾和换新)）。停着的 session 用和交第一条任务一样的安全输入送进去：先看屏幕，你在打字时等着，送完再确认真的提交了。总控的消息可以要求叫停：Butler 先按 Esc，再输入进去。一个 session 的信箱空着时，hook 只是一次 shell 判断，不启动 Butler 的 hook 程序（Apple 芯片的 Mac 上约 2 毫秒，直接启动约 28 毫秒）。epic 里一个 session 往 epic 记忆里存了东西，这个 epic 里别的在跑的 session 会收到这条**约定**，写的那个 session 自己不收。每条消息是 **已排队**、**已送达**（工具调用间隙送到，或者直接输入）或 **已回复**。**全局总控** 页面和 epic 的 **总控** tab 上的 **消息（N）** 列出最近的几条。
 
 ## Epic
 
@@ -129,6 +129,7 @@ Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所�
 
 - **关掉已完成的 session。** epic 总控可以用 `end_session` 关掉一个已经停下、在等输入的 session。正在工作的、在等你回答的，以及它自己，它都会拒绝。
 - **清理 session。** 开着不用的终端每个要占几百 MB。session 闲置超过 `idleCloseMinutes`（默认 180 分钟，`0` 关掉，最短 10）后，Butler 会让它先写 handoff，再结束终端。session 仍留在列表里，可以恢复。有要你决定的事、有后台任务、在等合并或 CI 结果，或者（总控）它管的子 session 还在干活时都不会关。电脑睡着的时间不算闲置。隐藏超过 14 天的 session 会从 Butler 里删掉，对话记录文件留着。session 栏的 **清理闲置** 会立刻关掉闲置 5 分钟以上的 session，**已隐藏** 列表里有 **全部删除**。详见[配置 Butler](configuration.zh-CN.md#记忆statecore)。
+- **有消息时恢复关着的 session。** 总控给它开的、关着的 session 发消息（比如重启后），Butler 先看内存再在后台恢复它并送到；你点 × 结束的不恢复。**设置 → 基本** 可让 Butler 重启后恢复上次在工作的 session。
 - **换新不丢对话。** session 换新时（↻ 按钮、总控的 `refresh_session`，或者上下文太长时自动换新），Butler 先让它写 handoff，等记忆真的存好，同时把最近几轮对话存到 `~/.butler/refresh/<session>.md`，不调用模型。`/clear` 之后 session 会 recall 那份 handoff、读这个文件，然后接着做换新前在做的事；如果当时在等什么，就说一句在等什么并继续等。不会再停住等你的下一条指令。
 - **合并后清理 worktree。** 一旦 handoff 报告某个 ticket 的 PR 已合并，Butler 就用 `git worktree remove` 删掉这个 ticket 的 worktree。分支保留，在那里再开 session 时会重建 worktree。有未提交改动或未跟踪文件的 worktree，或者自己的 session 还在终端里运行的，Butler 不会删。这时 ticket 页会说明原因，并给一个 **重新检查** 按钮，那个终端退出时 Butler 也会再试一次。被 `.gitignore` 忽略的文件（`node_modules`、本地的 `.env`）会随 worktree 一起删掉。
 - **防止休眠。** 想在你离开、盖子开着的时候让 session 继续跑，就勾上侧栏底部或托盘菜单里的 **防止休眠**。开着时电脑空闲也不会睡眠，屏幕保持亮着。取消勾选、电脑睡眠（合上盖子）或 Butler 退出时它会关掉，Butler 每次启动时它都是关的。合上盖子照样会让 Mac 睡眠；Windows 上取决于你的合盖设置。
@@ -164,7 +165,7 @@ epic 的记忆用来放它各个 ticket 共用的约定，比如 API 约定或�
 
 ## 界面语言
 
-界面有中文和英文两种。首次启动时跟随系统语言（中文系统用中文，其他用英文），之后可以在 **设置 → 基本 → 语言 / Language** 或首次运行向导里改。语言也会切换 Butler 发给 `claude` 的默认提示词，所以 handoff 和记忆会用这种语言来写；你自己改过的提示词不变。从 1.2.0 或更早版本升级上来的安装保持中文，直到你手动改。切换之后，在环境检查里点一次 **安装 / 修复**，`/handoff` 命令就会换成新语言。这些文档引用的是中文界面的标签；[英文版](how-it-works.md)引用的是英文界面的标签。
+界面有中文和英文两种。首次启动时跟随系统语言（中文系统用中文，其他用英文），之后可以在 **设置 → 基本 → 语言 / Language** 或首次运行向导里改。语言也会切换 Butler 发给 `claude` 的默认提示词，所以 handoff 和记忆会用这种语言来写；你自己改过的提示词不变。从 1.2.0 或更早版本升级上来的安装保持中文，直到你手动改。切换之后，在 **设置 → 健康检查** 里点一次 **安装 / 修复**，`/handoff` 命令就会换成新语言。这些文档引用的是中文界面的标签；[英文版](how-it-works.md)引用的是英文界面的标签。
 
 ## Butler 不会碰的东西
 
