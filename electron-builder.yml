@@ -1,4 +1,5 @@
-# 不签名的安装包（设计文档 2.1、12 节）。发布（推 tag、建 release）由用户完成：publish 关掉，也不配置自动更新。
+# 安装包（设计文档 2.1、12 节）。macOS 有签名 secret 时签名并公证，没有时 ad-hoc 签名（BTL-258）；Windows 不签名。
+# 发布（推 tag、建 release）由用户完成：publish 关掉，也不配置自动更新。
 appId: io.statecore.butler
 productName: Butler
 copyright: Copyright © 2026 Yuchen Lin
@@ -30,7 +31,7 @@ extraResources:
       - statecore-mcp.cjs
       - butler-sessions-mcp.cjs
       - mcp-hub.cjs
-# spawn-helper 的执行位、macOS 的 ad-hoc 签名、resources 的完整性检查。
+# spawn-helper 的执行位、macOS 没有签名证书时的 ad-hoc 签名、resources 的完整性检查。
 afterPack: scripts/after-pack.cjs
 publish: null
 # 不配置 electronFuses：记忆 MCP 靠 ELECTRON_RUN_AS_NODE 运行，RunAsNode 必须保持可用。
@@ -46,12 +47,24 @@ mac:
   # 安装包文件名固定、不带空格（GitHub 会把 release 资源名里的空格换成点，README 里写的名字就对不上了）。
   # mac.artifactName 用于 zip，dmg.artifactName 用于 dmg；值与 electron-builder 的默认相同。
   artifactName: "Butler-${version}-${arch}-mac.${ext}"
-  # 不用开发者证书签名；after-pack.cjs 做 ad-hoc 签名（arm64 上完全不签名的 app 无法启动）。
-  identity: null
-  hardenedRuntime: false
+  # 两种签名只走一种（BTL-258，scripts/mac-signing.cjs 判断）：
+  # - 有 CSC_LINK（或 CSC_NAME）时，electron-builder 用 Developer ID Application 签名，打开 hardened runtime；
+  #   有 APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER 时再交给 Apple 公证并 staple。release.yml 在设了签名 secret 时这样打包。
+  # - 否则（fork、PR、本地打包）after-pack.cjs 做 ad-hoc 签名（arm64 上完全不签名的 app 无法启动），并关掉 electron-builder 自己找证书。
+  # 这里不写 identity：写 null 会让 electron-builder 永远跳过签名。
+  hardenedRuntime: true
+  # app 和 app 里每个可执行文件、原生模块用同一份 entitlements，每一项的理由写在文件里。
+  entitlements: build-resources/entitlements.mac.plist
+  entitlementsInherit: build-resources/entitlements.mac.plist
   gatekeeperAssess: false
+  # 只打 Apple 芯片的包：别的平台的 node-pty 预编译（Windows 的 DLL、Intel 的 Mach-O）用不上，留着还要跟着签名和公证。
+  files:
+    - "!**/node_modules/node-pty/prebuilds/win32-*/**"
+    - "!**/node_modules/node-pty/prebuilds/darwin-x64/**"
 dmg:
   artifactName: "Butler-${version}-${arch}.${ext}"
+  # 有 Developer ID 时 dmg 本身也签名（release.yml 再把 dmg 交给公证并 staple）；ad-hoc 打包时找不到身份，自动跳过。
+  sign: true
 win:
   # render-icons.mjs 生成的多尺寸 .ico：小尺寸是专门画的简化版，不让 Windows 从大图缩下来糊掉。
   icon: build-resources/icon.ico

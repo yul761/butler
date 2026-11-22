@@ -41,13 +41,13 @@ BUTLER_HOME=/tmp/butler-dev CLAUDE_CONFIG_DIR=/tmp/claude-dev pnpm dev
 | `pnpm e2e` | 先运行 `pnpm build` 和 `pnpm build:hook`，再跑 Playwright-for-Electron 测试 |
 | `pnpm e2e:only` | 同样的测试，但不重新构建 |
 | `pnpm demo:record` | 把 README 的动图和截图录到 `docs/media/`（macOS 或 Linux，需要 `ffmpeg`；见[录制演示素材](docs/demo-media.zh-CN.md)）。不进 CI |
-| `pnpm dist` | 把未签名的安装包输出到 `dist/`，只限当前平台（macOS：arm64 的 dmg 和 zip；Windows：x64 NSIS）。它只打包已经构建好的东西，所以先运行 `pnpm build && pnpm build:hook`。 |
+| `pnpm dist` | 把安装包输出到 `dist/`（macOS：没有 `CSC_LINK` 或 `CSC_NAME` 时 ad-hoc 签名；Windows：不签名），只限当前平台（macOS：arm64 的 dmg 和 zip；Windows：x64 NSIS）。它只打包已经构建好的东西，所以先运行 `pnpm build && pnpm build:hook`。 |
 
 E2E 测试是沙箱化的。每个测试都有自己的临时 `BUTLER_HOME`、`CLAUDE_CONFIG_DIR`、home 文件夹和临时文件夹，用的是假的 `claude`（`e2e/fake-claude`）。它们从不运行真实的 `claude`，也不读你的真实数据。
 
 ## CI 和发布
 
-- `.github/workflows/ci.yml` 在 pull request 和推到 `main` 时，在 macOS 和 Windows 上跑 typecheck、lint、单元测试、build、`build:hook` 和 E2E 测试。推到 `main` 时还会构建未签名的安装包。
+- `.github/workflows/ci.yml` 在 pull request 和推到 `main` 时，在 macOS 和 Windows 上跑 typecheck、lint、单元测试、build、`build:hook` 和 E2E 测试。推到 `main` 时还会构建安装包（macOS ad-hoc 签名，Windows 不签名），并检查打出来的 macOS app 能启动。
 - `.github/workflows/release.yml` 在 `v*` tag 上运行。tag 必须和 `package.json` 里的 `version` 一致，例如 `1.0.0` 对应 `v1.0.0`。这个 workflow 会构建两个平台，并创建一个**草稿** GitHub release。维护者检查草稿后手动发布。
 - 不会自动推送或发布任何东西。分支和 tag 由维护者推送。
 
@@ -55,7 +55,7 @@ E2E 测试是沙箱化的。每个测试都有自己的临时 `BUTLER_HOME`、`C
 
 - **第一次发布之后不要改 `APP_ID`（`io.statecore.butler`）。** 它在 `src/main/app-id.ts` 里，必须和 `electron-builder.yml` 里的 `appId` 相同，有测试会检查。Windows 把它当作通知、开始菜单快捷方式和开机自启用的 AppUserModelID。
 - **图标是生成出来的。** SVG 源文件在 `build-resources/icon-src/`；`pnpm icons` 会生成 `build-resources/icon.png`（macOS）、多尺寸的 `build-resources/icon.ico`（Windows；32 px 及以下用简化的托盘图案）和 `src/main/tray-icons.ts`。生成的文件要提交。有测试会检查每个图标的背景和深色、浅色任务栏都有足够的对比度。不要把打包资源放进 `build/`：那里放的是 hook 和记忆 MCP 的构建产物。
-- 构建是未签名的。macOS 安装包在 `scripts/after-pack.cjs` 里做 ad-hoc 签名（完全不签名的 arm64 app 启动不了）。README 里说明了用户怎么绕过 Gatekeeper 和 SmartScreen。
+- 签名（BTL-258）：有五个签名 secret 时，`release.yml` 用 Developer ID 给 macOS 安装包签名、公证并 staple，见[给 fork 的 macOS 安装包签名](docs/how-it-works.zh-CN.md#给-fork-的-macos-安装包签名)。没有时，macOS 安装包在 `scripts/after-pack.cjs` 里做 ad-hoc 签名（完全不签名的 arm64 app 启动不了）；走哪一种由 `scripts/mac-signing.cjs` 决定，不会两种都做。Windows 不签名。README 里说明了用户怎么绕过 Gatekeeper 和 SmartScreen。
 
 ## 架构概览
 

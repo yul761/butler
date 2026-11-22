@@ -3,7 +3,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # Manual run: builds, signs and notarizes (macOS) and uploads the installers as artifacts. It never creates a release.
+  # Used to try the macOS signing secrets: gh workflow run release.yml --ref <branch> (docs/how-it-works.md, "Signing the macOS build of a fork").
   workflow_dispatch:
+    inputs:
+      require_signing:
+        description: Fail unless the macOS build is signed with Developer ID and notarized (needs the five signing secrets)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -18,7 +25,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      # Unsigned installers (design 12): never look for a signing identity.
+      # Never pick up a signing identity from the runner's keychain. Windows stays unsigned; the macOS Developer ID build
+      # turns discovery on for the packaging step only, where the only identity is the one imported from CSC_LINK.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,10 +56,86 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm build:hook
-      - name: Unsigned installers (design 12)
+      # BTL-258: Developer ID when all five signing secrets ([contract:mac-signing]) are set, ad-hoc when none is (forks),
+      # and a failure when only some are. Only whether each secret is set reaches this step, never its value.
+      - name: Decide how to sign the macOS build
+        id: signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HAS_CSC_LINK: ${{ secrets.CSC_LINK != '' }}
+          HAS_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' }}
+          HAS_APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 != '' }}
+          HAS_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' }}
+          HAS_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' }}
+          REQUIRE_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.require_signing }}
+        run: node scripts/mac-signing.cjs release
+      # notarytool needs the App Store Connect API key as a file. It lives in a private directory under the runner temp
+      # dir and is deleted by the always() step below; its contents are never printed.
+      - name: Write the App Store Connect API key to a temporary file
+        if: steps.signing.outputs.mode == 'developer-id'
+        shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          dir="$(mktemp -d "$RUNNER_TEMP/asc-key.XXXXXX")"
+          chmod 700 "$dir"
+          (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$dir/AuthKey.p8")
+          echo "APPLE_API_KEY=$dir/AuthKey.p8" >> "$GITHUB_ENV"
+      # Windows: unsigned (design 12). macOS without the secrets: ad-hoc signed by scripts/after-pack.cjs.
+      - name: Installers (Windows unsigned, macOS ad-hoc)
+        if: steps.signing.outputs.mode != 'developer-id'
         run: pnpm dist
+      # macOS with the secrets: electron-builder imports the certificate from CSC_LINK into a temporary keychain, signs
+      # with Developer ID and the hardened runtime, then notarizes and staples the app. The secrets go only to this step
+      # (an empty CSC_LINK is not "unset" to electron-builder, so the unsigned step must not see these names at all).
+      - name: Installers (macOS signed with Developer ID and notarized)
+        if: steps.signing.outputs.mode == 'developer-id'
+        run: pnpm dist
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "true"
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      # electron-builder notarizes and staples the app (so the zip carries a stapled app) and signs the dmg; the dmg
+      # itself is notarized and stapled here so it also opens offline without a Gatekeeper prompt.
+      - name: Notarize and staple the dmg
+        if: steps.signing.outputs.mode == 'developer-id'
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          for dmg in dist/*.dmg; do
+            result="$RUNNER_TEMP/notary-result.json"
+            # A rejected submission can exit non-zero: read the status from the JSON either way, then print Apple's log.
+            xcrun notarytool submit "$dmg" --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
+              --wait --timeout 45m --output-format json > "$result" || true
+            status="$(node -p 'try { require(process.argv[1]).status ?? "unknown" } catch { "no result" }' "$result")"
+            id="$(node -p 'try { require(process.argv[1]).id ?? "" } catch { "" }' "$result")"
+            echo "notarization of $(basename "$dmg"): $status ${id:+($id)}"
+            if [ "$status" != "Accepted" ]; then
+              if [ -n "$id" ]; then
+                xcrun notarytool log "$id" --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" || true
+              fi
+              exit 1
+            fi
+            xcrun stapler staple "$dmg"
+          done
+      - name: Delete the App Store Connect API key
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -n "${APPLE_API_KEY:-}" ]; then rm -rf "$(dirname "$APPLE_API_KEY")"; fi
       - name: Verify the package contents (hook, memory MCP, node-pty prebuilds)
         run: node scripts/verify-package.mjs dist
+      # Signatures of every Mach-O inside, the zip and the dmg, Gatekeeper and the stapled tickets (Developer ID), and a
+      # smoke run of the packaged app, the ELECTRON_RUN_AS_NODE memory MCP runtime and butler-hook.
+      - name: Verify the macOS signature and run the packaged app
+        if: runner.os == 'macOS'
+        run: node scripts/verify-mac-signing.mjs dist --mode ${{ steps.signing.outputs.mode }}
       # Installers only: dist/Butler-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -64,7 +148,8 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # Only a pushed tag drafts a release; a manual run on a tag ref only builds.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -73,7 +158,15 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      # The build job fails when only some signing secrets are set, so CSC_LINK being set means the macOS build was signed.
       - name: Draft release (the maintainer reviews and publishes it by hand)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --draft --title "Butler $GITHUB_REF_NAME" --notes "Unsigned build. See the README for how to open it on macOS (Gatekeeper) and Windows (SmartScreen)."
+          MAC_SIGNED: ${{ secrets.CSC_LINK != '' }}
+        run: |
+          if [ "$MAC_SIGNED" = "true" ]; then
+            notes="The macOS build is signed with Developer ID and notarized by Apple. The Windows installer is unsigned: see the README for SmartScreen."
+          else
+            notes="Unsigned build. See the README for how to open it on macOS (Gatekeeper) and Windows (SmartScreen)."
+          fi
+          gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --draft --title "Butler $GITHUB_REF_NAME" --notes "$notes"

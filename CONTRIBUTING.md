@@ -41,13 +41,13 @@ With a fresh `CLAUDE_CONFIG_DIR`, you may need to log in to `claude` once under 
 | `pnpm e2e` | Runs `pnpm build` and `pnpm build:hook` first, then the Playwright-for-Electron tests |
 | `pnpm e2e:only` | The same tests without rebuilding |
 | `pnpm demo:record` | Records the README animation and screenshots into `docs/media/` (macOS or Linux, needs `ffmpeg`; see [Recording the demo media](docs/demo-media.md)). Not run in CI |
-| `pnpm dist` | Unsigned installers into `dist/`, for this platform only (macOS: arm64 dmg and zip; Windows: x64 NSIS). It packages what is already built, so run `pnpm build && pnpm build:hook` first. |
+| `pnpm dist` | Installers into `dist/` (macOS: ad-hoc signed unless `CSC_LINK` or `CSC_NAME` is set; Windows: unsigned), for this platform only (macOS: arm64 dmg and zip; Windows: x64 NSIS). It packages what is already built, so run `pnpm build && pnpm build:hook` first. |
 
 The E2E tests are sandboxed. Each test gets its own temporary `BUTLER_HOME`, `CLAUDE_CONFIG_DIR`, home folder and temp folder, and uses a fake `claude` (`e2e/fake-claude`). They never run a real `claude` or read your real data.
 
 ## CI and releases
 
-- `.github/workflows/ci.yml` runs typecheck, lint, unit tests, build, `build:hook` and the E2E tests on macOS and Windows for pull requests and pushes to `main`. Pushes to `main` also build unsigned packages.
+- `.github/workflows/ci.yml` runs typecheck, lint, unit tests, build, `build:hook` and the E2E tests on macOS and Windows for pull requests and pushes to `main`. Pushes to `main` also build packages (macOS ad-hoc signed, Windows unsigned) and check that the packaged macOS app starts.
 - `.github/workflows/release.yml` runs on `v*` tags. The tag must match the `version` in `package.json`, for example `v1.0.0` for `1.0.0`. The workflow builds both platforms and creates a **draft** GitHub release. A maintainer reviews the draft and publishes it by hand.
 - Nothing is pushed or released automatically. The maintainer pushes branches and tags.
 
@@ -55,7 +55,7 @@ The E2E tests are sandboxed. Each test gets its own temporary `BUTLER_HOME`, `CL
 
 - **Do not change `APP_ID` (`io.statecore.butler`) after the first release.** It lives in `src/main/app-id.ts` and must equal `appId` in `electron-builder.yml`, which a test enforces. Windows uses it as the AppUserModelID for notifications, Start-menu shortcuts and start-at-login.
 - **Icons are generated.** The SVG sources are in `build-resources/icon-src/`; `pnpm icons` renders `build-resources/icon.png` (macOS), the multi-size `build-resources/icon.ico` (Windows; 32 px and below use the simplified tray artwork) and `src/main/tray-icons.ts`. Commit the generated files. A test checks that every icon's background contrasts with both dark and light taskbars. Don't put packaging resources in `build/`: that holds the hook and memory MCP build output.
-- Builds are unsigned. macOS packages get an ad-hoc signature in `scripts/after-pack.cjs` (a fully unsigned arm64 app won't launch). The README explains how users get past Gatekeeper and SmartScreen.
+- Signing (BTL-258): with the five signing secrets, `release.yml` signs the macOS build with Developer ID, notarizes and staples it; see [Signing the macOS build of a fork](docs/how-it-works.md#signing-the-macos-build-of-a-fork). Without them, macOS packages get an ad-hoc signature in `scripts/after-pack.cjs` (a fully unsigned arm64 app won't launch); `scripts/mac-signing.cjs` decides which, never both. Windows builds are unsigned. The README explains how users get past Gatekeeper and SmartScreen.
 
 ## Architecture in brief
 

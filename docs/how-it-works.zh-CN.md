@@ -231,7 +231,23 @@ Butler 自己不调用任何模型，也没有 API key。所有要用模型的�
 
 **现状：** 安装包都没有代码签名。macOS 版只有 ad-hoc 签名，没有公证；Windows 安装包没有签名。所以第一次打开时 Gatekeeper 和 SmartScreen 会拦（怎么放行见 [README](../README.zh-CN.md#安装)）。Butler 也没有自动更新，只在有新版本时提示你。
 
-以后加上签名时，只签 GitHub Actions 上由 [`.github/workflows/release.yml`](../.github/workflows/release.yml) 从这个公开仓库的版本 tag 构建出来的安装包。任何人在自己机器上做的构建都不会被签名。
+签名只在 GitHub Actions 上由 [`.github/workflows/release.yml`](../.github/workflows/release.yml) 来做。仓库设了下面五个签名 secret 时，它打出来的 macOS 安装包用 Developer ID Application 证书签名（打开 hardened runtime），交给 Apple 公证并 staple，dmg 和 zip 打开时 Gatekeeper 都不会拦。没有这些 secret 时（fork、pull request、在自己机器上打包），macOS 的 app 和以前一样只有 ad-hoc 签名。Windows 安装包两种情况下都不签名。Butler 官方的安装包都是从这个公开仓库的版本 tag 构建的。
+
+### 给 fork 的 macOS 安装包签名
+
+你需要付费的 Apple Developer Program 会员。在仓库里设这五个 secret（**Settings → Secrets and variables → Actions**，或者 `gh secret set 名字 -R owner/repo`）。五个要么都设，要么都不设：只设了一部分时，发版构建会停下，并列出缺了哪几个。
+
+| Secret | 是什么 |
+|---|---|
+| `CSC_LINK` | 你的 **Developer ID Application** 证书连同私钥，从「钥匙串访问」导出成 `.p12`，再做 base64：`base64 -i cert.p12 \| pbcopy`。 |
+| `CSC_KEY_PASSWORD` | 导出 `.p12` 时设的密码。 |
+| `APPLE_API_KEY_P8` | App Store Connect API 密钥的全文（`.p8` 文件，包括 `-----BEGIN PRIVATE KEY-----` 那行）。在 **用户和访问 → 集成 → App Store Connect API** 里创建；公证用 **Developer** 角色就够了。Apple 只让你下载一次。 |
+| `APPLE_API_KEY_ID` | 这个密钥的 Key ID（10 个字符）。 |
+| `APPLE_API_ISSUER` | 密钥列表上方的 Issuer ID（一个 UUID）。 |
+
+然后不用发版就能试：在任意分支上手动跑一次这个 workflow，`gh workflow run release.yml --ref <分支>`（或者 **Actions → Release → Run workflow**）。手动运行会构建、签名、公证、检查结果，并把安装包上传成 artifact，不会建 release。**require_signing** 开着时（默认），缺 secret 会直接失败，而不是退回 ad-hoc。**Verify the macOS signature and run the packaged app** 这一步会检查：包里每个可执行文件和原生模块都用你的 Team ID 签了名、打开了 hardened runtime；app 和 dmg 都 staple 了公证票据；Gatekeeper 认它们；打出来的 app 能启动。
+
+App Store Connect 密钥只在签名那几步写成 runner 上的一个私有临时文件，用完就删；证书导入一个临时钥匙串，electron-builder 结束时会删掉。两者都不会打进日志。hardened runtime 的 entitlements 在 [`build-resources/entitlements.mac.plist`](../build-resources/entitlements.mac.plist)，每一项为什么要都写在里面。
 
 团队角色：
 

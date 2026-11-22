@@ -87,7 +87,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
-      # Unsigned installers (design 12): never look for a signing identity.
+      # Never signs here: Windows unsigned (design 12), macOS ad-hoc (after-pack.cjs). Signing happens in release.yml.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v7
@@ -101,10 +101,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm build:hook
-      - name: Unsigned installers (design 12)
+      - name: Installers (Windows unsigned, macOS ad-hoc)
         run: pnpm dist
       - name: Verify the package contents (hook, memory MCP, node-pty prebuilds)
         run: node scripts/verify-package.mjs dist
+      # The ad-hoc signature survives the zip and the dmg, and the packaged app, memory MCP runtime and hook run (BTL-258).
+      - name: Verify the ad-hoc signature and run the packaged app
+        if: runner.os == 'macOS'
+        run: node scripts/verify-mac-signing.mjs dist --mode ad-hoc
       # Installers only: dist/Butler-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
       - uses: actions/upload-artifact@v7
         with:

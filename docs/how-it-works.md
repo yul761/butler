@@ -231,7 +231,23 @@ A lint rule keeps it this way: no source file may use the network, except the we
 
 **Status:** the installers are not code-signed. The macOS app carries only an ad-hoc signature and is not notarized; the Windows installer is unsigned. That is why Gatekeeper and SmartScreen warn on first launch (the [README](../README.md#install) shows how to get past them). Butler has no auto-update either: it only tells you when a new version is out.
 
-When signing is added, only installers built by [`.github/workflows/release.yml`](../.github/workflows/release.yml) on GitHub Actions, from a version tag on this public repository, will be signed. A build made on anyone's own machine is never signed.
+Signing is done only by [`.github/workflows/release.yml`](../.github/workflows/release.yml) on GitHub Actions. When the repository has the five signing secrets below, the macOS installers it builds are signed with a Developer ID Application certificate (hardened runtime), notarized by Apple and stapled, so both the dmg and the zip open without a Gatekeeper warning. Without the secrets (forks, pull requests, a build on your own machine) the macOS app gets only an ad-hoc signature, as before. The Windows installer is not signed either way. Butler's own release builds come from version tags on this public repository.
+
+### Signing the macOS build of a fork
+
+You need a paid Apple Developer Program membership. Set these five repository secrets (**Settings → Secrets and variables → Actions**, or `gh secret set NAME -R owner/repo`). Set all five or none: with only some of them the release build stops with the names of the missing ones.
+
+| Secret | What it is |
+|---|---|
+| `CSC_LINK` | Your **Developer ID Application** certificate and its private key, exported from Keychain Access as a `.p12`, then base64-encoded: `base64 -i cert.p12 \| pbcopy`. |
+| `CSC_KEY_PASSWORD` | The password you gave the `.p12` when you exported it. |
+| `APPLE_API_KEY_P8` | The full text of an App Store Connect API key (the `.p8` file, `-----BEGIN PRIVATE KEY-----` included). Create it under **Users and Access → Integrations → App Store Connect API**; the **Developer** role is enough for notarization. Apple lets you download it only once. |
+| `APPLE_API_KEY_ID` | That key's Key ID (10 characters). |
+| `APPLE_API_ISSUER` | The Issuer ID shown above the key list (a UUID). |
+
+Then try it without making a release: run the workflow by hand on any branch, `gh workflow run release.yml --ref <branch>` (or **Actions → Release → Run workflow**). A manual run builds, signs and notarizes, checks the result and uploads the installers as artifacts; it never creates a release. With **require_signing** on (the default) it fails if the secrets are missing instead of falling back to ad-hoc. The step **Verify the macOS signature and run the packaged app** checks that every executable and native module inside is signed with your Team ID with the hardened runtime, that the app and the dmg carry a stapled notarization ticket, that Gatekeeper accepts them, and that the packaged app starts.
+
+The App Store Connect key is written to a private temporary file on the runner only for the signing steps and deleted afterwards; the certificate goes into a temporary keychain that electron-builder removes when it finishes. Nothing prints either of them. The hardened runtime entitlements are in [`build-resources/entitlements.mac.plist`](../build-resources/entitlements.mac.plist), each with the reason it is needed.
 
 Team roles:
 
