@@ -218,13 +218,26 @@ function runGh(cwd: string, args: string[], timeoutMs: number, maxBuffer: number
   return runGhDetail(cwd, args, timeoutMs, maxBuffer, env).then((r) => r.stdout);
 }
 
-/** 同 runGh，另外带回 stderr（失败时用来分辨原因）。 */
-export function runGhDetail(cwd: string, args: string[], timeoutMs: number, maxBuffer: number, env?: NodeJS.ProcessEnv): Promise<{ stdout: string | null; stderr: string }> {
+/**
+ * 同 runGh，另外带回 stderr（失败时用来分辨原因）。spawnError：进程没起来时的错误代码（ENOENT：没有 gh；不能执行 gh 时也是 ENOENT）；
+ * timedOut：超时被杀掉。
+ */
+export function runGhDetail(
+  cwd: string, args: string[], timeoutMs: number, maxBuffer: number, env?: NodeJS.ProcessEnv,
+): Promise<{ stdout: string | null; stderr: string; spawnError?: string | null; timedOut?: boolean }> {
   const bin = ghBinary();
-  if (bin === null) return Promise.resolve({ stdout: null, stderr: "" });
+  if (bin === null) return Promise.resolve({ stdout: null, stderr: "", spawnError: "ENOENT", timedOut: false });
   return new Promise((done) => {
-    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer, ...(env ? { env: { ...process.env, ...env } } : {}) }, (err, stdout, stderr) =>
-      done({ stdout: err ? null : String(stdout), stderr: String(stderr ?? "") }));
+    execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer, ...(env ? { env: { ...process.env, ...env } } : {}) }, (err, stdout, stderr) => {
+      const e = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;
+      done({
+        stdout: e ? null : String(stdout),
+        stderr: String(stderr ?? ""),
+        spawnError: e && typeof e.code === "string" ? e.code : null,
+        // 超过 maxBuffer 时 Node 也会杀掉进程（killed）：那不是超时。
+        timedOut: e?.killed === true && e.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+      });
+    });
   });
 }
 

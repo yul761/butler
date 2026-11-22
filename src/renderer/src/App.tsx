@@ -15,6 +15,7 @@ import { HomePage } from "./components/HomePage";
 import { FirstRunHome } from "./components/FirstRunHome";
 import { useTurnBoard } from "./components/useTurnBoard";
 import { EffectPage } from "./components/EffectPage";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { scopeDots } from "./sidebar-view";
@@ -50,7 +51,7 @@ export type Route =
   | { page: "unclaimed" }
   | { page: "archived" }
   /** section：要看的那个 tab 或高级里的分组（首页的提醒跳来时用 health / routing）。 */
-  | { page: "settings"; section?: SettingsSection }
+  | { page: "settings"; section?: SettingsSection; /** 每次从菜单打开都换一个：已经在设置页别的 tab 上也切过去。 */ nonce?: number }
   | { page: "audit" }
   /** tab：从「现在」页的检查升降级提醒跳来时直接打开检查标签。 */
   | { page: "lessons"; tab?: "checks" };
@@ -85,6 +86,10 @@ export function App() {
     api.keepAwake().then(setKeepAwake, reportError);
     return api.onKeepAwakeChanged(setKeepAwake);
   }, []);
+  // 应用菜单（BTL-253 / 254）：「检查更新…」在主进程查，这里打开设置 › 关于看结果。
+  useEffect(() => api.onAppMenu((action) => {
+    if (action === "checkUpdates") setRoute({ page: "settings", section: "about", nonce: Date.now() });
+  }), []);
   /** 每次 refresh 的序号：只有最新一次的结果写进状态（hook 事件密集时，慢的旧响应不会盖掉新的）。 */
   const refreshSeq = useRef(0);
   /** 重读 ticket 列表和「现在」页；列表失败时报错并返回 false。 */
@@ -212,6 +217,7 @@ export function App() {
             <button onClick={() => setError(null)}>{S.close}</button>
           </div>
         )}
+        <UpdateBanner />
         {onboarding === null ? null : onboarding ? (
           <Wizard
             onDone={() => {
@@ -278,7 +284,7 @@ export function App() {
             {route.page === "effect" && <EffectPage />}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} />}
-            {route.page === "settings" && <SettingsPage section={route.section} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
+            {route.page === "settings" && <SettingsPage section={route.section} nonce={route.nonce} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
             {route.page === "lessons" && <LessonsPage tab={route.tab} onOpenSession={(id) => setRoute({ page: "butler", focusSession: id })} />}
           </>

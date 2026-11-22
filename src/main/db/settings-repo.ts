@@ -192,6 +192,14 @@ export const SETTING_DEFAULTS = {
   showOutsideSessions: "0",
   /** 4.0（BTL-247）：全局自动化档位，manual | semi。默认手动 = 4.0 以前的默认；每个 epic 可以另选（features.automation_level）。 */
   automationLevel: "manual",
+  /** BTL-253：每天最多一次经你的 gh 查 GitHub 上有没有新版本，有就在顶部提示（只提示，不下载）。只读，默认开（「新行为默认关」的例外）。 */
+  updateCheckEnabled: "1",
+  /** BTL-253：上次检查更新的时间（毫秒）；空 = 没查过。不在设置页上。 */
+  updateLastCheckAt: "",
+  /** BTL-253：上次查到的、比当前新的 release（JSON，ReleaseInfo）；空 = 没有。不在设置页上。 */
+  updateLatest: "",
+  /** BTL-253：「跳过这个版本」跳过的版本号；空 = 没跳过。不在设置页上。 */
+  updateSkippedVersion: "",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

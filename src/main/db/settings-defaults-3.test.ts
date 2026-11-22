@@ -28,6 +28,8 @@ describe("3.0.0 defaults: nothing new acts on its own", () => {
     expect(SETTING_DEFAULTS.bgWindow).toBe("anytime");
     // 4.0（BTL-247）：全局档位默认手动。
     expect(SETTING_DEFAULTS.automationLevel).toBe("manual");
+    // 唯一的例外（BTL-253，计划 BTL-250 第 2 条）：更新检查默认开。它只读（gh api …/releases/latest），不在 GitHub 上留下任何东西。
+    expect(SETTING_DEFAULTS.updateCheckEnabled).toBe("1");
   });
 
   it("keeps every new policy's own switch off", () => {

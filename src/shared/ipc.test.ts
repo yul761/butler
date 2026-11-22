@@ -45,6 +45,15 @@ describe("IPC whitelist", () => {
     expect(EVENT_CHANNELS).toContain(IPC.appKeepAwakeChanged);
   });
 
+  it("exposes the update channels as invokes and the app menu as an event only (BTL-253)", () => {
+    for (const c of [IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease]) {
+      expect(INVOKE_CHANNELS).toContain(c);
+      expect(EVENT_CHANNELS).not.toContain(c);
+    }
+    expect(EVENT_CHANNELS).toContain(IPC.appMenu);
+    expect(INVOKE_CHANNELS).not.toContain(IPC.appMenu);
+  });
+
   it("exposes opening a fix session as invoke-only", () => {
     expect(INVOKE_CHANNELS).toContain(IPC.sessionOpenFix);
     expect(EVENT_CHANNELS).not.toContain(IPC.sessionOpenFix);

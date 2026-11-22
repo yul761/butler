@@ -95,6 +95,8 @@ export const EDITABLE_SETTINGS = [
   "showOutsideSessions",
   // 4.0 自动化档位（BTL-247）：manual | semi。写它会把受管开关写成那一档的预设（src/shared/automation.ts）。
   "automationLevel",
+  // 更新提示（BTL-253）：每天经你的 gh 查一次 GitHub 上有没有新版本。默认开。
+  "updateCheckEnabled",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

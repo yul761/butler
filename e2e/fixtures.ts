@@ -89,6 +89,8 @@ export interface FakeGhFixture {
   /** 栈（工作流 K）：gh pr list --state open（自动检测栈）的结果；gh issue create 打印的链接。 */
   open?: PrViewFixture[];
   issueCreated?: string;
+  /** gh api repos/<owner>/<repo>/releases/latest 的结果（更新提示，BTL-253）；没有就是 HTTP 404（还没发布过）。 */
+  release?: { tag_name: string; html_url: string; body: string; draft: boolean; prerelease: boolean; published_at: string };
   /** gh search prs --review-requested=@me 的结果（UI 重做第 1 层）；没有就是 []。 */
   reviewRequested?: { number: number; title: string; url: string; repository: { nameWithOwner: string }; author: { login: string }; updatedAt: string }[];
 }

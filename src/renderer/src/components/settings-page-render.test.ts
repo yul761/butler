@@ -45,7 +45,7 @@ describe("settings › advanced", () => {
     expect(HAN.test(html.replace(/<[^>]+>/g, ""))).toBe(false);
   });
 
-  it("names the four tabs in both languages", () => {
+  it("names every tab in both languages", () => {
     for (const lang of ["zh", "en"] as const) {
       setUiLang(lang);
       for (const t of SETTINGS_TABS) expect(S.set.tabs[t], `${lang}:${t}`).toBeTruthy();

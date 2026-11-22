@@ -93,3 +93,14 @@ describe("ExternalAuditRepo", () => {
     expect(repo.prune(2)).toBe(1);
   });
 });
+
+describe("update checks in the audit (BTL-253)", () => {
+  it("records and lists update_check rows next to outward actions, without a switch of its own", () => {
+    const { repo, actions } = setup();
+    expect(EXTERNAL_ACTIONS).not.toContain("update_check");
+    actions.record("update_check", { target: "repos/yul761/butler/releases/latest", summary: "latest 4.1.0", outcome: "done" });
+    actions.record("update_check", { target: "repos/yul761/butler/releases/latest", summary: "failed", outcome: "failed", error: "offline" });
+    expect(repo.list().map((e) => [e.kind, e.outcome])).toEqual([["update_check", "failed"], ["update_check", "done"]]);
+    expect(repo.list({ kind: "update_check" })).toHaveLength(2);
+  });
+});

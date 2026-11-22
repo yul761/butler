@@ -24,6 +24,9 @@
 //     pr edit <号> --base/--title/--body-file/--add-label/--remove-label …、pr ready <号>、pr close <号> …、issue edit <号> …：成功
 //       （假 gh 不改 fixture，测试据 FAKE_GH_LOG 断言；要后续读到新状态就自己 setGh）；
 //     label create <名字> …：成功；issue create …：打印 fixture 的 issueCreated（没有就是 …/issues/900）；
+//   更新提示（BTL-253）：
+//     api repos/<owner>/<repo>/releases/latest：fixture 的 release（GitHub releases API 的字段：tag_name、html_url、body、draft、prerelease、published_at），
+//       没有就和真 gh 一样打 HTTP 404 退出 1（还没发布过 release）；
 //   其余一律退出 1，并往 FAKE_GH_LOG 追加一行 {"unsupported": 参数}：测试结束时 unsupportedGhCalls 会把它们找出来，
 //   免得产品调了假 gh 不认的命令却被当成"gh 出错"悄悄吞掉。
 "use strict";
@@ -40,7 +43,7 @@ const flag = (name) => {
 };
 const fixture = () => {
   const f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
-  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], reviewRequested: f.reviewRequested ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
+  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], release: f.release ?? null, reviewRequested: f.reviewRequested ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
 /** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
@@ -57,6 +60,7 @@ const unsupported = () => {
 const API_PULL = /^repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/(comments|reviews)$/;
 const API_REPLY = /^repos\/\{owner\}\/\{repo\}\/(pulls\/\d+\/comments\/\d+\/replies|issues\/\d+\/comments)$/;
 const API_PR_FILES = /^repos\/\{owner\}\/\{repo\}\/pulls\/(\d+)\/files$/;
+const API_RELEASE_LATEST = /^repos\/[^/{}]+\/[^/{}]+\/releases\/latest$/;
 const API_COMPARE = /^repos\/\{owner\}\/\{repo\}\/compare\/\S+\.\.\.\S+$/; // 分支名可以带 /（feature/x）
 /** -f / -F 传的 key=value。 */
 const field = (key) => {
@@ -94,6 +98,10 @@ if (cmd === "--version") {
   process.stdout.write(`https://github.com/acme/app/issues/${ref}\n`);
 } else if (cmd === "run" && sub === "list" && flag("--branch") !== undefined) {
   out([]);
+} else if (cmd === "api" && API_RELEASE_LATEST.test(sub ?? "") && args.length === 2) {
+  const release = fixture().release;
+  if (!release) notFound("HTTP 404: Not Found (https://api.github.com/" + sub + ")");
+  out(release);
 } else if (cmd === "api" && API_PULL.test(sub ?? "")) {
   // 行内评论、review 列表：没有。
 } else if (cmd === "api" && sub === "graphql" && /^\s*query/.test(field("query") ?? "") && field("number") !== undefined) {

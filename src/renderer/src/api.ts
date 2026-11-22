@@ -10,6 +10,7 @@ import type { DevSendResult, ForkView, RememberResult } from "../../shared/fork"
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyAction, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
+import type { AppMenuAction, UpdateCheckResult, UpdateView } from "../../shared/update";
 import { createStateBus } from "./state-bus";
 import type { StateScope } from "../../shared/state-scope";
 import { IPC, type IpcResult } from "../../shared/ipc";
@@ -283,6 +284,14 @@ export const api = {
   setAutostart: (on: boolean) => call<AutostartState>(IPC.appAutostartSet, on),
   keepAwake: () => call<boolean>(IPC.appKeepAwakeGet),
   setKeepAwake: (on: boolean) => call<boolean>(IPC.appKeepAwakeSet, on),
+  // 更新提示（BTL-253）
+  updateState: () => call<UpdateView>(IPC.updateState),
+  checkUpdates: () => call<UpdateCheckResult>(IPC.updateCheck),
+  skipUpdate: (version: string) => call<void>(IPC.updateSkip, version),
+  dismissUpdate: (version: string) => call<void>(IPC.updateDismiss, version),
+  openRelease: () => call<void>(IPC.updateOpenRelease),
+  /** 应用菜单点了要界面做的事（BTL-253 / 254）。 */
+  onAppMenu: (cb: (action: AppMenuAction) => void) => window.butler.on(IPC.appMenu, cb),
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
   usageSummary: () => call<UsageSummary>(IPC.usageSummary),
   dismissActivity: (sessionId: string) => call<void>(IPC.activityDismiss, sessionId),
