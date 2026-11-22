@@ -82,7 +82,7 @@
 
 ## 反馈
 
-发现 bug 或有想法？**帮助 → 发送反馈…** 会在浏览器里打开填好的 GitHub issue，由你自己提交；诊断可选，脱敏后先给你看再存。有问题可以去 [Discussions](https://github.com/yul761/butler/discussions) 问。
+发现 bug 或有想法？**帮助 → 发送反馈…**（或者 **设置 → 关于** 里的按钮）会在浏览器里打开填好的 GitHub issue，由你自己提交，Butler 自己不往外发任何东西。诊断可选，脱敏后先给你看，再存进「下载」文件夹，由你拖进 issue。有问题可以去 [Discussions](https://github.com/yul761/butler/discussions) 问。
 
 ## 开发
 

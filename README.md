@@ -82,7 +82,7 @@ Every setting is described in [docs/configuration.md](docs/configuration.md), in
 
 ## Feedback
 
-Found a bug or have an idea? **Help → Send Feedback…** opens a prefilled GitHub issue in your browser; you submit it yourself. Diagnostics are optional, redacted, and shown to you before they're saved. Questions go to [Discussions](https://github.com/yul761/butler/discussions).
+Found a bug or have an idea? **Help → Send Feedback…** (or the button under **Settings → About**) opens a filled-in GitHub issue in your browser; you submit it yourself, and Butler sends nothing on its own. Diagnostics are optional, redacted, and shown to you before they're saved to your Downloads folder for you to drag into the issue. Questions go to [Discussions](https://github.com/yul761/butler/discussions).
 
 ## Development
 
