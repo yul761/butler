@@ -16,8 +16,17 @@ interface BuilderConfig {
   files: string[];
   extraResources: { from: string; to: string; filter: string[] }[];
   electronFuses?: Record<string, boolean>;
-  mac: { identity: unknown; artifactName: string; icon?: string; target: { target: string; arch: string[] }[] };
-  dmg: { artifactName: string };
+  mac: {
+    identity?: unknown;
+    hardenedRuntime?: boolean;
+    entitlements?: string;
+    entitlementsInherit?: string;
+    files?: string[];
+    artifactName: string;
+    icon?: string;
+    target: { target: string; arch: string[] }[];
+  };
+  dmg: { artifactName: string; sign?: boolean };
   win: { icon?: string; target: { target: string; arch: string[] }[] };
   nsis: Record<string, unknown>;
 }
@@ -38,14 +47,33 @@ describe("packaging config (design 2.1, 12)", () => {
     expect(cfg.productName).toBe("Butler");
   });
 
-  it("is unsigned, never publishes, and keeps RunAsNode available for the memory MCP", () => {
+  it("never publishes, signs macOS in after-pack or electron-builder, and keeps RunAsNode available for the memory MCP", () => {
     expect(cfg.publish).toBeNull();
-    expect(cfg.mac.identity).toBeNull();
+    // BTL-258：以前是 identity: null（永远不让 electron-builder 签名）。现在不写 identity：有 CSC_LINK 时 electron-builder 用
+    // Developer ID 签名，没有时 after-pack.cjs 做 ad-hoc 签名（scripts/mac-signing.cjs 判断，见 mac-signing.test.ts）。
+    expect(cfg.mac).not.toHaveProperty("identity");
     expect(cfg.afterPack).toBe("scripts/after-pack.cjs");
     expect(cfg.electronFuses?.runAsNode).not.toBe(false);
     // 不配置 fuses：记忆 MCP 靠 ELECTRON_RUN_AS_NODE 运行。以后真要加 fuses，改这条断言时 runAsNode 必须保持 true。
     expect(cfg.electronFuses).toBeUndefined();
     expect(existsSync(`${root}${cfg.afterPack}`)).toBe(true);
+  });
+
+  it("signs the Developer ID build with the hardened runtime and only the entitlements it needs (BTL-258)", () => {
+    expect(cfg.mac.hardenedRuntime).toBe(true);
+    expect(cfg.mac.entitlements).toBe("build-resources/entitlements.mac.plist");
+    // 包里的 helper、node-pty、butler-hook 和主程序用同一份：它们都跑 V8 或 Node。
+    expect(cfg.mac.entitlementsInherit).toBe(cfg.mac.entitlements);
+    expect(cfg.dmg.sign).toBe(true);
+    const plist = read(String(cfg.mac.entitlements));
+    const keys = [...plist.replace(/<!--[\s\S]*?-->/g, "").matchAll(/<key>([^<]+)<\/key>\s*<true\/>/g)].map((m) => m[1]);
+    expect(keys).toEqual(["com.apple.security.cs.allow-jit", "com.apple.security.cs.allow-unsigned-executable-memory"]);
+    // 每个 Mach-O 都是同一个 Team ID 签的，不需要关库验证；也不需要调试、注入环境变量、摄像头之类。
+    expect(plist.replace(/<!--[\s\S]*?-->/g, "")).not.toMatch(/disable-library-validation|allow-dyld-environment-variables|get-task-allow|<false\/>/);
+  });
+
+  it("leaves other platforms' node-pty prebuilds out of the Apple silicon app (they would have to be signed and notarized)", () => {
+    expect(cfg.mac.files).toEqual(["!**/node_modules/node-pty/prebuilds/win32-*/**", "!**/node_modules/node-pty/prebuilds/darwin-x64/**"]);
   });
 
   it("uses the Butler icon (direction E1) on both platforms, not the default Electron one", () => {

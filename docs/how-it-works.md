@@ -208,7 +208,7 @@ The transcripts, output files and registry files are Claude Code's internal file
 
 The notification webhook address is encrypted with the OS keychain (macOS Keychain / Windows DPAPI), and the UI shows only its host. Butler uses the keychain only when you save a webhook address, when it sends a notification, and when you open **Interruptions & notifications** in the advanced settings, which shows the webhook's host. If you never set up a webhook, Butler never touches the keychain.
 
-On macOS, a dialog may ask whether Butler may use "butler Safe Storage" in your keychain (Electron names the item after the app's internal name, `butler`). Click **Always Allow**. The builds are ad-hoc signed, not signed with a Developer ID, so macOS treats every new version as a different app and asks again once after each upgrade. If you click **Deny**, Butler can't read the saved address; enter it again.
+On macOS, a dialog may ask whether Butler may use "butler Safe Storage" in your keychain (Electron names the item after the app's internal name, `butler`). Click **Always Allow**. Releases up to 4.1.1, and any build without the signing secrets, are ad-hoc signed rather than signed with a Developer ID, so macOS treats every new version as a different app and asks again once after each upgrade; signed releases keep the permission. If you click **Deny**, Butler can't read the saved address; enter it again.
 
 Upgrading from 3.x deletes the personal API key, its settings, the sensitive-terms list and the LLM call log from `app.db`. Butler no longer has a way to show or clear them.
 
@@ -229,9 +229,25 @@ A lint rule keeps it this way: no source file may use the network, except the we
 
 ## Code signing
 
-**Status:** the installers are not code-signed. The macOS app carries only an ad-hoc signature and is not notarized; the Windows installer is unsigned. That is why Gatekeeper and SmartScreen warn on first launch (the [README](../README.md#install) shows how to get past them). Butler has no auto-update either: it only tells you when a new version is out.
+**Status:** releases up to 4.1.1 are not code-signed: the macOS app carries only an ad-hoc signature and is not notarized. From the next release on, the macOS installers are signed and notarized as described below. The Windows installer is unsigned. That is why Gatekeeper and SmartScreen warn on first launch (the [README](../README.md#install) shows how to get past them). Butler has no auto-update either: it only tells you when a new version is out.
 
-When signing is added, only installers built by [`.github/workflows/release.yml`](../.github/workflows/release.yml) on GitHub Actions, from a version tag on this public repository, will be signed. A build made on anyone's own machine is never signed.
+Signing is done only by [`.github/workflows/release.yml`](../.github/workflows/release.yml) on GitHub Actions. When the repository has the five signing secrets below, the macOS installers it builds are signed with a Developer ID Application certificate (hardened runtime), notarized by Apple and stapled, so both the dmg and the zip open without a Gatekeeper warning. Without the secrets (forks, pull requests, a build on your own machine) the macOS app gets only an ad-hoc signature, as before. The Windows installer is not signed either way. Butler's own release builds come from version tags on this public repository.
+
+### Signing the macOS build of a fork
+
+You need a paid Apple Developer Program membership. Set these five repository secrets (**Settings → Secrets and variables → Actions**, or `gh secret set NAME -R owner/repo`). Set all five or none: with only some of them the release build stops with the names of the missing ones.
+
+| Secret | What it is |
+|---|---|
+| `CSC_LINK` | Your **Developer ID Application** certificate and its private key, exported from Keychain Access as a `.p12`, then base64-encoded: `base64 -i cert.p12 \| pbcopy`. |
+| `CSC_KEY_PASSWORD` | The password you gave the `.p12` when you exported it. |
+| `APPLE_API_KEY_P8` | The full text of an App Store Connect API key (the `.p8` file, `-----BEGIN PRIVATE KEY-----` included). Create it under **Users and Access → Integrations → App Store Connect API**; the **Developer** role is enough for notarization. Apple lets you download it only once. |
+| `APPLE_API_KEY_ID` | That key's Key ID (10 characters). |
+| `APPLE_API_ISSUER` | The Issuer ID shown above the key list (a UUID). |
+
+Then try it without making a release: run the workflow by hand on any branch, `gh workflow run release.yml --ref <branch>` (or **Actions → Release → Run workflow**). A manual run builds, signs and notarizes, checks the result and uploads the installers as artifacts; it never creates a release. With **require_signing** on (the default) it fails if the secrets are missing instead of falling back to ad-hoc. The step **Verify the macOS signature and run the packaged app** checks that every executable and native module inside is signed with your Team ID with the hardened runtime, that the app and the dmg carry a stapled notarization ticket, that Gatekeeper accepts them, and that the packaged app starts.
+
+The App Store Connect key is written to a private temporary file on the runner only for the signing steps and deleted afterwards; the certificate goes into a temporary keychain that electron-builder removes when it finishes. Nothing prints either of them. The hardened runtime entitlements are in [`build-resources/entitlements.mac.plist`](../build-resources/entitlements.mac.plist), each with the reason it is needed.
 
 Team roles:
 
@@ -251,7 +267,7 @@ This program will not transfer any information to other networked systems unless
 
 - Unsigned builds (see [Code signing](#code-signing)). macOS builds are Apple silicon only.
 - No auto-update.
-- macOS asks again for keychain access to the saved webhook address after every upgrade (builds are ad-hoc signed). With no webhook saved, there is no prompt.
+- With ad-hoc signed builds (4.1.1 and earlier), macOS asks again for keychain access to the saved webhook address after every upgrade. With no webhook saved, there is no prompt.
 - **Live status limits.** A command piped into `| tail` prints nothing until it ends, so the status shows no output for it. On Windows, Butler doesn't check child-process CPU and may not find a command's output, so the status can show only the command and how long it has run.
 - **Windows, npm-installed Claude Code.** Butler starts the npm/pnpm `claude.cmd` shim's target directly, without `cmd.exe`. The target is either the native `claude.exe` or `node <script>`.
   - If Claude Code was installed with `--ignore-scripts`, or its native optional package is missing, `bin\claude.exe` is only a small placeholder file.
