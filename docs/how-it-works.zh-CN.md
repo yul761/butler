@@ -129,7 +129,7 @@ Butler 开的每个 session 都有两个工具，`ask_user` 和 `report`，所�
 
 - **关掉已完成的 session。** epic 总控可以用 `end_session` 关掉一个已经停下、在等输入的 session。正在工作的、在等你回答的，以及它自己，它都会拒绝。
 - **清理 session。** 开着不用的终端每个要占几百 MB。session 闲置超过 `idleCloseMinutes`（默认 180 分钟，`0` 关掉，最短 10）后，Butler 会让它先写 handoff，再结束终端。session 仍留在列表里，可以恢复。有要你决定的事、有后台任务、在等合并或 CI 结果，或者（总控）它管的子 session 还在干活时都不会关。电脑睡着的时间不算闲置。隐藏超过 14 天的 session 会从 Butler 里删掉，对话记录文件留着。session 栏的 **清理闲置** 会立刻关掉闲置 5 分钟以上的 session，**已隐藏** 列表里有 **全部删除**。详见[配置 Butler](configuration.zh-CN.md#记忆statecore)。
-- **有消息时恢复关着的 session。** 总控给它开的、关着的 session 发消息（比如重启后），Butler 先看内存再在后台恢复它并送到；你点 × 结束的不恢复。**设置 → 基本** 可让 Butler 重启后恢复上次在工作的 session。
+- **有消息时恢复关着的 session。** 总控给它开的、关着的 session 发消息（比如重启后），Butler 先看内存再在后台恢复它并送到；你点 × 结束的不恢复。打开 **设置 → 基本 → 重启后自动恢复之前在工作的 session**（默认关），Butler 重启后会恢复上次在工作的 session；见[配置 Butler](configuration.zh-CN.md)。
 - **换新不丢对话。** session 换新时（↻ 按钮、总控的 `refresh_session`，或者上下文太长时自动换新），Butler 先让它写 handoff，等记忆真的存好，同时把最近几轮对话存到 `~/.butler/refresh/<session>.md`，不调用模型。`/clear` 之后 session 会 recall 那份 handoff、读这个文件，然后接着做换新前在做的事；如果当时在等什么，就说一句在等什么并继续等。不会再停住等你的下一条指令。
 - **合并后清理 worktree。** 一旦 handoff 报告某个 ticket 的 PR 已合并，Butler 就用 `git worktree remove` 删掉这个 ticket 的 worktree。分支保留，在那里再开 session 时会重建 worktree。有未提交改动或未跟踪文件的 worktree，或者自己的 session 还在终端里运行的，Butler 不会删。这时 ticket 页会说明原因，并给一个 **重新检查** 按钮，那个终端退出时 Butler 也会再试一次。被 `.gitignore` 忽略的文件（`node_modules`、本地的 `.env`）会随 worktree 一起删掉。
 - **防止休眠。** 想在你离开、盖子开着的时候让 session 继续跑，就勾上侧栏底部或托盘菜单里的 **防止休眠**。开着时电脑空闲也不会睡眠，屏幕保持亮着。取消勾选、电脑睡眠（合上盖子）或 Butler 退出时它会关掉，Butler 每次启动时它都是关的。合上盖子照样会让 Mac 睡眠；Windows 上取决于你的合盖设置。
