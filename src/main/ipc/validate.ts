@@ -25,6 +25,8 @@ import {
   EXPORT_CONTENTS, type ExportContent, type ExportRequest, type ExportScopeArg, type ImportApplyRequest, type Resolution, type StarterTarget,
 } from "../../shared/config-io";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
+import { DESCRIPTION_MAX, isFeedbackKind, TITLE_MAX } from "../../shared/feedback";
+import type { FeedbackOpenRequest } from "../feedback/feedback-service";
 
 /**
  * 渲染进程不可信：IPC 参数在主进程里按运行时类型检查，不合规就抛错（toIpcResult 包装成 { ok: false }）。
@@ -980,4 +982,24 @@ export function turnSendArg(v: unknown): { ticketKey: string; pr: { repo: string
     return { ticketKey: v.ticketKey, pr: { repo: v.pr.repo, number: v.pr.number } };
   }
   throw new Error("invalid turn send target");
+}
+
+/** 「发送反馈」（BTL-254）：类型、标题、描述、向导那一步、要不要提诊断文件。超长的先截，链接长度另由 feedbackUrl 截。 */
+export function feedbackOpenArg(v: unknown): FeedbackOpenRequest {
+  if (!v || typeof v !== "object") throw new Error("invalid feedback");
+  const o = v as Record<string, unknown>;
+  if (!isFeedbackKind(o.kind)) throw new Error("invalid feedback kind");
+  const str = (x: unknown, max: number, name: string): string => {
+    if (x === undefined || x === null) return "";
+    if (typeof x !== "string") throw new Error(`invalid feedback ${name}`);
+    return x.slice(0, max);
+  };
+  const step = str(o.step, 100, "step");
+  return {
+    kind: o.kind,
+    title: str(o.title, TITLE_MAX * 2, "title"),
+    description: str(o.description, DESCRIPTION_MAX, "description"),
+    ...(step ? { step } : {}),
+    attachDiagnostics: o.attachDiagnostics === true,
+  };
 }

@@ -1,0 +1,30 @@
+name: First-run problem
+description: Got stuck installing or setting up Butler for the first time.
+labels: ["first-run"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sorry you got stuck. Only **What happened** is required.
+  - type: input
+    id: step
+    attributes:
+      label: Where did you get stuck?
+      description: Optional. For example "download", "opening the app", "claude", "hooks".
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: What you saw (error text helps), and what you tried.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Filled in by Butler's "Send feedback…".
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Optional. Drag the redacted diagnostics file Butler saved to your Downloads folder into this box.

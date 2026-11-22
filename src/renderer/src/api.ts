@@ -11,6 +11,7 @@ import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesVie
 import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import type { AppMenuAction, UpdateCheckResult, UpdateView } from "../../shared/update";
+import type { FeedbackKind } from "../../shared/feedback";
 import { createStateBus } from "./state-bus";
 import type { StateScope } from "../../shared/state-scope";
 import { IPC, type IpcResult } from "../../shared/ipc";
@@ -153,6 +154,11 @@ export const api = {
   diagSnapshot: (resetMeasure = false) => call<DiagSnapshot | null>(IPC.diagSnapshot, resetMeasure),
   /** 弹保存对话框写一份诊断文件；返回写到的路径，取消为 null。 */
   diagExport: () => call<string | null>(IPC.diagExport),
+  /** 发送反馈（BTL-254）。 */
+  feedbackOpen: (r: { kind: FeedbackKind; title: string; description: string; step?: string; attachDiagnostics: boolean }) =>
+    call<{ url: string; truncated: boolean }>(IPC.feedbackOpen, r),
+  feedbackDiagPreview: () => call<string>(IPC.feedbackDiagPreview),
+  feedbackDiagSave: () => call<{ path: string; name: string }>(IPC.feedbackDiagSave),
   memUsageHistory: (hours = 24) => call<MemoryHistoryPoint[]>(IPC.memUsageHistory, hours),
   health: () => call<HealthReport>(IPC.healthGet),
   installHooks: () => call<HealthReport>(IPC.healthInstallHooks),

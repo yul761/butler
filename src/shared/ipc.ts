@@ -64,6 +64,10 @@ export const IPC = {
   /** 性能诊断（BTL-242）：渲染进程每分钟报一次 long task；快照给 e2e 测量；导出写一份诊断文件。 */
   diagRenderer: "diag:renderer",
   diagSnapshot: "diag:snapshot",
+  /** 「发送反馈」（BTL-254）：打开预填好的 new issue 页；脱敏诊断先预览再存。 */
+  feedbackOpen: "feedback:open",
+  feedbackDiagPreview: "feedback:diagPreview",
+  feedbackDiagSave: "feedback:diagSave",
   diagExport: "diag:export",
   /** 内存历史曲线（WS-M A）。 */
   memUsageHistory: "memusage:history",
@@ -278,6 +282,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.automationState, IPC.featuresSetAutomationLevel,
   IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease,
   IPC.diagSnapshot, IPC.diagExport,
+  IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];

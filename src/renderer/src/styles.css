@@ -741,3 +741,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 @media (max-width: 900px) { .conv-split { grid-template-columns: 1fr; } }
 .conv-term { display: flex; flex-direction: column; min-width: 0; }
 .conv-term-closed { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+
+/* 发送反馈（BTL-254） */
+.modal.feedback-dialog.wide { width: min(760px, calc(100vw - 48px)); }
+.feedback-preview { max-height: 50vh; overflow: auto; margin: 0; padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; border: 1px solid var(--border); border-radius: 6px; user-select: text; }
