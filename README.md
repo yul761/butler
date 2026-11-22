@@ -2,7 +2,7 @@
 
 **Talk to one coordinator. It runs your Claude Code sessions and only pings you when it's your turn.**
 
-![Describe an epic, the coordinator splits it into tickets, sessions start work, a card shows up on Your turn, the PR is ready to merge](docs/media/demo.gif)
+![Describe an epic to its coordinator; it splits the work into features and tickets, each ticket gets its own session and worktree, cards show up on Your turn, you merge the PR and the next ticket starts](docs/media/demo.gif)
 
 **Download:** [macOS (Apple silicon)](https://github.com/yul761/butler/releases/latest) · [Windows](https://github.com/yul761/butler/releases/latest) · MIT · [butler.statecore.io](https://butler.statecore.io) · **English** | [简体中文](README.zh-CN.md)
 

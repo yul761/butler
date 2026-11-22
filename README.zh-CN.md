@@ -2,7 +2,7 @@
 
 **和一个总控对话。它替你管好各个 Claude Code session，只在轮到你的时候叫你。**
 
-![描述一个 epic，总控拆成几个 ticket，session 开工，「轮到你」页上出现卡片，PR 可以合并了](docs/media/demo.zh-CN.gif)
+![把 epic 讲给总控听，它拆成 feature 和 ticket，每个 ticket 有自己的 session 和 worktree，「轮到你」页上出现卡片，你把 PR 合进去，接着做下一个](docs/media/demo.zh-CN.gif)
 
 **下载：** [macOS（Apple silicon）](https://github.com/yul761/butler/releases/latest) · [Windows](https://github.com/yul761/butler/releases/latest) · MIT · [butler.statecore.io](https://butler.statecore.io) · [English](README.md) | **简体中文**
 
