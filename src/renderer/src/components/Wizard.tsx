@@ -3,14 +3,12 @@ import type { HealthReport } from "../../../shared/types";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { savedWizardStep, saveWizardStep, setWizardSkipped } from "../local-prefs";
-import { mergeTools } from "../settings-form";
 import { S } from "../strings";
 import { LanguagePicker } from "./LanguagePicker";
 import { canAdvance, nextStep, prevStep, stepNumber, type WizardStep } from "../wizard";
-import { ProfileCandidates } from "./ProfileCandidates";
-import { TrackerToolPicker } from "./TrackerToolPicker";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const ghText = (g: HealthReport["gh"]) => (g === "ok" ? S.set.health.ghOk : g === "logged_out" ? S.set.health.ghLoggedOut : S.set.health.ghMissing);
 
 export function Wizard({ onDone }: { onDone: () => void }) {
   // 上次退出时停在哪一步就从哪一步继续（只记在这台机器上）。
@@ -72,14 +70,22 @@ export function Wizard({ onDone }: { onDone: () => void }) {
     }
   }
 
-  async function saveTools(picked: string[]) {
+  /** 装好了要看 hook 和 /handoff 两样；/handoff 是用户自己的同名文件（conflict）时不覆盖，也算能继续。 */
+  const hooksReady = report !== null && report.hooks === "installed" && report.handoffCommand !== "missing" && report.handoffCommand !== "stale";
+
+  async function installAndContinue() {
+    const seq = ++runSeq.current;
+    setBusy(true);
     setMessage(null);
     try {
-      const current = await api.settings();
-      await api.setSetting("trackerTools", mergeTools(current.trackerTools, picked));
-      setMessage(S.wizardTrackerSaved);
+      const r = await api.installHooks();
+      if (seq !== runSeq.current) return;
+      setReport(r);
+      if (r.hooks === "installed") setStep(nextStep("hooks"));
     } catch (e) {
-      setMessage(errorText(e));
+      if (seq === runSeq.current) setMessage(errorText(e));
+    } finally {
+      if (seq === runSeq.current) setBusy(false);
     }
   }
 
@@ -88,7 +94,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
   return (
     <div className="page wizard" data-testid="wizard">
       <h2>{S.wizardTitle}</h2>
-      <LanguagePicker />
+      <LanguagePicker hint={S.languageHintWizard} />
       {step !== "done" && <p className="muted">{S.wizardStep(n, total)}</p>}
 
       {step === "claude" && (
@@ -107,9 +113,13 @@ export function Wizard({ onDone }: { onDone: () => void }) {
                   <dd className="error">{report.claude.missingFlags.join(" ")}</dd>
                 </>
               )}
+              <dt>{S.set.health.gh}</dt>
+              <dd className={report.gh === "ok" ? "ok" : "error"} data-testid="wizard-gh">{ghText(report.gh)}</dd>
             </dl>
           )}
           {!canAdvance("claude", report) && !busy && <p className="error">{S.wizardClaudeMissing}</p>}
+          {report?.claudeLogin === "missing" && !busy && <p className="error" data-testid="wizard-claude-login">{S.wizardClaudeLoginMissing}</p>}
+          {report && report.gh !== "ok" && <p className="muted">{S.wizardGhHelp}</p>}
           <div className="field">
             {S.generalFields.claudePath}
             <input className="mono" value={claudePath} placeholder={S.generalPlaceholders.claudePath} onChange={(e) => setClaudePath(e.target.value)} />
@@ -125,7 +135,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       {step === "hooks" && (
         <section className="settings-section">
           <h3>{S.wizardHooksTitle}</h3>
-          <p className="muted">{S.wizardHooksHelp}</p>
+          <p className="muted">{S.wizardHooksHelp(report?.butlerHome ?? "~/.butler")}</p>
           {report && (
             <dl className="kv">
               <dt>{S.hooks}</dt>
@@ -134,27 +144,12 @@ export function Wizard({ onDone }: { onDone: () => void }) {
               <dd className={report.handoffCommand === "installed" ? "ok" : "error"}>{S.handoffCommandStatus[report.handoffCommand]}</dd>
             </dl>
           )}
-          <div className="actions">
-            <button className="primary" disabled={busy || report?.hooks === "settings_invalid"} onClick={() => void run(api.installHooks)}>
-              {S.installHooks}
-            </button>
-          </div>
-        </section>
-      )}
-
-      {step === "tracker" && (
-        <section className="settings-section">
-          <h3>{S.wizardTrackerTitle}</h3>
-          <p className="muted">{S.wizardTrackerHelp}</p>
-          <TrackerToolPicker onDetect={() => setMessage(null)} onSave={saveTools} />
-        </section>
-      )}
-
-      {step === "permissions" && (
-        <section className="settings-section" data-testid="wizard-permissions">
-          <h3>{S.wizardPermissionsTitle}</h3>
-          <p className="muted">{S.wizardPermissionsHelp}</p>
-          <ProfileCandidates />
+          {/* 还没装时底下的主按钮就是「安装并继续」；这里留着给已经装过、要修复的情况。 */}
+          {hooksReady && (
+            <div className="actions">
+              <button disabled={busy} onClick={() => void run(api.installHooks)}>{S.installHooks}</button>
+            </div>
+          )}
         </section>
       )}
 
@@ -170,6 +165,11 @@ export function Wizard({ onDone }: { onDone: () => void }) {
         {step !== "claude" && step !== "done" && <button onClick={() => setStep(prevStep(step))}>{S.wizardBack}</button>}
         {step === "done" ? (
           <button className="primary" onClick={() => void finish(false)}>{S.wizardFinish}</button>
+        ) : step === "hooks" && !hooksReady ? (
+          // 不装 hook，「轮到你」和状态都不工作（BTL-249）：主按钮先装再走；真想跳过点「稍后再说」。
+          <button className="primary" disabled={busy || report?.hooks === "settings_invalid"} onClick={() => void installAndContinue()}>
+            {S.wizardHooksInstallNext}
+          </button>
         ) : (
           <button className="primary" disabled={busy || !canAdvance(step, report)} onClick={() => setStep(nextStep(step))}>
             {S.wizardNext}

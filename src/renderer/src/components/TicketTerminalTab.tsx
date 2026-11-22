@@ -170,7 +170,8 @@ export function TicketTerminalTab({ ticket, term }: { ticket: TicketView; term: 
             <button onClick={() => setRemoving(r)}>{S.removeRepo}</button>
           </span>
         ))}
-        <button onClick={() => setRepoDialog("new")}>+ {S.addRepo}</button>
+        {/* 没有仓库就开不了 session：这时「添加仓库」是这一页唯一要做的事（BTL-249）。 */}
+        <button className={ticket.repos.length === 0 ? "primary" : undefined} onClick={() => setRepoDialog("new")}>+ {S.addRepo}</button>
       </div>
       {ticket.repos.filter((r) => r.cleanupBlocked).map((r) => (
         <div key={r.id} className="notice">
@@ -191,7 +192,7 @@ export function TicketTerminalTab({ ticket, term }: { ticket: TicketView; term: 
       )}
 
       <div className="sessions-bar">
-        {ticket.sessions.length === 0 && <span className="muted">{S.noSessions}</span>}
+        {ticket.sessions.length === 0 && ticket.repos.length > 0 && <span className="muted">{S.noSessions}</span>}
         {(showAllSessions ? ticket.sessions : sessionSplit.shown).map((s) => (
           <span key={s.id} className="session-wrap">
             <button

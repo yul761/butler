@@ -291,8 +291,16 @@ export interface ClaudeHealth {
   error: string | null;
 }
 
+/** claude 看起来登没登录（BTL-249）：missing 只是提示，不拦路。 */
+export type ClaudeLoginState = "ok" | "missing";
+/** gh 装没装、登没登录（BTL-249）。 */
+export type GhAuthState = "ok" | "missing" | "logged_out";
+
 export interface HealthReport {
   claude: ClaudeHealth;
+  /** claude 找到了才看；没找到时是 null。 */
+  claudeLogin: ClaudeLoginState | null;
+  gh: GhAuthState;
   hooks: HookStatus;
   hookBinInstalled: boolean;
   handoffCommand: HandoffCommandStatus;

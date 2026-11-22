@@ -5,22 +5,20 @@ import { S } from "../strings";
 import { ClaudeAvailability } from "./ClaudeAvailability";
 
 /**
- * gh 和用量两行：读不到时 gh 显示「未知」（不当成没装），用量那一行省略。
- * 跟着 report 重取：点「重新检测」拿到新的 report 时，gh 那一行也一起更新。
- * 不用 useStateRefetch：它把每次读失败都弹成错误，而这里读不到只该显示「未知」。
+ * 用量一行：读不到时省略。gh 装没装、登没登录在 report 里（BTL-249）。
+ * 跟着 report 重取：点「重新检测」拿到新的 report 时一起更新。
+ * 不用 useStateRefetch：它把每次读失败都弹成错误，而这里读不到只该省略。
  */
-function useExtraHealth(report: HealthReport | null): { gh: boolean | null; cachePct: number | null } {
-  const [gh, setGh] = useState<boolean | null>(null);
+function useExtraHealth(report: HealthReport | null): { cachePct: number | null } {
   const [cachePct, setCachePct] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
-    api.lessonsState().then((s) => live && setGh(s.ghAvailable), () => undefined);
     api.usageSummary().then((u) => live && u.totalTokens > 0 && setCachePct(Math.round(u.cacheReadShare * 100)), () => undefined);
     return () => {
       live = false;
     };
   }, [report]);
-  return { gh, cachePct };
+  return { cachePct };
 }
 
 /** 「导出诊断」（BTL-242）：弹保存对话框，写一份性能诊断文件。 */
@@ -58,7 +56,7 @@ export function HealthSettings({
   onUninstall(): void;
   scrollToAvailability: boolean;
 }) {
-  const { gh, cachePct } = useExtraHealth(report);
+  const { cachePct } = useExtraHealth(report);
   if (!report) return <p className="empty">{error ?? S.loading}</p>;
   const { claude } = report;
   return (
@@ -69,12 +67,13 @@ export function HealthSettings({
         <dt>{S.claudeVersion}</dt><dd>{claude.version ?? "—"}</dd>
         {claude.missingFlags.length > 0 && (<><dt>{S.missingFlags}</dt><dd className="error">{claude.missingFlags.join(" ")}</dd></>)}
         {claude.error && claude.error !== "claude_not_found" && (<><dt /><dd className="error">{claude.error}</dd></>)}
+        {report.claudeLogin === "missing" && (<><dt /><dd className="error" data-testid="health-claude-login">{S.wizardClaudeLoginMissing}</dd></>)}
         <dt>{S.hooks}</dt><dd className={report.hooks === "installed" ? "ok" : "error"}>{S.hookStatus[report.hooks]}</dd>
         <dt>{S.handoffCommand}</dt><dd className={report.handoffCommand === "installed" ? "ok" : "error"}>{S.handoffCommandStatus[report.handoffCommand]}</dd>
         <dt>{S.butlerHome}</dt><dd>{report.butlerHome}</dd>
         <dt>{S.claudeSettings}</dt><dd>{report.claudeSettingsPath}</dd>
         <dt>{S.set.health.gh}</dt>
-        <dd className={gh === null ? undefined : gh ? "ok" : "error"} data-testid="health-gh">{gh === null ? S.set.health.unknown : gh ? S.set.health.ghOk : S.set.health.ghMissing}</dd>
+        <dd className={report.gh === "ok" ? "ok" : "error"} data-testid="health-gh">{report.gh === "ok" ? S.set.health.ghOk : report.gh === "logged_out" ? S.set.health.ghLoggedOut : S.set.health.ghMissing}</dd>
         {cachePct !== null && (<><dt>{S.set.health.usage}</dt><dd data-testid="health-usage">{S.set.health.usageValue(cachePct)}</dd></>)}
       </dl>
       <ClaudeAvailability scrollIntoView={scrollToAvailability} />

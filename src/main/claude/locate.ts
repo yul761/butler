@@ -50,15 +50,34 @@ export function findOnPath(
   return null;
 }
 
+/**
+ * PATH 里没有 claude 时再看的几个常见安装位置（BTL-249）：都在用户目录下。官方安装脚本装到 ~/.local/bin，
+ * 有的 shell 配置只在交互 shell 里把它加进 PATH，从 Finder 启动时登录 shell 的 PATH 里就没有。
+ * 不看 /usr/local/bin、/opt/homebrew/bin 这类系统目录：它们本来就在登录 shell 的 PATH 里。
+ */
+export function wellKnownClaudePaths(platform: NodeJS.Platform, env: { home?: string; appData?: string }): string[] {
+  const out: string[] = [];
+  if (platform === "win32") {
+    const p = path.win32;
+    if (env.home) out.push(p.join(env.home, ".local", "bin", "claude.exe"));
+    if (env.appData) out.push(p.join(env.appData, "npm", "claude.cmd"));
+    return out;
+  }
+  if (env.home) out.push(path.posix.join(env.home, ".local", "bin", "claude"), path.posix.join(env.home, ".claude", "local", "claude"));
+  return out;
+}
+
 export function locateClaude(opts: {
   override: string;
   pathValue: string;
   platform: NodeJS.Platform;
   exists?: (p: string) => boolean;
   pathext?: string;
+  /** PATH 里没找到时依次看的位置（wellKnownClaudePaths）。 */
+  fallbacks?: readonly string[];
 }): string | null {
   const exists = opts.exists ?? existsSync;
   const override = opts.override.trim();
   if (override) return exists(override) ? override : null;
-  return findOnPath("claude", opts.pathValue, opts.platform, opts.pathext, exists);
+  return findOnPath("claude", opts.pathValue, opts.platform, opts.pathext, exists) ?? opts.fallbacks?.find((p) => exists(p)) ?? null;
 }

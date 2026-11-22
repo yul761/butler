@@ -14,6 +14,8 @@ export interface Sandbox {
   butlerHome: string;
   claudeConfigDir: string;
   claudePath: string;
+  /** 假 claude 在沙盒的 PATH 里；false：放在沙盒 HOME 的 ~/.local/bin（PATH 里没有，靠常见安装位置找到）。 */
+  claudeOnPath: boolean;
   repo: string;
   /** 第二个仓库（多仓库 ticket 用）。 */
   apiRepo: string;
@@ -73,6 +75,8 @@ export interface PrViewFixture extends BranchPrFixture {
 
 /** 假 gh（e2e/fake-gh/fake-gh.cjs）的数据：branches 按分支名，prs 按 prUrlKey 形式的链接（小写、没有末尾斜杠；gh pr view <号> 取链接以 /pull/<号> 结尾的第一项）。 */
 export interface FakeGhFixture {
+  /** gh auth token 退出 1（gh 没登录，BTL-249）。 */
+  loggedOut?: boolean;
   branches: Record<string, BranchPrFixture[]>;
   prs: Record<string, PrViewFixture>;
   /** gh pr create 打印的新 PR 链接；没有时 gh pr create 是不支持的调用。 */
@@ -110,6 +114,11 @@ export const FAKE_GH_ORIGIN = "https://github.com/acme/app.git";
 export interface SandboxOptions {
   /** 给了就在沙盒的 PATH 里装假 gh。不支持 Windows。 */
   gh?: FakeGhFixture;
+  /**
+   * 假 claude 不放进 PATH，放在沙盒 HOME 的 ~/.local/bin/claude（官方安装脚本的位置，BTL-249 的回退能找到）。
+   * Windows 上回退找的是 claude.exe，假 claude 做不成 exe：这个选项在 Windows 上不生效，照旧放进 PATH。
+   */
+  claudeOffPath?: boolean;
 }
 
 const isWin = process.platform === "win32";
@@ -178,11 +187,14 @@ function createSandbox(opts: SandboxOptions = {}): Sandbox {
   mkdirSync(tempDir(dir));
   copyFileSync(join(ROOT, "e2e", "fake-claude", "fake-claude.cjs"), join(bin, "fake-claude.cjs"));
   let claudePath: string;
+  const claudeOnPath = isWin || !opts.claudeOffPath;
   if (isWin) {
     claudePath = join(bin, "claude.cmd");
     writeFileSync(claudePath, NPM_STYLE_SHIM);
   } else {
-    claudePath = join(bin, "claude");
+    const claudeDir = claudeOnPath ? bin : join(homeDir(dir), ".local", "bin");
+    mkdirSync(claudeDir, { recursive: true });
+    claudePath = join(claudeDir, "claude");
     // 写死这次运行用的 node：沙盒的 PATH 里没有 node。
     writeFileSync(claudePath, `#!/bin/sh\nexec "${process.execPath}" "${join(bin, "fake-claude.cjs")}" "$@"\n`);
     chmodSync(claudePath, 0o755);
@@ -192,7 +204,7 @@ function createSandbox(opts: SandboxOptions = {}): Sandbox {
   const repo = makeGitRepo(join(dir, "repo"));
   const apiRepo = makeGitRepo(join(dir, "api"));
   const s: Sandbox = {
-    dir, butlerHome, claudeConfigDir, claudePath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log"), lang: "zh", env: {},
+    dir, butlerHome, claudeConfigDir, claudePath, claudeOnPath, repo, apiRepo, fakeLog: join(dir, "fake-claude.log"), lang: "zh", env: {},
     ghFixture: null,
     ghLog: join(dir, "fake-gh.log"),
     setGh(fixture) {
@@ -310,10 +322,13 @@ export function assertOnlyFakeClaude(s: Sandbox, env: Record<string, string>): v
     .filter(Boolean)
     .flatMap((d) => names.map((n) => join(d, n)))
     .filter((p) => existsSync(p));
-  expect(found, `claude reachable from the sandbox PATH ${pathValue}`).toEqual([s.claudePath]);
+  expect(found, `claude reachable from the sandbox PATH ${pathValue}`).toEqual(s.claudeOnPath ? [s.claudePath] : []);
+  // 不在 PATH 时，Butler 回退去找的常见安装位置也都在沙盒的 HOME 里（locate.ts 的 wellKnownClaudePaths 只看用户目录）。
+  if (!s.claudeOnPath) expect(s.claudePath.startsWith(homeDir(s.dir)), `${s.claudePath} is outside the sandbox HOME`).toBe(true);
   const probe = 'const os = require("node:os"); process.stdout.write(JSON.stringify([os.homedir(), os.tmpdir()]))';
   const dirs = JSON.parse(execFileSync(process.execPath, ["-e", probe], { env, encoding: "utf8", timeout: 10_000 })) as string[];
-  for (const d of [...dirs, env.BUTLER_HOME, env.CLAUDE_CONFIG_DIR]) expect(d.startsWith(s.dir), `${d} is outside the sandbox ${s.dir}`).toBe(true);
+  // HOME / USERPROFILE、APPDATA 也要在沙盒里：Butler 在 PATH 里找不到 claude 时会去那里的常见安装位置找。
+  for (const d of [...dirs, env.BUTLER_HOME, env.CLAUDE_CONFIG_DIR, isWin ? env.USERPROFILE : env.HOME, ...(isWin ? [env.APPDATA] : [])]) expect(d.startsWith(s.dir), `${d} is outside the sandbox ${s.dir}`).toBe(true);
 }
 
 export interface Launched {
@@ -498,11 +513,8 @@ export async function completeWizard(page: Page, s: Sandbox): Promise<void> {
   const next = page.getByRole("button", { name: S.wizardNext, exact: true });
   await expect(next).toBeEnabled();
   await next.click();
-  await page.getByRole("button", { name: S.installHooks, exact: true }).click();
-  await expect(kvValue(page, S.hooks)).toHaveText(S.hookStatus.installed);
-  await expect(kvValue(page, S.handoffCommand)).toHaveText(S.handoffCommandStatus.installed);
-  // tracker → 权限档案（ws-j）→ 完成（隐私那一步 BTL-243 去掉了）。
-  for (let i = 0; i < 3; i++) await page.getByRole("button", { name: S.wizardNext, exact: true }).click();
+  // hook 还没装：主按钮是「安装并继续」，装好直接到「完成」（BTL-249：tracker、权限档案两步移到了设置页）。
+  await page.getByRole("button", { name: S.wizardHooksInstallNext, exact: true }).click();
   await page.getByRole("button", { name: S.wizardFinish, exact: true }).click();
   await expect(page.getByTestId("wizard")).toHaveCount(0);
 }

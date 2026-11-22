@@ -17,6 +17,7 @@ import { landingTab, type TicketTab } from "../ticket-tabs";
 import { clipSaid, contextLine, mainActions, prStageLine, prUrlOf, type MainAction } from "../ticket-view";
 import { turnSentence } from "../turn-text";
 import { GroupToggle } from "./HomeMore";
+import { RepoDialog } from "./RepoDialog";
 import { WhoTag } from "./ScopeParts";
 import { TicketStatus, type TicketStatusProps } from "./TicketStatus";
 import { useCollapsed } from "./useCollapsed";
@@ -49,6 +50,10 @@ export interface TicketHomeProps {
   onFix: () => void;
   /** 提问行上的按钮（和首页卡片同一套 cardActions）：由 TicketHomeTab 交给 runTicketAsk。 */
   onAsk: (a: CardAction, item: TurnItem) => void;
+  /** 还没开过 session 时的「开第一个 session」（BTL-249）：开在第一个仓库里、切到终端页签，由页面做。 */
+  onStartSession?: () => void;
+  /** 还没有仓库时的「添加仓库」。 */
+  onAddRepo?: () => void;
 }
 
 const noop = () => {};
@@ -74,7 +79,7 @@ export async function runTicketAsk(
   }, s);
 }
 
-export function TicketHome({ ticket, row, glance, stages, canFix, notice, answered, busy, status, onGoTab, onOpenPr, onSend, onFix, onAsk }: TicketHomeProps) {
+export function TicketHome({ ticket, row, glance, stages, canFix, notice, answered, busy, status, onGoTab, onOpenPr, onSend, onFix, onAsk, onStartSession, onAddRepo }: TicketHomeProps) {
   if (row === null) return <div className="ticket-home ticket-home-skeleton" aria-busy="true"><p className="muted">…</p></div>;
   const url = prUrlOf(row.item.pr, stages);
   const actions = mainActions(row.turn, { hasPr: url !== null, canFix }, S);
@@ -92,6 +97,9 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, answer
   const prLine = stages === null ? null : prStageLine(stages, S);
   const noPr = prLine === S.lay.noPrYet;
   const stageLine = noPr ? null : prLine;
+  // 一个 session 都没开过（隐藏的也算开过）：「最后一句」没有意义，换成开始的入口（BTL-249）。
+  const neverStarted = ticket.sessions.length === 0 && (ticket.hiddenSessions ?? []).length === 0;
+  const noRepo = ticket.repos.length === 0;
   return (
     <div className="ticket-home">
       <p className="ticket-home-state">
@@ -122,7 +130,17 @@ export function TicketHome({ ticket, row, glance, stages, canFix, notice, answer
         </section>
       )}
       {notice && <p className="muted" role="status">{notice}</p>}
-      {glance !== null && (
+      {neverStarted && (
+        <section className="ticket-home-first" data-testid="ticket-first-session">
+          <p>{noRepo ? S.lay.firstSessionNoRepo : S.lay.firstSessionHint}</p>
+          <div className="actions">
+            {noRepo
+              ? <button className="primary" onClick={onAddRepo ?? (() => onGoTab("terminal"))}>{`+ ${S.lay.addRepoFirst}`}</button>
+              : <button className="primary" onClick={onStartSession ?? (() => onGoTab("terminal"))}>{S.lay.startFirstSession}</button>}
+          </div>
+        </section>
+      )}
+      {glance !== null && !neverStarted && (
         <section className="ticket-home-said">
           <h3>{S.lay.lastSaid}</h3>
           {glance.lastSaid === null ? <p className="muted">{S.lay.lastSaidNone}</p> : <p className="said">{clipSaid(glance.lastSaid.text)}</p>}
@@ -173,14 +191,17 @@ export interface TicketHomeTabProps {
   /** 回答请求还没回来：也放在 TicketPage 上，请求途中切走再切回，按钮照样禁用，不会再答一次。 */
   busy: boolean;
   onBusy: (busy: boolean) => void;
+  /** 「开第一个 session」（BTL-249）。 */
+  onStartSession: () => void;
 }
 
-export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, busy, onBusy }: TicketHomeTabProps) {
+export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, busy, onBusy, onStartSession }: TicketHomeTabProps) {
   const key = ticket.key;
   const { board, reload } = useTurnBoard({ ticketKey: key });
   const glance = useStateRefetch(`glance:${key}`, () => api.ticketGlance(key), { scopes: GLANCE_SCOPES });
   const stages = usePrStages({ ticketKey: key })?.find((t) => t.ticketKey === key) ?? null;
   const [notice, setNotice] = useState<string | null>(null);
+  const [addingRepo, setAddingRepo] = useState(false);
   // 最新一份 handoff 就是这个 ticket 的「状态」：存下新的一份会发 stateChanged，这里跟着重取。
   const history = useStateRefetch(`handoffs:${key}`, () => api.handoffs(key));
   const [running, setRunning] = useState(false);
@@ -197,8 +218,11 @@ export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, bu
   const canFix = ticket.featureId !== null && stuckSession !== null;
   const pr = row?.item.pr ?? null;
   return (
+    <>
+    {addingRepo && <RepoDialog ticketKey={key} hasSessions={false} onClose={() => setAddingRepo(false)} />}
     <TicketHome
       ticket={ticket} row={row} glance={glance} stages={stages} canFix={canFix} notice={notice} answered={answered} busy={busy} onGoTab={onGoTab}
+      onStartSession={onStartSession} onAddRepo={() => setAddingRepo(true)}
       status={{ latest, running, message: statusMessage, onRun: runStatus }}
       onOpenPr={(url) => api.prOpen(url).catch(reportError)}
       onSend={() => {
@@ -223,5 +247,6 @@ export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, bu
         }, reportError).finally(() => onBusy(false));
       }}
     />
+    </>
   );
 }

@@ -198,17 +198,22 @@ There is no auto-update. To upgrade, download the new version and install it ove
 
 ## First run
 
-A short wizard, **Welcome to Butler**, walks you through these steps:
+Before you open Butler, install Claude Code and log in once: run `claude` in a terminal and follow the login steps. Installing the GitHub CLI (`gh`) and running `gh auth login` is optional; without it sessions still work, but PR, CI and review features don't.
 
-1. **Check Claude Code.** Butler finds `claude` on your login shell's `PATH`, or you give it the absolute path. It also checks that `claude --help` lists the flags Butler relies on. You can't continue without a working `claude`.
-2. **Install the hooks and the /handoff command.** Butler merges four hooks (`SessionStart`, `Stop`, `UserPromptSubmit`, `SessionEnd`) into your user-level Claude Code `settings.json`, keeping your existing hooks.
+A short wizard, **Welcome to Butler**, has two steps:
+
+1. **Check Claude Code.** Butler finds `claude` on your login shell's `PATH`, then in the usual install locations (`~/.local/bin`, `~/.claude/local`; on Windows `%USERPROFILE%\.local\bin` and `%APPDATA%\npm`), or you give it the absolute path. It also checks that `claude --help` lists the flags Butler relies on. You can't continue without a working `claude`.
+   - It also tells you when `claude` doesn't look logged in yet, and whether `gh` is installed and logged in. Neither stops you from continuing.
+2. **Install the hooks and the /handoff command.** Click **Install and continue**. Butler merges four hooks (`SessionStart`, `Stop`, `UserPromptSubmit`, `SessionEnd`) into your user-level Claude Code `settings.json`, keeping your existing hooks. Without them, **Your turn** and status don't work.
    - The first time, it saves a copy of the file as `settings.json.butler-backup`.
    - It also writes `commands/handoff.md`.
-   - The hooks only drop small JSON files into `~/.butler/inbox`. They never touch the network and always exit 0.
+   - The hooks only drop small JSON files into the `inbox` folder of Butler's data folder (`~/.butler` unless you set `BUTLER_HOME`). They never touch the network and always exit 0.
    - Sessions Butler starts also record Skill calls (only the skill name) through a hook, which is how it tells whether design and self-review happened.
    - To remove them, use **Settings → Environment check → Uninstall**.
-3. **Tracker MCP tools.** Butler lists the MCP tools your Claude Code exposes, and you pick the read-only ones handoffs may call.
-4. **Permission profile.** How much Butler's sessions may do without asking you; see [docs/configuration.md](docs/configuration.md#permission-profile).
+
+Then create a ticket and add a repository to it (Claude works there). The ticket's overview has a **Start the first session** button; when the session stops to wait for you, it shows up under **Your turn** on the home page.
+
+Two things are set up later in Settings, not in the wizard: the read-only MCP tools of your tracker (Jira, Linear, GitLab, …) under **Settings › Advanced › Schedule & status**, and the [permission profile](docs/configuration.md#permission-profile) under **Settings › Advanced › Interruptions & notifications**.
 
 You can run the wizard again from Settings. [docs/configuration.md](docs/configuration.md) covers every setting, including how to adapt Butler to another company's tracker and conventions.
 

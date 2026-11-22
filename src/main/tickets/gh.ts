@@ -1,6 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { prUrlParts } from "../../shared/pr-url";
+import type { GhAuthState } from "../../shared/types";
 import { MERGE_STATES, type PrMergeable, type PrMergeState, type PrReviewer, type PrReviewRequest } from "../../shared/progress";
 
 /**
@@ -63,6 +64,31 @@ export function probeGh(timeoutMs: number): Promise<boolean> {
     execFile(bin, ["--version"], { timeout: timeoutMs, windowsHide: true }, (err) => {
       if (binary === bin) probed = !err;
       done(!err);
+    });
+  });
+}
+
+export type GhState = GhAuthState;
+
+/**
+ * gh 装没装、登没登录（BTL-249，向导和环境检查用）：`gh auth token` 只看本机的登录记录，不联网。
+ * 输出（就是 token）不接，只看退出码。超时当作能用（说不清的时候不吓唬人）。从不抛错。
+ */
+export function ghAuthState(timeoutMs: number): Promise<GhState> {
+  const bin = binary;
+  if (bin === null) return Promise.resolve("missing");
+  return new Promise((done) => {
+    let child;
+    try {
+      child = spawn(bin, ["auth", "token"], { stdio: "ignore", timeout: timeoutMs, windowsHide: true });
+    } catch {
+      done("missing");
+      return;
+    }
+    child.on("error", () => done("missing"));
+    child.on("exit", (code) => {
+      if (code !== null && binary === bin) probed = true;
+      done(code === null || code === 0 ? "ok" : "logged_out");
     });
   });
 }

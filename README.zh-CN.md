@@ -198,17 +198,22 @@ NSIS 安装包目前没有签名（见[代码签名政策](#代码签名政策)�
 
 ## 首次运行
 
-一个简短的向导 **欢迎使用 Butler** 会带你走完这几步：
+打开 Butler 之前，先装好 Claude Code 并登录一次：在终端里运行 `claude`，按提示登录。GitHub CLI（`gh`）可装可不装，装了再运行 `gh auth login`；不装 session 照样能用，只是 PR、CI、review 相关的功能不工作。
 
-1. **检查 Claude Code。** Butler 在你登录 shell 的 `PATH` 上找 `claude`，或者由你给出绝对路径。它还会检查 `claude --help` 是否列出了 Butler 依赖的参数。没有能用的 `claude` 就无法继续。
-2. **安装 hook 和 /handoff 命令。** Butler 把四个 hook（`SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`）合并进你用户级的 Claude Code `settings.json`，保留你已有的 hook。
+一个简短的向导 **欢迎使用 Butler** 只有两步：
+
+1. **检查 Claude Code。** Butler 在你登录 shell 的 `PATH` 上找 `claude`，找不到再看常见的安装位置（`~/.local/bin`、`~/.claude/local`；Windows 上 `%USERPROFILE%\.local\bin` 和 `%APPDATA%\npm`），或者由你给出绝对路径。它还会检查 `claude --help` 是否列出了 Butler 依赖的参数。没有能用的 `claude` 就无法继续。
+   - `claude` 看起来还没登录时会提示你；也会写出 `gh` 装了没有、登录了没有。这两样都不拦下一步。
+2. **安装 hook 和 /handoff 命令。** 点 **安装并继续**。Butler 把四个 hook（`SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`）合并进你用户级的 Claude Code `settings.json`，保留你已有的 hook。没有它们，**轮到你** 和状态都不工作。
    - 第一次会把原文件备份为 `settings.json.butler-backup`。
    - 还会写入 `commands/handoff.md`。
-   - 这些 hook 只往 `~/.butler/inbox` 里放小 JSON 文件。它们从不访问网络，退出码永远是 0。
+   - 这些 hook 只往 Butler 数据目录（默认 `~/.butler`，设了 `BUTLER_HOME` 就是那里）的 `inbox` 里放小 JSON 文件。它们从不访问网络，退出码永远是 0。
    - Butler 开的 session 还会通过 hook 额外记录 Skill 调用（只记 skill 名），用来判断设计和自我 review 有没有做。
    - 要移除它们，用 **设置 → 环境检查 → 卸载**。
-3. **tracker 的 MCP 工具。** Butler 列出你的 Claude Code 暴露的 MCP 工具，由你挑出 handoff 可以调用的只读工具。
-4. **权限档案。** Butler 的 session 不问你能做多少事；见 [docs/configuration.zh-CN.md](docs/configuration.zh-CN.md#权限档案)。
+
+然后新建一个 ticket，给它添加一个仓库（Claude 在那里干活）。ticket 的概况上有 **开第一个 session** 按钮；session 停下来等你时，首页的 **轮到你** 里会出现它。
+
+有两样不在向导里，之后在设置页配：tracker（Jira、Linear、GitLab……）的只读 MCP 工具在 **设置 › 高级 › 定时与状态**；[权限档案](docs/configuration.zh-CN.md#权限档案) 在 **设置 › 高级 › 打断与通知**。
 
 向导可以在设置里重新运行。[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md) 介绍了每一项设置，包括怎么让 Butler 适配别的公司的 tracker 和习惯。
 

@@ -8,7 +8,8 @@ import { S } from "../strings";
  * 语言选择（设计文档 2026-10-26）：自动 / 中文 / English。保存之后整个窗口重新加载，所有文案换成新语言；
  * 终端的进程在主进程里，重新加载后照常接上。
  */
-export function LanguagePicker() {
+/** hint：下面那行说明；不给时用设置页的完整说明。 */
+export function LanguagePicker({ hint = S.languageHint }: { hint?: string } = {}) {
   const [value, setValue] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,7 +33,7 @@ export function LanguagePicker() {
       <select value={value} onChange={(e) => void change(e.target.value)}>
         {LANG_SETTINGS.map((l) => <option key={l} value={l}>{S.languageOptions[l]}</option>)}
       </select>
-      <span className="muted">{S.languageHint}</span>
+      <span className="muted">{hint}</span>
     </label>
   );
 }

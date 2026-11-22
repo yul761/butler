@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prStatus, prsForBranch, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prStatus, prsForBranch, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -266,6 +266,17 @@ describe("gh binary (resolved like git: a GUI app's PATH often lacks Homebrew)",
     expect(ghAvailable()).toBe(false);
     expect(await probeGh(5000)).toBe(false);
     expect(ghAvailable()).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("ghAuthState tells missing, logged out and logged in apart from the exit code", async () => {
+    process.env.PATH = tempDir();
+    applyGhResolution(null, "darwin", () => undefined);
+    expect(await ghAuthState(5000)).toBe("missing");
+    fakeGh('[ "$1 $2" = "auth token" ] && exit 1; exit 0');
+    expect(await ghAuthState(5000)).toBe("logged_out");
+    fakeGh('[ "$1 $2" = "auth token" ] && { echo gho_x; exit 0; }; exit 1');
+    expect(await ghAuthState(5000)).toBe("ok");
+    expect(ghAvailable()).toBe(true);
   });
 
   it.skipIf(process.platform === "win32")("ghAvailable is true after a successful probe, and a new resolution clears the cached probe", async () => {

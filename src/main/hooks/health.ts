@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import type { HandoffCommandStatus, HealthReport, HookStatus } from "../../shared/types";
+import type { GhAuthState, HandoffCommandStatus, HealthReport, HookStatus } from "../../shared/types";
 import { handoffCommandPath, handoffCommandStatus, installHandoffCommand, uninstallHandoffCommand } from "../handoff/command";
 import { probeClaude } from "../claude/capabilities";
-import { locateClaude, readLoginShellPath } from "../claude/locate";
+import { locateClaude, readLoginShellPath, wellKnownClaudePaths } from "../claude/locate";
+import { claudeLoginState } from "../claude/login";
 import type { SettingsRepo } from "../db/settings-repo";
 import { memoryOn } from "../settings/settings-values";
 import type { ButlerPaths } from "../paths";
@@ -25,6 +26,8 @@ export interface HealthDeps {
   readPath?: () => Promise<string>;
   run?: ExecText;
   log?: (msg: string, err?: unknown) => void;
+  /** gh 装没装、登没登录（拿登录 shell 的 PATH 重新找 gh 再看）。不给时报 missing。 */
+  gh?: (pathValue: string) => Promise<GhAuthState>;
   /** installHooks 装好当前版本的 hook 程序之后调用（健康页安装路径）；启动时的同类播种在 index.ts。抛错会被记日志并忽略。 */
   onHookBinCurrent?: () => void;
 }
@@ -127,8 +130,18 @@ export class HealthService {
 
   async refresh(): Promise<HealthReport> {
     const pathValue = await (this.d.readPath ?? (() => readLoginShellPath(this.d.platform, this.d.env)))();
-    const path = locateClaude({ override: this.d.settings.get("claudePath"), pathValue, platform: this.d.platform });
-    const claude = await probeClaude(path, withPath(this.d.env, pathValue), this.d.run);
+    // 用户目录只从环境变量拿（测试给的 env 里没有就不回退，不会摸到真的用户目录）。
+    const home = (this.d.platform === "win32" ? this.d.env.USERPROFILE : this.d.env.HOME) || undefined;
+    const fallbacks = wellKnownClaudePaths(this.d.platform, { home, appData: this.d.env.APPDATA });
+    const path = locateClaude({ override: this.d.settings.get("claudePath"), pathValue, platform: this.d.platform, fallbacks });
+    const [claude, gh] = await Promise.all([
+      probeClaude(path, withPath(this.d.env, pathValue), this.d.run),
+      this.d.gh ? this.d.gh(pathValue).catch((): GhAuthState => "missing") : Promise.resolve<GhAuthState>("missing"),
+    ]);
+    const { paths } = this.d;
+    const claudeLogin = claude.error === null
+      ? await claudeLoginState({ claudeJson: paths.claudeJson, claudeConfigDir: paths.claudeConfigDir, claudeSettings: paths.claudeSettings, env: this.d.env })
+      : null;
     this.state = { path, pathValue };
     this.lastClaudeVersion = claude.version ?? null;
     this.optional = claude.error === null ? { model: claude.flags["--model"] === true, effort: claude.flags["--effort"] === true } : { model: true, effort: false };
@@ -152,6 +165,8 @@ export class HealthService {
     }
     return {
       claude,
+      claudeLogin,
+      gh,
       hooks,
       hookBinInstalled: existsSync(this.d.paths.hookBin),
       handoffCommand,

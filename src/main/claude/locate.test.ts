@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { absolutePathEntries, findOnPath, locateClaude, readLoginShellPath } from "./locate";
+import { absolutePathEntries, findOnPath, locateClaude, readLoginShellPath, wellKnownClaudePaths } from "./locate";
 
 describe("readLoginShellPath", () => {
   it("extracts PATH between markers, ignoring shell noise", async () => {
@@ -32,6 +32,26 @@ describe("findOnPath / locateClaude", () => {
   it("uses an existing override and rejects a missing one", () => {
     expect(locateClaude({ override: "/x/claude", pathValue: "", platform: "darwin", exists: () => true })).toBe("/x/claude");
     expect(locateClaude({ override: "/x/claude", pathValue: "/opt/bin", platform: "darwin", exists: () => false })).toBeNull();
+  });
+
+  it("falls back to well-known install locations only when PATH has no claude", () => {
+    const fallbacks = wellKnownClaudePaths("darwin", { home: "/Users/u" });
+    expect(fallbacks).toEqual(["/Users/u/.local/bin/claude", "/Users/u/.claude/local/claude"]);
+    const local = (p: string) => p === "/Users/u/.local/bin/claude";
+    expect(locateClaude({ override: "", pathValue: "/usr/bin", platform: "darwin", exists: local, fallbacks })).toBe("/Users/u/.local/bin/claude");
+    const both = (p: string) => local(p) || p === "/usr/bin/claude";
+    expect(locateClaude({ override: "", pathValue: "/usr/bin", platform: "darwin", exists: both, fallbacks })).toBe("/usr/bin/claude");
+    expect(locateClaude({ override: "", pathValue: "/usr/bin", platform: "darwin", exists: () => false, fallbacks })).toBeNull();
+    // 填了路径就只认它，不回退。
+    expect(locateClaude({ override: "/x/claude", pathValue: "", platform: "darwin", exists: local, fallbacks })).toBeNull();
+  });
+
+  it("lists the Windows install locations with Windows separators", () => {
+    expect(wellKnownClaudePaths("win32", { home: "C:\\Users\\u", appData: "C:\\Users\\u\\AppData\\Roaming" })).toEqual([
+      "C:\\Users\\u\\.local\\bin\\claude.exe",
+      "C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd",
+    ]);
+    expect(wellKnownClaudePaths("linux", {})).toEqual([]);
   });
 });
 
