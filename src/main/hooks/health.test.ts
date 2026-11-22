@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SettingsRepo } from "../db/settings-repo";
 import { resolvePaths } from "../paths";
@@ -39,6 +39,23 @@ describe("HealthService", () => {
 
     writeFileSync(paths.claudeSettings, "{oops");
     expect((await health.refresh()).hooks).toBe("settings_invalid");
+  });
+
+  it("finds claude in ~/.local/bin when the login shell's PATH has none, and puts that folder on the session PATH (BTL-249)", async () => {
+    const home = tempDir();
+    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    // platform 是 darwin，Butler 按 posix 拼回退路径；期望值也用 posix，Windows 上跑才对得上。
+    const localBin = posix.join(home, ".local", "bin");
+    mkdirSync(localBin, { recursive: true });
+    const fakeClaude = posix.join(localBin, "claude");
+    writeFileSync(fakeClaude, "");
+    const bundled = join(home, "bundled-hook");
+    writeFileSync(bundled, "#!/bin/sh\n");
+    const run = async (_f: string, args: string[]) => (args[0] === "--version" ? "2.1.304" : "");
+    const health = new HealthService({ paths, platform: "darwin", env: { HOME: home }, settings: new SettingsRepo(memDb()), bundledHookBin: bundled, readPath: async () => "/usr/bin", run });
+    const r = await health.refresh();
+    expect(r.claude.path).toBe(fakeClaude);
+    expect(health.claude()).toEqual({ path: fakeClaude, pathValue: `${localBin}:/usr/bin` });
   });
 
   it("treats any settings read failure (e.g. a directory at the path) as settings_invalid", async () => {

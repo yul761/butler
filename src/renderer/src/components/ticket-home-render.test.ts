@@ -13,7 +13,7 @@ import { landingTab } from "../ticket-tabs";
 import { runTicketAsk, TicketHome, type TicketHomeProps } from "./TicketHome";
 
 const noop = () => {};
-const ticket = { key: "BTL-1", title: "T", repos: [{ branch: "feat/btl-1" }], sessions: [] } as unknown as TicketView;
+const ticket = { key: "BTL-1", title: "T", repos: [{ branch: "feat/btl-1" }], sessions: [{ id: "s" }], hiddenSessions: [] } as unknown as TicketView;
 const pr = { repo: "r", number: 52, title: "t", url: "https://x/pr/52" };
 const merge: TicketItemTurn = { owner: "you", kind: "merge", risk: null };
 type TicketItemTurn = TurnItem["turn"];
@@ -106,10 +106,30 @@ describe("TicketHome", () => {
   });
   it("last said missing vs glance not loaded", () => {
     const g = { rootSessionId: null, lastSaid: null, context: null };
-    expect(html({ glance: g })).toContain(S.lay.lastSaidNone);
+    const started = { ...ticket, sessions: [{ id: "s" }] } as unknown as TicketView;
+    expect(html({ glance: g, ticket: started })).toContain(S.lay.lastSaidNone);
     const loading = html({ glance: null });
     expect(loading).not.toContain(S.lay.lastSaidNone);
     expect(loading).not.toContain("NaN");
+  });
+  it("a ticket that never had a session offers to start one, or to add a repo first (BTL-249)", () => {
+    const fresh = { ...ticket, sessions: [] } as unknown as TicketView;
+    let started = 0;
+    const tree = TicketHome(props({ ticket: fresh, onStartSession: () => started++ }));
+    findButton(tree, S.lay.startFirstSession).props.onClick();
+    expect(started).toBe(1);
+    const h = html({ ticket: fresh });
+    expect(h).toContain(S.lay.firstSessionHint);
+    // 「最后一句」这时没有意义。
+    expect(h).not.toContain(S.lay.lastSaid);
+    let added = 0;
+    const bare = { ...fresh, repos: [] } as unknown as TicketView;
+    findButton(TicketHome(props({ ticket: bare, onAddRepo: () => added++ })), `+ ${S.lay.addRepoFirst}`).props.onClick();
+    expect(added).toBe(1);
+    expect(html({ ticket: bare })).toContain(S.lay.firstSessionNoRepo);
+    expect(html({ ticket: bare })).not.toContain(S.lay.startFirstSession);
+    // 隐藏过的 session 也算开过。
+    expect(html({ ticket: { ...fresh, hiddenSessions: [{ id: "h" }] } as unknown as TicketView })).not.toContain(S.lay.startFirstSession);
   });
   it("row not loaded renders a skeleton, not the not-started state", () => {
     const h = html({ row: null });

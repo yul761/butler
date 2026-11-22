@@ -513,10 +513,12 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .first-run-step p { margin: 0; flex: 1; }
 .first-run-step button { align-self: flex-start; }
 .first-run-num { position: absolute; left: 12px; top: 14px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--bg); font-size: 12px; line-height: 20px; text-align: center; }
-.first-run-flow { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 0 0 16px; padding: 0; list-style: none; }
-.first-run-node { position: relative; display: flex; flex-direction: column; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
-.first-run-node + .first-run-node::before { content: "→"; position: absolute; left: -20px; top: 6px; color: var(--muted); }
-.first-run-node.you { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.first-run-flow { display: flex; flex-wrap: wrap; gap: 8px 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+.first-run-node { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.first-run-arrow { padding-top: 6px; color: var(--muted); }
+.first-run-box { display: flex; flex-direction: column; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; }
+.first-run-note { white-space: normal; }
+.first-run-node.you .first-run-box { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .first-run-note { color: var(--muted); font-size: 11px; font-weight: normal; }
 .first-run-defaults { font-size: 13px; }
 .first-run-defaults button.link { color: var(--accent); }

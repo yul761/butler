@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { expect, FAKE_GH_ORIGIN, kvValue, newButton, openSettingsGroup, type Sandbox, terminalText, test, openTicketTab } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, newButton, openSettingsGroup, type Sandbox, terminalText, test, openTicketTab } from "./fixtures";
 
 /** 沙盒的 Claude Code 记录里放几次在这个仓库里跑过的命令：只读的跑够次数，写的也跑了（不能成为候选）。 */
 function seedHistory(s: Sandbox): void {
@@ -27,10 +27,10 @@ function seedHistory(s: Sandbox): void {
 }
 
 /**
- * ws-j 权限档案：候选来自本机的历史，向导的「权限档案」这一步确认一次，之后这个仓库的 Butler session 的 --settings 里就放行它；
- * 写操作（push、rm）跑得再多也不会出现，更不会进 --settings。
+ * ws-j 权限档案：候选来自本机的历史，在设置 →「打断与通知」里确认一次（BTL-249 起不在第一次的向导里），
+ * 之后这个仓库的 Butler session 的 --settings 里就放行它；写操作（push、rm）跑得再多也不会出现，更不会进 --settings。
  */
-test("the wizard's permission step offers read-only commands from history and confirmed ones reach the session's --settings", async ({ makeSandbox, launch }) => {
+test("the permission profile offers read-only commands from history and confirmed ones reach the session's --settings", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   execFileSync("git", ["remote", "add", "origin", FAKE_GH_ORIGIN], { cwd: s.repo, stdio: "ignore" });
   execFileSync("git", ["config", "protocol.https.allow", "never"], { cwd: s.repo, stdio: "ignore" });
@@ -38,19 +38,10 @@ test("the wizard's permission step offers read-only commands from history and co
   const { page } = await launch(s);
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
 
-  // 1. 向导前两步照常（claude、hook），再下一步两次到「权限档案」。
-  await expect(page.getByTestId("wizard")).toBeVisible();
-  await page.getByPlaceholder(S.generalPlaceholders.claudePath, { exact: true }).fill(s.claudePath);
-  await page.getByRole("button", { name: S.save, exact: true }).click();
-  await expect(kvValue(page, S.claudeVersion)).toHaveText("2.1.306");
-  const next = page.getByRole("button", { name: S.wizardNext, exact: true });
-  await next.click();
-  await page.getByRole("button", { name: S.installHooks, exact: true }).click();
-  await expect(kvValue(page, S.hooks)).toHaveText(S.hookStatus.installed);
-  for (let i = 0; i < 2; i++) await next.click();
-  await expect(page.getByText(S.wizardStep(4, 4), { exact: true })).toBeVisible();
-  const step = page.getByTestId("wizard-permissions");
-  await expect(step.getByRole("heading", { name: S.wizardPermissionsTitle, exact: true })).toBeVisible();
+  // 1. 走完向导，到设置 →「打断与通知」看权限档案的候选。
+  await completeWizard(page, s);
+  await openSettingsGroup(page, "interrupts");
+  const step = page.getByTestId("profile-candidates");
 
   // 2. 候选：只有只读的 gh pr view；push 和 rm 不在里面。默认勾上了。
   const repo = step.getByTestId("profile-repo-acme/app");
@@ -59,13 +50,9 @@ test("the wizard's permission step offers read-only commands from history and co
   await expect(step).not.toContainText("push");
   await expect(step).not.toContainText("rm ");
   await step.getByTestId("profile-confirm-acme/app").click();
-  await expect(step.getByText(S.ij.noCandidates, { exact: true })).toBeVisible();
-  await next.click();
-  await page.getByRole("button", { name: S.wizardFinish, exact: true }).click();
-  await expect(page.getByTestId("wizard")).toHaveCount(0);
+  await expect(page.getByText(S.ij.noCandidates, { exact: true })).toBeVisible();
 
-  // 3. 设置 →「打断与通知」里能看到这条确认过的规则；webhook 默认没设置，推送开关关着。
-  await openSettingsGroup(page, "interrupts");
+  // 3. 同一页上能看到这条确认过的规则；webhook 默认没设置，推送开关关着。
   const rule = page.getByTestId("profile-rule-Bash(gh pr view:*)");
   await expect(rule).toContainText("acme/app");
   await expect(rule).toContainText(S.ij.statusLabel.confirmed);

@@ -683,7 +683,7 @@ Only read-only commands qualify. The check is fixed and runs again before every 
 - Allowed: `gh pr view` and similar read-only subcommands, `git log` without `--output`, and `gh api` without a method or fields.
 - Never: anything that writes, deletes, pushes or runs other programs, chains with `&&`, `|` or `;`, or uses redirects, `$`, backticks or globs, or runs the repository's own scripts.
 
-A command you rejected once in a repository is never offered there. **Explain** asks the low-tier model (task `permission_profile`) for a one-line note per candidate. It can't add rules; candidates it marks as risky start unticked, and so do MCP tools, since only their names can be checked. The first-run wizard has the same step. Rules can be removed at any time. Imported rules wait for you to confirm them.
+A command you rejected once in a repository is never offered there. **Explain** asks the low-tier model (task `permission_profile`) for a one-line note per candidate. It can't add rules; candidates it marks as risky start unticked, and so do MCP tools, since only their names can be checked. This lives only here: the first-run wizard no longer has a permission step. Rules can be removed at any time. Imported rules wait for you to confirm them.
 
 | Setting | Key | Default | What it does |
 |---------|-----|---------|--------------|

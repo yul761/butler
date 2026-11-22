@@ -4,6 +4,8 @@ import { canAdvance, needsOnboarding, nextStep, onboardingReducer, type Onboardi
 
 const report = (claude: Partial<HealthReport["claude"]>): HealthReport => ({
   claude: { path: "/usr/local/bin/claude", version: "2.1.306", flags: {}, missingFlags: [], error: null, ...claude },
+  claudeLogin: "ok",
+  gh: "ok",
   hooks: "missing",
   hookBinInstalled: false,
   handoffCommand: "missing",
@@ -14,16 +16,15 @@ const report = (claude: Partial<HealthReport["claude"]>): HealthReport => ({
 
 describe("first-run wizard (design 9, 10)", () => {
   it("walks the steps in the design's order", () => {
-    expect(WIZARD_STEPS).toEqual(["claude", "hooks", "tracker", "permissions", "done"]);
+    // BTL-249：tracker 和权限档案移出了第一次的向导，只剩检查 claude、装 hook、完成。
+    expect(WIZARD_STEPS).toEqual(["claude", "hooks", "done"]);
     expect(nextStep("claude")).toBe("hooks");
+    expect(nextStep("hooks")).toBe("done");
     expect(nextStep("done")).toBe("done");
     expect(prevStep("hooks")).toBe("claude");
     expect(prevStep("claude")).toBe("claude");
-    expect(stepNumber("claude")).toEqual({ n: 1, total: 4 });
-    // BTL-243 起没有隐私档位这一步：tracker 之后直接是权限档案（ws-j），可以跳过。
-    expect(nextStep("tracker")).toBe("permissions");
-    expect(nextStep("permissions")).toBe("done");
-    expect(stepNumber("permissions")).toEqual({ n: 4, total: 4 });
+    expect(stepNumber("claude")).toEqual({ n: 1, total: 2 });
+    expect(stepNumber("hooks")).toEqual({ n: 2, total: 2 });
   });
 
   it("blocks the first step until a working claude is found", () => {
@@ -32,7 +33,7 @@ describe("first-run wizard (design 9, 10)", () => {
     expect(canAdvance("claude", report({ error: "spawn failed" }))).toBe(false);
     expect(canAdvance("claude", report({}))).toBe(true);
     // 其余步骤都可以先跳过。
-    for (const s of ["hooks", "tracker", "permissions"] as const) expect(canAdvance(s, null)).toBe(true);
+    expect(canAdvance("hooks", null)).toBe(true);
     expect(canAdvance("done", report({}))).toBe(false);
   });
 

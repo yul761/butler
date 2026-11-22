@@ -1,8 +1,11 @@
 import type { EditableSettings } from "../../shared/settings";
 import type { HealthReport } from "../../shared/types";
 
-/** 设计文档第 9 节的顺序：自检 claude → hook 和 /handoff → tracker MCP → 权限档案（ws-j）→ 完成。隐私档位那一步在 BTL-243 去掉了。 */
-export const WIZARD_STEPS = ["claude", "hooks", "tracker", "permissions", "done"] as const;
+/**
+ * 自检 claude（连同登录、gh）→ hook 和 /handoff → 完成。隐私档位那一步在 BTL-243 去掉了；
+ * tracker MCP 和权限档案（ws-j）在 BTL-249 移出了第一次的向导：新机器上它们几乎总是空的，留在设置页，完成页指过去。
+ */
+export const WIZARD_STEPS = ["claude", "hooks", "done"] as const;
 export type WizardStep = (typeof WIZARD_STEPS)[number];
 
 /** 第一步必须找到能用的 claude（设计文档第 10 节）；其余步骤都可以先跳过，之后在设置页补。 */

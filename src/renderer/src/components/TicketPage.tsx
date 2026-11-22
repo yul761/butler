@@ -109,7 +109,12 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         tabs={[
           {
             id: "overview", label: S.lay.tabOverview, className: row !== null && (row.turn.owner === "you" || row.asks.length > 0) ? "attention" : undefined,
-            content: <TicketHomeTab ticket={ticket} onGoTab={goTab} onFix={onFix} answered={answered} onAnswered={(id, text) => setAnswered((m) => ({ ...m, [id]: text }))} busy={askBusy} onBusy={setAskBusy} />,
+            content: <TicketHomeTab ticket={ticket} onGoTab={goTab} onFix={onFix} answered={answered} onAnswered={(id, text) => setAnswered((m) => ({ ...m, [id]: text }))} busy={askBusy} onBusy={setAskBusy}
+              onStartSession={() => {
+                // 开在第一个仓库里，切到终端页签（分支不对等提示也在那里）。
+                goTab("terminal");
+                if (ticket.repos[0]) void term.open({ ticketKey: ticket.key, repoId: ticket.repos[0].id });
+              }} />,
           },
           {
             id: "conversation", label: S.lay.tabConversation,

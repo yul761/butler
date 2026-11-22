@@ -64,7 +64,7 @@ test("Settings → rerun shows the wizard again at once, with the saved claude p
   await openSettingsTab(page, "basic");
   await page.getByRole("button", { name: S.rerunWizard, exact: true }).click();
   await expect(page.getByTestId("wizard")).toBeVisible();
-  await expect(page.getByText(S.wizardStep(1, 4), { exact: true })).toBeVisible();
+  await expect(page.getByText(S.wizardStep(1, 2), { exact: true })).toBeVisible();
   await expect(page.getByPlaceholder(S.generalPlaceholders.claudePath, { exact: true })).toHaveValue(s.claudePath);
   await page.getByRole("button", { name: S.wizardSkip, exact: true }).click();
   await expect(page.getByTestId("wizard")).toHaveCount(0);

@@ -3,6 +3,7 @@
 //   每次调用都重新读 FAKE_GH_FIXTURE 指向的 JSON（测试中途可以改）：{ branches: { <分支>: [pr list 的项] }, prs: { <PR 链接，prUrlKey 形式>: pr view 的结果 } }；
 //   每次调用把参数（JSON 数组）追加一行到 FAKE_GH_LOG；
 //   --version；
+//   auth token（BTL-249，环境检查看 gh 登没登录）：fixture 的 loggedOut 为 true 时退出 1，否则打印一个假 token；
 //   search prs --review-requested=@me --state=open …（UI 重做第 1 层，请你 review 的 PR）：reviewRequested，没有就是 []；
 //   pr list --head <分支> --state all …：branches[分支]，没有就是 []；
 //   pr list --state merged …（复盘的补录、每日拉取）：没有已合并的 PR（[]；带 --jq .[] 时就是没有输出）；
@@ -43,7 +44,7 @@ const flag = (name) => {
 };
 const fixture = () => {
   const f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
-  return { branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], release: f.release ?? null, reviewRequested: f.reviewRequested ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
+  return { loggedOut: f.loggedOut === true, branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], release: f.release ?? null, reviewRequested: f.reviewRequested ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
 /** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
@@ -71,6 +72,9 @@ const field = (key) => {
 const [cmd, sub, ref] = args;
 if (cmd === "--version") {
   process.stdout.write("gh version 2.83.0 (fake)\n");
+} else if (cmd === "auth" && sub === "token") {
+  if (fixture().loggedOut) notFound("no oauth token found for github.com");
+  process.stdout.write("gho_fake\n");
 } else if (cmd === "search" && sub === "prs" && args.includes("--review-requested=@me")) {
   out(fixture().reviewRequested);
 } else if (cmd === "pr" && sub === "list" && flag("--head") !== undefined && flag("--state") === "all") {

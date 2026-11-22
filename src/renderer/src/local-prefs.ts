@@ -26,6 +26,8 @@ function set(key: string, value: string | null): void {
 
 export const savedWizardStep = (): WizardStep | null => {
   const v = get(STEP_KEY);
+  // 停在已经去掉的 tracker、权限档案两步（BTL-249 以前）：前面两步都走过了，落到「完成」。
+  if (v === "tracker" || v === "permissions") return "done";
   return (WIZARD_STEPS as readonly string[]).includes(v ?? "") ? (v as WizardStep) : null;
 };
 export const saveWizardStep = (step: WizardStep | null) => set(STEP_KEY, step);

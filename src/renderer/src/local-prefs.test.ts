@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isCollapsed, onCollapsedChange, saveConvSplit, savedConvSplit, saveSendTarget, savedSendTarget, setCollapsed, setWizardSkipped, wizardSkipped } from "./local-prefs";
+import { isCollapsed, onCollapsedChange, saveConvSplit, savedConvSplit, saveSendTarget, savedSendTarget, savedWizardStep, saveWizardStep, setCollapsed, setWizardSkipped, wizardSkipped } from "./local-prefs";
 
 function fakeStorage(): Storage {
   const m = new Map<string, string>();
@@ -151,5 +151,22 @@ describe("conversation tab prefs", () => {
     expect(savedSendTarget()).toBe("fork");
     expect(() => saveSendTarget("dev")).not.toThrow();
     expect(savedConvSplit("p")).toBe(false);
+  });
+});
+
+describe("saved wizard step", () => {
+  beforeEach(() => vi.stubGlobal("localStorage", fakeStorage()));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("resumes a current step, and lands on done from a step the wizard no longer has (BTL-249)", () => {
+    expect(savedWizardStep()).toBeNull();
+    saveWizardStep("hooks");
+    expect(savedWizardStep()).toBe("hooks");
+    localStorage.setItem("butler.wizardStep", "permissions");
+    expect(savedWizardStep()).toBe("done");
+    localStorage.setItem("butler.wizardStep", "tracker");
+    expect(savedWizardStep()).toBe("done");
+    localStorage.setItem("butler.wizardStep", "bogus");
+    expect(savedWizardStep()).toBeNull();
   });
 });

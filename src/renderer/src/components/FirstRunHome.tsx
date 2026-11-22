@@ -33,9 +33,13 @@ export function FirstRunHomeView({ onNewTicket, onNewFeature, onOpenSettings }: 
       </div>
       <ol className="first-run-flow" data-testid="first-run-flow">
         {t.flow.map((node, i) => (
+          // 箭头放在格子前面、跟格子在同一个 li 里：换行时整格（连同箭头）一起到下一行，不会伸到左边外面（BTL-249）。
           <li key={node} className={i === t.flow.length - 1 ? "first-run-node you" : "first-run-node"}>
-            {node}
-            {i === 2 && <span className="first-run-note">{t.flowNote}</span>}
+            {i > 0 && <span className="first-run-arrow" aria-hidden="true">→</span>}
+            <span className="first-run-box">
+              {node}
+              {i === 2 && <span className="first-run-note">{t.flowNote}</span>}
+            </span>
           </li>
         ))}
       </ol>
