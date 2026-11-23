@@ -162,10 +162,10 @@ describe("pre-rename variables in the parent environment", () => {
     expect(e.BUTLER_HOME).toBeUndefined();
     expect(e.SHIPHERD_TICKET).toBeUndefined();
     expect(e.SHIPHERD_SESSION).toBe("s");
-    expect(e.SHIPHERD_HOME).toBe(resolve("/data/old"));
+    expect(e.SHIPHERD_HOME).toBe("/data/old");
     expect(e.BUTLER_COLOR).toBe("blue");
     const h = headlessEnv(base, { pathValue: "", runId: "r" });
     expect(h.BUTLER_TICKET).toBeUndefined();
-    expect(h.SHIPHERD_HOME).toBe(resolve("/data/old"));
+    expect(h.SHIPHERD_HOME).toBe("/data/old");
   });
 });

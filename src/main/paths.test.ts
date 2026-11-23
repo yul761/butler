@@ -57,9 +57,9 @@ describe("resolvePaths", () => {
 
   // BTL-260：改名前的 BUTLER_HOME 还认（SHIPHERD_HOME 没设或是空的时候），主进程、hook、MCP 都走 homeFromEnv。
   it("falls back to the pre-rename BUTLER_HOME, with SHIPHERD_HOME taking priority", () => {
-    expect(resolvePaths({ BUTLER_HOME: "/data/old" }, "darwin", "/home/u").home).toBe(resolve("/data/old"));
-    expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: "/data/new" }, "darwin", "/home/u").home).toBe(resolve("/data/new"));
-    expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: " " }, "darwin", "/home/u").home).toBe(resolve("/data/old"));
+    expect(resolvePaths({ BUTLER_HOME: "/data/old" }, "darwin", "/home/u").home).toBe("/data/old");
+    expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: "/data/new" }, "darwin", "/home/u").home).toBe("/data/new");
+    expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: " " }, "darwin", "/home/u").home).toBe("/data/old");
     expect(homeFromEnv({ BUTLER_HOME: "~/bh" }, "/home/u")).toBe(join("/home/u", "bh"));
     expect(homeFromEnv({}, "/home/u")).toBe(join("/home/u", ".shipherd"));
   });

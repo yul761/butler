@@ -213,7 +213,8 @@ export function readMigrationMarker(shipherdHome: string): MigrationMarker | nul
 }
 
 /** Windows 路径（盘符或 UNC 开头）：比较时不分大小写，/ 和 \\ 算同一个分隔符（Claude Code 在 Windows 上记的路径是正斜杠）。 */
-const winLike = (p: string): boolean => /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p);
+// 带反斜杠的也算：Windows 上不带盘符的路径（如 \h\.butler，测试里 join("/h", …) 在 Windows 上得到的就是这种）。
+const winLike = (p: string): boolean => /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p) || p.includes("\\");
 const normWin = (p: string): string => p.replace(/\//g, "\\").toLowerCase();
 
 /**
