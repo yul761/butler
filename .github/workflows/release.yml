@@ -3,7 +3,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  # Manual run: builds, signs and notarizes (macOS) and uploads the installers as artifacts. It never creates a release.
+  # Manual run: builds, signs and notarizes (macOS) and uploads the installers as artifacts. It creates no release, except
+  # on a v* tag with skip_ci_check on (BTL-262: the explicit override of the CI check, see the ci-gate job).
   # Used to try the macOS signing secrets: gh workflow run release.yml --ref main (docs/how-it-works.md, "Signing the macOS build of a fork").
   # The secrets live in the protected environment "release" (BTL-259), which only main and v* tags may use: a run on any
   # other ref builds macOS ad-hoc, or fails right away with require_signing on.
@@ -13,6 +14,12 @@ on:
         description: Fail unless the macOS build is signed with Developer ID and notarized (needs the five signing secrets, so only on main or a v* tag)
         type: boolean
         default: true
+      # BTL-262: a pushed tag drafts a release only after CI on the tagged commit is green. This is the one explicit way
+      # around that: run it by hand on the v* tag with this on, and it drafts the release without looking at CI.
+      skip_ci_check:
+        description: "Run on a v* tag only: draft the release even though CI on the tagged commit is not green (an explicit override; the run log says who used it)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -167,13 +174,37 @@ jobs:
             dist/Shipherd-Setup-*.exe
           if-no-files-found: error
 
+  # BTL-262: no release unless CI (ci.yml, both platforms, every job) is green on the commit the tag points to. 4.1.2 went
+  # out while main's CI was red. The release flow pushes the version commit to main and then the tag, so CI and this
+  # workflow start together: this job waits for that CI run to finish (in parallel with the build) instead of failing
+  # because there is no result yet. A red CI fails this job and the release job does not run; after fixing (or
+  # re-running a flaky CI), re-run this workflow's failed jobs.
+  ci-gate:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: CI check skipped by hand
+        if: github.event_name == 'workflow_dispatch' && inputs.skip_ci_check
+        shell: bash
+        run: echo "::warning::$GITHUB_ACTOR drafted $GITHUB_REF_NAME with skip_ci_check, without waiting for CI on the tagged commit."
+      - name: Wait for CI on the tagged commit to pass
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_ci_check) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/wait-for-ci.mjs "$GITHUB_REF_NAME"
+
   release:
-    needs: build
-    # Only a pushed tag drafts a release; a manual run on a tag ref only builds.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [build, ci-gate]
+    # A pushed tag drafts a release; a manual run on a tag ref only builds, unless it is the explicit skip_ci_check override.
+    if: startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.skip_ci_check))
     runs-on: ubuntu-latest
     # BTL-259: only to see whether CSC_LINK is set (the signing secrets are environment secrets of "release"). This job
-    # runs only for a pushed v* tag, which the environment allows.
+    # runs only on a v* tag ref (pushed, or by hand with skip_ci_check), which the environment allows.
     environment: release
     permissions:
       contents: write
@@ -187,10 +218,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MAC_SIGNED: ${{ secrets.CSC_LINK != '' }}
+          SKIPPED_CI: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_ci_check }}
         run: |
           if [ "$MAC_SIGNED" = "true" ]; then
             notes="The macOS build is signed with Developer ID and notarized by Apple. The Windows installer is unsigned: see the README for SmartScreen."
           else
             notes="The macOS build is only ad-hoc signed (no signing secrets), so Gatekeeper blocks it until it is allowed in System Settings → Privacy & Security. The Windows installer is unsigned: see the README for SmartScreen."
+          fi
+          if [ "$SKIPPED_CI" = "true" ]; then
+            notes="$(printf '%s\n\n%s' "$notes" "Drafted with skip_ci_check by $GITHUB_ACTOR: CI on this commit was not required to pass.")"
           fi
           gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --draft --title "Shipherd $GITHUB_REF_NAME" --notes "$notes"

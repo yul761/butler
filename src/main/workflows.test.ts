@@ -56,9 +56,12 @@ describe("CI workflows (design 1.3, 11)", () => {
     expect(release.jobs.build.strategy?.matrix.os).toEqual(["macos-15", "windows-latest"]);
     // One platform's failure does not cancel the other's build; the release still waits for both.
     expect(release.jobs.build.strategy?.["fail-fast"]).toBe(false);
-    expect(release.jobs.release.needs).toBe("build");
-    // BTL-258: a manual run (workflow_dispatch) only builds and uploads, even when started on a tag ref.
-    expect(release.jobs.release.if).toBe("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')");
+    expect(release.jobs.release.needs).toEqual(["build", "ci-gate"]);
+    // BTL-258: a manual run (workflow_dispatch) only builds and uploads, even when started on a tag ref —
+    // except the explicit skip_ci_check override (BTL-262).
+    expect(release.jobs.release.if).toBe(
+      "startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.skip_ci_check))",
+    );
     expect(runs(release.jobs.build)).toContain("pnpm dist");
     const publish = runs(release.jobs.release).join("\n");
     expect(publish).toContain("gh release create");
@@ -141,6 +144,35 @@ describe("CI workflows (design 1.3, 11)", () => {
     // The release job only learns whether the macOS build was signed.
     const draft = release.jobs.release.steps.find((s) => /gh release create/.test(s.run ?? ""));
     expect(draft?.env?.MAC_SIGNED).toBe("${{ secrets.CSC_LINK != '' }}");
+  });
+
+  it("drafts a release only after CI on the tagged commit is green, waiting for it rather than failing early (BTL-262)", () => {
+    const gate = release.jobs["ci-gate"];
+    expect(gate.if).toBe("startsWith(github.ref, 'refs/tags/v')");
+    // Runs next to the build, not after it: CI and Release start together when the tag is pushed.
+    expect(gate.needs).toBeUndefined();
+    expect(gate.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(gate.environment).toBeUndefined();
+    const wait = gate.steps.find((s) => s.run === 'node scripts/wait-for-ci.mjs "$GITHUB_REF_NAME"');
+    expect(wait?.if).toBe("${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_ci_check) }}");
+    expect(wait?.env).toEqual({ GH_TOKEN: "${{ github.token }}" });
+    // Long enough for CI's test and package jobs (45 minutes each) plus the wait for the run to appear.
+    expect(Number((gate as Job & { "timeout-minutes"?: number })["timeout-minutes"])).toBeGreaterThanOrEqual(120);
+    // The release job never runs when the gate fails (no always() / failure() in its condition).
+    expect(release.jobs.release.if).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)/);
+  });
+
+  it("the CI check can only be skipped by hand on a tag, with an explicit input that defaults off and is noted in the release", () => {
+    const input = release.on.workflow_dispatch?.inputs?.skip_ci_check;
+    expect(input).toMatchObject({ type: "boolean", default: false });
+    const note = release.jobs["ci-gate"].steps.find((s) => s.name === "CI check skipped by hand");
+    expect(note?.if).toBe("github.event_name == 'workflow_dispatch' && inputs.skip_ci_check");
+    expect(note?.run).toContain("::warning::");
+    const draft = release.jobs.release.steps.find((s) => /gh release create/.test(s.run ?? ""));
+    expect(draft?.env?.SKIPPED_CI).toBe("${{ github.event_name == 'workflow_dispatch' && inputs.skip_ci_check }}");
+    expect(draft?.run).toContain("Drafted with skip_ci_check");
+    // The pushed-tag path has no way around the gate.
+    expect(release.on.push).toEqual({ tags: ["v*"] });
   });
 
   it("can be run by hand to try the signing, failing instead of falling back to ad-hoc", () => {
