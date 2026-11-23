@@ -137,6 +137,9 @@ describe("TicketPrsRepo", () => {
     expect(prGivenUp(prs.get(p.id)!)).toBe(true);
     expect(linkedOpen([prs.get(p.id)!])).toBe(false);
     expect(prs.needingRead(at + 1)).toEqual([]);
+    // 不到一周的强制读（用户刷新、session 停下）又是不存在：不往后推每周那一次。
+    prs.noteReadFailure(p.id, at + 1000, { notFound: true });
+    expect(prs.get(p.id)?.readGoneAt).toBe(at);
     // 一周以后再给一次；又是不存在：从那时起再等一周，不算“刚放弃”。
     const week = at + PR_GONE_RETRY_MS;
     expect(prs.needingRead(week - 1)).toEqual([]);

@@ -228,13 +228,13 @@ export class TicketPrsRepo {
 
   /**
    * 要读的：还开着的，和从没读过的。包括放弃了的（read_retry_at）：停到什么时候由调用方看，强制读不管它。
-   * 认定不存在的（read_gone_at）不给，除非已经过了 PR_GONE_RETRY_MS（每隔这么久再试一次）。
+   * 认定不存在的（read_gone_at）不给，除非已经过了 PR_GONE_RETRY_MS（每隔这么久再试一次），或者 includeGone（调用方自己挑：用户点了刷新的照读）。
    */
-  needingRead(now: number = Date.now()): TicketPr[] {
+  needingRead(now: number = Date.now(), o: { includeGone?: boolean } = {}): TicketPr[] {
     return (
       this.db
-        .prepare(`SELECT * FROM ticket_prs WHERE (state = 'open' OR checked_at = 0) AND (read_gone_at IS NULL OR read_gone_at <= ?) ORDER BY id`)
-        .all(now - PR_GONE_RETRY_MS) as unknown as Row[]
+        .prepare(`SELECT * FROM ticket_prs WHERE (state = 'open' OR checked_at = 0) AND (? OR read_gone_at IS NULL OR read_gone_at <= ?) ORDER BY id`)
+        .all(o.includeGone ? 1 : 0, now - PR_GONE_RETRY_MS) as unknown as Row[]
     ).map(toPr);
   }
 
@@ -288,7 +288,8 @@ export class TicketPrsRepo {
    * count（默认）时失败次数加一、记下这一串失败的开始；失败到 PR_READ_GIVE_UP 次而且已经失败了 PR_READ_RETRY_MS，
    * 停 PR_READ_RETRY_MS（之后每次失败再停一次）。count: false（整轮都读失败，像是 gh 离线）只记 read_error。
    * notFound（GitHub 说没有这个 PR）一定计数，另外 read_not_found 加一（第一次记下 read_not_found_since）；到 PR_NOT_FOUND_GIVE_UP 次、
-   * 离第一次「不存在」已经 PR_NOT_FOUND_MIN_MS，记 read_gone_at。已经认定了的（隔一周再试又是「不存在」）read_gone_at 记成 now，再等一周。
+   * 离第一次「不存在」已经 PR_NOT_FOUND_MIN_MS，记 read_gone_at。已经认定了的：到了每周再试的时候（隔了 PR_GONE_RETRY_MS）又是「不存在」，
+   * read_gone_at 记成 now，再等一周；不到一周的强制读（用户刷新、session 停下）不往后推，不然常有人碰的 ticket 永远等不到每周那一次。
    * 别的失败不清 read_not_found（gh 离线一会儿不说明 PR 回来了），读成功才清。
    * 返回新的失败次数，和这一次是不是刚放弃（之前没停着；认定不存在也算）。
    */
@@ -301,7 +302,7 @@ export class TicketPrsRepo {
       const gone = before.readGoneAt !== null || (nf >= PR_NOT_FOUND_GIVE_UP && now - since >= PR_NOT_FOUND_MIN_MS);
       this.db
         .prepare(`UPDATE ticket_prs SET read_not_found = ?, read_not_found_since = ?, read_gone_at = ? WHERE id = ?`)
-        .run(nf, since, gone ? now : null, id);
+        .run(nf, since, !gone ? null : before.readGoneAt !== null && now - before.readGoneAt < PR_GONE_RETRY_MS ? before.readGoneAt : now, id);
     }
     const count = o.notFound ? true : (o.count ?? true);
     const r = this.db

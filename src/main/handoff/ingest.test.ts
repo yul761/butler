@@ -184,5 +184,17 @@ describe("ingestHandoff", () => {
     expect(tickets.get("PROJ-1")?.status).toBe("in_review");
     expect(rederiveTicketStatus(givenUp, "PROJ-1")).toBe("active");
   });
+
+  it("an open PR in another repo (the linker refused it) does not pin the ticket in review (BTL-261 review)", () => {
+    const { deps, tickets, tick } = setup();
+    const a = { number: 7, url: "https://github.com/o/app/pull/7", state: "merged" as const, review: "approved" as const };
+    const b = { number: 25, url: "https://github.com/x/other/pull/25", state: "open" as const, review: "pending" as const };
+    const withForeign = { ...deps, foreignPr: (k: string, url: string) => k === "PROJ-1" && url === b.url };
+    expect(ingestHandoff(withForeign, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "in_review", prs: [a, b] }) })).toMatchObject({ status: "done" });
+    tick(10);
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "nightly", rawText: null, payload: payload({ status: "active", prs: [b] }) });
+    expect(tickets.get("PROJ-1")?.status).toBe("in_review");
+    expect(rederiveTicketStatus(withForeign, "PROJ-1")).toBe("active");
+  });
 });
 

@@ -82,7 +82,7 @@ describe("RepoRenamesRepo.apply", () => {
       INSERT INTO metrics_events (kind, at, pr_id, repo_slug, dedupe_key) VALUES
         ('agent_merge', 1, ${o}, '${OLD}', 'merge:${o}'), ('manual_merge', 2, ${n}, '${NEW}', 'merge:${n}'), ('pr_ready', 3, ${n}, '${NEW}', 'ready:${n}:abc');
       INSERT INTO pr_comment_items (pr_id, comment_key, kind, author, who, body, first_seen, state, updated_at) VALUES
-        (${o}, 'c1', 'issue', 'a', 'human', 'x', 1, 'pending', 1), (${n}, 'c1', 'issue', 'a', 'human', 'x', 1, 'pending', 1), (${n}, 'c2', 'issue', 'a', 'human', 'y', 1, 'pending', 1);
+        (${o}, 'c1', 'issue', 'a', 'human', 'x', 1, 'pending', 1), (${n}, 'c1', 'issue', 'a', 'human', 'x', 1, 'review', 5), (${n}, 'c2', 'issue', 'a', 'human', 'y', 1, 'pending', 1);
       INSERT INTO ci_triage (item_kind, item_id, head_sha, run_id, state, first_failed_at, updated_at) VALUES ('pr', ${n}, 's', 1, 'passed', 1, 1);
     `);
     repo.record(OLD, NEW, "scan", 1);
@@ -95,16 +95,20 @@ describe("RepoRenamesRepo.apply", () => {
     expect(prs.get(lone)).toMatchObject({ url: u(NEW, 26), slug: NEW });
     expect(prs.get(other)).toMatchObject({ ticketKey: "T-2", url: u(NEW, 25) });
     expect(all(db, `SELECT pr_id FROM pr_stage_events`)).toEqual([{ pr_id: o }]);
+    // 一对一的表留 computed_at 较新的（新行的），它的评论跟着走。
     expect(all(db, `SELECT pr_id, repo_slug, computed_at FROM review_effect_prs ORDER BY pr_id`)).toEqual([
-      { pr_id: o, repo_slug: NEW, computed_at: 1 },
+      { pr_id: o, repo_slug: NEW, computed_at: 2 },
     ]);
-    expect(all(db, `SELECT pr_id FROM review_effect_comments`)).toEqual([]);
+    expect(all(db, `SELECT pr_id FROM review_effect_comments`)).toEqual([{ pr_id: o }]);
     expect(all(db, `SELECT pr_id FROM pr_readiness`)).toEqual([{ pr_id: o }]);
     expect(all(db, `SELECT kind, pr_id, repo_slug, dedupe_key FROM metrics_events ORDER BY id`)).toEqual([
       { kind: "agent_merge", pr_id: o, repo_slug: NEW, dedupe_key: `merge:${o}` },
       { kind: "pr_ready", pr_id: o, repo_slug: NEW, dedupe_key: `ready:${o}:abc` },
     ]);
-    expect(all(db, `SELECT pr_id, comment_key FROM pr_comment_items ORDER BY comment_key`)).toEqual([{ pr_id: o, comment_key: "c1" }, { pr_id: o, comment_key: "c2" }]);
+    // 同一条评论两行都有：留 updated_at 较新的（新行的 review），不把过时的 pending 带回来。
+    expect(all(db, `SELECT pr_id, comment_key, state FROM pr_comment_items ORDER BY comment_key`)).toEqual([
+      { pr_id: o, comment_key: "c1", state: "review" }, { pr_id: o, comment_key: "c2", state: "pending" },
+    ]);
     expect(all(db, `SELECT item_id FROM ci_triage`)).toEqual([{ item_id: o }]);
     expect(all(db, `PRAGMA foreign_key_check`)).toEqual([]);
     // 幂等：再跑一遍什么也不动。
@@ -176,6 +180,51 @@ describe("RepoRenamesRepo.apply", () => {
       { dedupe_key: `T-1@${NEW}:ci:b:1`, data: '{"url":"https://github.com/o/new/pull/3#c"}' }, { dedupe_key: `T-1@${NEW}:ci:b:2`, data: "{}" },
     ]);
     expect(one(db, `SELECT pr_url FROM merge_holds`)).toEqual({ pr_url: "https://github.com/o/new/pull/3" });
+  });
+
+  it("on a unique clash keeps the newer row: a check keeps its history either way, and the old name's newer settings win (BTL-261 review)", () => {
+    const { db, repo } = setup();
+    db.exec(`
+      INSERT INTO checks (id, key, scope_kind, repo_slug, type, severity, mode, created_at, updated_at) VALUES
+        (101, 'k', 'repo', '${OLD}', 'forbidden_pattern', 'block', 'enforce', 1, 9), (102, 'k', 'repo', '${NEW}', 'forbidden_pattern', 'warn', 'shadow', 1, 3),
+        (103, 'm', 'repo', '${OLD}', 'forbidden_pattern', 'block', 'enforce', 1, 1), (104, 'm', 'repo', '${NEW}', 'forbidden_pattern', 'warn', 'shadow', 1, 5);
+      INSERT INTO check_scores (check_id, score, scored_at) VALUES (101, 0.9, 1), (102, 0.1, 1), (103, 0.5, 1);
+      INSERT INTO check_lifecycle (check_id, needs_review, updated_at) VALUES (102, 1, 1);
+      INSERT INTO legacy_scans (check_id, check_key, repo_slug, started_at, status) VALUES (102, 'k', '${NEW}', 1, 'done'), (103, 'm', '${OLD}', 1, 'done');
+      INSERT INTO check_hits (check_id, check_key, repo_slug, stage, mode, severity, outcome, ingest_key, at) VALUES (103, 'm', '${OLD}', 'edit', 'enforce', 'block', 'fail', 'h1', 1);
+      INSERT INTO pr_policies (scope_kind, repo_slug, overrides, updated_at) VALUES ('repo', '${OLD}', '{"v":"old"}', 7), ('repo', '${NEW}', '{"v":"new"}', 2);
+      INSERT INTO permission_profiles (slug, rule, status, source, decided_at) VALUES ('${OLD}', 'Bash(x)', 'dismissed', 'manual', 1), ('${NEW}', 'Bash(x)', 'confirmed', 'manual', 4);
+    `);
+    repo.record(OLD, NEW, "scan", 1);
+    const notes: string[] = [];
+    const c = repo.applyAll(10, undefined, undefined, (m) => notes.push(m));
+    // k：旧名字下的较新（updated_at 9），留它；新名字下那条的历史并过来，它自己的分数留着。
+    // m：新名字下的较新，留它；旧那条的分数、命中、扫描并过去。
+    expect(all(db, `SELECT id, key, repo_slug, severity FROM checks WHERE id > 100 ORDER BY id`)).toEqual([
+      { id: 101, key: "k", repo_slug: NEW, severity: "block" }, { id: 104, key: "m", repo_slug: NEW, severity: "warn" },
+    ]);
+    expect(all(db, `SELECT check_id, score FROM check_scores WHERE check_id > 100 ORDER BY check_id`)).toEqual([{ check_id: 101, score: 0.9 }, { check_id: 104, score: 0.5 }]);
+    expect(all(db, `SELECT check_id FROM check_lifecycle WHERE check_id > 100`)).toEqual([{ check_id: 101 }]);
+    expect(all(db, `SELECT check_id, check_key FROM legacy_scans ORDER BY check_key`)).toEqual([{ check_id: 101, check_key: "k" }, { check_id: 104, check_key: "m" }]);
+    expect(all(db, `SELECT check_id FROM check_hits`)).toEqual([{ check_id: 104 }]);
+    expect(all(db, `SELECT repo_slug, overrides FROM pr_policies`)).toEqual([{ repo_slug: NEW, overrides: '{"v":"old"}' }]);
+    expect(all(db, `SELECT slug, status FROM permission_profiles`)).toEqual([{ slug: NEW, status: "confirmed" }]);
+    expect(c["checks.repo_slug replaced"]).toBe(1);
+    expect(c["checks.repo_slug dropped"]).toBe(1);
+    expect(notes.filter((m) => m.includes("checks"))).toHaveLength(2);
+    expect(notes.every((m) => m.startsWith(`repo renames: ${OLD} → ${NEW}: `))).toBe(true);
+    expect(all(db, `PRAGMA foreign_key_check`)).toEqual([]);
+  });
+
+  it("merging PR rows keeps the delivery marker of the row delivered last", () => {
+    const { prs, link, repo } = setup();
+    const o = link("T-1", OLD, 25, { checkedAt: 10 });
+    const n = link("T-1", NEW, 25, { checkedAt: 5 });
+    prs.setDelivered(o, "k-old", { sessionId: "s1", at: 3 });
+    prs.setDelivered(n, "k-new", { sessionId: "s2", at: 8 });
+    repo.record(OLD, NEW, "scan", 1);
+    repo.applyAll(10);
+    expect(prs.get(o)).toMatchObject({ deliveredKey: "k-new", deliveredAt: 8, deliveredTo: "s2" });
   });
 
   it("a rewritten PR row starts reading afresh: failures, give-up and gone from the old link are cleared (BTL-261)", () => {

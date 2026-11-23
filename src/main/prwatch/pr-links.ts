@@ -12,8 +12,15 @@ export interface PrLinkerDeps {
   prs: TicketPrsRepo;
   tickets: Pick<TicketsRepo, "get">;
   slugOf(path: string): string | null;
+  /**
+   * 仓库的 PR 可能开在哪些仓库上：origin，和 upstream（fork 的工作流：origin 是自己的 fork，PR 开在 upstream 上）。
+   * 不给就只看 slugOf。
+   */
+  remoteSlugs?(path: string): string[];
   /** 记过的仓库改名：旧 slug 给现在的名字，别的原样（BTL-261）。不给就不换。 */
   canonical?(slug: string): string;
+  /** 这次运行里 GitHub 确认过这个 slug 叫什么（RepoRenames.settled）。不给就当都确认过。 */
+  settled?(slug: string): boolean;
   /**
    * 链接的仓库名和 origin 的不一样（仓库可能改了名）：交给改名处理去确认。gh 按 origin 列出来的 PR 换了仓库名时调；
    * handoff 里的 PR 对不上 ticket 的任何仓库时，对 ticket 的每个 origin 也调一次（改名还没记下时，新链接要靠它发现）。
@@ -45,14 +52,35 @@ export class PrLinker {
     return { url: slug === parts.slug ? url : rewriteSlugUrl(url, parts.slug, slug), slug, number: parts.number };
   }
 
-  /** slug 对得上的 ticket 仓库（都按改名后的名字比）；不是这个 ticket 的仓库返回 null。 */
+  private remotes(path: string): string[] {
+    if (this.d.remoteSlugs) return this.d.remoteSlugs(path);
+    const s = this.d.slugOf(path);
+    return s === null ? [] : [s];
+  }
+
+  /** slug 对得上的 ticket 仓库（origin 或 upstream，都按改名后的名字比）；不是这个 ticket 的仓库返回 null。 */
   repoFor(ticketKey: string, slug: string): number | null {
     const repos = this.d.tickets.get(ticketKey)?.repos ?? [];
     const want = this.canon(slug);
-    return repos.find((r) => {
-      const s = this.d.slugOf(r.repoPath);
-      return s !== null && this.canon(s) === want;
-    })?.id ?? null;
+    return repos.find((r) => this.remotes(r.repoPath).some((s) => this.canon(s) === want))?.id ?? null;
+  }
+
+  /**
+   * 这个 PR 链接不在 ticket 的任何一个仓库里（origin、upstream 都对不上）：handoff 里的不收录，状态也不看它（deriveStatus 的 foreign）。
+   * 没法判断的不算：ticket 有一个仓库的 remote 解析不出来（路径不在、没有 remote、git 超时），
+   * 或者有哪个 remote 这次运行里还没去 GitHub 确认过叫什么（settled：可能刚改了名，PR 链接已经是新名字）。
+   */
+  foreign(ticketKey: string, url: string): boolean {
+    const parts = this.parse(url);
+    if (!parts) return false;
+    const repos = this.d.tickets.get(ticketKey)?.repos ?? [];
+    if (repos.length === 0) return false;
+    for (const r of repos) {
+      const slugs = this.remotes(r.repoPath);
+      if (slugs.length === 0) return false;
+      if (this.d.settled && !slugs.every((s) => this.d.settled?.(s))) return false;
+    }
+    return this.repoFor(ticketKey, parts.slug) === null;
   }
 
   /** ticket 各仓库 origin 的 slug（改名后的名字，去重）。 */
@@ -67,7 +95,8 @@ export class PrLinker {
 
   /**
    * 返回新建了几行。handoff 里的链接是 session 自己写的，可能写错（BTL-190 写成了 yuchenlin/butler）：
-   * 只收 ticket 某个仓库 remote 上的 PR，别的仓库的不收录（读不到，只会一直重试）。
+   * 只收 ticket 某个仓库 remote（origin、upstream）上的 PR，别的仓库的不收录（读不到，只会一直重试）。
+   * 没法判断的（foreign 说的那几种）照旧收录（repo_id 空）。对不上的都对 ticket 的每个 origin 做一次改名检查。
    */
   linkHandoffPrs(ticketKey: string, prs: Pr[]): number {
     let created = 0;
@@ -76,9 +105,11 @@ export class PrLinker {
       if (!parts) continue;
       const repoId = this.repoFor(ticketKey, parts.slug);
       if (repoId === null) {
-        this.d.log?.(`pr links: ${ticketKey}'s handoff names ${parts.url}, which is not in any of the ticket's repos; not tracking it`);
         for (const s of this.originSlugs(ticketKey)) if (s !== parts.slug) this.d.onSlugMoved?.(s, parts.slug);
-        continue;
+        if (this.foreign(ticketKey, parts.url)) {
+          this.d.log?.(`pr links: ${ticketKey}'s handoff names ${parts.url}, which is not in any of the ticket's repos; not tracking it`);
+          continue;
+        }
       }
       const r = this.d.prs.link({
         ticketKey, url: parts.url, slug: parts.slug, repoId, number: parts.number,

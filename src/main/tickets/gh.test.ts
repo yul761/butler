@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -548,13 +548,23 @@ describe("ghNotFound (BTL-261)", () => {
     expect(ghNotFound("HTTP 502: Bad Gateway")).toBe(false);
     expect(ghNotFound("")).toBe(false);
   });
+
+  it("only a PR GitHub cannot resolve in a visible repo is a strong not-found (a hidden private repo looks like a missing one)", () => {
+    expect(ghPrNotFound("GraphQL: Could not resolve to a PullRequest with the number of 99999. (repository.pullRequest)")).toBe(true);
+    expect(ghPrNotFound("GraphQL: Could not resolve to a Repository with the name 'o/private'. (repository)")).toBe(false);
+    expect(ghPrNotFound("HTTP 404: Not Found (https://api.github.com/repos/a/b)")).toBe(false);
+    expect(ghPrNotFound("error connecting to api.github.com")).toBe(false);
+  });
 });
 
 describe.skipIf(process.platform === "win32")("prRead and repoCurrentSlug (BTL-261)", () => {
   it("prRead returns not_found when GitHub cannot resolve the PR, null on other failures; prStatus turns both into null", async () => {
-    const dir = fakeGh(`echo "GraphQL: Could not resolve to a Repository with the name 'o/gone'. (repository)" >&2\nexit 1`);
-    expect(await prRead(dir, "https://github.com/o/gone/pull/1", 5000)).toBe("not_found");
-    expect(await prStatus(dir, "https://github.com/o/gone/pull/1", 5000)).toBeNull();
+    const dir = fakeGh(`echo "GraphQL: Could not resolve to a PullRequest with the number of 1. (repository.pullRequest)" >&2\nexit 1`);
+    expect(await prRead(dir, "https://github.com/o/a/pull/1", 5000)).toBe("not_found");
+    expect(await prStatus(dir, "https://github.com/o/a/pull/1", 5000)).toBeNull();
+    // 仓库解析不到：可能只是当前账号看不到这个私有仓库，按 gh 失败处理。
+    fakeGh(`echo "GraphQL: Could not resolve to a Repository with the name 'o/gone'. (repository)" >&2\nexit 1`);
+    expect(await prRead(dir, "https://github.com/o/gone/pull/1", 5000)).toBeNull();
     fakeGh(`echo "error connecting to api.github.com" >&2\nexit 1`);
     expect(await prRead(dir, "https://github.com/o/a/pull/1", 5000)).toBeNull();
   });

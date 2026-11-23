@@ -108,16 +108,22 @@ export class RepoRenamesRepo {
     });
   }
 
+  /** 删掉 old 的改名记录（旧名字又成了 GitHub 上一个独立的仓库）。返回是不是删了。已经改写过的数据不动。 */
+  forget(oldSlug: string): boolean {
+    return Number(this.db.prepare(`DELETE FROM repo_renames WHERE old_slug = ?`).run(oldSlug.toLowerCase()).changes) > 0;
+  }
+
   /**
-   * 把记下的每一条改名都改写一遍（幂等：没有旧名字的就什么也不动）。返回各表动了几行。
-   * 每一条单独一个事务：一条改写失败（回滚，交给 onError）不挡后面的；它的 applied_at 不记，下次启动再试。
+   * 把记下的改名（only 给了就只要它认的）都改写一遍（幂等：没有旧名字的就什么也不动）。返回各表动了几行。
+   * 每一条单独一个事务：一条改写失败（回滚，交给 onError）不挡后面的；它的 applied_at 不记，下次再试。
    */
-  applyAll(now: number, onError?: (r: RepoRename, e: unknown) => void): RenameCounts {
+  applyAll(now: number, onError?: (r: RepoRename, e: unknown) => void, only?: (r: RepoRename) => boolean, note?: (msg: string) => void): RenameCounts {
     const total: RenameCounts = {};
     for (const r of this.all()) {
+      if (only && !only(r)) continue;
       let c: RenameCounts;
       try {
-        c = this.apply(r.oldSlug, r.newSlug);
+        c = this.apply(r.oldSlug, r.newSlug, note);
       } catch (e) {
         if (!onError) throw e;
         onError(r, e);
@@ -132,13 +138,14 @@ export class RepoRenamesRepo {
   /**
    * 一个事务里把 old 改写成 new：
    * - ticket_prs：同一个 ticket 在新旧两个链接下各有一行的，合并到旧行（id 小、别的表引用的多），后读到的状态为准；
-   *   新行的子表（阶段事件、预审、证据、简报、评论、CI 分诊、指标事件，和一对一的 review 效果、就绪、风险）挪到旧行，冲突时旧行的留下。
+   *   新行的子表（阶段事件、预审、证据、简报、评论、CI 分诊、指标事件，和一对一的 review 效果、就绪、风险）挪到旧行，冲突时按时间留较新的。
    * - lesson_repos（主键 slug，lessons / lesson_queue / lesson_runs / lesson_product_repos 引用它）：挪到新名字，两个都有就并进新的。
-   * - 其余 slug 列、链接列：改成新的；改了会和已有的行冲突（唯一约束）的，留新的、删旧的。
+   * - 其余 slug 列、链接列：改成新的；改了会和已有的行冲突（唯一约束）的，按 CONFLICTS 的时间列留较新的那行（检查规则的历史并过去），
+   *   没配的留新名字下的；删了哪一行交给 note（写日志）。
    * - metrics_daily 按仓库分的行：并进新名字（相加）；调用方随后重算汇总。
    * - handoff、epic handoff、阶段事件里的 JSON 文本：链接和正好是 slug 的字符串换成新的。
    */
-  apply(oldSlug: string, newSlug: string): RenameCounts {
+  apply(oldSlug: string, newSlug: string, note?: (msg: string) => void): RenameCounts {
     const o = oldSlug.toLowerCase();
     const n = newSlug.toLowerCase();
     const counts: RenameCounts = {};
@@ -147,6 +154,21 @@ export class RepoRenamesRepo {
       const x = Number(v);
       if (x > 0) counts[k] = (counts[k] ?? 0) + x;
     };
+    // 事务回滚了的话这些都没发生：提交以后才交出去。
+    const notes: string[] = [];
+    this.note = (m) => notes.push(`repo renames: ${o} → ${n}: ${m}`);
+    try {
+      this.applyTx(o, n, add);
+    } finally {
+      this.note = () => {};
+    }
+    for (const m of notes) note?.(m);
+    return counts;
+  }
+
+  private note: (msg: string) => void = () => {};
+
+  private applyTx(o: string, n: string, add: Add): void {
     withTransaction(this.db, () => {
       // lesson_repos 的主键要改，子表跟着改：外键推迟到提交时再查（PRAGMA 在提交时自己复原）。
       this.db.exec("PRAGMA defer_foreign_keys = ON");
@@ -158,16 +180,48 @@ export class RepoRenamesRepo {
       for (const [table, col] of JSON_COLUMNS) add(`${table}.${col}`, this.rewriteText(table, col, o, n));
       this.rewriteStageKeys(add, o, n);
     });
-    return counts;
   }
 
   /**
-   * UPDATE OR IGNORE 再删掉没改成的（和已有行冲突的：留已有的新行）。改了的记在 key 下，删了的记在「key dropped」下。
-   * 只改 slug / 链接这一列（新值不是 NULL），所以 OR IGNORE 跳过的只会是唯一约束冲突。
+   * UPDATE OR IGNORE，没改成的（和已有行撞了唯一约束）一行一行处理：CONFLICTS 里配了的，找到撞上的那行，按时间列留较新的
+   * （旧行较新：删掉撞上的那行再改旧行，记在「key replaced」下；否则删旧行，记在「key dropped」下），被删的那行的子数据并进留下的；
+   * 没配的、找不到撞上的，删旧行。改了的记在 key 下。只改这一列（新值不是 NULL），所以 OR IGNORE 跳过的只会是唯一约束冲突。
    */
   private moveValue(key: string, add: Add, table: string, col: string, where: string, expr: string, whereArgs: string[], exprArgs: string[]): void {
     add(key, this.db.prepare(`UPDATE OR IGNORE ${table} SET ${col} = ${expr} WHERE ${where}`).run(...exprArgs, ...whereArgs).changes);
-    add(`${key} dropped`, this.db.prepare(`DELETE FROM ${table} WHERE ${where}`).run(...whereArgs).changes);
+    const left = this.db.prepare(`SELECT rowid AS rid, * FROM ${table} WHERE ${where}`).all(...whereArgs) as Record<string, unknown>[];
+    const c = CONFLICTS[`${table}.${col}`];
+    for (const row of left) {
+      const rid = Number(row.rid);
+      const v = (this.db.prepare(`SELECT ${expr} AS v FROM ${table} WHERE rowid = ?`).get(...exprArgs, rid) as { v: unknown }).v;
+      const target = c
+        ? (this.db
+            .prepare(`SELECT rowid AS rid, * FROM ${table} WHERE ${col} = ? AND rowid <> ? ${c.key.map((k) => `AND ${k} IS ?`).join(" ")}`)
+            .get(v as string, rid, ...c.key.map((k) => row[k] as string | number | null)) as Record<string, unknown> | undefined)
+        : undefined;
+      const what = `${table} ${c ? c.key.map((k) => `${k}=${String(row[k])}`).join(" ") : `row ${rid}`}`.trim();
+      if (c && target && Number(row[c.time] ?? 0) > Number(target[c.time] ?? 0)) {
+        const tid = Number(target.rid);
+        this.mergeInto(table, tid, rid);
+        this.db.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(tid);
+        this.db.prepare(`UPDATE ${table} SET ${col} = ? WHERE rowid = ?`).run(v as string, rid);
+        add(`${key} replaced`, 1);
+        this.note(`${what}: both names had one; kept the old name's (newer ${c.time}), dropped row ${tid}`);
+      } else {
+        if (target) this.mergeInto(table, rid, Number(target.rid));
+        this.db.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(rid);
+        add(`${key} dropped`, 1);
+        this.note(`${what}: both names had one; kept the new name's${c && target ? ` (newer ${c.time})` : ""}, dropped row ${rid}`);
+      }
+    }
+  }
+
+  /** 撞了唯一约束、要删掉的 from 行，它的子数据并进留下的 into 行（目前只有检查规则：命中、绕过、导出、旧代码扫描，和一对一的分数、生命周期）。 */
+  private mergeInto(table: string, from: number, into: number): void {
+    if (table !== "checks") return;
+    for (const t of ["check_hits", "check_bypasses", "check_exports", "legacy_scans"]) this.db.prepare(`UPDATE ${t} SET check_id = ? WHERE check_id = ?`).run(into, from);
+    // 一对一的：留下的那行没有才拿过来（有的话它是留下的规则自己的，比要删的新）。
+    for (const t of ["check_scores", "check_lifecycle"]) this.db.prepare(`UPDATE OR IGNORE ${t} SET check_id = ? WHERE check_id = ?`).run(into, from);
   }
 
   private moveUrl(key: string, add: Add, table: string, col: string, o: string, n: string): void {
@@ -203,23 +257,29 @@ export class RepoRenamesRepo {
   private mergePrInto(from: number, into: number, add: Add): void {
     const pick = STATUS_COLS.map((c) => `CASE WHEN f.checked_at > i.checked_at THEN f.${c} ELSE i.${c} END`);
     const fill = FILL_COLS.map((c) => `COALESCE(i.${c}, f.${c})`);
+    // 送过的标记三列一起取：后送的那行的（旧行没送过、新行送过也取新行的）。
+    const fNewer = `(COALESCE(f.delivered_at, -1) > COALESCE(i.delivered_at, -1) OR (i.delivered_key IS NULL AND f.delivered_key IS NOT NULL))`;
+    const delivered = DELIVERY_COLS.map((c) => `CASE WHEN ${fNewer} THEN f.${c} ELSE i.${c} END`);
     this.db
       .prepare(
-        `UPDATE ticket_prs SET (${[...STATUS_COLS, ...FILL_COLS].join(", ")}) =
-           (SELECT ${[...pick, ...fill].join(", ")} FROM ticket_prs f, ticket_prs i WHERE f.id = ? AND i.id = ?)
+        `UPDATE ticket_prs SET (${[...STATUS_COLS, ...FILL_COLS, ...DELIVERY_COLS].join(", ")}) =
+           (SELECT ${[...pick, ...fill, ...delivered].join(", ")} FROM ticket_prs f, ticket_prs i WHERE f.id = ? AND i.id = ?)
          WHERE id = ?`,
       )
       .run(from, into, into);
     for (const t of ["pre_reviews", "pr_evidence", "pr_briefs", "pr_stage_events"]) this.db.prepare(`UPDATE ${t} SET pr_id = ? WHERE pr_id = ?`).run(into, from);
     this.moveValue("pr_comment_items", add, "pr_comment_items", "pr_id", "pr_id = ?", "?", [String(from)], [String(into)]);
     this.moveValue("ci_triage", add, "ci_triage", "item_id", "item_kind = 'pr' AND item_id = ?", "?", [String(from)], [String(into)]);
-    // 一对一的表：旧行已经有的留旧的，没有的把新行的挪过来（review_effect_comments 跟着 review_effect_prs 走）。
+    // 一对一的表：两行都有的留 computed_at 较新的，只有新行有的挪过来（review_effect_comments 跟着 review_effect_prs 走）。
     for (const t of ["review_effect_prs", "pr_readiness", "pr_risk"]) {
-      const has = this.db.prepare(`SELECT 1 FROM ${t} WHERE pr_id = ?`).get(into) !== undefined;
-      if (has) {
-        if (t === "review_effect_prs") this.db.prepare(`DELETE FROM review_effect_comments WHERE pr_id = ?`).run(from);
-        this.db.prepare(`DELETE FROM ${t} WHERE pr_id = ?`).run(from);
-      } else {
+      const at = (id: number) => (this.db.prepare(`SELECT computed_at FROM ${t} WHERE pr_id = ?`).get(id) as { computed_at: number } | undefined)?.computed_at;
+      const mine = at(into);
+      const theirs = at(from);
+      if (theirs === undefined) continue;
+      const drop = mine !== undefined && Number(mine) >= Number(theirs) ? from : into;
+      if (t === "review_effect_prs") this.db.prepare(`DELETE FROM review_effect_comments WHERE pr_id = ?`).run(drop);
+      this.db.prepare(`DELETE FROM ${t} WHERE pr_id = ?`).run(drop);
+      if (drop === into) {
         this.db.prepare(`UPDATE ${t} SET pr_id = ? WHERE pr_id = ?`).run(into, from);
         if (t === "review_effect_prs") this.db.prepare(`UPDATE review_effect_comments SET pr_id = ? WHERE pr_id = ?`).run(into, from);
       }
@@ -305,8 +365,30 @@ const STATUS_COLS = [
   "read_retry_at", "read_not_found", "read_not_found_since", "read_gone_at", "base_branch", "is_draft", "title", "author", "labels", "review_requests", "reviewers", "mergeable",
   "merge_state", "status_changed_at", "head_branch",
 ];
-/** 合并时旧行空着才用新行的列（处理过的、送过的标记：哪一行有就算处理过）。 */
-const FILL_COLS = ["repo_id", "merged_handled_at", "delivered_key", "delivered_at", "delivered_to", "shipherd_made"];
+/** 合并时旧行空着才用新行的列（处理过的标记：哪一行有就算处理过）。 */
+const FILL_COLS = ["repo_id", "merged_handled_at", "shipherd_made"];
+/** 送过的标记：三列一起取后送的那一行的。 */
+const DELIVERY_COLS = ["delivered_key", "delivered_at", "delivered_to"];
+
+/**
+ * 改 slug / 链接 / pr_id 会撞唯一约束的表（键是「表.改的列」）：key 是唯一键里除了改的那一列以外的列，time 是比新旧用的列，大的留下。
+ * 没列在这里的冲突（缓存、去重用的表）留新名字下的那行。
+ */
+const CONFLICTS: Record<string, { key: string[]; time: string }> = {
+  ...Object.fromEntries(
+    ["admission_policies", "cost_caps", "intake_policies", "loop_policies", "pr_policies", "stack_policies"].map((t) => [
+      `${t}.repo_slug`, { key: ["scope_kind", "product_id"], time: "updated_at" },
+    ]),
+  ),
+  "baseline_rules.repo_slug": { key: ["key", "scope_kind", "product_id"], time: "updated_at" },
+  "checks.repo_slug": { key: ["scope_kind", "product_id", "key"], time: "updated_at" },
+  "permission_profiles.slug": { key: ["rule"], time: "decided_at" },
+  "ci_flaky_list.repo_slug": { key: ["kind", "name"], time: "added_at" },
+  "metrics_baseline_prs.slug": { key: ["number"], time: "fetched_at" },
+  "review_requests.url_key": { key: [], time: "last_seen_at" },
+  "pr_comment_items.pr_id": { key: ["comment_key"], time: "updated_at" },
+  "ci_triage.item_id": { key: ["item_kind", "head_sha", "run_id"], time: "updated_at" },
+};
 
 /** 存 slug 的列（ticket_prs、lesson_* 另外处理）。 */
 const SLUG_COLUMNS: [string, string][] = [

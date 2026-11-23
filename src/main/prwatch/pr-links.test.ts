@@ -35,6 +35,39 @@ describe("PrLinker", () => {
     expect(prs.byTicket("T-1")).toEqual([]);
   });
 
+  it("fork workflow: a handoff PR on the upstream remote links to the repo (BTL-261)", () => {
+    const remoteSlugs = (p: string) => (p === "/a" ? ["me/x", "a/x"] : []);
+    const { prs, linker, repoIds } = setup(["/a"], { slugOf: () => "me/x", remoteSlugs });
+    expect(linker.linkHandoffPrs("T-1", [pr(3, "https://github.com/a/x/pull/3"), pr(4, "https://github.com/me/x/pull/4")])).toBe(2);
+    expect(prs.byTicket("T-1").map((r) => [r.slug, r.repoId]).sort()).toEqual([["a/x", repoIds[0]], ["me/x", repoIds[0]]]);
+    expect(linker.foreign("T-1", "https://github.com/a/x/pull/3")).toBe(false);
+    expect(linker.foreign("T-1", "https://github.com/other/x/pull/3")).toBe(true);
+  });
+
+  it("a ticket whose remotes cannot be resolved still links handoff PRs, with no repo, and nothing counts as foreign", () => {
+    const { prs, linker } = setup(["/gone"]);
+    expect(linker.foreign("T-1", "https://github.com/a/x/pull/3")).toBe(false);
+    expect(linker.linkHandoffPrs("T-1", [pr(3, "https://github.com/a/x/pull/3")])).toBe(1);
+    expect(prs.byTicket("T-1")[0]).toMatchObject({ repoId: null, slug: "a/x" });
+  });
+
+  it("foreign is undecided while any of the ticket's repos has no resolvable remote, or a remote GitHub has not confirmed yet (BTL-261 review)", () => {
+    const remoteSlugs = (p: string) => (p === "/a" ? ["a/x"] : []);
+    // 两个仓库，B 的路径不在：B 的 PR 不能当成别的仓库的。
+    const partial = setup(["/a", "/b"], { slugOf: (p) => (p === "/a" ? "a/x" : null), remoteSlugs });
+    expect(partial.linker.foreign("T-1", "https://github.com/b/y/pull/3")).toBe(false);
+    expect(partial.linker.linkHandoffPrs("T-1", [pr(3, "https://github.com/b/y/pull/3")])).toBe(1);
+    // origin 还没去 GitHub 确认过（可能刚改了名）：先收录，确认以后再说。
+    const settled = new Set<string>();
+    const moved: [string, string][] = [];
+    const s = setup(["/a"], { slugOf: () => "a/x", remoteSlugs, settled: (x) => settled.has(x), onSlugMoved: (o, n) => moved.push([o, n]) });
+    expect(s.linker.foreign("T-1", "https://github.com/a/x-renamed/pull/3")).toBe(false);
+    expect(s.linker.linkHandoffPrs("T-1", [pr(3, "https://github.com/a/x-renamed/pull/3")])).toBe(1);
+    expect(moved).toEqual([["a/x", "a/x-renamed"]]);
+    settled.add("a/x");
+    expect(s.linker.foreign("T-1", "https://github.com/a/x-renamed/pull/3")).toBe(true);
+  });
+
   it("an unmatched handoff PR asks the rename check about each of the ticket's origins, and is logged (BTL-261)", () => {
     const moved: [string, string][] = [];
     const logs: string[] = [];

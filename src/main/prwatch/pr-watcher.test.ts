@@ -305,13 +305,36 @@ describe("PrWatcher: reading PRs", () => {
     for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readNotFound: PR_NOT_FOUND_GIVE_UP, readGoneAt: s.now() });
     expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining(`${url(25, "gone")} does not exist`));
     expect(s.w.statusOf("BTL-1").find((p) => p.url === url(25, "gone"))).toMatchObject({ gaveUp: true });
-    // 之后谁也不读它：到点了不读，强制刷新也不读。
+    // 之后定时的不读它，总控停下来扫 epic 也不读。
     const calls = s.gh.prStatus.mock.calls.length;
     s.advance(PR_READ_RETRY_MS * 2);
     await s.w.check();
-    s.w.soonTicket("BTL-1");
+    s.w.soonTicket("BTL-1", { retryGivenUp: false });
     await vi.advanceTimersByTimeAsync(1000);
     expect(s.gh.prStatus.mock.calls.length).toBe(calls);
+    // 用户点了刷新：照读。读到了（比如认定错了），全部清掉，又照常跟踪。
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(25, "gone") ? 25 : 26, url: u }));
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus.mock.calls.length).toBe(calls + 2);
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readGoneAt: null, readNotFound: 0, readFailures: 0, readError: false });
+    expect(s.w.statusOf("BTL-1").find((p) => p.url === url(25, "gone"))?.gaveUp).toBeUndefined();
+  });
+
+  it("a round where every read fails because the repo cannot be resolved (gh switched to an account that cannot see it) is an outage: nothing counted, nothing gone", async () => {
+    const s = setup();
+    const a = s.link();
+    const b = s.link({ url: url(8), number: 8 });
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(7) ? 7 : 8, url: u }));
+    await s.w.check();
+    // prRead 把「Could not resolve to a Repository」当 gh 失败（null）。
+    s.gh.prStatus.mockResolvedValue(null);
+    for (let i = 0; i < PR_READ_GIVE_UP + 2; i++) {
+      s.advance(PR_SLOW_MS);
+      await s.w.check();
+    }
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readFailures: 0, readNotFound: 0, readGoneAt: null, readRetryAt: null, state: "open" });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("gh offline"));
   });
 
   it("one not-found among failed reads still makes it no outage; a gh failure does not reset the not-found count", async () => {

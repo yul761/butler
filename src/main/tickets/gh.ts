@@ -427,6 +427,15 @@ export async function prStatus(cwd: string, ref: string, timeoutMs: number): Pro
 export const GH_NOT_FOUND = "not_found" as const;
 
 /**
+ * gh 的 stderr 是不是在说这个 PR 不存在，而仓库是看得见的（GraphQL 先解析仓库，再解析 PR 号）。
+ * 只有这一种当作 PR 确实不在的强信号：仓库级别的「不存在」和 HTTP 404，当前账号看不到私有仓库时也会这么说
+ * （gh auth switch、GH_TOKEN 覆盖、细粒度 PAT），按普通读失败处理。
+ */
+export function ghPrNotFound(stderr: string): boolean {
+  return /Could not resolve to a PullRequest\b/i.test(stderr);
+}
+
+/**
  * gh 的 stderr 是不是在说仓库或 PR 不存在（或者当前账号看不到）。改了名的仓库 GitHub 会跳转到新名字，不会走到这里。
  * 「Could not resolve host」是网络问题，不算。
  */
@@ -434,10 +443,13 @@ export function ghNotFound(stderr: string): boolean {
   return /Could not resolve to a (?:Repository|PullRequest)\b|\bHTTP 404\b/i.test(stderr);
 }
 
-/** 同 prStatus，另外分出 GitHub 说不存在的（GH_NOT_FOUND）；null 仍是 gh 不可用、超时、输出不对。 */
+/**
+ * 同 prStatus，另外分出 GitHub 说仓库看得见、但没有这个 PR 的（GH_NOT_FOUND，见 ghPrNotFound）；
+ * null 是 gh 不可用、超时、输出不对，以及仓库解析不到（可能只是当前账号看不到）。
+ */
 export async function prRead(cwd: string, ref: string, timeoutMs: number): Promise<PrStatus | typeof GH_NOT_FOUND | null> {
   const r = await runGhDetail(cwd, ["pr", "view", ref, "--json", PR_FIELDS], timeoutMs, 8 * 1024 * 1024);
-  if (r.stdout === null) return !r.timedOut && !r.spawnError && ghNotFound(r.stderr) ? GH_NOT_FOUND : null;
+  if (r.stdout === null) return !r.timedOut && !r.spawnError && ghPrNotFound(r.stderr) ? GH_NOT_FOUND : null;
   return parsePr(r.stdout);
 }
 

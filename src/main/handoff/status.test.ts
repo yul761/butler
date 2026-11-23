@@ -57,4 +57,14 @@ describe("deriveStatus", () => {
     expect(deriveStatus({ status: "in_review", prs: [a, { ...b, url: "https://github.com/O/app/pull/2/" }], blockers: [] }, 0, { remembered: [], linkedOpen: false, givenUp })).toBe("done");
     expect(deriveStatus({ status: "active", prs: [], blockers: [] }, 0, { remembered: [a, b], linkedOpen: false, givenUp })).toBe("active");
   });
+
+  it("a handoff PR in a repo that is not the ticket's (never linked, never read) does not hold the ticket in review (BTL-261 review)", () => {
+    const a = { number: 1, url: "https://github.com/o/app/pull/1", state: "merged" as const, review: null };
+    const b = { number: 25, url: "https://github.com/x/other/pull/25", state: "open" as const, review: null };
+    const foreign = (url: string) => url.includes("/x/other/");
+    expect(deriveStatus({ status: "in_review", prs: [a, b], blockers: [] }, 0, { remembered: [], linkedOpen: false, foreign })).toBe("done");
+    expect(deriveStatus({ status: "active", prs: [], blockers: [] }, 0, { remembered: [a, b], linkedOpen: false, foreign })).toBe("active");
+    // 自己仓库的开着的 PR 照样留在 review。
+    expect(deriveStatus({ status: "in_review", prs: [a, { ...b, url: "https://github.com/o/app/pull/25" }], blockers: [] }, 0, { remembered: [], linkedOpen: false, foreign })).toBe("in_review");
+  });
 });

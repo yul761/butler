@@ -261,7 +261,7 @@ import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, re
 import type { CiItem } from "./prwatch/ci-delivery";
 import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { RepoRenamesRepo } from "./db/repo-renames-repo";
-import { RepoRenames } from "./tickets/repo-renames";
+import { RENAME_RETRY_MS, RepoRenames } from "./tickets/repo-renames";
 import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
@@ -1485,7 +1485,7 @@ async function bootstrap(): Promise<void> {
   }
   const ingest = (input: IngestInput) => {
     const r = ingestHandoff(
-      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen, givenUpPrs },
+      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen, givenUpPrs, foreignPr },
       input,
     );
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
@@ -2191,8 +2191,11 @@ async function bootstrap(): Promise<void> {
   const linkedOpen = (k: string): boolean => anyLinkedOpen(ticketPrs.byTicket(k));
   // 放弃读了的 PR：handoff 里（模型报的、记着的）开着也不再把 ticket 留在 in_review。
   const givenUpPrs = (k: string): ReadonlySet<string> => new Set(ticketPrs.byTicket(k).filter(prGivenUp).map((p) => p.url));
+  // 不在 ticket 任何仓库里的 PR（BTL-261）：不收录、不跟踪，handoff 里说它开着也不把 ticket 留在 in_review。
+  const foreignPr = (k: string, url: string): boolean => prLinker.foreign(k, url);
   const branchWatch = new BranchWatchRepo(db);
-  // 仓库改名（BTL-261）：记下的改名启动时先改写一遍（读 PR 之前），之后启动扫一遍、watcher / linker 看到链接换了仓库名时再查。
+  // 仓库改名（BTL-261）：记下的改名启动时先去 GitHub 复查（旧名字可能被新仓库占了），确认的才改写、才用；之后定时复查。
+  // 启动后再扫一遍存着的 slug，watcher / linker 看到链接换了仓库名时再查。
   const repoRenamesRepo = new RepoRenamesRepo(db);
   // 汇总还没建好（启动时改写）就先记着，建好以后马上重算。
   let rerollPending = false;
@@ -2203,14 +2206,17 @@ async function bootstrap(): Promise<void> {
     repo: repoRenamesRepo,
     currentSlug: (slug) => repoCurrentSlug(homedir(), slug, 20_000),
     candidates: () => repoRenamesRepo.candidates(Date.now() - 90 * 24 * 60 * 60_000),
-    slugOf: (path) => repoIdentity.slugOf(path),
+    slugOf: (path) => repoIdentity.rawSlugOf(path),
     now: Date.now,
     log: logger,
     onApplied: () => afterRename(),
   });
-  repoRenames.applyRecorded();
+  // 各处拿到的仓库 slug 都换成改名后的名字（本地 origin 还是旧名字也一样）。
+  repoIdentity.useCanonical((slug) => repoRenames.canonical(slug));
+  void repoRenames.verifyRecorded();
   const prLinker = new PrLinker({
-    prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), canonical: (slug) => repoRenamesRepo.canonical(slug),
+    prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), remoteSlugs: (path) => repoIdentity.remoteSlugsOf(path),
+    canonical: (slug) => repoRenames.canonical(slug), settled: (slug) => repoRenames.settled(slug),
     onSlugMoved: (from, to) => repoRenames.suggest(from, to), log: logger, now: Date.now,
   });
   // 合并通知排进等待者的信箱（BTL-248）：在忙的下一次调用工具读到，关着的下次打开时读到，休眠的信箱叫它醒。
@@ -3548,7 +3554,7 @@ async function bootstrap(): Promise<void> {
       return intake.active() ? { ...view, intake: intake.recent() } : view;
     },
     rederive: (key) => {
-      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs }, key);
+      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, foreignPr }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。
       void memory.syncTicket(key);
     },
@@ -3806,6 +3812,7 @@ async function bootstrap(): Promise<void> {
   };
   if (rerollPending) afterRename();
   const renameScan = setTimeout(() => void repoRenames.scan(), 30_000);
+  const renameVerify = setInterval(() => void repoRenames.verifyRecorded(), RENAME_RETRY_MS);
   const rollupTimer = setInterval(() => metricsRollup.run(), 60 * 60_000);
   const METRICS_VIEW_STALE_MS = 10 * 60_000;
   const metricsCutoff = () => baselineCutoffOf(settings, () => sessions.firstShipherdCreatedAt(), metricsSince(settings) ?? Date.now());
@@ -3856,6 +3863,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(waitTimer);
     clearTimeout(rollupFirst);
     clearTimeout(renameScan);
+    clearInterval(renameVerify);
     clearInterval(rollupTimer);
     lessonAdmission.stop();
     lessonWizard.stop();

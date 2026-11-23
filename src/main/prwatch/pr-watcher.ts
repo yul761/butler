@@ -1,7 +1,7 @@
 import type { BranchOwnersRepo } from "../db/branch-owners-repo";
 import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
-import { prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
+import { PR_GONE_RETRY_MS, prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
   GH_NOT_FOUND, latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prRead, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
@@ -54,7 +54,7 @@ export interface PrWatcherDeps {
   slugOf(path: string): string | null;
   linker: Pick<PrLinker, "linkBranchPrs">;
   gh: {
-    /** 读一个 PR：GH_NOT_FOUND 是 GitHub 说没有这个 PR（或这个仓库），null 是 gh 失败。 */
+    /** 读一个 PR：GH_NOT_FOUND 是 GitHub 说仓库看得见、没有这个 PR，null 是 gh 失败（包括仓库解析不到）。 */
     prStatus: typeof prRead; prsForBranch: typeof prsForBranch; branchRuns: typeof branchRuns; failedLog: typeof failedLog;
     reviewComments: typeof reviewComments; reviewAuthors: typeof reviewAuthors;
   };
@@ -90,7 +90,7 @@ interface Marks {
 
 type Forced = (ticketKey: string, repoId: number | null) => boolean;
 
-/** 一轮里读失败的 PR：notFound 是 GitHub 说没有这个 PR，其余是 gh 失败。 */
+/** 一轮里读失败的 PR：notFound 是 GitHub 说仓库看得见、没有这个 PR，其余是 gh 失败。 */
 interface Unread {
   poll: PrPoll;
   notFound: boolean;
@@ -254,11 +254,17 @@ export class PrWatcher {
   private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, retryGivenUp: Forced, marks: Marks): Promise<void> {
     const live = new Set(tickets.map((t) => t.key));
     const now = this.d.now();
-    // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。认定不存在的 needingRead 也不给。
-    // 放弃了的（read_retry_at 还没到）不读，除非这一轮强制、而且要重试放弃了的（用户点了刷新、session 刚 push 或停下；总控停下的那种不算）。
+    // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。
+    // 放弃了的（read_retry_at 还没到）和认定不存在的（read_gone_at，一周内）不读，除非这一轮强制、而且要重试放弃了的
+    // （用户点了刷新、session 刚 push 或停下；总控停下的那种不算）：认定错了（比如换了账号、补了权限）用户刷新一下就能读回来。
+    const goneUntil = now - PR_GONE_RETRY_MS;
     const rows = this.d.prs
-      .needingRead(now)
-      .filter((r) => (live.has(r.ticketKey) || r.checkedAt === 0) && (r.readRetryAt === null || r.readRetryAt <= now || retryGivenUp(r.ticketKey, r.repoId)));
+      .needingRead(now, { includeGone: true })
+      .filter(
+        (r) =>
+          (live.has(r.ticketKey) || r.checkedAt === 0) &&
+          (retryGivenUp(r.ticketKey, r.repoId) || ((r.readRetryAt === null || r.readRetryAt <= now) && (r.readGoneAt === null || r.readGoneAt <= goneUntil))),
+      );
     const urls = new Set(rows.map((r) => r.url));
     for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);
     const polls = prPolls(rows, {
@@ -273,8 +279,9 @@ export class PrWatcher {
     );
     const unread: Unread[] = [];
     await Promise.all(due.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, unread, marks))));
-    // 这一轮读了两个以上、全都是 gh 失败：多半是 gh 离线 / 没登录 / 网络断了，不是这些 PR 的问题，不算进失败次数。
-    // GitHub 回答了「不存在」的不算 gh 失败（有一个这样的，gh 就是在线的），它们自己一定计数，不然全是坏链接的时候永远停不下来。
+    // 这一轮读了两个以上、全都是 gh 失败：多半是 gh 离线 / 没登录 / 换了看不到这些仓库的账号 / 网络断了，不是这些 PR 的问题，不算进失败次数。
+    // 仓库解析不到也算 gh 失败（私有仓库对当前账号就是这么回答的）。只有「仓库看得见、没有这个 PR」（GH_NOT_FOUND）
+    // 不算：有一个这样的，gh 就是在线、看得见的；它们自己一定计数。
     const outage = due.length >= 2 && unread.length === due.length && unread.every((u) => !u.notFound);
     if (outage) this.d.log(`pr watch: all ${due.length} PR reads failed this round; not counting them (gh offline?)`);
     for (const u of unread) await this.part(`noting the failed read of ${u.poll.url}`, () => this.noteFailed(u, !outage, marks));
