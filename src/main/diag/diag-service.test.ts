@@ -41,6 +41,14 @@ describe("DiagService", () => {
     expect(await svc.export()).toBe("/x/diag.json");
     expect(JSON.parse(written[0][1]).kind).toBe("shipherd-diagnostics");
   });
+
+  it("the exported file carries the renderer's crash / hang records (BTL-262), also in off mode", async () => {
+    const written: string[] = [];
+    const events = [{ at: "2026-11-23T00:00:00.000Z", kind: "gone", reason: "oom", exitCode: -536870904, action: "reload" }];
+    svc = new DiagService({ mode: "off", now: () => 0, log: () => undefined, logFile: "/nope", info, pickSavePath: async () => "/x.json", writeFile: async (_p, t) => void written.push(t), rendererEvents: () => events });
+    await svc.export();
+    expect(JSON.parse(written[0]).renderer).toEqual({ events });
+  });
 });
 
 describe("DiagService measure", () => {

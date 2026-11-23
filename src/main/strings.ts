@@ -67,6 +67,7 @@ const ZH = {
     agent: "子 agent 在跑", thinking: "思考中", approval: "等你批准", waiting: "等你回话", idle: "空闲",
   },
   activityBackground: "（后台）",
+  activityStartupDialog: "（启动询问：信任文件夹或新的 MCP server，要用户在这个 session 的终端里回答）",
   /** 「现在」页：停在确认（权限、AskUserQuestion、ExitPlanMode）上的 session 需要你的理由。 */
   nowApproval: "在终端里确认",
   trayOpen: "打开 Shipherd",
@@ -78,6 +79,16 @@ const ZH = {
     help: "帮助",
     checkUpdates: "检查更新…",
     sendFeedback: "发送反馈…",
+  },
+  /** 界面连续崩溃、自动重新加载的次数用完了（BTL-262）：主进程弹的对话框，界面已经没了。 */
+  rendererGone: {
+    title: "Shipherd 界面崩溃",
+    message: (n: number, min: number) => `Shipherd 的界面在 ${min} 分钟里崩溃了 ${n + 1} 次，已停止自动重新加载。`,
+    detail: (reason: string, code: number) => `最后一次的原因：${reason}（退出码 ${code}）。后台的 session 和终端照常在跑；关掉窗口以后，从托盘图标可以再打开。可以再重新加载一次；如果一直崩，请导出诊断附在反馈里。`,
+    reload: "重新加载",
+    exportDiag: "导出诊断…",
+    closeWindow: "关掉窗口（session 在后台继续跑）",
+    quit: "退出 Shipherd",
   },
   /** 更新检查（BTL-253）记进审计的摘要。 */
   update: {
@@ -197,6 +208,15 @@ const ZH = {
   hooksEventNotArray: (event: string) => `settings.json 的 hooks.${event} 不是数组，Shipherd 不会修改它`,
   notJsonObject: (file: string) => `${file} 不是合法的 JSON 对象，Shipherd 不会修改它`,
   newerDatabase: (found: number, known: number) => `这份数据是更新版本的 Shipherd 创建的（数据版本 ${found}，这个 Shipherd 只认识到 ${known}）。请安装最新版本的 Shipherd 再打开。`,
+  newerDatabaseBackup: (path: string) => `升级前留了一份这个版本能打开的备份：${path}。退出 Shipherd 后把它改名成 app.db 就能用旧版本打开，但升级以后的改动会丢掉。`,
+  /** 迁移前的备份失败（BTL-262）：不迁移，先问用户。 */
+  databaseBackupFailed: (path: string, reason: string, diskFull: boolean) =>
+    `Shipherd 要升级数据，升级前没能备份到 ${path}（${diskFull ? "磁盘空间不足" : reason}）。为了不丢数据，这次没有升级。${diskFull ? "请腾出一些磁盘空间，" : "请检查数据目录能不能写，"}再打开 Shipherd。`,
+  databaseBackupAsk: {
+    title: "升级数据前没能备份",
+    continue: "不备份，继续升级",
+    quit: "退出",
+  },
   badRequest: "请求格式不对",
   /** 错误原因之间的分隔。 */
   causeSep: "：",
@@ -717,6 +737,7 @@ const EN: MainStrings = {
     agent: "running a subagent", thinking: "thinking", approval: "waiting for approval", waiting: "waiting for a reply", idle: "idle",
   },
   activityBackground: " (background)",
+  activityStartupDialog: " (a startup prompt: trusting the folder or a new MCP server; the user has to answer it in this session's terminal)",
   nowApproval: "confirm in the terminal",
   trayOpen: "Open Shipherd",
   trayKeepAwake: "Keep awake",
@@ -726,6 +747,15 @@ const EN: MainStrings = {
     help: "Help",
     checkUpdates: "Check for Updates…",
     sendFeedback: "Send Feedback…",
+  },
+  rendererGone: {
+    title: "Shipherd's window crashed",
+    message: (n: number, min: number) => `Shipherd's window crashed ${n + 1} times in ${min} minutes, so it is no longer reloading by itself.`,
+    detail: (reason: string, code: number) => `Last reason: ${reason} (exit code ${code}). Sessions and terminals keep running in the background; if you close the window, open it again from the tray icon. You can reload once more; if it keeps crashing, export diagnostics and attach them to your feedback.`,
+    reload: "Reload",
+    exportDiag: "Export Diagnostics…",
+    closeWindow: "Close the Window (Sessions Keep Running)",
+    quit: "Quit Shipherd",
   },
   update: {
     auditFound: (latest: string, newer: boolean) => (newer ? `The latest version on GitHub is ${latest}, newer than this one` : `The latest version on GitHub is ${latest}; this one is up to date`),
@@ -838,6 +868,14 @@ const EN: MainStrings = {
   hooksEventNotArray: (event: string) => `hooks.${event} in settings.json is not an array; Shipherd won't change it`,
   notJsonObject: (file: string) => `${file} is not a valid JSON object; Shipherd won't change it`,
   newerDatabase: (found: number, known: number) => `This data was created by a newer Shipherd (data version ${found}; this Shipherd knows up to ${known}). Install the latest Shipherd to open it.`,
+  newerDatabaseBackup: (path: string) => `A backup this version can open was kept before the upgrade: ${path}. Quit Shipherd and rename it to app.db to open it with this version; changes made since the upgrade will be lost.`,
+  databaseBackupFailed: (path: string, reason: string, diskFull: boolean) =>
+    `Shipherd needs to upgrade its data but could not back it up to ${path} first (${diskFull ? "the disk is full" : reason}). To keep your data safe, nothing was upgraded. ${diskFull ? "Free up some disk space" : "Check that the data folder is writable"}, then open Shipherd again.`,
+  databaseBackupAsk: {
+    title: "Could not back up before upgrading",
+    continue: "Upgrade Without a Backup",
+    quit: "Quit",
+  },
   badRequest: "Malformed request",
   causeSep: ": ",
   ctlBranchMismatch: (repo: string, current: string, expected: string) => `Repo ${repo} is on ${current}, not on this ticket's branch ${expected}. Ask the user to switch branches in Shipherd, then try again`,

@@ -43,7 +43,7 @@ const SCHEMA = "http://json-schema.org/draft-07/schema#";
 const EXECUTION = { taskSupport: "forbidden" };
 const boundedStrings = { type: "array", items: { type: "string", minLength: 1, maxLength: 500 }, maxItems: 10 };
 
-/** statecore-mcp 1.1.0 的 tools/list，原文。 */
+/** statecore-mcp 1.1.0 的 tools/list，原文（用 zod 4 生成的 JSON Schema：BTL-262 把 zod 覆盖成了 4，不再有 additionalProperties: false）。 */
 export const UPSTREAM_TOOLS = [
   {
     name: "remember",
@@ -55,7 +55,6 @@ export const UPSTREAM_TOOLS = [
         consolidate: { type: "boolean", description: "true for longer conversational context to be distilled into facts in the background; omit for a single fact." },
       },
       required: ["text"],
-      additionalProperties: false,
       $schema: SCHEMA,
     },
     execution: EXECUTION,
@@ -69,7 +68,6 @@ export const UPSTREAM_TOOLS = [
         query: { type: "string", description: "What you are about to work on, in natural language. Ranks facts and events by relevance; omit to rank by confidence and recency." },
         maxChars: { type: "integer", exclusiveMinimum: 0, maximum: 32000, description: "Character budget for the whole response (default 4000, max 32000). Items that do not fit are listed in the budget report, not silently dropped." },
       },
-      additionalProperties: false,
       $schema: SCHEMA,
     },
     execution: EXECUTION,
@@ -87,7 +85,6 @@ export const UPSTREAM_TOOLS = [
       type: "object",
       properties: { factId: { type: "string", minLength: 1, description: "The factId of a fact, as returned by facts or recall, or a handoffId from handoff." } },
       required: ["factId"],
-      additionalProperties: false,
       $schema: SCHEMA,
     },
     execution: EXECUTION,
@@ -99,7 +96,6 @@ export const UPSTREAM_TOOLS = [
       type: "object",
       properties: { factKey: { type: "string", minLength: 1, description: "The factKey of the fact to retire, as listed by facts (not its factId)." } },
       required: ["factKey"],
-      additionalProperties: false,
       $schema: SCHEMA,
     },
     execution: EXECUTION,
@@ -110,7 +106,6 @@ export const UPSTREAM_TOOLS = [
     inputSchema: {
       type: "object",
       properties: { summary: { type: "string", maxLength: 2000 }, openQuestions: boundedStrings, nextSteps: boundedStrings, clear: { type: "boolean" } },
-      additionalProperties: false,
       $schema: SCHEMA,
     },
     execution: EXECUTION,
@@ -209,39 +204,44 @@ const json = (v: unknown) => text(JSON.stringify(v, null, 2));
 
 class InputError extends Error {}
 
-/** 按 inputSchema 检查参数（statecore-mcp 用 zod 做的那些），返回去掉了多余字段的参数；字符串按 zod 的 trim 处理 handoff 的。 */
+/**
+ * 按 inputSchema 检查参数（statecore-mcp 用 zod 做的那些），返回去掉了多余字段的参数；字符串按 zod 的 trim 处理 handoff 的。
+ * 报错和 zod 4 一字不差（BTL-262 起依赖覆盖成了 zod 4）：所有问题按参数顺序列出，用换行分开；数组太长时只报长度。
+ */
 function validate(tool: string, args: unknown): Record<string, unknown> {
   const a = typeof args === "object" && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
   const out: Record<string, unknown> = {};
-  const bad = (what: string): never => {
-    throw new InputError(`MCP error -32602: Input validation error: Invalid arguments for tool ${tool}: ${what}`);
+  const issues: string[] = [];
+  const received = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+  const expected = (type: string, v: unknown, at: string) => issues.push(`Invalid input: expected ${type}, received ${received(v)} at ${at}`);
+  const checkLength = (s: string, at: string, min?: number, max?: number) => {
+    if (min !== undefined && s.length < min) issues.push(`Too small: expected string to have >=${min} characters at ${at}`);
+    else if (max !== undefined && s.length > max) issues.push(`Too big: expected string to have <=${max} characters at ${at}`);
   };
   const str = (key: string, o: { min?: number; max?: number; required?: boolean; trim?: boolean } = {}) => {
     let v = a[key];
-    if (v === undefined) return o.required ? bad(`Required at ${key}`) : undefined;
-    if (typeof v !== "string") return bad(`Expected string at ${key}`);
+    if (v === undefined && !o.required) return;
+    if (typeof v !== "string") return void expected("string", v, key);
     if (o.trim) v = v.trim();
     const s = v as string;
-    if (o.min !== undefined && s.length < o.min) bad(`String must contain at least ${o.min} character(s) at ${key}`);
-    if (o.max !== undefined && s.length > o.max) bad(`String must contain at most ${o.max} character(s) at ${key}`);
+    checkLength(s, key, o.min, o.max);
     out[key] = s;
   };
   const bool = (key: string) => {
     const v = a[key];
     if (v === undefined) return;
-    if (typeof v !== "boolean") bad(`Expected boolean at ${key}`);
+    if (typeof v !== "boolean") return void expected("boolean", v, key);
     out[key] = v;
   };
   const list = (key: string) => {
     const v = a[key];
     if (v === undefined) return;
-    if (!Array.isArray(v)) return bad(`Expected array at ${key}`);
-    if (v.length > 10) bad(`Array must contain at most 10 element(s) at ${key}`);
+    if (!Array.isArray(v)) return void expected("array", v, key);
+    if (v.length > 10) return void issues.push(`Too big: expected array to have <=10 items at ${key}`);
     out[key] = v.map((x, i) => {
-      if (typeof x !== "string") return bad(`Expected string at ${key}.${i}`);
+      if (typeof x !== "string") return void expected("string", x, `${key}[${i}]`);
       const t = x.trim();
-      if (t.length < 1) bad(`String must contain at least 1 character(s) at ${key}.${i}`);
-      if (t.length > 500) bad(`String must contain at most 500 character(s) at ${key}.${i}`);
+      checkLength(t, `${key}[${i}]`, 1, 500);
       return t;
     });
   };
@@ -253,12 +253,12 @@ function validate(tool: string, args: unknown): Record<string, unknown> {
     case "recall": {
       str("query");
       const m = a.maxChars;
-      if (m !== undefined) {
-        if (typeof m !== "number" || !Number.isInteger(m)) bad("Expected integer at maxChars");
-        if ((m as number) <= 0) bad("Number must be greater than 0 at maxChars");
-        if ((m as number) > 32000) bad("Number must be less than or equal to 32000 at maxChars");
-        out.maxChars = m;
-      }
+      if (m === undefined) break;
+      if (typeof m !== "number") expected("number", m, "maxChars");
+      else if (!Number.isInteger(m)) issues.push("Invalid input: expected int, received number at maxChars");
+      else if (m <= 0) issues.push("Too small: expected number to be >0 at maxChars");
+      else if (m > 32000) issues.push("Too big: expected number to be <=32000 at maxChars");
+      else out.maxChars = m;
       break;
     }
     case "why":
@@ -274,6 +274,7 @@ function validate(tool: string, args: unknown): Record<string, unknown> {
       bool("clear");
       break;
   }
+  if (issues.length > 0) throw new InputError(`MCP error -32602: Input validation error: Invalid arguments for tool ${tool}: ${issues.join("\n")}`);
   return out;
 }
 

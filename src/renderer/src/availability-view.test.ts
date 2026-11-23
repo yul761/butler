@@ -158,5 +158,8 @@ describe("stack notice (workstream K)", () => {
 describe("approval notice (UI redesign layer 1)", () => {
   it("asks you to confirm the permission prompt and opens the session", () => {
     expect(noticeText({ kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" }, S, 0)).toEqual({ text: S.noticeApproval("登录"), actions: ["open"] });
+    const startup = noticeText({ kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录", startup: true }, S, 0);
+    expect(startup).toEqual({ text: S.noticeApproval("登录", true), actions: ["open"] });
+    expect(startup.text).toContain("MCP server");
   });
 });

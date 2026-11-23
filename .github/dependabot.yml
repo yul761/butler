@@ -4,3 +4,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # BTL-262: npm dependencies too (pnpm; Dependabot reads pnpm-lock.yaml). Minor and patch updates come as one weekly PR;
+  # each major update gets its own. The pnpm.overrides in package.json (security fixes for packages that statecore-mcp
+  # pulls in) are not updated by Dependabot: revisit them when statecore-mcp or @modelcontextprotocol/sdk is upgraded.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]

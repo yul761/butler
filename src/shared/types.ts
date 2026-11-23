@@ -628,7 +628,8 @@ export type NowNotice =
   | { kind: "shared_mcp_failed"; error: string }
   | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit }
   /** 终端停在权限确认上（第 1 层的 you/shipherd 用）。 */
-  | { kind: "approval"; target: NowTarget; title: string | null }
+  /** startup：等的是启动对话框（信任文件夹、新的 MCP server），不是权限确认（BTL-262 审查）。 */
+  | { kind: "approval"; target: NowTarget; title: string | null; startup?: boolean }
   /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
   | { kind: "routing"; limited: string[]; fallbacks: number }
   /** CI 结论超过半小时没递出去（工作流 W）：可以重发、打开 ticket。 */

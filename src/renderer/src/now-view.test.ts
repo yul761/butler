@@ -126,6 +126,7 @@ describe("the live window (BTL-190 7)", () => {
     expect(livePill(row(), S)).toEqual({ text: "写代码", tone: "work" });
     expect(livePill(row({ activity: act({ kind: "command", background: true }) }), S)).toEqual({ text: "后台 · 运行命令", tone: "work" });
     expect(livePill(row({ working: false, activity: act({ kind: "approval" }), needsYou: "等你确认" }), S)).toEqual({ text: "等你批准", tone: "need" });
+    expect(livePill(row({ working: false, activity: act({ kind: "approval", prompt: "startup" }), needsYou: null }), S)).toEqual({ text: "等你回答启动询问", tone: "need" });
     expect(livePill(row({ working: false, activity: act({ kind: "waiting" }), decisions: 1 }), S)).toEqual({ text: "等你决定", tone: "need" });
     expect(livePill(row({ working: false, activity: act({ kind: "waiting" }), needsYou: "要拆 PR 吗？" }), S)).toEqual({ text: "等你", tone: "need" });
     expect(livePill(row({ activity: act({ kind: "test", stuck: true }), needsYou: "测试没有输出" }), S)).toEqual({ text: "卡住", tone: "stuck" });

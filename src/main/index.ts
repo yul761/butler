@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { cpus, freemem, homedir, release as osRelease, tmpdir, totalmem, userInfo } from "node:os";
 import { writeFile as writeFileAsync } from "node:fs/promises";
 import { DiagService } from "./diag/diag-service";
+import { RELOAD_WINDOW_MS, RendererHealth } from "./diag/renderer-health";
 import { collectRedactTerms } from "./diag/redact";
 import { FeedbackService, osName } from "./feedback/feedback-service";
 import { Invalidator } from "./diag/invalidator";
@@ -45,7 +46,7 @@ import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { MAILBOX_EVENT, mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
-import { NewerDatabaseError, openDatabase } from "./db/database";
+import { DatabaseBackupError, NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
@@ -328,6 +329,8 @@ let win: BrowserWindow | null = null;
 /** 窗口 show / restore 时调（bootstrap 里接到 WS-M 的优先级上）。 */
 let windowShownHook: () => void = () => undefined;
 let tray: Tray | null = null;
+/** 启动时的第一个窗口建好以后为 true：之后窗口被关掉（崩溃对话框里选了关掉），showWindow 可以再建一个。 */
+let windowReopenable = false;
 /** e2e 设 SHIPHERD_BACKGROUND_WINDOWS=1：窗口不激活、macOS 上不进 Dock，测试跑起来不把焦点从别的程序抢过来。 */
 const BACKGROUND_WINDOWS = process.env.SHIPHERD_BACKGROUND_WINDOWS === "1";
 /** 防休眠开关（托盘菜单和侧边栏都能开关）；bootstrap 里建好。 */
@@ -369,6 +372,60 @@ if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
 /** 性能诊断（BTL-242）：bootstrap 里装上。 */
 let diag: DiagService | null = null;
+/**
+ * 渲染进程的健康（BTL-262）：崩了记原因和退出码、限频自动重新加载（5 分钟最多 3 次，超过就停下弹框）；
+ * 卡住和恢复也记下来。这些都进导出诊断（BTL-242）。整个进程一份，换了窗口记录也还在。
+ */
+const rendererHealth = new RendererHealth({
+  now: Date.now,
+  log: (line) => logger(line),
+  reload: () => {
+    if (win && !win.isDestroyed()) win.webContents.reload();
+  },
+  quitting: () => quitState.quitting,
+  gaveUp: (info) => void rendererGaveUp(info),
+});
+
+/**
+ * 崩掉的窗口关掉（BTL-262 审查）：只销毁这个窗口，app 留在托盘里，session 和终端（PTY 在主进程里）照常跑。
+ * 从托盘或 Dock 再打开时 showWindow 新建一个窗口。
+ */
+function closeBrokenWindow(why: string): void {
+  logger(`renderer: closing the crashed window (${why}); Shipherd keeps running in the tray`);
+  if (win && !win.isDestroyed()) win.destroy();
+}
+
+/**
+ * 自动重新加载的次数用完了：界面已经没了，只能用主进程的对话框告诉用户，让用户选重新加载、导出诊断、关掉窗口或退出。
+ * 只有明确点「退出」才退出：退出会结束所有在跑的 session，它们本来没受渲染进程崩溃的影响。
+ */
+async function rendererGaveUp(info: { reason: string; exitCode: number; reloads: number }): Promise<void> {
+  const S = M().rendererGone;
+  for (;;) {
+    let choice: number;
+    try {
+      ({ response: choice } = await dialog.showMessageBox({
+        type: "error", title: S.title, message: S.message(info.reloads, Math.round(RELOAD_WINDOW_MS / 60_000)), detail: S.detail(info.reason, info.exitCode),
+        // Esc / 关掉对话框算「关掉窗口」：不重新加载（一加载就崩的界面，按一次 Esc 不该又白给三次自动重新加载），也不退出。
+        buttons: [S.reload, S.exportDiag, S.closeWindow, S.quit], defaultId: 0, cancelId: 2, noLink: true,
+      }));
+    } catch (e) {
+      // 连对话框都弹不出来：问不了用户，只关掉这个窗口，不留一个空白窗口，也不结束 session。
+      logger("renderer: could not show the crash dialog", e);
+      closeBrokenWindow("the crash dialog could not be shown");
+      return;
+    }
+    if (quitState.quitting) return;
+    if (choice === 1) {
+      await diag?.export().catch((e: unknown) => logger("renderer: diagnostics export failed", e));
+      continue;
+    }
+    if (choice === 3) app.quit();
+    else if (choice === 2) closeBrokenWindow("chosen in the crash dialog");
+    else rendererHealth.userReload();
+    return;
+  }
+}
 /** 渲染进程挂着的终端（BTL-242）：pty:data 只发给它们。 */
 const ptySubs = new PtySubscriptions();
 
@@ -457,7 +514,13 @@ function createWindow(): BrowserWindow {
   w.webContents.on("did-start-navigation", (e) => {
     if (e.isMainFrame && !e.isSameDocument) ptySubs.clear();
   });
-  w.webContents.on("render-process-gone", () => ptySubs.clear());
+  // 崩了：记下原因和退出码，限频自动重新加载（BTL-262）。卡住和恢复也记，Windows 卡顿（BTL-242）要看。
+  w.webContents.on("render-process-gone", (_e, details) => {
+    ptySubs.clear();
+    rendererHealth.gone({ reason: details.reason, exitCode: details.exitCode });
+  });
+  w.on("unresponsive", () => rendererHealth.unresponsive());
+  w.on("responsive", () => rendererHealth.responsive());
   // CSP 拦下了什么就记一笔（任务 6）：界面某处空白时先看这里。
   w.webContents.on("console-message", (e) => {
     if (isCspViolationMessage(e.message)) logger(`${CSP_VIOLATION_LOG_PREFIX} ${e.message}`);
@@ -469,6 +532,12 @@ function createWindow(): BrowserWindow {
 }
 
 function showWindow(): void {
+  // 崩掉的窗口被关掉了（closeBrokenWindow）：新建一个，自动重新加载重新计数。启动完成之前（win 还没建）什么也不做。
+  if (!win && windowReopenable) {
+    rendererHealth.windowReopened();
+    win = createWindow();
+    return;
+  }
   if (!win) return;
   if (BACKGROUND_WINDOWS) {
     win.showInactive();
@@ -549,6 +618,7 @@ async function bootstrap(): Promise<void> {
       return r.canceled || !r.filePath ? null : r.filePath;
     },
     writeFile: (path, text) => writeFileAsync(path, text, "utf8"),
+    rendererEvents: () => rendererHealth.events(),
     cpuTimes: () => {
       const t: Record<string, number> = {};
       for (const m of app.getAppMetrics()) t[m.type] = (t[m.type] ?? 0) + (m.cpu.cumulativeCPUUsage ?? 0);
@@ -562,7 +632,17 @@ async function bootstrap(): Promise<void> {
   applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
   applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
   void probeGh(5000);
-  const db = openDatabase(paths.db);
+  // 要迁移时先备份（BTL-262）；备份失败就问用户：默认退出（先腾空间），用户也可以选不备份继续。
+  const db = openDatabase(paths.db, {
+    log: (m) => logger(m),
+    onBackupFailed: (f) => {
+      const A = M().databaseBackupAsk;
+      return dialog.showMessageBoxSync({
+        type: "warning", title: A.title, message: A.title, detail: M().databaseBackupFailed(f.backup, f.reason, f.diskFull),
+        buttons: [A.quit, A.continue], defaultId: 0, cancelId: 0, noLink: true,
+      }) === 1;
+    },
+  });
   await finishLegacyHome(legacyHome, paths, db, (m) => logger(m));
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -1339,8 +1419,12 @@ async function bootstrap(): Promise<void> {
     },
     log: logger,
   });
-  /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
-  const submitTask = (termId: string, message: string) => pty.deliver(termId, message, { singleLine: process.platform === "win32" });
+  /**
+   * 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。
+   * 启动对话框（比如新 worktree 里的「New MCP server found」）没人回答时一直等（waitOutDialogs），任务不丢；
+   * 这期间「轮到你」页面上有这个 session 的「等你回答启动询问」（activity 的 prompt: "startup"）。
+   */
+  const submitTask = (termId: string, message: string) => pty.deliver(termId, message, { singleLine: process.platform === "win32", waitOutDialogs: true });
   /** 装着的 shipherd-hook 是当前版本：只有这时才挂 gate / check hook。 */
   const hookInstalled = () => health.hookBinCurrent() && existsSync(paths.hookBin);
   /** 这次启动的 session 为什么跑不了检查（addendum 第 7 节）；没有打开的检查就不算缺。 */
@@ -3682,6 +3766,7 @@ async function bootstrap(): Promise<void> {
   });
 
   win = createWindow();
+  windowReopenable = true;
   tray = createTray();
   inbox.start();
   controlInbox.start();
@@ -3950,8 +4035,15 @@ if (process.argv.includes("--smoke")) {
     })
     .then(bootstrap)
     .catch((e: unknown) => {
-      // 数据比程序新：给一句能看懂的话，不贴调用栈。
-      const text = e instanceof NewerDatabaseError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
+      // 迁移前的备份失败、用户在对话框里选了退出（BTL-262）：已经告诉过原因了，不再弹第二个。
+      if (e instanceof DatabaseBackupError && e.declined) {
+        logger(`startup: quit after the database backup failed (${e.failure.reason})`);
+        flushLogSync();
+        app.exit(1);
+        return;
+      }
+      // 数据比程序新、备份失败：给一句能看懂的话，不贴调用栈。
+      const text = e instanceof NewerDatabaseError || e instanceof DatabaseBackupError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
       dialog.showErrorBox(M().startupFailed, text);
       app.exit(1);
     });

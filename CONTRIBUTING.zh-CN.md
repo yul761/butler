@@ -17,6 +17,7 @@
 
 ```sh
 pnpm install          # 同时为 Electron 重新编译 node-pty
+pnpm exec install-electron   # 下载 Electron 程序（Electron 44 没有 postinstall；记忆 MCP 的测试要在它下面跑）
 pnpm build:hook       # 构建 build/hook/shipherd-hook（安装 hook 时需要）
 pnpm dev              # 以热重载方式运行 Shipherd（也会构建 StateCore MCP 程序包）
 ```

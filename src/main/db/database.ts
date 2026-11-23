@@ -1,25 +1,53 @@
+import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { backupBeforeMigrate, backupPath, type OnBackupFailed } from "./backup";
 import { MIGRATIONS } from "./migrations";
 import { M } from "../strings";
 
 export type Db = DatabaseSync;
+export { DatabaseBackupError } from "./backup";
 
-export function openDatabase(file: string): Db {
+export interface OpenDatabaseOptions {
+  log?: (msg: string) => void;
+  /** 迁移前的备份失败了怎么办（见 backup.ts 的 OnBackupFailed）：不给就不迁移、抛 DatabaseBackupError。 */
+  onBackupFailed?: OnBackupFailed;
+}
+
+const userVersion = (db: Db): number => (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+
+/**
+ * 打开数据库并迁移到最新版本。要迁移时（数据版本在 1 和最新之间），先备份一份 app.db.pre-v<当前版本>（BTL-262）；
+ * 新建的空库（版本 0）和内存库不备份。
+ */
+export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
   const db = new DatabaseSync(file);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-  migrate(db);
+  try {
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+    const current = userVersion(db);
+    if (current > MIGRATIONS.length) {
+      const backup = backupPath(file, MIGRATIONS.length);
+      throw new NewerDatabaseError(current, MIGRATIONS.length, file !== ":memory:" && existsSync(backup) ? backup : undefined);
+    }
+    if (current > 0 && current < MIGRATIONS.length && file !== ":memory:") {
+      backupBeforeMigrate(db, file, current, { log: o.log, onBackupFailed: o.onBackupFailed, failedMessage: (f) => M().databaseBackupFailed(f.backup, f.reason, f.diskFull) });
+    }
+    migrate(db);
+  } catch (e) {
+    db.close();
+    throw e;
+  }
   return db;
 }
 
-/** 数据库比这个版本的 Shipherd 新（装回了旧版本）：不能在不认识的表结构上运行。 */
+/** 数据库比这个版本的 Shipherd 新（装回了旧版本）：不能在不认识的表结构上运行。有这个版本能认的迁移前备份时，告诉用户它在哪。 */
 export class NewerDatabaseError extends Error {
-  constructor(readonly found: number, readonly known: number) {
-    super(M().newerDatabase(found, known));
+  constructor(readonly found: number, readonly known: number, readonly backup?: string) {
+    super(M().newerDatabase(found, known) + (backup ? ` ${M().newerDatabaseBackup(backup)}` : ""));
   }
 }
 
 export function migrate(db: Db): number {
-  const { user_version: current } = db.prepare("PRAGMA user_version").get() as { user_version: number };
+  const current = userVersion(db);
   if (current > MIGRATIONS.length) throw new NewerDatabaseError(current, MIGRATIONS.length);
   for (let i = current; i < MIGRATIONS.length; i++) {
     db.exec("BEGIN");

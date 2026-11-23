@@ -56,9 +56,12 @@ describe("CI workflows (design 1.3, 11)", () => {
     expect(release.jobs.build.strategy?.matrix.os).toEqual(["macos-15", "windows-latest"]);
     // One platform's failure does not cancel the other's build; the release still waits for both.
     expect(release.jobs.build.strategy?.["fail-fast"]).toBe(false);
-    expect(release.jobs.release.needs).toBe("build");
-    // BTL-258: a manual run (workflow_dispatch) only builds and uploads, even when started on a tag ref.
-    expect(release.jobs.release.if).toBe("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')");
+    expect(release.jobs.release.needs).toEqual(["build", "ci-gate"]);
+    // BTL-258: a manual run (workflow_dispatch) only builds and uploads, even when started on a tag ref —
+    // except the explicit skip_ci_check override (BTL-262).
+    expect(release.jobs.release.if).toBe(
+      "startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.skip_ci_check))",
+    );
     expect(runs(release.jobs.build)).toContain("pnpm dist");
     const publish = runs(release.jobs.release).join("\n");
     expect(publish).toContain("gh release create");
@@ -143,6 +146,36 @@ describe("CI workflows (design 1.3, 11)", () => {
     expect(draft?.env?.MAC_SIGNED).toBe("${{ secrets.CSC_LINK != '' }}");
   });
 
+  it("drafts a release only after CI on the tagged commit is green, waiting for it rather than failing early (BTL-262)", () => {
+    const gate = release.jobs["ci-gate"];
+    // A manual run on a tag without skip_ci_check only builds, so the gate does not wait there (BTL-262 review).
+    expect(gate.if).toBe("startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.skip_ci_check)");
+    // Runs next to the build, not after it: CI and Release start together when the tag is pushed.
+    expect(gate.needs).toBeUndefined();
+    expect(gate.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(gate.environment).toBeUndefined();
+    const wait = gate.steps.find((s) => s.run === 'node scripts/wait-for-ci.mjs "$GITHUB_REF_NAME"');
+    expect(wait?.if).toBe("${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_ci_check) }}");
+    expect(wait?.env).toEqual({ GH_TOKEN: "${{ github.token }}" });
+    // Long enough for CI's test and package jobs (45 minutes each) plus the wait for the run to appear.
+    expect(Number((gate as Job & { "timeout-minutes"?: number })["timeout-minutes"])).toBeGreaterThanOrEqual(120);
+    // The release job never runs when the gate fails (no always() / failure() in its condition).
+    expect(release.jobs.release.if).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)/);
+  });
+
+  it("the CI check can only be skipped by hand on a tag, with an explicit input that defaults off and is noted in the release", () => {
+    const input = release.on.workflow_dispatch?.inputs?.skip_ci_check;
+    expect(input).toMatchObject({ type: "boolean", default: false });
+    const note = release.jobs["ci-gate"].steps.find((s) => s.name === "CI check skipped by hand");
+    expect(note?.if).toBe("github.event_name == 'workflow_dispatch' && inputs.skip_ci_check");
+    expect(note?.run).toContain("::warning::");
+    const draft = release.jobs.release.steps.find((s) => /gh release create/.test(s.run ?? ""));
+    expect(draft?.env?.SKIPPED_CI).toBe("${{ github.event_name == 'workflow_dispatch' && inputs.skip_ci_check }}");
+    expect(draft?.run).toContain("Drafted with skip_ci_check");
+    // The pushed-tag path has no way around the gate.
+    expect(release.on.push).toEqual({ tags: ["v*"] });
+  });
+
   it("can be run by hand to try the signing, failing instead of falling back to ad-hoc", () => {
     const input = release.on.workflow_dispatch?.inputs?.require_signing;
     expect(input).toMatchObject({ type: "boolean", default: true });
@@ -202,6 +235,15 @@ describe("CI workflows (design 1.3, 11)", () => {
     }
   });
 
+  it("tells contributors to download the Electron binary right after pnpm install, as CI does (BTL-262)", () => {
+    for (const file of ["CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md"]) {
+      const setup = read(file).split("\n").map((l) => l.split("#")[0].trim()).filter((l) => l.startsWith("pnpm "));
+      const install = setup.indexOf("pnpm install");
+      expect(install, file).toBeGreaterThan(-1);
+      expect(setup[install + 1], file).toBe("pnpm exec install-electron");
+    }
+  });
+
   it("only cancels superseded pull request runs", () => {
     expect(ci.concurrency?.["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' }}");
   });
@@ -239,6 +281,31 @@ describe("CI workflows (design 1.3, 11)", () => {
   it("keeps GitHub Actions updated weekly", () => {
     const d = parse(read(".github/dependabot.yml")) as { updates: { "package-ecosystem": string; schedule: { interval: string } }[] };
     expect(d.updates).toContainEqual(expect.objectContaining({ "package-ecosystem": "github-actions", schedule: { interval: "weekly" } }));
+  });
+
+  it("keeps npm dependencies updated weekly, minor and patch in one group (BTL-262)", () => {
+    const d = parse(read(".github/dependabot.yml")) as { updates: Record<string, unknown>[] };
+    const npm = d.updates.find((u) => u["package-ecosystem"] === "npm");
+    expect(npm).toMatchObject({ directory: "/", schedule: { interval: "weekly" } });
+    const groups = Object.values((npm?.groups ?? {}) as Record<string, { "update-types"?: string[] }>);
+    expect(groups.map((g) => [...(g["update-types"] ?? [])].sort())).toContainEqual(["minor", "patch"]);
+  });
+
+  it("overrides the vulnerable packages statecore-mcp pulls in to fixed versions (BTL-262: pnpm audit --prod had 3 high)", () => {
+    const pkg = JSON.parse(read("package.json")) as { dependencies: Record<string, string>; pnpm: { overrides?: Record<string, string> } };
+    const o = pkg.pnpm.overrides ?? {};
+    const atLeast = (v: string | undefined, min: string) => {
+      const n = (s: string) => s.replace(/^[^\d]*/, "").split(".").map(Number);
+      const [a, b] = [n(v ?? "0"), n(min)];
+      for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+      return true;
+    };
+    // GHSA advisories: the patched versions pnpm audit named.
+    for (const [name, min] of [["hono", "4.13.16"], ["@hono/node-server", "2.1.6"], ["body-parser", "2.4.0"], ["zod", "4.6.6"]] as const) {
+      expect(atLeast(o[name], min), `${name} ${o[name]}`).toBe(true);
+    }
+    // One zod for Shipherd and for statecore-mcp / the MCP SDK (memory-mcp/hub-contract.test.ts checks the tools still match).
+    expect(pkg.dependencies.zod).toBe(o.zod);
   });
 
   it("keeps LF line endings on Windows checkouts", () => {

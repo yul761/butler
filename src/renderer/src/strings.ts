@@ -554,6 +554,7 @@ const ZH = {
     idle: "还没开始",
     shipherd: {
       approval: "在终端里等你确认权限",
+      approvalStartup: "在终端里等你回答启动询问（信任文件夹或新的 MCP server）",
       claude_limited: "Claude 到额度了，等你处理",
       model_unavailable: "模型用不了",
       session_limited: "这个 session 到额度停了",
@@ -567,7 +568,11 @@ const ZH = {
       other: "Shipherd 要你点一下",
     },
   },
-  noticeApproval: (title: string | null) => (title === null ? "在终端里确认权限" : `「${title}」在终端里等你确认权限`),
+  noticeApproval: (title: string | null, startup = false) => {
+    const what = startup ? "回答启动询问（信任文件夹或新的 MCP server），回答完总控交的任务才会送进去" : "确认权限";
+    return title === null ? `在终端里${what}` : `「${title}」在终端里等你${what}`;
+  },
+  activityStartup: "等你回答启动询问",
   noticeCiUndelivered: (what: string, minutes: number, why: string) => `CI 结果未能送达：${what}，已等 ${minutes} 分钟（${why}）`,
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n}（${branch}）`,
   ciWhatBranch: (key: string, branch: string) => `${key} 分支 ${branch}`,

@@ -236,7 +236,7 @@ export interface SessionTurnInput {
   sessionId: string;
   target: NowTarget;
   title: string | null;
-  activity: (Pick<SessionActivity, "kind" | "stuck" | "reason" | "startedAt" | "lastOutputAt" | "limit"> & Partial<Pick<SessionActivity, "action">>) | null;
+  activity: (Pick<SessionActivity, "kind" | "stuck" | "reason" | "startedAt" | "lastOutputAt" | "limit"> & Partial<Pick<SessionActivity, "action" | "prompt">>) | null;
   /** 这个 session 最早一条没回答的 ask_user（inbox_items.id）。 */
   ask: { id: number; question: string; options: string[]; at: number } | null;
   needsYou: { reason: string; category: InterruptCategory } | null;
@@ -255,7 +255,8 @@ export function sessionTurn(i: SessionTurnInput): TimedTurn {
   const working = isWorking(a);
   if (i.ask) return { turn: { owner: "you", kind: "answer", question: i.ask.question, options: i.ask.options, askId: i.ask.id, sessionId }, since: i.ask.at };
   if (a?.kind === "approval" || i.needsYou?.category === "permission") {
-    return { turn: { owner: "you", kind: "shipherd", notice: { kind: "approval", target: i.target, title: i.title } }, since: i.now };
+    const startup = a?.kind === "approval" && a.prompt === "startup";
+    return { turn: { owner: "you", kind: "shipherd", notice: { kind: "approval", target: i.target, title: i.title, ...(startup && { startup: true }) } }, since: i.now };
   }
   if (i.refreshing) return { turn: { owner: "agent", kind: "working", sessionId }, since: a?.startedAt ?? i.now };
   if (i.needsYou && (i.needsYou.category === "stuck" || i.needsYou.category === "missing_info")) {

@@ -248,7 +248,7 @@ Shipherd 自己不调用任何模型，也没有 API key。所有要用模型的
 | `APPLE_API_KEY_ID` | 这个密钥的 Key ID（10 个字符）。 |
 | `APPLE_API_ISSUER` | 密钥列表上方的 Issuer ID（一个 UUID）。 |
 
-然后不用发版就能试：在 `main` 上手动跑一次这个 workflow，`gh workflow run release.yml --ref main`（或者 **Actions → Release → Run workflow**）。手动运行会构建、签名、公证、检查结果，并把安装包上传成 artifact，不会建 release。**require_signing** 开着时（默认），缺 secret 会直接失败，而不是退回 ad-hoc；在 `main` 和 `v*` tag 以外的 ref 上会一开始就失败，因为签名只在这两处可用。关掉它时，在其他分支上运行，macOS 走 ad-hoc。不管 secret 设在哪一级，都只有 `main` 和 `v*` tag 上的运行会签名：在别的 ref 上，workflow 把这些 secret 都当作没设，仓库级的也一样。**Verify the macOS signature and run the packaged app** 这一步会检查：包里每个可执行文件和原生模块都用你的 Team ID 签了名、打开了 hardened runtime；app 和 dmg 都 staple 了公证票据；Gatekeeper 认它们；打出来的 app 能启动。
+然后不用发版就能试：在 `main` 上手动跑一次这个 workflow，`gh workflow run release.yml --ref main`（或者 **Actions → Release → Run workflow**）。手动运行会构建、签名、公证、检查结果，并把安装包上传成 artifact，默认不建 release。只有推送 `v*` tag、而且 tag 指向的那个 commit 在 `main` 上的 CI 全绿（两个平台）时，才会建 release 草稿：**ci-gate** 这个 job 会等那次 CI 跑完，没通过就什么都不建。唯一的例外是在 `v*` tag 上手动运行并勾上 **skip_ci_check**：不看 CI 直接建草稿，运行日志里留一条写明是谁跑的警告，release 说明里也加一行注明这件事。**require_signing** 开着时（默认），缺 secret 会直接失败，而不是退回 ad-hoc；在 `main` 和 `v*` tag 以外的 ref 上会一开始就失败，因为签名只在这两处可用。关掉它时，在其他分支上运行，macOS 走 ad-hoc。不管 secret 设在哪一级，都只有 `main` 和 `v*` tag 上的运行会签名：在别的 ref 上，workflow 把这些 secret 都当作没设，仓库级的也一样。**Verify the macOS signature and run the packaged app** 这一步会检查：包里每个可执行文件和原生模块都用你的 Team ID 签了名、打开了 hardened runtime；app 和 dmg 都 staple 了公证票据；Gatekeeper 认它们；打出来的 app 能启动。
 
 App Store Connect 密钥只在签名那几步写成 runner 上的一个私有临时文件，用完就删；证书导入一个临时钥匙串，electron-builder 结束时会删掉。两者都不会打进日志。hardened runtime 的 entitlements 在 [`build-resources/entitlements.mac.plist`](../build-resources/entitlements.mac.plist)，每一项为什么要都写在里面。
 

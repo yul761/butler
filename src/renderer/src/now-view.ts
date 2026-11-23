@@ -70,7 +70,7 @@ export const liveRows = (v: NowView): NowRow[] => allRows(v).filter((r) => r.ses
 export function livePill(r: NowRow, S: UiStrings): { text: string; tone: "work" | "need" | "stuck" } {
   const a = r.activity;
   if (isStuck(r)) return { text: S.nowStuck, tone: "stuck" };
-  if (a?.kind === "approval") return { text: S.activity.approval, tone: "need" };
+  if (a?.kind === "approval") return { text: a.prompt === "startup" ? S.activityStartup : S.activity.approval, tone: "need" };
   if (r.decisions > 0) return { text: S.nowWaitingDecision, tone: "need" };
   if (r.needsYou !== null) return { text: S.liveWaiting, tone: "need" };
   const main = a ? S.activity[a.kind] : S.activity.thinking;

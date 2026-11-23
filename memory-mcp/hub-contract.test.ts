@@ -125,6 +125,24 @@ describe("shared MCP memory server vs statecore-mcp", () => {
     }
   });
 
+  it("rejects bad arguments with the same words as statecore-mcp (zod 4 since BTL-262)", async () => {
+    const cases: [string, object][] = [
+      ["remember", {}], ["remember", { text: 1 }], ["remember", { text: null }], ["remember", { text: "" }], ["remember", { text: "x".repeat(2001) }],
+      ["remember", { text: "x", consolidate: "y" }], ["remember", { text: 1, consolidate: "y" }],
+      ["recall", { query: 1 }], ["recall", { maxChars: 1.5 }], ["recall", { maxChars: "1" }], ["recall", { maxChars: null }], ["recall", { maxChars: 0 }],
+      ["recall", { maxChars: 32001 }], ["recall", { maxChars: -1.5 }],
+      ["why", {}], ["why", { factId: "" }], ["forget", { factKey: 3 }],
+      ["handoff", { summary: "x".repeat(2001) }], ["handoff", { openQuestions: "a" }], ["handoff", { nextSteps: Array(11).fill("a") }],
+      ["handoff", { nextSteps: [1, ...Array(10).fill("a")] }], ["handoff", { nextSteps: [1, "  ", "x".repeat(501)], openQuestions: 2 }], ["handoff", { clear: 1 }],
+    ];
+    for (const [name, args] of cases) {
+      const [a, b] = await Promise.all([real.send("tools/call", { name, arguments: args }), hubSend("tools/call", { name, arguments: args })]);
+      const label = `${name} ${JSON.stringify(args).slice(0, 60)}`;
+      expect(toolJson(a).isError, label).toBe(true);
+      expect(toolJson(b), label).toEqual(toolJson(a));
+    }
+  });
+
   it("answers remember(consolidate) as an event and returns a long entry whole in recall (BTL-243)", async () => {
     const long = `Why we picked WAL over a rollback journal: ${"readers never block the writer, and recovery after a crash is a replay. ".repeat(24)}`;
     expect(long.length).toBeGreaterThan(1500);

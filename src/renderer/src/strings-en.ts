@@ -543,6 +543,7 @@ export const EN: UiStrings = {
     idle: "Not started",
     shipherd: {
       approval: "Waiting for you to confirm a permission prompt",
+      approvalStartup: "Waiting for you to answer a startup prompt in the terminal (trust the folder, or a new MCP server)",
       claude_limited: "Claude hit its limit",
       model_unavailable: "The model is unavailable",
       session_limited: "This session hit its limit",
@@ -556,7 +557,12 @@ export const EN: UiStrings = {
       other: "Shipherd needs a click",
     },
   },
-  noticeApproval: (title: string | null) => (title === null ? "Confirm the permission prompt in the terminal" : `"${title}" is waiting for you to confirm a permission prompt`),
+  noticeApproval: (title: string | null, startup = false) => {
+    if (!startup) return title === null ? "Confirm the permission prompt in the terminal" : `"${title}" is waiting for you to confirm a permission prompt`;
+    const what = "a startup prompt (trust the folder, or a new MCP server); the coordinator's task is sent once you answer";
+    return title === null ? `Answer ${what} in the terminal` : `"${title}" is waiting for you to answer ${what} in the terminal`;
+  },
+  activityStartup: "Waiting for you to answer a startup prompt",
   noticeCiUndelivered: (what: string, minutes: number, why: string) => `CI result not delivered: ${what}, waiting ${minutes} min (${why})`,
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n} (${branch})`,
   ciWhatBranch: (key: string, branch: string) => `${key} branch ${branch}`,
