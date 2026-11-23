@@ -28,7 +28,7 @@ function seedHistory(s: Sandbox): void {
 
 /**
  * ws-j 权限档案：候选来自本机的历史，在设置 →「打断与通知」里确认一次（BTL-249 起不在第一次的向导里），
- * 之后这个仓库的 Butler session 的 --settings 里就放行它；写操作（push、rm）跑得再多也不会出现，更不会进 --settings。
+ * 之后这个仓库的 Shipherd session 的 --settings 里就放行它；写操作（push、rm）跑得再多也不会出现，更不会进 --settings。
  */
 test("the permission profile offers read-only commands from history and confirmed ones reach the session's --settings", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();

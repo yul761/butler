@@ -7,10 +7,10 @@ import { tempDir } from "../test-utils";
 import { judgeNeedsYou } from "./needs-you";
 
 /**
- * 只在 BUTLER_LIVE_CLAUDE=1 时运行：真的调用本机已登录的 claude（会花一点公司额度）。
+ * 只在 SHIPHERD_LIVE_CLAUDE=1 时运行：真的调用本机已登录的 claude（会花一点公司额度）。
  * 验证无头调用在真实 CLI 上能拿到符合 schema 的结构化结果：needs-you 判断（Haiku）。
  */
-describe.skipIf(process.env.BUTLER_LIVE_CLAUDE !== "1")("headless judges against the real claude", () => {
+describe.skipIf(process.env.SHIPHERD_LIVE_CLAUDE !== "1")("headless judges against the real claude", () => {
   async function deps(): Promise<HeadlessExecDeps> {
     const pathValue = await readLoginShellPath(process.platform, process.env);
     const claudePath = locateClaude({ override: "", pathValue, platform: process.platform });
@@ -19,8 +19,8 @@ describe.skipIf(process.env.BUTLER_LIVE_CLAUDE !== "1")("headless judges against
       run: runHeadless,
       ready: async () => undefined,
       claude: () => ({ path: claudePath, pathValue }),
-      // BUTLER_HOME 指向临时目录：用户级 butler-hook 的上报只会落进临时 inbox。
-      baseEnv: { ...process.env, BUTLER_HOME: tempDir("butler-home-") },
+      // SHIPHERD_HOME 指向临时目录：用户级 shipherd-hook 的上报只会落进临时 inbox。
+      baseEnv: { ...process.env, SHIPHERD_HOME: tempDir("shipherd-home-") },
       sessions: { recordHeadless: () => undefined } as never,
       now: () => Date.now(),
       newRunId: () => "live-judges",
@@ -30,7 +30,7 @@ describe.skipIf(process.env.BUTLER_LIVE_CLAUDE !== "1")("headless judges against
 
   it("needs-you judge tells a question from a status report", async () => {
     const d = await deps();
-    const cwd = tempDir("butler-cwd-");
+    const cwd = tempDir("shipherd-cwd-");
     try {
       const ask = await judgeNeedsYou(d, "要把它拆成两个 PR 吗？", cwd);
       const done = await judgeNeedsYou(d, "已经推上去了，CI 在跑。", cwd);

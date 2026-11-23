@@ -14,7 +14,7 @@ export async function runSmoke(): Promise<number> {
     db.close();
 
     // StateCore 的嵌入式存储（node:sqlite + statecore-mcp/lib）能在 Electron 主进程里写、读。
-    const scDir = mkdtempSync(join(tmpdir(), "butler-smoke-"));
+    const scDir = mkdtempSync(join(tmpdir(), "shipherd-smoke-"));
     try {
       const n = await withScope({ dataDir: scDir, scope: "smoke" }, async (s) => {
         await s.remember("smoke note");

@@ -5,8 +5,8 @@ import { REMEMBER_TOOL } from "../claude/project-mcp";
 import { broadcastConvention, conventionFromEnvelope } from "./broadcast";
 import type { SendInput } from "./mailbox";
 
-const env = (butlerSession: string | null, input: object, o: { tool?: string; event?: string } = {}): HookEnvelope => ({
-  v: 1, receivedAt: 1, ticket: null, butlerSession,
+const env = (shipherdSession: string | null, input: object, o: { tool?: string; event?: string } = {}): HookEnvelope => ({
+  v: 1, receivedAt: 1, ticket: null, shipherdSession,
   payload: { hook_event_name: o.event ?? "PostToolUse", session_id: "claude-id", tool_name: o.tool ?? REMEMBER_TOOL, tool_input: input },
 });
 
@@ -69,10 +69,10 @@ describe("convention broadcast (BTL-245)", () => {
   it("ignores consolidate, empty text, other tools, other events and headless sessions", () => {
     expect(conventionFromEnvelope(env("a", { text: "long", consolidate: true }))).toBeNull();
     expect(conventionFromEnvelope(env("a", { text: "  " }))).toBeNull();
-    expect(conventionFromEnvelope(env("a", { text: "x" }, { tool: "mcp__butler-memory__remember" }))).toBeNull();
+    expect(conventionFromEnvelope(env("a", { text: "x" }, { tool: "mcp__shipherd-memory__remember" }))).toBeNull();
     expect(conventionFromEnvelope(env("a", { text: "x" }, { event: "PreToolUse" }))).toBeNull();
     expect(conventionFromEnvelope(env("headless:1", { text: "x" }))).toBeNull();
-    // 外部终端（没有 BUTLER_SESSION）：按 claude 的 session id 找作者。
+    // 外部终端（没有 SHIPHERD_SESSION）：按 claude 的 session id 找作者。
     expect(conventionFromEnvelope(env(null, { text: "x" }))).toEqual({ author: "claude-id", text: "x" });
   });
 });

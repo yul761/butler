@@ -120,7 +120,7 @@ describe("applyRerun", () => {
     const v = applyRerun([ev({ id: 1 }), ev({ id: 2, category: "lint" }), ev({ id: 3, kind: "acceptance", category: null })], { kind: "ran", results: [res("test", true), res("lint", false)] });
     expect(v).toEqual([
       { id: 1, verified: "rerun_pass", detail: "run test", rerunOutput: null },
-      { id: 2, verified: "rerun_fail", detail: "claimed pass, but Butler's rerun failed: run lint", rerunOutput: "boom" },
+      { id: 2, verified: "rerun_fail", detail: "claimed pass, but Shipherd's rerun failed: run lint", rerunOutput: "boom" },
     ]);
   });
   it("leaves items without a decided rerun for cross-checking; invalidated marks them unverifiable", () => {

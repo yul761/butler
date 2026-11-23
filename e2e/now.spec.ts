@@ -73,13 +73,13 @@ async function homeMore(page: Page): Promise<void> {
 /**
  * 实况窗口（BTL-190 第 7 点）：没人干活时说一句；在干活的、在等你的 session 各一张卡片，停下的不在；
  * 工具调用一推过来就出现在卡片上，写记忆、读记忆沿着虚线走一个光点；窄窗口里排成网格、核心在最上面。
- * 截图存到 test-results/now-page/live-*.png（设了 BUTLER_E2E_SHOTS_DIR 就存到那里）。
+ * 截图存到 test-results/now-page/live-*.png（设了 SHIPHERD_E2E_SHOTS_DIR 就存到那里）。
  */
 test("the live window shows working sessions, their tool calls and memory sparks", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   // tick 调得很长：回到首页以后卡片上的新行只能是 fs.watch 带来的。
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "60000" };
-  const shots = process.env.BUTLER_E2E_SHOTS_DIR ?? join(ROOT, "test-results", "now-page");
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "60000" };
+  const shots = process.env.SHIPHERD_E2E_SHOTS_DIR ?? join(ROOT, "test-results", "now-page");
   mkdirSync(shots, { recursive: true });
   const { app, page } = await launch(s);
   await completeWizard(page, s);
@@ -97,13 +97,13 @@ test("the live window shows working sessions, their tool calls and memory sparks
   await expect.poll(() => terminalText(page)).toContain("收到：hello");
   await ticketPage(page, "DMS-1");
   await openSession(page);
-  await typeLine(page, '/fake-tool mcp__butler-feature__recall {"query":"结账金额"}');
+  await typeLine(page, '/fake-tool mcp__shipherd-feature__recall {"query":"结账金额"}');
   await typeLine(page, '/fake-tool Read {"file_path":"/w/src/cart.ts"}');
   await typeLine(page, '/fake-tool Grep {"pattern":"totalCents"}');
   await expect.poll(() => terminalText(page)).toContain("tool Grep");
   // 回到首页以后才来的：写一条记忆，再读一次。
-  await typeLine(page, '/fake-later 3000 /fake-tool mcp__butler-feature__remember {"text":"金额一律用分"}');
-  await typeLine(page, '/fake-later 7000 /fake-tool mcp__butler-feature__facts {"query":"金额"}');
+  await typeLine(page, '/fake-later 3000 /fake-tool mcp__shipherd-feature__remember {"text":"金额一律用分"}');
+  await typeLine(page, '/fake-later 7000 /fake-tool mcp__shipherd-feature__facts {"query":"金额"}');
 
   await homeMore(page);
   const cards = page.locator(".live-card");

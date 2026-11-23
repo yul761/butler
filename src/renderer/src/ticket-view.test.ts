@@ -30,13 +30,13 @@ describe("mainActions", () => {
     expect(ids(u(false))).toEqual(["pr_details"]);
     expect(mainActions(u(false, "agent_stopped"), { hasPr: true, canFix: false }, S)).toEqual([{ id: "look", label: "去看看", primary: true, goTab: "terminal" }]);
   });
-  it("nobody-to-click owners and butler notices give no buttons", () => {
+  it("nobody-to-click owners and shipherd notices give no buttons", () => {
     const none: Turn[] = [
       { owner: "agent", kind: "working", sessionId: "s" },
       { owner: "external", kind: "ci_running", names: [] },
       { owner: "done", kind: "merged" },
       { owner: "idle", kind: "not_started" },
-      { owner: "you", kind: "butler", notice: { kind: "other" } as never },
+      { owner: "you", kind: "shipherd", notice: { kind: "other" } as never },
     ];
     for (const t of none) expect(ids(t, { hasPr: true, canFix: true })).toEqual([]);
   });

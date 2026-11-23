@@ -7,7 +7,7 @@ import { completeWizard, expect, terminalText, test, unsupportedGhCalls } from "
 const board = (page: Page, filter?: unknown) =>
   page.evaluate(
     ([ch, f]) =>
-      (window as unknown as { butler: { invoke(c: string, ...a: unknown[]): Promise<{ ok: boolean; value: TurnBoard }> } }).butler.invoke(ch as string, f ?? null),
+      (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<{ ok: boolean; value: TurnBoard }> } }).shipherd.invoke(ch as string, f ?? null),
     [IPC.turnBoard, filter] as const,
   );
 
@@ -35,22 +35,22 @@ test("a PR someone asked you to review shows up on the turn board", async ({ mak
   expect(unsupportedGhCalls(s)).toEqual([]);
 });
 
-/** Butler 总控撞了用量上限：turn:board 里有一条不属于 ticket 的 you/butler session_limited（首页的「Butler 要你点一下」）。 */
-test("the Butler session hitting its usage limit is on the turn board", async ({ makeSandbox, launch }) => {
+/** Shipherd 总控撞了用量上限：turn:board 里有一条不属于 ticket 的 you/shipherd session_limited（首页的「Shipherd 要你点一下」）。 */
+test("the Shipherd session hitting its usage limit is on the turn board", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);
   await completeWizard(page, s);
-  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await page.locator(".butler-page").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  await page.locator(".sidebar").getByRole("button", { name: S.shipherdNav, exact: true }).click();
+  await page.locator(".shipherd-page").getByRole("button", { name: `+ ${S.newShipherdSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.locator(".terminal-wrap:visible .xterm").click();
   await page.keyboard.type("/fake-limit You've hit your limit · resets 3pm (UTC)");
   await page.keyboard.press("Enter");
   await expect.poll(() => terminalText(page)).toContain("hit your limit");
-  const limited = async () => (await board(page)).value.items.find((i) => i.turn.kind === "butler" && i.turn.notice.kind === "session_limited");
+  const limited = async () => (await board(page)).value.items.find((i) => i.turn.kind === "shipherd" && i.turn.notice.kind === "session_limited");
   await expect.poll(async () => (await limited())?.turn, { timeout: 20_000 }).toMatchObject({
-    owner: "you", kind: "butler", notice: { kind: "session_limited", target: { page: "butler" }, limit: { kind: "usage_limit" } },
+    owner: "you", kind: "shipherd", notice: { kind: "session_limited", target: { page: "shipherd" }, limit: { kind: "usage_limit" } },
   });
   expect(await limited()).toMatchObject({ ticketKey: null, pr: null });
 });

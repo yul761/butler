@@ -23,7 +23,7 @@
 
 ## Task 5：应用和推送
 - `src/main/stacks/apply.ts`：预检（检出位置、管理的 worktree、干净、HEAD、session 忙、远端有外来提交）、备份引用、CAS 更新、回滚、推送（force_push 经 attempt）、恢复备份、清理过期备份。
-- 测试：未检出 / 检出在 ticket worktree / 检出在不归 Butler 的目录；中途失败回滚、备份还在；开关关着记 skipped、`remote_ok_sha` 下次认得；远端有外来提交不推；恢复。
+- 测试：未检出 / 检出在 ticket worktree / 检出在不归 Shipherd 的目录；中途失败回滚、备份还在；开关关着记 skipped、`remote_ok_sha` 下次认得；远端有外来提交不推；恢复。
 
 ## Task 6：gh 和 PR 文本
 - `src/main/stacks/gh-stack.ts`：pr create（ready / draft、label）、pr edit（base / title / body / label）、pr ready、pr close、label create、issue create / edit。
@@ -42,7 +42,7 @@
 
 ## Task 9：IPC、MCP、session 说明
 - IPC：`stacks:list`、`stacks:rebase`、`stacks:layerMode`、`stacks:restore`、`stacks:remove`、`stacks:policyGet`、`stacks:policySet`、`stacks:policyLayers`；validate；interventions 归类。
-- MCP：`create_ticket.stack_on`；`stack_define`、`list_stacks`、`stack_rebase`、`stack_layer_mode`（feature 总控、Butler 总控；epic 只有 `list_stacks`）；`control.ts` 解析；handler；`SESSIONS_AUTO_ALLOW` 加 `list_stacks`；`session-guide.ts`。
+- MCP：`create_ticket.stack_on`；`stack_define`、`list_stacks`、`stack_rebase`、`stack_layer_mode`（feature 总控、Shipherd 总控；epic 只有 `list_stacks`）；`control.ts` 解析；handler；`SESSIONS_AUTO_ALLOW` 加 `list_stacks`；`session-guide.ts`。
 - 测试：解析、handler、guide。
 
 ## Task 10：界面和装配

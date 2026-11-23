@@ -63,7 +63,7 @@ async function connect(command: string, args: string[], env: NodeJS.ProcessEnv) 
       });
       child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     });
-  await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "butler-test", version: "0" } });
+  await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "shipherd-test", version: "0" } });
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
   const tool = async (name: string, args: Record<string, unknown>) => (await call("tools/call", { name, arguments: args })).result?.content?.[0]?.text ?? "";
   const close = () =>
@@ -98,14 +98,14 @@ const electronBinary = (): string => {
 };
 
 describe("bundled StateCore MCP (design 8.4)", () => {
-  it("serves StateCore's tools in the scope from STATECORE_SCOPE, and Butler reads what it wrote", async () => {
+  it("serves StateCore's tools in the scope from STATECORE_SCOPE, and Shipherd reads what it wrote", async () => {
     const dataDir = tempDir();
     // 这里透传开发者自己的环境变量：万一清理失效、shell 里又导出了 key，请求也只会打到本机一个关闭的端口。
     const s = await open({ ...process.env, ...CLOSED_PORT_URLS, STATECORE_SCOPE: "ticket:T-1", LOG_LEVEL: "warn" }, dataDir);
     try {
       const tools = (await s.call("tools/list")).result?.tools ?? [];
       expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(["remember", "recall", "facts", "why", "forget", "handoff"]));
-      // Butler 自己的 MemoryServer（BTL-243）：说明里不许诺蒸馏，consolidate 的内容原样留成事件。
+      // Shipherd 自己的 MemoryServer（BTL-243）：说明里不许诺蒸馏，consolidate 的内容原样留成事件。
       expect(JSON.stringify(tools)).not.toMatch(/distil/i);
       expect(tools.find((t) => t.name === "remember")?.description).toContain("kept word for word as an event");
       expect(await s.tool("remember", { text: "Claude 记的：这个仓库用 pnpm" })).toContain('"ok": true');
@@ -144,7 +144,7 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     const electron = electronBinary();
     const recorder = await startLoopbackRecorder();
     const statecoreDir = tempDir();
-    const spec = memoryServers({ launcher: { command: electron, script: bundle }, statecoreDir, ticketKey: "T-3" })["butler-memory"];
+    const spec = memoryServers({ launcher: { command: electron, script: bundle }, statecoreDir, ticketKey: "T-3" })["shipherd-memory"];
     const claudeEnv: NodeJS.ProcessEnv = {
       ...process.env,
       FEATURE_LLM: "true", STATECORE_DIGEST_THRESHOLD: "1",
@@ -155,7 +155,7 @@ describe("bundled StateCore MCP (design 8.4)", () => {
     try {
       const s = await connect(spec.command, spec.args, { ...claudeEnv, ...spec.env });
       try {
-        // Butler 不蒸馏（backgroundDigest: false）：consolidate 只存成事件；阈值 1、环境里带着 key 也不会去找模型。
+        // Shipherd 不蒸馏（backgroundDigest: false）：consolidate 只存成事件；阈值 1、环境里带着 key 也不会去找模型。
         expect(JSON.parse(await s.tool("remember", { text: "一段原始对话", consolidate: true }))).toEqual({ ok: true, mode: "event" });
         for (const text of ["决定：用 pnpm", "约束：不能改公共 API"]) expect(await s.tool("remember", { text })).toContain('"ok": true');
         // 给可能的后台摘要留出时间，再确认没有任何请求发出。

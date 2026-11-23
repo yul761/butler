@@ -23,7 +23,7 @@ export function ciPrompt(i: CiModelInput, lang: "zh" | "en" = currentLang()): st
   if (lang === "en") {
     return [
       "A CI run failed. Decide whether this looks like a problem in the code (a real test failure, a type error, a lint error, a build error caused by the change) or a problem in the environment (network, timeouts, the runner going away, a package registry or service being down, disk full, rate limits).",
-      "If you are not sure, answer code: an environment answer makes Butler rerun CI instead of telling the developer.",
+      "If you are not sure, answer code: an environment answer makes Shipherd rerun CI instead of telling the developer.",
       `Failed checks: ${i.checks.join(", ")}`,
       `Failed step: ${i.step ?? "unknown"}`,
       `Log tail:\n${log}`,
@@ -32,7 +32,7 @@ export function ciPrompt(i: CiModelInput, lang: "zh" | "en" = currentLang()): st
   }
   return [
     "一次 CI 失败了。请判断它像是代码的问题（真的测试失败、类型错误、lint 错误、改动导致的构建失败），还是环境的问题（网络、超时、runner 掉线、包仓库或外部服务挂了、磁盘满、限流）。",
-    "拿不准就答 code：答 env 会让 Butler 重跑 CI，而不是告诉开发者。",
+    "拿不准就答 code：答 env 会让 Shipherd 重跑 CI，而不是告诉开发者。",
     `失败的检查：${i.checks.join("、")}`,
     `失败的步骤：${i.step ?? "未知"}`,
     `日志末尾：\n${log}`,

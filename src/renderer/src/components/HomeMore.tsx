@@ -9,7 +9,7 @@ import type { Route } from "../App";
 import { reportError } from "../errors";
 import { intakeRecentText } from "../intake-view";
 import { setWizardSkipped, wizardSkipped } from "../local-prefs";
-import { butlerLines, formatKb, heavyMcp, peakKb, sharedMcpSavingKb, snapshotLine, sparkPath } from "../mem-view";
+import { shipherdLines, formatKb, heavyMcp, peakKb, sharedMcpSavingKb, snapshotLine, sparkPath } from "../mem-view";
 import { mergeEventText } from "../merge-events-view";
 import { usageDetails, usageLine } from "../now-view";
 import { S } from "../strings";
@@ -44,8 +44,8 @@ export function HomeMore({ view, onOpen, onOpenTicket, liveTickets, onGo }: Home
 }
 
 /**
- * 只是告诉你一声的 Butler 提醒（检查自动升级了可以撤销、复盘暂停了、共享 MCP 起不来……）：要你动手的那些是首页的卡片，这里不重复。
- * spec 说它们以后放进「Butler 自己」相应页面的主层；那些页面做好之前先放在这里，免得哪儿都看不到。
+ * 只是告诉你一声的 Shipherd 提醒（检查自动升级了可以撤销、复盘暂停了、共享 MCP 起不来……）：要你动手的那些是首页的卡片，这里不重复。
+ * spec 说它们以后放进「Shipherd 自己」相应页面的主层；那些页面做好之前先放在这里，免得哪儿都看不到。
  */
 function InfoNotices({ view, onOpen, onGo }: { view: NowView; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const now = useNow();
@@ -120,7 +120,7 @@ export function GroupToggle({ open, onToggle, children, className }: ToggleProps
 /** 历史曲线多久重取一次（历史每 5 分钟才多一个点）。 */
 const MEM_HISTORY_REFRESH_MS = 5 * 60_000;
 
-/** 内存卡片（WS-M A）：一行汇总，展开后是 Butler 自己的明细、24 小时的曲线和「你装的 MCP 太大」的提示。默认收起。 */
+/** 内存卡片（WS-M A）：一行汇总，展开后是 Shipherd 自己的明细、24 小时的曲线和「你装的 MCP 太大」的提示。默认收起。 */
 function MemoryCard({ snap, view }: { snap: MemorySnapshot; view: NowView }) {
   // 这个记号在存储里的意思是“展开了”。
   const [open, toggle] = useCollapsed("now:mem");
@@ -141,8 +141,8 @@ function MemoryCard({ snap, view }: { snap: MemorySnapshot; view: NowView }) {
       {open && (
         <div className="now-usage-details">
           <div>
-            <h4>{S.perf.memButler}</h4>
-            <ul>{butlerLines(snap, S).map((l) => <li key={l}>{l}</li>)}</ul>
+            <h4>{S.perf.memShipherd}</h4>
+            <ul>{shipherdLines(snap, S).map((l) => <li key={l}>{l}</li>)}</ul>
             {view.sharedMcp === false && sharedMcpSavingKb(snap) > 0 && <p className="muted">{S.perf.sharedMcpSave(formatKb(sharedMcpSavingKb(snap)))}</p>}
           </div>
           <div>

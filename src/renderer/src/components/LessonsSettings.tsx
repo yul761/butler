@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PolicyGroup, PolicyScope } from "../../../shared/admission-policy";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { parsePolicyInput, policyGroups, policyInputValue, policyOverridesFromDraft, policyScopeFromKey, policyScopeKey, type PolicyDraft } from "../policy-view";
 import { S } from "../strings";
@@ -55,7 +55,7 @@ export function PolicyEditor({ groups, title }: { groups?: readonly PolicyGroup[
       setDraft({});
       setMessage({ text: r.batchId === null ? S.policyNoChange : S.policySaved, error: false });
     } catch (e) {
-      if (e instanceof ButlerError) setMessage({ text: e.message, error: true });
+      if (e instanceof ShipherdError) setMessage({ text: e.message, error: true });
       else reportError(e);
     } finally {
       setBusy(false);
@@ -182,7 +182,7 @@ export function LessonsSettings() {
       await api.setSetting(k, v);
       await load();
     } catch (e) {
-      if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+      if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
       else reportError(e);
     }
   };
@@ -199,7 +199,7 @@ export function LessonsSettings() {
       });
       await load();
     } catch (e) {
-      if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+      if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
       else reportError(e);
     }
   };

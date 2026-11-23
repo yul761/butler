@@ -37,7 +37,7 @@ export function evidenceGuideLines(lang: Lang, repos: readonly GuideRepo[]): str
     ? [
         "## 完成前交证据",
         "",
-        "Butler 会在后台预审你的改动（对照这个仓库的规矩和检查结果），预审要你交的完成证据。做完、提交以后、开 PR 之前调 `submit_evidence`：",
+        "Shipherd 会在后台预审你的改动（对照这个仓库的规矩和检查结果），预审要你交的完成证据。做完、提交以后、开 PR 之前调 `submit_evidence`：",
         "- checks：跑了哪些检查，写实际的命令、pass 或 fail、输出的关键部分（比如通过 / 失败的数量）；",
         "- acceptance：每条验收条件怎么满足的；",
         "- ui：改了界面时附截图路径（有条件时）；",
@@ -48,7 +48,7 @@ export function evidenceGuideLines(lang: Lang, repos: readonly GuideRepo[]): str
     : [
         "## Hand in evidence before you finish",
         "",
-        "Butler pre-reviews your change in the background (against this repo's rules and check results) and needs your completion evidence. When the work is done and committed, before opening a PR, call `submit_evidence` with:",
+        "Shipherd pre-reviews your change in the background (against this repo's rules and check results) and needs your completion evidence. When the work is done and committed, before opening a PR, call `submit_evidence` with:",
         "- checks: what you ran, with the actual command, pass or fail, and the key part of the output (such as pass / fail counts);",
         "- acceptance: how each acceptance criterion is met;",
         "- ui: screenshot paths when you changed the UI (when you can);",
@@ -58,7 +58,7 @@ export function evidenceGuideLines(lang: Lang, repos: readonly GuideRepo[]): str
       ];
   const lines = repos.length ? repos.map((r) => repoLine(r, lang)) : [zh ? "- 测试、lint、类型检查" : "- tests, lint, typecheck"];
   const tail = zh
-    ? "交完结束这一轮，等预审结果送进来（没收到就调 `pre_review_result`）；在那之前不要改 worktree。Butler 会自己复跑档案里的命令核对你的输出。"
-    : "After submitting, end your turn and wait for the pre-review result (call `pre_review_result` if it does not arrive); do not change the worktree until then. Butler reruns the profile's commands itself to check your output.";
+    ? "交完结束这一轮，等预审结果送进来（没收到就调 `pre_review_result`）；在那之前不要改 worktree。Shipherd 会自己复跑档案里的命令核对你的输出。"
+    : "After submitting, end your turn and wait for the pre-review result (call `pre_review_result` if it does not arrive); do not change the worktree until then. Shipherd reruns the profile's commands itself to check your output.";
   return [[...head, ...lines, "", tail].join("\n")];
 }

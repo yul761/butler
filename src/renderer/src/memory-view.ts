@@ -3,7 +3,7 @@ import { S } from "./strings";
 
 export interface MemoryRow {
   item: MemoryItem;
-  /** 显示的文字：Butler 的条目去掉前缀。 */
+  /** 显示的文字：Shipherd 的条目去掉前缀。 */
   text: string;
 }
 
@@ -12,7 +12,7 @@ export interface MemorySection {
   rows: MemoryRow[];
 }
 
-/** 记忆标签的分区：决策、未完成的 follow-up（Butler 写的），然后按 StateCore 的分组列出其余的。空的分区不显示。 */
+/** 记忆标签的分区：决策、未完成的 follow-up（Shipherd 写的），然后按 StateCore 的分组列出其余的。空的分区不显示。 */
 export function memorySections(items: MemoryItem[]): MemorySection[] {
   const decisions: MemoryRow[] = [];
   const followups: MemoryRow[] = [];
@@ -42,7 +42,7 @@ export interface WhyLine {
   note: string | null;
 }
 
-/** why 链的每个版本（旧的在前）：正文（去掉 Butler 前缀）、时间、状态。 */
+/** why 链的每个版本（旧的在前）：正文（去掉 Shipherd 前缀）、时间、状态。 */
 export function whyLines(chain: WhyEntry[], formatTime: (iso: string) => string): WhyLine[] {
   return chain.map((e) => ({
     text: parseNote(e.content)?.body ?? e.content,

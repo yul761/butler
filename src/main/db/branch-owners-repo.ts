@@ -5,7 +5,7 @@ export interface BranchOwner {
   ticketKey: string;
   repoId: number;
   branch: string;
-  /** 记下时的 session id（BUTLER_SESSION，/clear 之后用 head 找现在的那个）。 */
+  /** 记下时的 session id（SHIPHERD_SESSION，/clear 之后用 head 找现在的那个）。 */
   sessionId: string;
   /** 推的时候在哪个目录（worktree 或仓库本身）：在这里跑 gh 列这个分支的 PR。 */
   dir: string;
@@ -36,7 +36,7 @@ export class BranchOwnersRepo {
     return r ? toOwner(r) : null;
   }
 
-  /** 推过这个分支的（任何 ticket、任何仓库），新的在前（工作流 K：栈的层是不是 Butler 的）。 */
+  /** 推过这个分支的（任何 ticket、任何仓库），新的在前（工作流 K：栈的层是不是 Shipherd 的）。 */
   byBranch(branch: string): BranchOwner[] {
     return (this.db.prepare(`SELECT * FROM branch_owners WHERE branch = ? ORDER BY at DESC`).all(branch) as unknown as Row[]).map(toOwner);
   }

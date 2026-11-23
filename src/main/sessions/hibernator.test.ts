@@ -17,8 +17,8 @@ const table = (...lines: string[]): ProcTable => parsePsTable(lines.join("\n"));
 const FULL = table(L.claude, L.mcp, L.shell, L.vite, L.esbuild);
 
 const session = (over: Partial<Session> = {}): Session => ({
-  id: "h", ticketKey: "T-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: "hi", lastActivityAt: 0, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false,
+  id: "h", ticketKey: "T-1", cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: "hi", lastActivityAt: 0, waitingForInput: true, replacedBy: null,
+  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false,
   lessonRunId: null, hibernatedAt: null, hibernateReason: null, pinned: false, wakeError: null, wakeErrorAt: null, ...over,
 });
 
@@ -275,7 +275,7 @@ describe("Hibernator.wake", () => {
     expect(t.rows.get("h")?.hibernatedAt).not.toBeNull();
   });
 
-  it("opening a different session (another Butler control is running) counts as a failed wake, so deliveries stop waking it", async () => {
+  it("opening a different session (another Shipherd control is running) counts as a failed wake, so deliveries stop waking it", async () => {
     const t = setup({
       open: async () => {
         t.open.add("b");
@@ -283,7 +283,7 @@ describe("Hibernator.wake", () => {
         return { ok: true, termId: "b" };
       },
     });
-    t.rows.set("b", session({ id: "b", ticketKey: null, butler: true }));
+    t.rows.set("b", session({ id: "b", ticketKey: null, shipherd: true }));
     await t.h.hibernate("h", "idle");
     expect(await t.h.wake("h", "delivery")).toBe("failed");
     expect(t.rows.get("h")).toMatchObject({ hibernatedAt: null, wakeError: "another session (b) was opened instead" });

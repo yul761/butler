@@ -1,5 +1,5 @@
 // 首页的一张「轮到你」卡片（UI 重做第 2 层，spec §5.3）：类型标签、一句话（第 1 层的 turnSentence）、位置和多久、一到三个按钮。
-// Butler 要你点一下的那类直接放原来的 Notice，按钮也是它自己的。
+// Shipherd 要你点一下的那类直接放原来的 Notice，按钮也是它自己的。
 import { useState } from "react";
 import type { TurnItem } from "../../../shared/turn";
 import type { NowTarget } from "../../../shared/types";
@@ -32,9 +32,9 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
   const [answered, setAnswered] = useState<string | null>(null);
   if (t.owner !== "you") return null;
   const { path, scope, key, age } = locationOf(item, ctx, now, S);
-  const butler = t.kind === "butler";
-  // 不挂在任何地方的 Butler 提醒没有位置可写。
-  const where = butler && item.ticketKey === null && item.featureId === null ? "" : path;
+  const shipherd = t.kind === "shipherd";
+  // 不挂在任何地方的 Shipherd 提醒没有位置可写。
+  const where = shipherd && item.ticketKey === null && item.featureId === null ? "" : path;
   const target = lookTarget(item);
   const actions = cardActions(item).filter((a) => a.id !== "look" || target !== null);
 
@@ -55,7 +55,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
     <div className="turn-card" data-testid="turn-card" data-kind={t.kind}>
       <span className={`turn-tag turn-${turnTone(t)}`}>{S.hm.kind[t.kind]}</span>
       <div className="turn-card-body">
-        {butler ? <Notice notice={t.notice} now={now} onOpen={onOpen} onGo={onGo} /> : <p className="sentence">{turnSentence(t, item, S)}</p>}
+        {shipherd ? <Notice notice={t.notice} now={now} onOpen={onOpen} onGo={onGo} /> : <p className="sentence">{turnSentence(t, item, S)}</p>}
         {t.kind === "stuck" && t.action && <p className="stuck-action">{S.hm.stuckAction(t.action)}</p>}
         {(where || age) && (
           <p className="where muted">
@@ -65,7 +65,7 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
         )}
         {result && <p className="muted" role="status">{result}</p>}
       </div>
-      {!butler && (
+      {!shipherd && (
         <div className="actions">
           {answered !== null ? <span className="muted" role="status">{S.hm.act.answered(answered)}</span> : actions.map((a) => (
             <button key={a.id === "answer" ? `answer:${a.option}` : a.id} className={a.primary ? "primary" : undefined} disabled={busy} onClick={() => act(a)}>

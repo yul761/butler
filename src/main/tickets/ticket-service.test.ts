@@ -13,7 +13,7 @@ import { TicketError, TicketService } from "./ticket-service";
 function setup() {
   const db = memDb();
   const tickets = new TicketsRepo(db);
-  const service = new TicketService({ tickets, settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("butler-ws-") });
+  const service = new TicketService({ tickets, settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("shipherd-ws-") });
   /** 单仓库 ticket 的那个仓库。 */
   const repoOf = (key: string) => tickets.get(key)!.repos[0];
   return { tickets, service, repoOf };
@@ -108,7 +108,7 @@ describe("TicketService branch checks", () => {
 describe("TicketService.create input checks", () => {
   it("rejects an empty repository with a friendly message", async () => {
     const { service, tickets } = setup();
-    const dir = tempDir("butler-empty-");
+    const dir = tempDir("shipherd-empty-");
     execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
     await expect(service.create({ key: "PROJ-20", repoPath: dir, workMode: "branch" })).rejects.toMatchObject({
       code: "empty_repo",
@@ -122,7 +122,7 @@ describe("TicketService.create input checks", () => {
     const settings = new SettingsRepo(db);
     settings.set("ticketPattern", "-\\d+");
     settings.set("branchTemplate", "{key}");
-    const service = new TicketService({ tickets: new TicketsRepo(db), settings, now: () => 1000, workspacesDir: tempDir("butler-ws-") });
+    const service = new TicketService({ tickets: new TicketsRepo(db), settings, now: () => 1000, workspacesDir: tempDir("shipherd-ws-") });
     expect(await code(service.create({ key: "-5", repoPath: makeRepo(), workMode: "branch" }))).toBe("invalid_branch");
   });
 
@@ -130,7 +130,7 @@ describe("TicketService.create input checks", () => {
     const db = memDb();
     const settings = new SettingsRepo(db);
     settings.set("branchTemplate", "{key_lower}-{title}");
-    const service = new TicketService({ tickets: new TicketsRepo(db), settings, now: () => 1000, workspacesDir: tempDir("butler-ws-") });
+    const service = new TicketService({ tickets: new TicketsRepo(db), settings, now: () => 1000, workspacesDir: tempDir("shipherd-ws-") });
     const t = await service.create({ key: "DMS-1234", title: "Add payment API", repoPath: makeRepo(), workMode: "branch" });
     expect(only(t).branch).toBe("dms-1234-add-payment-api");
     const added = await service.addRepo({ ticketKey: "DMS-1234", repoPath: makeRepo(), workMode: "branch" });
@@ -435,10 +435,10 @@ describe("TicketService.featureHeadlessDirs", () => {
     const db = memDb();
     const features = new FeaturesRepo(db);
     const tickets = new TicketsRepo(db);
-    const service = new TicketService({ tickets, features, settings: new SettingsRepo(db), now: () => 1, workspacesDir: tempDir("butler-ws-") });
-    const ws = tempDir("butler-feature-");
-    const outside = tempDir("butler-outside-");
-    const earlier = tempDir("butler-earlier-");
+    const service = new TicketService({ tickets, features, settings: new SettingsRepo(db), now: () => 1, workspacesDir: tempDir("shipherd-ws-") });
+    const ws = tempDir("shipherd-feature-");
+    const outside = tempDir("shipherd-outside-");
+    const earlier = tempDir("shipherd-earlier-");
     const featureId = features.insert({ name: "f", workspaceDir: ws, createdAt: 1 });
     const add = (key: string, repoPath: string) =>
       insertTicket(tickets, { key, title: null, repoPath, workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId });
@@ -454,14 +454,14 @@ describe("TicketService.featureHeadlessDirs", () => {
     const db = memDb();
     const tickets = new TicketsRepo(db);
     const features = new FeaturesRepo(db);
-    const service = new TicketService({ tickets, features, settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("butler-ws-") });
-    const ws = tempDir("butler-feature-ws-");
+    const service = new TicketService({ tickets, features, settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("shipherd-ws-") });
+    const ws = tempDir("shipherd-feature-ws-");
     const featureId = features.insert({ name: "f", workspaceDir: ws, createdAt: 1 });
     const inside = join(ws, "web-f-1");
     mkdirSync(inside);
-    const outside = tempDir("butler-outside-");
-    const gone = join(tempDir("butler-gone-"), "wt");
-    const archivedDir = tempDir("butler-archived-");
+    const outside = tempDir("shipherd-outside-");
+    const gone = join(tempDir("shipherd-gone-"), "wt");
+    const archivedDir = tempDir("shipherd-archived-");
     const add = (key: string, over: Partial<LegacyTicket>) =>
       insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId, ...over });
     add("F-1", { repoPath: "/r/web", workMode: "worktree", worktreePath: inside });
@@ -469,7 +469,7 @@ describe("TicketService.featureHeadlessDirs", () => {
     add("F-3", { repoPath: outside });
     add("F-4", { repoPath: "/r/api", workMode: "worktree", worktreePath: gone });
     add("F-5", { repoPath: archivedDir, archivedAt: 5 });
-    add("OTHER-1", { repoPath: tempDir("butler-other-"), featureId: null });
+    add("OTHER-1", { repoPath: tempDir("shipherd-other-"), featureId: null });
     expect(service.featureHeadlessDirs(featureId)).toEqual({ cwd: ws, addDirs: [outside], repoDirs: [inside, outside, gone] });
   });
 });
@@ -544,7 +544,7 @@ describe("TicketService new branches start from the remote's default branch (BTL
   it("logs and falls back to the local origin/main when the remote can't be reached", async () => {
     const db = memDb();
     const logs: string[] = [];
-    const service = new TicketService({ tickets: new TicketsRepo(db), settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("butler-ws-"), log: (m) => logs.push(m) });
+    const service = new TicketService({ tickets: new TicketsRepo(db), settings: new SettingsRepo(db), now: () => 1000, workspacesDir: tempDir("shipherd-ws-"), log: (m) => logs.push(m) });
     const { repo, initSha } = makeStaleClone();
     execFileSync("git", ["remote", "set-url", "origin", join(tempDir(), "gone")], { cwd: repo });
     const t = await service.create({ key: "PROJ-263", repoPath: repo, workMode: "worktree" });

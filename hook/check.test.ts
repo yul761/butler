@@ -14,18 +14,18 @@ const check = (over: Partial<ResolvedCheck>): ResolvedCheck => ({
 });
 
 function setup(checks: ResolvedCheck[], o: { enabled?: boolean; remote?: string | null; editTimeoutMs?: number } = {}) {
-  const home = tempDir("butler-home-");
+  const home = tempDir("shipherd-home-");
   const repo = makeRepo();
   if (o.remote !== null) execFileSync("git", ["remote", "add", "origin", o.remote ?? `git@github.com:${SLUG}.git`], { cwd: repo });
   const snap: CheckSnapshot = {
     v: CHECKS_SNAPSHOT_VERSION, generatedAt: 1, enabled: o.enabled ?? true, editTimeoutMs: o.editTimeoutMs ?? 8000, pushTimeoutMs: 60_000, ticketPattern: "[A-Z]+-\\d+",
-    strings: { failHeader: 'Butler check "{name}" failed: {where}', shadowTag: " (trial)", warnTag: " (warning)", blockFooter: "FOOTER", pushHeader: "PUSH BLOCKED" },
+    strings: { failHeader: 'Shipherd check "{name}" failed: {where}', shadowTag: " (trial)", warnTag: " (warning)", blockFooter: "FOOTER", pushHeader: "PUSH BLOCKED" },
     global: [], repos: { [SLUG]: checks },
   };
   mkdirSync(join(home, "checks"), { recursive: true });
   writeFileSync(join(home, "checks", "snapshot.json"), JSON.stringify(snap));
   mkdirSync(join(repo, "src"), { recursive: true });
-  const env = { ...process.env, BUTLER_HOME: home, BUTLER_SESSION: "sess-1" };
+  const env = { ...process.env, SHIPHERD_HOME: home, SHIPHERD_SESSION: "sess-1" };
   const hits = (): CheckLogRecord[] => {
     const dir = join(home, "checks", "hits");
     let names: string[];
@@ -47,13 +47,13 @@ function setup(checks: ResolvedCheck[], o: { enabled?: boolean; remote?: string 
   return { home, repo, env, hits, write };
 }
 
-describe("butler-hook check (PostToolUse)", () => {
+describe("shipherd-hook check (PostToolUse)", () => {
   it("blocks an enforced violation the edit introduced and logs the hit", async () => {
     const t = setup([check({})]);
     const out = await runCheck(t.write("src/a.ts", "ok\nfoo(1)\n"), t.env, realCheckDeps);
     const j = JSON.parse(out);
     expect(j.decision).toBe("block");
-    expect(j.reason).toContain('Butler check "no foo" failed: src/a.ts:2');
+    expect(j.reason).toContain('Shipherd check "no foo" failed: src/a.ts:2');
     expect(j.reason).toContain("Fix the root cause.");
     expect(j.reason).toContain("FOOTER");
     expect(t.hits()).toMatchObject([{ kind: "hit", checkKey: "ck_1", file: "src/a.ts", line: 2, outcome: "fail", blocked: true, mode: "enforce", session: "sess-1", slug: SLUG }]);
@@ -144,7 +144,7 @@ describe("butler-hook check (PostToolUse)", () => {
   });
 });
 
-describe("butler-hook check-push (PreToolUse Bash)", () => {
+describe("shipherd-hook check-push (PreToolUse Bash)", () => {
   const bash = (repo: string, command: string) => JSON.stringify({ hook_event_name: "PreToolUse", cwd: repo, tool_name: "Bash", tool_input: { command } });
 
   it("denies a push when an enforced push check fails", async () => {

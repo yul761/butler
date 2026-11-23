@@ -18,7 +18,7 @@ export interface SnapshotWriterOptions {
 const content = (s: CheckSnapshot): string => JSON.stringify({ ...s, generatedAt: 0 });
 
 /**
- * hook 读的检查快照（addendum 第 3 节）：Butler 是唯一的写入者，tmp + rename 写，hook 永远读到完整的文件。
+ * hook 读的检查快照（addendum 第 3 节）：Shipherd 是唯一的写入者，tmp + rename 写，hook 永远读到完整的文件。
  * 内容没变就不写；改动之后防抖再写；另有定时兜底（产品成员、仓库登记这些不经过 ChecksService 的改动也会跟上）。
  */
 export class SnapshotWriter {

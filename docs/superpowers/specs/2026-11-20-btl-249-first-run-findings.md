@@ -1,10 +1,10 @@
 # BTL-249 新用户第一次使用：问题清单
 
-日期：2026-11-20。目标：一个从没装过 Butler 的人，5 分钟内跑起第一个 ticket session。
+日期：2026-11-20。目标：一个从没装过 Shipherd 的人，5 分钟内跑起第一个 ticket session。
 
 ## 怎么走的
 
-- 用 e2e 沙盒模拟一台全新的机器：临时的 HOME、BUTLER_HOME、CLAUDE_CONFIG_DIR、TMPDIR；PATH 里只有假 claude；登录 shell 是假的，不读开发者的 shell 配置。全程没有读写真实的 `~/.butler` 和 `~/.claude`。
+- 用 e2e 沙盒模拟一台全新的机器：临时的 HOME、SHIPHERD_HOME、CLAUDE_CONFIG_DIR、TMPDIR；PATH 里只有假 claude；登录 shell 是假的，不读开发者的 shell 配置。全程没有读写真实的 `~/.shipherd` 和 `~/.claude`。
 - 用 Playwright 驱动 Electron，每一步截图并保存页面文字。走的路线是：第一次启动 → 向导（语言、claude、hook、tracker、权限档案、完成；这是改之前的五步）→ 首页 → 新建 ticket（带仓库）→ 终端页签开 session → 让假 claude 提一个问题 → 首页「轮到你」出现一张卡片。
 - 中文和英文各走一遍。不顺利的路线：PATH 里没有 claude；claude 没登录（只看代码，假 claude 模拟不了登录界面）；没装 gh、gh 没登录（只看代码和设置页）；选的目录不是 git 仓库；目录不存在；Windows 路径（只看代码）。
 
@@ -18,10 +18,10 @@
 | 2 | ticket 概况 | 新建好的 ticket 默认停在「概况」，只有「现在看不到（终端没开着时取不到最后一句）」，没有「开始」的入口，开 session 要自己找到「终端」页签。 | 高 | 已修：还没开过 session 时，概况最上面一个主按钮「开第一个 session」（没有仓库时是「添加仓库」）。还没开过 session 时不显示「最后一句」那一栏。 |
 | 3 | 向导第 1 步 | 只要找到 claude 就能下一步，**不检查有没有登录**。没登录的人要到第一个 session 才在终端里看到 Claude Code 自己的登录界面，后台的「更新状态」会直接失败。 | 高 | 已修：读 Claude Code 自己的登录记录（`.claude.json` 里的账号、`.credentials.json`、API key 环境变量、`apiKeyHelper`），一个都没有时提示「看起来还没登录：在终端里运行 claude 并登录，再点“重新检查”」。只提示不拦，用 API key 等别的方式登录的人照样能继续。 |
 | 4 | 向导第 1 步 | 从 Finder / 开始菜单启动时，只在登录 shell 的 PATH 里找 claude。用官方安装脚本装的 claude 在 `~/.local/bin`，有的 shell 配置不会把它加进登录 shell 的 PATH，向导就说找不到，只能手填路径。 | 高 | 已修：PATH 里找不到时，再看用户目录下的常见安装位置（`~/.local/bin`、`~/.claude/local`；Windows 上 `%USERPROFILE%\.local\bin`、`%APPDATA%\npm`）。系统目录（`/opt/homebrew/bin`、`/usr/local/bin`）不看：它们一般已经在登录 shell 的 PATH 里；而且只看用户目录，e2e 沙盒换掉 HOME 就保证找不到开发者机器上真的 claude。在这些位置找到时，它的目录也加到 session 的 PATH 前面。 |
-| 5 | 向导第 1 步 | 说明写「Butler 只用你本机已登录的**公司** claude 干活」。对开源用户不对。 | 中 | 已修：去掉「公司」，并说清楚没装、没登录分别怎么办（按官方文档安装，在终端里运行一次 claude 登录）。 |
+| 5 | 向导第 1 步 | 说明写「Shipherd 只用你本机已登录的**公司** claude 干活」。对开源用户不对。 | 中 | 已修：去掉「公司」，并说清楚没装、没登录分别怎么办（按官方文档安装，在终端里运行一次 claude 登录）。 |
 | 6 | 向导第 1 步 | 不提 gh。没装 gh 或 gh 没登录时，PR、CI、review 相关的功能都静默不工作（ticket 一直「还没有 PR」），只有设置 › 环境检查里有一行「没找到」，也不看登录。 | 高 | 已修：向导第 1 步和环境检查都显示 gh：没装 / 没登录（`gh auth token` 的退出码，不联网，不读出 token，最多等 3 秒）/ 正常，每种都写下一步怎么做。不拦下一步。 |
 | 7 | 向导第 2 步 | 不装 hook 也能直接点「下一步」。不装 hook，「轮到你」、状态这些核心功能都不工作，新用户不会知道。 | 高 | 已修：hook 没装时主按钮是「安装并继续」；装不上时再给一个「下一步」并说明原因；想跳过整个向导可以点「稍后再说」。 |
-| 8 | 向导第 2 步 | 说明里写死「写进 ~/.butler/inbox」，数据目录改过（BUTLER_HOME）时不对。 | 低 | 已修：写实际的数据目录。 |
+| 8 | 向导第 2 步 | 说明里写死「写进 ~/.shipherd/inbox」，数据目录改过（SHIPHERD_HOME）时不对。 | 低 | 已修：写实际的数据目录。 |
 | 9 | 向导，语言选择 | 语言下面的说明讲「之后设置 → 环境检查里 /handoff 命令会显示需要更新……」，第一次打开时 /handoff 还没装，这句话没有意义。 | 中 | 已修：向导里只说切换的是什么；/handoff 那句只在设置页显示。 |
 | 10 | 向导第 3、4 步 | 第 3 步「tracker 的 MCP 工具」和第 4 步「权限档案」对第一次用的人几乎都是空的（新机器没有 transcript：「没有新的候选」，「请模型解释每一条」是灰的）；第 4 步说「之后在 设置 → 打断与通知 里补」，实际在 设置 › 高级 › 打断与通知。 | 中 | 已修：设置路径的文字改对；两步移出第一次的向导（见下面「要定的事」）。 |
 | 11 | 首页「轮到你」 | 卡片时间写「just now ago」/「刚刚前」。 | 低 | 已修：不到一分钟时写「刚刚」/「just now」。 |

@@ -26,16 +26,16 @@ export function hookCommand(hookBin: string, platform: NodeJS.Platform): string 
   return `"${p.replace(/"/g, '\\"')}"`;
 }
 
-/** 只识别 hookCommand 生成的精确形式：双引号包裹的路径，末段恰好是 butler-hook 或 butler-hook.exe。 */
-export function isButlerHook(command: unknown): boolean {
-  return typeof command === "string" && /^"[^"]*[/\\]butler-hook(\.exe)?"$/.test(command);
+/** 只识别 hookCommand 生成的精确形式：双引号包裹的路径，末段恰好是 shipherd-hook 或 shipherd-hook.exe。 */
+export function isShipherdHook(command: unknown): boolean {
+  return typeof command === "string" && /^"[^"]*[/\\]shipherd-hook(\.exe)?"$/.test(command);
 }
 
 function hookObject(settings: Json): Record<string, unknown> | null {
   return isObj(settings.hooks) ? settings.hooks : null;
 }
 
-function butlerCommands(settings: Json, event: string): unknown[] {
+function shipherdCommands(settings: Json, event: string): unknown[] {
   const groups = hookObject(settings)?.[event];
   if (!Array.isArray(groups)) return [];
   return groups
@@ -43,10 +43,10 @@ function butlerCommands(settings: Json, event: string): unknown[] {
     .flatMap((g) => (Array.isArray(g.hooks) ? (g.hooks as unknown[]) : []))
     .filter(isObj)
     .map((h) => h.command)
-    .filter(isButlerHook);
+    .filter(isShipherdHook);
 }
 
-/** 只删除 Butler 自己的条目；非对象的 group/entry 原样保留；只有 Butler 实际删过的 event 键和 hooks 对象才会被清理。 */
+/** 只删除 Shipherd 自己的条目；非对象的 group/entry 原样保留；只有 Shipherd 实际删过的 event 键和 hooks 对象才会被清理。 */
 export function applyUninstall(settings: Json): Json {
   const next = structuredClone(settings);
   const hooks = hookObject(next);
@@ -63,7 +63,7 @@ export function applyUninstall(settings: Json): Json {
         continue;
       }
       const entries = g.hooks as unknown[];
-      const remaining = entries.filter((h) => !(isObj(h) && isButlerHook(h.command)));
+      const remaining = entries.filter((h) => !(isObj(h) && isShipherdHook(h.command)));
       if (remaining.length === entries.length) {
         kept.push(g);
         continue;
@@ -101,7 +101,7 @@ export function applyInstall(settings: Json, command: string): Json {
 }
 
 export function hookStatus(settings: Json, command: string): HookStatus {
-  const perEvent = HOOK_EVENTS.map((e) => butlerCommands(settings, e));
+  const perEvent = HOOK_EVENTS.map((e) => shipherdCommands(settings, e));
   if (perEvent.every((cmds) => cmds.length === 1 && cmds[0] === command)) return "installed";
   if (perEvent.every((cmds) => cmds.length === 0)) return "missing";
   return perEvent.some((cmds) => cmds.some((c) => c !== command)) ? "stale" : "partial";
@@ -141,12 +141,12 @@ async function exists(p: string): Promise<boolean> {
  */
 export async function writeSettingsAtomic(file: string, data: Json): Promise<void> {
   await mkdir(dirname(file), { recursive: true });
-  const backup = `${file}.butler-backup`;
+  const backup = `${file}.shipherd-backup`;
   const existed = await exists(file);
   if (existed && !(await exists(backup))) await copyFile(file, backup);
   const target = existed ? await realpath(file) : file;
   const mode = existed ? (await stat(target)).mode & 0o777 : undefined;
-  const tmp = `${target}.butler-tmp`;
+  const tmp = `${target}.shipherd-tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   if (mode !== undefined) await chmod(tmp, mode);
   await renameWithRetry(tmp, target);
@@ -164,7 +164,7 @@ export async function uninstallHooks(settingsFile: string): Promise<void> {
 }
 
 /**
- * 把打包的 butler-hook 复制到 ~/.butler/bin。只复制内容，不用 fs.copyFile：
+ * 把打包的 shipherd-hook 复制到 ~/.shipherd/bin。只复制内容，不用 fs.copyFile：
  * 从浏览器下载、用"仍要打开"放行的 app 里，hook 带着 com.apple.quarantine；复制出来的程序如果也带着，
  * 会被 Gatekeeper 拦下，Claude Code 跑不了 hook。copyFile 带不带扩展属性取决于 libuv 的实现
  * （cp、copyfile(3) 的 COPYFILE_ALL 都会带），流式复制（约 143 MB）一定不带。ad-hoc 签名在文件内容里，不受影响。

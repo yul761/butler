@@ -170,7 +170,7 @@ describe("PrStagesService", () => {
     expect(ticketMerged(st("active", "done"), [{ state: "open" }])).toBe(true);
   });
 
-  it("ticketMerged: an open PR Butler gave up reading (10 failed reads) does not hold the ticket back", () => {
+  it("ticketMerged: an open PR Shipherd gave up reading (10 failed reads) does not hold the ticket back", () => {
     const st = { status: "active" as const, statusManual: null };
     expect(ticketMerged(st, [{ state: "merged" }, { state: "open", readRetryAt: 5 }])).toBe(true);
     expect(ticketMerged(st, [{ state: "merged" }, { state: "open", readRetryAt: null }])).toBe(false);
@@ -179,9 +179,9 @@ describe("PrStagesService", () => {
   });
 
   it("an unread handoff row with a made-up url and the same number as a read row is not shown: one row", () => {
-    const real = prRow({ id: 1, number: 25, url: "https://github.com/yul761/butler/pull/25", slug: "yul761/butler", state: "merged", mergedAt: 200 });
+    const real = prRow({ id: 1, number: 25, url: "https://github.com/yul761/shipherd/pull/25", slug: "yul761/shipherd", state: "merged", mergedAt: 200 });
     const bogus = prRow({
-      id: 2, number: 25, url: "https://github.com/yuchenlin/butler/pull/25", slug: "yuchenlin/butler", repoId: null, headBranch: null, state: "merged",
+      id: 2, number: 25, url: "https://github.com/yuchenlin/shipherd/pull/25", slug: "yuchenlin/shipherd", repoId: null, headBranch: null, state: "merged",
       mergedAt: null, openedAt: null, source: "handoff", checkedAt: 0, ci: "unknown",
     });
     const rows = rowsOf(make({ tickets: [ticket("A-1", [repo(5, "A-1")])], prs: [real, bogus] }));

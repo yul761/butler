@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 用一套「谁该动」（`Turn`）规则，把每个 PR、每个 ticket、每个总控 session、每条要你动手的 Butler 提醒和「别人请你 review 的 PR」算成同一种数据（`TurnBoard`），通过 IPC 交给渲染进程。同时新加一路「请你 review」的 gh 查询。本层不改界面，旧的状态算法在第 2、3 层删。
+**Goal:** 用一套「谁该动」（`Turn`）规则，把每个 PR、每个 ticket、每个总控 session、每条要你动手的 Shipherd 提醒和「别人请你 review 的 PR」算成同一种数据（`TurnBoard`），通过 IPC 交给渲染进程。同时新加一路「请你 review」的 gh 查询。本层不改界面，旧的状态算法在第 2、3 层删。
 
 **Architecture:**
 - 规则全是纯函数，放在 `src/shared/turn.ts`：`prTurn`、`sessionTurn`、`ticketTurn`、`noticeNeedsYou`、`mostUrgent`。
@@ -105,10 +105,10 @@
 按顺序判断，先满足哪条就是哪条：
 
 1. 有未回答的 ask_user：`you/answer {question, options, askId: inbox_items.id, sessionId}`。这个 `askId` 可以直接传给 `api.answerInbox(askId, option)`。
-2. `activity.kind === "approval"`，或者 needs-you 的类别是 `permission`：`you/butler {notice: {kind: "approval", target, title}}`。`approval` 是 Task 1 给 `NowNotice` 新加的一种。
+2. `activity.kind === "approval"`，或者 needs-you 的类别是 `permission`：`you/shipherd {notice: {kind: "approval", target, title}}`。`approval` 是 Task 1 给 `NowNotice` 新加的一种。
 3. `refreshing`（正在换新）：`agent/working`。
 4. needs-you 的类别是 `stuck` 或 `missing_info`：`you/stuck {source: "needs_you", detail: reason}`。
-5. `activity.limit` 有值：`you/butler {notice: {kind: "session_limited", target, title, limit}}`。
+5. `activity.limit` 有值：`you/shipherd {notice: {kind: "session_limited", target, title, limit}}`。
 6. `activity.stuck === true`（stuck-tracker 认为在跑但长时间没动静）：`you/stuck {source: "silent", detail: activity.reason}`。
 7. 最近一条 report 的 `kind === "blocked"`，session 不在干活，并且 `stoppedAt === null || stoppedAt <= report.at + REPORT_STOP_SLACK_MS`（5 分钟，意思是发完 report 以后没再干过别的一轮）：`you/stuck {source: "blocked_report", detail: report.text}`。
 8. needs-you 是其他类别（`question`、`choice`）：`you/answer {question: reason, options: [], askId: null}`。
@@ -121,7 +121,7 @@
 
 - **非 PR 候选 `others`：**
   - 每个 head session 的 `sessionTurn`。
-  - 挂在这个 ticket 上的、要你动手的 Butler 提醒，转成 `you/butler`。
+  - 挂在这个 ticket 上的、要你动手的 Shipherd 提醒，转成 `you/shipherd`。
   - `effectiveStatus === "blocked"` 时，加一条 `you/stuck {source: "ticket_blocked", detail: null, sessionId: 第一个 head ?? null}`。
   - 没有 PR 且 `effectiveStatus` 是 `done` 或 `merged_pending_followup` 时，加一条 `done/merged`，由调用方传进来。
 - **sessionTurn：** 取 `mostUrgent(others)`。
@@ -129,9 +129,9 @@
   - 有 PR 时，session 给出的 `you/unattended(agent_stopped)`、`idle` 和 `done` 不参与。等 review 时 session 停着是正常的。
   - 输入全空时返回 `{ turn: { owner: "idle", kind: "not_started" }, others: 0 }`。
   - `others` 是除了选中的那个以外、owner 不是 done 的 PR turn 的个数。
-- **急的顺序：** 先比 `TURN_PRIORITY`，同为 you 时再比 `YOU_KIND_RANK`：answer 0、stuck 1、butler 2、unattended 3、review 4、merge 5。还一样的，取先出现的。
+- **急的顺序：** 先比 `TURN_PRIORITY`，同为 you 时再比 `YOU_KIND_RANK`：answer 0、stuck 1、shipherd 2、unattended 3、review 4、merge 5。还一样的，取先出现的。
 
-### R5. 哪些 Butler 提醒算「要你动手」（`noticeNeedsYou`）
+### R5. 哪些 Shipherd 提醒算「要你动手」（`noticeNeedsYou`）
 
 | kind | 算不算 |
 |---|---|
@@ -155,7 +155,7 @@
 - `pendingDecisions()` 里的每一条 ask_user 都要出现成一条 `you/answer`。
 - 按提问 session 的 head 归组。每组最早的一条作为那个 session 的 `sessionTurn` 输入（R3 第 1 条），其余的作为额外的 item（ticket 的进 `moreAsks`，总控的进 `loose`）。
 - head 找不到的，按 inbox 行自带的 ticketKey、featureId、epicId 归属：有 ticketKey 的进那个 ticket 的 `moreAsks`，没有的进 `loose`。
-- 总控 session（feature、epic 的总控，以及 Butler 总控）也算 `sessionTurn`，结果 owner 是 you 的才进 `loose`。
+- 总控 session（feature、epic 的总控，以及 Shipherd 总控）也算 `sessionTurn`，结果 owner 是 you 的才进 `loose`。
 
 ### R7. `since`（进入这个状态的时间）
 
@@ -167,7 +167,7 @@
 | `stuck/silent` | `activity.lastOutputAt ?? activity.startedAt ?? now` |
 | `stuck/blocked_report` | report 的 `at` |
 | `agent/working`（session） | `activity.startedAt ?? now` |
-| `butler` | `ci_undelivered` 和 `comments_waiting` 用自带的 `since`，其余用 `now` |
+| `shipherd` | `ci_undelivered` 和 `comments_waiting` 用自带的 `since`，其余用 `now` |
 | `review` | `review_requests.first_seen_at` |
 | 其余 session 的 turn | `stoppedAt ?? now` |
 
@@ -288,7 +288,7 @@
 - Produces，附加的部分：
 ```ts
 export type YouKind = Extract<Turn, { owner: "you" }>["kind"];
-export const YOU_KIND_RANK: Record<YouKind, number> = { answer: 0, stuck: 1, butler: 2, unattended: 3, review: 4, merge: 5 };
+export const YOU_KIND_RANK: Record<YouKind, number> = { answer: 0, stuck: 1, shipherd: 2, unattended: 3, review: 4, merge: 5 };
 /** 一个 turn 和它进入这个状态的时间。 */
 export interface TimedTurn { turn: Turn; since: number }
 /** 越小越急：[TURN_PRIORITY, you 内部的顺序]。 */
@@ -298,7 +298,7 @@ export function mostUrgent<T extends { turn: Turn }>(xs: readonly T[]): T | null
 export function noticeNeedsYou(n: NowNotice): boolean;
 export type TurnFilter = { epicId?: number; featureId?: number; ticketKey?: string };
 ```
-- `types.ts` 的 `NowNotice` 加一种：`| { kind: "approval"; target: NowTarget; title: string | null }`，注释写「终端停在权限确认上（第 1 层的 you/butler 用）」。
+- `types.ts` 的 `NowNotice` 加一种：`| { kind: "approval"; target: NowTarget; title: string | null }`，注释写「终端停在权限确认上（第 1 层的 you/shipherd 用）」。
 - `S.noticeApproval: (title: string | null) => string`。中文：`title === null ? "在终端里确认权限" : \`「${title}」在终端里等你确认权限\``；英文：`"Confirm the permission prompt in the terminal"` / `` `"${title}" is waiting for you to confirm a permission prompt` ``。
 
 - [ ] **Step 1: 写失败的测试** `src/shared/turn.test.ts`
@@ -353,7 +353,7 @@ describe("noticeNeedsYou", () => {
     expect(noticeNeedsYou(breaker("warned"))).toBe(false);
     expect(noticeNeedsYou({ kind: "lessons_paused" })).toBe(false);
     expect(noticeNeedsYou({ kind: "check_promoted", eventId: 1, batchId: null, names: [], at: 0 })).toBe(false);
-    expect(noticeNeedsYou({ kind: "approval", target: { page: "butler", sessionId: null }, title: null })).toBe(true);
+    expect(noticeNeedsYou({ kind: "approval", target: { page: "shipherd", sessionId: null }, title: null })).toBe(true);
     const stack = (reason: string) => ({ kind: "stack", stack: { reason }, target: null }) as unknown as NowNotice;
     expect(noticeNeedsYou(stack("conflict"))).toBe(true);
     expect(noticeNeedsYou(stack("behind"))).toBe(false);
@@ -550,9 +550,9 @@ describe("sessionTurn", () => {
       turn: { owner: "you", kind: "answer", question: "用哪个库？", options: ["a", "b"], askId: 7, sessionId: "s" }, since: N - 50,
     });
   });
-  it("permission prompt → butler approval notice", () => {
+  it("permission prompt → shipherd approval notice", () => {
     expect(sessionTurn(ses({ activity: act({ kind: "approval" }) })).turn).toEqual({
-      owner: "you", kind: "butler", notice: { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" },
+      owner: "you", kind: "shipherd", notice: { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" },
     });
   });
   it("only the four sources are stuck", () => {
@@ -969,7 +969,7 @@ export class ReviewRequestPoller {
 }
 ```
 - 设置部分：
-  - `SETTING_DEFAULTS.reviewRequestScope = "all"`，注释写「请你 review 的查询：all = 账号能看到的所有仓库，registered = 只看 Butler 登记过的」。
+  - `SETTING_DEFAULTS.reviewRequestScope = "all"`，注释写「请你 review 的查询：all = 账号能看到的所有仓库，registered = 只看 Shipherd 登记过的」。
   - 把这个 key 加进 `EDITABLE_SETTINGS`。设置界面由第 6 层做。
   - `normalizeSetting` 只接受 trim 之后的 `all` 或 `registered`，其他值抛 `SettingError(M().reviewRequestScope)`。
   - `M().reviewRequestScope` 中文是「请你 review 的范围只能是 all 或 registered」，英文是 "The review request scope can only be all or registered"。
@@ -1075,7 +1075,7 @@ export interface TurnServiceDeps {
   epics(): EpicView[];                     // sessionService.epicViews()
   /** 休眠着的 head（WatchedPr 之外，ticket 的 session 列表里可能没有）。 */
   hibernatedHeads(): Session[];
-  /** feature / epic 总控和 Butler 总控的 head，各带页面 target。 */
+  /** feature / epic 总控和 Shipherd 总控的 head，各带页面 target。 */
   coordinators(): { session: Session; featureId: number | null; epicId: number | null; target: NowTarget; title: string | null }[];
   head(id: string): Session | null;
   prs(ticketKey: string): WatchedPr[];     // prWatcher.statusOf
@@ -1210,7 +1210,7 @@ export function turnSendArg(v: unknown): { ticketKey: string; pr: { repo: string
 ```ts
 turnBoard: (filter?: TurnFilter) => call<TurnBoard>(IPC.turnBoard, filter ?? null),
 turnSendToAgent: (item: { ticketKey: string; pr: { repo: string; number: number } }) => call<{ ok: boolean; reason?: string }>(IPC.turnSendToAgent, item),
-onTurnChanged: (cb: () => void) => window.butler.on(IPC.turnChanged, cb),
+onTurnChanged: (cb: () => void) => window.shipherd.on(IPC.turnChanged, cb),
 ```
 
 `index.ts` 的接线：
@@ -1289,9 +1289,9 @@ export function turnSentence(turn: Turn, item: TurnItem, t: UiStrings): string;
 | `external.awaiting_review(names)` | `在等 ${names.join("、")} review`（空时是 `在等 review`） | `Waiting for review from ${names.join(", ")}` / `Waiting for review` |
 | `external.merge_queue` | `在合并队列里` | `In the merge queue` |
 | `done` / `idle` | `合了` / `还没开始` | `Merged` / `Not started` |
-| `butler.<kind>` | 见下 | 见下 |
+| `shipherd.<kind>` | 见下 | 见下 |
 
-`butler` 按 notice 的 kind 出一句短话，只覆盖 `noticeNeedsYou` 为真的那几种：
+`shipherd` 按 notice 的 kind 出一句短话，只覆盖 `noticeNeedsYou` 为真的那几种：
 - `approval`：`在终端里等你确认权限` / `Waiting for you to confirm a permission prompt`
 - `claude_limited`：`Claude 到额度了，等你处理` / `Claude hit its limit`
 - `model_unavailable`：`模型用不了` / `The model is unavailable`
@@ -1302,7 +1302,7 @@ export function turnSentence(turn: Turn, item: TurnItem, t: UiStrings): string;
 - `stack`：`栈里有冲突没交给 session` / `A stack conflict wasn't handed to a session`；`stuck` 原因是 `栈的 rebase 卡住了` / `The stack rebase is stuck`
 - `intake`：`自动接活拿不准，等你决定` / `Auto-intake needs your decision`
 
-其余 kind 不会出现在 turn 里。`switch` 的 default 返回 `t.turn.butler.other`：`Butler 要你点一下` / `Butler needs a click`。
+其余 kind 不会出现在 turn 里。`switch` 的 default 返回 `t.turn.shipherd.other`：`Shipherd 要你点一下` / `Shipherd needs a click`。
 
 - [ ] **Step 1: 写失败的测试** `turn-text.test.ts`
 
@@ -1333,8 +1333,8 @@ describe("turnSentence", () => {
     setUiLang("en");
     expect(turnSentence({ owner: "you", kind: "merge", risk: null }, item({ owner: "you", kind: "merge", risk: null }), S)).toBe("Ready to merge");
   });
-  it("butler sentences come from the notice kind", () => {
-    const t: Turn = { owner: "you", kind: "butler", notice: { kind: "approval", target: { page: "butler", sessionId: null }, title: null } };
+  it("shipherd sentences come from the notice kind", () => {
+    const t: Turn = { owner: "you", kind: "shipherd", notice: { kind: "approval", target: { page: "shipherd", sessionId: null }, title: null } };
     expect(turnSentence(t, item(t), S)).toBe("在终端里等你确认权限");
   });
 });
@@ -1383,7 +1383,7 @@ import type { TurnBoard } from "../src/shared/turn";
 import { completeWizard, expect, test, unsupportedGhCalls } from "./fixtures";
 
 const board = (page: Page, filter?: unknown) =>
-  page.evaluate(([ch, f]) => (window as unknown as { butler: { invoke(c: string, ...a: unknown[]): Promise<{ ok: boolean; value: TurnBoard }> } }).butler.invoke(ch as string, f ?? null), [IPC.turnBoard, filter] as const);
+  page.evaluate(([ch, f]) => (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<{ ok: boolean; value: TurnBoard }> } }).shipherd.invoke(ch as string, f ?? null), [IPC.turnBoard, filter] as const);
 
 /**
  * 第 1 层：「请你 review」的 PR 经 gh search prs 进 turn:board，不属于任何 ticket；带 filter 时不出现。
@@ -1433,8 +1433,8 @@ git commit -m "test(turn): e2e for review requests on the turn board"
 | # | 旧算法 | 在哪里用（调用点） | 换成 | 哪层删 |
 |---|---|---|---|---|
 | A | `waitingOnOf`（`src/shared/progress.ts:57`） | ① `ProgressPage.tsx:54/216`，经 `progress-view.ts:59/72` 和 `progress-ui.ts:22` 的 `waitingText`，包括 `BLOCKING` 和 stuck 列表（`progress-view.ts:175-181`） | 「全部工作」页用 `turn:board` | 第 2 层删页面和 `progress-ui.waitingText`。`main/progress/progress-view.ts` 和 `shared/progress.ts` 的 `waitingOnOf` 由第 3 层删，见建议 4 |
-| A | 同上 | ② `src/main/control/butler-control.ts:276`（MCP `progress_overview` 的 `waitingOn`）；③ `src/main/handoff/feature-templates.ts:169`（feature 汇总的后台文案） | 用 `TurnService.board` 的 turn。字段名可以保留，内容换成 owner 和 kind | 第 3 层（总控页那一层），见建议 4 |
-| B | 主进程 `now-view.ts` 的 `sessionRow` 中 needsYou 和 idle 的判断（约 71-97 行），以及 `buildNowView` 产出的 `needsYou`、`decisions`、`notices` | ④ `NowPage.tsx`（`needsYouText`、`needsYouTotal`）；⑤ `App.tsx:167` 侧栏的 `needsYouTotal(nowView)` | 首页和侧栏用 `turn:board` 的 `counts.you` | 渲染进程这边由第 2 层删。主进程 `NowView.needsYou`、`decisions`、`notices` 字段的产出由 **第 3 层** 删，那时渲染进程已经不读了；`ButlerPage` 也不读，删之前用 grep 再确认一次 |
+| A | 同上 | ② `src/main/control/shipherd-control.ts:276`（MCP `progress_overview` 的 `waitingOn`）；③ `src/main/handoff/feature-templates.ts:169`（feature 汇总的后台文案） | 用 `TurnService.board` 的 turn。字段名可以保留，内容换成 owner 和 kind | 第 3 层（总控页那一层），见建议 4 |
+| B | 主进程 `now-view.ts` 的 `sessionRow` 中 needsYou 和 idle 的判断（约 71-97 行），以及 `buildNowView` 产出的 `needsYou`、`decisions`、`notices` | ④ `NowPage.tsx`（`needsYouText`、`needsYouTotal`）；⑤ `App.tsx:167` 侧栏的 `needsYouTotal(nowView)` | 首页和侧栏用 `turn:board` 的 `counts.you` | 渲染进程这边由第 2 层删。主进程 `NowView.needsYou`、`decisions`、`notices` 字段的产出由 **第 3 层** 删，那时渲染进程已经不读了；`ShipherdPage` 也不读，删之前用 grep 再确认一次 |
 | C | 渲染进程 `now-view.ts` 的 `prText`、`prPill`、`rowText`、`livePill`，以及 `feature-summary-view.ts` 的 `prPill` | ④ `NowPage.tsx:277`；⑥ `LiveWindow.tsx:175`（`livePill`）；⑦ `FeaturePage.tsx:358`（`prPill`、`prLabel`） | `turnSentence` 加 owner 色 | `now-view.ts` 的这些函数和 `LiveWindow` 的 `livePill` 由第 2 层删。`feature-summary-view.ts` 的 `prPill`、`prLabel` 由第 3 层删，第 3 层的删除清单里已经写了。`S.prPill` 在第 2 层最后一个用它的地方删掉后一起删 |
 | D | epic 和 feature 的状态：`epic-info.ts:54` 的 `statusOf`（`EpicFeatureStatus`），以及 `epic-row.ts` 的 `epicRowText` 和 `firstSentence` | ⑦' `EpicPage.tsx:144`；侧栏的卡住标记（`.stuck-mark`）；`epic-brief.ts:64/95` 的总控文案 | `ScopeTurnRow`（数字、进度条、`youCount`、`slowest`） | 侧栏的标记由第 2 层删。`EpicPage` 和 `epic-row.ts` 由第 3 层删。`EpicFeatureStatus`、`statusOf` 和 `S.epicStatus` 由第 3 层在最后一个调用点删掉后删 |
 
@@ -1448,7 +1448,7 @@ git commit -m "test(turn): e2e for review requests on the turn board"
    - 卡住的 4 个来源：R3、R4。
    - 每个 PR 单独算、ticket 取最急的：Task 1、4。
    - 首页的数字（N 件事轮到你、agent 在处理多少、在等多少、今天合了多少）：Task 4 的 counts。
-   - Butler 卡片的 7 种来源：R5 和 Task 1。其中「屏幕上的权限确认」是新加的 `approval`。只做提示的提醒不进首页。
+   - Shipherd 卡片的 7 种来源：R5 和 Task 1。其中「屏幕上的权限确认」是新加的 `approval`。只做提示的提醒不进首页。
    - epic 的「数字 + 进度条」和「最慢的地方」：Task 4。
    - 中英文：Task 8、11。
    - 不改后台行为：Task 5、6 只多记了时间，和加了一个由用户触发的、走现有路径的「一键发送」。
@@ -1469,8 +1469,8 @@ git commit -m "test(turn): e2e for review requests on the turn board"
 1. **`TurnItem` 加 `others: number`。** `ticketTurn` 返回了 `others`，用来说「另有 1 个 PR 在等 CI」，但 `TurnItem` 里没有这个字段。不带 filter 时，item 已经是 ticket 级的，渲染进程拿不到 PR 的 turn，没法自己算。现在第 2 层的首页卡片说不出这半句。建议在 item 上加 `others`，并让 `turnSentence` 接上这半句。
 2. **带 filter 时 items 的粒度和 counts。** 第 3 层要按 PR 拆开的 items（每个 PR 一条，再加 ticket 级一条），协调者的口径又是「counts 等于 items 的计数」。两者在带 filter 时不能同时成立。本计划的做法是：counts 始终按「一个 ticket 一条」数，不带 filter 时正好等于 items 的计数，带 filter 时不等于。建议把索引的口径改成「counts 按 ticket 级计数；不带 filter 时等于 items」。另外，同一个 ticket 有几条没回答的 ask_user 时，第一条以后的会是额外的 `pr: null` item。第 3 层取「session 级那一条」时，应该在 `pr === null` 的 item 里取 `mostUrgent`，不要取第一条。
 3. **不带 filter 时的 scopes 要包括「没有 epic 的 feature」。** 协调者第二次说的是「所有 epic 和所有单独的 ticket」，第一次说的是「所有 feature」。如果只照第二次，没有 epic 的 feature 在首页的小表里就没有行了，第 3 层的 `featuresOutsideEpics` 也没有数据。本计划把它们加了进来。如果第 2 层不想要，可以在渲染进程过滤掉。
-4. **`waitingOnOf` 的后台调用点没人删。** 第 3 层的计划写的是「`butler-control` 和 `feature-templates` 的 `waitingOnOf` 属于第 1 层」，而给我的范围是「本层只出新算法和测试」。按现在的写法，这两处和 `main/progress/*` 谁都不删。建议在第 3 层加一个任务，把它们换成 `TurnService.board` 的结果；或者允许本层加第 13 个任务来做。不管哪种，表 A 的「哪层删」都要在索引里定下来。
-5. **`NowNotice` 新加了 `approval`。** 索引里 `you/butler` 的 `notice: NowNotice` 没有能表示「屏幕上的权限确认」的 kind，所以本层加了 `{ kind: "approval"; target; title }`，并在 `noticeText` 里补上了对应的分支。第 2 层的 `Notice` 组件如果按 kind 穷举，要认这一种。
-6. **总控和全局的 item。** 协调者要求「所有 ask_user，包括总控 session 的，都要出现在 items 里」，所以 items 里会有 `ticketKey: null && pr === null` 的项：总控的 ask_user 和卡住，以及不挂在 ticket 上的 Butler 提醒（Claude 到额度、自动接活等）。建议在索引的口径里写明，「一条 item 是一个 ticket、一个请你 review 的 PR，或者一件不属于 ticket 的要你动手的事」。
+4. **`waitingOnOf` 的后台调用点没人删。** 第 3 层的计划写的是「`shipherd-control` 和 `feature-templates` 的 `waitingOnOf` 属于第 1 层」，而给我的范围是「本层只出新算法和测试」。按现在的写法，这两处和 `main/progress/*` 谁都不删。建议在第 3 层加一个任务，把它们换成 `TurnService.board` 的结果；或者允许本层加第 13 个任务来做。不管哪种，表 A 的「哪层删」都要在索引里定下来。
+5. **`NowNotice` 新加了 `approval`。** 索引里 `you/shipherd` 的 `notice: NowNotice` 没有能表示「屏幕上的权限确认」的 kind，所以本层加了 `{ kind: "approval"; target; title }`，并在 `noticeText` 里补上了对应的分支。第 2 层的 `Notice` 组件如果按 kind 穷举，要认这一种。
+6. **总控和全局的 item。** 协调者要求「所有 ask_user，包括总控 session 的，都要出现在 items 里」，所以 items 里会有 `ticketKey: null && pr === null` 的项：总控的 ask_user 和卡住，以及不挂在 ticket 上的 Shipherd 提醒（Claude 到额度、自动接活等）。建议在索引的口径里写明，「一条 item 是一个 ticket、一个请你 review 的 PR，或者一件不属于 ticket 的要你动手的事」。
 7. **`turn:send-to-agent` 的 `reason`。** 取值是 `TurnSendReason`：`not_found | not_sendable | no_comments`，或 `CiSkipReason`（`busy`、`no_session` 等）。第 2 层的 `S.hm.act.sendNot(reason)` 按这个列表出文案；索引里的 `reason?: string` 可以收紧成这个类型。
 8. **企业版 GitHub 上的「请你 review」。** `gh search prs` 只查 gh 默认的主机，企业版的 review 请求要按主机再查一次。本层没有做，建议记进 spec 的「已知限制」。

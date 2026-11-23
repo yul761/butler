@@ -6,7 +6,7 @@ import { firstRunProps, homeOpenedSignal, isNoWork, type NameCtx } from "./home-
 import { fixLanding, missingTicket, routeGone } from "./route-view";
 import { ArchivedPage } from "./components/ArchivedPage";
 import { AuditPage } from "./components/AuditPage";
-import { ButlerPage } from "./components/ButlerPage";
+import { ShipherdPage } from "./components/ShipherdPage";
 import { FeaturePage } from "./components/FeaturePage";
 import { NewFeatureDialog } from "./components/NewFeatureDialog";
 import { NewTicketDialog } from "./components/NewTicketDialog";
@@ -44,8 +44,8 @@ export type Route =
    * landing "control"：刚开好修复 session（fixLanding），落到「总控」页签看 focusTerm 那个终端；landingSeq 每次开都递增，页面已经开着也会再落一次。
    */
   | { page: "feature"; id: number; focusSession?: string | null; landing?: "control"; focusTerm?: string | null; landingSeq?: number }
-  /** Butler 总控（BTL-190 第 5 点）。 */
-  | { page: "butler"; focusSession?: string | null }
+  /** Shipherd 总控（BTL-190 第 5 点）。 */
+  | { page: "shipherd"; focusSession?: string | null }
   /** 效果与花费页。 */
   | { page: "effect" }
   /** 全部工作（UI 重做第 2 层）；section：从提醒跳来时要展开的那一块。 */
@@ -184,7 +184,7 @@ export function App() {
   /** 「现在」页的一行点开：ticket 走 openTicket（切到那个终端）；feature 页打开时先看那个 session 的终端。 */
   const openTarget = (t: NowTarget) => {
     if (t.page === "ticket") openTicket(t.key, t.sessionId ? { ticketKey: t.key, sessionId: t.sessionId } : undefined);
-    else if (t.page === "butler") setRoute({ page: "butler", focusSession: t.sessionId });
+    else if (t.page === "shipherd") setRoute({ page: "shipherd", focusSession: t.sessionId });
     else if (t.page === "feature") setRoute({ page: "feature", id: t.id, focusSession: t.sessionId });
     // 别的（旧版本主进程给的、这一版已经没有的页面）不跳。
   };
@@ -279,7 +279,7 @@ export function App() {
                 onGo={go}
               />
             )}
-            {route.page === "butler" && <ButlerPage key={route.focusSession ?? ""} focusSession={route.focusSession} />}
+            {route.page === "shipherd" && <ShipherdPage key={route.focusSession ?? ""} focusSession={route.focusSession} />}
             {route.page === "all" && (
               <AllWorkPage
                 key={route.section ?? ""}
@@ -300,7 +300,7 @@ export function App() {
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} />}
             {route.page === "settings" && <SettingsPage section={route.section} nonce={route.nonce} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
-            {route.page === "lessons" && <LessonsPage tab={route.tab} onOpenSession={(id) => setRoute({ page: "butler", focusSession: id })} />}
+            {route.page === "lessons" && <LessonsPage tab={route.tab} onOpenSession={(id) => setRoute({ page: "shipherd", focusSession: id })} />}
           </>
         )}
       </main>

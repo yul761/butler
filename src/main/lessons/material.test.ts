@@ -116,7 +116,7 @@ describe("materialText", () => {
       items,
       fixes: [{ filename: "src/a.ts", patch: big }],
       fixesNote: null,
-      butler: { ticketKey: "BTL-1", decisions: ["d"], learnings: ["l"], excerpts: [big, big] },
+      shipherd: { ticketKey: "BTL-1", decisions: ["d"], learnings: ["l"], excerpts: [big, big] },
     };
     for (const lang of ["zh", "en"] as const) {
       const t = materialText(m, lang);
@@ -126,10 +126,10 @@ describe("materialText", () => {
       expect(t).toContain("one");
     }
   });
-  it("includes butler context and fixes when small", () => {
+  it("includes shipherd context and fixes when small", () => {
     const m: Material = {
       pr: pr(), items: [], fixes: [{ filename: "f.ts", patch: "PATCH" }], fixesNote: null,
-      butler: { ticketKey: "BTL-1", decisions: ["DEC"], learnings: ["LRN"], excerpts: ["EXC"] },
+      shipherd: { ticketKey: "BTL-1", decisions: ["DEC"], learnings: ["LRN"], excerpts: ["EXC"] },
     };
     const t = materialText(m, "en");
     for (const s of ["PATCH", "f.ts", "BTL-1", "DEC", "LRN", "EXC"]) expect(t).toContain(s);
@@ -140,7 +140,7 @@ describe("materialText", () => {
     items: Array.from({ length: n }, (_, i) => ({
       who: "human" as const, author: n === 12 ? names[i]! : `user${i}`, body, url: null, path: null, line: null, at: iso("10:00"),
     })),
-    fixes: [], fixesNote: null, butler: null,
+    fixes: [], fixesNote: null, shipherd: null,
   });
   it("caps a 70k PR body so every author survives", () => {
     const t = materialText(mk(12, "y".repeat(1500), "p".repeat(70_000)), "en");
@@ -160,7 +160,7 @@ describe("materialText", () => {
   });
   it("a 5000-char author or path is cut in the header", () => {
     const m: Material = {
-      pr: pr(), items: [item("a".repeat(5000), "b", "p".repeat(5000))], fixes: [{ filename: "f".repeat(5000), patch: "P" }], fixesNote: null, butler: null,
+      pr: pr(), items: [item("a".repeat(5000), "b", "p".repeat(5000))], fixes: [{ filename: "f".repeat(5000), patch: "P" }], fixesNote: null, shipherd: null,
     };
     const t = materialText(m, "en");
     expect(t.length).toBeLessThan(2000);
@@ -168,26 +168,26 @@ describe("materialText", () => {
   });
   it("the 1500-char body cap and the 4000-char patch cap hold", () => {
     const m: Material = {
-      pr: pr(), items: [item("al", "y".repeat(3000))], fixes: [{ filename: "f.ts", patch: "z".repeat(9000) }], fixesNote: null, butler: null,
+      pr: pr(), items: [item("al", "y".repeat(3000))], fixes: [{ filename: "f.ts", patch: "z".repeat(9000) }], fixesNote: null, shipherd: null,
     };
     const full = materialText(m, "en");
     expect(full).toContain("z".repeat(4000));
     expect(full).not.toContain("z".repeat(4001));
     expect(full).toContain("y".repeat(3000));
     const big = Array.from({ length: 30 }, (_, i) => item(`u${i}`, "y".repeat(2500)));
-    const t = materialText({ pr: pr({ body: "p".repeat(8000) }), items: big, fixes: [], fixesNote: null, butler: null }, "en");
+    const t = materialText({ pr: pr({ body: "p".repeat(8000) }), items: big, fixes: [], fixesNote: null, shipherd: null }, "en");
     expect(t).toContain("y".repeat(1500));
     expect(t).not.toContain("y".repeat(1501));
   });
   it("a rewritten-history note renders when fixesNote is set", () => {
-    const m: Material = { pr: pr(), items: [item("al", "x", "a.ts")], fixes: [], fixesNote: "rewritten", butler: null };
+    const m: Material = { pr: pr(), items: [item("al", "x", "a.ts")], fixes: [], fixesNote: "rewritten", shipherd: null };
     expect(materialText(m, "en")).toContain("history was rewritten");
     expect(materialText(m, "zh")).toContain("改写");
     expect(materialText({ ...m, fixesNote: null }, "en")).not.toContain("rewritten");
   });
   it("the note survives size reduction", () => {
     const big = "x".repeat(1500);
-    const m: Material = { pr: pr({ body: "p".repeat(8000) }), items: Array.from({ length: 60 }, (_, i) => item(`u${i}`, big, "a.ts")), fixes: [], fixesNote: "rewritten", butler: null };
+    const m: Material = { pr: pr({ body: "p".repeat(8000) }), items: Array.from({ length: 60 }, (_, i) => item(`u${i}`, big, "a.ts")), fixes: [], fixesNote: "rewritten", shipherd: null };
     const t = materialText(m, "en");
     expect(t.length).toBeLessThanOrEqual(MATERIAL_MAX_CHARS);
     expect(t).toContain("history was rewritten");

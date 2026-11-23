@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <!-- Butler 应用图标（方向 E1：卡片叠）。Windows 版：铺满画布，不留阴影边；.ico 里 48 px 及以上用它，更小的用 tray-win.svg。
+  <!-- Shipherd 应用图标（方向 E1：卡片叠）。Windows 版：铺满画布，不留阴影边；.ico 里 48 px 及以上用它，更小的用 tray-win.svg。
        蓝底白卡片：任务栏上只有 24–32 px，浅底细描边会糊成一个白块，这里只用大色块。 -->
   <rect x="2" y="2" width="96" height="96" rx="22" fill="#2F6FEB"/>
   <rect x="42" y="14" width="42" height="50" rx="7" fill="#FFFFFF" fill-opacity="0.45"/>

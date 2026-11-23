@@ -3,7 +3,7 @@
 来源：2026-10-26 用户反馈。用户做的往往不是单个 ticket，而是一个 feature：它有自己的名字，下面挂着前端、后端各几个 ticket（每个 ticket 有 Jira 号，例如 DMS-1234），希望一起做、用 subagent / 子 session 同时推进前后端。现在的问题：
 
 1. 新建只能建 ticket，必须填符合格式的 ticket 号，没法表达"feature"这一层。
-2. 选的目录必须是 git 仓库。用户习惯在前后端仓库的上一层目录打开 claude，好同时看到两边，Butler 不支持。
+2. 选的目录必须是 git 仓库。用户习惯在前后端仓库的上一层目录打开 claude，好同时看到两边，Shipherd 不支持。
 3. worktree 合并后一直留在磁盘上，时间久了很乱。
 
 ## 用户确认的决定
@@ -97,15 +97,15 @@ ALTER TABLE ticket_repos ADD COLUMN cleanup_blocked TEXT;
 ### feature 总控 session
 
 - 工作目录是 feature 工作区（不存在就建）。ticket 仓库的工作目录不在工作区里面的（分支模式、别处的 worktree），每个加一个 `--add-dir`。
-- MCP：`butler-sessions` 换成 feature 模式（环境变量 `BUTLER_FEATURE=<id>`，不设 `BUTLER_TICKET`），工具：
+- MCP：`shipherd-sessions` 换成 feature 模式（环境变量 `SHIPHERD_FEATURE=<id>`，不设 `SHIPHERD_TICKET`），工具：
   - `list_tickets()`：feature 下未归档的 ticket：ticket 号、标题、状态、仓库（名字、工作目录、分支）。
   - `start_session({ ticket, repo?, task })`：在这个 ticket 的仓库里开子 session；ticket 只有一个仓库时 `repo` 可以省略。子 session 是这个 ticket 的普通 session，`spawned_by` 记总控。
   - `list_sessions()`：feature 下所有 ticket 的 session（多一个 `ticket` 字段）和 feature 的总控。
   - 请求里的 feature id 来自配置；ticket 必须属于这个 feature 且未归档。
 - 运行中的终端上限：一个 feature（它所有 ticket 的终端 + feature 总控）最多 8 个；单个 ticket 仍是 6 个。
-- 记忆：新 scope `feature:<id>`，挂成 `butler-feature` server。feature 总控挂 `butler-feature` + `butler-workspace`；feature 下 ticket 的所有 session 在原来的基础上多挂 `butler-feature`，前后端靠它共享接口约定等。
+- 记忆：新 scope `feature:<id>`，挂成 `shipherd-feature` server。feature 总控挂 `shipherd-feature` + `shipherd-workspace`；feature 下 ticket 的所有 session 在原来的基础上多挂 `shipherd-feature`，前后端靠它共享接口约定等。
 - 认领：hook 报上来的 session，cwd 恰好是某个未归档 feature 的工作区 → 记成这个 feature 的总控（`feature_id`、`coordinator = 1`）。`/clear` 之后的新 id 沿用上一个 head 的 `feature_id`。用户自己在工作区里打开 claude 也会被认成总控。
-- 终端环境：`BUTLER_SESSION` 照常设，`BUTLER_TICKET` 不设。hook 二进制不用改。
+- 终端环境：`SHIPHERD_SESSION` 照常设，`SHIPHERD_TICKET` 不设。hook 二进制不用改。
 
 ### 合并后自动清理 worktree
 
@@ -130,7 +130,7 @@ ALTER TABLE ticket_repos ADD COLUMN cleanup_blocked TEXT;
 - 把已有 ticket 移进 / 移出 feature。
 - feature 级别的简报、handoff、状态。
 - 删除本地分支、删除远端分支。
-- 总控在 Butler 里新建 ticket。
+- 总控在 Shipherd 里新建 ticket。
 
 ## 测试
 

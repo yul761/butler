@@ -8,8 +8,8 @@ import type { HookEnvelope } from "../../shared/hook-envelope";
 import { BranchOwnership, pathKey, resolveShipDir, shipFromEnvelope, type BranchOwnershipDeps } from "./branch-owners";
 import { PrLinker } from "./pr-links";
 
-const env = (command: string, o: { cwd?: string; ticket?: string | null; butlerSession?: string | null; prUrls?: string[]; event?: string; tool?: string } = {}): HookEnvelope => ({
-  v: 1, receivedAt: 5, ticket: o.ticket === undefined ? "T-1" : o.ticket, butlerSession: o.butlerSession === undefined ? "b1" : o.butlerSession,
+const env = (command: string, o: { cwd?: string; ticket?: string | null; shipherdSession?: string | null; prUrls?: string[]; event?: string; tool?: string } = {}): HookEnvelope => ({
+  v: 1, receivedAt: 5, ticket: o.ticket === undefined ? "T-1" : o.ticket, shipherdSession: o.shipherdSession === undefined ? "b1" : o.shipherdSession,
   payload: { hook_event_name: o.event ?? "PostToolUse", session_id: "c1", tool_name: o.tool ?? "Bash", cwd: o.cwd ?? "/repo", tool_input: { command }, pr_urls: o.prUrls ?? [] },
 });
 
@@ -18,14 +18,14 @@ describe("shipFromEnvelope", () => {
     expect(shipFromEnvelope(env("cd /wt/a && git push -u origin feat/a", { prUrls: [] }))).toEqual({
       sessionId: "b1", ticket: "T-1", cwd: "/repo", commands: [{ kind: "push", dir: "/wt/a", branch: "feat/a" }], prUrls: [],
     });
-    // 没有 BUTLER_SESSION（不是 Butler 开的终端）：用 Claude 的 session id。
-    expect(shipFromEnvelope(env("git push", { butlerSession: null }))?.sessionId).toBe("c1");
+    // 没有 SHIPHERD_SESSION（不是 Shipherd 开的终端）：用 Claude 的 session id。
+    expect(shipFromEnvelope(env("git push", { shipherdSession: null }))?.sessionId).toBe("c1");
     expect(shipFromEnvelope(env("ls"))).toBeNull();
     expect(shipFromEnvelope(env("git push", { event: "PreToolUse" }))).toBeNull();
     expect(shipFromEnvelope(env("git push", { tool: "Skill" }))).toBeNull();
     expect(shipFromEnvelope({ ...env("git push"), payload: "x" })).toBeNull();
-    // Butler 自己的后台 claude：不算。
-    expect(shipFromEnvelope(env("git push", { butlerSession: "headless:r1" }))).toBeNull();
+    // Shipherd 自己的后台 claude：不算。
+    expect(shipFromEnvelope(env("git push", { shipherdSession: "headless:r1" }))).toBeNull();
     // 失败的命令（PostToolUseFailure）里的推送也算：`git push && gh pr create` 里 gh 失败了。
     expect(shipFromEnvelope(env("git push origin feat/a && gh pr create", { event: "PostToolUseFailure" }))?.commands).toHaveLength(2);
   });
@@ -107,7 +107,7 @@ describe("BranchOwnership", () => {
     await s.b.handle(env("cd ../wt/a && git push -u origin HEAD", { cwd: "/repo" }));
     expect(s.owners.get("T-1", s.repoId, "feat/a")).toMatchObject({ sessionId: "b1", dir: "/wt/a", at: 100 });
     expect(s.deps.soon).toHaveBeenCalledWith(s.repoId);
-    await s.b.handle(env("git -C /wt/a push origin feat/a:feat/renamed", { butlerSession: "b2" }));
+    await s.b.handle(env("git -C /wt/a push origin feat/a:feat/renamed", { shipherdSession: "b2" }));
     expect(s.owners.get("T-1", s.repoId, "feat/renamed")).toMatchObject({ sessionId: "b2" });
   });
 
@@ -128,12 +128,12 @@ describe("BranchOwnership", () => {
   it("the coordinator force-pushing a child's branch does not take it from the open child", async () => {
     const s = setup();
     s.deps.isCoordinator.mockImplementation((id) => id === "coord");
-    await s.b.handle(env("git -C /wt/a push origin feat/a", { butlerSession: "child" }));
-    await s.b.handle(env("git -C /wt/a push --force-with-lease origin feat/a", { butlerSession: "coord" }));
+    await s.b.handle(env("git -C /wt/a push origin feat/a", { shipherdSession: "child" }));
+    await s.b.handle(env("git -C /wt/a push --force-with-lease origin feat/a", { shipherdSession: "coord" }));
     expect(s.owners.get("T-1", s.repoId, "feat/a")).toMatchObject({ sessionId: "child" });
     // 子 session 关了：总控接过来。
     s.deps.isOpen.mockReturnValue(false);
-    await s.b.handle(env("git -C /wt/a push --force-with-lease origin feat/a", { butlerSession: "coord" }));
+    await s.b.handle(env("git -C /wt/a push --force-with-lease origin feat/a", { shipherdSession: "coord" }));
     expect(s.owners.get("T-1", s.repoId, "feat/a")).toMatchObject({ sessionId: "coord" });
   });
 
@@ -149,7 +149,7 @@ describe("BranchOwnership", () => {
     expect(s.owners.get("T-1", s.repoId, "feat/c")).toMatchObject({ dir: "/wt/b" });
   });
 
-  it("uses the session's ticket when BUTLER_TICKET is missing, and logs why it records nothing", async () => {
+  it("uses the session's ticket when SHIPHERD_TICKET is missing, and logs why it records nothing", async () => {
     const s = setup();
     s.deps.sessionTicket.mockReturnValue("T-1");
     await s.b.handle(env("git push", { ticket: null }));
@@ -188,7 +188,7 @@ describe("BranchOwnership", () => {
     // hook 的 cwd 本身是 Git Bash 路径、命令里是 ~：都对得上。
     await s.b.handle(env("git push origin feature/T-1", { cwd: "/c/Users/me/proj" }));
     expect(s.owners.get("T-1", s.repoId, "feature/T-1")).toMatchObject({ dir: "C:\\Users\\me\\proj" });
-    await s.b.handle(env("cd ~/wt/a && git push origin feat/a2", { cwd: "C:\\Users\\me\\proj", butlerSession: "b3" }));
+    await s.b.handle(env("cd ~/wt/a && git push origin feat/a2", { cwd: "C:\\Users\\me\\proj", shipherdSession: "b3" }));
     expect(s.owners.get("T-1", s.repoId, "feat/a2")).toMatchObject({ sessionId: "b3", dir: "C:\\Users\\me\\wt\\a" });
   });
 });

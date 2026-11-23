@@ -29,7 +29,7 @@ describe("costBreakerText", () => {
     expect(costBreakerText(breaker({ state: "downgraded", fromModel: "big", toModel: "small" }), EN)).toBe("Session “fix login” reached its cap ($12.5 / $10.0) and switched from big to small");
     expect(costBreakerText(breaker({ state: "downgraded", subjectKind: "ticket", title: "T-1 fix login" }), EN)).toBe("Ticket T-1 fix login reached its cap ($12.5 / $10.0); its background calls now use a lower model");
     expect(costBreakerText(breaker({ pauseScope: "background" }), EN)).toContain("its background work is paused");
-    expect(costBreakerText(breaker({ stoppedAt: 3, partial: true }), EN)).toBe("Session “fix login” reached its cap ($12.5 / $10.0) and is paused · It kept spending after the pause, so Butler ended its terminal · Some usage has no known price, so the real spend is higher");
+    expect(costBreakerText(breaker({ stoppedAt: 3, partial: true }), EN)).toBe("Session “fix login” reached its cap ($12.5 / $10.0) and is paused · It kept spending after the pause, so Shipherd ended its terminal · Some usage has no known price, so the real spend is higher");
     expect(costBreakerText(breaker({ takenOver: true }), ZH)).toContain("你接手了终端");
   });
 });

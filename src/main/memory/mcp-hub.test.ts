@@ -63,7 +63,7 @@ function setup() {
   return { hub, children, timers, fire, logs, tick: (ms: number) => (now += ms), changes: () => changes };
 }
 
-const memory = { "butler-workspace": { server: "memory" as const, scope: "workspace" } };
+const memory = { "shipherd-workspace": { server: "memory" as const, scope: "workspace" } };
 
 describe("McpHub", () => {
   it("starts lazily on the first route and gives stdio until the hub is ready", () => {
@@ -76,23 +76,23 @@ describe("McpHub", () => {
     s.children[0].ready(4100);
     expect(s.hub.status()).toEqual({ state: "running", error: null });
     const urls = s.hub.route("t1", memory)!;
-    expect(urls["butler-workspace"]).toMatch(/^http:\/\/127\.0\.0\.1:4100\/mcp\/[A-Za-z0-9_-]{43}$/);
-    expect(s.children[0].cmds()).toEqual([{ op: "add", token: urls["butler-workspace"].split("/").pop(), route: { server: "memory", scope: "workspace" } }]);
+    expect(urls["shipherd-workspace"]).toMatch(/^http:\/\/127\.0\.0\.1:4100\/mcp\/[A-Za-z0-9_-]{43}$/);
+    expect(s.children[0].cmds()).toEqual([{ op: "add", token: urls["shipherd-workspace"].split("/").pop(), route: { server: "memory", scope: "workspace" } }]);
   });
 
   it("gives every terminal and server its own token and removes a terminal's tokens when it exits", () => {
     const s = setup();
     s.hub.start();
     s.children[0].ready(4100);
-    const sessions = { server: "sessions" as const, env: { BUTLER_TICKET: "A" }, from: "t1" };
-    const a = s.hub.route("t1", { ...memory, "butler-sessions": sessions })!;
+    const sessions = { server: "sessions" as const, env: { SHIPHERD_TICKET: "A" }, from: "t1" };
+    const a = s.hub.route("t1", { ...memory, "shipherd-sessions": sessions })!;
     const b = s.hub.route("t2", memory)!;
-    const tokens = new Set([a["butler-workspace"], a["butler-sessions"], b["butler-workspace"]]);
+    const tokens = new Set([a["shipherd-workspace"], a["shipherd-sessions"], b["shipherd-workspace"]]);
     expect(tokens.size).toBe(3);
     s.children[0].written = [];
     s.hub.removeTerminal("t1");
     expect(s.children[0].cmds().map((c) => c.op)).toEqual(["remove", "remove"]);
-    expect(s.children[0].cmds().map((c) => c.token).sort()).toEqual([a["butler-workspace"], a["butler-sessions"]].map((u) => u.split("/").pop()).sort());
+    expect(s.children[0].cmds().map((c) => c.token).sort()).toEqual([a["shipherd-workspace"], a["shipherd-sessions"]].map((u) => u.split("/").pop()).sort());
   });
 
   it("restarts a hub that died, asks for the same port and sends every route again", () => {
@@ -106,7 +106,7 @@ describe("McpHub", () => {
     expect(s.fire()).toBe(1000);
     expect(s.children[1].args).toEqual(["--data", "/data", "--port", "4100"]);
     s.children[1].ready(4100);
-    expect(s.children[1].cmds()).toEqual([{ op: "add", token: urls["butler-workspace"].split("/").pop(), route: { server: "memory", scope: "workspace" } }]);
+    expect(s.children[1].cmds()).toEqual([{ op: "add", token: urls["shipherd-workspace"].split("/").pop(), route: { server: "memory", scope: "workspace" } }]);
   });
 
   it("backs off 1 s, 2 s, 4 s … up to a minute while the hub keeps failing, and starts over after it ran for a minute", () => {

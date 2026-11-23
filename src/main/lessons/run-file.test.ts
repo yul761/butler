@@ -70,7 +70,7 @@ describe("runFileMarkdown", () => {
 
 describe("writeRunFile", () => {
   it("creates the directory and overwrites run-<id>.md", () => {
-    const dir = join(tempDir("butler-runs-"), "workspaces", "_lessons");
+    const dir = join(tempDir("shipherd-runs-"), "workspaces", "_lessons");
     const file = writeRunFile(dir, detail({ message: "first" }), "en");
     expect(file).toBe(join(dir, "run-12.md"));
     expect(readFileSync(file, "utf8")).toContain("first");

@@ -11,7 +11,7 @@ export interface ApplyLayer {
   branch: string;
   oldTip: string;
   newTip: string;
-  /** 检出这个分支的目录：managed = Butler 管理的 ticket worktree。null = 没检出。 */
+  /** 检出这个分支的目录：managed = Shipherd 管理的 ticket worktree。null = 没检出。 */
   checkout: { path: string; managed: boolean } | null;
   /** 远端分支现在的提交（fetch 之后）；null = 远端没有这个分支。 */
   remoteTip: string | null;
@@ -46,7 +46,7 @@ export type ApplyResult =
   | { kind: "rolled_back"; reason: string; layers: RunLayerDetail[] }
   | { kind: "applied"; layers: RunLayerDetail[]; pushed: string[]; unpushed: string[]; pushFailed: { branch: string; error: string }[] };
 
-export const backupRef = (stackId: number, runId: number, position: number) => `refs/butler/stack-backup/${stackId}/${runId}/${position}`;
+export const backupRef = (stackId: number, runId: number, position: number) => `refs/shipherd/stack-backup/${stackId}/${runId}/${position}`;
 
 export function deferText(r: DeferReason): string {
   switch (r.code) {
@@ -124,7 +124,7 @@ export async function applyTips(i: ApplyInput): Promise<ApplyResult> {
       try {
         await move(i.repo, l, l.newTip, l.oldTip);
       } catch (e2) {
-        // 改不回来：备份引用（refs/butler/stack-backup/…）还在，可以照它手动改回。
+        // 改不回来：备份引用（refs/shipherd/stack-backup/…）还在，可以照它手动改回。
         log(`stack ${i.stackId} run ${i.runId}: could not restore ${l.branch}: ${(e2 as Error).message}`);
       }
     }

@@ -57,8 +57,8 @@ async function enableStacks(page: Page, external: readonly string[]): Promise<vo
 }
 
 /**
- * 工作流 K 验收：两层的栈（E2E-1 的 PR 在 main 上，E2E-2 的 draft PR 在 E2E-1 上），Butler 从开着的 PR 自动认出来；
- * 栈底 squash 合并以后，Butler 把 E2E-2 rebase 到新的 main 上、force push，把它的 PR 改到 main 上并标成 ready。
+ * 工作流 K 验收：两层的栈（E2E-1 的 PR 在 main 上，E2E-2 的 draft PR 在 E2E-1 上），Shipherd 从开着的 PR 自动认出来；
+ * 栈底 squash 合并以后，Shipherd 把 E2E-2 rebase 到新的 main 上、force push，把它的 PR 改到 main 上并标成 ready。
  * 走真实的路径：StackService.tick → detect（gh pr list）→ PrWatcher 看到合并 → onMerged → rebase 引擎 → apply → promoteBottom（gh pr edit / ready）。
  * origin 是沙盒里的裸仓库（fetch、push 都是真的），PR 由假 gh 提供。Windows 上跳过：假 gh 是 sh 包装。
  */
@@ -82,11 +82,11 @@ test("when the bottom of a stack merges, the stack is rebased and the next layer
   const sha1 = git(repo, "rev-parse", B1);
   const sha2 = git(repo, "rev-parse", B2);
   s.setGh(fixture(sha1, sha2, null));
-  s.env = { BUTLER_STACKS_TICK_MS: "2000" };
+  s.env = { SHIPHERD_STACKS_TICK_MS: "2000" };
 
   const { page } = await launch(s);
   await completeWizard(page, s);
-  // 先建 ticket（栈的层要是 Butler 的分支），再开 autoRebase：自动检测只在开了的时候跑。
+  // 先建 ticket（栈的层要是 Shipherd 的分支），再开 autoRebase：自动检测只在开了的时候跑。
   await newTicket(page, "E2E-2", repo);
   await newTicket(page, "E2E-1", repo);
   // E2E-1 开一个 session：合并后它一停下，PR watcher 就马上去读它的 PR（不用等 5 分钟一轮）。

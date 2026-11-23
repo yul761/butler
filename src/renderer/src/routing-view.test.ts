@@ -8,7 +8,7 @@ describe("routing view helpers", () => {
     const S = STRINGS.en;
     expect(healthText(undefined, S)).toBe("Healthy");
     expect(healthText({ model: "M", state: "limited", kind: "usage_limit", until: null, resetKnown: false, suspected: true, consecutiveFailures: 1, lastSuccessAt: null, lastFailureAt: 1, lastFailureText: "x" }, S)).toBe(
-      "Limited · suspected · Reset time unknown; Butler backs off, then probes",
+      "Limited · suspected · Reset time unknown; Shipherd backs off, then probes",
     );
   });
 

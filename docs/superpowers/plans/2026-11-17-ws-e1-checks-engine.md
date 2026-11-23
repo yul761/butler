@@ -46,7 +46,7 @@ Design: `docs/superpowers/specs/2026-11-17-ws-e1-checks-engine-design.md`. Branc
 ## Group 7: e2e
 
 24. fake claude: `/fake-edit <path> <content>` (PostToolUse Write with `originalFile`, prints `blocked: …` / `context: …`), and a `check_draft` answer for `--json-schema` with `checkable`.
-25. `e2e/checks.spec.ts`: create a forbidden-pattern check in the UI → in a Butler session `/fake-edit` a violating file → the agent sees the root-cause block and `check_hits` has a `fail` row with `blocked = 1`; the same in shadow mode → `context:` only, row with `mode = shadow`, `blocked = 0`; `/fake-run git push` with a failing push check → denied. (Runs on both platforms where the merge-gate e2e pattern allows.)
+25. `e2e/checks.spec.ts`: create a forbidden-pattern check in the UI → in a Shipherd session `/fake-edit` a violating file → the agent sees the root-cause block and `check_hits` has a `fail` row with `blocked = 1`; the same in shadow mode → `context:` only, row with `mode = shadow`, `blocked = 0`; `/fake-run git push` with a failing push check → denied. (Runs on both platforms where the merge-gate e2e pattern allows.)
 
 ## Group 8: finish
 

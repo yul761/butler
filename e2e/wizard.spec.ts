@@ -9,10 +9,10 @@ test("first run: the wizard finds claude, installs hooks into the given config d
   await completeWizard(page, s);
   await expect(page.getByTestId("first-run-home")).toBeVisible();
   const settings = readFileSync(join(s.claudeConfigDir, "settings.json"), "utf8");
-  expect(settings).toContain("butler-hook");
-  expect(readFileSync(join(s.claudeConfigDir, "commands", "handoff.md"), "utf8")).toContain("butler-handoff");
-  // hook 程序装进了沙盒的 BUTLER_HOME。
-  expect(existsSync(join(s.butlerHome, "bin", process.platform === "win32" ? "butler-hook.exe" : "butler-hook"))).toBe(true);
+  expect(settings).toContain("shipherd-hook");
+  expect(readFileSync(join(s.claudeConfigDir, "commands", "handoff.md"), "utf8")).toContain("shipherd-handoff");
+  // hook 程序装进了沙盒的 SHIPHERD_HOME。
+  expect(existsSync(join(s.shipherdHome, "bin", process.platform === "win32" ? "shipherd-hook.exe" : "shipherd-hook"))).toBe(true);
 });
 
 test("the wizard does not let the user continue without a working claude", async ({ makeSandbox, launch }) => {

@@ -180,8 +180,8 @@ describe("ChecksService", () => {
   it("reports per-session coverage for pre-review", () => {
     const { svc, db } = setup();
     const sessions = new SessionsRepo(db);
-    sessions.insertIfAbsent({ id: "s1", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "s2", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s2", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1 });
     sessions.setChecksAbsent("s1", "hook_outdated");
     expect(svc.sessionCoverage(["s1", "s2", "nope"])).toEqual({ s1: { absent: "hook_outdated" }, s2: { absent: null }, nope: { absent: null } });
     expect(sessions.get("s1")?.checksAbsent).toBe("hook_outdated");

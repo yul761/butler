@@ -29,11 +29,11 @@ type Owner = { ticketKey: string | null; repoId: number | null; featureId: numbe
 
 /** 事件归到哪一层：ticket（加仓库）、feature；归不了为 null。 */
 function ownerOf(s: Session, sessions: Pick<SessionsRepo, "get">): Owner | null {
-  if (s.butler) return null;
+  if (s.shipherd) return null;
   if (s.fixesSession) {
     // 修复 session 的工作算在被修的那个 session 上。
     const t = sessions.get(s.fixesSession);
-    if (!t || t.butler) return null;
+    if (!t || t.shipherd) return null;
     if (t.ticketKey) return { ticketKey: t.ticketKey, repoId: t.repoId, featureId: null };
     if (t.featureId !== null) return { ticketKey: null, repoId: null, featureId: t.featureId };
     return null;

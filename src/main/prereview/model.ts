@@ -71,7 +71,7 @@ function checksBlock(c: CheckSummary, en: boolean): string {
   if (c.absent) lines.push(en ? `Checks were not attached to the session: ${c.absent}` : `session 没挂上检查：${c.absent}`);
   for (const f of c.failing) lines.push(`- checkKey=${f.checkKey} "${f.name}" (${f.severity}, ${f.mode}) x${f.count}: ${f.files.slice(0, 20).join(", ")}`);
   if (c.ci) lines.push(`CI: ${c.ci}`);
-  for (const r of c.rerun) lines.push(`${en ? "Butler rerun" : "Butler 复跑"} [${r.category}] ${r.command}: ${r.skipped ? `${en ? "no result" : "没跑出结论"} (${r.skipped})` : r.ok ? "pass" : "fail"}`);
+  for (const r of c.rerun) lines.push(`${en ? "Shipherd rerun" : "Shipherd 复跑"} [${r.category}] ${r.command}: ${r.skipped ? `${en ? "no result" : "没跑出结论"} (${r.skipped})` : r.ok ? "pass" : "fail"}`);
   return lines.length ? lines.join("\n") : en ? "(no check results)" : "（没有检查结果）";
 }
 
@@ -200,14 +200,14 @@ export function verifyPrompt(i: VerifyModelInput): string {
   const head = en
     ? [
       "A coding session submitted evidence that its work is done. Check each item against the facts below and say whether it holds up.",
-      "- consistent: the item is plausible given the diff, the file list and Butler's reruns (e.g. claims tests were added and test files changed; output matches the claim).",
+      "- consistent: the item is plausible given the diff, the file list and Shipherd's reruns (e.g. claims tests were added and test files changed; output matches the claim).",
       "- mismatch: the item contradicts the facts (claims 120 tests passed but the output shows 0; claims tests were added but no test file changed; claims pass but the output shows failures).",
       "- unverifiable: there is not enough to tell.",
       "Judge only from what is given; you have no tools. reason: one short sentence.",
     ]
     : [
       "一个写代码的 session 交了「做完了」的证据。对照下面的事实逐条判断它站不站得住。",
-      "- consistent：和 diff、文件清单、Butler 的复跑对得上（比如说加了测试，改动里确实有测试文件；输出和声称一致）。",
+      "- consistent：和 diff、文件清单、Shipherd 的复跑对得上（比如说加了测试，改动里确实有测试文件；输出和声称一致）。",
       "- mismatch：和事实矛盾（说 120 个测试全过，输出里是 0 个；说加了测试，改动里没有测试文件；说通过，输出里有失败）。",
       "- unverifiable：给的东西不够判断。",
       "只根据给你的内容判断，你没有工具。reason：一句短话。",
@@ -224,7 +224,7 @@ export function verifyPrompt(i: VerifyModelInput): string {
     `## ${en ? "Changed files" : "改动的文件"}`,
     i.files.map((f) => `- ${f.path} (+${f.added} -${f.deleted})`).join("\n") || "-",
     "",
-    `## ${en ? "Butler reruns" : "Butler 复跑"}`,
+    `## ${en ? "Shipherd reruns" : "Shipherd 复跑"}`,
     rerun,
     "",
     `## ${en ? "Evidence items" : "证据条目"}`,
@@ -258,7 +258,7 @@ export interface BriefModelInput {
   ticketKey: string | null;
   ticketTitle: string | null;
   prTitle: string | null;
-  /** PR 描述（已去掉 Butler 的块）。 */
+  /** PR 描述（已去掉 Shipherd 的块）。 */
   description: string | null;
   files: DiffFile[];
   acceptance: { criterion: string; how: string }[];

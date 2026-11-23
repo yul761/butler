@@ -77,7 +77,7 @@ export class PriorityManager {
       if (!on) continue;
       this.termPids.set(t.termId, t.tree.map((p) => p.pid));
       const level: PriorityLevel = this.d.exempt(t.head) || this.d.visible(t.termId) ? 0 : this.d.idle(t.head) ? 2 : 1;
-      // 开发服务器和它起的进程最多降一档：用户可能正在浏览器里用它，不在 Butler 里。
+      // 开发服务器和它起的进程最多降一档：用户可能正在浏览器里用它，不在 Shipherd 里。
       const dev = new Set<number>();
       for (const p of t.tree) if (p.cls === "dev_server" || dev.has(p.ppid)) dev.add(p.pid);
       for (const p of t.tree) want.set(p.pid, dev.has(p.pid) ? (Math.min(level, 1) as PriorityLevel) : level);

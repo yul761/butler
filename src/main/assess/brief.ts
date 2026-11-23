@@ -1,4 +1,4 @@
-// review 简报（设计 §8.1）：一页 Markdown，包在 <!-- butler:brief --> … <!-- /butler:brief --> 里。
+// review 简报（设计 §8.1）：一页 Markdown，包在 <!-- shipherd:brief --> … <!-- /shipherd:brief --> 里。
 // 只有「改了什么、为什么」那一段是模型写的；其余全是确定的数据。证据只列核实过的，session 的自述不原样进来。
 import { matchAny } from "../../shared/glob";
 import type { ResolvedPrPolicy } from "../../shared/pr-policy";
@@ -72,7 +72,7 @@ export function focusFiles(files: readonly DiffFile[], policy: ResolvedPrPolicy[
 
 export function renderBrief(i: BriefInput): string {
   const en = i.lang === "en";
-  const out: string[] = [BRIEF_START, en ? "## Butler review brief" : "## Butler review 简报", ""];
+  const out: string[] = [BRIEF_START, en ? "## Shipherd review brief" : "## Shipherd review 简报", ""];
 
   // 1. 改了什么、为什么
   out.push(en ? "### What changed and why" : "### 改了什么、为什么", "", one(i.summary ?? fallbackSummary(i)), "");
@@ -95,7 +95,7 @@ export function renderBrief(i: BriefInput): string {
   for (const e of i.evidence) {
     if (e.kind === "not_run") continue;
     const label = e.kind === "check" ? (e.category && e.category !== "other" ? CAT[i.lang][e.category] : one(e.name)) : one(e.name);
-    if (e.verified === "rerun_pass") ev.push(en ? `- ${label}: Butler's rerun passed${e.verifyDetail ? ` (${code(e.verifyDetail)})` : ""}` : `- ${label}：Butler 复跑通过${e.verifyDetail ? `（${code(e.verifyDetail)}）` : ""}`);
+    if (e.verified === "rerun_pass") ev.push(en ? `- ${label}: Shipherd's rerun passed${e.verifyDetail ? ` (${code(e.verifyDetail)})` : ""}` : `- ${label}：Shipherd 复跑通过${e.verifyDetail ? `（${code(e.verifyDetail)}）` : ""}`);
     else if (e.verified === "consistent") ev.push(en ? `- ${cut(label, 120)}: output checked` : `- ${cut(label, 120)}：已核对输出`);
     else if (e.verified === "rerun_fail" || e.verified === "mismatch") ev.push(en ? `- ${cut(label, 120)}: does not match: ${cut(one(e.verifyDetail ?? ""), 200)}` : `- ${cut(label, 120)}：对不上：${cut(one(e.verifyDetail ?? ""), 200)}`);
   }

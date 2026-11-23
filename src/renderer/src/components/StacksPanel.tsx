@@ -12,7 +12,7 @@ import { useStateRefetch } from "./useStateRefetch";
 
 const STATE_PILL: Record<string, string> = { branch_only: "none", draft: "pending", ready: "approved", merged: "merged" };
 
-/** 全部工作页「更多」里的「栈」区块（工作流 K）：Butler 管的栈，从下到上每一层，最近一次 rebase，和几个按钮。 */
+/** 全部工作页「更多」里的「栈」区块（工作流 K）：Shipherd 管的栈，从下到上每一层，最近一次 rebase，和几个按钮。 */
 export function ManagedStacks({ filter, onOpenTicket }: { filter: StacksFilter; onOpenTicket: (key: string) => void }) {
   const view = useStateRefetch(`stacks:${filter.featureId ?? ""}`, () => api.stacks(filter));
   if (!view) return null;

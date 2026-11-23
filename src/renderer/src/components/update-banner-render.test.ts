@@ -9,7 +9,7 @@ import { UpdateBannerView } from "./UpdateBanner";
 afterEach(() => setUiLang("zh"));
 
 const HAN = /[一-鿿]/;
-const rel = (notes: string): ReleaseInfo => ({ version: "4.1.0", tag: "v4.1.0", url: "https://github.com/yul761/butler/releases/tag/v4.1.0", publishedAt: 1, notes });
+const rel = (notes: string): ReleaseInfo => ({ version: "4.1.0", tag: "v4.1.0", url: "https://github.com/yul761/shipherd/releases/tag/v4.1.0", publishedAt: 1, notes });
 
 describe("update banner (BTL-253)", () => {
   it("shows the version, collapsed notes as plain text, download, skip and close", () => {

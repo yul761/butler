@@ -89,7 +89,7 @@ describe("convEntriesOf on the refresh-tail fixture", () => {
   });
 });
 
-describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
+describe.each(["zh", "en"] as const)("Shipherd's own messages (%s)", (lang) => {
   afterEach(() => setLang("zh"));
   const openOf = (text: string) => {
     setLang(lang);
@@ -100,12 +100,12 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
   it("the old epic handoff requests in old transcripts (BTL-246 removed them from strings.ts)", () => {
     const old = lang === "zh"
       ? [
-        "Butler 要清空这个 session 的上下文。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
-        "这个 session 闲置很久了，Butler 要把它关掉（以后可以恢复）。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+        "Shipherd 要清空这个 session 的上下文。请先用 shipherd-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+        "这个 session 闲置很久了，Shipherd 要把它关掉（以后可以恢复）。请先用 shipherd-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
       ]
       : [
-        "Butler is about to clear this session's context. First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
-        "This session has been idle for a long time, so Butler is about to close it (it can be resumed later). First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+        "Shipherd is about to clear this session's context. First use shipherd-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+        "This session has been idle for a long time, so Shipherd is about to close it (it can be resumed later). First use shipherd-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
       ];
     for (const text of old) expect(openOf(text)).toBe("handoff");
   });
@@ -141,12 +141,12 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     expect(openOf(`${intro}\n\n---\n\n${m.mailboxInstruction("feature 总控", "先停下", true)}`)).toBe("silent");
   });
 
-  it("messages Butler types into the terminal are silent (PR #60 review 2)", () => {
+  it("messages Shipherd types into the terminal are silent (PR #60 review 2)", () => {
     setLang(lang);
     const m = M();
-    expect(openOf(`${m.butlerMessagePrefix}\n帮我看看 PR #60 为什么红了？`)).toBe("silent");
-    expect(openOf(m.butlerReplyLine("BTL-1", ["m1"], "要不要先合？"))).toBe("silent");
-    expect(openOf(m.butlerPatrolMessage)).toBe("silent");
+    expect(openOf(`${m.shipherdMessagePrefix}\n帮我看看 PR #60 为什么红了？`)).toBe("silent");
+    expect(openOf(m.shipherdReplyLine("BTL-1", ["m1"], "要不要先合？"))).toBe("silent");
+    expect(openOf(m.shipherdPatrolMessage)).toBe("silent");
     expect(openOf(m.cost.continueAfterDowngrade("haiku"))).toBe("silent");
     expect(openOf(m.cost.continueAfterRaise("$5"))).toBe("silent");
     const pre = { shortSha: "abc1234", violations: [], gaps: [], error: "boom", lang };
@@ -155,13 +155,13 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     expect(openOf(deliveryText({ ...pre, verdict: "violations", violations: [{ lessonId: null, checkKey: null, severity: "must", file: "a.ts", line: 1, what: "x", fix: "y" }] }))).toBe("silent");
   });
 
-  it("the user talking about Butler is still the user", () => {
-    expect(openOf("Butler 对话页为什么是空的？")).toBe("user");
-    expect(openOf("Butler is slow, why?")).toBe("user");
+  it("the user talking about Shipherd is still the user", () => {
+    expect(openOf("Shipherd 对话页为什么是空的？")).toBe("user");
+    expect(openOf("Shipherd is slow, why?")).toBe("user");
     expect(openOf("【回顾】这周做了什么？")).toBe("user");
     // PR #60 re-review I2 / M1：只像开头、后面的固定段对不上的，是用户的话。
-    expect(openOf("Butler 对 CI 的判断对吗？")).toBe("user");
-    expect(openOf("Butler pre-review of what exactly?")).toBe("user");
+    expect(openOf("Shipherd 对 CI 的判断对吗？")).toBe("user");
+    expect(openOf("Shipherd pre-review of what exactly?")).toBe("user");
     expect(openOf("【回复】一下 amy 的评论")).toBe("user");
     expect(openOf("[Reply] to amy")).toBe("user");
     expect(openOf("ticket BTL-1 为什么还没开工？")).toBe("user");
@@ -269,14 +269,14 @@ describe("toolEffect", () => {
     ["AskUserQuestion", {}, "read"],
     ["Task", {}, "other"],
     ["mcp__github__create_pull_request", {}, "mutate"],
-    ["mcp__butler-workspace__remember", {}, "mutate"],
-    ["mcp__butler-workspace__handoff", {}, "mutate"],
+    ["mcp__shipherd-workspace__remember", {}, "mutate"],
+    ["mcp__shipherd-workspace__handoff", {}, "mutate"],
     ["mcp__x__set_epic_plan", {}, "mutate"],
-    ["mcp__butler-workspace__recall", {}, "read"],
-    ["mcp__butler-workspace__facts", {}, "read"],
+    ["mcp__shipherd-workspace__recall", {}, "read"],
+    ["mcp__shipherd-workspace__facts", {}, "read"],
     ["mcp__github__get_pull_request", {}, "read"],
-    ["mcp__butler-sessions__session_activity", {}, "read"],
-    ["mcp__butler-sessions__report", {}, "other"],
+    ["mcp__shipherd-sessions__session_activity", {}, "read"],
+    ["mcp__shipherd-sessions__report", {}, "other"],
   ] as const)("%s → %s", (name, input, effect) => {
     expect(toolEffect(name, input)).toBe(effect);
   });

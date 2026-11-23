@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { CreateFeatureInput } from "../../../shared/types";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { S } from "../strings";
 import { RepoPicker } from "./RepoPicker";
 
@@ -59,7 +59,7 @@ interface Props {
   onCreated: (id: number) => void;
 }
 
-const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
+const errorText = (e: unknown) => (e instanceof ShipherdError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
 
 /** 新建 feature（设计文档 2026-10-26）。 */
 export function NewFeatureDialog({ onClose, onCreated }: Props) {

@@ -63,8 +63,8 @@ describe("runCommand", () => {
     expect(Date.now() - t0).toBeLessThan(5000);
   }, 15_000);
 
-  it("gives the file in BUTLER_CHECK_FILE too (for compound commands)", async () => {
-    expect(await run('printf "%s" "$BUTLER_CHECK_FILE"; exit 1', "src/a b.ts")).toEqual({ kind: "fail", code: 1, output: "src/a b.ts" });
+  it("gives the file in SHIPHERD_CHECK_FILE too (for compound commands)", async () => {
+    expect(await run('printf "%s" "$SHIPHERD_CHECK_FILE"; exit 1', "src/a b.ts")).toEqual({ kind: "fail", code: 1, output: "src/a b.ts" });
   });
 
   it("decides on the shell's exit, not on a background child still holding the pipe", async () => {

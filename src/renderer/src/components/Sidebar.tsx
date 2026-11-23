@@ -7,7 +7,7 @@ import { api } from "../api";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
-// 侧栏（UI 重做第 2 层，spec §5.3）：轮到你、全部工作的树、总控、「Butler 自己」一组、防休眠。
+// 侧栏（UI 重做第 2 层，spec §5.3）：轮到你、全部工作的树、总控、「Shipherd 自己」一组、防休眠。
 // 树里每个节点的点只表示谁该动（第 1 层的 turn:board 算出来，App 传进 dots）。
 
 interface Props {
@@ -82,7 +82,7 @@ export const Sidebar = memo(function Sidebar({ tickets, features, youCount, dots
         ))}
         {tickets.map(ticketButton)}
       </div>
-      <button className={cls("nav butler", route.page === "butler")} onClick={() => onNavigate({ page: "butler" })}>{S.butlerNav}</button>
+      <button className={cls("nav shipherd", route.page === "shipherd")} onClick={() => onNavigate({ page: "shipherd" })}>{S.shipherdNav}</button>
       <h3 className="nav-group">{S.selfGroup}</h3>
       <button className={cls("nav", route.page === "lessons")} data-testid="lessons-nav" title={lessonsPending > 0 ? S.lessonsNavCount(lessonsPending) : undefined} onClick={() => onNavigate({ page: "lessons" })}>
         {S.lessons}{lessonsPending > 0 ? ` · ${lessonsPending}` : ""}

@@ -32,7 +32,7 @@ const ghFor = (prs: number[]): FakeGhFixture => ({ branches: {}, prs: Object.fro
 
 /** 在 app.db 里登记 acme/app（本地路径是沙盒仓库，已补录过）和这些 PR 的排队项（已合并、排队中）。返回 PR 号 → 队列 id。 */
 function seedLessonQueue(s: Sandbox, prs: number[]): Map<number, number> {
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   const now = Date.now();
   db.prepare("INSERT INTO lesson_repos (slug, local_path, backfilled_at, created_at) VALUES (?, ?, ?, ?)").run(SLUG, s.repo, now, now);
   const ins = db.prepare("INSERT INTO lesson_queue (repo_slug, pr_number, origin, status, enqueued_at) VALUES (?, ?, 'merged', 'queued', ?)");
@@ -170,29 +170,29 @@ test("a usage-limit run pauses the queue and shows the Now notice", async ({ mak
 
 test("a session that hits a limit shows the badge, the notice and the Health entry", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  // 1. Butler 总控 session 撞了用量上限（Claude Code 合成的报错，这一轮没有 Stop）。
-  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  const butler = page.locator(".butler-page");
-  await butler.getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  // 1. Shipherd 总控 session 撞了用量上限（Claude Code 合成的报错，这一轮没有 Stop）。
+  await page.locator(".sidebar").getByRole("button", { name: S.shipherdNav, exact: true }).click();
+  const shipherd = page.locator(".shipherd-page");
+  await shipherd.getByRole("button", { name: `+ ${S.newShipherdSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.locator(".terminal-wrap:visible .xterm").click();
   await page.keyboard.type("/fake-limit You've hit your limit · resets 3pm (UTC)");
   await page.keyboard.press("Enter");
   await expect.poll(() => terminalText(page)).toContain("hit your limit");
 
-  // 2. 首页：一张「Butler 要你点一下」的卡片，是这个 session 的用量提醒，点“打开会话”回到它。
+  // 2. 首页：一张「Shipherd 要你点一下」的卡片，是这个 session 的用量提醒，点“打开会话”回到它。
   await homeButton(page).click();
   const card = page.getByTestId("turn-card").filter({ has: page.getByTestId("now-notice-session_limited") });
-  await expect(card.locator(".turn-tag")).toHaveText(S.hm.kind.butler);
+  await expect(card.locator(".turn-tag")).toHaveText(S.hm.kind.shipherd);
   const sessionNotice = page.getByTestId("now-notice-session_limited");
   await expect(sessionNotice).toContainText(S.limitKind.usage_limit);
   await sessionNotice.getByRole("button", { name: S.noticeOpen, exact: true }).click();
-  await expect(butler).toBeVisible();
-  await expect(butler.locator(".terminal-wrap:visible")).toHaveCount(1);
+  await expect(shipherd).toBeVisible();
+  await expect(shipherd.locator(".terminal-wrap:visible")).toHaveCount(1);
   await expect.poll(() => terminalText(page)).toContain("hit your limit");
 
   // 3. 账号受限的提醒（session_limited 只有“打开会话”）点“查看状态”：跳到设置 › 健康检查（可用性一块在这个 tab 里，

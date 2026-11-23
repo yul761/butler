@@ -4,9 +4,9 @@ import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, test } from "./fixtures";
 
 /**
- * 用户反馈（2026-10-28）：开着盖子让 session 自己跑时，要能在 Butler 里一键开关防休眠，不用每次叫 claude 起 caffeinate。
+ * 用户反馈（2026-10-28）：开着盖子让 session 自己跑时，要能在 Shipherd 里一键开关防休眠，不用每次叫 claude 起 caffeinate。
  * 侧边栏的开关打开后主进程真的持有 powerSaveBlocker，关掉后释放；重启后默认是关的。
- * 设了 BUTLER_E2E_SHOTS_DIR 时把打开状态的侧边栏截一张图存到那里（CI 不设）。
+ * 设了 SHIPHERD_E2E_SHOTS_DIR 时把打开状态的侧边栏截一张图存到那里（CI 不设）。
  */
 test("the keep-awake switch holds a power save blocker until turned off, and starts off", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
@@ -22,7 +22,7 @@ test("the keep-awake switch holds a power save blocker until turned off, and sta
   // powerSaveBlocker 的 id 从 0 开始递增；这个进程里只有防休眠会申请，查前 32 个就够了。
   const blocking = () => first.app.evaluate(({ powerSaveBlocker }) => Array.from({ length: 32 }, (_, id) => id).some((id) => powerSaveBlocker.isStarted(id)));
   expect(await blocking()).toBe(true);
-  const shots = process.env.BUTLER_E2E_SHOTS_DIR;
+  const shots = process.env.SHIPHERD_E2E_SHOTS_DIR;
   if (shots) {
     mkdirSync(shots, { recursive: true });
     await first.page.locator(".sidebar").screenshot({ path: join(shots, "keep-awake-on.png") });

@@ -1,8 +1,8 @@
 /** 内存与卡顿（WS-M）的共享类型：main 采样，「现在」页显示。 */
 
 /** 进程在 session 树里的类别（设计 §1）。 */
-export type ProcClass = "claude" | "mcp_butler" | "mcp_other" | "shell" | "watcher" | "dev_server" | "other";
-export const PROC_CLASSES: readonly ProcClass[] = ["claude", "mcp_butler", "mcp_other", "shell", "watcher", "dev_server", "other"];
+export type ProcClass = "claude" | "mcp_shipherd" | "mcp_other" | "shell" | "watcher" | "dev_server" | "other";
+export const PROC_CLASSES: readonly ProcClass[] = ["claude", "mcp_shipherd", "mcp_other", "shell", "watcher", "dev_server", "other"];
 
 export interface TopProc {
   pid: number;
@@ -26,9 +26,9 @@ export interface SessionMemory extends TreeSummary {
   at: number;
 }
 
-/** Butler 自己的进程，按 Electron 的进程类型和 Butler 起的后台进程分（设计 §2）。 */
-export type ButlerPart = "main" | "renderer" | "gpu" | "utility" | "terminals" | "headless" | "hub";
-export const BUTLER_PARTS: readonly ButlerPart[] = ["main", "renderer", "gpu", "utility", "terminals", "headless", "hub"];
+/** Shipherd 自己的进程，按 Electron 的进程类型和 Shipherd 起的后台进程分（设计 §2）。 */
+export type ShipherdPart = "main" | "renderer" | "gpu" | "utility" | "terminals" | "headless" | "hub";
+export const SHIPHERD_PARTS: readonly ShipherdPart[] = ["main", "renderer", "gpu", "utility", "terminals", "headless", "hub"];
 
 export interface SystemMemoryView {
   totalKb: number;
@@ -39,20 +39,20 @@ export interface SystemMemoryView {
 /** 「现在」页顶上那张卡片：最近一次采样。 */
 export interface MemorySnapshot {
   at: number;
-  butlerKb: number;
-  butler: Record<ButlerPart, number>;
+  shipherdKb: number;
+  shipherd: Record<ShipherdPart, number>;
   /** 所有开着的 session 的树加起来。 */
   sessionsKb: number;
   sessions: number;
-  /** 其中 Butler 自己的 MCP（statecore、butler-sessions）占了多少：大的话提示打开共享 MCP（H）。 */
-  butlerMcpKb: number;
+  /** 其中 Shipherd 自己的 MCP（statecore、shipherd-sessions）占了多少：大的话提示打开共享 MCP（H）。 */
+  shipherdMcpKb: number;
   system: SystemMemoryView | null;
 }
 
 /** 历史曲线上的一个点（每 5 分钟一个）。 */
 export interface MemoryHistoryPoint {
   at: number;
-  butlerKb: number;
+  shipherdKb: number;
   sessionsKb: number;
   freePercent: number | null;
 }

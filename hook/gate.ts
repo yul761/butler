@@ -61,11 +61,11 @@ export async function runGate(raw: string, env: NodeJS.ProcessEnv, deps: GateDep
     if (!action) return "";
 
     const home = homedir();
-    const gateDir = join(dirFromEnv(env.BUTLER_HOME, home) ?? join(home, ".butler"), "gate");
+    const gateDir = join(dirFromEnv(env.SHIPHERD_HOME, home) ?? join(home, ".shipherd"), "gate");
     const alive = readJson(join(gateDir, "alive.json")) as { pid?: unknown } | null;
     if (!alive || typeof alive.pid !== "number" || !deps.pidAlive(alive.pid)) return "";
 
-    const request: GateRequest = { v: GATE_VERSION, phase, action, cwd: p.cwd, session: env.BUTLER_SESSION?.trim() || null, ticket: env.BUTLER_TICKET?.trim() || null };
+    const request: GateRequest = { v: GATE_VERSION, phase, action, cwd: p.cwd, session: env.SHIPHERD_SESSION?.trim() || null, ticket: env.SHIPHERD_TICKET?.trim() || null };
     const id = deps.newId();
     const reqDir = join(gateDir, "requests");
     mkdirSync(reqDir, { recursive: true });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { EXTERNAL_ACTION_SETTINGS } from "../../../shared/external";
 import type { PrPolicyKey, PrPolicyOverrides, PrScope, RiskPathClass } from "../../../shared/pr-policy";
 import type { EditableSettings } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { policyScopeFromKey, policyScopeKey } from "../policy-view";
 import { parsePrInput, pathClassOf, prGroups, prInputValue, prOverridesFromDraft, type PrDraft } from "../review-view";
@@ -87,7 +87,7 @@ function PrPolicyEditor() {
       setDraft({});
       setMessage({ text: S.lp.saved, error: false });
     } catch (e) {
-      if (e instanceof ButlerError) setMessage({ text: e.message, error: true });
+      if (e instanceof ShipherdError) setMessage({ text: e.message, error: true });
       else reportError(e);
     } finally {
       setBusy(false);

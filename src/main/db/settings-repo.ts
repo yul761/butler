@@ -19,7 +19,7 @@ export const SETTING_DEFAULTS = {
   skillTrackingSince: "",
   /** 开始记度量（ws-h）的时间（毫秒，字符串）；空表示还没开始。基线截止点和「从什么时候起有人介入数据」看它。 */
   metricsSince: "",
-  /** 「效果」页基线的截止点（ws-h）：第一个 Butler session 的创建时间，第一次看到时存下，之后不变；空表示还没有。 */
+  /** 「效果」页基线的截止点（ws-h）：第一个 Shipherd session 的创建时间，第一次看到时存下，之后不变；空表示还没有。 */
   metricsBaselineCutoff: "",
   handoffPrompt: DEFAULT_HANDOFF_PROMPT,
   refreshPrompt: DEFAULT_REFRESH_PROMPT,
@@ -32,7 +32,7 @@ export const SETTING_DEFAULTS = {
   /** 上下文（最近一轮的 token 数）超过这么多时自动换新 session（计划 16）；0 = 关。手动和总控触发不看它。 */
   refreshThresholdTokens: "150000",
   /**
-   * Butler 的 session 停下超过这么多分钟、没有要你决定的事，就写 handoff、结束终端并隐藏（BTL-190 第 8 点）；0 = 关。
+   * Shipherd 的 session 停下超过这么多分钟、没有要你决定的事，就写 handoff、结束终端并隐藏（BTL-190 第 8 点）；0 = 关。
    * 「清理闲置」按钮不看它。
    */
   idleCloseMinutes: "180",
@@ -45,15 +45,15 @@ export const SETTING_DEFAULTS = {
   sessionMemoryEstimateMb: "1024",
   /** 同时开着的终端最多几个，只当保险；0 = 不限（默认，只看内存）。 */
   sessionMaxRunning: "0",
-  /** 每天几点让 Butler 总控巡检一次（BTL-190 第 5 点），HH:MM；空 = 关（默认）。 */
-  butlerPatrolTime: "",
+  /** 每天几点让 Shipherd 总控巡检一次（BTL-190 第 5 点），HH:MM；空 = 关（默认）。 */
+  shipherdPatrolTime: "",
   /** 界面和提示词的语言：auto | zh | en（设计文档 2026-10-26）。迁移 7 给老用户写 zh。 */
   language: "auto",
-  /** 请你 review 的查询：all = 账号能看到的所有仓库，registered = 只看 Butler 登记过的（UI 重做第 1 层）。 */
+  /** 请你 review 的查询：all = 账号能看到的所有仓库，registered = 只看 Shipherd 登记过的（UI 重做第 1 层）。 */
   reviewRequestScope: "all",
   /** 准入策略的版本：每次改策略（任一层）加一，评分时写进 score_policy_version。不在设置页上。 */
   admissionPolicyVersion: "1",
-  /** 每隔几天自动备份一次全部配置到 <BUTLER_HOME>/backups（契约 4.3）；0 = 关（默认）。 */
+  /** 每隔几天自动备份一次全部配置到 <SHIPHERD_HOME>/backups（契约 4.3）；0 = 关（默认）。 */
   configBackupIntervalDays: "0",
   /** 自动备份留几个（最新的）。 */
   configBackupKeep: "10",
@@ -91,7 +91,7 @@ export const SETTING_DEFAULTS = {
   memoryMonitor: "1",
   /** 看不见又停着的 session 的进程树降到后台优先级（WS-M E）：1 开 0 关（默认关，先观察）。 */
   backgroundPriority: "0",
-  /** 定时清理 Butler 自己的 session 留下的孤儿进程（WS-M F）：1 开 0 关。 */
+  /** 定时清理 Shipherd 自己的 session 留下的孤儿进程（WS-M F）：1 开 0 关。 */
   orphanCleanup: "1",
   /** claude 进程的内存超过这么多 MB 就在下一个空闲点换新（WS-M G）；0 = 关。 */
   refreshMemoryMb: "0",
@@ -111,7 +111,7 @@ export const SETTING_DEFAULTS = {
   memoryPressureEnabled: "0",
   /** 内存紧张的线：可用内存低于百分之几（1–50）。回到这条线以上 5 个点才停。 */
   memoryPressureFreePercent: "10",
-  /** 共享 MCP（WS-M H）：所有 session 的 Butler 记忆和 butler-sessions 由一个 hub 进程经本机回环 HTTP 提供，不再每个 session 各起一组。1 开 0 关（默认关）。 */
+  /** 共享 MCP（WS-M H）：所有 session 的 Shipherd 记忆和 shipherd-sessions 由一个 hub 进程经本机回环 HTTP 提供，不再每个 session 各起一组。1 开 0 关（默认关）。 */
   sharedMcp: "0",
   /** 对外动作（契约 4.8，ws-b）：每种一个开关，1 开 0 关，默认全关。见 src/main/external/actions.ts。 */
   externalCommentReply: "0",
@@ -188,7 +188,7 @@ export const SETTING_DEFAULTS = {
   intakePollMinutes: "15",
   /** 工作流 N：ticket → 仓库，一行一条 `匹配 => 绝对路径`（见 src/main/intake/sources.ts 的 parseRepoMap）。 */
   intakeRepoMap: "",
-  /** 4.0（BTL-244）：显示 Butler 之外开的 session（未认领）。默认关：关着时完全不扫描 ~/.claude/projects 去发现它们。 */
+  /** 4.0（BTL-244）：显示 Shipherd 之外开的 session（未认领）。默认关：关着时完全不扫描 ~/.claude/projects 去发现它们。 */
   showOutsideSessions: "0",
   /** 4.0（BTL-247）：全局自动化档位，manual | semi。默认手动 = 4.0 以前的默认；每个 epic 可以另选（features.automation_level）。 */
   automationLevel: "manual",

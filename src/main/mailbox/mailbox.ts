@@ -20,7 +20,7 @@ export const REPLY_WAIT_MS = 24 * 3600_000;
 export const MESSAGE_KEEP_MS = 30 * 24 * 3600_000;
 /** hook 认领了这么久还没写出去（崩了）：放回去，下一次工具调用再送。 */
 export const TAKEN_STALE_MS = 60_000;
-/** 主进程认领了这么久（直接输入的结果一直没回来，Butler 上次崩在这里）：放回去。deliver 最多等 1 分钟。 */
+/** 主进程认领了这么久（直接输入的结果一直没回来，Shipherd 上次崩在这里）：放回去。deliver 最多等 1 分钟。 */
 export const MAIN_STALE_MS = 5 * 60_000;
 /** 排队超过这么久才送到的，正文前注明是多久之前发的。 */
 export const AGE_NOTE_MS = 10 * 60_000;
@@ -74,11 +74,11 @@ export interface MailboxDeps {
   interruptRecheck(termId: string): () => boolean;
   /** 目标最后一条回复（ActivityMonitor.lastReplyOf）。 */
   lastReply(sessionId: string): { id: string; text: string; at: number | null } | null;
-  /** 给人看的 session 名字（列表、回复的开头）："ABC-1"、"feature 登录改版的总控"、"Butler 总控"。null 是 Butler 自己。 */
+  /** 给人看的 session 名字（列表、回复的开头）："ABC-1"、"feature 登录改版的总控"、"Shipherd 总控"。null 是 Shipherd 自己。 */
   nameOf(sessionId: string | null): string;
   /**
-   * Butler 往这个 session（head）里直接输入：start 在 deliver 之前，之后是 sent / failed。这一段引起的那次 UserPromptSubmit
-   * 不算用户在终端里答了提问（InboxService.butlerTyping）。
+   * Shipherd 往这个 session（head）里直接输入：start 在 deliver 之前，之后是 sent / failed。这一段引起的那次 UserPromptSubmit
+   * 不算用户在终端里答了提问（InboxService.shipherdTyping）。
    */
   typing?(headId: string, phase: "start" | "sent" | "failed"): void;
   /**
@@ -103,7 +103,7 @@ export interface MailboxDeps {
 
 export interface SendInput {
   kind: MessageKind;
-  /** 发送方 session；Butler 自己发的为 null。 */
+  /** 发送方 session；Shipherd 自己发的为 null。 */
   from: string | null;
   to: string;
   featureId: number | null;
@@ -122,7 +122,7 @@ export type TargetState = "busy" | "idle" | "closed";
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t).toISOString());
 /** 正文的版本：按 ref 换了正文（回答改了、评论多了）就变。 */
 const revOf = (m: Pick<SessionMessage, "body">): string => createHash("sha1").update(m.body).digest("hex").slice(0, 16);
-const EXPECTS_REPLY: ReadonlySet<MessageKind> = new Set(["instruction", "butler"]);
+const EXPECTS_REPLY: ReadonlySet<MessageKind> = new Set(["instruction", "shipherd"]);
 
 export class Mailbox {
   private readonly fs: MailboxFs;
@@ -382,7 +382,7 @@ export class Mailbox {
 
   /**
    * 合成一段直接输入的正文；第一条总要送，放不下的留到下一次。
-   * 用户在对话 tab 里说的话（kind user）不和 Butler 的消息合在一起：开头是 user 的这一批只要接着的 user，原样输入，
+   * 用户在对话 tab 里说的话（kind user）不和 Shipherd 的消息合在一起：开头是 user 的这一批只要接着的 user，原样输入，
    * 不加信箱开头，对话里照旧是「你：」；开头不是 user 的这一批碰到 user 就停（BTL-248）。
    */
   private batch(list: SessionMessage[]): { text: string; ids: SessionMessage[] } {
@@ -465,7 +465,7 @@ export class Mailbox {
     let list = queued;
     let gate = this.d.check(head, { answer });
     if (!gate.ok && gate.block === "needs_you") {
-      // 用户自己在对话 tab 里说的话也不看：它就是用户在回答。只送这些，Butler 的别的消息接着等。
+      // 用户自己在对话 tab 里说的话也不看：它就是用户在回答。只送这些，Shipherd 的别的消息接着等。
       list = queued.filter((m) => m.kind === "user");
       if (list.length === 0) return;
       answer = true;
@@ -503,11 +503,11 @@ export class Mailbox {
       const list = forced ? [...claimed.mine.filter((m) => m.id === forced), ...claimed.mine.filter((m) => m.id !== forced)] : claimed.mine;
       const { text, ids } = this.batch(list);
       const at = this.d.now();
-      // 用户自己的话不算 Butler 输入的：它的 UserPromptSubmit 照样算用户在终端里回答了。
+      // 用户自己的话不算 Shipherd 输入的：它的 UserPromptSubmit 照样算用户在终端里回答了。
       const typing = ids[0]?.kind === "user" ? undefined : this.d.typing;
       typing?.(head, "start");
       const result = await (submit ? submit(term, text) : this.d.deliver(term, text, recheck)).catch((e: unknown) => {
-        // 抛了也要收尾，不然那个 session 下一次 UserPromptSubmit 一直被当成 Butler 的。
+        // 抛了也要收尾，不然那个 session 下一次 UserPromptSubmit 一直被当成 Shipherd 的。
         typing?.(head, "failed");
         throw e;
       });
@@ -585,7 +585,7 @@ export class Mailbox {
       if (!this.d.repo.replied(x.id, { text, at: reply.at ?? this.d.now() })) continue;
       changed = true;
       if (x.fromSession !== null) {
-        this.send({ kind: "reply", from: head, to: x.fromSession, featureId: x.featureId, body: m.butlerReplyLine(this.d.nameOf(head), [x.id], text) });
+        this.send({ kind: "reply", from: head, to: x.fromSession, featureId: x.featureId, body: m.shipherdReplyLine(this.d.nameOf(head), [x.id], text) });
       }
     }
     if (changed) this.d.notify();
@@ -612,9 +612,9 @@ export class Mailbox {
 
   // ---- 界面 ----
 
-  /** 一个 session（任何一个 id）发出或收到的最近几条；scope 见 MessageScope，butler 时给 Butler 总控的 session id 们。 */
-  views(scope: MessageScope, butlerSessions: string[], limit = RECENT_MESSAGES): MessageView[] {
-    const rows = "featureId" in scope ? this.d.repo.recent({ featureId: scope.featureId }, limit) : this.d.repo.recent({ sessions: butlerSessions }, limit);
+  /** 一个 session（任何一个 id）发出或收到的最近几条；scope 见 MessageScope，shipherd 时给 Shipherd 总控的 session id 们。 */
+  views(scope: MessageScope, shipherdSessions: string[], limit = RECENT_MESSAGES): MessageView[] {
+    const rows = "featureId" in scope ? this.d.repo.recent({ featureId: scope.featureId }, limit) : this.d.repo.recent({ sessions: shipherdSessions }, limit);
     return rows.map((x) => ({
       id: x.id, kind: x.kind, from: this.d.nameOf(x.fromSession), to: this.d.nameOf(x.toSession), toSession: x.toSession, status: x.status, via: x.via,
       interrupt: x.interrupt, text: x.body, queuedAt: new Date(x.queuedAt).toISOString(), deliveredAt: iso(x.deliveredAt), reply: x.replyText, repliedAt: iso(x.repliedAt),

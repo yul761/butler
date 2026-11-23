@@ -11,9 +11,9 @@ function make(mode: "on" | "verbose" = "on") {
 describe("diagMode", () => {
   it("is on by default, off with 0, verbose with verbose", () => {
     expect(diagMode({})).toBe("on");
-    expect(diagMode({ BUTLER_PERF_DIAG: "0" })).toBe("off");
-    expect(diagMode({ BUTLER_PERF_DIAG: "off" })).toBe("off");
-    expect(diagMode({ BUTLER_PERF_DIAG: "verbose" })).toBe("verbose");
+    expect(diagMode({ SHIPHERD_PERF_DIAG: "0" })).toBe("off");
+    expect(diagMode({ SHIPHERD_PERF_DIAG: "off" })).toBe("off");
+    expect(diagMode({ SHIPHERD_PERF_DIAG: "verbose" })).toBe("verbose");
   });
 });
 

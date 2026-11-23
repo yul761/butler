@@ -29,14 +29,14 @@
    - fetch 失败或超时：照样用本地的 `origin/<name>`，日志里写明「fetch 失败，用本地的 origin/<name>，可能不是最新」。
    - 没有 `origin`，或远端上找不到默认分支：用本地默认分支（`init.defaultBranch`、`main`、`master` 中第一个存在的）。都没有才用 HEAD，并写日志。
    - 不读共享 checkout 停在哪个分支，也不改它的工作区和 HEAD。fetch 只更新 `refs/remotes/origin/*`。
-2. **仓库设置里的 trunk**：Butler 现在没有按仓库设的 trunk。栈的 `trunkOf` 和这里用的是同一套顺序（`origin/HEAD` → main / master），所以不另加设置。
+2. **仓库设置里的 trunk**：Shipherd 现在没有按仓库设的 trunk。栈的 `trunkOf` 和这里用的是同一套顺序（`origin/HEAD` → main / master），所以不另加设置。
 3. 只认 `origin`，和 `defaultBranch`、`upstreamRef`、`firstCommitAt` 一致。
 4. 从远端分支开的新分支加 `--no-track`：不然 git 会把上游设成 `origin/main`，session 里 `git push` 会推错地方或者被 `push.default=simple` 拒绝。以前从本地 HEAD 开也不设上游，行为不变。
 5. `stack_on` 和 intake 接栈给了起点，原样使用，不 fetch。改名时旧分支还在，仍从旧分支开。
 6. 同一个仓库接连或同时建好几个 ticket（总控一次建 5 个，control inbox 是一个一个处理的）：同一个仓库正在算的、或 60 秒内算好的起点直接用，只 fetch 一次。并发 fetch 不会抢 ref 锁，离线时也不用每个 ticket 都等一次 20 秒的超时。
 7. 基线导出（`exporter.ts`）已经有自己的一份「从远端默认分支开」，这次不动它。
 8. 已知的限制：
-   - ssh 远端要密码短语或确认主机指纹时，`GIT_TERMINAL_PROMPT=0` 拦不住。Butler 是 GUI 启动的，没有终端，ssh 会直接失败。
+   - ssh 远端要密码短语或确认主机指纹时，`GIT_TERMINAL_PROMPT=0` 拦不住。Shipherd 是 GUI 启动的，没有终端，ssh 会直接失败。
    - 给已有 ticket 加仓库时，fetch 在这个 ticket 的锁里做，最多 20 秒内不能打开它的 session。
 
 ## 测试

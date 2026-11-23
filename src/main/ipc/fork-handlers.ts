@@ -6,7 +6,7 @@ import { devMessageArg, forkIdArg, forkQuestionArg, sessionIdArg } from "./valid
 interface Deps {
   fork: Pick<ForkService, "ask" | "reaskFull" | "list" | "sendConclusion" | "remember">;
   devSend: Pick<DevSender, "send">;
-  /** 启动时的健康检查（healthReady）。完成前 claude 路径、butler-hook 都还不知道，ForkService 会误报 no_claude。 */
+  /** 启动时的健康检查（healthReady）。完成前 claude 路径、shipherd-hook 都还不知道，ForkService 会误报 no_claude。 */
   ready: () => Promise<void>;
 }
 

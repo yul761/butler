@@ -3,7 +3,7 @@ import type { Handoff } from "../../shared/handoff";
 import { EPIC_PLAN_MAX_CHARS } from "../../shared/control";
 import {
   epicScope, featureScope, MAX_NOTE_VARIANT, noteBody, noteId, noteText, parseNote, plainNoteBody, ticketScope, truncateUnits, WORKSPACE_SCOPE,
-  type ButlerNote, type MemoryView, type WhyEntry,
+  type ShipherdNote, type MemoryView, type WhyEntry,
 } from "../../shared/memory";
 import { currentLang } from "../i18n";
 import type { EpicArchiveEntry, EpicArchiveRepo } from "../db/epic-archive-repo";
@@ -18,7 +18,7 @@ import { NOTES_CAP, withScope, type ScopeHandle } from "./statecore";
 
 /**
  * epic 记忆（内部是 feature scope，BTL-246 §5）：StateCore 每个 scope 只有 30 个笔记位。
- * 看得见的笔记到 EPIC_ARCHIVE_AT 条时，Butler 把最旧的挪进存档，留 EPIC_ARCHIVE_KEEP 条，给下一轮留几个空位；
+ * 看得见的笔记到 EPIC_ARCHIVE_AT 条时，Shipherd 把最旧的挪进存档，留 EPIC_ARCHIVE_KEEP 条，给下一轮留几个空位；
  * 存档只留最新的 EPIC_ARCHIVE_MAX 条，渲染进 handoff 的「以前的约定」。
  */
 export const EPIC_ARCHIVE_AT = 26;
@@ -78,14 +78,14 @@ const noteKey = (n: { kind: string; id: string }): string => `${n.kind}:${n.id}`
  * 写入的先后（PF2）：位置不够时先写的才写得进去。未完成的 followup 优先，然后是决策；各自新的在前。
  * desiredNotes 里 followup 按创建时间从旧到新、决策从新到旧，所以只需要把 followup 倒过来。
  */
-function byPriority(notes: ButlerNote[]): ButlerNote[] {
+function byPriority(notes: ShipherdNote[]): ShipherdNote[] {
   return [...notes.filter((n) => n.kind === "followup").reverse(), ...notes.filter((n) => n.kind !== "followup")];
 }
 
 /**
  * 每次 remember 之前实测一次：还能不能追加一条而不让 StateCore 挤掉别的条目（PF2）。
- * StateCore 的 notes 上限是 30，满了再追加就挤掉最旧的那条，可能正是一条要保留的 Butler 条目；
- * claude 里挂的记忆 MCP 写的 note 和 Butler 的一样会挤掉最旧的（见 statecore.ts 的 NOTES_CAP）。
+ * StateCore 的 notes 上限是 30，满了再追加就挤掉最旧的那条，可能正是一条要保留的 Shipherd 条目；
+ * claude 里挂的记忆 MCP 写的 note 和 Shipherd 的一样会挤掉最旧的（见 statecore.ts 的 NOTES_CAP）。
  * 一次 remember 可能是追加，也可能是原地修订或一字不差的空操作，事先分不出来，所以一律当成追加：没有空位就不写。
  * 每次都重新数，而不是数一次再自己扣：claude 里挂的记忆 MCP 可能同时在往这个 scope 写。一次同步只写几条，开销很小。
  */
@@ -201,7 +201,7 @@ export class MemoryService {
   }
 
   /** 同步一个 ticket；返回这次要保留的条目（记忆关了或没有这个 ticket 时什么都不做，返回 null）。 */
-  private async syncNow(key: string): Promise<ButlerNote[] | null> {
+  private async syncNow(key: string): Promise<ShipherdNote[] | null> {
     if (!this.d.enabled() || !this.d.tickets.get(key)) return null;
     const handoffs = this.d.handoffs.listByTicket(key, HANDOFF_SCAN);
     const full = handoffs.filter(isFull).sort((a, b) => a.id - b.id);
@@ -274,7 +274,7 @@ export class MemoryService {
 
   /**
    * 笔记位快满时（EPIC_ARCHIVE_AT 条），把最旧的 Claude 笔记挪进存档、在 StateCore 里 forget（审计链里还在），留 EPIC_ARCHIVE_KEEP 条。
-   * Butler 自己的条目（[decision:…] 这类）不挪：同步时已经 forget 了。返回挪了几条。
+   * Shipherd 自己的条目（[decision:…] 这类）不挪：同步时已经 forget 了。返回挪了几条。
    */
   private async archiveOverflow(featureId: number, s: ScopeHandle): Promise<number> {
     const archive = this.d.epicArchive;
@@ -295,7 +295,7 @@ export class MemoryService {
   /**
    * 同步一个 epic（内部是 feature）：交接是最新一份有效汇总（summary、next_steps 的文字、open_questions），
    * summary 后面接规划（brief）、约定（汇总里的决策）和以前的约定（存档）（BTL-246 §5）。
-   * Butler 不再占这个 scope 的笔记位：以前写的决策笔记一律 forget；笔记快满时先把最旧的挪进存档（每次 Stop 和启动时都会同步）。
+   * Shipherd 不再占这个 scope 的笔记位：以前写的决策笔记一律 forget；笔记快满时先把最旧的挪进存档（每次 Stop 和启动时都会同步）。
    * 汇总没有 followups 和 learnings，不写 workspace。什么都没有可写时不写交接。
    * 不用 memory_sync 的游标：那张表的 key 引用 tickets(key)（外键开着），feature 写不进去。
    * 改用 StateCore 自己的记录判断“这份汇总写过没有”：handoff 的 retryAfter 传汇总的 createdAt，
@@ -329,7 +329,7 @@ export class MemoryService {
     }
   }
 
-  private async reconcile(key: string, s: ScopeHandle, desired: ButlerNote[]): Promise<void> {
+  private async reconcile(key: string, s: ScopeHandle, desired: ShipherdNote[]): Promise<void> {
     const slots = slotGuard(s);
     const before = await s.facts();
     const plan = planReconcile(before, desired);
@@ -354,7 +354,7 @@ export class MemoryService {
         return;
       }
       queue.shift();
-      // 新写的这条被 StateCore 当成了另一条看得见的 Butler 条目的修订，那一条被挤掉了：用更长的区分词马上把它写回去。
+      // 新写的这条被 StateCore 当成了另一条看得见的 Shipherd 条目的修订，那一条被挤掉了：用更长的区分词马上把它写回去。
       // 排在最前面：挤掉它的那次写入是原地修订、没占位置，这个位置留给它，不让后面的条目先占走（PF2）。
       const displaced = r.displaced;
       const other = displaced ? wanted.get(displaced.key) : undefined;
@@ -367,13 +367,13 @@ export class MemoryService {
 
   /**
    * 从第 from 个变体开始写，直到 facts() 里看得见为止：和已遗忘的条目一字不差时 StateCore 会永久隐藏它。
-   * displaced：被它挤掉的另一条看得见的 Butler 条目（StateCore 把这次写入当成了那一条的修订）。
+   * displaced：被它挤掉的另一条看得见的 Shipherd 条目（StateCore 把这次写入当成了那一条的修订）。
    * 被修订掉的如果是一条早就 forget 过、本来就看不见的旧文本，不算挤掉：它要的那一条还好好地看得见，不用重写。
    * written 为 false：还没写到看得见就没有空位了（take 返回 false）。visible：当前看得见的文本，这里跟着更新。
    */
   private async writeVisible(
     s: ScopeHandle,
-    note: ButlerNote,
+    note: ShipherdNote,
     from: number,
     take: () => Promise<boolean>,
     visible: Set<string>,
@@ -435,7 +435,7 @@ export class MemoryService {
   }
 
   /**
-   * 把一段纯文本记进这个范围（不带 Butler 的 kind:id 前缀，所以 reconcile 不认它，也就不会删它）。
+   * 把一段纯文本记进这个范围（不带 Shipherd 的 kind:id 前缀，所以 reconcile 不认它，也就不会删它）。
    * 每次写之前过 slotGuard：没有空位就不写（不挤掉别的条目），返回 "full"。正文压空白、截到 NOTE_BODY_LIMIT。
    * 和已遗忘的条目一字不差时 StateCore 会永久隐藏它（见 writeVisible）：写完看不见就加 " #2"…" #5" 再写，
    * 到 MAX_NOTE_VARIANT 还是看不见就返回 "failed"。

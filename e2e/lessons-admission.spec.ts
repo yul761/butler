@@ -11,7 +11,7 @@ test("old lessons get their scope and checkability filled in, without analysing 
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  const file = join(s.butlerHome, "app.db");
+  const file = join(s.shipherdHome, "app.db");
   const db = new DatabaseSync(file);
   const now = Date.now();
   db.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run("acme/web", s.repo, now);
@@ -58,7 +58,7 @@ test("a lesson's score parts expand to show each part and the policy version", a
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   db.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run("acme/web", s.repo, Date.now());
   const id = addLesson(db, "错误信息要说清楚下一步", { score: 0.62, parts: { evidence: { value: 0.8, reason: "2 个 PR" }, clarity: { value: 0.5, reason: "范围有点宽" }, composite: { value: 0.62, reason: "准入线 0.70" } } });
   db.close();
@@ -80,7 +80,7 @@ test("the calibration page draws a sample per band and records each mark as a sa
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  const file = join(s.butlerHome, "app.db");
+  const file = join(s.shipherdHome, "app.db");
   const db = new DatabaseSync(file);
   db.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run("acme/web", s.repo, Date.now());
   const high = addLesson(db, "高分的规矩", { score: 0.9 });
@@ -121,7 +121,7 @@ test("the setup wizard picks up after a restart, summarises, and its accept is u
   await first.app.close();
 
   // 上次关掉时向导正在判规矩。
-  const file = join(s.butlerHome, "app.db");
+  const file = join(s.shipherdHome, "app.db");
   const db = new DatabaseSync(file);
   const now = Date.now();
   db.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run("acme/web", s.repo, now);

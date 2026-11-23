@@ -3,17 +3,17 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { MetricsRepo, WaitKind } from "../db/metrics-repo";
 import { busy, type AnsweredWhat } from "./interventions";
 
-/** 状态没变时多久写一次 last_seen_at（Butler 突然退出时，段按它关）。 */
+/** 状态没变时多久写一次 last_seen_at（Shipherd 突然退出时，段按它关）。 */
 export const TOUCH_MS = 30_000;
 /**
- * 两次 sync 隔了这么久：中间电脑睡着了（或者主进程卡住了），那段时间 Butler 没在跑，不算等待。
+ * 两次 sync 隔了这么久：中间电脑睡着了（或者主进程卡住了），那段时间 Shipherd 没在跑，不算等待。
  * 段在最后看到的时间关掉，醒来那一刻重新开。sync 至少每 TOUCH_MS 一次，留出定时器的抖动。
  */
 export const GAP_MS = 3 * TOUCH_MS;
 
 export type WaitSource = "permission_prompt" | "question_tool" | "ask_user" | "needs_you";
 
-/** 一个开着终端的 Butler head 此刻的样子。 */
+/** 一个开着终端的 Shipherd head 此刻的样子。 */
 export interface WaitHead {
   id: string;
   ticketKey: string | null;

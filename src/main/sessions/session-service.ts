@@ -9,8 +9,8 @@ import {
   type Feature,
   type FeatureHandoffRecord,
   type FeatureView,
-  type OpenButlerSessionRequest,
-  type ButlerView,
+  type OpenShipherdSessionRequest,
+  type ShipherdView,
   type OpenFeatureSessionRequest,
   type OpenFixSessionRequest,
   type OpenSessionRequest,
@@ -67,16 +67,16 @@ export interface SessionServiceDeps {
   /**
    * 写好这个 ticket 的记忆 --mcp-config 文件并返回路径；记忆关闭或 bundle 不存在时返回 null（设计文档 8.4）。
    * featureId：ticket 属于的 feature，要多挂 feature 的记忆（设计文档 2026-10-26）。
-   * termId：要启动的终端。共享 MCP（WS-M H）开着时配置按终端写，butler-sessions 的调用者由路由带着。
+   * termId：要启动的终端。共享 MCP（WS-M H）开着时配置按终端写，shipherd-sessions 的调用者由路由带着。
    */
   mcpConfig?: (ticketKey: string, opts: { featureId: number | null }, termId: string) => string | null;
-  /** feature 总控的 --mcp-config 文件（feature 记忆、全局记忆、butler-sessions）。 */
+  /** feature 总控的 --mcp-config 文件（feature 记忆、全局记忆、shipherd-sessions）。 */
   featureMcpConfig?: (featureId: number, termId: string) => string | null;
-  /** Butler 总控的工作目录（BTL-190 第 5 点）；不给就没有 Butler 总控。 */
-  butlerWorkspace?: string;
-  /** Butler 总控的 --mcp-config 文件。 */
-  butlerMcpConfig?: (termId: string) => string | null;
-  /** 复盘分析 session 的工作目录（~/.butler/workspaces/_lessons）；不给就开不了复盘分析 session。 */
+  /** Shipherd 总控的工作目录（BTL-190 第 5 点）；不给就没有 Shipherd 总控。 */
+  shipherdWorkspace?: string;
+  /** Shipherd 总控的 --mcp-config 文件。 */
+  shipherdMcpConfig?: (termId: string) => string | null;
+  /** 复盘分析 session 的工作目录（~/.shipherd/workspaces/_lessons）；不给就开不了复盘分析 session。 */
   lessonsWorkspace?: string;
   /**
    * 交互 session 的 --settings 文件：直接启用仓库 .mcp.json 里的 server，不停在选择对话框上（用户在 dirs 里禁用过的照旧禁用）。
@@ -89,7 +89,7 @@ export interface SessionServiceDeps {
    * 每次启动都记到 session 行上（新开和恢复都算）；不给就不记。
    */
   checksAbsence?: () => CheckAbsenceReason | null;
-  /** Butler 的 session 说明文件（--append-system-prompt-file）；不给或返回 null 时不加。 */
+  /** Shipherd 的 session 说明文件（--append-system-prompt-file）；不给或返回 null 时不加。 */
   /** repoPaths：这个 session 涉及的仓库路径，用来挑要送进去的规矩。 */
   /** ticketKey：给了时按它所在 epic 的自动化档位决定预审那段（BTL-247）。 */
   guidePath?: (kind: GuideKind, repoPaths: string[], ticketKey?: string) => string | null;
@@ -118,7 +118,7 @@ export interface SessionServiceDeps {
   log?: (msg: string, err?: unknown) => void;
   /** 终端打开了（新开或恢复，pty.open 成功之后）：休眠在这里清掉（WS-M B，Hibernator.opened）。 */
   opened?: (termId: string) => void;
-  /** 休眠着的 session 不再算休眠（Hibernator.forget）：被隐藏了，或者被另开的 Butler 总控取代了。 */
+  /** 休眠着的 session 不再算休眠（Hibernator.forget）：被隐藏了，或者被另开的 Shipherd 总控取代了。 */
   hidden?: (headId: string) => void;
   /** 度量（契约 4.7）：开了修复 session 记一条 stuck_fix_opened（ws-j 设计 5）。 */
   recordEvent?: RecordEvent;
@@ -131,7 +131,7 @@ interface Placement {
   cwd: string;
 }
 
-/** 在工作区里启动 claude 时，各种工作区 session（feature 总控、修复 session、Butler 总控、复盘分析）各自不同的地方。 */
+/** 在工作区里启动 claude 时，各种工作区 session（feature 总控、修复 session、Shipherd 总控、复盘分析）各自不同的地方。 */
 interface WorkspaceTarget {
   /** 日志里的称呼。 */
   label: string;
@@ -146,7 +146,7 @@ interface WorkspaceTarget {
   /** 送规矩用的仓库路径（只有修复 session 非空）。 */
   guideRepoPaths: string[];
   /** 新建 session 时这一行的角色。 */
-  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "butler" | "lessonRunId"> & { model?: SessionModel | null };
+  row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "shipherd" | "lessonRunId"> & { model?: SessionModel | null };
 }
 
 type Claude = { path: string; pathValue: string };
@@ -248,7 +248,7 @@ export class SessionService {
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
-        id: termId, model: extra.model ?? null, ticketKey: ticket.key, cwd, origin: "butler", lastActivityAt: now, createdAt: now,
+        id: termId, model: extra.model ?? null, ticketKey: ticket.key, cwd, origin: "shipherd", lastActivityAt: now, createdAt: now,
         repoId: repo?.id ?? null, spawnedBy: extra.spawnedBy ?? null,
       });
     }
@@ -363,7 +363,7 @@ export class SessionService {
 
   /**
    * feature 总控（设计文档 2026-10-26）：在 feature 的工作区里打开，feature 下 ticket 的 worktree 都在里面；
-   * 工作区外面的仓库目录（分支模式、别处的 worktree）各加一个 --add-dir。不设 BUTLER_TICKET。
+   * 工作区外面的仓库目录（分支模式、别处的 worktree）各加一个 --add-dir。不设 SHIPHERD_TICKET。
    */
   async openFeature(req: OpenFeatureSessionRequest): Promise<OpenSessionResult> {
     await this.d.ready();
@@ -373,14 +373,14 @@ export class SessionService {
   }
 
   /**
-   * Butler 总控（BTL-190 第 5 点）：全局只有一个在跑。已经开着时不管要的是哪个对话都返回它（要换对话先在终端里退出）。
-   * 在 ~/.butler/workspaces/_butler 里打开，不加 --add-dir，不设 BUTLER_TICKET。
+   * Shipherd 总控（BTL-190 第 5 点）：全局只有一个在跑。已经开着时不管要的是哪个对话都返回它（要换对话先在终端里退出）。
+   * 在 ~/.shipherd/workspaces/_shipherd 里打开，不加 --add-dir，不设 SHIPHERD_TICKET。
    */
-  async openButler(req: OpenButlerSessionRequest): Promise<OpenSessionResult> {
+  async openShipherd(req: OpenShipherdSessionRequest): Promise<OpenSessionResult> {
     await this.d.ready();
-    const workspace = this.d.butlerWorkspace;
+    const workspace = this.d.shipherdWorkspace;
     if (!workspace) return { ok: false, reason: "no_ticket" };
-    const running = this.runningButler();
+    const running = this.runningShipherd();
     if (running) {
       const termId = this.openHeads().get(running.id);
       if (termId) {
@@ -388,58 +388,58 @@ export class SessionService {
         return { ok: true, termId, alreadyOpen: true };
       }
     }
-    const r = await this.resumeOrStart(req, (head) => head.butler && head.ticketKey === null, (claude, head) => {
+    const r = await this.resumeOrStart(req, (head) => head.shipherd && head.ticketKey === null, (claude, head) => {
       const cwd = head?.cwd || workspace;
       try {
         mkdirSync(cwd, { recursive: true });
       } catch (e) {
-        this.d.log?.(`butler: cannot create ${cwd}`, e);
+        this.d.log?.(`shipherd: cannot create ${cwd}`, e);
         return { ok: false, reason: "no_repo" };
       }
       return this.startInWorkspace({
-        label: "butler", workspace, repoPaths: [], dirs: [],
-        mcpConfig: (termId) => this.d.butlerMcpConfig?.(termId) ?? null,
-        guideKind: "butler",
+        label: "shipherd", workspace, repoPaths: [], dirs: [],
+        mcpConfig: (termId) => this.d.shipherdMcpConfig?.(termId) ?? null,
+        guideKind: "shipherd",
         guideRepoPaths: [],
-        row: { butler: true },
+        row: { shipherd: true },
       }, claude, head);
     });
-    // 全局只有一个 Butler 总控（WS-M B）：开了另一个对话，休眠着的旧总控就不再算休眠，不然投递会一直去叫醒它。
+    // 全局只有一个 Shipherd 总控（WS-M B）：开了另一个对话，休眠着的旧总控就不再算休眠，不然投递会一直去叫醒它。
     if (r.ok) {
       const now = this.d.sessions.head(r.termId)?.id ?? r.termId;
       for (const h of this.d.sessions.listHibernated()) {
-        if (h.butler && h.ticketKey === null && h.id !== now) this.d.hidden?.(h.id);
+        if (h.shipherd && h.ticketKey === null && h.id !== now) this.d.hidden?.(h.id);
       }
     }
     return r;
   }
 
-  /** 正在运行的 Butler 总控的 head；没有在跑的是 null。 */
-  runningButler(): Session | null {
+  /** 正在运行的 Shipherd 总控的 head；没有在跑的是 null。 */
+  runningShipherd(): Session | null {
     for (const [id] of this.openHeads()) {
       const head = this.d.sessions.get(id);
-      if (head?.butler && head.ticketKey === null) return head;
+      if (head?.shipherd && head.ticketKey === null) return head;
     }
     return null;
   }
 
-  /** 最近用过、没隐藏的 Butler 总控 session（巡检要开时恢复它）；没有是 null。 */
-  latestButler(): Session | null {
-    return this.d.sessions.listButler().find((s) => !s.replacedBy && !s.dismissed) ?? null;
+  /** 最近用过、没隐藏的 Shipherd 总控 session（巡检要开时恢复它）；没有是 null。 */
+  latestShipherd(): Session | null {
+    return this.d.sessions.listShipherd().find((s) => !s.replacedBy && !s.dismissed) ?? null;
   }
 
-  /** Butler 总控页：它的 session（分显示的和隐藏的）和工作目录，以及复盘分析 session。 */
-  butlerView(): ButlerView {
+  /** Shipherd 总控页：它的 session（分显示的和隐藏的）和工作目录，以及复盘分析 session。 */
+  shipherdView(): ShipherdView {
     const heads = this.openHeads();
-    const { sessions, hiddenSessions } = this.split(this.d.sessions.listButler(), heads);
+    const { sessions, hiddenSessions } = this.split(this.d.sessions.listShipherd(), heads);
     const lessonRows = this.d.sessions.listLessonSessions();
     const roots = this.d.sessions.rootsOf(lessonRows.map((s) => s.id));
     const lessonSessions = lessonRows.map((s) => ({ ...s, termId: heads.get(s.id) ?? null, rootId: roots.get(s.id) ?? s.id }));
-    return { workspaceDir: this.d.butlerWorkspace ?? "", sessions, hiddenSessions, lessonSessions };
+    return { workspaceDir: this.d.shipherdWorkspace ?? "", sessions, hiddenSessions, lessonSessions };
   }
 
   /**
-   * 复盘分析 session（lessons visibility 任务 7）：在 _lessons 工作目录里看一次复盘运行，仓库用 --add-dir 加进来，没有 Butler 的 MCP。
+   * 复盘分析 session（lessons visibility 任务 7）：在 _lessons 工作目录里看一次复盘运行，仓库用 --add-dir 加进来，没有 Shipherd 的 MCP。
    * 这次运行已经有终端开着就返回它；有关着的 session 就接着它打开，什么都不发；都没有就新开一个，把「先读 file」作为第一条消息发进去。
    */
   async openLessonRun(req: { runId: number; repoPath: string; file: string; label: string }): Promise<OpenSessionResult> {
@@ -605,7 +605,7 @@ export class SessionService {
       args = claudeArgs({ mode: "new", sessionId: termId, mcpConfigPath, settingsPath, addDirs, guidePath, model });
       const now = this.d.now();
       insertedRow = this.d.sessions.insertIfAbsent({
-        id: termId, ticketKey: null, cwd, origin: "butler", lastActivityAt: now, createdAt: now, ...target.row,
+        id: termId, ticketKey: null, cwd, origin: "shipherd", lastActivityAt: now, createdAt: now, ...target.row,
       });
     }
     try {
@@ -621,7 +621,7 @@ export class SessionService {
     return termId;
   }
 
-  /** 开发 session 这次启动时的 claude 参数；只有这个 Butler 进程里开过、终端还开着的 head 才有（/clear 之后的新 head 不认，参数指向旧对话）。 */
+  /** 开发 session 这次启动时的 claude 参数；只有这个 Shipherd 进程里开过、终端还开着的 head 才有（/clear 之后的新 head 不认，参数指向旧对话）。 */
   devLaunchOf(sessionId: string): DevLaunch | null {
     const termId = this.openHeads().get(sessionId);
     const l = termId ? this.launches.get(termId) : undefined;
@@ -654,12 +654,12 @@ export class SessionService {
   /**
    * 终端退出时调用。进程没了就不可能在等用户：× 直接杀进程，可能没有 SessionEnd hook，等待标记要在这里清掉，不然一路传到 feature。
    * 清的是 head（/clear 之后 termId 还是启动时的 id）；结束不算活动，lastActivityAt 不动。
-   * Butler 新建、但用户一句话都没说就退出的 session 没有 transcript，也不能 --resume；留着只会多出一个空的“新对话”按钮，删掉。
+   * Shipherd 新建、但用户一句话都没说就退出的 session 没有 transcript，也不能 --resume；留着只会多出一个空的“新对话”按钮，删掉。
    */
   handleExit(termId: string): void {
     this.launches.delete(termId);
     const head = this.d.sessions.head(termId);
-    // 休眠（WS-M B）：进程是 Butler 结束的，session 还在等（等你、等 CI……），等待标记留着；它有 transcript，也不删。
+    // 休眠（WS-M B）：进程是 Shipherd 结束的，session 还在等（等你、等 CI……），等待标记留着；它有 transcript，也不删。
     if (head?.hibernatedAt) return;
     if (head?.waitingForInput) this.d.sessions.setWaiting(head.id, false, head.lastActivityAt ?? 0);
     const s = this.d.sessions.get(termId);
@@ -673,15 +673,15 @@ export class SessionService {
   pruneEmptySessions(): number {
     const open = new Set([...this.d.pty.openIds(), ...this.openHeads().keys()]);
     let pruned = 0;
-    for (const s of this.d.sessions.listEmptyButler()) {
+    for (const s of this.d.sessions.listEmptyShipherd()) {
       if (!open.has(s.id) && this.pruneIfEmpty(s)) pruned++;
     }
     return pruned;
   }
 
-  /** Butler 新建、没有第一句话、没被替换、确认没有 transcript 的 session：删掉并返回 true。 */
+  /** Shipherd 新建、没有第一句话、没被替换、确认没有 transcript 的 session：删掉并返回 true。 */
   private pruneIfEmpty(s: Session): boolean {
-    if (s.origin !== "butler" || s.firstPrompt || s.replacedBy) return false;
+    if (s.origin !== "shipherd" || s.firstPrompt || s.replacedBy) return false;
     // 只有确认没有记录才删；读不了目录（unknown）时保留这一行。
     if (this.d.transcriptState(s.id) !== "absent") return false;
     this.d.sessions.delete(s.id);
@@ -836,7 +836,7 @@ export class SessionService {
     };
   }
 
-  /** 所有未归档 feature 的一行情况：Butler 总控的 list_features。 */
+  /** 所有未归档 feature 的一行情况：Shipherd 总控的 list_features。 */
   featureRowsAll(): FeatureStatusRow[] {
     const fh = this.d.featureHandoffs;
     const list = this.d.features?.list() ?? [];
@@ -854,7 +854,7 @@ export class SessionService {
     });
   }
 
-  /** 「显示 Butler 之外开的 session」关着（默认）时是空的（BTL-244）。 */
+  /** 「显示 Shipherd 之外开的 session」关着（默认）时是空的（BTL-244）。 */
   unclaimed(): UnclaimedSession[] {
     if (!outsideSessionsOn(this.d.settings)) return [];
     const pattern = this.d.settings.get("ticketPattern");
@@ -883,8 +883,8 @@ export class SessionService {
    */
   hide(sessionId: string): void {
     const s = this.d.sessions.head(sessionId);
-    // ticket 的 session、feature 级 session，或者 Butler 总控（以前的 epic session 不算：BTL-246 去掉了，没有页面能看）。
-    if (!s || (!s.ticketKey && s.featureId === null && !s.butler)) throw new TicketError("not_found", M().sessionNotFound);
+    // ticket 的 session、feature 级 session，或者 Shipherd 总控（以前的 epic session 不算：BTL-246 去掉了，没有页面能看）。
+    if (!s || (!s.ticketKey && s.featureId === null && !s.shipherd)) throw new TicketError("not_found", M().sessionNotFound);
     if (this.openHeads().has(s.id)) throw new TicketError("sessions_open", M().sessionTerminalHide);
     this.d.sessions.dismiss(s.id, this.d.now());
     if (s.hibernatedAt) this.d.hidden?.(s.id);
@@ -892,7 +892,7 @@ export class SessionService {
 
   unhide(sessionId: string): void {
     const s = this.d.sessions.get(sessionId);
-    if (!s || (!s.ticketKey && s.featureId === null && !s.butler)) throw new TicketError("not_found", M().sessionNotFound);
+    if (!s || (!s.ticketKey && s.featureId === null && !s.shipherd)) throw new TicketError("not_found", M().sessionNotFound);
     this.d.sessions.undismiss(s.id);
   }
 }

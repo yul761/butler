@@ -20,7 +20,7 @@ function home() {
   let version = 1;
   const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => version, set: (v) => (version = v) }, now });
   let applied = 0;
-  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), butlerVersion: "3.0.0", backupDir: join(tempDir(), "b"), now, onApplied: () => applied++ });
+  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), shipherdVersion: "3.0.0", backupDir: join(tempDir(), "b"), now, onApplied: () => applied++ });
   return { db, repo, recorder, io, checks: new ChecksRepo(db), applied: () => applied };
 }
 

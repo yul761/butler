@@ -41,13 +41,13 @@ export function compareFromDay(since: number): string {
 
 function compareSide(rows: readonly DailyRow[], from: string, to: string, days: number): CompareSide {
   const side = rows.filter((r) => r.groupKind === "all" && r.day >= from && r.day <= to);
-  const butler = totalsOf(side.filter((r) => r.butler));
+  const shipherd = totalsOf(side.filter((r) => r.shipherd));
   const any = totalsOf(side);
-  const a = averagesOf(butler);
-  const interruptsPerDay = Object.fromEntries(INTERRUPT_CATEGORIES.map((c) => [c, butler.total(`interrupt:${c}`) / days])) as CompareSide["interruptsPerDay"];
+  const a = averagesOf(shipherd);
+  const interruptsPerDay = Object.fromEntries(INTERRUPT_CATEGORIES.map((c) => [c, shipherd.total(`interrupt:${c}`) / days])) as CompareSide["interruptsPerDay"];
   return {
     from, to, days, prs: a.prs, interventions: a.interventions, waitHumanMs: a.waitHumanMs, interruptsPerDay,
-    autoResolved: butler.total("event:interrupt_auto_resolved"), stuckFixes: any.total("event:stuck_fix_opened"),
+    autoResolved: shipherd.total("event:interrupt_auto_resolved"), stuckFixes: any.total("event:stuck_fix_opened"),
   };
 }
 
@@ -219,15 +219,15 @@ export function buildOverview(input: OverviewInput): MetricsOverview {
   const from = windowFromDay(input.now, days);
   const to = dayOf(input.now);
   const inWindow = input.daily.filter((r) => r.day >= from && r.day <= to);
-  const all = (butler: boolean) => inWindow.filter((r) => r.groupKind === "all" && r.butler === butler);
-  const butlerAll = totalsOf(all(true));
+  const all = (shipherd: boolean) => inWindow.filter((r) => r.groupKind === "all" && r.shipherd === shipherd);
+  const shipherdAll = totalsOf(all(true));
   const otherAll = totalsOf(all(false));
   const anyAll = totalsOf(inWindow.filter((r) => r.groupKind === "all"));
 
   const groups: GroupMetrics[] = [];
   const groupRows = new Map<string, DailyRow[]>();
   for (const r of inWindow) {
-    if (r.groupKind === "all" || !r.butler) continue;
+    if (r.groupKind === "all" || !r.shipherd) continue;
     const k = `${r.groupKind}\u0000${r.groupKey}`;
     const list = groupRows.get(k);
     if (list) list.push(r);
@@ -244,10 +244,10 @@ export function buildOverview(input: OverviewInput): MetricsOverview {
   const interventions: KeyCount[] = [];
   for (const [kind, group] of Object.entries(METRIC_KINDS)) {
     if (group !== "intervention") continue;
-    const n = butlerAll.total(`event:${kind}`);
+    const n = shipherdAll.total(`event:${kind}`);
     if (n > 0) interventions.push({ key: kind, n, total: n });
   }
-  for (const s of butlerAll.prefixed("event_sub:")) {
+  for (const s of shipherdAll.prefixed("event_sub:")) {
     const kind = s.key.slice(0, s.key.indexOf(":"));
     if (METRIC_KINDS[kind] === "intervention") interventions.push({ key: s.key, n: s.total, total: s.total });
   }
@@ -259,7 +259,7 @@ export function buildOverview(input: OverviewInput): MetricsOverview {
     .map((e) => ({ key: e.key, n: e.total, total: e.total }))
     .sort(byN);
 
-  const trendRows = input.daily.filter((r) => r.groupKind === "all" && r.butler);
+  const trendRows = input.daily.filter((r) => r.groupKind === "all" && r.shipherd);
   const weekStarts = Array.from({ length: TREND_POINTS }, (_, i) => dayOf(addDays(weekStart(input.now), -7 * (TREND_POINTS - 1 - i))));
   const monthStarts = Array.from({ length: TREND_POINTS }, (_, i) => dayOf(monthsBefore(input.now, TREND_POINTS - 1 - i)));
 
@@ -269,21 +269,21 @@ export function buildOverview(input: OverviewInput): MetricsOverview {
     to,
     generatedAt: input.now,
     rolledUpAt: input.rolledUpAt,
-    butler: averagesOf(butlerAll),
+    shipherd: averagesOf(shipherdAll),
     other: averagesOf(otherAll),
     baseline: baselineAverages(input.baseline, input.cutoff),
     trend: { week: trend(trendRows, weekStarts), month: trend(trendRows, monthStarts) },
-    interrupts: INTERRUPT_CATEGORIES.map((category) => ({ category, count: butlerAll.total(`interrupt:${category}`), waitMs: butlerAll.total(`wait_human:${category}`) })),
-    autoResolved: butlerAll.total("event:interrupt_auto_resolved"),
-    waitHumanMs: butlerAll.prefixed("wait_human:").reduce((a, x) => a + x.total, 0),
-    waitIdleMs: butlerAll.total("wait_idle"),
+    interrupts: INTERRUPT_CATEGORIES.map((category) => ({ category, count: shipherdAll.total(`interrupt:${category}`), waitMs: shipherdAll.total(`wait_human:${category}`) })),
+    autoResolved: shipherdAll.total("event:interrupt_auto_resolved"),
+    waitHumanMs: shipherdAll.prefixed("wait_human:").reduce((a, x) => a + x.total, 0),
+    waitIdleMs: shipherdAll.total("wait_idle"),
     interventions,
     groups,
     spend: {
-      byModel: butlerAll.prefixed("spend_model:").map((x) => ({ key: x.key, n: x.n, total: x.total })).sort(byTotal),
-      byTask: butlerAll.prefixed("spend_task:").map((x) => ({ key: x.key, n: x.n, total: x.total })).sort(byTotal),
+      byModel: shipherdAll.prefixed("spend_model:").map((x) => ({ key: x.key, n: x.n, total: x.total })).sort(byTotal),
+      byTask: shipherdAll.prefixed("spend_task:").map((x) => ({ key: x.key, n: x.n, total: x.total })).sort(byTotal),
     },
-    rework: { prs: butlerAll.total("pr_merged"), ciFailures: butlerAll.total("ci_failures"), reopens: butlerAll.total("reopens"), reverts: butlerAll.total("reverts") },
+    rework: { prs: shipherdAll.total("pr_merged"), ciFailures: shipherdAll.total("ci_failures"), reopens: shipherdAll.total("reopens"), reverts: shipherdAll.total("reverts") },
     otherEvents,
     interruptCompare: input.compareSince ? interruptCompare(input.daily, input.compareSince, input.now) : null,
   };

@@ -9,11 +9,11 @@ function box(files: { at: number; id: string; text: string }[]): { root: string;
   const root = mkdtempSync(join(tmpdir(), "mbx-"));
   const dir = join(root, "term-1");
   mkdirSync(dir);
-  for (const f of files) writeFileSync(join(dir, messageFileName(f.at, f.id)), JSON.stringify({ id: f.id, text: f.text, intro: "Butler 信箱：{n} 条" }));
+  for (const f of files) writeFileSync(join(dir, messageFileName(f.at, f.id)), JSON.stringify({ id: f.id, text: f.text, intro: "Shipherd 信箱：{n} 条" }));
   return { root, dir };
 }
 
-const env = { BUTLER_SESSION: "term-1" };
+const env = { SHIPHERD_SESSION: "term-1" };
 const stdin = JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Read" });
 
 describe("runMailbox", () => {
@@ -22,7 +22,7 @@ describe("runMailbox", () => {
     const run = runMailbox(stdin, env, root);
     const out = JSON.parse(run.out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
-    expect(out.hookSpecificOutput.additionalContext).toBe("Butler 信箱：2 条\n\n---\n\nfirst\n\n---\n\nsecond");
+    expect(out.hookSpecificOutput.additionalContext).toBe("Shipherd 信箱：2 条\n\n---\n\nfirst\n\n---\n\nsecond");
     expect(readdirSync(dir).every((n) => n.includes(".taken-"))).toBe(true);
     run.commit();
     expect(readdirSync(dir).sort()).toEqual([`${messageFileName(1, "a")}.done`, `${messageFileName(2, "b")}.done`]);
@@ -65,7 +65,7 @@ describe("runMailbox", () => {
     expect(runMailbox(JSON.stringify({ tool_name: "Agent" }), env, root).out).toBe("");
     expect(runMailbox(JSON.stringify({ tool_name: "Task" }), env, root).out).toBe("");
     expect(runMailbox(stdin, {}, root).out).toBe("");
-    expect(runMailbox(stdin, { BUTLER_SESSION: "nope" }, root).out).toBe("");
+    expect(runMailbox(stdin, { SHIPHERD_SESSION: "nope" }, root).out).toBe("");
     expect(readdirSync(dir)).toEqual([messageFileName(1, "a")]);
   });
 
@@ -88,10 +88,10 @@ describe("runMailbox", () => {
         realMailboxDeps.rename(a, b);
       },
     });
-    expect(JSON.parse(run.out).hookSpecificOutput.additionalContext).toBe("Butler 信箱：1 条\n\n---\n\nsecond");
+    expect(JSON.parse(run.out).hookSpecificOutput.additionalContext).toBe("Shipherd 信箱：1 条\n\n---\n\nsecond");
   });
 
   it("the envelope names the terminal", () => {
-    expect(mailboxEnvelope(env, 5)).toEqual({ v: 1, receivedAt: 5, ticket: null, butlerSession: "term-1", payload: { hook_event_name: "ButlerMailbox", session_id: "term-1" } });
+    expect(mailboxEnvelope(env, 5)).toEqual({ v: 1, receivedAt: 5, ticket: null, shipherdSession: "term-1", payload: { hook_event_name: "ShipherdMailbox", session_id: "term-1" } });
   });
 });

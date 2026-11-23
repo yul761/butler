@@ -28,11 +28,11 @@ export interface ReviewEffectLesson {
 
 export interface ReviewEffectView {
   days: number;
-  /** Butler 的 PR，最近 12 周。 */
+  /** Shipherd 的 PR，最近 12 周。 */
   weeks: ReviewEffectWeek[];
-  butler: ReviewGroupStats;
+  shipherd: ReviewGroupStats;
   others: ReviewGroupStats;
-  /** Butler 的 PR 里带简报 / 不带简报的。 */
+  /** Shipherd 的 PR 里带简报 / 不带简报的。 */
   withBrief: ReviewGroupStats;
   withoutBrief: ReviewGroupStats;
   /** 最近确认的规矩，上线后至少 3 个 PR 的，按变化排。 */

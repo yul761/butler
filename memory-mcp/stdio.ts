@@ -1,4 +1,4 @@
-// stdio 上的 JSON-RPC：butler-sessions（sessions-entry.ts）和记忆 server（entry.ts）共用。
+// stdio 上的 JSON-RPC：shipherd-sessions（sessions-entry.ts）和记忆 server（entry.ts）共用。
 
 export interface StdioMessage {
   jsonrpc?: string;
@@ -7,7 +7,7 @@ export interface StdioMessage {
   params?: Record<string, unknown>;
 }
 
-/** stdio：每行一条 JSON-RPC 消息，回复也是一行一条。butler-sessions 和记忆 server（entry.ts）都用它。 */
+/** stdio：每行一条 JSON-RPC 消息，回复也是一行一条。shipherd-sessions 和记忆 server（entry.ts）都用它。 */
 export function serveStdio(server: { handle(msg: StdioMessage): Promise<object | null> }, input: NodeJS.ReadableStream, output: NodeJS.WritableStream): void {
   let buf = "";
   input.setEncoding("utf8");

@@ -17,12 +17,12 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 const tmp = () => {
-  const d = mkdtempSync(join(tmpdir(), "butler-cfg-"));
+  const d = mkdtempSync(join(tmpdir(), "shipherd-cfg-"));
   dirs.push(d);
   return d;
 };
 
-/** 一个独立的「BUTLER_HOME」：自己的数据库和备份目录。 */
+/** 一个独立的「SHIPHERD_HOME」：自己的数据库和备份目录。 */
 function home(opts: { backupDir?: string } = {}) {
   const db = memDb();
   const repo = new LessonsRepo(db);
@@ -33,7 +33,7 @@ function home(opts: { backupDir?: string } = {}) {
   const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => version, set: (v) => (version = v) }, now });
   const backupDir = opts.backupDir ?? join(tmp(), "backups");
   let exportedAt: number | null = null;
-  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), butlerVersion: "3.0.0", backupDir, now, onExported: (at) => (exportedAt = at) });
+  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), shipherdVersion: "3.0.0", backupDir, now, onExported: (at) => (exportedAt = at) });
   const lesson = (slug: string | { productId: number }, text: string, status: "pending" | "confirmed" | "rejected" | "disabled" = "confirmed", url: string | null = null) => {
     const scope = typeof slug === "string" ? { kind: "repo" as const, slug } : { kind: "product" as const, productId: slug.productId };
     const id = repo.addLesson({ scope, text, why: "because", at: 5, source: { prNumber: 7, url, slug: typeof slug === "string" ? slug : "acme/web", runId: null } });
@@ -62,12 +62,12 @@ function seed() {
 }
 
 describe("format", () => {
-  const doc = (v: number) => ({ format: CONFIG_FORMAT, formatVersion: v, exportedAt: 1, butlerVersion: "x", scope: { kind: "all" }, options: { content: "all", includeSourceUrls: false }, sections: {} });
+  const doc = (v: number) => ({ format: CONFIG_FORMAT, formatVersion: v, exportedAt: 1, shipherdVersion: "x", scope: { kind: "all" }, options: { content: "all", includeSourceUrls: false }, sections: {} });
 
-  it("refuses files from a newer Butler, non-JSON and non-Butler files", () => {
+  it("refuses files from a newer Shipherd, non-JSON and non-Shipherd files", () => {
     expect(() => parseDoc(JSON.stringify(doc(2)))).toThrow(expect.objectContaining({ reason: "too_new" }) as Error);
     expect(() => parseDoc("{nope")).toThrow(expect.objectContaining({ reason: "not_json" }) as Error);
-    expect(() => parseDoc(JSON.stringify({ format: "other" }))).toThrow(expect.objectContaining({ reason: "not_butler" }) as Error);
+    expect(() => parseDoc(JSON.stringify({ format: "other" }))).toThrow(expect.objectContaining({ reason: "not_shipherd" }) as Error);
     expect(() => parseDoc(JSON.stringify({ ...doc(1), scope: { kind: "moon" } }))).toThrow(ConfigFormatError);
     expect(parseDoc(`\uFEFF${JSON.stringify(doc(1))}`).formatVersion).toBe(1);
   });
@@ -137,12 +137,12 @@ describe("export", () => {
     const { a } = seed();
     const f = join(tmp(), "out.json");
     expect(a.io.writeExport(all, f)).toMatchObject({ ok: true, counts: { products: 1, lessons: 4, policies: 2 } });
-    expect(JSON.parse(readFileSync(f, "utf8"))).toMatchObject({ format: CONFIG_FORMAT, formatVersion: 1, butlerVersion: "3.0.0" });
+    expect(JSON.parse(readFileSync(f, "utf8"))).toMatchObject({ format: CONFIG_FORMAT, formatVersion: 1, shipherdVersion: "3.0.0" });
     expect(a.exportedAt()).not.toBeNull();
   });
 });
 
-describe("import into another BUTLER_HOME", () => {
+describe("import into another SHIPHERD_HOME", () => {
   it("previews, applies as one pending undoable batch, and undoes", async () => {
     const { a } = seed();
     const text = JSON.stringify(a.io.exportDoc(all));
@@ -304,7 +304,7 @@ describe("import into another BUTLER_HOME", () => {
 describe("file round trip", () => {
   it("writes an export from one home and previews it from the file in another", async () => {
     const { a } = seed();
-    const f = join(tmp(), "butler-export.json");
+    const f = join(tmp(), "shipherd-export.json");
     expect(a.io.writeExport(all, f).ok).toBe(true);
     const b = home();
     const pr = await b.io.previewFile(f);

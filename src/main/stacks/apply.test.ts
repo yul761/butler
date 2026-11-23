@@ -45,7 +45,7 @@ const base = (repo: string, layers: ApplyLayer[]) => ({ repo, stackId: 1, runId:
 describe("applyTips", () => {
   it("backs up, moves every branch and pushes the ones the remote has", async () => {
     const s = setup();
-    const remote = tempDir("butler-remote-");
+    const remote = tempDir("shipherd-remote-");
     g(remote, "init", "-q", "--bare");
     g(s.repo, "remote", "add", "origin", remote);
     g(s.repo, "push", "-q", "origin", "a");
@@ -73,7 +73,7 @@ describe("applyTips", () => {
   });
 
   it.each([
-    ["a branch checked out somewhere Butler does not manage", (s: ReturnType<typeof setup>, wt: string) => (s.layers[1]!.checkout = { path: wt, managed: false }), "checked_out"],
+    ["a branch checked out somewhere Shipherd does not manage", (s: ReturnType<typeof setup>, wt: string) => (s.layers[1]!.checkout = { path: wt, managed: false }), "checked_out"],
     ["uncommitted changes", (s: ReturnType<typeof setup>, wt: string) => {
       s.layers[1]!.checkout = { path: wt, managed: true };
       writeFileSync(join(wt, "b.txt"), "edited\n");
@@ -91,7 +91,7 @@ describe("applyTips", () => {
     const r = await applyTips(base(s.repo, s.layers));
     expect(r).toMatchObject({ kind: "deferred", reason: { code } });
     expect(g(s.repo, "rev-parse", "a")).toBe(s.a);
-    expect(g(s.repo, "for-each-ref", "refs/butler")).toBe("");
+    expect(g(s.repo, "for-each-ref", "refs/shipherd")).toBe("");
   });
 
   it("defers while the session is busy", async () => {
@@ -103,7 +103,7 @@ describe("applyTips", () => {
     expect(r).toMatchObject({ kind: "deferred", reason: { code: "session_busy" } });
   });
 
-  it("accepts a remote still at the commit Butler last replaced", async () => {
+  it("accepts a remote still at the commit Shipherd last replaced", async () => {
     const s = setup();
     s.layers[0]!.remoteTip = "1111111111111111111111111111111111111111";
     s.layers[0]!.remoteOkSha = "1111111111111111111111111111111111111111";
@@ -132,6 +132,6 @@ describe("applyTips", () => {
     const s = setup();
     const r = await applyTips({ ...base(s.repo, s.layers), backup: false });
     expect(r).toMatchObject({ kind: "applied", layers: [{ backupRef: null }, { backupRef: null }] });
-    expect(g(s.repo, "for-each-ref", "refs/butler")).toBe("");
+    expect(g(s.repo, "for-each-ref", "refs/shipherd")).toBe("");
   });
 });

@@ -35,7 +35,7 @@ function statusOf(archived: boolean, live: LiveFeature | undefined): FeatureStat
 }
 
 /**
- * 给定的 feature 一行行的情况（Butler 总控的 list_features）。未归档在前；同组按最新有效汇总的时间倒序（没有汇总的排最后）。
+ * 给定的 feature 一行行的情况（Shipherd 总控的 list_features）。未归档在前；同组按最新有效汇总的时间倒序（没有汇总的排最后）。
  * 只用最新的有效汇总（degraded 的不算）。
  */
 export function featureStatusRows(features: readonly Feature[], d: FeatureStatusDeps): FeatureStatusRow[] {

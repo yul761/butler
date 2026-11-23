@@ -4,7 +4,7 @@ import { FeedbackService, osName, type FeedbackServiceDeps } from "./feedback-se
 import type { DiagnosticsFile } from "../diag/diag-export";
 
 const DIAG = {
-  kind: "butler-diagnostics", schema: 1, generatedAt: "2026-11-21T00:00:00.000Z",
+  kind: "shipherd-diagnostics", schema: 1, generatedAt: "2026-11-21T00:00:00.000Z",
   app: { version: "4.0.0", versions: {}, mode: "on" },
   system: { platform: "darwin", arch: "arm64", osRelease: "25.2.0", cpus: { model: "M", count: 1 }, memory: { totalMb: 1, freeMb: 1 } },
   processes: [], mainMemory: {}, perf: { current: {}, history: [] },
@@ -14,7 +14,7 @@ const DIAG = {
 function setup(over: Partial<FeedbackServiceDeps> = {}) {
   const files = new Map<string, string>();
   const d: FeedbackServiceDeps = {
-    env: () => ({ butler: "4.0.0", os: "macOS 15.1.0", platform: "darwin", arch: "arm64", claude: "unknown" }),
+    env: () => ({ shipherd: "4.0.0", os: "macOS 15.1.0", platform: "darwin", arch: "arm64", claude: "unknown" }),
     openExternal: vi.fn(async () => undefined),
     copyText: vi.fn(),
     buildDiagnostics: async () => DIAG,
@@ -73,7 +73,7 @@ describe("FeedbackService diagnostics", () => {
     for (const leak of ["alice", "acme", "Secret", "/Users"]) expect(text).not.toContain(leak);
     expect(JSON.parse(text).redacted).toBe(true);
     const r = await s.saveDiagnostics();
-    expect(r.name).toBe("butler-diagnostics-redacted-2026-11-21T08-09-10.json");
+    expect(r.name).toBe("shipherd-diagnostics-redacted-2026-11-21T08-09-10.json");
     expect(r.path).toBe(join("/dl", r.name));
     expect(files.get(r.path)).toBe(text);
     expect(d.showItemInFolder).toHaveBeenCalledWith(r.path);
@@ -81,10 +81,10 @@ describe("FeedbackService diagnostics", () => {
 
   it("never overwrites an existing file", async () => {
     const { s, files } = setup();
-    files.set(join("/dl", "butler-diagnostics-redacted-2026-11-21T08-09-10.json"), "old");
-    files.set(join("/dl", "butler-diagnostics-redacted-2026-11-21T08-09-10-1.json"), "old");
+    files.set(join("/dl", "shipherd-diagnostics-redacted-2026-11-21T08-09-10.json"), "old");
+    files.set(join("/dl", "shipherd-diagnostics-redacted-2026-11-21T08-09-10-1.json"), "old");
     await s.previewDiagnostics();
-    expect((await s.saveDiagnostics()).name).toBe("butler-diagnostics-redacted-2026-11-21T08-09-10-2.json");
+    expect((await s.saveDiagnostics()).name).toBe("shipherd-diagnostics-redacted-2026-11-21T08-09-10-2.json");
   });
 
   it("refuses to save without a preview, and each preview saves once", async () => {

@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { BaselineCheck, BaselineRepoView, BaselinesAction, RuleRowView } from "../../../shared/baselines";
 import type { CheckScope } from "../../../shared/checks";
 import type { EditableSettingKey } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { parseScopeKey, scopeKey } from "../checks-view";
 import { S } from "../strings";
@@ -227,7 +227,7 @@ function BaselineSettings() {
         return next;
       });
     } catch (e) {
-      if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+      if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
       else reportError(e);
     }
   };

@@ -27,7 +27,7 @@ export interface TurnServiceDeps {
   features(): FeatureView[];
   /** 休眠着的 head（ticket 的 session 列表里可能没有）。 */
   hibernatedHeads(): Session[];
-  /** feature 总控和 Butler 总控的 head，各带页面 target。 */
+  /** feature 总控和 Shipherd 总控的 head，各带页面 target。 */
   coordinators(): { session: Session; featureId: number | null; target: NowTarget; title: string | null }[];
   head(id: string): Session | null;
   /** prWatcher.statusOf */
@@ -62,7 +62,7 @@ export interface TurnServiceDeps {
   /** 不带 filter 的 board（首页）被取时调，做 R9 的补查。 */
   /** 切到首页时（turn:home-opened）：补查一次请你 review 的 PR。 */
   homeOpened(): void;
-  /** 这个 PR 是 Butler 管的栈里、下面还有没合的层时，最近那层的分支（StackService.stackBelow）。 */
+  /** 这个 PR 是 Shipherd 管的栈里、下面还有没合的层时，最近那层的分支（StackService.stackBelow）。 */
   stackBelow(prUrl: string, branch: string | null): string | null;
   /** 推 turn:changed。 */
   emit(): void;
@@ -78,9 +78,9 @@ export function localDayStart(now: number): number {
   return d.getTime();
 }
 
-/** 和「现在」页一样：开着终端、休眠着或唤醒失败的 Butler session 才算（彻底关掉的不算有人在推进，也不算要你接着说）。 */
+/** 和「现在」页一样：开着终端、休眠着或唤醒失败的 Shipherd session 才算（彻底关掉的不算有人在推进，也不算要你接着说）。 */
 const live = (s: Session & { termId?: string | null }): boolean =>
-  (!!s.termId || !!s.hibernatedAt || !!s.wakeError) && s.origin === "butler" && s.replacedBy === null;
+  (!!s.termId || !!s.hibernatedAt || !!s.wakeError) && s.origin === "shipherd" && s.replacedBy === null;
 
 
 /** 一次 board / sendToAgent 里取齐的快照：needsYou、decisions、notices、ciUndelivered 只调一次接口。 */
@@ -323,7 +323,7 @@ export class TurnService {
     for (const n of this.d.notices()) {
       if (!noticeNeedsYou(n) || n.kind === "session_limited") continue;
       const since = n.kind === "ci_undelivered" ? n.ci.since : n.kind === "comments_waiting" ? n.waiting.since : now;
-      const tt: TimedTurn = { turn: { owner: "you", kind: "butler", notice: n }, since };
+      const tt: TimedTurn = { turn: { owner: "you", kind: "shipherd", notice: n }, since };
       const target = "target" in n ? n.target : null;
       const key = n.kind === "ci_undelivered" ? n.ci.ticketKey
         : n.kind === "comments_waiting" ? n.waiting.ticketKey
@@ -379,7 +379,7 @@ export class TurnService {
     for (const c of coords) {
       const [first, ...rest] = asks.get(c.session.id) ?? [];
       const tt = this.sessionInput(c.session, c.target, c.title, first ?? null, null, snap);
-      // 总控停在提示符等输入是常态，不算要你动手：只有问你、卡住和 Butler 提醒进 loose。
+      // 总控停在提示符等输入是常态，不算要你动手：只有问你、卡住和 Shipherd 提醒进 loose。
       if (tt.turn.owner === "you" && tt.turn.kind !== "unattended") loose.push({ ...tt, featureId: c.featureId });
       for (const a of rest) loose.push({ ...askTurn(a, c.session.id), featureId: c.featureId });
     }

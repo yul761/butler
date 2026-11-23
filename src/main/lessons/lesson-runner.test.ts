@@ -89,7 +89,7 @@ function setup(o: { identity?: (p: string) => string | null; available?: boolean
       costGate: o.costGate,
     } as unknown as HeadlessExecDeps,
     ticketForBranch: () => null,
-    butlerContext: async () => ({ decisions: [], learnings: [], transcripts: [] }),
+    shipherdContext: async () => ({ decisions: [], learnings: [], transcripts: [] }),
     lang: () => "en",
     now: () => t,
     notify: vi.fn(),
@@ -317,10 +317,10 @@ describe("LessonRunner queue", () => {
     expect(s.deps.notify).toHaveBeenCalledTimes(1);
   });
 
-  it("puts Butler context into the prompt for a Butler PR", async () => {
+  it("puts Shipherd context into the prompt for a Shipherd PR", async () => {
     const s = setup();
     s.deps.ticketForBranch = (slug, branch) => (slug === "acme/web" && branch === "b7" ? "BTL-1" : null);
-    s.deps.butlerContext = vi.fn(async () => ({ decisions: ["DECISION-TEXT"], learnings: ["LEARNING-TEXT"], transcripts: [] }));
+    s.deps.shipherdContext = vi.fn(async () => ({ decisions: ["DECISION-TEXT"], learnings: ["LEARNING-TEXT"], transcripts: [] }));
     const r = new LessonRunner(s.deps);
     s.repo.enqueue("acme/web", [7], "merged", T0);
     r.start();
@@ -333,7 +333,7 @@ describe("LessonRunner queue", () => {
     const s = setup();
     s.deps.ticketForBranch = () => "BTL-1";
     const ctx = vi.fn(async () => ({ decisions: [], learnings: [], transcripts: [] }));
-    s.deps.butlerContext = ctx;
+    s.deps.shipherdContext = ctx;
     const r = new LessonRunner(s.deps);
     s.repo.enqueue("acme/web", [7], "merged", T0);
     r.start();
@@ -652,11 +652,11 @@ describe("LessonRunner cancel and retry", () => {
     expect(s.statusOf(1)).toMatchObject({ status: "skipped", error: "cancelled", attempts: 0, last_run_id: r.id });
   });
 
-  it("cancel while the Butler context is loading never spawns claude", async () => {
+  it("cancel while the Shipherd context is loading never spawns claude", async () => {
     const s = setup();
     s.deps.ticketForBranch = () => "BTL-1";
     let release!: () => void;
-    s.deps.butlerContext = () => new Promise((res) => (release = () => res({ decisions: [], learnings: [], transcripts: [] })));
+    s.deps.shipherdContext = () => new Promise((res) => (release = () => res({ decisions: [], learnings: [], transcripts: [] })));
     s.repo.enqueue("acme/web", [1], "merged", T0);
     s.runner.start();
     await flush();

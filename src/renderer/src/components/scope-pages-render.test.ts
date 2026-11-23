@@ -34,7 +34,7 @@ const boardFor = (filter: TurnFilter, withPr: boolean): TurnBoard => {
 };
 
 const session = (id: string, o: Partial<SessionView> = {}): SessionView => ({
-  id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
+  id, ticketKey: null, cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
   replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: true, spawnedBy: null, featureId: null, fixesSession: null,
   model: null, termId: null, rootId: id, ...o,
 } as SessionView);

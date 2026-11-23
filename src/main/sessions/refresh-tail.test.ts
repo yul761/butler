@@ -19,7 +19,7 @@ const HANDOFF = user("<command-message>handoff</command-message>\n<command-name>
 afterEach(() => setLang("zh"));
 
 describe("extractRefreshTail", () => {
-  it("takes the turns before Butler's /handoff and leaves out the command, its output, sidechains, meta and tool results", () => {
+  it("takes the turns before Shipherd's /handoff and leaves out the command, its output, sidechains, meta and tool results", () => {
     const r = extractRefreshTail(fixtureLines(), refreshCommandMatcher());
     expect(r.commandFound).toBe(true);
     expect(r.turns).toEqual<TailTurn[]>([
@@ -87,7 +87,7 @@ describe("renderRefreshTail", () => {
     expect(out).toContain("## 用户\n\n把登录页的按钮改成蓝色");
     expect(out).toContain("- 工具 Read: /repo/src/login.tsx\n- 工具 Bash: pnpm test --filter login && echo done");
     expect(out.indexOf("把登录页")).toBeLessThan(out.indexOf("开 PR 吧"));
-    expect(out).not.toContain("butler-handoff");
+    expect(out).not.toContain("shipherd-handoff");
     expect(out).not.toContain("子代理");
     expect(out).not.toContain("Set model to sonnet");
     setLang("en");

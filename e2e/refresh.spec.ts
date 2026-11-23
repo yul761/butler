@@ -6,14 +6,14 @@ import { completeWizard, expect, newButton, openSettingsTab, openTicketTab, type
 
 /**
  * 上下文换新（计划 16 任务 7）：假 claude 的每条回复都带 usage（上下文是 FAKE_CLAUDE_CONTEXT_TOKENS，/clear 之后从头算），
- * 认 /handoff（输出 butler-handoff 代码块）和 /clear（换新的 session id，SessionStart 的 source 是 clear，没有 Stop）。
+ * 认 /handoff（输出 shipherd-handoff 代码块）和 /clear（换新的 session id，SessionStart 的 source 是 clear，没有 Stop）。
  * 活动 tick、用量扫描和"刚打过字"的间隔都调短；终端里早已滚走的输入按假 claude 记下的 prompt 行核对。
  */
 
 /** 用量扫描、活动 tick、打字之后不自动输入、刚打开的终端不自动换新的间隔（e2e 专用的环境变量，只在后台窗口模式下算数）。 */
-const FAST = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_USAGE_SCAN_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000", BUTLER_REFRESH_OPEN_QUIET_MS: "1000" };
+const FAST = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_USAGE_SCAN_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000", SHIPHERD_REFRESH_OPEN_QUIET_MS: "1000" };
 /** 换新的最后一步「接着做」里的一句（src/main/strings.ts 的 refreshResume）；BTL-248 起经信箱送，前面有信箱的开头。 */
-const RESUME = "上下文已由 Butler 换新。先用 recall 调出";
+const RESUME = "上下文已由 Shipherd 换新。先用 recall 调出";
 /** 假 claude 的 /handoff 输出（fake-claude.cjs 的 COMMAND_HANDOFF）里做完的事。 */
 const HANDOFF_DONE = "结账页写完";
 
@@ -89,12 +89,12 @@ async function expectHandoffStored(page: Page): Promise<void> {
   await expect(page.locator(".memory-handoff pre")).toContainText(HANDOFF_DONE);
 }
 
-/** 失败时把假 claude 的记录和 Butler 的日志打出来（沙盒也会留下）。 */
+/** 失败时把假 claude 的记录和 Shipherd 的日志打出来（沙盒也会留下）。 */
 async function withLogs(s: Sandbox, body: () => Promise<void>): Promise<void> {
   try {
     await body();
   } catch (e) {
-    for (const f of [s.fakeLog, join(s.butlerHome, "logs", "main.log")]) if (existsSync(f)) console.log(`--- ${f}\n${readFileSync(f, "utf8")}`);
+    for (const f of [s.fakeLog, join(s.shipherdHome, "logs", "main.log")]) if (existsSync(f)) console.log(`--- ${f}\n${readFileSync(f, "utf8")}`);
     throw e;
   }
 }
@@ -117,7 +117,7 @@ for (const { title, judgeDelayMs } of [
     await newTicket(page, s, "RF-1");
     const first = await openSession(page);
 
-    // 1. 回一句话停下：用量扫描读到 5000 的上下文，Butler 自己开始换新。
+    // 1. 回一句话停下：用量扫描读到 5000 的上下文，Shipherd 自己开始换新。
     await typeLine(page, "hello");
     await expect.poll(() => terminalText(page)).toContain("收到：hello");
 

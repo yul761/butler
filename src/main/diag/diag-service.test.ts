@@ -39,7 +39,7 @@ describe("DiagService", () => {
     expect(written).toHaveLength(0);
     pick = "/x/diag.json";
     expect(await svc.export()).toBe("/x/diag.json");
-    expect(JSON.parse(written[0][1]).kind).toBe("butler-diagnostics");
+    expect(JSON.parse(written[0][1]).kind).toBe("shipherd-diagnostics");
   });
 });
 

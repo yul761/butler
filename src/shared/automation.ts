@@ -1,5 +1,5 @@
 /**
- * 自动化档位（BTL-247，Butler 4.0 W7）：全局一个档位，每个 epic 可以另选。
+ * 自动化档位（BTL-247，Shipherd 4.0 W7）：全局一个档位，每个 epic 可以另选。
  * 档位不是新的权限，只是一组「受管开关」的预设：选全局档位时把这些开关写成预设；
  * epic 另选了档位时，它的 ticket 的受管行为按那一档的预设，盖过全局、产品、仓库三层。
  * 设计：docs/superpowers/specs/2026-11-20-btl-247-automation-levels-design.md。
@@ -60,7 +60,7 @@ const allOff = Object.fromEntries(GOVERNED_SETTINGS.map((k) => [k, "0"])) as Rec
 /**
  * 手动 = 什么都不配置时的默认值（等于 4.0 以前的默认）。
  * 半自动：评论送回 session 但不回复、不 resolve；CI 分类，偶发失败重跑一次；栈自动 rebase，栈要用的推送、强推、开 PR；
- * 预审；配了来源的自动接活自动开工。合并永远要人点（Butler 没有替你合并的动作）。
+ * 预审；配了来源的自动接活自动开工。合并永远要人点（Shipherd 没有替你合并的动作）。
  */
 export const AUTOMATION_PRESETS: Record<AutomationLevel, AutomationPreset> = {
   manual: {
@@ -158,7 +158,7 @@ export function overlayStack(p: StackPolicy, level: AutomationLevel | null): Sta
 }
 
 /**
- * Jira 接进来、父 epic 在 Butler 里另选了档位的 ticket：接活策略按 BTL-246 §7 的手动 / 半自动（BTL-247）。
+ * Jira 接进来、父 epic 在 Shipherd 里另选了档位的 ticket：接活策略按 BTL-246 §7 的手动 / 半自动（BTL-247）。
  * 只管开不开工，接活本身开没开（拉不拉、接不接这个仓库）仍然按三层：一个 epic 不能替全局把接活打开。
  * 半自动 = 自动开工。手动 = 不开工，拿不准要澄清时也只提醒你、不自动开 session；仓库的接活开着时照样建进 epic 整理。
  * 不用手动档的预设（接活整个关掉），否则 epic 选了手动反而连整理都不做了。

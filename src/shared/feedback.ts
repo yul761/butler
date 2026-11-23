@@ -1,12 +1,12 @@
 // 「发送反馈」（BTL-254）：在浏览器里打开预填好的 GitHub new issue 页，由用户自己提交。
-import { BUTLER_REPO } from "./butler-repo";
+import { SHIPHERD_REPO } from "./shipherd-repo";
 
 export const FEEDBACK_KINDS = ["bug", "idea", "first-run"] as const;
 export type FeedbackKind = (typeof FEEDBACK_KINDS)[number];
 
 export const isFeedbackKind = (v: unknown): v is FeedbackKind => typeof v === "string" && (FEEDBACK_KINDS as readonly string[]).includes(v);
 
-export const FEEDBACK_REPO_URL = `https://github.com/${BUTLER_REPO}`;
+export const FEEDBACK_REPO_URL = `https://github.com/${SHIPHERD_REPO}`;
 export const FEEDBACK_ISSUE_URL = `${FEEDBACK_REPO_URL}/issues/new`;
 export const FEEDBACK_DISCUSSIONS_URL = `${FEEDBACK_REPO_URL}/discussions`;
 
@@ -26,7 +26,7 @@ export const TRUNCATED_MARK = "\n\n…(truncated)";
 export const TITLE_URL_BUDGET = 600;
 
 export interface FeedbackEnv {
-  butler: string;
+  shipherd: string;
   /** 例如 "macOS 15.1.0"、"Windows 10.0.22631"。 */
   os: string;
   platform: string;
@@ -52,7 +52,7 @@ export interface FeedbackLink {
 }
 
 export function envBlock(e: FeedbackEnv): string {
-  return [`- Butler: ${e.butler}`, `- OS: ${e.os} (${e.platform})`, `- Architecture: ${e.arch}`, `- Claude Code: ${e.claude}`].join("\n");
+  return [`- Shipherd: ${e.shipherd}`, `- OS: ${e.os} (${e.platform})`, `- Architecture: ${e.arch}`, `- Claude Code: ${e.claude}`].join("\n");
 }
 
 function build(d: FeedbackDraft, env: FeedbackEnv, title: string, description: string): string {

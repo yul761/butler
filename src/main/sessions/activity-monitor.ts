@@ -69,13 +69,13 @@ const positiveMs = (v: string | undefined, fallback: number): number => (/^[1-9]
 
 /**
  * 活动刷新和卡住检查的间隔，只在这里读环境变量。e2e 等不起 3 分钟，把它们调短；
- * 只有 e2e 的标记 BUTLER_BACKGROUND_WINDOWS=1 在时才算数，正常运行永远是 10 秒和 3 分钟。
+ * 只有 e2e 的标记 SHIPHERD_BACKGROUND_WINDOWS=1 在时才算数，正常运行永远是 10 秒和 3 分钟。
  */
 export function activityIntervals(env: NodeJS.ProcessEnv): ActivityIntervals {
-  const test = env.BUTLER_BACKGROUND_WINDOWS === "1";
+  const test = env.SHIPHERD_BACKGROUND_WINDOWS === "1";
   return {
-    tickMs: test ? positiveMs(env.BUTLER_ACTIVITY_TICK_MS, ACTIVITY_TICK_MS) : ACTIVITY_TICK_MS,
-    stuckCheckMs: test ? positiveMs(env.BUTLER_STUCK_CHECK_MS, STUCK_CHECK_MS) : STUCK_CHECK_MS,
+    tickMs: test ? positiveMs(env.SHIPHERD_ACTIVITY_TICK_MS, ACTIVITY_TICK_MS) : ACTIVITY_TICK_MS,
+    stuckCheckMs: test ? positiveMs(env.SHIPHERD_STUCK_CHECK_MS, STUCK_CHECK_MS) : STUCK_CHECK_MS,
   };
 }
 
@@ -108,7 +108,7 @@ export interface ActivityDeps {
    */
   notify: (change: ActivityChange) => void;
   /**
-   * 实况窗口的信号（BTL-190 第 7 点）：每个新的 tool_use、轮次开始和结束各一条。开始跟踪以前的记录（--resume 重放、Butler 启动前写的）、
+   * 实况窗口的信号（BTL-190 第 7 点）：每个新的 tool_use、轮次开始和结束各一条。开始跟踪以前的记录（--resume 重放、Shipherd 启动前写的）、
    * 文件截短或轮转后重读出来的不推。
    */
   onEvent?: (e: ActivityEvent) => void;
@@ -182,7 +182,7 @@ export function describeActivity(a: SessionActivity): string {
   return `${[m.activityKinds[a.kind], a.detail].filter(Boolean).join(" ")}${a.background ? m.activityBackground : ""}`;
 }
 
-/** 卡住检测的范围：Butler 开的、不是修复 session 的所有 session（ticket、总控），已归档的 ticket 和 feature 除外。 */
+/** 卡住检测的范围：Shipherd 开的、不是修复 session 的所有 session（ticket、总控），已归档的 ticket 和 feature 除外。 */
 interface StuckScope {
   ticketKey: string | null;
   featureId: number | null;
@@ -537,7 +537,7 @@ export class ActivityMonitor {
 
   private scope(head: Session): StuckScope | null {
     // 修复 session 和复盘分析 session 不判断卡住（也就不判断需要你）。
-    if (head.origin !== "butler" || head.fixesSession !== null || head.lessonRunId !== null) return null;
+    if (head.origin !== "shipherd" || head.fixesSession !== null || head.lessonRunId !== null) return null;
     const ticket = head.ticketKey ? this.d.tickets.get(head.ticketKey) : null;
     if (head.ticketKey && (!ticket || ticket.archivedAt !== null)) return null;
     const featureId = ticket?.featureId ?? head.featureId;

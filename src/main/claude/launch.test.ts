@@ -37,7 +37,7 @@ describe("Windows claude shims (plan 1 Task 9, plan 2 Task 10)", () => {
   it("resolves npm and pnpm shims to node and the script, keeping spaces (Review Focus 1)", () => {
     const files = new Map([[`${NPM_DIR}\\claude.cmd`, NPM_SHIM], [`${NPM_DIR}\\node.exe`, ""], [CLI, ""]]);
     const deps = { read: (f: string) => files.get(f) ?? "", exists: (p: string) => files.has(p) };
-    const args = ["--session-id", "u1", "--mcp-config", "C:\\Users\\John Smith\\.butler\\mcp\\PROJ-1.json"];
+    const args = ["--session-id", "u1", "--mcp-config", "C:\\Users\\John Smith\\.shipherd\\mcp\\PROJ-1.json"];
     expect(resolveLaunch(`${NPM_DIR}\\claude.cmd`, args, "win32", deps)).toEqual({ file: `${NPM_DIR}\\node.exe`, args: [CLI, ...args], viaCmd: false });
 
     const nodeOnPath = "C:\\Program Files\\nodejs\\node.exe";
@@ -76,7 +76,7 @@ describe("native claude.exe behind npm and pnpm shims (claude-code 2.1.307 ships
   });
 
   it("starts the exe directly with the args: no node, no cmd.exe, spaces kept", () => {
-    const args = ["--session-id", "u1", "--mcp-config", "C:\\Users\\John Smith\\.butler\\mcp\\tickets\\PROJ-1.json"];
+    const args = ["--session-id", "u1", "--mcp-config", "C:\\Users\\John Smith\\.shipherd\\mcp\\tickets\\PROJ-1.json"];
     const npm = fsWith({ [`${NPM_DIR}\\claude.cmd`]: NPM_EXE_SHIM }, [EXE]);
     expect(resolveLaunch(`${NPM_DIR}\\claude.cmd`, args, "win32", npm)).toEqual({ file: EXE, args, viaCmd: false });
     expect(childLaunch(`${NPM_DIR}\\claude.cmd`, args, "win32", npm)).toEqual({ file: EXE, args, viaCmd: false });
@@ -204,7 +204,7 @@ describe("Windows claude shims: other formats and odd cases (P5-R6)", () => {
   it("a launch resolved once can take the arguments later (P5-PF10)", () => {
     const shims = { [`${NPM_DIR}\\claude.cmd`]: NPM_FLAGS_SHIM, [`${NPM_DIR}\\exe.cmd`]: NPM_EXE_SHIM, [`${NPM_DIR}\\junk.cmd`]: "junk" };
     const deps = fsWith(shims, [`${NPM_DIR}\\node.exe`, CLI, EXE]);
-    const args = ["--mcp-config", "C:\\Users\\John Smith\\.butler\\mcp\\tickets\\PROJ-1.json"];
+    const args = ["--mcp-config", "C:\\Users\\John Smith\\.shipherd\\mcp\\tickets\\PROJ-1.json"];
     for (const [claudePath, platform] of [
       [`${NPM_DIR}\\claude.cmd`, "win32"],
       [`${NPM_DIR}\\exe.cmd`, "win32"],

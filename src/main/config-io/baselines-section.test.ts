@@ -16,7 +16,7 @@ function home() {
   const now = () => (t += 10);
   let version = 1;
   const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => version, set: (v) => (version = v) }, now });
-  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), butlerVersion: "3.0.0", backupDir: join(tempDir(), "b"), now });
+  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), shipherdVersion: "3.0.0", backupDir: join(tempDir(), "b"), now });
   return { db, repo, recorder, io, baselines: new BaselinesRepo(db) };
 }
 
@@ -28,7 +28,7 @@ function scan(slug: string, at: number, over: Partial<NewBaseline> = {}): NewBas
     projects: [{ dir: "", langs: ["ts"], markers: ["node"], pm: "pnpm" }],
     checks: [{
       id: "|test|vitest", dir: "", category: "test", tool: "vitest", command: "pnpm test", fileCommand: "pnpm vitest run {file}", stages: ["ci"], changedFiles: true,
-      butlerStage: "push", source: "marker", confidence: "high", evidence: ["package.json"], facts: [],
+      shipherdStage: "push", source: "marker", confidence: "high", evidence: ["package.json"], facts: [],
     }],
     advice: [],
     profile: { projects: [{ dir: "", langs: ["ts"], install: "pnpm install", build: null, testAll: "pnpm test", testOne: "pnpm vitest run {file}", fastest: null, lint: null, typecheck: null, inferred: [] }], dirs: ["src/"], ci: [], pitfalls: ["never call the db from views"] },

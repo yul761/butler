@@ -1,19 +1,19 @@
 # Workstream J: fewer interruptions that need no human, and outside notifications (design addendum)
 
-Part of Butler 3.0.0. The master design is `2026-11-17-butler-3-design.md`. This addendum covers source plan 7.4 (everything except "measure first", which H did) and 7.12. It records the calls that were open and how they were settled. Contracts used: 4.1 router, 4.2 layered settings, 4.3 export/import, 4.7 metrics events, 4.8 external actions.
+Part of Shipherd 3.0.0. The master design is `2026-11-17-shipherd-3-design.md`. This addendum covers source plan 7.4 (everything except "measure first", which H did) and 7.12. It records the calls that were open and how they were settled. Contracts used: 4.1 router, 4.2 layered settings, 4.3 export/import, 4.7 metrics events, 4.8 external actions.
 
 ## 1. What the numbers said (measuring before building)
 
 H's tables only started filling with 3.0.0, so the local history was read directly. Aggregate numbers only, no content:
 
-- Butler's inbox: 4 `ask_user` decisions, all with options (category `choice`), 0 missing-information questions.
+- Shipherd's inbox: 4 `ask_user` decisions, all with options (category `choice`), 0 missing-information questions.
 - Claude Code transcripts from the last 60 days: 5 `AskUserQuestion` calls with 9 questions. 8 of the 9 marked a recommended option, and the user picked it 8 times out of 8.
 - Only 2 rejected permission prompts in the same period. Approved prompts leave no trace in transcripts, so the prompt count itself can't be read back. The commands that ran are the evidence.
 
 Conclusions:
 
 - **Choice.** Picking the recommended option is almost always what the user does, so a default rule pays off. It must leave a record so the user can check it afterwards.
-- **Missing information.** Too rare to justify routing it inside Butler. The fix is a rule in the session guide: look first, ask last. Measurement continues through H's `missing_info` category, so the decision can be revisited.
+- **Missing information.** Too rare to justify routing it inside Shipherd. The fix is a rule in the session guide: look first, ask last. Measurement continues through H's `missing_info` category, so the decision can be revisited.
 - **Permission.** Build the profile from commands that actually ran, not from prompts.
 - **Stuck.** Keep the existing fix session and wire it into the statistics.
 
@@ -65,7 +65,7 @@ Some commands produce no rule:
 
 MCP tools qualify when all of these hold:
 
-- the server isn't one of Butler's own;
+- the server isn't one of Shipherd's own;
 - the tool part starts with a read verb (`get`, `list`, `search`, `read`, `view`, `fetch`, `describe`, `show`, `find`);
 - no part of the tool name is a write verb (`create`, `update`, `delete`, `remove`, `add`, `set`, `post`, `send`, `write`, `edit`, `move`, `merge`, `close`, `transition`, `assign`, `comment`, `upload`, `run`, `execute`, `trigger`, `approve`, `reject`, `push`, `publish`, `deploy`, `cancel`, `archive`, `link`, `submit`, `replace`, `generate`, `reset`, `install`, `access`, `invoke`, `call`, `request`, `token`, `dialog`, `prompt`, `notify` and more; the full list is `WRITE_VERBS`).
 
@@ -87,7 +87,7 @@ On request, the low-tier model (task `permission_profile`, contract 4.1) writes 
 
 ### 2.5 Measurement
 
-When Butler starts or resumes a session, it records which profile rules went into that session's `--settings` and when. When the session stops, `ProfileHitCounter` reads the part of its transcript written since the last stop (at most 4 MB, up to the last complete line). For every `tool_use` that matches one of those rules, is timestamped after the start, and that `SESSIONS_AUTO_ALLOW` wouldn't already allow, it records `interrupt_auto_resolved` with `{category: "permission", via: "profile"}`, deduplicated by `profile:<session>:<tool-use id>`. Sessions Butler didn't start in this run, rules confirmed after the start and entries without a timestamp count nothing. A 4 MB stretch with no newline is skipped rather than read again on every stop.
+When Shipherd starts or resumes a session, it records which profile rules went into that session's `--settings` and when. When the session stops, `ProfileHitCounter` reads the part of its transcript written since the last stop (at most 4 MB, up to the last complete line). For every `tool_use` that matches one of those rules, is timestamped after the start, and that `SESSIONS_AUTO_ALLOW` wouldn't already allow, it records `interrupt_auto_resolved` with `{category: "permission", via: "profile"}`, deduplicated by `profile:<session>:<tool-use id>`. Sessions Shipherd didn't start in this run, rules confirmed after the start and entries without a timestamp count nothing. A 4 MB stretch with no newline is skipped rather than read again on every stop.
 
 - This replaces the `onTool` plan. The hook only sends Bash envelopes for push and PR creation, so most profile-allowed calls never reach `activity-monitor`.
 - The count is an upper bound: Claude Code might not have asked for some of these calls (for example, when the user's own settings already allow them). The Effect page labels it "auto-resolved", not "prompts avoided".
@@ -102,7 +102,7 @@ When Butler starts or resumes a session, it records which profile rules went int
   - `ask_user` gains an optional `recommended` (index into `options`).
   - Only questions with at least two options (category `choice`) are answered automatically.
   - When a default matches, the decision is answered immediately, with a short prefix telling the session the answer came from the user's default. It goes into `auto_choices` (source `default`) and records `interrupt_auto_resolved {category: "choice", via: "default"}`. It does not count as a human intervention.
-- **Review.** Settings → 「打断与通知」 lists auto choices, newest first, and marks them reviewed one by one or all at once. A choice the user disagrees with is fixed by answering the session directly; Butler doesn't try to undo it.
+- **Review.** Settings → 「打断与通知」 lists auto choices, newest first, and marks them reviewed one by one or all at once. A choice the user disagrees with is fixed by answering the session directly; Shipherd doesn't try to undo it.
 
 ## 4. Missing information
 
@@ -113,7 +113,7 @@ Setting `interruptSelfServe` (default `0`). The guide for ticket sessions and co
 3. memory `recall`;
 4. for a ticket session under a coordinator, `report(kind: "blocked")` to the coordinator.
 
-Ask the user only when none of these can supply it, and say what was already checked. No routing inside Butler (section 1).
+Ask the user only when none of these can supply it, and say what was already checked. No routing inside Shipherd (section 1).
 
 ## 5. Stuck
 
@@ -124,7 +124,7 @@ The fix session stays as it is. `openFix` records `stuck_fix_opened` (kind regis
 - `interruptReductionSince`, an internal setting not editable from the renderer, holds the first time any of the J features came into effect: a profile rule confirmed, or the choice rule, default answers or self-serve switched on.
 - The overview gains `interruptCompare`, with equal windows of up to 30 full days on each side of that time. The activation day itself is left out of both sides, since it is partly before and partly after; on that day both sides are null and the page says the comparison starts the next day. Each side has:
   - days;
-  - Butler PRs merged;
+  - Shipherd PRs merged;
   - human interventions per PR;
   - waiting-for-human time per PR;
   - interrupts per day by category;
@@ -160,7 +160,7 @@ The fix session stays as it is. `openFix` records `stuck_fix_opened` (kind regis
   - `review_comment` counts new `comment` and `review` observations whose `who` is `human`, so the PR author and bots are excluded. The watcher's first read of a PR is history, and nothing is sent for it.
 - **Content.**
   - Events of the same kind are gathered for 60 seconds and sent as one message with a count.
-  - By default the message says only the kind and the count, for example "Butler: 2 decisions need you".
+  - By default the message says only the kind and the count, for example "Shipherd: 2 decisions need you".
   - `notifyDetails=1` adds the ticket key and PR number. Question text, comment text, paths and repository names are never sent.
 - **Test.** Settings has "Send a test". With the switch off, no request goes out: `attempt` records a `skipped` row in the outward-action audit, and the page says the switch is off.
 - **Quiet hours.** `notifyQuietHours` takes the form `HH:MM-HH:MM` in local time and may wrap past midnight. Events inside the window are dropped and logged as `quiet`, not held back. When a 60-second batch is sent, the switch, the chosen events and quiet hours are checked again, so a batch that crosses into quiet hours or whose event was unticked is logged as `quiet` or `filtered` instead.
@@ -191,5 +191,5 @@ New IPC channels are all configuration or reading, so they go into `NOT_TRIGGERS
 
 - **Claude Code rule syntax.** Checked against the current permissions docs: `Bash(x:*)` equals `Bash(x *)`; compound commands are split, and every part must be allowed; redirection targets are checked separately; a `*` in a rule makes it a wildcard. This is why exact rules never contain `*`.
 - **Transcript shape.** Checked on this machine's transcripts: `cwd` on each entry, `tool_use.id` matched to `tool_result.tool_use_id`, rejections carry `is_error` and the "doesn't want to proceed" text.
-- **The settings file a session already gets.** `projectMcpApprovalSettings` already writes `permissions.allow`, so profile rules join that list and Butler never touches the user's own Claude Code settings.
+- **The settings file a session already gets.** `projectMcpApprovalSettings` already writes `permissions.allow`, so profile rules join that list and Shipherd never touches the user's own Claude Code settings.
 - **D's #43 wizard.** It is the lessons admission panel, not the first-run wizard, so the 「权限档案」 step goes into the first-run wizard between `privacy` and `done`.

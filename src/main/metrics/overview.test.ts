@@ -8,11 +8,11 @@ const H = 3_600_000;
 const NOW = new Date(2026, 9, 15, 12).getTime();
 const TODAY = dayOf(NOW);
 
-const row = (o: Partial<DailyRow> & Pick<DailyRow, "metric">): DailyRow => ({ day: TODAY, groupKind: "all", groupKey: "", butler: true, n: 1, total: 1, ...o });
+const row = (o: Partial<DailyRow> & Pick<DailyRow, "metric">): DailyRow => ({ day: TODAY, groupKind: "all", groupKey: "", shipherd: true, n: 1, total: 1, ...o });
 
-/** 一个 Butler PR 在 day 合并：周期 cycle 小时，评论、介入、花费。 */
-const prRows = (day: string, o: { cycleH?: number; human?: number; copilot?: number; interventions?: number; cost?: number; butler?: boolean; group?: Pick<DailyRow, "groupKind" | "groupKey"> } = {}): DailyRow[] => {
-  const base = { day, butler: o.butler ?? true, ...(o.group ?? {}) };
+/** 一个 Shipherd PR 在 day 合并：周期 cycle 小时，评论、介入、花费。 */
+const prRows = (day: string, o: { cycleH?: number; human?: number; copilot?: number; interventions?: number; cost?: number; shipherd?: boolean; group?: Pick<DailyRow, "groupKind" | "groupKey"> } = {}): DailyRow[] => {
+  const base = { day, shipherd: o.shipherd ?? true, ...(o.group ?? {}) };
   return [
     row({ ...base, metric: "pr_merged" }),
     row({ ...base, metric: "cycle_open_ms", total: (o.cycleH ?? 10) * H }),
@@ -31,23 +31,23 @@ const overview = (daily: DailyRow[], baseline: BaselinePr[] = [], days = 30) =>
   buildOverview({ daily, baseline, cutoff: NOW - 100 * 24 * H, now: NOW, days, rolledUpAt: NOW - H });
 
 describe("buildOverview", () => {
-  it("averages the last 30 days of Butler PRs, apart from other PRs and older days", () => {
+  it("averages the last 30 days of Shipherd PRs, apart from other PRs and older days", () => {
     const old = dayOf(NOW - 40 * 24 * H);
     const o = overview([
       ...prRows(TODAY, { cycleH: 10, human: 2 }),
       ...prRows(dayOf(NOW - 5 * 24 * H), { cycleH: 20, human: 4 }),
       ...prRows(old, { cycleH: 100 }),
-      ...prRows(TODAY, { butler: false, cycleH: 50 }),
+      ...prRows(TODAY, { shipherd: false, cycleH: 50 }),
     ]);
     expect(o.from).toBe(windowFromDay(NOW, 30));
-    expect(o.butler).toMatchObject({ prs: 2, cycleOpenMs: 15 * H, commentsHuman: 3, commentsCopilot: 1, interventions: 3, costWeighted: 1000 });
+    expect(o.shipherd).toMatchObject({ prs: 2, cycleOpenMs: 15 * H, commentsHuman: 3, commentsCopilot: 1, interventions: 3, costWeighted: 1000 });
     expect(o.other).toMatchObject({ prs: 1, cycleOpenMs: 50 * H });
     expect(o.rolledUpAt).toBe(NOW - H);
   });
 
   it("returns nulls, not zeros, when there are no PRs", () => {
     const o = overview([]);
-    expect(o.butler).toMatchObject({ prs: 0, cycleOpenMs: null, commentsHuman: null, costWeighted: null, costUsdPartial: false });
+    expect(o.shipherd).toMatchObject({ prs: 0, cycleOpenMs: null, commentsHuman: null, costWeighted: null, costUsdPartial: false });
     expect(o.baseline).toBeNull();
   });
 
@@ -79,7 +79,7 @@ describe("buildOverview", () => {
       row({ metric: "wait_human:missing_info", n: 1, total: 600_000 }),
       row({ metric: "wait_idle", n: 2, total: 5 * H }),
       row({ metric: "event:interrupt_auto_resolved", n: 2, total: 2 }),
-      row({ metric: "interrupt:permission", butler: false, n: 9, total: 9 }),
+      row({ metric: "interrupt:permission", shipherd: false, n: 9, total: 9 }),
     ]);
     expect(o.interrupts.find((x) => x.category === "permission")).toEqual({ category: "permission", count: 3, waitMs: 60_000 });
     expect(o.interrupts.find((x) => x.category === "stuck")).toEqual({ category: "stuck", count: 0, waitMs: 0 });
@@ -96,7 +96,7 @@ describe("buildOverview", () => {
       row({ metric: "event_sub:terminal_input:dialog", total: 1 }),
       row({ metric: "event:manual_merge", total: 2 }),
       row({ metric: "event:agent_merge", total: 3 }),
-      row({ metric: "event:cost.pause", butler: false, total: 1 }),
+      row({ metric: "event:cost.pause", shipherd: false, total: 1 }),
       row({ metric: "event:something_new", total: 1 }),
       row({ metric: "event:interrupt", total: 7 }),
     ]);
@@ -106,13 +106,13 @@ describe("buildOverview", () => {
     expect(o.otherEvents.map((x) => [x.key, x.n])).toEqual([["agent_merge", 3], ["cost.pause", 1], ["something_new", 1]]);
   });
 
-  it("groups Butler PRs by repo, product and risk; spend by model and task; rework", () => {
+  it("groups Shipherd PRs by repo, product and risk; spend by model and task; rework", () => {
     const repo = { groupKind: "repo" as const, groupKey: "o/app" };
     const o = overview([
       ...prRows(TODAY, { cycleH: 8 }),
       ...prRows(TODAY, { cycleH: 8, group: repo }),
       ...prRows(TODAY, { cycleH: 8, group: { groupKind: "risk", groupKey: "unrated" } }),
-      ...prRows(TODAY, { butler: false, group: { groupKind: "repo", groupKey: "o/other" } }),
+      ...prRows(TODAY, { shipherd: false, group: { groupKind: "repo", groupKey: "o/other" } }),
       row({ metric: "spend_model:m1", n: 2, total: 50 }),
       row({ metric: "spend_model:m2", n: 9, total: 500 }),
       row({ metric: "spend_task:handoff", n: 1, total: 20 }),
@@ -127,7 +127,7 @@ describe("buildOverview", () => {
 
   it("honours days and clamps it to 1–365", () => {
     const o = overview([...prRows(TODAY), ...prRows(dayOf(NOW - 3 * 24 * H))], [], 1);
-    expect(o.butler.prs).toBe(1);
+    expect(o.shipherd.prs).toBe(1);
     expect(clampDays(0)).toBe(1);
     expect(clampDays(9999)).toBe(365);
     expect(clampDays("x")).toBe(30);
@@ -160,7 +160,7 @@ describe("interruptCompare (ws-j)", () => {
       row({ day: before, metric: "interrupt:permission", total: 22 }),
       row({ day: after, metric: "interrupt:permission", total: 11 }),
       row({ day: after, metric: "event:interrupt_auto_resolved", total: 5 }),
-      row({ day: after, metric: "event:stuck_fix_opened", total: 1, butler: false }),
+      row({ day: after, metric: "event:stuck_fix_opened", total: 1, shipherd: false }),
       row({ day: dayOf(NOW - 25 * D), metric: "interrupt:permission", total: 99 }),
       // 生效当天的不算在任何一边。
       row({ day: dayOf(since), metric: "interrupt:permission", total: 50 }),

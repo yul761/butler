@@ -1,5 +1,5 @@
 // state:changed 的总线（BTL-242）：渲染进程只挂一个 IPC 监听，按范围分给订阅的地方。
-// 订阅时不说范围的只听 data（存下来的东西变了）；显示在跑的 session 在干什么的（首页、侧栏、Butler 页……）自己加上 activity、procs。
+// 订阅时不说范围的只听 data（存下来的东西变了）；显示在跑的 session 在干什么的（首页、侧栏、Shipherd 页……）自己加上 activity、procs。
 import { scopesOf, type StateScope } from "../../shared/state-scope";
 
 export type StateListener = (scopes: StateScope[]) => void;

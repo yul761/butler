@@ -15,58 +15,58 @@ function setup() {
 }
 
 const env = (event: string, sessionId: string, over: Partial<HookEnvelope> = {}, payload: Record<string, unknown> = {}): HookEnvelope => ({
-  v: 1, receivedAt: 100, ticket: null, butlerSession: null,
+  v: 1, receivedAt: 100, ticket: null, shipherdSession: null,
   payload: { hook_event_name: event, session_id: sessionId, cwd: "/w", ...payload }, ...over,
 });
 
 describe("applyHookEnvelope", () => {
-  it("SessionStart from a Butler terminal binds the ticket", () => {
+  it("SessionStart from a Shipherd terminal binds the ticket", () => {
     const { sessions, deps } = setup();
-    expect(applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }), deps))
+    expect(applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", shipherdSession: "s1" }), deps))
       .toMatchObject({ kind: "session_started", sessionId: "s1", ticketKey: "PROJ-1", replaced: null });
-    expect(sessions.get("s1")).toMatchObject({ ticketKey: "PROJ-1", origin: "butler", cwd: "/w", lastActivityAt: 100 });
+    expect(sessions.get("s1")).toMatchObject({ ticketKey: "PROJ-1", origin: "shipherd", cwd: "/w", lastActivityAt: 100 });
   });
 
-  it("/clear in a Butler terminal chains the new session and inherits the ticket", () => {
+  it("/clear in a Shipherd terminal chains the new session and inherits the ticket", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }), deps);
-    const eff = applyHookEnvelope(env("SessionStart", "s2", { ticket: null, butlerSession: "s1" }, { source: "clear" }), deps);
+    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", shipherdSession: "s1" }), deps);
+    const eff = applyHookEnvelope(env("SessionStart", "s2", { ticket: null, shipherdSession: "s1" }, { source: "clear" }), deps);
     expect(eff).toEqual({ kind: "session_started", sessionId: "s2", ticketKey: "PROJ-1", replaced: "s1" });
     expect(sessions.head("s1")?.id).toBe("s2");
     // 再 clear 一次，链继续延长
-    applyHookEnvelope(env("SessionStart", "s3", { butlerSession: "s1" }, { source: "clear" }), deps);
+    applyHookEnvelope(env("SessionStart", "s3", { shipherdSession: "s1" }, { source: "clear" }), deps);
     expect(sessions.head("s1")?.id).toBe("s3");
   });
 
   it("/clear leaves the new head waiting at an empty prompt (plan 16 R28: no Stop follows a /clear)", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }), deps);
+    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", shipherdSession: "s1" }), deps);
     applyHookEnvelope(env("UserPromptSubmit", "s1"), deps);
-    applyHookEnvelope(env("SessionStart", "s2", { butlerSession: "s1" }, { source: "clear" }), deps);
+    applyHookEnvelope(env("SessionStart", "s2", { shipherdSession: "s1" }, { source: "clear" }), deps);
     expect(sessions.get("s2")).toMatchObject({ waitingForInput: true, lastActivityAt: 100 });
     // compact 之后还会有 Stop：不这样处理（resume 见下一条测试）。
-    applyHookEnvelope(env("SessionStart", "s3", { butlerSession: "s1" }, { source: "compact" }), deps);
+    applyHookEnvelope(env("SessionStart", "s3", { shipherdSession: "s1" }, { source: "compact" }), deps);
     expect(sessions.get("s3")?.waitingForInput).toBe(false);
-    // 不在 Butler 终端里（没接上链）的 /clear 不管。
+    // 不在 Shipherd 终端里（没接上链）的 /clear 不管。
     applyHookEnvelope(env("SessionStart", "x2", {}, { source: "clear" }), deps);
     expect(sessions.get("x2")?.waitingForInput).toBe(false);
   });
 
-  it("a resumed session in a Butler terminal is waiting at the prompt, and the effect says it was resumed (BTL-190 2+3)", () => {
+  it("a resumed session in a Shipherd terminal is waiting at the prompt, and the effect says it was resumed (BTL-190 2+3)", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }), deps);
+    applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", shipherdSession: "s1" }), deps);
     applyHookEnvelope(env("UserPromptSubmit", "s1"), deps);
     applyHookEnvelope(env("SessionEnd", "s1"), deps);
     // 重新打开终端：claude --resume 同一个 id。
-    const eff = applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1", receivedAt: 300 }, { source: "resume" }), deps);
+    const eff = applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", shipherdSession: "s1", receivedAt: 300 }, { source: "resume" }), deps);
     expect(eff).toEqual({ kind: "session_started", sessionId: "s1", ticketKey: "PROJ-1", replaced: null, resumed: true });
     expect(sessions.get("s1")).toMatchObject({ waitingForInput: true, lastActivityAt: 300 });
     // 终端里 /resume 选到另一个 id：接上链，新 head 也停着。
-    applyHookEnvelope(env("UserPromptSubmit", "s1", { butlerSession: "s1" }), deps);
-    const eff2 = applyHookEnvelope(env("SessionStart", "s2", { butlerSession: "s1" }, { source: "resume" }), deps);
+    applyHookEnvelope(env("UserPromptSubmit", "s1", { shipherdSession: "s1" }), deps);
+    const eff2 = applyHookEnvelope(env("SessionStart", "s2", { shipherdSession: "s1" }, { source: "resume" }), deps);
     expect(eff2).toMatchObject({ replaced: "s1", resumed: true });
     expect(sessions.get("s2")?.waitingForInput).toBe(true);
-    // 不在 Butler 终端里的 resume 不管。
+    // 不在 Shipherd 终端里的 resume 不管。
     const eff3 = applyHookEnvelope(env("SessionStart", "x1", {}, { source: "resume" }), deps);
     expect(eff3).toEqual({ kind: "session_started", sessionId: "x1", ticketKey: null, replaced: null });
     expect(sessions.get("x1")?.waitingForInput).toBe(false);
@@ -75,7 +75,7 @@ describe("applyHookEnvelope", () => {
   it("an unknown ticket in env is ignored, the session is still recorded", () => {
     const { sessions, deps } = setup();
     applyHookEnvelope(env("SessionStart", "s1", { ticket: "GONE-9" }), deps);
-    expect(sessions.get("s1")).toMatchObject({ ticketKey: null, origin: "butler" });
+    expect(sessions.get("s1")).toMatchObject({ ticketKey: null, origin: "shipherd" });
   });
 
   it("Stop before SessionStart creates the session and marks it waiting", () => {
@@ -96,7 +96,7 @@ describe("applyHookEnvelope", () => {
     expect(sessions.get("s1")?.waitingForInput).toBe(false);
   });
 
-  it("SessionEnd of a hibernated session keeps the waiting flag: Butler ended it, it still waits (WS-M B)", () => {
+  it("SessionEnd of a hibernated session keeps the waiting flag: Shipherd ended it, it still waits (WS-M B)", () => {
     const { sessions, deps } = setup();
     applyHookEnvelope(env("Stop", "s1"), deps);
     sessions.setHibernated("s1", 150, "you", null);
@@ -106,65 +106,65 @@ describe("applyHookEnvelope", () => {
 
   it("ignores payloads without event or session id", () => {
     const { deps } = setup();
-    expect(applyHookEnvelope({ v: 1, receivedAt: 1, ticket: null, butlerSession: null, payload: null }, deps).kind).toBe("ignored");
+    expect(applyHookEnvelope({ v: 1, receivedAt: 1, ticket: null, shipherdSession: null, payload: null }, deps).kind).toBe("ignored");
     expect(applyHookEnvelope(env("Notification", "s1"), deps)).toEqual({ kind: "ignored", reason: "unhandled_event:Notification" });
   });
 
-  it("a fresh claude (startup) in a Butler terminal is waiting at the empty prompt; the first prompt clears it (follow-up D)", () => {
+  it("a fresh claude (startup) in a Shipherd terminal is waiting at the empty prompt; the first prompt clears it (follow-up D)", () => {
     const { sessions, deps } = setup();
-    const eff = applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", butlerSession: "s1" }, { source: "startup" }), deps);
+    const eff = applyHookEnvelope(env("SessionStart", "s1", { ticket: "PROJ-1", shipherdSession: "s1" }, { source: "startup" }), deps);
     expect(eff).toEqual({ kind: "session_started", sessionId: "s1", ticketKey: "PROJ-1", replaced: null, fresh: true });
     expect(sessions.get("s1")?.waitingForInput).toBe(true);
     applyHookEnvelope(env("UserPromptSubmit", "s1", { receivedAt: 200 }), deps);
     expect(sessions.get("s1")?.waitingForInput).toBe(false);
   });
 
-  it("startup outside a Butler terminal, or nested under another id, is not marked waiting (follow-up D)", () => {
+  it("startup outside a Shipherd terminal, or nested under another id, is not marked waiting (follow-up D)", () => {
     const { sessions, deps } = setup();
     const eff = applyHookEnvelope(env("SessionStart", "x1", {}, { source: "startup" }), deps);
     expect(eff).toEqual({ kind: "session_started", sessionId: "x1", ticketKey: null, replaced: null });
     expect(sessions.get("x1")?.waitingForInput).toBe(false);
-    applyHookEnvelope(env("SessionStart", "A", { butlerSession: "A" }, { source: "startup" }), deps);
+    applyHookEnvelope(env("SessionStart", "A", { shipherdSession: "A" }, { source: "startup" }), deps);
     applyHookEnvelope(env("UserPromptSubmit", "A"), deps);
-    expect(applyHookEnvelope(env("SessionStart", "N", { butlerSession: "A" }, { source: "startup" }), deps)).toEqual({ kind: "nested", sessionId: "N" });
+    expect(applyHookEnvelope(env("SessionStart", "N", { shipherdSession: "A" }, { source: "startup" }), deps)).toEqual({ kind: "nested", sessionId: "N" });
     expect(sessions.get("N")?.waitingForInput).toBe(false);
     expect(sessions.get("A")?.waitingForInput).toBe(false);
   });
 
-  it("a nested claude (startup, other id) in a Butler terminal does not hijack the chain", () => {
+  it("a nested claude (startup, other id) in a Shipherd terminal does not hijack the chain", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
-    const eff = applyHookEnvelope(env("SessionStart", "N", { ticket: "PROJ-1", butlerSession: "A" }, { source: "startup" }), deps);
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", shipherdSession: "A" }), deps);
+    const eff = applyHookEnvelope(env("SessionStart", "N", { ticket: "PROJ-1", shipherdSession: "A" }, { source: "startup" }), deps);
     expect(eff).toEqual({ kind: "nested", sessionId: "N" });
     expect(sessions.head("A")?.id).toBe("A");
     expect(sessions.get("N")).toMatchObject({ ticketKey: null, dismissed: true });
     // 缺少 source 同样按嵌套处理
-    expect(applyHookEnvelope(env("SessionStart", "M", { butlerSession: "A" }), deps).kind).toBe("nested");
+    expect(applyHookEnvelope(env("SessionStart", "M", { shipherdSession: "A" }), deps).kind).toBe("nested");
     expect(sessions.head("A")?.id).toBe("A");
   });
 
   it("later events from a nested session never attach the ticket", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
-    applyHookEnvelope(env("SessionStart", "N", { ticket: "PROJ-1", butlerSession: "A" }, { source: "startup" }), deps);
-    for (const ev of ["Stop", "UserPromptSubmit", "SessionEnd"]) applyHookEnvelope(env(ev, "N", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", shipherdSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "N", { ticket: "PROJ-1", shipherdSession: "A" }, { source: "startup" }), deps);
+    for (const ev of ["Stop", "UserPromptSubmit", "SessionEnd"]) applyHookEnvelope(env(ev, "N", { ticket: "PROJ-1", shipherdSession: "A" }), deps);
     expect(sessions.get("N")).toMatchObject({ ticketKey: null, dismissed: true });
   });
 
   it("compact and resume chain like clear", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
-    applyHookEnvelope(env("SessionStart", "B", { butlerSession: "A" }, { source: "compact" }), deps);
-    applyHookEnvelope(env("SessionStart", "C", { butlerSession: "A" }, { source: "resume" }), deps);
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", shipherdSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "B", { shipherdSession: "A" }, { source: "compact" }), deps);
+    applyHookEnvelope(env("SessionStart", "C", { shipherdSession: "A" }, { source: "resume" }), deps);
     expect(sessions.head("A")?.id).toBe("C");
     expect(sessions.get("C")?.ticketKey).toBe("PROJ-1");
   });
 
   it("out-of-order: Stop(B) before SessionStart(B, clear) still chains and keeps the ticket", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
-    applyHookEnvelope(env("Stop", "B", { butlerSession: "A" }), deps);
-    applyHookEnvelope(env("SessionStart", "B", { butlerSession: "A" }, { source: "clear" }), deps);
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", shipherdSession: "A" }), deps);
+    applyHookEnvelope(env("Stop", "B", { shipherdSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "B", { shipherdSession: "A" }, { source: "clear" }), deps);
     expect(sessions.head("A")?.id).toBe("B");
     expect(sessions.get("B")).toMatchObject({ ticketKey: "PROJ-1", dismissed: false });
   });
@@ -185,47 +185,47 @@ describe("applyHookEnvelope", () => {
 
   it("late envelopes do not resurrect a deleted orphan row; a real prompt does", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "o1", { ticket: "PROJ-1", butlerSession: "o1" }), deps);
+    applyHookEnvelope(env("SessionStart", "o1", { ticket: "PROJ-1", shipherdSession: "o1" }), deps);
     sessions.delete("o1");
-    applyHookEnvelope(env("Stop", "o1", { ticket: "PROJ-1", butlerSession: "o1" }), deps);
+    applyHookEnvelope(env("Stop", "o1", { ticket: "PROJ-1", shipherdSession: "o1" }), deps);
     applyHookEnvelope(env("SessionEnd", "o1"), deps);
-    applyHookEnvelope(env("SessionStart", "o1", { butlerSession: "o1" }, { source: "startup" }), deps);
+    applyHookEnvelope(env("SessionStart", "o1", { shipherdSession: "o1" }, { source: "startup" }), deps);
     expect(sessions.get("o1")).toBeNull();
-    applyHookEnvelope(env("UserPromptSubmit", "o1", { ticket: "PROJ-1", butlerSession: "o1" }, { prompt: "hi" }), deps);
-    expect(sessions.get("o1")).toMatchObject({ ticketKey: "PROJ-1", origin: "butler", firstPrompt: "hi" });
+    applyHookEnvelope(env("UserPromptSubmit", "o1", { ticket: "PROJ-1", shipherdSession: "o1" }, { prompt: "hi" }), deps);
+    expect(sessions.get("o1")).toMatchObject({ ticketKey: "PROJ-1", origin: "shipherd", firstPrompt: "hi" });
   });
 
   it("a late event re-creates a deleted row when its transcript now exists", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "o2", { ticket: "PROJ-1", butlerSession: "o2" }), deps);
+    applyHookEnvelope(env("SessionStart", "o2", { ticket: "PROJ-1", shipherdSession: "o2" }), deps);
     sessions.delete("o2");
-    applyHookEnvelope(env("Stop", "o2", { ticket: "PROJ-1", butlerSession: "o2" }), { ...deps, transcriptState: () => "present" });
+    applyHookEnvelope(env("Stop", "o2", { ticket: "PROJ-1", shipherdSession: "o2" }), { ...deps, transcriptState: () => "present" });
     expect(sessions.get("o2")).not.toBeNull();
   });
 
   it("a tombstoned id in a clear chain does not point the previous head at a missing row", () => {
     const { sessions, deps } = setup();
-    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", butlerSession: "A" }), deps);
+    applyHookEnvelope(env("SessionStart", "A", { ticket: "PROJ-1", shipherdSession: "A" }), deps);
     sessions.delete("B");
-    const eff = applyHookEnvelope(env("SessionStart", "B", { butlerSession: "A" }, { source: "clear" }), deps);
+    const eff = applyHookEnvelope(env("SessionStart", "B", { shipherdSession: "A" }, { source: "clear" }), deps);
     expect(eff).toEqual({ kind: "session_started", sessionId: "B", ticketKey: "PROJ-1", replaced: null });
     expect(sessions.get("B")).toBeNull();
     expect(sessions.head("A")?.id).toBe("A");
   });
 
-  it("upgrades a discovered session to butler once a Butler terminal reports it", () => {
+  it("upgrades a discovered session to shipherd once a Shipherd terminal reports it", () => {
     const { sessions, deps } = setup();
     sessions.insertIfAbsent({ id: "d1", ticketKey: "PROJ-1", cwd: "/w", origin: "discovered", createdAt: 1 });
     applyHookEnvelope(env("Stop", "d1"), deps);
     expect(sessions.get("d1")?.origin).toBe("discovered");
-    applyHookEnvelope(env("UserPromptSubmit", "d1", { ticket: "PROJ-1", butlerSession: "d1" }), deps);
-    expect(sessions.get("d1")?.origin).toBe("butler");
+    applyHookEnvelope(env("UserPromptSubmit", "d1", { ticket: "PROJ-1", shipherdSession: "d1" }), deps);
+    expect(sessions.get("d1")?.origin).toBe("shipherd");
   });
 
-  it("ignores every event from Butler's own headless runs", () => {
+  it("ignores every event from Shipherd's own headless runs", () => {
     const { sessions, deps } = setup();
     for (const ev of ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]) {
-      expect(applyHookEnvelope(env(ev, "h1", { butlerSession: "headless:run-1" }, { source: "fork" }), deps)).toEqual({ kind: "ignored", reason: "headless" });
+      expect(applyHookEnvelope(env(ev, "h1", { shipherdSession: "headless:run-1" }, { source: "fork" }), deps)).toEqual({ kind: "ignored", reason: "headless" });
     }
     expect(sessions.get("h1")).toBeNull();
   });
@@ -237,8 +237,8 @@ describe("hook sessions on multi-repo tickets", () => {
     const repoId = tickets.get("PROJ-1")!.repos[0].id;
     const placement = (key: string, cwd: string) => ({ repoId: cwd.startsWith("/r") ? repoId : null });
     const deps = { sessions, tickets, placement };
-    applyHookEnvelope(env("SessionStart", "a", { ticket: "PROJ-1", butlerSession: "a" }, { cwd: "/r/src" }), deps);
-    applyHookEnvelope(env("SessionStart", "b", { ticket: "PROJ-1", butlerSession: "b" }, { cwd: "/ws/PROJ-1" }), deps);
+    applyHookEnvelope(env("SessionStart", "a", { ticket: "PROJ-1", shipherdSession: "a" }, { cwd: "/r/src" }), deps);
+    applyHookEnvelope(env("SessionStart", "b", { ticket: "PROJ-1", shipherdSession: "b" }, { cwd: "/ws/PROJ-1" }), deps);
     expect(sessions.get("a")).toMatchObject({ repoId, coordinator: false });
     expect(sessions.get("b")).toMatchObject({ repoId: null, coordinator: false });
   });
@@ -250,10 +250,10 @@ describe("hook sessions in a fix session's terminal", () => {
     const tickets = new TicketsRepo(db);
     const sessions = new SessionsRepo(db);
     const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/ws", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, fixesSession: "stuck-1" });
     return { sessions, featureId, deps: { sessions, tickets, featureForCwd: (cwd: string) => (cwd === "/ws" ? featureId : null) } };
   }
-  const inFix = { butlerSession: "fix" };
+  const inFix = { shipherdSession: "fix" };
 
   it("keeps a fix session's new head a fix session across /clear", () => {
     const { sessions, featureId, deps } = fixSetup();
@@ -289,7 +289,7 @@ describe("hook sessions in a fix session's terminal", () => {
 
   it("leaves an existing coordinator a coordinator when /resume in the fix terminal picks it", () => {
     const { sessions, featureId, deps } = fixSetup();
-    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, coordinator: true });
     const eff = applyHookEnvelope(env("SessionStart", "c", inFix, { cwd: "/ws", source: "resume" }), deps);
     expect(eff).toEqual({ kind: "session_started", sessionId: "c", ticketKey: null, replaced: "fix", resumed: true });
     expect(sessions.head("fix")?.id).toBe("c");
@@ -299,8 +299,8 @@ describe("hook sessions in a fix session's terminal", () => {
 
   it("leaves an existing fix session a fix session when /resume in a coordinator terminal picks it", () => {
     const { sessions, featureId, deps } = fixSetup();
-    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
-    applyHookEnvelope(env("SessionStart", "fix", { butlerSession: "c" }, { cwd: "/ws", source: "resume" }), deps);
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "fix", { shipherdSession: "c" }, { cwd: "/ws", source: "resume" }), deps);
     expect(sessions.head("c")?.id).toBe("fix");
     expect(sessions.get("fix")).toMatchObject({ coordinator: false, fixesSession: "stuck-1", featureId });
   });
@@ -322,16 +322,16 @@ describe("hook sessions in a fix session's terminal", () => {
 
   it("still claims an unclaimed session for the feature when /resume in a coordinator terminal picks it", () => {
     const { sessions, featureId, deps } = fixSetup();
-    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, coordinator: true });
     sessions.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/elsewhere", origin: "discovered", createdAt: 1 });
-    applyHookEnvelope(env("SessionStart", "loose", { butlerSession: "c" }, { cwd: "/elsewhere", source: "resume" }), deps);
+    applyHookEnvelope(env("SessionStart", "loose", { shipherdSession: "c" }, { cwd: "/elsewhere", source: "resume" }), deps);
     expect(sessions.get("loose")).toMatchObject({ coordinator: true, fixesSession: null, featureId });
   });
 
   it("still makes a real coordinator's new head a coordinator", () => {
     const { sessions, featureId, deps } = fixSetup();
-    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
-    applyHookEnvelope(env("SessionStart", "c-2", { butlerSession: "c" }, { cwd: "/ws", source: "clear" }), deps);
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, coordinator: true });
+    applyHookEnvelope(env("SessionStart", "c-2", { shipherdSession: "c" }, { cwd: "/ws", source: "clear" }), deps);
     expect(sessions.get("c-2")).toMatchObject({ coordinator: true, featureId, fixesSession: null });
   });
 });
@@ -344,10 +344,10 @@ describe("hook sessions and a legacy epic session (BTL-246)", () => {
     const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/fs", createdAt: 1 });
     // 新代码不写 epic_id：老行只能直接改表做出来。
     db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES ('e', '/es', 1)`).run();
-    sessions.insertIfAbsent({ id: "e1", ticketKey: null, cwd: "/es", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "e1", ticketKey: null, cwd: "/es", origin: "shipherd", createdAt: 1 });
     db.prepare(`UPDATE sessions SET epic_id = (SELECT MAX(id) FROM epics) WHERE id = 'e1'`).run();
     const deps = { sessions, tickets, featureForCwd: (cwd: string) => (cwd === "/fs" ? featureId : null) };
-    applyHookEnvelope(env("SessionStart", "e2", { butlerSession: "e1" }, { cwd: "/fs", source: "clear" }), deps);
+    applyHookEnvelope(env("SessionStart", "e2", { shipherdSession: "e1" }, { cwd: "/fs", source: "clear" }), deps);
     expect(sessions.head("e1")).toMatchObject({ id: "e2", featureId: null, ticketKey: null, coordinator: false });
     expect(sessions.isLegacyEpic("e2")).toBe(true);
     expect(sessions.listFeatureCoordinators(featureId)).toEqual([]);

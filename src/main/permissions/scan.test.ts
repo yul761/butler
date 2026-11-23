@@ -8,7 +8,7 @@ const NOW = Date.UTC(2026, 10, 18);
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "butler-scan-"));
+  dir = mkdtempSync(join(tmpdir(), "shipherd-scan-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 

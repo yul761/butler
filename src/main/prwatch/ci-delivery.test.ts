@@ -381,7 +381,7 @@ describe("pickRecipient", () => {
 describe("ciRecipient (pickRecipient plus hibernated sessions, workstream M)", () => {
   const head = (id: string, gitBranch: string | null = null, o: Partial<Session> = {}): Session =>
     ({
-      id, ticketKey: "BTL-1", repoId: 1, gitBranch, coordinator: false, cwd: "/r", origin: "butler", firstPrompt: null, lastActivityAt: null,
+      id, ticketKey: "BTL-1", repoId: 1, gitBranch, coordinator: false, cwd: "/r", origin: "shipherd", firstPrompt: null, lastActivityAt: null,
       waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, spawnedBy: null, featureId: null, fixesSession: null, model: null,
       ...o,
     }) as Session;

@@ -19,7 +19,7 @@ export interface IngestDeps {
   linkPrs?: (ticketKey: string, prs: Pr[]) => void;
   /** ticket_prs 里这个 ticket 是否有链接的 PR 还开着。 */
   linkedOpen?: (ticketKey: string) => boolean;
-  /** 这个 ticket 链接的、Butler 放弃读了的 PR（prUrlKey 形式）。 */
+  /** 这个 ticket 链接的、Shipherd 放弃读了的 PR（prUrlKey 形式）。 */
   givenUpPrs?: (ticketKey: string) => ReadonlySet<string>;
 }
 
@@ -49,7 +49,7 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
   const given = input.payload;
   const reported = given?.prs ?? [];
   return withTransaction(d.db, (): IngestResult => {
-    // ticket 以 Butler 的记录为准，模型写错了也不影响归属。以前合并过的 PR 记着（模型这次没提、或者报错了状态）。
+    // ticket 以 Shipherd 的记录为准，模型写错了也不影响归属。以前合并过的 PR 记着（模型这次没提、或者报错了状态）。
     const stored = given ? rememberMergedPrs(given.prs, [d.handoffs.knownPrs(input.ticketKey)]) : [];
     const payload = given ? { ...given, ticket: input.ticketKey, prs: stored } : null;
     const id = d.handoffs.insert({

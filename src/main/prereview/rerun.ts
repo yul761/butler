@@ -184,7 +184,7 @@ export function applyRerun(items: readonly EvidenceItem[], outcome: RerunOutcome
     }
     const failed = rs.find((r) => !r.ok);
     if (failed) {
-      const said = it.claimed === "pass" ? "claimed pass, but Butler's rerun failed" : "Butler's rerun failed";
+      const said = it.claimed === "pass" ? "claimed pass, but Shipherd's rerun failed" : "Shipherd's rerun failed";
       out.push({ id: it.id, verified: "rerun_fail", detail: `${said}: ${failed.command}`, rerunOutput: failed.output || null });
     } else {
       out.push({ id: it.id, verified: "rerun_pass", detail: rs.map((r) => r.command).join("; "), rerunOutput: null });

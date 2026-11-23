@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProfileScan } from "../../../shared/interrupts";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { defaultPicks, groupCandidates, pickKey } from "../interrupts-view";
 import { timeText } from "../lesson-runs-view";
@@ -26,7 +26,7 @@ export function ProfileCandidates({ onDecided }: { onDecided?: () => void }) {
     try {
       take(await api.profilesScan(kind === "explain"));
     } catch (e) {
-      if (e instanceof ButlerError) setError(e.message);
+      if (e instanceof ShipherdError) setError(e.message);
       else reportError(e);
     } finally {
       setBusy(null);
@@ -53,7 +53,7 @@ export function ProfileCandidates({ onDecided }: { onDecided?: () => void }) {
       take(await api.profilesGet());
       onDecided?.();
     } catch (e) {
-      if (e instanceof ButlerError) setError(e.message);
+      if (e instanceof ShipherdError) setError(e.message);
       else reportError(e);
     } finally {
       setBusy(null);

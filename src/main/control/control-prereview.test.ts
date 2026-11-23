@@ -5,8 +5,8 @@ import type { Session } from "../../shared/types";
 import { controlHandler, type ControlHandlerDeps } from "./control-handler";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
-  id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
+  id, ticketKey: null, cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false, replacedBy: null,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, ...o,
 });
 
 const VIEW: PreReviewView = {
@@ -40,8 +40,8 @@ describe("submit_evidence and pre_review_result (ws-g)", () => {
     expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: "s", op: "submit_evidence", evidence: { checks: [] } })).toMatchObject({ op: "submit_evidence", evidence: { checks: [] } });
     expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: "s", op: "submit_evidence", evidence: [] })).toBeNull();
     expect(parseControlRequest({ v: 1, ticketKey: "BTL-1", from: "s", op: "submit_evidence" })).toBeNull();
-    expect(parseControlRequest({ v: 1, butler: true, from: "b", op: "pr_assessment", pr: "12" })).toEqual({ v: 1, butler: true, from: "b", op: "pr_assessment", pr: "12" });
-    expect(parseControlRequest({ v: 1, butler: true, from: "b", op: "pr_assessment" })).toBeNull();
+    expect(parseControlRequest({ v: 1, shipherd: true, from: "b", op: "pr_assessment", pr: "12" })).toEqual({ v: 1, shipherd: true, from: "b", op: "pr_assessment", pr: "12" });
+    expect(parseControlRequest({ v: 1, shipherd: true, from: "b", op: "pr_assessment" })).toBeNull();
   });
 
   it("submits for the head of the calling session and passes the message back", async () => {

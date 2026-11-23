@@ -9,7 +9,7 @@ spec 里有 6 块，各自可以独立测试，所以拆成 6 份计划。每份
 |---|---|---|---|
 | 1 | `2026-11-19-ui-redesign-01-turn-model.md` | 「谁该动」状态模型、数据接线、「请你 review」的查询、IPC | — |
 | 2 | `2026-11-19-ui-redesign-02-home-nav.md` | 侧栏、首页（轮到你）、全部工作 | 1 |
-| 3 | `2026-11-19-ui-redesign-03-layered-pages.md` | epic、feature、ticket 页的分层和 tab，总控页，「Butler 自己」各页的主层 | 1、2 |
+| 3 | `2026-11-19-ui-redesign-03-layered-pages.md` | epic、feature、ticket 页的分层和 tab，总控页，「Shipherd 自己」各页的主层 | 1、2 |
 | 4 | `2026-11-19-ui-redesign-04-conversation-store.md` | 对话另存、问答标记、换新不等用户、恢复提示带问答 | — |
 | 5 | `2026-11-19-ui-redesign-05-conversation-tab.md` | 对话 tab、分叉讨论（先做缓存试验）、「按这个改」 | 3、4 |
 | 6 | `2026-11-19-ui-redesign-06-settings-onboarding.md` | 设置的 4 个 tab、功能页、新用户空状态、向导结尾 | 2 |
@@ -35,7 +35,7 @@ export type Turn =
   | { owner: "you"; kind: "review"; author: string; title: string; url: string }
   | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked"; detail: string | null; sessionId: string | null }
   | { owner: "you"; kind: "unattended"; why: UnattendedWhy; canSend: boolean; sessionId: string | null }
-  | { owner: "you"; kind: "butler"; notice: NowNotice }
+  | { owner: "you"; kind: "shipherd"; notice: NowNotice }
   | { owner: "agent"; kind: "fixing_ci" | "addressing_review" | "rebasing" | "working"; sessionId: string }
   | { owner: "external"; kind: "ci_running" | "awaiting_review" | "merge_queue"; names: string[] }
   | { owner: "done"; kind: "merged" }
@@ -133,7 +133,7 @@ main 进程函数：`recentQa(rootSessionId: string, maxChars: number): string`�
 
 - 项目的测试命令、lint 命令、e2e 用法，都照仓库现有的 `package.json` 和 `e2e/` 来写。e2e 里的 ticket 号必须带数字，比如 `E2E-7`。
 - 不能留两套并存的状态算法。被新状态模型替换掉的旧算法和旧组件，在接手它的那一层里删掉，并在计划里写明。
-- 3.0 的功能默认全关，Butler 默认不对外做任何事，这两点不能改。
+- 3.0 的功能默认全关，Shipherd 默认不对外做任何事，这两点不能改。
 - 新文案中英文都要有。
 
 ## 实际开工的顺序（总控定，2026-11-19 夜）
@@ -170,7 +170,7 @@ ticket 号对应：BTL-231 是第 1 层，BTL-232 第 2 层，BTL-233 第 3 层�
      - 同一个 ticket 里 `pr` 为 null、轮次是 `answer`、又不是 `ticketLevel` 的 item，是多出来的提问：同一 session 的后续提问（第一条以后的 ask_user），或发问的 session 已经不在的孤儿提问。它不参与 ticket 的轮次，但首页、epic/feature 概况和 ticket 页都要显示成卡片或提问行，ticket 自己的轮次不是活的时候也要显示。
      - `ticketKey` 和 `pr` 都为 null 的 item 是总控的提问或全局提醒，首页照常显示成卡片。
   3. 不带 filter 时，`scopes` 里还要包括不属于任何 epic 的 feature。
-  4. 剩下的 `waitingOnOf` 调用点：`butler-control` 的 progress_overview、`feature-templates`、`src/main/progress`。由第 3 层的最后一个任务改成用 turn 模型，然后删掉 `waitingOnOf`，不留两套。第 3 层删 `ProgressBody` 的同时做。
+  4. 剩下的 `waitingOnOf` 调用点：`shipherd-control` 的 progress_overview、`feature-templates`、`src/main/progress`。由第 3 层的最后一个任务改成用 turn 模型，然后删掉 `waitingOnOf`，不留两套。第 3 层删 `ProgressBody` 的同时做。
   5. `NowNotice` 新增一种 `approval`，表示 session 停在权限确认上。第 2 层的 `Notice.tsx` 和 `turnSentence` 要能显示它，按钮是「去看看」，落到那个 session 的终端。
   6. `turn:send-to-agent` 的 reason 类型收紧成 `TurnSendReason`，由第 1 层定义。
   7. 已知限制：`gh search` 只查默认主机，企业版 GitHub 上请你 review 的 PR 查不到。这条写进发版说明。

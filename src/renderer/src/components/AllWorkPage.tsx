@@ -21,7 +21,7 @@ export interface AllWorkBodyProps {
   /** 单独的 ticket（不在任何 feature 里）。 */
   tickets: TicketView[];
   unclaimedCount: number;
-  /** 「显示 Butler 之外开的 session」开着才有「未认领 session」入口（BTL-244，默认关）。 */
+  /** 「显示 Shipherd 之外开的 session」开着才有「未认领 session」入口（BTL-244，默认关）。 */
   showUnclaimed?: boolean;
   now: number;
   /** 从提醒跳来：「更多」默认展开。 */

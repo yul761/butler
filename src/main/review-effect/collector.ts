@@ -50,13 +50,13 @@ export class ReviewEffectCollector {
 
   constructor(private readonly d: CollectorDeps) {}
 
-  private pr(id: number): (PrRef & { state: string; butler: boolean }) | null {
+  private pr(id: number): (PrRef & { state: string; shipherd: boolean }) | null {
     const r = this.d.db.prepare(`SELECT * FROM ticket_prs WHERE id = ?`).get(id) as Row | undefined;
     if (!r) return null;
     return {
       id: Number(r.id), slug: String(r.slug), number: Number(r.number), url: String(r.url), ticketKey: String(r.ticket_key),
       repoId: num(r.repo_id), headBranch: (r.head_branch as string | null) ?? null, author: (r.author as string | null) ?? null,
-      openedAt: num(r.opened_at), mergedAt: num(r.merged_at), state: String(r.state), butler: Number(r.butler_made ?? 0) === 1,
+      openedAt: num(r.opened_at), mergedAt: num(r.merged_at), state: String(r.state), shipherd: Number(r.shipherd_made ?? 0) === 1,
     };
   }
 
@@ -112,7 +112,7 @@ export class ReviewEffectCollector {
     return ids.length;
   }
 
-  private compute(pr: PrRef & { butler: boolean }): { stats: Omit<Parameters<ReviewEffectRepo["save"]>[0], "files">; comments: ReviewEffectComment[] } {
+  private compute(pr: PrRef & { shipherd: boolean }): { stats: Omit<Parameters<ReviewEffectRepo["save"]>[0], "files">; comments: ReviewEffectComment[] } {
     const db = this.d.db;
     const field = (path: string) => `CASE WHEN json_valid(data) THEN json_extract(data, '${path}') END`;
     const stages = db
@@ -171,7 +171,7 @@ export class ReviewEffectCollector {
     }
     return {
       stats: {
-        prId: pr.id, repoSlug: pr.slug, number: pr.number, butler: pr.butler, openedAt: pr.openedAt, mergedAt: pr.mergedAt,
+        prId: pr.id, repoSlug: pr.slug, number: pr.number, shipherd: pr.shipherd, openedAt: pr.openedAt, mergedAt: pr.mergedAt,
         commentsHuman: human, commentsCopilot: copilot, avoidable: run ? avoidableCount(run.findings_json) : 0,
         rounds: countRounds(humanReviews, pushes),
         firstReviewMs: firstHuman !== null && pr.openedAt !== null ? Math.max(0, firstHuman - pr.openedAt) : null,

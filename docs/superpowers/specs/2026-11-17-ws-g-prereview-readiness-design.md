@@ -1,11 +1,11 @@
 # Workstream G：PR 前预审、完成证据、就绪度、风险、review 简报、review 效果统计（设计补充）
 
-上级文档：`2026-11-17-butler-3-design.md`（第 3 节 G、第 4.1 / 4.2 / 4.5 / 4.6 / 4.7 / 4.8 / 4.9 节、第 5 节）。
+上级文档：`2026-11-17-shipherd-3-design.md`（第 3 节 G、第 4.1 / 4.2 / 4.5 / 4.6 / 4.7 / 4.8 / 4.9 节、第 5 节）。
 源计划第一部分 1.1、1.3、1.6（预审那句话），第三部分第 7 条，7.3，7.5，第五部分阶段 4。这里只记 G 自己做的决定；契约以上级文档为准，这里只扩展不修改。
 
 ## 0. 开工前核实过的点
 
-- **自我 review 这一步在哪。** Butler 没有「自我 review」的钩子：session 自己决定什么时候跑 code-review skill、什么时候 `gh pr create`。能确定抓到的时刻只有两个：session 主动调 MCP 工具（新加 `submit_evidence`，第 3 节），和 Butler 看到 PR（`PrLinker.linkCreatedPr`，以及 `PrWatcher.onPrRead` 里出现新的 head sha）。G 两个都接：前者是主路径（证据 + 预审一起做），后者兜底（没交证据的 PR 也会被预审，证据记为缺失）。
+- **自我 review 这一步在哪。** Shipherd 没有「自我 review」的钩子：session 自己决定什么时候跑 code-review skill、什么时候 `gh pr create`。能确定抓到的时刻只有两个：session 主动调 MCP 工具（新加 `submit_evidence`，第 3 节），和 Shipherd 看到 PR（`PrLinker.linkCreatedPr`，以及 `PrWatcher.onPrRead` 里出现新的 head sha）。G 两个都接：前者是主路径（证据 + 预审一起做），后者兜底（没交证据的 PR 也会被预审，证据记为缺失）。
 - **diff 从哪来。** 仓库里没有现成的 diff 统计函数（`gh.ts` 只有 `compareFiles`，走 GitHub API）。G 新加 `src/main/prereview/diff.ts`：在 session 的 worktree 里 `git merge-base <sha> origin/<base>`，`git diff --numstat -z` 和 `git diff --unified=3` 取「这次 PR 的改动」；worktree 不可用时退回 `compareFiles`。全部 `execFile` 加参数数组，路径统一成 `/`，Windows 和 macOS 一样。
 - **规矩按路径筛。** D 的 `scopeGlobs`、`scopeLang`、`strength`、`checkability` 都在 `lessons` 上；`src/shared/glob.ts` 的 `inScope(path, globs)` 是 hook 也在用的同一个匹配。预审取「这些仓库的已确认规矩 + 所属产品的已确认规矩」（和 `lessons/select.ts` 的 `confirmedFor` 同一口径，不受 30 条限制），再留下 `scopeGlobs` 为空或匹配任一改动文件的；`scopeLang` 有值时要求改动里有这种语言的文件（按扩展名）。`checkability = converted` 的已经由检查管，不再送进预审（检查结果另有输入）。
 - **检查结果。** E1 已经给 G 留了接口：`ChecksService.sessionCoverage(ids)`（`checks_absent`，契约 4.5 的「没挂上检查」）和 `hitsForSessions(ids)`（`check_hits`）。CI 结论来自 `ticket_prs.ci` 和 `PrStatus.checks`。
@@ -60,16 +60,16 @@
 
 ### `review_effect_prs`、`review_effect_comments`：效果统计（F 只读）
 
-- `review_effect_prs(pr_id PRIMARY KEY → ticket_prs ON DELETE CASCADE, repo_slug, number, butler INTEGER, opened_at, merged_at, files TEXT JSON (改动路径，最多 1000 个), comments_human, comments_copilot, avoidable, rounds, first_review_ms, submit_to_merge_ms, brief_posted INTEGER, retro_done INTEGER, computed_at)`。
+- `review_effect_prs(pr_id PRIMARY KEY → ticket_prs ON DELETE CASCADE, repo_slug, number, shipherd INTEGER, opened_at, merged_at, files TEXT JSON (改动路径，最多 1000 个), comments_human, comments_copilot, avoidable, rounds, first_review_ms, submit_to_merge_ms, brief_posted INTEGER, retro_done INTEGER, computed_at)`。
 - `review_effect_comments(id, pr_id → review_effect_prs ON DELETE CASCADE, source_id (lesson_sources.id), lesson_id (归到的规矩，跟着 merged_into 走到最终那条), who ('human' / 'copilot'), path, lesson_confirmed_before INTEGER (这条规矩在这个 PR 开之前已经确认 = 「规矩在却没遵守或写得不清楚」), created_at)`，唯一 `(pr_id, source_id)`。
 
 ## 3. 完成证据（7.5）
 
 ### 3.1 session 怎么交
 
-butler-sessions 新加两个工具（ticket 和 fix session 有，成员 session 的 inbox 不加）：
+shipherd-sessions 新加两个工具（ticket 和 fix session 有，成员 session 的 inbox 不加）：
 
-- `submit_evidence`：`{ checks: { name, category, command, result: 'pass' | 'fail', output }[], acceptance: { criterion, how }[], ui?: { path, note }[], notRun?: { name, reason }[], notes? }`。Butler 按 session 的 worktree 读出当前 `HEAD`、分支、slug，存成一组 `pr_evidence`，排一次预审（`trigger = 'evidence'`，去重键 `session:sha`），返回「已收到，预审结果会送进来；在那之前不要改 worktree」。worktree 有未提交的改动时拒收，告诉 session 先提交（证据要对应一个确定的 sha）。字段长度在 MCP 和主进程各验一次（`output` 截到 2000 字，最多 30 条检查、50 条验收）。
+- `submit_evidence`：`{ checks: { name, category, command, result: 'pass' | 'fail', output }[], acceptance: { criterion, how }[], ui?: { path, note }[], notRun?: { name, reason }[], notes? }`。Shipherd 按 session 的 worktree 读出当前 `HEAD`、分支、slug，存成一组 `pr_evidence`，排一次预审（`trigger = 'evidence'`，去重键 `session:sha`），返回「已收到，预审结果会送进来；在那之前不要改 worktree」。worktree 有未提交的改动时拒收，告诉 session 先提交（证据要对应一个确定的 sha）。字段长度在 MCP 和主进程各验一次（`output` 截到 2000 字，最多 30 条检查、50 条验收）。
 - `pre_review_result`：只读，返回这个 session 最近一次预审的结论、违规清单、证据核实结果和缺的证据。递送失败时 session 自己能取。加进 `SESSIONS_AUTO_ALLOW`。
 
 ### 3.2 说明文件里写什么
@@ -91,7 +91,7 @@ butler-sessions 新加两个工具（ticket 和 fix session 有，成员 session
 
 ### 3.4 核实（预审的一部分）
 
-1. **复跑**（确定性，Butler 自己跑，不让模型跑命令）：只跑**档案里的命令**，不跑 session 自己写的命令（防止证据里的命令被改成 `echo ok`）。默认复跑 `typecheck`、`lint`、`test`（`testAll`），策略 `evidence.rerun = 'all' | 'fast' | 'off'`（`fast` = 只跑 `fastest` 和 `typecheck`）。条件：session 的 worktree 干净、`HEAD` 等于这次的 sha；跑完再看一次，`HEAD` 变了或 worktree 变脏就把结果作废（`unverifiable`）。每条命令有超时（策略 `evidence.rerunTimeoutSec`，默认 600）。进程树用 hook 里现成的 `killTree`（Windows `taskkill /T`，macOS 进程组）。输出只留尾部 4000 字。
+1. **复跑**（确定性，Shipherd 自己跑，不让模型跑命令）：只跑**档案里的命令**，不跑 session 自己写的命令（防止证据里的命令被改成 `echo ok`）。默认复跑 `typecheck`、`lint`、`test`（`testAll`），策略 `evidence.rerun = 'all' | 'fast' | 'off'`（`fast` = 只跑 `fastest` 和 `typecheck`）。条件：session 的 worktree 干净、`HEAD` 等于这次的 sha；跑完再看一次，`HEAD` 变了或 worktree 变脏就把结果作废（`unverifiable`）。每条命令有超时（策略 `evidence.rerunTimeoutSec`，默认 600）。进程树用 hook 里现成的 `killTree`（Windows `taskkill /T`，macOS 进程组）。输出只留尾部 4000 字。
    - session 声称 pass、复跑也 pass → `rerun_pass`；复跑 fail → `rerun_fail`（声称和实际不符，比没交更糟）。
 2. **交叉核对**（`evidence_verify`，独立后台 claude，reviewer 任务）：输入是证据条目、复跑结果、diff 的文件清单和统计、ticket 标题。对没复跑的条目判断「输出能不能对上」（比如声称跑了 120 个测试全过、但输出里是 0 个；声称加了测试、但 diff 里没有测试文件），给每条 `consistent` / `mismatch` / `unverifiable` 和一句理由。不给工具，只看给它的东西。模型调用失败：没复跑的条目记 `unverifiable`。
 3. **结论**：一条要的类别「有效」= 有一条该类别的 `check` 证据，而且核实结果是 `rerun_pass` 或 `consistent`。`rerun_fail`、`mismatch` 算「证据不实」，比缺失多一句说明。
@@ -107,7 +107,7 @@ butler-sessions 新加两个工具（ticket 和 fix session 有，成员 session
 ### 4.1 什么时候跑
 
 - `submit_evidence` → 立刻排（`trigger = 'evidence'`）。
-- Butler 看到一个 Butler session 的 PR 有新的 head sha（`linkCreatedPr`、`onPrRead`），而这个 `(slug, branch, sha)` 还没有预审 → 排一次（`trigger = 'pr'`），没有证据。草稿和已合并、已关闭的不排。去重键 `pr:<slug>:<branch>:<sha>`。
+- Shipherd 看到一个 Shipherd session 的 PR 有新的 head sha（`linkCreatedPr`、`onPrRead`），而这个 `(slug, branch, sha)` 还没有预审 → 排一次（`trigger = 'pr'`），没有证据。草稿和已合并、已关闭的不排。去重键 `pr:<slug>:<branch>:<sha>`。
 - 页面和总控的「重新预审」（`trigger = 'manual'`）。
 - `preReviewEnabled` 关着时前两种都不排；手动的照样能跑（用户亲手点的）。
 
@@ -179,9 +179,9 @@ butler-sessions 新加两个工具（ticket 和 fix session 有，成员 session
 3. `evidence`：第 3.3 节要的证据都有效。没开预审 = `off`。
 4. `comments`：第 0 节「评论数据」的口径，没有未处理的评论。
 5. `mergeable`：`mergeable != CONFLICTING`，而且合并总控没有在让它等别人。`UNKNOWN` = `unknown`。
-6. `description`：PR 描述去掉 Butler 自己的块（`<!-- butler:… -->`）后 ≥ `descriptionMinChars` 字，并且三组关键词（「改了什么」：`what` / `changes` / `summary` / `改了` / `改动` / `做了什么`；「为什么」：`why` / `motivation` / `context` / `为什么` / `原因` / `背景`；「怎么验证」：`test` / `verif` / `how to` / `验证` / `测试`）每组至少命中一个（标题行或正文，大小写不敏感）。描述原文不出主进程。
+6. `description`：PR 描述去掉 Shipherd 自己的块（`<!-- shipherd:… -->`）后 ≥ `descriptionMinChars` 字，并且三组关键词（「改了什么」：`what` / `changes` / `summary` / `改了` / `改动` / `做了什么`；「为什么」：`why` / `motivation` / `context` / `为什么` / `原因` / `背景`；「怎么验证」：`test` / `verif` / `how to` / `验证` / `测试`）每组至少命中一个（标题行或正文，大小写不敏感）。描述原文不出主进程。
 
-`ready` = 所有启用的条件都是 `pass` 或 `off`。`unknown` 不算就绪，但 `missing` 里写「还不知道」而不是「缺」。**只提示、只排序，不当闸门**：Butler 不因为未就绪拦任何动作。
+`ready` = 所有启用的条件都是 `pass` 或 `off`。`unknown` 不算就绪，但 `missing` 里写「还不知道」而不是「缺」。**只提示、只排序，不当闸门**：Shipherd 不因为未就绪拦任何动作。
 
 ### 7.1 什么时候算
 
@@ -191,11 +191,11 @@ butler-sessions 新加两个工具（ticket 和 fix session 有，成员 session
 
 ### 8.1 内容
 
-`src/main/assess/brief.ts`。一页 Markdown，用 `<!-- butler:brief -->` … `<!-- /butler:brief -->` 包住（和 K 约定）。各段：
+`src/main/assess/brief.ts`。一页 Markdown，用 `<!-- shipherd:brief -->` … `<!-- /shipherd:brief -->` 包住（和 K 约定）。各段：
 
 1. **改了什么、为什么**：唯一由模型写的段（`pr_brief`，mid，fallback）。输入是 ticket 标题、PR 标题和描述（截断）、改动文件统计、证据里的验收条件对照。模型失败 → 用 ticket 标题 + PR 标题 + 文件统计拼一句（`summary_ok = 0`）。
 2. **风险**：等级和每条理由（哪类、哪些文件），直接从 `pr_risk.reasons` 渲染。
-3. **证据**：**只列核实过的**（`rerun_pass` 写「Butler 复跑通过」并附命令，`consistent` 写「已核对输出」），不实的写「对不上：…」，缺的写「缺少：…」。session 的自述不原样进简报。
+3. **证据**：**只列核实过的**（`rerun_pass` 写「Shipherd 复跑通过」并附命令，`consistent` 写「已核对输出」），不实的写「对不上：…」，缺的写「缺少：…」。session 的自述不原样进简报。
 4. **预审结论**：clean，或违规条数和每条的文件:行和一句话。
 5. **建议重点看**：确定性挑出：命中风险路径的文件、改动行数最多的前 5 个文件（生成文件除外）。
 6. **已知取舍和没做的事**：证据的 `notRun`（带原因）和 `notes`。
@@ -203,7 +203,7 @@ butler-sessions 新加两个工具（ticket 和 fix session 有，成员 session
 ### 8.2 什么时候生成、放哪
 
 - 每次预审完成后生成一份（预审开着时）；页面上有「重新生成」。
-- 默认**只在 Butler 里看**：ticket 页的「Review」tab 显示、可复制。
+- 默认**只在 Shipherd 里看**：ticket 页的「Review」tab 显示、可复制。
 - 「贴到 PR」按钮：把简报块写进 PR 描述（已有块就整块替换，没有就追加在末尾），`gh pr edit --body-file`。用户亲手点的，走 `ExternalActions.record('pr_brief_post', …)` 记审计。
 - 自动贴：`externalPrBriefPost` 打开时，PR 是 open、非草稿、简报对应当前 sha → 自动做上面那一步，走 `ExternalActions.attempt`。
 - **K 的注入点**（记忆里的约定）：`briefProvider(layer: { repoSlug, branch, headSha | null, ticketKey | null, prNumber | null }) => { markdown, posted(prUrl) } | null`，同步。G 按 `(repoSlug, branch, headSha)` 找最近的简报（`headSha` 为空取这个分支最新的）；`pr_brief_post` 的开关关着或没有简报返回 null。K 把 markdown 原样插进栈底描述，`gh` 成功后调 `posted(prUrl)`：G 记审计、填 `posted_at`。`index.ts` 里谁后合并谁接线。
@@ -256,8 +256,8 @@ export interface TrendSide { prs: number; comments: number; perPr: number | null
 
 在 I 的「评论和 CI」区块后面加「Review 效果」区块（单独的 IPC `reviewEffect(days)`，和 `loopEffect` 一样，不塞进 H 的 `MetricsOverview`）：
 
-- **可避免评论的趋势**：Butler 的 PR，最近 12 周每周的「平均每 PR 可避免评论数」（SVG 折线，和 H 的趋势图同一个组件）。这是阶段 4 的验收。
-- **同事 review**：Butler 的 PR 和其他 PR 各一组：平均人评论数、平均轮次、首个 review 等待、提交到合并。另一行「带简报 / 不带简报」对比同样四个数（样本 < 5 时显示「样本太少」）。
+- **可避免评论的趋势**：Shipherd 的 PR，最近 12 周每周的「平均每 PR 可避免评论数」（SVG 折线，和 H 的趋势图同一个组件）。这是阶段 4 的验收。
+- **同事 review**：Shipherd 的 PR 和其他 PR 各一组：平均人评论数、平均轮次、首个 review 等待、提交到合并。另一行「带简报 / 不带简报」对比同样四个数（样本 < 5 时显示「样本太少」）。
 - **规矩上线前后**：最近确认的规矩里，`after.prs ≥ 3` 的按变化排序列出（规矩一句话、前 / 后每 PR 评论数、PR 数），点开跳到规矩页。
 - **评论落点**：窗口内合并的 PR 上的评论，归到「上线前就有的规矩」（没遵守或写得不清楚）/「当时还没有的规矩」/「没归到规矩」（可能是新规矩）三类的数量。
 
@@ -280,7 +280,7 @@ export interface TrendSide { prs: number; comments: number; perPr: number | null
 2. 动迁移的 PR 一定判为高风险，任何策略都改不了（单测，含策略试图关掉的情况）。
 3. 缺证据的 PR 显示为「未就绪」并写明缺什么（单测 + e2e）。
 4. 没有测试输出的 PR 不会被判为低风险（单测：小改动、只动测试文件、CI 通过、但没有核实过的测试证据 → medium）。
-5. 「效果」页能看到 Butler 做的 PR 上可避免评论数的趋势（单测 + e2e 看到区块）。
+5. 「效果」页能看到 Shipherd 做的 PR 上可避免评论数的趋势（单测 + e2e 看到区块）。
 6. 每个新开关（`preReviewEnabled`、`externalPrBriefPost`、每个就绪条件的 enabled、`evidence.rerun`）都有单测。
 7. 一个 e2e 走完「`submit_evidence` → 预审（假 claude）→ 证据核实 → 就绪度和风险 → 简报」。
 

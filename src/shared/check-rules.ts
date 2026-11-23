@@ -1,5 +1,5 @@
 // 内置检查类型的求值（契约 4.5）：禁用模式、import 边界、注释策略。纯函数，毫秒级；用户写的正则经 ctx.test 跑（hook 在 worker 里限时跑）。
-// 也给 Butler 页面和测试用。只看文字，不执行任何东西。
+// 也给 Shipherd 页面和测试用。只看文字，不执行任何东西。
 import { matchAny, normalizePath } from "./glob";
 import type { CommentPolicyParams, ForbiddenPatternParams, ImportBoundaryParams } from "./checks";
 

@@ -2,11 +2,11 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 /**
- * Butler 自己不往外发网络请求（BTL-243 拿掉了个人 LLM API 和 PrivacyGateway）。
+ * Shipherd 自己不往外发网络请求（BTL-243 拿掉了个人 LLM API 和 PrivacyGateway）。
  * 所有源码都不能用浏览器 / Node 的网络 API，也不能 import 网络模块、HTTP 客户端、LLM SDK 或 Electron 的 net。没有目录例外，
  * 只有三个文件各放开一小块（见 ALLOWANCES）。src/main/egress-lint.test.ts 用一段违规代码验证这些规则真的生效。
  */
-const EGRESS_MESSAGE = "Butler 不往外发网络请求（BTL-243）。唯一的出口是 src/main/notify/webhook.ts（对外动作 push_notification）。";
+const EGRESS_MESSAGE = "Shipherd 不往外发网络请求（BTL-243）。唯一的出口是 src/main/notify/webhook.ts（对外动作 push_notification）。";
 const NETWORK_BUILTINS = ["http", "https", "http2", "net", "tls", "dgram", "dns"];
 /** 能绕过静态检查去拿到任意模块的入口，同样禁止。 */
 const LOADER_BUILTINS = ["module"];

@@ -1,6 +1,6 @@
 # Workstream R: integration and release 3.0.0
 
-Addendum to the [Butler 3 master design](2026-11-17-butler-3-design.md). R checks every workstream's acceptance on `main`, closes the leftovers, confirms that a user who configures nothing gets 2.1.0 behaviour, keeps the docs pairs in sync and prepares 3.0.0.
+Addendum to the [Shipherd 3 master design](2026-11-17-shipherd-3-design.md). R checks every workstream's acceptance on `main`, closes the leftovers, confirms that a user who configures nothing gets 2.1.0 behaviour, keeps the docs pairs in sync and prepares 3.0.0.
 
 Verdicts: **pass** means a test proves it, and the test is named. **Reading only** means the behaviour was confirmed by reading the code, with the place given. **Fail** means it did not hold on `main` when R started. Every failure below was fixed in R unless the row says otherwise.
 
@@ -19,9 +19,9 @@ Verdicts: **pass** means a test proves it, and the test is named. **Reading only
 
 | Item | Verdict | Evidence |
 |---|---|---|
-| B1 `list_prs` fields | pass | `control-butler.test` "list_prs adds the stack, review and merge fields…"; `pr-watcher.test` |
-| B2 replies flow back | pass | `control-butler.test` "returns a requestId and sends the target's next reply back"; `butler-messages.test` |
-| B3 `refresh_feature_summary` | pass | `control-butler.test` |
+| B1 `list_prs` fields | pass | `control-shipherd.test` "list_prs adds the stack, review and merge fields…"; `pr-watcher.test` |
+| B2 replies flow back | pass | `control-shipherd.test` "returns a requestId and sends the target's next reply back"; `shipherd-messages.test` |
+| B3 `refresh_feature_summary` | pass | `control-shipherd.test` |
 | B4 freshness considers PR state | pass | `feature-runner.test` "a PR status change after the summary read PRs makes the feature stale" |
 | B5 Progress page | pass | `progress-view.test`; e2e `progress.spec` |
 | B6 one switch per kind, off by default | pass | `external/actions.test` "has one editable flag per kind, off by default"; `settings-defaults-3.test` |
@@ -93,7 +93,7 @@ Verdicts: **pass** means a test proves it, and the test is named. **Reading only
 | G4 no tests is never low risk | pass | `risk.test` |
 | G5 deterministic | reading only | pure functions in `assess/` with tests |
 | G6 the brief quotes only verified evidence | pass | `assessment-service.test` "renders the six sections from verified evidence only" |
-| G7 avoidable-comment trend | pass, with a note | The trend compares Butler PRs with other PRs, not with a pre-Butler baseline: the baseline only stores cycle time and comment counts. Recorded as "vs other PRs". |
+| G7 avoidable-comment trend | pass, with a note | The trend compares Shipherd PRs with other PRs, not with a pre-Shipherd baseline: the baseline only stores cycle time and comment counts. Recorded as "vs other PRs". |
 | G8 pre-review through the router | pass | `prereview/model.test` |
 | G9 posting the brief is off by default | pass | `external/actions.test` |
 
@@ -101,8 +101,8 @@ Verdicts: **pass** means a test proves it, and the test is named. **Reading only
 
 | Item | Verdict | Evidence |
 |---|---|---|
-| H1 30-day averages vs a baseline | pass, by design limited | Only cycle time and comments have pre-Butler data (H addendum §8). `overview.test` |
-| H2–H7 events, daily rollup, Butler-made tag, interventions and waits, baseline backfill, page | pass | `events.test`, `rollup.test`, `interventions.test`, `wait-tracker.test`, `gh-job.test`; e2e `effect.spec` |
+| H1 30-day averages vs a baseline | pass, by design limited | Only cycle time and comments have pre-Shipherd data (H addendum §8). `overview.test` |
+| H2–H7 events, daily rollup, Shipherd-made tag, interventions and waits, baseline backfill, page | pass | `events.test`, `rollup.test`, `interventions.test`, `wait-tracker.test`, `gh-job.test`; e2e `effect.spec` |
 
 ### I: comment loop and CI triage
 
@@ -119,7 +119,7 @@ Note: the I addendum §6 says `loop.integration.test` covers the comment loop to
 
 ### W-ci: CI delivery to the owning session
 
-W1–W7 pass: `ci-delivery.test`, `notices.test`, `branch-owners.test`, `butler-hook.test`, `pr-watcher.test`; e2e `ci-delivery.spec`.
+W1–W7 pass: `ci-delivery.test`, `notices.test`, `branch-owners.test`, `shipherd-hook.test`, `pr-watcher.test`; e2e `ci-delivery.spec`.
 
 ### J: fewer interruptions, notifications
 
@@ -196,12 +196,12 @@ Every new master switch and outward action defaults off. `src/main/db/settings-d
 - `shadow.autoPromote`, `admission.autoConfirm` and `conflict.autoPickHigherHits` are off;
 - there are no spend caps.
 
-`e2e/defaults.spec.ts` starts a fresh install, changes nothing, opens a session on a ticket whose PR has a review comment and failing CI, and checks that the comment does not reach the terminal, that Butler makes no `gh` write and no unsupported `gh` call, and that the Audit page has no outward action.
+`e2e/defaults.spec.ts` starts a fresh install, changes nothing, opens a session on a ticket whose PR has a review comment and failing CI, and checks that the comment does not reach the terminal, that Shipherd makes no `gh` write and no unsupported `gh` call, and that the Audit page has no outward action.
 
 Defaults reviewed and kept:
 
 - **`refreshMemoryMb`** was `2048`, which restarted any session over 2 GB even with hibernation off. That is new behaviour, so it is now `0` (off); the docs suggest 2048.
-- **`orphanCleanup` stays on.** It only ends processes Butler itself recorded for sessions that have closed.
+- **`orphanCleanup` stays on.** It only ends processes Shipherd itself recorded for sessions that have closed.
 - **Memory admission replacing the 6 / 8 / 4 caps stays.** That was the user's decision (W addendum §1). README's overview names it as one of the two differences from 2.1.0.
 - **`checksEnabled` and `permissionProfiles` stay on.** They do nothing until a check is enabled or a permission rule is confirmed; the only seeded check is off.
 - **`configExportReminderDays` stays at 30.** It is a reminder line, nothing acts.

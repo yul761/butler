@@ -116,7 +116,7 @@ export class MergeGateRepo {
     this.db.prepare(`UPDATE merge_waiters SET notified_at = ? WHERE id = ?`).run(at, waiterId);
   }
 
-  /** 还在排队的等待者的 session id：占位还没释放、还没通知过（「现在」页的“合并排队”）。记的是 BUTLER_SESSION，调用方按 head 对。 */
+  /** 还在排队的等待者的 session id：占位还没释放、还没通知过（「现在」页的“合并排队”）。记的是 SHIPHERD_SESSION，调用方按 head 对。 */
   waitingSessionIds(): Set<string> {
     const rows = this.db
       .prepare(

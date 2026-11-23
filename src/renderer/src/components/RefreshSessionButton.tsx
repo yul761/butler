@@ -8,8 +8,8 @@ import { S } from "../strings";
 const REFUSED_MS = 4000;
 
 /**
- * session 按钮旁边的 ↻，给正在运行的终端用（计划 16）：让 Butler 给这个 session 换新上下文（handoff → 清空 → 从记忆里接上）。
- * Butler 马上回答：开始了就在后台跑，终端里能看到；开始不了就在按钮上短暂显示原因。
+ * session 按钮旁边的 ↻，给正在运行的终端用（计划 16）：让 Shipherd 给这个 session 换新上下文（handoff → 清空 → 从记忆里接上）。
+ * Shipherd 马上回答：开始了就在后台跑，终端里能看到；开始不了就在按钮上短暂显示原因。
  */
 export function RefreshSessionButton({ sessionId, label }: { sessionId: string; label: string }) {
   const [refused, setRefused] = useState<RefreshRefusal | null>(null);

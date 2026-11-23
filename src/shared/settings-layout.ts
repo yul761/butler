@@ -55,7 +55,7 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   // 高级 › 定时与 handoff
   nightlyTime: adv("schedule"),
   workingDays: adv("schedule"),
-  butlerPatrolTime: adv("schedule"),
+  shipherdPatrolTime: adv("schedule"),
   handoffPrompt: adv("schedule"),
   refreshPrompt: adv("schedule"),
   trackerTools: adv("schedule"),

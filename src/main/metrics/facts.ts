@@ -25,7 +25,7 @@ export interface SessionFact {
   id: string;
   ticketKey: string | null;
   gitBranch: string | null;
-  butler: boolean;
+  shipherd: boolean;
   createdAt: number;
 }
 
@@ -163,7 +163,7 @@ export function readFacts(db: Db, since: number, extra: { events: MetricEvent[];
   const sessions = (db.prepare(`SELECT id, ticket_key, git_branch, origin, created_at FROM sessions`).all() as unknown as Record<string, unknown>[]).map(
     (r): SessionFact => ({
       id: String(r.id), ticketKey: (r.ticket_key as string | null) ?? null, gitBranch: (r.git_branch as string | null) ?? null,
-      butler: r.origin === "butler", createdAt: num(r.created_at),
+      shipherd: r.origin === "shipherd", createdAt: num(r.created_at),
     }),
   );
   const usage = (db.prepare(`SELECT * FROM session_usage WHERE at >= ?`).all(since) as unknown as Record<string, unknown>[]).map(

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { renderBranch } from "../../../shared/branch";
 import type { Feature, WorkMode } from "../../../shared/types";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { lastSegment } from "../repos";
 import { S } from "../strings";
 import { RepoPicker } from "./RepoPicker";
@@ -56,8 +56,8 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature }: Pro
       });
       onCreated(t.key);
     } catch (err) {
-      setError(err instanceof ButlerError ? (S.createErrors[err.code] ?? err.message) : (err as Error).message);
-      if (err instanceof ButlerError && err.code === "archived") setArchivedKey(key.trim().toUpperCase());
+      setError(err instanceof ShipherdError ? (S.createErrors[err.code] ?? err.message) : (err as Error).message);
+      if (err instanceof ShipherdError && err.code === "archived") setArchivedKey(key.trim().toUpperCase());
     } finally {
       setBusy(false);
     }

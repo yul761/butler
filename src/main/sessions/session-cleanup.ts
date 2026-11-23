@@ -12,7 +12,7 @@ export const PURGE_EVERY_MS = 60 * 60 * 1000;
  */
 export const MANUAL_IDLE_MS = 5 * 60 * 1000;
 
-/** 一个开着的终端和它现在的 head（Butler 开的 session）。 */
+/** 一个开着的终端和它现在的 head（Shipherd 开的 session）。 */
 export interface OpenTerminal {
   termId: string;
   head: Session;
@@ -21,7 +21,7 @@ export interface OpenTerminal {
 export interface SessionCleanupDeps {
   /** 设置 idleCloseMinutes，0 = 不自动关。 */
   idleMinutes(): number;
-  /** 开着终端的 Butler session（每个终端一个；/clear 之后是链上最新的 head）。 */
+  /** 开着终端的 Shipherd session（每个终端一个；/clear 之后是链上最新的 head）。 */
   terminals(): OpenTerminal[];
   /** 按 head 的 id 查。 */
   activity(headId: string): SessionActivity | null;
@@ -37,10 +37,10 @@ export interface SessionCleanupDeps {
    */
   askUserPending?: (headId: string) => boolean;
   /**
-   * 这个 session 在等 Butler 递消息：合并总控排着队（还没通知到的等待者）、它的 PR 的 CI 还在跑。这些通知只递给开着的终端，
+   * 这个 session 在等 Shipherd 递消息：合并总控排着队（还没通知到的等待者）、它的 PR 的 CI 还在跑。这些通知只递给开着的终端，
    * 关了就收不到（审查）。和「现在」页的 idle 口径一样。不给就当作没有。
    */
-  waitingOnButler?: (headId: string) => boolean;
+  waitingOnShipherd?: (headId: string) => boolean;
   refresher: Pick<SessionRefresher, "precheckClose" | "close">;
   /** 隐藏着、隐藏和最后一次活动都早于 before 的 head（SessionsRepo.listHiddenBefore）。 */
   hiddenBefore(before: number): Session[];
@@ -50,7 +50,7 @@ export interface SessionCleanupDeps {
   terminalOpen(headId: string): boolean;
   /** 删掉整条链（SessionsRepo.deleteChain），返回删掉的 id。 */
   deleteChain(headId: string): string[];
-  /** 删掉这个 id 的换新尾巴文件（~/.butler/refresh/<id>.md，BTL-190 第 6 点）；没有就算了。 */
+  /** 删掉这个 id 的换新尾巴文件（~/.shipherd/refresh/<id>.md，BTL-190 第 6 点）；没有就算了。 */
   removeTail(sessionId: string): void;
   /** 自动删除删掉了东西：刷新界面。 */
   notify(): void;
@@ -66,7 +66,7 @@ export function working(a: SessionActivity | null): boolean {
 /**
  * 清理 session（BTL-190 第 8 点）：
  * - 闲置自动关闭：开着终端、停下超过 idleCloseMinutes、换新的 guard 通过（不需要你、没在打字、没有草稿）、没有后台任务、
- *   没有未决的 ask_user、没在等 Butler 递合并或 CI 的通知、不在换新中，总控的话它管的子 session 都没在干活，
+ *   没有未决的 ask_user、没在等 Shipherd 递合并或 CI 的通知、不在换新中，总控的话它管的子 session 都没在干活，
  *   就交给 SessionRefresher.close：写 handoff、等记忆写完、结束终端（不隐藏，以后能恢复）。睡眠的时间不算闲置。
  * - 隐藏超过 14 天的 session 行连同整条链、合并总控里没递出去的等待者和尾巴文件一起删掉。transcript 不动。
  * - 手动：「清理闲置」（closeIdle）和隐藏列表里的「全部删除」（deleteHidden）。
@@ -111,9 +111,9 @@ export class SessionCleanup {
       const h = t.head;
       if (out.includes(h.id) || (only && !only.has(h.id))) continue;
       if (now - this.idleSince(t) < idleMs) continue;
-      if (this.d.askUserPending?.(h.id) || this.d.waitingOnButler?.(h.id)) continue;
+      if (this.d.askUserPending?.(h.id) || this.d.waitingOnShipherd?.(h.id)) continue;
       if (this.childrenWorking(h, terms)) continue;
-      // 种类（修复 session、非 Butler 的不关）、guard、后台任务、刚打开、正在换新、冷却都由换新那边同步回答。
+      // 种类（修复 session、非 Shipherd 的不关）、guard、后台任务、刚打开、正在换新、冷却都由换新那边同步回答。
       if (this.d.refresher.precheckClose(h.id, trigger) !== null) continue;
       out.push(h.id);
     }

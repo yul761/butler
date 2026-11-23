@@ -27,7 +27,7 @@ export function checkData(c: ResolvedCheck, ticketPattern: string): ExportedChec
 
 function header(comment: string, data: ExportedCheckData, usage: string): string[] {
   return [
-    `${comment} Butler check "${data.name.replace(/[\r\n]+/g, " ")}" (${data.type}), written by Butler as a repo rule.`,
+    `${comment} Shipherd check "${data.name.replace(/[\r\n]+/g, " ")}" (${data.type}), written by Shipherd as a repo rule.`,
     `${comment} Usage: ${usage} [--all | files...]   (no arguments = staged files)`,
     `${comment} Prints file:line: message for each violation and exits 1 when there is any.`,
   ];
@@ -181,7 +181,7 @@ export function shScript(data: ExportedCheckData, path: string): ScriptResult {
       '[ "$staged" = 1 ] && cached="--cached"',
       // 先拿这个正则空跑一次：git 没带 PCRE、或者正则编译不了，git grep 都退出 128，下面的管道却只会得到空输出，
       // 把「出错」当成「没有违规」放过去（审查发现）。
-      `git grep -q ${modeFlag}${caseFlag} -e "$PATTERN" -- ":(literal)butler-no-such-file" >/dev/null 2>&1; [ $? -le 1 ] || { echo "$NAME: git grep cannot run this pattern (it does not compile, or this git was built without PCRE)" >&2; exit 2; }`,
+      `git grep -q ${modeFlag}${caseFlag} -e "$PATTERN" -- ":(literal)shipherd-no-such-file" >/dev/null 2>&1; [ $? -le 1 ] || { echo "$NAME: git grep cannot run this pattern (it does not compile, or this git was built without PCRE)" >&2; exit 2; }`,
       // 输出里的 NUL 存不进 shell 变量：先换成 \\001 再存。
       `out=$(printf '%s\\n' "$files" | tr '\\n' '\\000' | xargs -0 git -c core.quotepath=off grep -z -n -I $cached ${modeFlag}${caseFlag} -e "$PATTERN" -- | tr '\\000' '\\001')`,
       '[ -n "$out" ] || exit 0',
@@ -194,7 +194,7 @@ export function shScript(data: ExportedCheckData, path: string): ScriptResult {
   };
 }
 
-/** run_command 检查的逐文件运行脚本：和 Butler 编辑时的 hook 一样，每个文件跑一次，{file} 换成 "$1"，文件名也在 BUTLER_CHECK_FILE 里。 */
+/** run_command 检查的逐文件运行脚本：和 Shipherd 编辑时的 hook 一样，每个文件跑一次，{file} 换成 "$1"，文件名也在 SHIPHERD_CHECK_FILE 里。 */
 export function runnerScript(data: ExportedCheckData, command: string, path: string): string {
   return [
     "#!/bin/sh",
@@ -206,7 +206,7 @@ export function runnerScript(data: ExportedCheckData, command: string, path: str
     "status=0",
     "while IFS= read -r f; do",
     '  [ -n "$f" ] || continue',
-    '  if ! BUTLER_CHECK_FILE="$f" sh -c "$SCRIPT" sh "$f" </dev/null; then',
+    '  if ! SHIPHERD_CHECK_FILE="$f" sh -c "$SCRIPT" sh "$f" </dev/null; then',
     '    echo "$f: $NAME failed" >&2',
     "    status=1",
     "  fi",
@@ -229,6 +229,6 @@ export function pygrepEntry(params: Record<string, unknown>): { ok: true; entry:
   if (!t.ok) return t;
   // JS 不带 u 时 \d \w \s \b 只认 ASCII；pygrep 的 Python 正则默认认 Unicode，加 (?a) 对齐。
   const ascii = /\\[dDwWsSbB]/.test(t.source) ? "(?a)" : "";
-  // pygrep 读到的行带着 Windows 换行的 \r：$ 前面允许一个 \r，和 Butler 按 \r?\n 分行一样。
+  // pygrep 读到的行带着 Windows 换行的 \r：$ 前面允许一个 \r，和 Shipherd 按 \r?\n 分行一样。
   return { ok: true, entry: ascii + replaceEndAnchors(t.source, "(?=\\r?$)"), args };
 }

@@ -1,6 +1,6 @@
 # 工作流 L：成本熔断与空闲时段调度（设计 addendum）
 
-总设计：`2026-11-17-butler-3-design.md`。本文只写 L 自己的决定；契约（4.1 路由、4.2 三层作用域、4.7 事件、4.8 外部动作、4.9 通用规则）按总设计。
+总设计：`2026-11-17-shipherd-3-design.md`。本文只写 L 自己的决定；契约（4.1 路由、4.2 三层作用域、4.7 事件、4.8 外部动作、4.9 通用规则）按总设计。
 
 范围：源计划 7.10（成本熔断）、7.11（空闲与离线时段调度），以及它们引用的第六部分软阈值配合。
 
@@ -13,7 +13,7 @@
 | 金额 | 有 `cost_usd` 的行直接用；没有的按 A 的注册表单价折算（`spend.ts`） | 上限单位为 usd 时同样算法；有行估不出价格时标「部分」 |
 | 配额与阈值 | A：`routingQuotas`、`routingThresholds`（默认 70,90）、`summarizeSpend` 给每个配额 ok / soft / hard | 后台任务的「额度紧张」「额度充裕」都看这个；上限的提醒线也复用第一个阈值 |
 | 降档 | 交互 session：`SessionModelSwitcher.switch`（结束终端，`--resume --model 下一档`）；headless：A 的 `planTask`，soft 时 fallback 策略的任务降一档 | 熔断复用这两条，不另写降档逻辑 |
-| 空闲信号 | `powerMonitor.getSystemIdleTime()`（Butler 已用于夜间任务的「用户在用」判断，阈值 120 秒）；`getSystemIdleState` 能报 `locked`；`lock-screen` / `unlock-screen` / `suspend` / `resume` 事件。这几样 Electron 在 macOS（CGEventSource / 会话锁屏通知）和 Windows（GetLastInputInfo / WTS 会话通知）上都有实现。`user-did-resign-active` 只有 macOS | 见第 2 节 |
+| 空闲信号 | `powerMonitor.getSystemIdleTime()`（Shipherd 已用于夜间任务的「用户在用」判断，阈值 120 秒）；`getSystemIdleState` 能报 `locked`；`lock-screen` / `unlock-screen` / `suspend` / `resume` 事件。这几样 Electron 在 macOS（CGEventSource / 会话锁屏通知）和 Windows（GetLastInputInfo / WTS 会话通知）上都有实现。`user-did-resign-active` 只有 macOS | 见第 2 节 |
 | 防休眠 | `KeepAwake`：只在内存里，开着时阻止显示器休眠 | 不是「人在不在」的信号，不当空闲判断；它只保证机器醒着，空闲时段才跑得起来（记在文档里） |
 | 活动监控 | `ActivityMonitor` 看的是 Claude session 在干什么，不是人 | 不当空闲判断；用来判断熔断暂停后 session 还在不在跑 |
 | 休眠 | M：`Hibernator`，`isHibernated`、`wake` | 休眠的 session 不算活跃；后台任务不能叫醒它（第 3.4 节） |
@@ -121,7 +121,7 @@ D、F、G、N 的条目先登记好（它们的任务以后直接用），路由
 | `graceAfterDowngradePercent` | 20 | 降档以后再超出上限这么多才暂停 |
 | `raisePercent` | 50 | 「继续并提高上限」一次加多少 |
 
-session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多个仓库时每个字段取最严的（上限取最小、动作取 pause、范围取 session）。feature、epic、Butler 总控的 session 按全局。
+session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多个仓库时每个字段取最严的（上限取最小、动作取 pause、范围取 session）。feature、epic、Shipherd 总控的 session 按全局。
 
 ### 4.2 什么时候算
 
@@ -139,7 +139,7 @@ session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多�
     - session：`SessionModelSwitcher.switch`（同 A 的「换下一档继续」），换好后经 DeliveryGuard 递一句「接着做」；状态 `downgraded`。
     - ticket：它的 headless 调用规划时按 soft 算（A 的路由器让能降的降一档），交互 session 也逐个降档。
   - 没有下一档、动作是 `pause`、或降档后用到上限 ×（1 + 宽限）：`paused`。
-- 暂停 session：正在干活就发 Esc 打断这一轮；DeliveryGuard 多一个阻挡原因 `cost_paused`，Butler 不再往里自动输入；暂停后 90 秒还有新用量、并且用户没在这个终端里打过字，结束终端（可以 `--resume` 接上，和休眠一样不丢对话）。用户自己往暂停的终端里打字算自己接手，不再结束，提醒留着。
+- 暂停 session：正在干活就发 Esc 打断这一轮；DeliveryGuard 多一个阻挡原因 `cost_paused`，Shipherd 不再往里自动输入；暂停后 90 秒还有新用量、并且用户没在这个终端里打过字，结束终端（可以 `--resume` 接上，和休眠一样不丢对话）。用户自己往暂停的终端里打字算自己接手，不再结束，提醒留着。
 - 暂停后台：这个 ticket 的 headless 调用直接拒绝（失败原因 `cost_paused`，调用方当作延后），调度器对这个 ticket 的任务给 `cost`。
 - 「继续并提高上限」（IPC `cost:resume`）：新上限 = max(上限, 已花) + 上限 × raisePercent%；清掉暂停，降过档的不自动升回（用户可以在 session 上手动换）；session 递一句「继续」。
 - 卡住判断不动；熔断是并列的一道（死循环烧 token 的测试见计划）。
@@ -153,7 +153,7 @@ session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多�
 
 ## 5. 日志和事件
 
-熔断的 warn / downgrade / pause / stop / resume / raise 和调度器的 yield / resume 都写日志、写 `cost_events`（熔断）表；并调 `onEvent(kind, refs)`：index.ts 用 `cost/metric-events.ts` 把它接到 H 的 `recordEvent`，记成 `cost.<步骤>`（ticket 的挂 ticketKey，session 的挂链的根 id）和 `background.yield` / `background.resume`。data 只放花费、上限、单位、任务种类和 Butler 自己写的短说明。
+熔断的 warn / downgrade / pause / stop / resume / raise 和调度器的 yield / resume 都写日志、写 `cost_events`（熔断）表；并调 `onEvent(kind, refs)`：index.ts 用 `cost/metric-events.ts` 把它接到 H 的 `recordEvent`，记成 `cost.<步骤>`（ticket 的挂 ticketKey，session 的挂链的根 id）和 `background.yield` / `background.resume`。data 只放花费、上限、单位、任务种类和 Shipherd 自己写的短说明。
 
 ## 6. 设置
 
@@ -180,7 +180,7 @@ session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多�
 ## 8. 决定记录
 
 1. 「额度紧张」默认先停低优先级（`pause_first`），因为它只在配了配额时才生效，不影响 2.1.0 的默认行为；A 原来的降档规则不变。
-2. 防休眠不当空闲信号（它表达的是「让机器醒着」，不是「人走了」）；Butler 终端里的键入已经包含在系统空闲时间里，不单独看。
+2. 防休眠不当空闲信号（它表达的是「让机器醒着」，不是「人走了」）；Shipherd 终端里的键入已经包含在系统空闲时间里，不单独看。
 3. 熔断暂停 session 先 Esc，不先结束终端：正在写的这一轮不被硬切；只有暂停后还在花钱、用户也没接手时才结束终端。
 4. 上限默认单位 usd：用户最直观；估不出价格的行在提示里标「部分」，这种情况推荐用 tokens。
 5. headless 的降档不改 A 的路由器：熔断的 ticket 在规划时按 soft 算，让 A 现有的降档规则生效（新增 `PlanContext.minLevel`）。
@@ -195,7 +195,7 @@ session 的作用域按它所在 ticket 的仓库解析；一个 ticket 有多�
 14. 花费上限暂不进导出文件（契约 4.3 没把 L 列为某个部分的提供方）；以后要导出就注册一个 `cost` 部分，读写 `cost_caps`。
 15. 设置里改了上限会作废之前「继续并提高上限」的提高（`raised_cap` 清空），以设置为准。
 16. （审查后）复盘项的 ticket 被熔断停了后台：这一次记 `aborted`（`cost_paused`），队列项 5 分钟后再试，不立刻放回，免得 pump 一直取同一项空转。
-17. （审查后）Butler 自己按的 Esc 走 `PtyManager.interrupt`，不算用户输入；否则熔断会把它当成「用户接手了」，再也不结束还在花钱的终端。
+17. （审查后）Shipherd 自己按的 Esc 走 `PtyManager.interrupt`，不算用户输入；否则熔断会把它当成「用户接手了」，再也不结束还在花钱的终端。
 18. （审查后）暂停后结束终端的条件：过了 90 秒、暂停后又花了钱、而且终端此刻还在跑。安静下来的（晚到的用量扫描、重启后重新打开的）不结束。
 19. （审查后）策略变了也接着原来的状态走：暂停着的、新上限还是不够就还停着，不会再降一档把暂停冲掉；单位换了时暂停时的花费换成新单位。
 20. （审查后）一次检查里 session 和 ticket 同时到上限，同一个 session 只换一档模型。

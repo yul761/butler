@@ -91,7 +91,7 @@ describe("PrPolicies", () => {
       const recorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db)]);
       let version = 1;
       const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => version, set: (v) => (version = v) }, now: () => 9 });
-      const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), butlerVersion: "3.0.0", backupDir: join(tempDir(), "b"), now: () => 9 });
+      const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), shipherdVersion: "3.0.0", backupDir: join(tempDir(), "b"), now: () => 9 });
       return { io, pol: new PrPolicies({ db, products: { productsOf: (s) => repo.productsOf(s), product: (id) => repo.product(id) }, now: () => 9 }) };
     };
     const a = mk();

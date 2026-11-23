@@ -183,7 +183,7 @@ describe("sendBlockText / rememberText / refusalText", () => {
     expect(rememberText("no_scope", T)).toBe("这里的结论没有 ticket 或 epic 可记");
     expect(rememberText("no_scope", STRINGS.en)).toBe("There's no ticket or epic here to remember this under");
   });
-  it("only disabled (memory off) turns the remember button off; no_scope (the Butler page) does not say memory is off", () => {
+  it("only disabled (memory off) turns the remember button off; no_scope (the Shipherd page) does not say memory is off", () => {
     expect(refusesMemory("disabled")).toBe(true);
     for (const r of ["no_scope", "written", "full", "failed", "busy", "no_conclusion"] as const) expect(refusesMemory(r), r).toBe(false);
   });
@@ -320,7 +320,7 @@ describe("latestOnly", () => {
 });
 
 describe("canRememberIn", () => {
-  it("only a feature's control page has something to remember under; the Butler page doesn't", () => {
+  it("only a feature's control page has something to remember under; the Shipherd page doesn't", () => {
     expect(canRememberIn({ featureId: 3 })).toBe(true);
     expect(canRememberIn({ all: true })).toBe(false);
   });

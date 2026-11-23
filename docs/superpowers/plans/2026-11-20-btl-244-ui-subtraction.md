@@ -29,7 +29,7 @@
 6. **复盘规矩页**
    - `lessons-view.ts`：加 `allPending(s)` 和 `scopeLabel(l, s)`，并写测试。
    - `LessonsPage`：默认的待确认列表加「高级」折叠。
-   - `butler-self-render` 测试相应调整。
+   - `shipherd-self-render` 测试相应调整。
 7. **e2e**
    - `fixtures.ts` 加 `openLessonsAdvanced`，各个 lessons、checks、baselines、config-io、backtest spec 调用它。
    - `home.spec` 改成默认没有未认领入口。

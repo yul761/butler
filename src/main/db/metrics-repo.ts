@@ -38,7 +38,7 @@ export interface DailyRow {
   day: string;
   groupKind: GroupKind;
   groupKey: string;
-  butler: boolean;
+  shipherd: boolean;
   metric: string;
   n: number;
   total: number;
@@ -63,7 +63,7 @@ interface SpanRow {
   id: number; session_id: string; ticket_key: string | null; kind: WaitKind; category: string | null; source: string | null;
   started_at: number; ended_at: number | null; last_seen_at: number;
 }
-interface DailyDbRow { day: string; group_kind: GroupKind; group_key: string; butler: number; metric: string; n: number; total: number }
+interface DailyDbRow { day: string; group_kind: GroupKind; group_key: string; shipherd: number; metric: string; n: number; total: number }
 interface BaselineRow {
   slug: string; number: number; opened_at: number; merged_at: number; first_commit_at: number | null;
   human_comments: number; copilot_comments: number; fetched_at: number;
@@ -87,7 +87,7 @@ const toSpan = (r: SpanRow): WaitSpan => ({
   startedAt: Number(r.started_at), endedAt: r.ended_at === null ? null : Number(r.ended_at), lastSeenAt: Number(r.last_seen_at),
 });
 const toDaily = (r: DailyDbRow): DailyRow => ({
-  day: r.day, groupKind: r.group_kind, groupKey: r.group_key, butler: Number(r.butler) === 1, metric: r.metric, n: Number(r.n), total: Number(r.total),
+  day: r.day, groupKind: r.group_kind, groupKey: r.group_key, shipherd: Number(r.shipherd) === 1, metric: r.metric, n: Number(r.n), total: Number(r.total),
 });
 const toBaseline = (r: BaselineRow): BaselinePr => ({
   slug: r.slug, number: Number(r.number), openedAt: Number(r.opened_at), mergedAt: Number(r.merged_at),
@@ -148,7 +148,7 @@ export class MetricsRepo {
     return (this.db.prepare(`SELECT * FROM metrics_wait_spans WHERE ended_at IS NULL ORDER BY id`).all() as unknown as SpanRow[]).map(toSpan);
   }
 
-  /** 启动时：上次没关的段按最后看到的时间关掉（Butler 没在跑的那段不算）。返回关了几个。 */
+  /** 启动时：上次没关的段按最后看到的时间关掉（Shipherd 没在跑的那段不算）。返回关了几个。 */
   closeStale(): number {
     return Number(this.db.prepare(`UPDATE metrics_wait_spans SET ended_at = last_seen_at WHERE ended_at IS NULL`).run().changes);
   }
@@ -165,10 +165,10 @@ export class MetricsRepo {
     withTransaction(this.db, () => {
       this.db.prepare(`DELETE FROM metrics_daily WHERE day >= ?`).run(fromDay);
       const ins = this.db.prepare(
-        `INSERT INTO metrics_daily (day, group_kind, group_key, butler, metric, n, total) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (day, group_kind, group_key, butler, metric) DO UPDATE SET n = n + excluded.n, total = total + excluded.total`,
+        `INSERT INTO metrics_daily (day, group_kind, group_key, shipherd, metric, n, total) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (day, group_kind, group_key, shipherd, metric) DO UPDATE SET n = n + excluded.n, total = total + excluded.total`,
       );
-      for (const r of rows) ins.run(r.day, r.groupKind, r.groupKey, r.butler ? 1 : 0, r.metric, r.n, r.total);
+      for (const r of rows) ins.run(r.day, r.groupKind, r.groupKey, r.shipherd ? 1 : 0, r.metric, r.n, r.total);
     });
   }
 

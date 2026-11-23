@@ -310,7 +310,7 @@ describe("BaselineService for lessons and checks", () => {
     await svc.scan("a/mono", { infer: false });
     const perFile = svc.suggestedChecks("a/mono").find((d) => d.input.params.stage === "edit" && String(d.input.params.command).startsWith("cd "));
     expect(perFile).toBeDefined();
-    expect(String(perFile!.input.params.command)).toContain('"$OLDPWD/$BUTLER_CHECK_FILE"');
+    expect(String(perFile!.input.params.command)).toContain('"$OLDPWD/$SHIPHERD_CHECK_FILE"');
   });
 });
 

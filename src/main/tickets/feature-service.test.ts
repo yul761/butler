@@ -12,7 +12,7 @@ import { TicketError, TicketService } from "./ticket-service";
 
 /** ~/Code/shop/{frontend,backend} 这样的布局。 */
 function shop() {
-  const code = tempDir("butler-code-");
+  const code = tempDir("shipherd-code-");
   const parent = join(code, "shop");
   const frontend = join(parent, "frontend");
   const backend = join(parent, "backend");
@@ -31,9 +31,9 @@ function setup() {
   const archived: string[] = [];
   let now = 1000;
   const clock = () => now;
-  const home = tempDir("butler-home-");
+  const home = tempDir("shipherd-home-");
   const featureService = new FeatureService({ features, tickets, now: clock, onTicketArchived: (k) => archived.push(k), homeDir: home });
-  const ticketService = new TicketService({ tickets, features, settings, now: clock, workspacesDir: tempDir("butler-ws-") });
+  const ticketService = new TicketService({ tickets, features, settings, now: clock, workspacesDir: tempDir("shipherd-ws-") });
   return { tickets, features, featureService, ticketService, archived, home, tick: (n: number) => (now = n) };
 }
 
@@ -53,7 +53,7 @@ describe("featureDirName", () => {
   });
 
   it("always stays inside the parent directory", () => {
-    const base = tempDir("butler-base-");
+    const base = tempDir("shipherd-base-");
     for (const name of ["../../etc", "a/b", "C:\\x", "..", ".", "", "   ", "a:b*c?", "CON", "x".repeat(200)]) {
       const dir = featureDirName(name);
       expect(dir, name).not.toMatch(/[/\\]/);
@@ -95,8 +95,8 @@ describe("FeatureService", () => {
     const tilde = await featureService.create({ name: "b", repoPaths: [s.frontend], workspaceDir: "~/features/b" });
     expect(tilde.workspaceDir).toBe(join(home, "features", "b"));
     expect(existsSync(tilde.workspaceDir)).toBe(true);
-    const real = tempDir("butler-real-");
-    const link = join(tempDir("butler-link-"), "ln");
+    const real = tempDir("shipherd-real-");
+    const link = join(tempDir("shipherd-link-"), "ln");
     symlinkSync(real, link);
     const linked = await featureService.create({ name: "c", repoPaths: [s.frontend], workspaceDir: join(link, "c") });
     expect(linked.workspaceDir).toBe(join(realpathSync(real), "c"));

@@ -6,7 +6,7 @@ Addendum: `docs/superpowers/specs/2026-11-20-btl-242-windows-perf-design.md`. Ev
 2. **Renderer long tasks + export**: `diag:renderer` (send) and `diag:export` / `diag:snapshot` (invoke) in `shared/ipc.ts`; preload; `renderer/src/diag.ts`; the HealthSettings button; zh and en strings; docs. Unit-test the export builder: no transcript content, and the log tail is capped.
 3. **Perf scenario**: add `/fake-work` to the fake `claude`, add `e2e/perf.spec.ts` (gated), and record the **before** numbers.
 4. **Invalidator + scopes**: `diag/invalidator.ts` (coalescing, max wait, union of scopes, turn flush), with tests. Then `notify(scope)` in `index.ts`, the activity monitor's `notify(kind)`, which skips output-only changes, and `notify("procs")` for memory samples.
-5. **Renderer state bus**: `state-bus.ts` (one listener, scope filter), with tests. Then `api.onStateChanged(cb, scopes?)` and `useStateRefetch(key, fetch, scopes?)`, and opt-ins in App and ButlerPage.
+5. **Renderer state bus**: `state-bus.ts` (one listener, scope filter), with tests. Then `api.onStateChanged(cb, scopes?)` and `useStateRefetch(key, fetch, scopes?)`, and opt-ins in App and ShipherdPage.
 6. **View cache + N+1**: `ViewCache` (generation, TTL, invalidation on writes), with tests; `SessionsRepo.listByTickets`; the `TurnService` input cache.
 7. **findTranscript cache**, with tests: hit, gone, then rescan; a miss is not cached.
 8. **Conv ingest**: rules only for touched turns, the rule memo, with tests. Pending turns must not be re-read on every ingest while the judge is paused.

@@ -12,8 +12,8 @@ if (!help.includes("--build-sea")) {
 if (process.argv.includes("--check-only")) process.exit(0);
 
 const outDir = "build/hook";
-const bundle = `${outDir}/butler-hook.cjs`;
-const exe = process.platform === "win32" ? `${outDir}/butler-hook.exe` : `${outDir}/butler-hook`;
+const bundle = `${outDir}/shipherd-hook.cjs`;
+const exe = process.platform === "win32" ? `${outDir}/shipherd-hook.exe` : `${outDir}/shipherd-hook`;
 mkdirSync(outDir, { recursive: true });
 
 await build({ entryPoints: ["hook/entry.ts"], bundle: true, platform: "node", format: "cjs", target: "node22", outfile: bundle });

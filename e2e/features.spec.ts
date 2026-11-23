@@ -54,10 +54,10 @@ async function newFeatureTicket(page: Page, key: string, repo: string): Promise<
 type McpServerConfig = { command: string; args: string[]; env: Record<string, string> };
 type ToolReply = { content: { text: string }[]; isError?: boolean };
 
-/** 按 mcp 配置启动 butler-sessions，像 claude 一样经 stdio 调用工具（from 是总控自己的 session id）。 */
+/** 按 mcp 配置启动 shipherd-sessions，像 claude 一样经 stdio 调用工具（from 是总控自己的 session id）。 */
 async function sessionsServer(server: McpServerConfig, from: string): Promise<{ call: (name: string, args?: object) => Promise<ToolReply>; close: () => void }> {
   const child = spawn(server.command, server.args, {
-    env: { ...server.env, BUTLER_SESSION: from, PATH: process.env.PATH ?? "" },
+    env: { ...server.env, SHIPHERD_SESSION: from, PATH: process.env.PATH ?? "" },
     stdio: ["pipe", "pipe", "inherit"],
   });
   const replies = createInterface({ input: child.stdout });
@@ -88,14 +88,14 @@ async function typeLine(page: Page, line: string): Promise<void> {
 
 /**
  * 设计文档 2026-10-26（feature）：选上一层目录建 feature（勾两个仓库）→ 在 feature 下建前端、后端两个 ticket，worktree 出现在工作区里
- * → feature 总控在工作区里打开 → 按 mcp 配置启动 butler-sessions，start_session 给前端 ticket 开子 session
+ * → feature 总控在工作区里打开 → 按 mcp 配置启动 shipherd-sessions，start_session 给前端 ticket 开子 session
  * → 子 session 退出后 handoff 报告 PR 已合并 → 前端 ticket 的 worktree 被自动清理。
  * end_session（计划 11 任务 11）：总控结束一个停下来在等输入的子 session，终端退出、session 还在列表里；正在跑命令的 session 被拒绝。
  */
 test("a feature over a parent directory: tickets' worktrees in its workspace, a coordinator, cleanup after merge", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   // end_session 要看活动：刷新调快，不用等 10 秒。
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const workspace = join(s.dir, "shop-features", "checkout");
   const feWorktree = join(workspace, "frontend-dms-1");
   const beWorktree = join(workspace, "backend-dms-2");
@@ -122,17 +122,17 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   await twisty.click();
   await expect(page.locator(".sidebar .feature-group .feature-tickets .ticket .key")).toHaveText(["DMS-1", "DMS-2"]);
 
-  // 3. feature 总控：在工作区里打开（worktree 都在里面，不需要 --add-dir），挂 feature 记忆和 feature 模式的 butler-sessions。
+  // 3. feature 总控：在工作区里打开（worktree 都在里面，不需要 --add-dir），挂 feature 记忆和 feature 模式的 shipherd-sessions。
   await page.locator(".sidebar .ticket.feature").click();
   await newCoordinator(page);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
-  await expect.poll(fakeLog).toContain(`mcp=butler-workspace,butler-feature,butler-sessions cwd=${workspace} adddirs= guide=`);
-  const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog())![1];
+  await expect.poll(fakeLog).toContain(`mcp=shipherd-workspace,shipherd-feature,shipherd-sessions cwd=${workspace} adddirs= guide=`);
+  const coordinatorId = /interactive new (\S+) mcp=shipherd-workspace,shipherd-feature,shipherd-sessions/.exec(fakeLog())![1];
 
-  // 4. 按配置启动 butler-sessions，像 claude 一样经 stdio 调用：给 DMS-1（只有一个仓库，不用指定 repo）开子 session。
-  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
-  const server = config.mcpServers["butler-sessions"];
-  expect(server.env.BUTLER_FEATURE).toBe("1");
+  // 4. 按配置启动 shipherd-sessions，像 claude 一样经 stdio 调用：给 DMS-1（只有一个仓库，不用指定 repo）开子 session。
+  const config = JSON.parse(readFileSync(join(s.shipherdHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
+  const server = config.mcpServers["shipherd-sessions"];
+  expect(server.env.SHIPHERD_FEATURE).toBe("1");
   const mcp = await sessionsServer(server, coordinatorId);
   let started: { sessionId: string; ticket: string; repo: string };
   try {
@@ -171,8 +171,8 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
   await openTab(page, S.lay.tabTickets);
   await expect(page.locator(".feature-page .ticket-table .group-row")).toHaveText([S.lay.groupHeader("Cart", 0, 1), S.lay.groupHeader("Payment", 0, 1), S.lay.groupHeader(S.lay.notInAFeature, 0, 1)]);
   await openTab(page, S.lay.tabControl);
-  // 子 session 是 DMS-1 的普通 session：在它的 worktree 里，挂 ticket 记忆和 feature 记忆，没有 butler-sessions。
-  await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=butler-memory,butler-workspace,butler-feature,butler-sessions cwd=${feWorktree} adddirs= guide=`);
+  // 子 session 是 DMS-1 的普通 session：在它的 worktree 里，挂 ticket 记忆和 feature 记忆，没有 shipherd-sessions。
+  await expect.poll(fakeLog).toContain(`interactive new ${started.sessionId} mcp=shipherd-memory,shipherd-workspace,shipherd-feature,shipherd-sessions cwd=${feWorktree} adddirs= guide=`);
 
   // 5. 在 DMS-1 的「终端」页签里看到子 session，等任务提交后用按钮旁的 × 结束它（点两次；这个仓库自己的终端在跑时不会清理）。
   await page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: "DMS-1" }).click();
@@ -208,7 +208,7 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
     const children = page.locator(".sessions-bar .session-wrap").filter({ has: page.locator(`[title="${S.spawnedByCoordinator}"]`) });
     await expect(children).toHaveCount(2);
     await expect(children.locator(".session .action")).toHaveText([S.open, S.open]);
-    // 已经结束的再结束一次：Butler 说它已经结束了。
+    // 已经结束的再结束一次：Shipherd 说它已经结束了。
     await expect.poll(async () => (await boss.call("end_session", { session: second.sessionId, reason: "again" })).content[0].text).toContain("已经结束");
 
     // 6. 更新状态（概况的「状态」一节，BTL-244）：假 claude 报告 PR 已合并 → worktree 被删掉（分支保留），仓库一行标着“已清理”。总控还开着也不拦。
@@ -258,19 +258,19 @@ test("a feature over a parent directory: tickets' worktrees in its workspace, a 
 
 /**
  * 设计文档 2026-10-28（feature 汇总）：DMS-1 在自己的 session 里 /handoff，留下一个带 PR 的 handoff；DMS-2 的 session 有新对话
- * → 总控里 /handoff 输出 butler-feature-handoff → feature 页显示汇总、卡住和下一步，来源是“总控 /handoff”
+ * → 总控里 /handoff 输出 shipherd-feature-handoff → feature 页显示汇总、卡住和下一步，来源是“总控 /handoff”
  * → 后台给有活动的 DMS-2 跑了 handoff（DMS-1 没有新活动，不跑），ticket 表里两个 ticket 都有 PR 标签
  * → “立即更新”生成新的汇总，来源变成“手动更新” → 切到英文后再更新一次，界面和汇总都是英文。
- * 设了 BUTLER_E2E_SHOTS_DIR 时把中英文的 feature 页各截一张图存到那里（CI 不设）。
+ * 设了 SHIPHERD_E2E_SHOTS_DIR 时把中英文的 feature 页各截一张图存到那里（CI 不设）。
  */
 /**
  * 工作流 W（按内存决定能开几个 session）：可用内存不够时 start_session 被拒，提示里写出现在可用多少、再开一个要多少、要留多少，
- * 不开终端；list_sessions 附的那一行说还能再开 0 个。可用内存用 BUTLER_E2E_AVAILABLE_MB 定死，不看这台机器。
+ * 不开终端；list_sessions 附的那一行说还能再开 0 个。可用内存用 SHIPHERD_E2E_AVAILABLE_MB 定死，不看这台机器。
  */
 test("start_session is refused when memory is short, with how much is available and needed", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   // 1000 MB：自动保留线最少 512 MB，加上预估的 1024 MB，在哪台机器上都不够。
-  s.env = { BUTLER_E2E_AVAILABLE_MB: "1000" };
+  s.env = { SHIPHERD_E2E_AVAILABLE_MB: "1000" };
   const feWorktree = join(s.dir, "shop-features", "checkout", "frontend-dms-1");
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const { page } = await launch(s);
@@ -279,10 +279,10 @@ test("start_session is refused when memory is short, with how much is available 
   await newFeatureTicket(page, "DMS-1", "frontend");
   await page.locator(".sidebar .ticket.feature").click();
   await newCoordinator(page);
-  await expect.poll(fakeLog).toContain("mcp=butler-workspace,butler-feature,butler-sessions");
-  const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog())![1];
-  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
-  const mcp = await sessionsServer(config.mcpServers["butler-sessions"], coordinatorId);
+  await expect.poll(fakeLog).toContain("mcp=shipherd-workspace,shipherd-feature,shipherd-sessions");
+  const coordinatorId = /interactive new (\S+) mcp=shipherd-workspace,shipherd-feature,shipherd-sessions/.exec(fakeLog())![1];
+  const config = JSON.parse(readFileSync(join(s.shipherdHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
+  const mcp = await sessionsServer(config.mcpServers["shipherd-sessions"], coordinatorId);
   try {
     const refused = await mcp.call("start_session", { ticket: "DMS-1", task: "build-the-cart" });
     expect(refused.isError).toBe(true);
@@ -309,7 +309,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   const sessionIn = (cwd: string) => new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(cwd)} `).exec(fakeLog())?.[1];
   // 只数 handoff 的 fork：需要你的判断（--model haiku）不算，transcript 有 fs.watch 以后它跑得早，什么时候跑不固定。
   const headlessLines = () => fakeLog().split("\n").filter((l) => / headless .*--json-schema/.test(l) && !/ --model haiku /.test(l));
-  const shots = process.env.BUTLER_E2E_SHOTS_DIR;
+  const shots = process.env.SHIPHERD_E2E_SHOTS_DIR;
   const { app, page } = await launch(s);
   await completeWizard(page, s);
 
@@ -320,7 +320,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   const ticketPage = (key: string) => page.locator(".sidebar .feature-tickets .ticket").filter({ hasText: key }).click();
   const featurePage = () => page.locator(".sidebar .ticket.feature").click();
 
-  // 1. DMS-1：在自己的 session 里 /handoff（ticket 的 butler-handoff 代码块，PR 还开着、已 approve）。
+  // 1. DMS-1：在自己的 session 里 /handoff（ticket 的 shipherd-handoff 代码块，PR 还开着、已 approve）。
   await ticketPage("DMS-1");
   await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
@@ -359,7 +359,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await expect(row("DMS-1")).toBeVisible();
   await expect(page.locator(".feature-page .page-tabs-bar").getByRole("button", { name: `+ ${S.newTicket}`, exact: true })).toBeVisible();
 
-  // 3. 总控里 /handoff：输出 butler-feature-handoff，存成 feature 汇总。
+  // 3. 总控里 /handoff：输出 shipherd-feature-handoff，存成 feature 汇总。
   await newCoordinator(page);
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const coordinatorId = sessionIn(workspace)!;
@@ -412,7 +412,7 @@ test("feature summary: the coordinator's /handoff, child tickets' handoffs and t
   await openTab(page, S.lay.tabControl);
   await expectTerminalsKeepHalf(page);
 
-  // 6. 切到英文（同 language.spec：不设 BUTLER_LANG 重启，在设置里选 English，窗口重新加载）后再更新一次。
+  // 6. 切到英文（同 language.spec：不设 SHIPHERD_LANG 重启，在设置里选 English，窗口重新加载）后再更新一次。
   await app.close();
   s.lang = null;
   const en = (await launch(s)).page;
@@ -455,7 +455,7 @@ test("the feature's control tab: reports on the right, the terminal keeps its ha
   const coordinatorId = new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(workspace)} `).exec(fakeLog())![1];
 
   const long = "很长的一段汇报，".repeat(40);
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   const [{ id: featureId }] = db.prepare("SELECT id FROM features WHERE name = 'checkout'").all() as { id: number }[];
   const insert = db.prepare("INSERT INTO inbox_items (kind, session_id, feature_id, text, context, report_kind, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
   const at = Date.now();
@@ -499,7 +499,7 @@ test("a coordinator's question is a turn card on the feature overview", async ({
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   const coordinatorId = new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(workspace)} `).exec(fakeLog())![1];
 
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   const [{ id: featureId }] = db.prepare("SELECT id FROM features WHERE name = 'checkout'").all() as { id: number }[];
   db.prepare("INSERT INTO inbox_items (kind, session_id, feature_id, text, context, report_kind, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     .run("decision", coordinatorId, featureId, "要不要先联调？", null, null, "pending", Date.now());
@@ -538,9 +538,9 @@ async function expectTerminalsKeepHalf(page: Page): Promise<void> {
   expect(m.bottom, JSON.stringify(m)).toBeLessThanOrEqual(m.window);
 }
 
-/** 直接读 Butler 的数据库（只读）：有些事界面上看不出来。 */
+/** 直接读 Shipherd 的数据库（只读）：有些事界面上看不出来。 */
 function dbRows<T>(s: Sandbox, sql: string, ...params: string[]): T[] {
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"), { readOnly: true });
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"), { readOnly: true });
   try {
     return db.prepare(sql).all(...params) as T[];
   } finally {
@@ -554,18 +554,18 @@ function dbRows<T>(s: Sandbox, sql: string, ...params: string[]): T[] {
  * → feature「概况」和首页各一张「卡住了」的卡片（写着理由），「全部 ticket」里那一行是卡住的颜色
  * → 首页卡片「没事，忽略」→ 卡片消失、恢复活动后再次卡住 → 卡片「开修复 session」落到「总控」，修复 session 收到四条规则，不算总控
  * → 从首页卡片「去看看」回到卡住的终端 → 重启后换成英文再卡住一次。
- * 设了 BUTLER_E2E_SHOTS_DIR 时截图存到那里，文件名 live-status-*.png（CI 不设）。
+ * 设了 SHIPHERD_E2E_SHOTS_DIR 时截图存到那里，文件名 live-status-*.png（CI 不设）。
  */
 test("live status and stuck handling on the feature page", async ({ makeSandbox, launch }) => {
   test.skip(process.platform === "win32", "Windows has no tasks directory or CPU reading in this version: only the command and duration show");
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_STUCK_CHECK_MS: String(STUCK_CHECK_MS) };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_STUCK_CHECK_MS: String(STUCK_CHECK_MS) };
   const workspace = join(s.dir, "shop-features", "checkout");
   const worktree = join(workspace, "frontend-dms-1");
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const sessionIn = (cwd: string) => new RegExp(`interactive new (\\S+) mcp=\\S* cwd=${escapeRe(cwd)} `).exec(fakeLog())?.[1];
   const judgePrompts = () => [...fakeLog().matchAll(/ judge prompt (.+)/g)].map((m) => JSON.parse(m[1]) as string);
-  const shots = process.env.BUTLER_E2E_SHOTS_DIR;
+  const shots = process.env.SHIPHERD_E2E_SHOTS_DIR;
   const shot = async (target: Page, name: string, colorScheme: "light" | "dark") => {
     if (!shots) return;
     mkdirSync(shots, { recursive: true });
@@ -705,7 +705,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
     const line = readFileSync(fixTranscript, "utf8").split("\n")[0];
     return (JSON.parse(line) as { message: { content: string } }).message.content;
   };
-  await expect.poll(firstMessage).toContain("Butler 开了这个 session 来解决一个卡住的 session。");
+  await expect.poll(firstMessage).toContain("Shipherd 开了这个 session 来解决一个卡住的 session。");
   const task = firstMessage();
   expect(task).toContain("1. 目标是让卡住的 session 能继续，不接手那个 ticket 的工作。");
   expect(task).toContain("2. 要杀进程时先问用户，用户确认后才杀。");
@@ -754,7 +754,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
   // 15. 卡住的 session 还在被监视时退出：监视先停，数据库才关，日志里没有错误。
   expect(pageErrors).toEqual([]);
   await app.close();
-  const log = () => readFileSync(join(s.butlerHome, "logs", "main.log"), "utf8");
+  const log = () => readFileSync(join(s.shipherdHome, "logs", "main.log"), "utf8");
   expect(log()).not.toMatch(/activity tick failed|activity of session|stuck judge/);
 
   // 16. 重启后是英文：卡住状态不留，DMS-2 新跑的命令重新判断，判断结果和界面都是英文。
@@ -790,7 +790,7 @@ test("live status and stuck handling on the feature page", async ({ makeSandbox,
  */
 test("live status: a background command stays on the row after its turn ends", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);
   await completeWizard(page, s);
   await createCheckoutFeature(page, s);
@@ -868,7 +868,7 @@ test("ending a waiting session with × clears the mark on the ticket and its fea
 test("archiving a feature: refused while a terminal is open, then archived with its tickets and restored", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const workspace = join(s.dir, "shop-features", "checkout");
-  const mcpFile = join(s.butlerHome, "mcp", "features", "1.json");
+  const mcpFile = join(s.shipherdHome, "mcp", "features", "1.json");
   const { page } = await launch(s);
   await completeWizard(page, s);
   await createCheckoutFeature(page, s);

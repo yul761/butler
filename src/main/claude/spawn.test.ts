@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { inboxDir } from "../../../hook/butler-hook";
+import { inboxDir } from "../../../hook/shipherd-hook";
 import { AUTO_COMPACT_WINDOW_DEFAULT, SUBAGENT_MODEL_DEFAULT, bypassProxyForLoopback, claudeArgs, cmdShimSafe, headlessEnv, sessionEnv, storedModel } from "./spawn";
 
 describe("claude spawn helpers", () => {
@@ -47,7 +47,7 @@ describe("claude spawn helpers", () => {
       { Path: "C:\\old", HOME: "/h", ELECTRON_RUN_AS_NODE: "1", CLAUDECODE: "1", EMPTY: undefined },
       { pathValue: "C:\\new", ticketKey: "PROJ-1", sessionId: "u1" },
     );
-    expect(env).toEqual({ Path: "C:\\new", HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor", BUTLER_TICKET: "PROJ-1", BUTLER_SESSION: "u1", CLAUDE_CODE_SUBAGENT_MODEL: "sonnet", CLAUDE_CODE_AUTO_COMPACT_WINDOW: "250000" });
+    expect(env).toEqual({ Path: "C:\\new", HOME: "/h", TERM: "xterm-256color", COLORTERM: "truecolor", SHIPHERD_TICKET: "PROJ-1", SHIPHERD_SESSION: "u1", CLAUDE_CODE_SUBAGENT_MODEL: "sonnet", CLAUDE_CODE_AUTO_COMPACT_WINDOW: "250000" });
   });
 
   it("drops the parent Claude Code session's markers but keeps user configuration", () => {
@@ -78,21 +78,21 @@ describe("claude spawn helpers", () => {
 
   it("builds a headless env: no ticket, a headless session marker, parent markers dropped", () => {
     const env = headlessEnv(
-      { PATH: "/usr/bin", BUTLER_TICKET: "OLD-1", BUTLER_SESSION: "x", CLAUDECODE: "1", ELECTRON_RUN_AS_NODE: "1", HOME: "/h" },
+      { PATH: "/usr/bin", SHIPHERD_TICKET: "OLD-1", SHIPHERD_SESSION: "x", CLAUDECODE: "1", ELECTRON_RUN_AS_NODE: "1", HOME: "/h" },
       { pathValue: "/login/bin", runId: "r1" },
     );
-    expect(env).toEqual({ PATH: "/login/bin", HOME: "/h", BUTLER_SESSION: "headless:r1" });
+    expect(env).toEqual({ PATH: "/login/bin", HOME: "/h", SHIPHERD_SESSION: "headless:r1" });
   });
 
-  it("turns a relative BUTLER_HOME / CLAUDE_CONFIG_DIR into an absolute path for every child", () => {
-    const base = { PATH: "/usr/bin", BUTLER_HOME: "rel/b", CLAUDE_CONFIG_DIR: "rel/c" };
+  it("turns a relative SHIPHERD_HOME / CLAUDE_CONFIG_DIR into an absolute path for every child", () => {
+    const base = { PATH: "/usr/bin", SHIPHERD_HOME: "rel/b", CLAUDE_CONFIG_DIR: "rel/c" };
     const s = sessionEnv(base, { pathValue: "", ticketKey: "T-1", sessionId: "u" });
     const h = headlessEnv(base, { pathValue: "", runId: "r" });
     for (const e of [s, h]) {
-      expect(e.BUTLER_HOME).toBe(resolve("rel/b"));
+      expect(e.SHIPHERD_HOME).toBe(resolve("rel/b"));
       expect(e.CLAUDE_CONFIG_DIR).toBe(resolve("rel/c"));
     }
-    expect("BUTLER_HOME" in headlessEnv({ PATH: "/usr/bin" }, { pathValue: "", runId: "r" })).toBe(false);
+    expect("SHIPHERD_HOME" in headlessEnv({ PATH: "/usr/bin" }, { pathValue: "", runId: "r" })).toBe(false);
   });
 });
 
@@ -109,26 +109,26 @@ describe("storedModel", () => {
 
 describe("cmdShimSafe", () => {
   it("accepts anything when no cmd.exe is involved", () => {
-    expect(cmdShimSafe("/usr/local/bin/claude", "/Users/John Smith/.butler/mcp/A-1.json", "darwin")).toBe(true);
+    expect(cmdShimSafe("/usr/local/bin/claude", "/Users/John Smith/.shipherd/mcp/A-1.json", "darwin")).toBe(true);
     expect(cmdShimSafe("C:\\bin\\claude.exe", "C:\\Users\\John Smith\\x.json", "win32")).toBe(true);
   });
 
   it("rejects spaces, quotes and cmd metacharacters for a .cmd shim on Windows", () => {
-    expect(cmdShimSafe("C:\\npm\\claude.cmd", "C:\\Users\\john\\.butler\\mcp\\A-1.json", "win32")).toBe(true);
+    expect(cmdShimSafe("C:\\npm\\claude.cmd", "C:\\Users\\john\\.shipherd\\mcp\\A-1.json", "win32")).toBe(true);
     for (const bad of ["C:\\Users\\John Smith\\x.json", 'C:\\a"b.json', "C:\\a&b.json", "C:\\a%b.json", "C:\\a^b.json", "C:\\a(b).json"]) {
       expect(cmdShimSafe("C:\\npm\\claude.cmd", bad, "win32"), bad).toBe(false);
     }
   });
 });
 
-describe("BUTLER_HOME agreement between spawn env and the hook", () => {
+describe("SHIPHERD_HOME agreement between spawn env and the hook", () => {
   it("resolves ~/x and the equivalent absolute path to the same inbox", () => {
     const x = { pathValue: "", ticketKey: "t", sessionId: "s" };
     for (const home of ["~/x", join(homedir(), "x")]) {
-      const env = sessionEnv({ BUTLER_HOME: home }, x);
-      expect(env.BUTLER_HOME).toBe(join(homedir(), "x"));
+      const env = sessionEnv({ SHIPHERD_HOME: home }, x);
+      expect(env.SHIPHERD_HOME).toBe(join(homedir(), "x"));
       expect(inboxDir(env)).toBe(join(homedir(), "x", "inbox"));
-      expect(inboxDir({ BUTLER_HOME: home })).toBe(inboxDir(env));
+      expect(inboxDir({ SHIPHERD_HOME: home })).toBe(inboxDir(env));
     }
   });
 });

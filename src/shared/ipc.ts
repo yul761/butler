@@ -22,9 +22,9 @@ export const IPC = {
   featuresArchived: "features:archived",
   featuresUnarchive: "features:unarchive",
   featuresOpenSession: "features:openSession",
-  /** Butler 总控（BTL-190 第 5 点）。 */
-  butlerView: "butler:view",
-  butlerOpenSession: "butler:openSession",
+  /** Shipherd 总控（BTL-190 第 5 点）。 */
+  shipherdView: "shipherd:view",
+  shipherdOpenSession: "shipherd:openSession",
   reposScan: "repos:scan",
   ticketsRecheckCleanup: "tickets:recheckCleanup",
   sessionsOpen: "sessions:open",
@@ -218,7 +218,7 @@ export const IPC = {
   intakeAct: "intake:act",
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metricsView: "metrics:view",
-  /** 信箱（BTL-245）：Butler 总控的或一个 feature 的消息（MessageScope），状态已排队 / 已送达 / 已回复。 */
+  /** 信箱（BTL-245）：Shipherd 总控的或一个 feature 的消息（MessageScope），状态已排队 / 已送达 / 已回复。 */
   messagesList: "messages:list",
   memoryView: "memory:view",
   memoryWhy: "memory:why",
@@ -263,7 +263,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.reposScan, IPC.ticketsRecheckCleanup,
-  IPC.butlerView, IPC.butlerOpenSession, IPC.messagesList, IPC.metricsView,
+  IPC.shipherdView, IPC.shipherdOpenSession, IPC.messagesList, IPC.metricsView,
   IPC.sessionsOpen, IPC.sessionsUnclaimed, IPC.sessionsClaim, IPC.sessionsDismiss, IPC.sessionsHide, IPC.sessionsUnhide, IPC.sessionsRefresh, IPC.sessionsCloseIdle, IPC.sessionsDeleteHidden, IPC.sessionsPin, IPC.sessionsWake, IPC.sessionOpenFix, IPC.activityDismiss, IPC.usageSummary,
   IPC.ptySnapshot, IPC.ptySince, IPC.ptyKill, IPC.healthGet, IPC.healthInstallHooks, IPC.healthUninstallHooks, IPC.dialogPickDir,
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.linkOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,

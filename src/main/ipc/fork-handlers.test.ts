@@ -61,7 +61,7 @@ describe("fork IPC handlers (UI redesign layer 5)", () => {
     for (const f of [fork.ask, fork.reaskFull, fork.list, fork.sendConclusion, fork.remember, devSend.send]) expect(f).not.toHaveBeenCalled();
   });
 
-  it("waits for the startup health check before anything that runs claude: right after launch the claude path and butler-hook are not known yet", async () => {
+  it("waits for the startup health check before anything that runs claude: right after launch the claude path and shipherd-hook are not known yet", async () => {
     let done!: () => void;
     const ready = new Promise<void>((r) => (done = r));
     const { h, fork, devSend } = setup(() => ready);

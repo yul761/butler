@@ -33,10 +33,10 @@ export interface LessonRunnerDeps {
   jobs: JobsRepo;
   gh: { mergedPrs: typeof mergedPrs; prLessonDataDetail: typeof prLessonDataDetail; compareFiles: typeof compareFiles; available: () => boolean };
   headless: HeadlessExecDeps;
-  /** PR 分支 → Butler 的 ticket：在所有 ticket_repos（包括归档的）里找 branch 相同、slugOf(repo_path) 相同的那一行。 */
+  /** PR 分支 → Shipherd 的 ticket：在所有 ticket_repos（包括归档的）里找 branch 相同、slugOf(repo_path) 相同的那一行。 */
   ticketForBranch: (slug: string, branch: string) => string | null;
   /** wantTranscripts 为 false 时不用读对话记录（没有评论指到文件，摘录一定为空）。 */
-  butlerContext: (ticketKey: string, wantTranscripts: boolean) => Promise<{ decisions: string[]; learnings: string[]; transcripts: string[][] }>;
+  shipherdContext: (ticketKey: string, wantTranscripts: boolean) => Promise<{ decisions: string[]; learnings: string[]; transcripts: string[][] }>;
   lang: () => Lang;
   now: () => number;
   notify: () => void;
@@ -220,7 +220,7 @@ export class LessonRunner {
   async backfill(slug: string): Promise<{ ok: true; enqueued: number; prs: number[] } | { ok: false; reason: "no_gh" | "gh_failed" | "unknown_repo" }> {
     if (!this.d.gh.available()) return { ok: false, reason: "no_gh" };
     const row = this.d.repo.repo(slug);
-    // 本地路径为空 = 导入来的、这台机器上没有克隆：没有仓库就没法在里面跑 gh（cwd 为空会落到 Butler 自己的目录）。
+    // 本地路径为空 = 导入来的、这台机器上没有克隆：没有仓库就没法在里面跑 gh（cwd 为空会落到 Shipherd 自己的目录）。
     if (!row || !isCloned(row)) return { ok: false, reason: "unknown_repo" };
     const prs = await this.d.gh.mergedPrs(row.localPath, null, BACKFILL_LIMIT, LESSON_GH_TIMEOUT_MS);
     if (prs === null) return { ok: false, reason: "gh_failed" };
@@ -237,7 +237,7 @@ export class LessonRunner {
   }
 
   /**
-   * PR 监视看到 Butler 跟踪的 PR 合并时调用。repoPath 是这个 PR 所在的 ticket 仓库（不是 ticket 仓库的 PR 为 null）。
+   * PR 监视看到 Shipherd 跟踪的 PR 合并时调用。repoPath 是这个 PR 所在的 ticket 仓库（不是 ticket 仓库的 PR 为 null）。
    * 认得出仓库的按仓库登记、排队；否则用 PR 的 slug，但只排已经登记过的仓库（没有本地仓库没法分析）。
    */
   merged(t: { repoPath: string | null; slug: string }, prNumber: number): void {
@@ -470,10 +470,10 @@ export class LessonRunner {
       }
     }
 
-    let butler: Material["butler"] = null;
+    let shipherd: Material["shipherd"] = null;
     const ticketKey = this.d.ticketForBranch(item.slug, pr.headRefName);
     if (ticketKey !== null) {
-      const ctx = await this.d.butlerContext(ticketKey, paths.length > 0);
+      const ctx = await this.d.shipherdContext(ticketKey, paths.length > 0);
       const excerpts: string[] = [];
       let left = EXCERPT_MAX_CHARS;
       for (const t of ctx.transcripts) {
@@ -482,13 +482,13 @@ export class LessonRunner {
         excerpts.push(...got);
         left -= got.reduce((n, s) => n + s.length, 0);
       }
-      butler = { ticketKey, decisions: ctx.decisions, learnings: ctx.learnings, excerpts };
+      shipherd = { ticketKey, decisions: ctx.decisions, learnings: ctx.learnings, excerpts };
     }
 
     const products = repo.products().filter((p) => p.slugs.includes(item.slug));
     const productIds = new Set(products.map((p) => p.id));
     const existing = repo.lessons().filter((l) => (l.scope.kind === "repo" ? l.scope.slug === item.slug : productIds.has(l.scope.productId)));
-    const prompt = analysisPrompt(this.d.lang(), item.slug, { pr, items, fixes, fixesNote, butler }, existing, products);
+    const prompt = analysisPrompt(this.d.lang(), item.slug, { pr, items, fixes, fixesNote, shipherd }, existing, products);
     a.ctx.material = prompt;
 
     // 取消可能发生在拉 gh 数据、读对话记录的时候：起进程前再看一次。

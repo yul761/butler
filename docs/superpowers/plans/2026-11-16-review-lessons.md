@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal：** 从已合并 PR 的 review 里提炼"开发时本来能避免"的规矩，经用户确认后，自动写进 Butler 打开的 ticket session 和修复 session 的说明里。左侧菜单新加「review 经验」页，在那里管理仓库、产品和规矩。
+**Goal：** 从已合并 PR 的 review 里提炼"开发时本来能避免"的规矩，经用户确认后，自动写进 Shipherd 打开的 ticket session 和修复 session 的说明里。左侧菜单新加「review 经验」页，在那里管理仓库、产品和规矩。
 
 **Architecture：**
 - **仓库身份：** 仓库用 git remote `origin` 解析出的 slug 认（`owner/name`；不是 github.com 的写成 `host/owner/name`）。
@@ -15,10 +15,10 @@
 
 ## Global Constraints
 
-- **规矩只存在 Butler 里**（用户 2026-11-16 定的）。不写进仓库的 `CLAUDE.md`、`.github/copilot-instructions.md`，也不做导出按钮。不给不是 Butler 开的 session 送规矩，不做统计和趋势图。
+- **规矩只存在 Shipherd 里**（用户 2026-11-16 定的）。不写进仓库的 `CLAUDE.md`、`.github/copilot-instructions.md`，也不做导出按钮。不给不是 Shipherd 开的 session 送规矩，不做统计和趋势图。
 - **没经用户确认的规矩不能送进任何 session。** 只有 `status = 'confirmed'` 的才送。待确认、停用、驳回的都不送。
 - **每个 session 最多 30 条规矩**（`MAX_SESSION_LESSONS = 30`），不管涉及几个仓库、几个产品。排序：出现次数降序，再按最后出现时间降序，再按 id 升序。
-- **只给 ticket session 和修复 session 送**（`GuideKind === "ticket"`）。ticket 总控、feature 总控、epic、Butler 总控都不送。
+- **只给 ticket session 和修复 session 送**（`GuideKind === "ticket"`）。ticket 总控、feature 总控、epic、Shipherd 总控都不送。
 - **生效时机：** 规矩改了，对已经开着的 session 不生效，下一次打开或恢复时才生效。换新（`/clear`）不重新读规矩。
 - **界面字符串成对加：** `src/renderer/src/strings.ts`（ZH）和 `strings-en.ts`（EN）；main 进程的字符串加在 `src/main/strings.ts` 的 ZH 和 EN 两边。`strings.test.ts` 会检查两边的键。
 - **README 成对更新：** README.md 和 README.zh-CN.md 一起改。
@@ -293,8 +293,8 @@ CREATE INDEX lesson_queue_status ON lesson_queue(status, enqueued_at);
   export interface Material {
     pr: PrLessonData; items: ReviewItem[];
     /** 评论指到的那几个文件在修改之后的 patch，每个最多 4000 字。 */ fixes: { filename: string; patch: string }[];
-    /** Butler 做的 PR：handoff 里的 decisions 和 learnings，以及对话记录摘录；不是 Butler 做的为 null。 */
-    butler: { ticketKey: string; decisions: string[]; learnings: string[]; excerpts: string[] } | null;
+    /** Shipherd 做的 PR：handoff 里的 decisions 和 learnings，以及对话记录摘录；不是 Shipherd 做的为 null。 */
+    shipherd: { ticketKey: string; decisions: string[]; learnings: string[]; excerpts: string[] } | null;
   }
   export const MATERIAL_MAX_CHARS = 60_000;
   /** 拼成 prompt 里的素材一节；超过 MATERIAL_MAX_CHARS 时依次截掉 excerpts、fixes 和 items 的正文（每条最多 1500 字）。 */
@@ -397,9 +397,9 @@ prompt 的要点（措辞留给实现的人，这些内容必须有）：
     repo: LessonsRepo; identity: RepoIdentity; jobs: JobsRepo;
     gh: { mergedPrs: typeof mergedPrs; prLessonData: typeof prLessonData; compareFiles: typeof compareFiles; available: () => boolean };
     headless: HeadlessExecDeps;
-    /** PR 分支 → Butler 的 ticket：在所有 ticket_repos（包括归档的）里找 branch 相同、slugOf(repo_path) 相同的那一行。 */
+    /** PR 分支 → Shipherd 的 ticket：在所有 ticket_repos（包括归档的）里找 branch 相同、slugOf(repo_path) 相同的那一行。 */
     ticketForBranch: (slug: string, branch: string) => string | null;
-    butlerContext: (ticketKey: string) => { decisions: string[]; learnings: string[]; transcripts: string[][] };
+    shipherdContext: (ticketKey: string) => { decisions: string[]; learnings: string[]; transcripts: string[][] };
     lang: () => Lang; now: () => number; notify: () => void; log?: (msg: string, e?: unknown) => void;
   }
   export class LessonRunner {
@@ -408,7 +408,7 @@ prompt 的要点（措辞留给实现的人，这些内容必须有）：
     start(): void;
     /** 页面的「分析历史」。没有 gh、解析不出 slug 时返回原因，不排队。 */
     backfill(slug: string): Promise<{ ok: true; enqueued: number } | { ok: false; reason: "no_gh" | "gh_failed" | "unknown_repo" }>;
-    /** PR 监视看到 Butler 跟踪的 PR 合并时调用。 */
+    /** PR 监视看到 Shipherd 跟踪的 PR 合并时调用。 */
     merged(repoPath: string, prNumber: number): void;
     /** checkSchedule 每次调；今天已经跑过就什么都不做。 */
     daily(): Promise<void>;
@@ -422,7 +422,7 @@ prompt 的要点（措辞留给实现的人，这些内容必须有）：
 1. 用 `repo(slug).localPath` 做 cwd 调 `prLessonData`。返回 null 时 `finish(failed, "gh")`。
 2. `reviewItems` 为空时 `finish(skipped)`，不调 claude。
 3. `fixRange` 有值时调 `compareFiles`，只留评论指到的那几个文件。这一步失败就当没有 fixes，不算失败。
-4. `ticketForBranch` 找到 ticket 时，用 `butlerContext` 填 `Material.butler`。`transcriptExcerpts` 的上限是 20_000 字。
+4. `ticketForBranch` 找到 ticket 时，用 `shipherdContext` 填 `Material.shipherd`。`transcriptExcerpts` 的上限是 20_000 字。
 5. 调 `execHeadlessJson`，label 是 `lessons`，参数是 `headlessArgs({ schema: toCliJsonSchema(AnalysisSchema), allowedTools: [] })`。结果按 reason 处理：
    - `rate_limited`：`defer(now + RATE_LIMIT_PAUSE_MS)`，并且在这个时间之前整个 runner 都不再 take。
    - `aborted`：`defer(now)`，回到队列。
@@ -452,7 +452,7 @@ prompt 的要点（措辞留给实现的人，这些内容必须有）：
   - **rate_limited：** 那一项回到 queued，`not_before` 是 now+10 分钟；在这之前 `pump` 不 take 任何一项。
   - **重启：** 把一项手动设成 running，新建一个 runner 调 `start()`，它被重新处理。
   - **结果写进去：** 假 claude 返回一条新规矩 → 一条 pending。`notify` 被调用。
-  - **Butler 的 PR：** `ticketForBranch` 返回 `"BTL-1"` 时，`run` 收到的 prompt 里有 `butlerContext` 给的 decision 原文。
+  - **Shipherd 的 PR：** `ticketForBranch` 返回 `"BTL-1"` 时，`run` 收到的 prompt 里有 `shipherdContext` 给的 decision 原文。
   - **backfill：** 没有 gh 时返回 `{ ok: false, reason: "no_gh" }`；`mergedPrs` 返回 null 时返回 `"gh_failed"`；成功时 `enqueued` 等于 PR 数，`backfilledAt` 有值，cursor 是最大的 mergedAt。
   - **daily：** 同一天调两次，`mergedPrs` 只调一次；没分析过历史的仓库不拉；第二天会再拉，并且带上 cursor。
   - **merged：** `slugOf` 为 null 时不排队；不为 null 时排一项，origin 是 `merged`。
@@ -461,7 +461,7 @@ prompt 的要点（措辞留给实现的人，这些内容必须有）：
 - [ ] **Step 3: 实现，并在 index.ts 接线。**
   - `headless` 是 `{ ...judgeDeps }`，用默认的 `HEADLESS_TIMEOUT_MS`。
   - `gh.available` 用 `() => ghBinary() !== null`。
-  - `ticketForBranch` 和 `butlerContext` 在 index.ts 里用现有的 repo 写成小函数：`TicketsRepo` 列所有 ticket_repos，包括归档的。没有现成方法时，在 `TicketsRepo` 加 `reposByBranch(branch): TicketRepo[]`。`butlerContext` 读最近 20 份 handoff 的 `decisions[].statement` 和 `learnings`，再读这个 ticket 每个 session 的 `chainOf` 里每段的 JSONL。
+  - `ticketForBranch` 和 `shipherdContext` 在 index.ts 里用现有的 repo 写成小函数：`TicketsRepo` 列所有 ticket_repos，包括归档的。没有现成方法时，在 `TicketsRepo` 加 `reposByBranch(branch): TicketRepo[]`。`shipherdContext` 读最近 20 份 handoff 的 `decisions[].statement` 和 `learnings`，再读这个 ticket 每个 session 的 `chainOf` 里每段的 JSONL。
   - `checkSchedule` 里加 `void lessonRunner.daily()`。
   - `healthReady` 之后调 `lessonRunner.start()`。
   - `PrWatcher` 的 `onMerged` 接到 `(t, n) => lessonRunner.merged(t.repoPath, n)`。
@@ -559,7 +559,7 @@ guidePath: (kind, repoPaths) =>
   ```ts
   export interface LessonsServiceDeps {
     repo: LessonsRepo; identity: RepoIdentity; runner: Pick<LessonRunner, "backfill">;
-    /** Butler 知道的所有仓库根路径（ticket_repos、feature_repos、epic_repos 的 repo_path 去重）。 */
+    /** Shipherd 知道的所有仓库根路径（ticket_repos、feature_repos、epic_repos 的 repo_path 去重）。 */
     knownRepoPaths: () => string[];
     /** 每个 ticket 和每个 feature 的仓库根路径，一组一个数组，给归组建议用。 */
     repoGroups: () => string[][];
@@ -668,7 +668,7 @@ guidePath: (kind, repoPaths) =>
 
 要加的字符串（ZH / EN 都加，下面列中文）：
 - `lessons`：「review 经验」
-- `lessonsIntro`：一句话说明规矩从哪来、确认后会送进 Butler 开的 ticket 和修复 session
+- `lessonsIntro`：一句话说明规矩从哪来、确认后会送进 Shipherd 开的 ticket 和修复 session
 - `lessonsPendingTitle`、`lessonsConfirmedTitle`
 - `lessonsBackfill`：「分析历史」
 - `lessonsLastAnalyzed(t)`、`lessonsNever`、`lessonsCounts(analyzed, queued, failed)`、`lessonsNoGh`、`lessonsNoRemote`、`lessonsNotGit`、`lessonsOverflow(n)`
@@ -712,9 +712,9 @@ guidePath: (kind, repoPaths) =>
     - 文件头的说明里各补一行。
   - **README（两份都改）：**
     - 「功能」一节加一小段「review 经验」：规矩从哪来、怎么确认、会送进哪些 session、最多 30 条、改了以后下次打开 session 才生效。
-    - 「隐私模型」一节补一句：review 经验的分析会把 PR 的评论、相关代码改动，以及 Butler 的 handoff 和对话记录摘录交给你自己的 `claude`，不经过个人 LLM API。
+    - 「隐私模型」一节补一句：review 经验的分析会把 PR 的评论、相关代码改动，以及 Shipherd 的 handoff 和对话记录摘录交给你自己的 `claude`，不经过个人 LLM API。
     - 「数据存放位置」里 app.db 那一行，提到规矩也存在这里。
-    - 写明规矩只存在 Butler 里，不会写进仓库。
+    - 写明规矩只存在 Shipherd 里，不会写进仓库。
 - [ ] **Step 4:** 再跑上面的 e2e，预期 PASS。
 - [ ] **Step 5: 全量验证。** `pnpm -s typecheck && pnpm -s lint && npx vitest run` 全部通过，`npx playwright test` 全部通过。
 - [ ] **Step 6: 提交** `feat(lessons): e2e and README`。push 分支，开 PR。

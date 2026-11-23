@@ -4,7 +4,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
 import {
   auditRetentionDays, isLoopbackHost, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTicketPattern, parseTime, parseToolList,
-  parseWorkingDays, butlerPatrolTime, idleCloseMinutes, sessionAdmission, refreshThreshold, scheduleConfig, SettingError, trackerTools,
+  parseWorkingDays, shipherdPatrolTime, idleCloseMinutes, sessionAdmission, refreshThreshold, scheduleConfig, SettingError, trackerTools,
   hibernateEndWatchersOn, hibernateMinutes, hibernateOn, memoryPressureFreePercent, memoryPressureOn, sharedMcpOn,
 } from "./settings-values";
 
@@ -174,18 +174,18 @@ describe("idle close minutes (BTL-190)", () => {
   });
 });
 
-describe("Butler 总控 daily patrol time (BTL-190 5)", () => {
+describe("Shipherd 总控 daily patrol time (BTL-190 5)", () => {
   it("is off by default; empty means off and a time is stored as HH:MM", () => {
     const s = new SettingsRepo(memDb());
-    expect(butlerPatrolTime(s)).toBeNull();
-    expect(normalizeSetting("butlerPatrolTime", "  ")).toBe("");
-    expect(normalizeSetting("butlerPatrolTime", "9:05")).toBe("09:05");
-    for (const bad of ["25:00", "9", "x"]) expect(() => normalizeSetting("butlerPatrolTime", bad), bad).toThrow(SettingError);
-    s.set("butlerPatrolTime", "09:30");
-    expect(butlerPatrolTime(s)).toEqual({ h: 9, m: 30 });
+    expect(shipherdPatrolTime(s)).toBeNull();
+    expect(normalizeSetting("shipherdPatrolTime", "  ")).toBe("");
+    expect(normalizeSetting("shipherdPatrolTime", "9:05")).toBe("09:05");
+    for (const bad of ["25:00", "9", "x"]) expect(() => normalizeSetting("shipherdPatrolTime", bad), bad).toThrow(SettingError);
+    s.set("shipherdPatrolTime", "09:30");
+    expect(shipherdPatrolTime(s)).toEqual({ h: 9, m: 30 });
     // 存坏了当作关，不猜一个时间。
-    s.set("butlerPatrolTime", "garbage");
-    expect(butlerPatrolTime(s)).toBeNull();
+    s.set("shipherdPatrolTime", "garbage");
+    expect(shipherdPatrolTime(s)).toBeNull();
   });
 });
 

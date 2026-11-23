@@ -58,7 +58,7 @@ describe("open-source docs (design 12)", () => {
     const required = (zh: boolean) => [
       "SmartScreen",
       zh ? "macOS 版用 Developer ID 签名并通过 Apple 公证，双击即可打开" : "The macOS build is signed with Developer ID and notarized by Apple, so it opens with a double-click",
-      "~/.butler",
+      "~/.shipherd",
       "StateCore",
       zh ? "docs/configuration.zh-CN.md" : "docs/configuration.md",
       zh ? "CONTRIBUTING.zh-CN.md" : "CONTRIBUTING.md",
@@ -71,7 +71,7 @@ describe("open-source docs (design 12)", () => {
     }
   });
 
-  it("says what Butler is on the README's first screen, above everything but the quick start", () => {
+  it("says what Shipherd is on the README's first screen, above everything but the quick start", () => {
     const cases = [
       { doc: "README.md", line: "Talk to one coordinator. It runs your Claude Code sessions and only pings you when it's your turn.", gif: "docs/media/demo.gif", docs: ["docs/how-it-works.md", "docs/compare.md", "docs/configuration.md"] },
       { doc: "README.zh-CN.md", line: "和一个总控对话。它替你管好各个 Claude Code session，只在轮到你的时候叫你。", gif: "docs/media/demo.zh-CN.gif", docs: ["docs/how-it-works.zh-CN.md", "docs/compare.zh-CN.md", "docs/configuration.zh-CN.md"] },
@@ -80,7 +80,7 @@ describe("open-source docs (design 12)", () => {
       const text = read(c.doc);
       // 首屏：第一个不是「快速开始」的二级标题之前。
       const firstScreen = text.slice(0, text.search(/^## (?!Quick start|快速开始)/m));
-      for (const s of [c.line, `](${c.gif})`, "https://github.com/yul761/butler/releases/latest", "MIT", ...c.docs.map((d) => `](${d})`)]) {
+      for (const s of [c.line, `](${c.gif})`, "https://github.com/yul761/shipherd/releases/latest", "MIT", ...c.docs.map((d) => `](${d})`)]) {
         expect(firstScreen, `${c.doc}: ${s}`).toContain(s);
       }
       expect(text, c.doc).not.toMatch(/^## (New in|.*新增)/m);
@@ -110,8 +110,8 @@ describe("open-source docs (design 12)", () => {
   });
 
   it("slugs headings the way GitHub does", () => {
-    const md = ["# Butler", "## Privacy model", "## 记忆（StateCore）(Memory)", "## `code` & more!", "```sh", "# not a heading", "```", "## Privacy model"].join("\n");
-    expect(headingAnchors(md)).toEqual(["butler", "privacy-model", "记忆statecorememory", "code--more", "privacy-model-1"]);
+    const md = ["# Shipherd", "## Privacy model", "## 记忆（StateCore）(Memory)", "## `code` & more!", "```sh", "# not a heading", "```", "## Privacy model"].join("\n");
+    expect(headingAnchors(md)).toEqual(["shipherd", "privacy-model", "记忆statecorememory", "code--more", "privacy-model-1"]);
   });
 
   it("only links to files and headings that exist", () => {

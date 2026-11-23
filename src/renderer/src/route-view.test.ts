@@ -20,7 +20,7 @@ describe("routeGone", () => {
   });
 
   it("never sends the user away from a page that has no target", () => {
-    for (const page of ["home", "unclaimed", "archived", "settings", "audit", "effect", "all", "lessons", "butler"] as const) {
+    for (const page of ["home", "unclaimed", "archived", "settings", "audit", "effect", "all", "lessons", "shipherd"] as const) {
       expect(routeGone({ page }, [], [])).toBe(false);
     }
   });

@@ -13,7 +13,7 @@ export interface StopEvent {
   transcriptPath: string;
 }
 
-/** Stop 事件里的 session 和 transcript 路径；Butler 自己的 headless 运行不算。 */
+/** Stop 事件里的 session 和 transcript 路径；Shipherd 自己的 headless 运行不算。 */
 export function stopFromEnvelope(env: HookEnvelope): StopEvent | null {
   if (isHeadlessEnvelope(env)) return null;
   const p = (env.payload && typeof env.payload === "object" ? env.payload : {}) as Record<string, unknown>;
@@ -30,7 +30,7 @@ export interface CaptureDeps {
   ingestFeature: (input: FeatureIngestInput) => FeatureIngestResult;
   /**
    * feature 总控的 /handoff 之后，给这个 feature 下有活动的 ticket 各跑一次 handoff（后台，capture 不等它）。
-   * handoffId 是这次存下的汇总；没存下（代码块类型不对、没有代码块）时为 null，这时 Butler 从 sessionId
+   * handoffId 是这次存下的汇总；没存下（代码块类型不对、没有代码块）时为 null，这时 Shipherd 从 sessionId
    * 这个 session fork 出来自己生成汇总（见 FeatureSummaryRunner.runFromCommand、featureCommandFollowup）。
    */
   afterFeatureCommand: (featureId: number, handoffId: number | null, sessionId: string) => void;
@@ -38,7 +38,7 @@ export interface CaptureDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** feature 总控里 /handoff 的结果：wrong_block 是总控输出了 ticket 的 butler-handoff 代码块（不存，记日志）。 */
+/** feature 总控里 /handoff 的结果：wrong_block 是总控输出了 ticket 的 shipherd-handoff 代码块（不存，记日志）。 */
 export type FeatureCaptureResult = { featureId: number } & (FeatureIngestResult | { stored: false; reason: "no_block" | "wrong_block" });
 
 /**
@@ -73,16 +73,16 @@ const sourceRefOf = (stop: StopEvent, found: FoundHandoff): string =>
 
 /**
  * Stop 之后看这一轮有没有 /handoff 的输出，有就入库（trigger=command）。
- * 归属以 Butler 的记录为准：session 是 feature 总控（featureId 不为空）时存成 feature 汇总，见 captureFeatureHandoff；
+ * 归属以 Shipherd 的记录为准：session 是 feature 总控（featureId 不为空）时存成 feature 汇总，见 captureFeatureHandoff；
  * 否则归到 session 已挂的 ticket，没挂的话用代码块里写的 ticket（必须已存在）。
  * 修复 session 不是总控，也不接手 ticket 的工作：它的 /handoff 不收，返回 null。
  * 以前的 epic session（BTL-246 去掉了）也不收：代码块里的 ticket 号不能认领它。
- * Butler 总控同理：它的汇总写进 butler-workspace 记忆，不能被当成哪个 ticket 的 handoff。
+ * Shipherd 总控同理：它的汇总写进 shipherd-workspace 记忆，不能被当成哪个 ticket 的 handoff。
  * 不是 /handoff、或读不到文件时返回 null；是 /handoff 但等了几次都没有代码块时返回 no_block（调用方记日志）。
  */
 export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Promise<IngestResult | FeatureCaptureResult | null> {
   const session = d.sessions.get(stop.sessionId);
-  if (session?.fixesSession || session?.butler || d.sessions.isLegacyEpic(stop.sessionId)) return null;
+  if (session?.fixesSession || session?.shipherd || d.sessions.isLegacyEpic(stop.sessionId)) return null;
   const featureId = session?.featureId ?? null;
   if (featureId !== null) return captureFeatureHandoff(d, stop, featureId);
   const r = await awaitCommandOutput(d, stop, findHandoffBlock);
@@ -101,11 +101,11 @@ export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Pr
 }
 
 /**
- * feature 总控里的 /handoff：只收 butler-feature-handoff 代码块（没有时退回看起来是 feature 汇总的 ```json 代码块），
+ * feature 总控里的 /handoff：只收 shipherd-feature-handoff 代码块（没有时退回看起来是 feature 汇总的 ```json 代码块），
  * 存成这个 feature 的汇总（校验失败存成 degraded）。
- * 总控按旧习惯输出了 ticket 的 butler-handoff 代码块时，当作没有输出（wrong_block）：总控不属于任何 ticket，代码块里的 ticket 号也不能认领它。
- * 存下新汇总、wrong_block、no_block 都调用 afterFeatureCommand（后两种 handoffId 为 null：用户自己开的总控没有 Butler 的
- * MCP，常常写不出 feature 代码块，由调用方退回 Butler 自己生成）；duplicate 不调用（第一次采集已经调用过）。
+ * 总控按旧习惯输出了 ticket 的 shipherd-handoff 代码块时，当作没有输出（wrong_block）：总控不属于任何 ticket，代码块里的 ticket 号也不能认领它。
+ * 存下新汇总、wrong_block、no_block 都调用 afterFeatureCommand（后两种 handoffId 为 null：用户自己开的总控没有 Shipherd 的
+ * MCP，常常写不出 feature 代码块，由调用方退回 Shipherd 自己生成）；duplicate 不调用（第一次采集已经调用过）。
  */
 async function captureFeatureHandoff(d: CaptureDeps, stop: StopEvent, featureId: number): Promise<FeatureCaptureResult | null> {
   const r = await awaitCommandOutput(d, stop, (turn) => {

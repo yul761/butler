@@ -24,9 +24,9 @@ const result = (over: Partial<ClaudeResult> = {}): ClaudeResult => ({
 const ok = (over: Partial<ClaudeResult> = {}): HeadlessOutcome => ({ ok: true, result: result(over) });
 
 const session = (id: string, over: Partial<Session> = {}): Session => ({
-  id, ticketKey: "BTL-1", cwd: "/repo", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
+  id, ticketKey: "BTL-1", cwd: "/repo", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
   dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: "opus",
-  butler: false, lessonRunId: null, ...over,
+  shipherd: false, lessonRunId: null, ...over,
 });
 
 const launchOf = (id: string): DevLaunch => ({
@@ -145,7 +145,7 @@ describe("ForkService 新分叉（精简）", () => {
     expect(row.launchArgs).toEqual(req.args);
   });
 
-  it("没有启动参数（/clear 之后、Butler 重启过）：精简，cwd 用 head 的，settings 照样传分叉那份", async () => {
+  it("没有启动参数（/clear 之后、Shipherd 重启过）：精简，cwd 用 head 的，settings 照样传分叉那份", async () => {
     const s = setup({ launch: false });
     s.svc.ask("root-1", null, "q");
     await s.svc.idle();
@@ -182,9 +182,9 @@ describe("ForkService 新分叉（精简）", () => {
     expect(env.CLAUDE_EFFORT).toBe("high");
     expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("sonnet");
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("100000");
-    expect(env.BUTLER_SESSION).toBe("headless:run-1");
+    expect(env.SHIPHERD_SESSION).toBe("headless:run-1");
     expect(env.PATH).toBe("/usr/bin");
-    expect(env.BUTLER_TICKET).toBeUndefined();
+    expect(env.SHIPHERD_TICKET).toBeUndefined();
     expect(s.calls[0].timeoutMs).toBe(5 * 60 * 1000);
   });
 });
@@ -1016,21 +1016,21 @@ describe("forkEnv", () => {
 });
 
 describe("writeForkSettings", () => {
-  it("用开发那份 settings 和 butler-hook readonly 写出分叉 settings；同样内容同一个文件", () => {
+  it("用开发那份 settings 和 shipherd-hook readonly 写出分叉 settings；同样内容同一个文件", () => {
     const dir = tempDir();
     const dev = join(dir, "dev.json");
     writeFileSync(dev, JSON.stringify({ enabledMcpjsonServers: ["x"], permissions: { allow: ["Bash"] }, hooks: { PreToolUse: [] } }));
-    const p = writeForkSettings({ dir, devSettingsPath: dev, guardCommand: '"/b/butler-hook"' })!;
+    const p = writeForkSettings({ dir, devSettingsPath: dev, guardCommand: '"/b/shipherd-hook"' })!;
     expect(p.startsWith(join(dir, "fork-"))).toBe(true);
-    expect(JSON.parse(readFileSync(p, "utf8"))).toEqual(forkSettings({ enabledMcpjsonServers: ["x"], permissions: { allow: ["Bash"] }, hooks: { PreToolUse: [] } }, '"/b/butler-hook"'));
-    expect(readFileSync(p, "utf8")).toContain('\\"/b/butler-hook\\" readonly');
-    expect(writeForkSettings({ dir, devSettingsPath: dev, guardCommand: '"/b/butler-hook"' })).toBe(p);
+    expect(JSON.parse(readFileSync(p, "utf8"))).toEqual(forkSettings({ enabledMcpjsonServers: ["x"], permissions: { allow: ["Bash"] }, hooks: { PreToolUse: [] } }, '"/b/shipherd-hook"'));
+    expect(readFileSync(p, "utf8")).toContain('\\"/b/shipherd-hook\\" readonly');
+    expect(writeForkSettings({ dir, devSettingsPath: dev, guardCommand: '"/b/shipherd-hook"' })).toBe(p);
   });
 
   it("开发那份读不到当 null；hook 不可用返回 null", () => {
     const dir = tempDir();
-    const p = writeForkSettings({ dir, devSettingsPath: join(dir, "missing.json"), guardCommand: '"/b/butler-hook"' })!;
-    expect(JSON.parse(readFileSync(p, "utf8"))).toEqual(forkSettings(null, '"/b/butler-hook"'));
+    const p = writeForkSettings({ dir, devSettingsPath: join(dir, "missing.json"), guardCommand: '"/b/shipherd-hook"' })!;
+    expect(JSON.parse(readFileSync(p, "utf8"))).toEqual(forkSettings(null, '"/b/shipherd-hook"'));
     expect(writeForkSettings({ dir, devSettingsPath: null, guardCommand: null })).toBeNull();
   });
 });
@@ -1120,7 +1120,7 @@ describe("ForkService 发给开发 session / 记进记忆", () => {
     expect(await s.svc.remember(forkId)).toBe("full");
   });
 
-  it("remember：连点 busy；没有 ticket 也没有 feature（Butler 页面）：no_scope，不要结论也不写", async () => {
+  it("remember：连点 busy；没有 ticket 也没有 feature（Shipherd 页面）：no_scope，不要结论也不写", async () => {
     const s = setup();
     const forkId = await withFork(s);
     s.queue.push(ok({ resultText: "c" }));

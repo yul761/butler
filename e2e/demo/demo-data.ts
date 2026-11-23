@@ -29,7 +29,7 @@ export interface DemoData {
   prTitle: string;
   doneReply: string;
   ciReply: string;
-  /** 合并以后总控发给 FERN-101 的话，和它的回复（它回完停下，Butler 就马上重查这个 ticket 的 PR）。 */
+  /** 合并以后总控发给 FERN-101 的话，和它的回复（它回完停下，Shipherd 就马上重查这个 ticket 的 PR）。 */
   mergedNote: string;
   mergedReply: string;
   /** FERN-102：一直在干活（读代码、改代码、跑测试）。 */
@@ -88,7 +88,7 @@ const EN: DemoData = {
     describe: "Describe the epic to its coordinator",
     split: "It splits the work into features and tickets",
     sessions: "Each ticket gets its own Claude Code session and worktree",
-    yourTurn: "Butler only pings you when it's your turn",
+    yourTurn: "Shipherd only pings you when it's your turn",
     merge: "Merging stays with you",
     merged: "Merged. On to the next ticket",
   },
@@ -129,7 +129,7 @@ const ZH: DemoData = {
     describe: "把 epic 讲给它的总控",
     split: "总控拆成 feature 和 ticket",
     sessions: "每个 ticket 一个 Claude Code session、一个 worktree",
-    yourTurn: "轮到你的时候 Butler 才叫你",
+    yourTurn: "轮到你的时候 Shipherd 才叫你",
     merge: "合并由你来点",
     merged: "合进去了，接着做下一个",
   },
@@ -149,7 +149,7 @@ export function fakeClaudeScript(d: DemoData): object {
     banner: d.coordinatorBanner,
     rules: [
       // 总控：回一句，然后接着在看各 session（一直算在干活）。
-      { when: d.description, reply: d.coordinatorReply, then: [{ after: 1200, line: "/fake-tool mcp__butler-sessions__list_sessions {}" }] },
+      { when: d.description, reply: d.coordinatorReply, then: [{ after: 1200, line: "/fake-tool mcp__shipherd-sessions__list_sessions {}" }] },
       { when: d.tasks[PR_TICKET], reply: d.doneReply },
       { when: d.mergedNote, reply: d.mergedReply },
       { when: `#${PR_NUMBER}`, reply: d.ciReply },

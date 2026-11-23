@@ -11,7 +11,7 @@ describe("which macOS signing runs (after-pack)", () => {
     for (const env of [{ CSC_LINK: "base64-p12" }, { CSC_NAME: "Developer ID Application: X (TEAM)" }, { CSC_LINK: "x", CSC_IDENTITY_AUTO_DISCOVERY: "true" }]) {
       const exec = vi.fn();
       const e: Env = { ...env };
-      expect(signMacApp({ appPath: "/tmp/Butler.app", env: e, exec }), JSON.stringify(env)).toBe("builder");
+      expect(signMacApp({ appPath: "/tmp/Shipherd.app", env: e, exec }), JSON.stringify(env)).toBe("builder");
       expect(exec).not.toHaveBeenCalled();
       // 不能关掉 electron-builder 的证书发现：否则 CSC_LINK 导入的证书会被悄悄跳过。
       expect(e.CSC_IDENTITY_AUTO_DISCOVERY).toBe(env.CSC_IDENTITY_AUTO_DISCOVERY);
@@ -28,9 +28,9 @@ describe("which macOS signing runs (after-pack)", () => {
     for (const env of [{}, { CSC_LINK: "" }, { CSC_LINK: "   ", CSC_NAME: "" }]) {
       const exec = vi.fn();
       const e: Env = { ...env };
-      expect(signMacApp({ appPath: "/tmp/Butler.app", env: e, identity: undefined, exec })).toBe("ad-hoc");
+      expect(signMacApp({ appPath: "/tmp/Shipherd.app", env: e, identity: undefined, exec })).toBe("ad-hoc");
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith("codesign", ["--force", "--deep", "--sign", "-", "/tmp/Butler.app"], { stdio: "inherit" });
+      expect(exec).toHaveBeenCalledWith("codesign", ["--force", "--deep", "--sign", "-", "/tmp/Shipherd.app"], { stdio: "inherit" });
       // 本机钥匙串里有 Developer ID 时，electron-builder 默认会自动找到它再签一遍：ad-hoc 之后必须关掉。
       expect(e.CSC_IDENTITY_AUTO_DISCOVERY).toBe("false");
     }
@@ -78,8 +78,8 @@ describe("release.yml signing decision ([contract:mac-signing])", () => {
   });
 });
 
-const DEVELOPER_ID = `Executable=/x/Butler.app/Contents/MacOS/Butler
-Identifier=io.statecore.butler
+const DEVELOPER_ID = `Executable=/x/Shipherd.app/Contents/MacOS/Shipherd
+Identifier=io.statecore.shipherd
 Format=app bundle with Mach-O thin (arm64)
 CodeDirectory v=20500 size=765 flags=0x10000(runtime) hashes=13+7 location=embedded
 Signature size=8991
@@ -90,8 +90,8 @@ Timestamp=Nov 22, 2026 at 10:24:42 AM
 Notarization Ticket=stapled
 TeamIdentifier=K4DJPVL5T5
 `;
-const ADHOC = `Executable=/x/Butler.app/Contents/MacOS/Butler
-Identifier=Butler
+const ADHOC = `Executable=/x/Shipherd.app/Contents/MacOS/Shipherd
+Identifier=Shipherd
 CodeDirectory v=20400 size=436 flags=0x2(adhoc) hashes=3+7 location=embedded
 Signature=adhoc
 Info.plist=not bound
@@ -134,11 +134,11 @@ describe("reading codesign and spctl output (verify-mac-signing)", () => {
   });
 
   it("reads Gatekeeper's verdict, including a runner with assessments disabled", () => {
-    expect(gatekeeperVerdict(0, "/x/Butler.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Yuchen Lin (K4DJPVL5T5)\n")).toBe("notarized");
+    expect(gatekeeperVerdict(0, "/x/Shipherd.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: Yuchen Lin (K4DJPVL5T5)\n")).toBe("notarized");
     // 签了名但没公证：spctl 拒绝（source=Unnotarized Developer ID）。
-    expect(gatekeeperVerdict(3, "/x/Butler.app: rejected\nsource=Unnotarized Developer ID\n")).toBe("rejected");
-    expect(gatekeeperVerdict(0, "/x/Butler.app: accepted\nsource=Developer ID\n")).toBe("rejected");
-    expect(gatekeeperVerdict(0, "/x/Butler.app: accepted\noverride=security disabled\n")).toBe("disabled");
+    expect(gatekeeperVerdict(3, "/x/Shipherd.app: rejected\nsource=Unnotarized Developer ID\n")).toBe("rejected");
+    expect(gatekeeperVerdict(0, "/x/Shipherd.app: accepted\nsource=Developer ID\n")).toBe("rejected");
+    expect(gatekeeperVerdict(0, "/x/Shipherd.app: accepted\noverride=security disabled\n")).toBe("disabled");
     expect(gatekeeperVerdict(null, "")).toBe("rejected");
   });
 

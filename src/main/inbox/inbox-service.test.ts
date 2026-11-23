@@ -16,8 +16,8 @@ import { ChoiceService } from "../interrupts/choices";
 import { ANSWERING_TTL_MS, InboxService, REPORT_DELIVERY_MAX_AGE_MS, roleOf, type AskedQuestion, type InboxServiceDeps } from "./inbox-service";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
-  id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
+  id, ticketKey: null, cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: true, replacedBy: null,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, ...o,
 });
 
 const ticket = (key: string, featureId: number | null, repos: { id: number; repoPath: string }[] = [{ id: 1, repoPath: "/r/api" }]): Ticket =>
@@ -61,7 +61,7 @@ function setup(o: {
     check: (id, g) => gate(g.answer ? "answerGate" : "reportGate").check(id), recheckAfter: () => () => true,
     deliver: (t, text, recheck) => deliver(t, text, recheck),
     canInterrupt: () => false, interrupt: () => {}, interruptRecheck: () => () => true,
-    lastReply: () => null, nameOf: (id) => id ?? "Butler", typing: (h, phase) => inboxRef?.butlerTyping(h, phase),
+    lastReply: () => null, nameOf: (id) => id ?? "Shipherd", typing: (h, phase) => inboxRef?.shipherdTyping(h, phase),
     notify: () => {}, now: () => state.now, log: () => {},
   });
   const inbox = new InboxService({
@@ -179,7 +179,7 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(inbox.hasPendingDecision("s2")).toBe(false);
   });
 
-  it("ignores the UserPromptSubmit of Butler's own /handoff and resume message while the session is being refreshed", () => {
+  it("ignores the UserPromptSubmit of Shipherd's own /handoff and resume message while the session is being refreshed", () => {
     const s = session("s1");
     const { inbox, repo, state, replace } = setup({ sessions: [s] });
     const a = inbox.ask(s, { question: "a" });
@@ -279,7 +279,7 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(repo.get(long)?.status).toBe("answered");
   });
 
-  it("the UserPromptSubmit caused by Butler delivering an answer only resolves the delivered items", async () => {
+  it("the UserPromptSubmit caused by Shipherd delivering an answer only resolves the delivered items", async () => {
     const s = session("s1");
     const { inbox, repo, deliver } = setup({ sessions: [s] });
     const a = inbox.ask(s, { question: "a" });
@@ -500,14 +500,14 @@ describe("InboxService views", () => {
   });
 });
 
-describe("InboxService and the Butler 总控 (BTL-190 5)", () => {
+describe("InboxService and the Shipherd 总控 (BTL-190 5)", () => {
 
-  it("does not send other sessions' reports to the Butler 总控, and its own reports are only stored", async () => {
+  it("does not send other sessions' reports to the Shipherd 总控, and its own reports are only stored", async () => {
     const fc = session("fc", { featureId: 3 });
     const child = session("c1", { ticketKey: "BTL-1" });
-    const bt = session("bt", { butler: true });
+    const bt = session("bt", { shipherd: true });
     const { inbox, repo, deliver } = setup({ sessions: [fc, child, bt], tickets: [ticket("BTL-1", 3)], open: ["bt"] });
-    // feature 总控上面没有总控（BTL-246）：只存，也不送给 Butler 总控。
+    // feature 总控上面没有总控（BTL-246）：只存，也不送给 Shipherd 总控。
     const r = inbox.report(fc, "feature done", "done");
     expect(r).toMatchObject({ queued: false, noCoordinator: true });
     await inbox.flush();
@@ -518,22 +518,22 @@ describe("InboxService and the Butler 总控 (BTL-190 5)", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("shows the Butler 总控's own questions with role butler and a target on its page", () => {
-    const bt = session("bt", { butler: true });
+  it("shows the Shipherd 总控's own questions with role shipherd and a target on its page", () => {
+    const bt = session("bt", { shipherd: true });
     const { inbox, repo } = setup({ sessions: [bt] });
     const id = inbox.ask(bt, { question: "先合哪个？" });
     expect(repo.get(id)).toMatchObject({ ticketKey: null, featureId: null });
-    expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "butler", open: true, target: { page: "butler", sessionId: "bt" } });
+    expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "shipherd", open: true, target: { page: "shipherd", sessionId: "bt" } });
     expect(inbox.view({ all: true }).decisions.map((x) => x.text)).toEqual(["先合哪个？"]);
-    expect(roleOf(bt)).toBe("butler");
+    expect(roleOf(bt)).toBe("shipherd");
   });
 
-  it("an item whose session is gone still points at the Butler 总控 page when it has no ticket or feature", () => {
-    const bt = session("bt", { butler: true });
+  it("an item whose session is gone still points at the Shipherd 总控 page when it has no ticket or feature", () => {
+    const bt = session("bt", { shipherd: true });
     const { inbox, sessions } = setup({ sessions: [bt] });
     inbox.ask(bt, { question: "q" });
     sessions.delete("bt");
-    expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "butler", target: { page: "butler", sessionId: "bt" } });
+    expect(inbox.pendingDecisionViews()[0]).toMatchObject({ role: "shipherd", target: { page: "shipherd", sessionId: "bt" } });
   });
 });
 

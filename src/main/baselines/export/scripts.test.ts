@@ -227,10 +227,10 @@ describe.runIf(HAS_SH)("shell script agrees with evaluateBuiltin for forbidden p
 });
 
 describe.runIf(HAS_SH)("run_command runner", () => {
-  it("runs the command once per file in scope with $1 and BUTLER_CHECK_FILE", () => {
+  it("runs the command once per file in scope with $1 and SHIPHERD_CHECK_FILE", () => {
     const root = repo();
     const data: ExportedCheckData = { ...checkData(check("run_command", {}, ["src/**/*.ts"], ["src/main/**"]), ""), name: "runner" };
-    write(root, "scripts/r.sh", runnerScript(data, 'grep -q console "$BUTLER_CHECK_FILE" && echo "bad {file}" && exit 1; exit 0', "scripts/r.sh"));
+    write(root, "scripts/r.sh", runnerScript(data, 'grep -q console "$SHIPHERD_CHECK_FILE" && echo "bad {file}" && exit 1; exit 0', "scripts/r.sh"));
     const r = run(root, "sh", ["scripts/r.sh", "--all"]);
     expect(r.status).toBe(1);
     expect(r.stdout.split("\n").filter(Boolean).sort()).toEqual(["bad src/a.ts", "bad src/b c/ü.ts"]);

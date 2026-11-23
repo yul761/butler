@@ -5,13 +5,13 @@ import { childrenIndex, compareStart, treeOf, type ProcInfo, type ProcTable } fr
 
 /**
  * 孤儿清理（WS-M F，设计 §7）。
- * Butler 起过的进程 = 在某个终端那棵树里出现过的进程，按 (pid, 启动时间, 命令行) 认，三样都对上才算同一个。
+ * Shipherd 起过的进程 = 在某个终端那棵树里出现过的进程，按 (pid, 启动时间, 命令行) 认，三样都对上才算同一个。
  * 记下的进程一直留着，直到它退出（不是每次采样换一份）。父进程退出、自己被收养走的也认回来：
  * macOS 上被收养到 1 号进程的还留在原来那个 shell 的进程组里（pgid），按组认回来。
  * 认不出来的：起它的 shell 在被采样到之前就退出了（macOS，组长没记下）；Windows 上父进程退出、自己没被采样到过的（见 WS-M addendum）。
  * 终端结束以后等一会儿，还活着、而且不在任何开着的终端底下的，就是漏掉的孤儿（claude 用 & 或 nohup 起的 dev server、
  * 被 MCP 留下的浏览器）：先 SIGTERM，5 秒后还在就 SIGKILL（Windows 用 taskkill，强制时加 /F，不加 /T）。每杀一个都写日志。
- * 记录存在 procs/owned.json：Butler 崩了、被强制退出，下次启动时扫一遍。
+ * 记录存在 procs/owned.json：Shipherd 崩了、被强制退出，下次启动时扫一遍。
  */
 export interface OwnedProc {
   pid: number;
@@ -97,7 +97,7 @@ export class OrphanSweeper {
 
   /**
    * 这些进程先不清理（休眠时留下的 watcher 和 dev server，WS-M B）。owner 是休眠的 session。
-   * 照样写进 owned.json：Butler 重启时（留着它们的 session 已经不在跑了）启动扫描会结束它们。
+   * 照样写进 owned.json：Shipherd 重启时（留着它们的 session 已经不在跑了）启动扫描会结束它们。
    */
   spare(owner: string, procs: OwnedProc[]): void {
     for (const p of procs) this.spared.set(p.pid, { ...p, owner });

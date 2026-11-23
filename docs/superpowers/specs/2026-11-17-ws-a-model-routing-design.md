@@ -1,6 +1,6 @@
 # Workstream A: model routing and limit fallback (design addendum)
 
-Date: 2026-11-17. Base: `main` at 2.1.0. Master design: `2026-11-17-butler-3-design.md` (contract 4.1, rules 4.9). Source: part 6 of the maintainer's local improvement plan, stages A to E, all of it.
+Date: 2026-11-17. Base: `main` at 2.1.0. Master design: `2026-11-17-shipherd-3-design.md` (contract 4.1, rules 4.9). Source: part 6 of the maintainer's local improvement plan, stages A to E, all of it.
 
 ## 1. What this adds
 
@@ -75,14 +75,14 @@ Claude Code's own `--fallback-model` is not used: it switches silently, only on 
 
 - `start_session`'s `model` accepts `high` / `mid` / `low`, a registry model name, or the old `opus` / `sonnet` (and `haiku`). Unconfigured: tiers map to `opus` / `sonnet` / `haiku`, names pass through as today. Configured: a tier resolves to the first healthy model of its chain; a model name that is limited resolves to the next healthy model in its tier's chain. Anything else is refused with the list of valid values. The result carries `model` (what the session got) and `requested`.
 - `SessionModel` becomes a validated string (letters, digits and `._-:/@[]`, at most 100 chars).
-- When `claude --help` does not list `--model`, Butler does not pass it (and the start result says so).
-- Mid-session limit: the activity monitor already sees API / limit errors. The session's model is marked (configured mode), and the session row (ticket, feature, epic and Butler pages) shows a limit pill with **Switch to <next model> and continue**. Butler ends the terminal, waits for it to exit (at most 15 s, otherwise it refuses with "still running"), records the new model on the session (`sessions.setModel`) and reopens it the usual way for its kind, which passes `--resume <id> --model <next>`. It does not type anything into the resumed session: the user decides what to say. The next model is the one after the session's model in its tier's chain, then lower tiers; unconfigured it is `opus` → `sonnet` → `haiku` (and `sonnet` when the session had no model). With `routingAutoSwitch` on (default off) Butler switches on the hit without the click. A hint with no known reset time expires after 6 hours; × dismisses it.
+- When `claude --help` does not list `--model`, Shipherd does not pass it (and the start result says so).
+- Mid-session limit: the activity monitor already sees API / limit errors. The session's model is marked (configured mode), and the session row (ticket, feature, epic and Shipherd pages) shows a limit pill with **Switch to <next model> and continue**. Shipherd ends the terminal, waits for it to exit (at most 15 s, otherwise it refuses with "still running"), records the new model on the session (`sessions.setModel`) and reopens it the usual way for its kind, which passes `--resume <id> --model <next>`. It does not type anything into the resumed session: the user decides what to say. The next model is the one after the session's model in its tier's chain, then lower tiers; unconfigured it is `opus` → `sonnet` → `haiku` (and `sonnet` when the session had no model). With `routingAutoSwitch` on (default off) Shipherd switches on the hit without the click. A hint with no known reset time expires after 6 hours; × dismisses it.
 
 ## 9. Spending control
 
 Settings (all default empty / off): `routingQuotas` (JSON list of `{ target: "tier:high" | "model:<name>", unit: "usd" | "tokens", monthly }`), `routingThresholds` (`70,90`), `routingPeriodStartDay` (1–28, default 1, local time), `routingEffort` (JSON map from task id or tier to an effort level), `routingMaxConcurrent` (JSON map tier → max concurrent background calls), `routingAutoSwitch`.
 
-Spend for the current period comes from `session_usage` (all sources): tokens, and money from the recorded `cost_usd` of headless runs (new column) or, for rows without it, tokens × the registry price when set. Levels per model: `ok` below the first threshold; `soft` (≥ first): non-critical `fallback` tasks skip the model; `hard` (≥ second, including over 100 %): every non-critical task skips it, so `fallback` tasks degrade and `wait` tasks wait until the period ends. Critical tasks always may use it (quotas are soft: Butler only sees its own usage). Passive detection after a real limit stays the main path.
+Spend for the current period comes from `session_usage` (all sources): tokens, and money from the recorded `cost_usd` of headless runs (new column) or, for rows without it, tokens × the registry price when set. Levels per model: `ok` below the first threshold; `soft` (≥ first): non-critical `fallback` tasks skip the model; `hard` (≥ second, including over 100 %): every non-critical task skips it, so `fallback` tasks degrade and `wait` tasks wait until the period ends. Critical tasks always may use it (quotas are soft: Shipherd only sees its own usage). Passive detection after a real limit stays the main path.
 
 ## 10. Re-runs of degraded results
 
@@ -120,7 +120,7 @@ Not exported:
 ## 13. Verified during development
 
 - Claude Code 2.1.327 `--help`: `--model <model>` (aliases such as `opus`, `sonnet`, or a full name), `--effort <level>` (`low` … `max`), `--fallback-model` (silent, overload only; not used). `--resume <id> --model <m>` resumes with another model. The capability probe now records `--model` and `--effort` as optional flags; missing ones are left out, not reported as errors.
-- Discovery candidates, in this order and de-duplicated: models already in the registry, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`, the `model` of Claude Code's user `settings.json` (read only), models seen in Butler's own usage records of the last 30 days, and the CLI aliases `opus`, `sonnet`, `haiku`. Each is probed with a tiny `model_probe` call (60 s timeout, no tools); a name that does not exist comes back `model_unavailable` and is shown as unavailable, never assigned. Discovery only suggests: the user adds a model with one click and a suggested tier.
+- Discovery candidates, in this order and de-duplicated: models already in the registry, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`, the `model` of Claude Code's user `settings.json` (read only), models seen in Shipherd's own usage records of the last 30 days, and the CLI aliases `opus`, `sonnet`, `haiku`. Each is probed with a tiny `model_probe` call (60 s timeout, no tools); a name that does not exist comes back `model_unavailable` and is shown as unavailable, never assigned. Discovery only suggests: the user adds a model with one click and a suggested tier.
 - The existing limit samples (`claude/__fixtures__/limit-samples.ts`) classify identically through the rule engine.
 
 ## 14. Acceptance (from the plan)

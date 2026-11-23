@@ -181,14 +181,14 @@ describe("CI workflows (design 1.3, 11)", () => {
     expect(steps.indexOf(e2e as Step)).toBeGreaterThan(steps.findIndex((s) => s.run === "pnpm build:hook"));
     const upload = steps.find((s) => s.uses?.startsWith("actions/upload-artifact@") && s.if === "failure()");
     expect(String(upload?.with?.path)).toContain("test-results/");
-    expect(String(upload?.with?.path)).toContain("butler-e2e-");
+    expect(String(upload?.with?.path)).toContain("shipherd-e2e-");
   });
 
   it("uploads only the named installers, never the NSIS uninstaller stub", () => {
     for (const job of [ci.jobs.package, release.jobs.build]) {
       const upload = job.steps.find((s) => s.uses?.startsWith("actions/upload-artifact@"));
       const globs = String(upload?.with?.path).trim().split("\n").map((l) => l.trim());
-      expect(globs).toEqual(["dist/*.dmg", "dist/*.zip", "dist/Butler-Setup-*.exe"]);
+      expect(globs).toEqual(["dist/*.dmg", "dist/*.zip", "dist/Shipherd-Setup-*.exe"]);
       expect(upload?.with?.["if-no-files-found"]).toBe("error");
     }
   });

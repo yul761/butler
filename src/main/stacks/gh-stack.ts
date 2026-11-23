@@ -23,7 +23,7 @@ async function gh(cwd: string, slug: string | null, args: string[]): Promise<str
 }
 
 async function withBody<T>(body: string, fn: (file: string) => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), "butler-stack-body-"));
+  const dir = mkdtempSync(join(tmpdir(), "shipherd-stack-body-"));
   const file = join(dir, "body.md");
   writeFileSync(file, body);
   try {

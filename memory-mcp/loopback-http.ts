@@ -38,7 +38,7 @@ export function startLoopbackMcp(o: { port: number; route: (token: string) => Rp
       else res.end();
     });
   });
-  // 工具调用可能要等 Butler 一阵（start_session 最多几分钟）：不按 Node 的默认 5 分钟掐断请求。
+  // 工具调用可能要等 Shipherd 一阵（start_session 最多几分钟）：不按 Node 的默认 5 分钟掐断请求。
   server.requestTimeout = 0;
   server.headersTimeout = 60_000;
   return new Promise((resolve, reject) => {

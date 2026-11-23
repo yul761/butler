@@ -17,9 +17,9 @@ function env() {
   const db = memDb();
   const sessions = new SessionsRepo(db);
   const repo = new ConvRepo(db);
-  sessions.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 0 });
-  sessions.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1000 });
-  sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 3000 });
+  sessions.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 0 });
+  sessions.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1000 });
+  sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 3000 });
   sessions.setReplacedBy("a", "b");
   sessions.setReplacedBy("b", "c");
   const appended: string[] = [];
@@ -241,7 +241,7 @@ describe("ConversationStore.byFork", () => {
 
 describe("withRecentQa", () => {
   it("appends the Q&A to the tail", async () => {
-    const dir = tempDir("butler-qa-");
+    const dir = tempDir("shipherd-qa-");
     const tail = join(dir, "tail.md");
     writeFileSync(tail, "# tail\n");
     expect(await withRecentQa(join(dir, "out.md"), tail, "# qa\n")).toBe(tail);
@@ -251,13 +251,13 @@ describe("withRecentQa", () => {
   });
 
   it("writes the Q&A alone when there is no tail", async () => {
-    const out = join(tempDir("butler-qa-"), "sub", "out.md");
+    const out = join(tempDir("shipherd-qa-"), "sub", "out.md");
     expect(await withRecentQa(out, null, "# qa\n")).toBe(out);
     expect(readFileSync(out, "utf8")).toBe("# qa\n");
   });
 
   it("writes nothing when there is neither", async () => {
-    const out = join(tempDir("butler-qa-"), "out.md");
+    const out = join(tempDir("shipherd-qa-"), "out.md");
     expect(await withRecentQa(out, null, "")).toBeNull();
     expect(existsSync(out)).toBe(false);
   });

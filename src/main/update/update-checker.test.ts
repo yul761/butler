@@ -4,7 +4,7 @@ import type { LatestReleaseResult } from "./release-source";
 import { UPDATE_CHECK_INTERVAL_MS, UpdateChecker, type UpdateAuditEntry, type UpdateCheckerDeps, type UpdateSettingKey } from "./update-checker";
 
 const DAY = 24 * 3600_000;
-const rel = (version: string): ReleaseInfo => ({ version, tag: `v${version}`, url: `https://github.com/yul761/butler/releases/tag/v${version}`, publishedAt: 1, notes: `notes ${version}` });
+const rel = (version: string): ReleaseInfo => ({ version, tag: `v${version}`, url: `https://github.com/yul761/shipherd/releases/tag/v${version}`, publishedAt: 1, notes: `notes ${version}` });
 const ok = (version: string, extra: Partial<{ draft: boolean; prerelease: boolean }> = {}): LatestReleaseResult => ({ ok: true, release: rel(version), draft: false, prerelease: false, ...extra });
 
 function setup(o: { results?: LatestReleaseResult[]; gh?: boolean; settings?: Partial<Record<UpdateSettingKey, string>>; current?: string; deps?: Partial<UpdateCheckerDeps> } = {}) {
@@ -42,7 +42,7 @@ describe("UpdateChecker.autoCheck", () => {
     expect(t.fetches()).toBe(1);
     expect(t.store.updateLastCheckAt).toBe(String(t.now()));
     expect(t.checker.view().banner?.version).toBe("4.1.0");
-    expect(t.audit).toEqual([expect.objectContaining({ outcome: "done", target: "repos/yul761/butler/releases/latest" })]);
+    expect(t.audit).toEqual([expect.objectContaining({ outcome: "done", target: "repos/yul761/shipherd/releases/latest" })]);
     expect(t.audit[0]!.summary).toContain("4.1.0");
     expect(t.notified()).toBeGreaterThan(0);
   });

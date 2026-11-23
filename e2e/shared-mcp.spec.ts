@@ -22,13 +22,13 @@ async function callTool(page: Page, s: Sandbox, tool: string, args: unknown = {}
 }
 
 /**
- * 共享 MCP（WS-M H）：打开设置后新开的 session 拿到的是 hub 上的 URL（每个终端一份配置），butler-sessions 的工具经 hub 照样能用；
+ * 共享 MCP（WS-M H）：打开设置后新开的 session 拿到的是 hub 上的 URL（每个终端一份配置），shipherd-sessions 的工具经 hub 照样能用；
  * 终端退出后它的配置文件跟着删掉。
  */
-test("with the shared MCP on, a new session reaches butler-sessions through the hub", async ({ makeSandbox, launch }) => {
+test("with the shared MCP on, a new session reaches shipherd-sessions through the hub", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
   const { page } = await launch(s);
   await completeWizard(page, s);
 
@@ -41,16 +41,16 @@ test("with the shared MCP on, a new session reaches butler-sessions through the 
   await page.waitForTimeout(5000);
 
   const side = page.locator(".sidebar");
-  await side.getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await page.locator(".butler-page").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  await side.getByRole("button", { name: S.shipherdNav, exact: true }).click();
+  await page.locator(".shipherd-page").getByRole("button", { name: `+ ${S.newShipherdSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await expect.poll(() => fakeLog(s)).toContain("mcp transport http");
 
-  const terms = join(s.butlerHome, "mcp", "terms");
+  const terms = join(s.shipherdHome, "mcp", "terms");
   const files = readdirSync(terms).filter((f) => f.endsWith(".json"));
   expect(files).toHaveLength(1);
   const config = JSON.parse(readFileSync(join(terms, files[0]), "utf8")) as { mcpServers: Record<string, { type: string; url: string }> };
-  expect(Object.keys(config.mcpServers)).toEqual(["butler-workspace", "butler-sessions"]);
+  expect(Object.keys(config.mcpServers)).toEqual(["shipherd-workspace", "shipherd-sessions"]);
   for (const spec of Object.values(config.mcpServers)) expect(spec.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\/[A-Za-z0-9_-]{43}$/);
 
   const listed = await callTool(page, s, "list_sessions");

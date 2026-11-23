@@ -28,7 +28,7 @@ The watcher polls open PRs by URL and re-checks ticket branches with `gh pr list
   - types: `pnpm typecheck`
   - lint: `pnpm exec eslint src e2e hook`
   - e2e: `pnpm e2e` (pree2e builds the app and the hook) or `pnpm e2e:only <spec>` after a build.
-- Out of scope: non-Butler terminals; exporting lessons to repos.
+- Out of scope: non-Shipherd terminals; exporting lessons to repos.
 
 ## Review Focus
 
@@ -664,7 +664,7 @@ Behaviour:
 ## Task 8: Hook capture: review agents, discovered sessions, skill branch, tracking start (D-2, C-S6, D-1 setting)
 
 **Files:**
-- Modify: `src/main/claude/project-mcp.ts` (+ test), `hook/butler-hook.ts` (+ `hook/butler-hook.test.ts`), `src/main/hooks/stage-hook.ts` (+ test), `src/shared/pr-stages.ts` (+ test), `src/main/db/settings-repo.ts`, `src/main/index.ts`
+- Modify: `src/main/claude/project-mcp.ts` (+ test), `hook/shipherd-hook.ts` (+ `hook/shipherd-hook.test.ts`), `src/main/hooks/stage-hook.ts` (+ test), `src/shared/pr-stages.ts` (+ test), `src/main/db/settings-repo.ts`, `src/main/index.ts`
 - Create: `src/main/prwatch/skill-tracking.ts`, `src/main/prwatch/skill-tracking.test.ts`
 
 **Interfaces:**
@@ -675,7 +675,7 @@ Behaviour:
   - `skillCategory(name)` returns `"review"` for names starting with `agent:`, checked before the prefix strip.
   - `stageEventFromHook`:
     - For Agent/Task with `description` or `subagent_type` matching `/review/i`, it records a skill event `{ name: "agent:" + (description || subagent_type), category: "review" }`.
-    - The `origin === "butler"` requirement is gone (C-S6). The owner rules are unchanged.
+    - The `origin === "shipherd"` requirement is gone (C-S6). The owner rules are unchanged.
     - `event.branch = session.gitBranch ?? null`.
   - `SETTING_DEFAULTS.skillTrackingSince = ""`
   - `ensureSkillTrackingSince(d: { settings: Pick<SettingsRepo, "get" | "set">; firstSkillAt(): number | null; now(): number }): number`. This is idempotent; it seeds `min(firstSkillAt ?? now, now)`.
@@ -684,7 +684,7 @@ Behaviour:
 
 - [ ] **Step 1: Write the failing tests**
   - `project-mcp.test.ts`: `adds the Agent|Task matcher next to Skill only with a gate command`.
-  - `butler-hook.test.ts`: `trims an Agent PostToolUse payload to description and subagent_type`, with a 1 MB `tool_response` input. Assert the envelope's JSON is under 2 KB.
+  - `shipherd-hook.test.ts`: `trims an Agent PostToolUse payload to description and subagent_type`, with a 1 MB `tool_response` input. Assert the envelope's JSON is under 2 KB.
   - `stage-hook.test.ts`:
     - `an Agent dispatch described "Review task 3" records agent:Review task 3 as review`;
     - `a non-review agent records nothing`;
@@ -698,7 +698,7 @@ Behaviour:
 
 - [ ] **Step 2: Run and verify they fail**
 
-  Run: `pnpm vitest run src/main/claude/project-mcp.test.ts hook/butler-hook.test.ts src/main/hooks/stage-hook.test.ts src/shared/pr-stages.test.ts src/main/prwatch/skill-tracking.test.ts`
+  Run: `pnpm vitest run src/main/claude/project-mcp.test.ts hook/shipherd-hook.test.ts src/main/hooks/stage-hook.test.ts src/shared/pr-stages.test.ts src/main/prwatch/skill-tracking.test.ts`
 
   Expected: FAIL.
 
@@ -1210,7 +1210,7 @@ These are tests for existing behaviour, so they are expected to pass on the firs
 **Files:**
 - Create: `e2e/fake-gh/fake-gh.cjs`
 - Modify: `e2e/fixtures.ts`, `e2e/pr-stages.spec.ts`
-- Create: `src/main/prwatch/verify-real-db.test.ts` (skipped unless `BUTLER_VERIFY_DB` is set)
+- Create: `src/main/prwatch/verify-real-db.test.ts` (skipped unless `SHIPHERD_VERIFY_DB` is set)
 
 **Interfaces:**
 - `fake-gh.cjs`:
@@ -1255,14 +1255,14 @@ These are tests for existing behaviour, so they are expected to pass on the firs
 
 - [ ] **Step 5: Run the real-DB check (manual, once; read-only copy)**
 
-  `verify-real-db.test.ts`, guarded by `describe.skipIf(!process.env.BUTLER_VERIFY_DB)`:
+  `verify-real-db.test.ts`, guarded by `describe.skipIf(!process.env.SHIPHERD_VERIFY_DB)`:
   1. Open the DB at that path; `migrate`.
   2. Build the real `PrLinker`, run `runPrBackfill` with the real gh, and run three watcher rounds with real gh (no notify, no delivery).
   3. Assert:
      - `PrStagesService.view({ featureId: 1 })` has five tickets, all `merged`;
      - `view({ ticketKey: "BTL-190" })[0].rows` lists PR numbers `[29, 28, 27, 26, 25]`.
 
-  Copy `~/.butler/app.db` (and `app.db-wal` if present) into the session scratchpad first, never the live file. Then run `BUTLER_VERIFY_DB=<copy> pnpm vitest run src/main/prwatch/verify-real-db.test.ts`.
+  Copy `~/.shipherd/app.db` (and `app.db-wal` if present) into the session scratchpad first, never the live file. Then run `SHIPHERD_VERIFY_DB=<copy> pnpm vitest run src/main/prwatch/verify-real-db.test.ts`.
 
   Expected: PASS. Record the output in the task report.
 

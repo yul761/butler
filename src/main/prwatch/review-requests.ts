@@ -20,7 +20,7 @@ export function reviewCatchUpDue(lastAt: number | null, now: number): boolean {
   return lastAt === null || now - lastAt > REVIEW_CATCHUP_MS;
 }
 
-/** 读的时候按设置过滤：registered 只留 Butler 登记过的仓库（改了设置马上生效，不用等下一次查询）。 */
+/** 读的时候按设置过滤：registered 只留 Shipherd 登记过的仓库（改了设置马上生效，不用等下一次查询）。 */
 export function scopeReviews<T extends { slug: string }>(list: T[], scope: ReviewRequestScope, registered: ReadonlySet<string>): T[] {
   return scope === "all" ? list : list.filter((r) => registered.has(r.slug.toLowerCase()));
 }

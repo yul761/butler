@@ -153,7 +153,7 @@ export function Wizard({ onDone }: { onDone: () => void }) {
       {step === "hooks" && (
         <section className="settings-section">
           <h3>{S.wizardHooksTitle}</h3>
-          <p className="muted">{S.wizardHooksHelp(report?.butlerHome ?? "~/.butler")}</p>
+          <p className="muted">{S.wizardHooksHelp(report?.shipherdHome ?? "~/.shipherd")}</p>
           {report && (
             <dl className="kv">
               <dt>{S.hooks}</dt>

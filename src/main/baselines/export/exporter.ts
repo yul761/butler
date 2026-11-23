@@ -1,4 +1,4 @@
-// 导出成 lint（设计 §8）：在 Butler 管的 worktree（<BUTLER_HOME>/exports/<id>）里新建分支、写文件、本地提交，然后停下。
+// 导出成 lint（设计 §8）：在 Shipherd 管的 worktree（<SHIPHERD_HOME>/exports/<id>）里新建分支、写文件、本地提交，然后停下。
 // 推送和开 PR 只经对外动作的开关（契约 4.8，branch_push / pr_open，默认关、都记录）；丢弃删掉 worktree 和本地分支。
 import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -54,7 +54,7 @@ export interface CheckExporterDeps {
   check(slug: string, key: string): (ResolvedCheck & { checkId: number | null }) | null;
   baseline(slug: string): RepoBaseline | null;
   localPath(slug: string): string | null;
-  /** <BUTLER_HOME>/exports */
+  /** <SHIPHERD_HOME>/exports */
   exportsDir: string;
   outward: OutwardGate;
   ticketPattern(): string;
@@ -68,7 +68,7 @@ export interface CheckExporterDeps {
 }
 
 const FETCH_TIMEOUT_MS = 20_000;
-const COMMIT_MESSAGE = (name: string) => `chore: add Butler check "${name.replace(/[\r\n"]+/g, " ").trim()}" as a repo rule`;
+const COMMIT_MESSAGE = (name: string) => `chore: add Shipherd check "${name.replace(/[\r\n"]+/g, " ").trim()}" as a repo rule`;
 
 function wiredText(w: Wired): string {
   const t = M().lintExport.wired;
@@ -155,7 +155,7 @@ export class CheckExporter {
       const built = buildExport({ check, baseline, layout, read, ticketPattern: this.d.ticketPattern() });
       if (!built.ok) return { ok: false, message: refusalText(built.reason, built.detail) };
       const plan = built.plan;
-      const branch = await this.freeBranch(root, `butler/check-${plan.name}-${key6(checkKey)}`);
+      const branch = await this.freeBranch(root, `shipherd/check-${plan.name}-${key6(checkKey)}`);
       const now = this.d.now();
       const id = this.d.repo.insertExport(
         { checkId: check.checkId, checkKey, slug, target: plan.target, branch, base, worktree: "", files: plan.files.map((f) => f.path), diff: "", committed: false, status: "failed", detail: M().legacy.interrupted, createdAt: now },
@@ -228,7 +228,7 @@ export class CheckExporter {
     const out = layout.files.filter((f) => want.test(f));
     for (const h of layout.huskyFiles) out.push(`.husky/${h}`);
     // 同名脚本已经存在时要知道（结果里说明覆盖了）。
-    const scripts = (await this.git(root, ["ls-tree", "-r", "-z", "--name-only", base, "--", "scripts/butler-checks", "scripts/butler_checks"])).stdout.split("\0").filter(Boolean);
+    const scripts = (await this.git(root, ["ls-tree", "-r", "-z", "--name-only", base, "--", "scripts/shipherd-checks", "scripts/shipherd_checks"])).stdout.split("\0").filter(Boolean);
     return [...out, ...scripts];
   }
 
@@ -281,7 +281,7 @@ export class CheckExporter {
 
   /**
    * 导出时不跑仓库自己的 git hook：worktree add 会触发 post-checkout（常见的是装依赖），提交会触发 prepare-commit-msg / post-commit
-   * （有的等终端输入，一直卡到超时）。core.hooksPath 指向 Butler 自己的一个空目录，只对这两条命令生效。
+   * （有的等终端输入，一直卡到超时）。core.hooksPath 指向 Shipherd 自己的一个空目录，只对这两条命令生效。
    */
   private noHooks(): string[] {
     const empty = join(this.d.exportsDir, ".no-hooks");
@@ -348,7 +348,7 @@ export class CheckExporter {
     const e = this.ready(id);
     if ("ok" in e) return e;
     if (e.status !== "ready" || !e.committed) return { ok: false, message: t.notReady };
-    const r = await this.d.outward.attempt("branch_push", { scope: { repoSlug: e.slug }, target: e.branch, summary: `push ${e.branch} (Butler check export)` }, async () => {
+    const r = await this.d.outward.attempt("branch_push", { scope: { repoSlug: e.slug }, target: e.branch, summary: `push ${e.branch} (Shipherd check export)` }, async () => {
       const p = await this.git(e.worktree, ["push", "-u", "origin", `${e.branch}:${e.branch}`], { timeoutMs: 120_000 });
       if (p.code !== 0) throw new Error(p.stderr.trim());
       return true;

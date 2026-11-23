@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { TicketRepo, WorkMode } from "../../../shared/types";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { repoName } from "../repos";
 import { RepoPicker } from "./RepoPicker";
 import { S } from "../strings";
@@ -37,7 +37,7 @@ export function RepoDialog({ ticketKey, repo, hasSessions, onClose }: Props) {
       else for (const repoPath of repoPaths) await api.addRepo({ ticketKey, repoPath, workMode, branch: branch.trim() || undefined });
       onClose();
     } catch (err) {
-      setError(err instanceof ButlerError ? (S.createErrors[err.code] ?? err.message) : (err as Error).message);
+      setError(err instanceof ShipherdError ? (S.createErrors[err.code] ?? err.message) : (err as Error).message);
     } finally {
       setBusy(false);
     }

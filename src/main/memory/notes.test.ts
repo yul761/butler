@@ -3,7 +3,7 @@ import type { Handoff } from "../../shared/handoff";
 import type { MemoryItem } from "../../shared/memory";
 import type { Followup, HandoffRecord, HandoffTrigger } from "../../shared/types";
 import { NOTE_BODY_LIMIT } from "../../shared/memory";
-import { BUTLER_NOTE_LIMIT, decisionNote, desiredNotes, followupNote, planReconcile } from "./notes";
+import { SHIPHERD_NOTE_LIMIT, decisionNote, desiredNotes, followupNote, planReconcile } from "./notes";
 
 const payload = (over: Partial<Handoff> = {}): Handoff => ({
   ticket: "PROJ-1", status: "active", done_today: [], next_steps: [], blockers: [], prs: [], jira: null,
@@ -84,7 +84,7 @@ describe("desiredNotes", () => {
     ];
     expect(desiredNotes(hs, []).map((n) => n.id)).toEqual(["changed", "old"]);
     const many = Array.from({ length: 40 }, (_, i) => followup(`f_${i}`, { createdAt: i }));
-    expect(desiredNotes([], many)).toHaveLength(BUTLER_NOTE_LIMIT);
+    expect(desiredNotes([], many)).toHaveLength(SHIPHERD_NOTE_LIMIT);
   });
 });
 

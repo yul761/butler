@@ -11,7 +11,7 @@ export const RECENT_REPORTS_LIMIT = 30;
 /** 汇报这么久还找不到总控（一个总控 session 都没有）就不送了：过时的「做完了」只会误导总控。排进了信箱的不受这个限制。 */
 export const REPORT_DELIVERY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 /**
- * Butler 往一个 session 里直接输入信箱消息、送到（deliver 返回 sent）以后这么久之内，这个 session 的下一次 UserPromptSubmit
+ * Shipherd 往一个 session 里直接输入信箱消息、送到（deliver 返回 sent）以后这么久之内，这个 session 的下一次 UserPromptSubmit
  * 算是这次输入引起的（只认一次）：deliver 没等到 hook 就返回时（hook 不通、等满了），迟到的那一次不能把它别的未决条目当成用户在终端里答了。
  */
 export const ANSWERING_TTL_MS = 30_000;
@@ -20,12 +20,12 @@ export interface InboxServiceDeps {
   repo: InboxRepo;
   /** 链上最新的 session（换新过的话是新的那个）；没有为 null。 */
   head(sessionId: string): Session | null;
-  /** Butler 正在给这个 session（链上任何一个 id）换新：/handoff 和接着做的话引起的 UserPromptSubmit 不是用户在回答。 */
+  /** Shipherd 正在给这个 session（链上任何一个 id）换新：/handoff 和接着做的话引起的 UserPromptSubmit 不是用户在回答。 */
   refreshing(sessionId: string): boolean;
   ticket(key: string): Ticket | null;
   /** 跑着这个 session（链上任何一个 id）的终端；没有为 null。 */
   termOf(sessionId: string): string | null;
-  /** 开着终端的 Butler session 的 head。 */
+  /** 开着终端的 Shipherd session 的 head。 */
   openHeads(): Session[];
   /** 信箱（BTL-245）：回答和汇报都排进去，送达后在 on("answer") / on("report") 里结束条目。 */
   mailbox: Pick<Mailbox, "send" | "on" | "queuedByRef" | "withdraw" | "queuedRefs">;
@@ -60,12 +60,12 @@ export interface AskedQuestion {
 export function roleOf(s: Pick<Session, "ticketKey" | "coordinator" | "featureId" | "fixesSession">): InboxRole {
   if (s.ticketKey !== null) return "ticket";
   if (s.featureId !== null) return s.fixesSession !== null ? "fix" : "feature_coordinator";
-  // Butler 总控（BTL-190 第 5 点）：ticket、feature 都是空的。以前的 epic session（BTL-246 去掉了）留下的条目也归到这里。
-  return "butler";
+  // Shipherd 总控（BTL-190 第 5 点）：ticket、feature 都是空的。以前的 epic session（BTL-246 去掉了）留下的条目也归到这里。
+  return "shipherd";
 }
 
 /**
- * 上面可能有管它的总控（汇报才有地方送）：ticket session、修复 session 要属于 feature；feature 总控和 Butler 总控上面都没有。
+ * 上面可能有管它的总控（汇报才有地方送）：ticket session、修复 session 要属于 feature；feature 总控和 Shipherd 总控上面都没有。
  */
 function mayHaveCoordinator(role: InboxRole, o: Pick<InboxOwner, "featureId">): boolean {
   return (role === "ticket" || role === "fix") && o.featureId !== null;
@@ -77,11 +77,11 @@ const repoName = (path: string): string => path.split(/[\\/]/).filter(Boolean).a
  * 「待你决定」和汇报（BTL-190 第 2+3 点）。
  * - ask_user 记一条 pending 的 decision；用户在卡片上答了以后先记下答案（status 还是 pending），等提问的 session 停下来再送进去，送到才算 answered。
  * - 用户直接在终端里回答（提问的 session 收到 UserPromptSubmit）：它还没答的条目都算 answered（卡片上答好、还没送的留着，下次照常送）。
- *   Butler 自己递回答、换新时输入的 /handoff 和接着做的话引起的那次不算。
+ *   Shipherd 自己递回答、换新时输入的 /handoff 和接着做的话引起的那次不算。
  * - report 存下；done / blocked 等管它的总控停下来时送进去（progress 只存不送；上面不可能有总控的也只存）。
  */
 export class InboxService {
-  /** Butler 刚往里直接输入过信箱消息的 session（head id）→ 到什么时候为止：这次输入引起的 UserPromptSubmit 不结束别的条目（见 ANSWERING_TTL_MS）。 */
+  /** Shipherd 刚往里直接输入过信箱消息的 session（head id）→ 到什么时候为止：这次输入引起的 UserPromptSubmit 不结束别的条目（见 ANSWERING_TTL_MS）。 */
   private readonly answering = new Map<string, number>();
 
   constructor(private readonly d: InboxServiceDeps) {
@@ -101,7 +101,7 @@ export class InboxService {
    * 信箱往这个 session 里直接输入（Mailbox 的 typing）：输入的途中（不限时）和送到以后 ANSWERING_TTL_MS 之内，
    * 这个 session 的下一次 UserPromptSubmit 算这次输入引起的。没送到就不留。
    */
-  butlerTyping(headId: string, phase: "start" | "sent" | "failed"): void {
+  shipherdTyping(headId: string, phase: "start" | "sent" | "failed"): void {
     const head = this.headId(headId);
     if (phase === "start") this.answering.set(head, Infinity);
     // 送到了、UserPromptSubmit 还没来（deliver 没等到 hook 就返回）：再等它一会儿。来过了（已经删掉）就不留。
@@ -145,7 +145,7 @@ export class InboxService {
 
   /**
    * report：存下来。queued：会送给总控（done / blocked，而且这个 session 上面可能有总控）。
-   * noCoordinator：done / blocked，但上面不可能有总控（没有 feature 的 ticket、feature 总控、Butler 总控自己），只存。
+   * noCoordinator：done / blocked，但上面不可能有总控（没有 feature 的 ticket、feature 总控、Shipherd 总控自己），只存。
    */
   report(s: Session, text: string, kind: ReportKind): { id: number; queued: boolean; noCoordinator: boolean } {
     // choice（ws-j）：不进汇报、不送总控，存进「替你做的选择」。没接选择服务时当 progress 存。
@@ -198,7 +198,7 @@ export class InboxService {
   /**
    * 这个 session 收到 UserPromptSubmit：用户在终端里回答了，它还没答的条目都算 answered。卡片上答好、还没送进去的不动：
    * 下次停下来照常送（不然答案永远送不进去）。
-   * Butler 刚往里直接输入过信箱消息（只认一次，最多 ANSWERING_TTL_MS），或者正在换新（/handoff、接着做的话）时不算：
+   * Shipherd 刚往里直接输入过信箱消息（只认一次，最多 ANSWERING_TTL_MS），或者正在换新（/handoff、接着做的话）时不算：
    * 信箱送到的回答自己结束那几条。
    */
   promptSubmitted(sessionId: string): void {
@@ -327,12 +327,12 @@ export class InboxService {
   itemView(item: InboxItem): InboxItemView {
     const s = this.d.head(item.sessionId);
     const sessionId = s?.id ?? item.sessionId;
-    const role: InboxRole = s ? roleOf(s) : item.ticketKey !== null ? "ticket" : item.featureId !== null ? "feature_coordinator" : "butler";
-    // 以前的 epic session（BTL-246 去掉了）留下的条目没有 ticket、feature：跳到 Butler 页。
+    const role: InboxRole = s ? roleOf(s) : item.ticketKey !== null ? "ticket" : item.featureId !== null ? "feature_coordinator" : "shipherd";
+    // 以前的 epic session（BTL-246 去掉了）留下的条目没有 ticket、feature：跳到 Shipherd 页。
     const target: NowTarget =
       item.ticketKey !== null ? { page: "ticket", key: item.ticketKey, sessionId }
       : s?.featureId != null || (s === null && item.featureId !== null) ? { page: "feature", id: (s?.featureId ?? item.featureId) as number, sessionId }
-      : { page: "butler", sessionId };
+      : { page: "shipherd", sessionId };
     return {
       id: item.id, kind: item.kind, sessionId, role, ticketKey: item.ticketKey, featureId: item.featureId,
       repo: s && role === "ticket" ? this.repoOf(s) : null,
@@ -347,7 +347,7 @@ export class InboxService {
     return this.d.repo.pendingDecisions().map((x) => this.itemView(x));
   }
 
-  /** feature 页（Butler 总控页用 all）上面的两栏。 */
+  /** feature 页（Shipherd 总控页用 all）上面的两栏。 */
   view(scope: InboxScope): InboxView {
     const filter: InboxFilter = "all" in scope ? null : scope;
     return {

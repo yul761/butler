@@ -106,7 +106,7 @@ export class BackgroundQueue {
   start(): void {
     if (this.started) return;
     const n = this.d.repo.resetRunning();
-    if (n > 0) this.d.log?.(`background: ${n} jobs were running when Butler quit, queued again`);
+    if (n > 0) this.d.log?.(`background: ${n} jobs were running when Shipherd quit, queued again`);
     this.started = true;
     this.unsubs.push(this.d.scheduler.subscribe(() => this.pump()));
     this.unsubs.push(this.d.scheduler.onYield((s) => this.yield(s)));

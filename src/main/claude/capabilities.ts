@@ -1,7 +1,7 @@
 import type { ClaudeHealth } from "../../shared/types";
 import { execText, type ExecText } from "../util/exec";
 
-/** Butler 依赖的 Claude Code 参数；缺任何一个都要在设置页报警。 */
+/** Shipherd 依赖的 Claude Code 参数；缺任何一个都要在设置页报警。 */
 export const REQUIRED_FLAGS = [
   "--print",
   "--session-id",

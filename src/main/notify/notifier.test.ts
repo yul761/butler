@@ -63,7 +63,7 @@ describe("Notifier (ws-j)", () => {
     await n.flush("decision_needed");
     expect(posted).toHaveLength(1);
     const body = JSON.parse(posted[0]!.body);
-    expect(body).toMatchObject({ title: "Butler", event: "decision_needed", count: 2 });
+    expect(body).toMatchObject({ title: "Shipherd", event: "decision_needed", count: 2 });
     expect(body.text).toContain("2");
     expect(posted[0]!.body).not.toContain("T-1");
     expect(posted[0]!.contentType).toBe("application/json");
@@ -75,7 +75,7 @@ describe("Notifier (ws-j)", () => {
     n.emit("pr_high_risk", { ticketKey: "T-1", prNumber: 12 });
     await n.flush("pr_high_risk");
     expect(posted[0]!.body).toContain("T-1 #12");
-    expect(posted[0]!.headers).toEqual({ Title: "Butler" });
+    expect(posted[0]!.headers).toEqual({ Title: "Shipherd" });
     expect(posted[0]!.contentType).toMatch(/^text\/plain/);
   });
 

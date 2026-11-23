@@ -48,7 +48,7 @@ const layers = (repo: string, names: string[], start = 0): EngineLayer[] =>
   names.map((b, i) => ({ position: start + i, branch: b, tip: g(repo, "rev-parse", b), base: null }));
 
 const input = (repo: string, extra: Partial<Parameters<typeof runEngine>[0]>) => ({
-  repo, workRoot: tempDir("butler-stack-work-"), runId: 1, trunk: g(repo, "rev-parse", "main"), layers: [] as EngineLayer[],
+  repo, workRoot: tempDir("shipherd-stack-work-"), runId: 1, trunk: g(repo, "rev-parse", "main"), layers: [] as EngineLayer[],
   bottomOldParent: null, mode: "update_refs" as const, execPath: process.execPath, ...extra,
 });
 
@@ -114,7 +114,7 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     expect(r.tips.map((t) => t.newBase)).toEqual([trunk, r.tips[0]!.newTip, r.tips[1]!.newTip, r.tips[2]!.newTip]);
     for (const b of ["a", "b", "c", "d"]) expect(g(repo, "rev-parse", b)).toBe(tips[b]);
     expect(g(repo, "rev-parse", "bystander")).toBe(tips.b);
-    expect(await refsUnder(repo, "refs/heads/butler-stack")).toEqual([]);
+    expect(await refsUnder(repo, "refs/heads/shipherd-stack")).toEqual([]);
     expect(g(repo, "worktree", "list", "--porcelain").split("\n").filter((l) => l.startsWith("worktree "))).toHaveLength(1);
   });
 
@@ -154,7 +154,7 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     const r = await runEngine(input(repo, { mode, layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
     expect(r).toMatchObject({ kind: "conflict", branch: "c", position: 2, files: ["c.txt"] });
     for (const b of ["a", "b", "c", "d"]) expect(g(repo, "rev-parse", b)).toBe(tips[b]);
-    expect(await refsUnder(repo, "refs/heads/butler-stack")).toEqual([]);
+    expect(await refsUnder(repo, "refs/heads/shipherd-stack")).toEqual([]);
   });
 
   it("gives a middle layer a command onto its parent's new tip, and the next run picks up the session's resolution", async () => {

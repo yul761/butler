@@ -57,7 +57,7 @@ export function memDb(): Db {
  * 用 .native：Windows runner 的 os.tmpdir() 是 8.3 短路径（C:\Users\RUNNER~1\...），JS 版 realpathSync 不展开短名，
  * 而 git rev-parse --show-toplevel 返回长路径（C:\Users\runneradmin\...），两者比较就对不上。
  */
-export function tempDir(prefix = "butler-test-"): string {
+export function tempDir(prefix = "shipherd-test-"): string {
   return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
 }
 
@@ -68,7 +68,7 @@ export function tempDir(prefix = "butler-test-"): string {
  * 复制会改掉工作区文件的 inode/ctime，index 里记的 stat 对不上；diff-index 这类不刷新 index 的命令会把它们当成
  * 改过，所以有 index 的就跑一次 update-index --refresh（1 个进程）。模板里不能有链接的 worktree（它们记的是绝对路径）。
  */
-export function copyRepo(src: string, prefix = "butler-repo-"): string {
+export function copyRepo(src: string, prefix = "shipherd-repo-"): string {
   const dir = tempDir(prefix);
   cpSync(src, dir, { recursive: true, preserveTimestamps: true });
   if (existsSync(join(dir, ".git", "index"))) execFileSync("git", ["update-index", "-q", "--refresh"], { cwd: dir, stdio: "ignore" });
@@ -97,7 +97,7 @@ let repoTemplate: string | null = null;
  */
 export function makeRepo(): string {
   if (repoTemplate === null) {
-    const tpl = tempDir("butler-repo-template-");
+    const tpl = tempDir("shipherd-repo-template-");
     const g = (...args: string[]) => execFileSync("git", args, { cwd: tpl, stdio: "ignore" });
     g("init", "-b", "main");
     g("config", "user.email", "test@example.com");
@@ -118,8 +118,8 @@ export function makeRepo(): string {
  */
 export function makeStaleClone(): { repo: string; remote: string; initSha: string; remoteSha: string; oldSha: string } {
   const upstream = makeRepo();
-  const remote = tempDir("butler-remote-");
-  const repo = tempDir("butler-clone-");
+  const remote = tempDir("shipherd-remote-");
+  const repo = tempDir("shipherd-clone-");
   const g = (cwd: string, ...args: string[]) =>
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
   const initSha = g(upstream, "rev-parse", "HEAD");
@@ -181,12 +181,12 @@ export function fakePtyFactory() {
 export interface FakeCall {
   args: string[];
   input: string;
-  butlerSession: string | null;
+  shipherdSession: string | null;
   cwd: string;
 }
 
 /**
- * 写一个假的 claude 可执行文件（Node 脚本）。它把参数、stdin、BUTLER_SESSION 和 cwd 记到日志里，然后执行 body。
+ * 写一个假的 claude 可执行文件（Node 脚本）。它把参数、stdin、SHIPHERD_SESSION 和 cwd 记到日志里，然后执行 body。
  * body 里可用：args、input、call（第几次调用，从 1 开始）、emit(obj)（写一行 JSON）、
  * result(structured, extra?)（写一条成功的 --output-format json 结果，session_id 为 "fork-<call>"）。
  * Windows 上额外生成一个 .cmd 包装并返回它的路径，这样测试会经过 cross-spawn 的 cmd.exe 转义。
@@ -211,7 +211,7 @@ process.stdin.on("data", (c) => (input += c));
 process.stdin.on("end", () => {
   const args = process.argv.slice(2);
   const call = (fs.existsSync(LOG) ? fs.readFileSync(LOG, "utf8").split("\\n").filter(Boolean).length : 0) + 1;
-  fs.appendFileSync(LOG, JSON.stringify({ args, input, butlerSession: process.env.BUTLER_SESSION ?? null, cwd: process.cwd() }) + "\\n");
+  fs.appendFileSync(LOG, JSON.stringify({ args, input, shipherdSession: process.env.SHIPHERD_SESSION ?? null, cwd: process.cwd() }) + "\\n");
   const emit = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
   const result = (structured, extra) => emit(Object.assign({ type: "result", subtype: "success", is_error: false, session_id: "fork-" + call, result: JSON.stringify(structured), structured_output: structured, permission_denials: [] }, extra || {}));
   ${body}

@@ -10,7 +10,7 @@ const isWin = process.platform === "win32";
 const goHome = (page: Page) => page.locator(".sidebar").getByRole("button", { name: S.home, exact: true }).click();
 
 /**
- * BTL-249「全新环境第一次使用」：一台从没装过 Butler 的机器，一个照着界面点的新用户，走到首页「轮到你」出现第一张卡片。
+ * BTL-249「全新环境第一次使用」：一台从没装过 Shipherd 的机器，一个照着界面点的新用户，走到首页「轮到你」出现第一张卡片。
  * - claude 不在登录 shell 的 PATH 里，装在 ~/.local/bin（官方安装脚本的位置）：向导自己找到，不用手填路径（Windows 上照旧在 PATH 里）。
  * - 这台机器上 claude 还没登录过：向导提示，但不拦；登录以后「重新检查」提示消失。
  * - gh 装了但没登录（Windows 上没有假 gh：没装）：向导里写出来，也不拦。
@@ -19,7 +19,7 @@ const goHome = (page: Page) => page.locator(".sidebar").getByRole("button", { na
  */
 test("first run on a fresh machine: wizard, a ticket with no repo, the first session and the first Your turn card", async ({ makeSandbox, launch }) => {
   const s = makeSandbox(isWin ? { claudeOffPath: true } : { claudeOffPath: true, gh: { branches: {}, prs: {}, loggedOut: true } });
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);
 
   // 1. 向导第 1 步：不手填路径，claude 已经找到了（PATH 里没有时看 ~/.local/bin）。
@@ -47,7 +47,7 @@ test("first run on a fresh machine: wizard, a ticket with no repo, the first ses
 
   // 3. 第 2 步：hook 还没装，主按钮是「安装并继续」，装好直接到完成页（tracker、权限档案不在第一次的向导里）。
   await expect(page.getByText(S.wizardStep(2, 2), { exact: true })).toBeVisible();
-  await expect(page.getByText(S.wizardHooksHelp(s.butlerHome), { exact: true })).toBeVisible();
+  await expect(page.getByText(S.wizardHooksHelp(s.shipherdHome), { exact: true })).toBeVisible();
   await page.getByRole("button", { name: S.wizardHooksInstallNext, exact: true }).click();
   await expect(page.getByRole("heading", { name: S.wizardDoneTitle, exact: true })).toBeVisible();
   await expect(page.getByText(S.wizardDoneHelp, { exact: true })).toBeVisible();

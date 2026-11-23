@@ -62,7 +62,7 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cw
   /** 一个有对话记录的 ticket：session 是 s-<key>，transcript 在 mtime 时刻修改过（null 表示没有 transcript）。 */
   const addTicket = (key: string, mtime: number | null = NOW - 10) => {
     insertTicket(tickets, ticket(key));
-    sessions.insertIfAbsent({ id: `s-${key}`, ticketKey: key, cwd: `/w/${key}`, origin: "butler", lastActivityAt: 1, createdAt: 1 });
+    sessions.insertIfAbsent({ id: `s-${key}`, ticketKey: key, cwd: `/w/${key}`, origin: "shipherd", lastActivityAt: 1, createdAt: 1 });
     if (mtime !== null) mtimes[`s-${key}`] = mtime;
   };
   const setRespond = (fn: typeof respond) => {
@@ -134,8 +134,8 @@ describe("HandoffRunner", () => {
     expect(req.prompt).toContain("A-1");
     expect(req.prompt).toContain("上一次的下一步");
     expect(req.prompt).toContain('"id": "f1"');
-    expect(req.env).toMatchObject({ BUTLER_SESSION: "headless:run-1", PATH: "/login/bin" });
-    expect(req.env.BUTLER_TICKET).toBeUndefined();
+    expect(req.env).toMatchObject({ SHIPHERD_SESSION: "headless:run-1", PATH: "/login/bin" });
+    expect(req.env.SHIPHERD_TICKET).toBeUndefined();
     expect(sessions.get("fork-1")).toMatchObject({ dismissed: true });
     expect(handoffs.latest("A-1")).toMatchObject({ trigger: "nightly", sessionId: "s-A-1", degraded: false });
   });
@@ -209,7 +209,7 @@ describe("HandoffRunner", () => {
     const { runner, addTicket, sessions, calls, mtimes } = setup();
     addTicket("A-1", NOW + 10);
     // s-A-1（sonnet）被 /clear 成 s-A-2：模型沿链复制，fork 的是链头。
-    sessions.insertIfAbsent({ id: "s-A-2", ticketKey: "A-1", cwd: "/w/A-1", origin: "butler", lastActivityAt: 2, createdAt: 2, model: "sonnet" });
+    sessions.insertIfAbsent({ id: "s-A-2", ticketKey: "A-1", cwd: "/w/A-1", origin: "shipherd", lastActivityAt: 2, createdAt: 2, model: "sonnet" });
     sessions.setReplacedBy("s-A-1", "s-A-2");
     mtimes["s-A-2"] = NOW + 10;
     await runner.runManual("A-1");
@@ -223,7 +223,7 @@ describe("HandoffRunner", () => {
     addTicket("A-1", NOW + 10);
     await runner.runManual("A-1");
     expect(calls[0].args).not.toContain("--model");
-    sessions.insertIfAbsent({ id: "s-A-2", ticketKey: "A-1", cwd: "/w/A-1", origin: "butler", lastActivityAt: 2, createdAt: 2, model: "gpt-9" });
+    sessions.insertIfAbsent({ id: "s-A-2", ticketKey: "A-1", cwd: "/w/A-1", origin: "shipherd", lastActivityAt: 2, createdAt: 2, model: "gpt-9" });
     mtimes["s-A-2"] = NOW + 10;
     sessions.setReplacedBy("s-A-1", "s-A-2");
     await runner.runManual("A-1");
@@ -304,7 +304,7 @@ describe("HandoffRunner", () => {
     const [call] = fake.calls();
     expect(call.input).toContain("A-1");
     expect(call.args).toContain("--fork-session");
-    expect(call.butlerSession).toBe("headless:run-1");
+    expect(call.shipherdSession).toBe("headless:run-1");
     expect(handoffs.latest("A-1")?.payload?.done_today).toEqual(["真的跑了"]);
   });
 

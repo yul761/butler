@@ -1,4 +1,4 @@
-// butler-hook mailbox <dir>：工具调用的间隙把信箱里排队的消息作为 additionalContext 送进 session（BTL-245）。
+// shipherd-hook mailbox <dir>：工具调用的间隙把信箱里排队的消息作为 additionalContext 送进 session（BTL-245）。
 // 只在 PostToolUse / PostToolUseFailure 上跑，而且 settings 里的命令先看过目录在不在：到这里时多半真有消息。
 import { readdirSync, readFileSync, renameSync, utimesSync } from "node:fs";
 import { join } from "node:path";
@@ -52,7 +52,7 @@ function parse(text: string): MailboxFile | null {
 
 /** 认领、拼正文。任何一步出错都只少送，不抛。 */
 export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, d: MailboxDeps = realMailboxDeps): MailboxRun {
-  const sid = env.BUTLER_SESSION?.trim();
+  const sid = env.SHIPHERD_SESSION?.trim();
   if (!sid || !root) return NOTHING;
   let event = "PostToolUse";
   try {
@@ -137,6 +137,6 @@ export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, 
 
 /** 送完以后给主进程的信封：让它马上清扫这个终端的 .done（不等定时清扫）。 */
 export function mailboxEnvelope(env: NodeJS.ProcessEnv, now: number): HookEnvelope {
-  const sid = env.BUTLER_SESSION?.trim() || null;
-  return { v: 1, receivedAt: now, ticket: env.BUTLER_TICKET?.trim() || null, butlerSession: sid, payload: { hook_event_name: MAILBOX_EVENT, session_id: sid } };
+  const sid = env.SHIPHERD_SESSION?.trim() || null;
+  return { v: 1, receivedAt: now, ticket: env.SHIPHERD_TICKET?.trim() || null, shipherdSession: sid, payload: { hook_event_name: MAILBOX_EVENT, session_id: sid } };
 }

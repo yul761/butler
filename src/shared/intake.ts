@@ -56,7 +56,7 @@ export interface IncomingTicket {
   subtasks: { key: string; title: string }[];
   /** 来源直接说了放哪个仓库（file 来源可以写路径）。 */
   repo: string | null;
-  /** 父 epic（BTL-246 §7：按它分组进 Butler 的 epic）；没有时不带这个字段（以前存的 payload 也没有）。 */
+  /** 父 epic（BTL-246 §7：按它分组进 Shipherd 的 epic）；没有时不带这个字段（以前存的 payload 也没有）。 */
   epic?: { key: string; title: string | null };
 }
 
@@ -99,7 +99,7 @@ export interface IntakePolicy {
   maxParallel: number;
   /** 同仓库预计改到同一批路径：排队串行，或照样并行（只记一笔）。 */
   conflictAction: ConflictAction;
-  /** 缺信息时：只提醒你、开 session 回 tracker 提问、交给 Butler 总控去问。 */
+  /** 缺信息时：只提醒你、开 session 回 tracker 提问、交给 Shipherd 总控去问。 */
   clarifyMode: ClarifyMode;
   /** 模型分类的把握低于这个就算拿不准（0–1）。 */
   uncertainBelow: number;

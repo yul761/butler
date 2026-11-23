@@ -15,8 +15,8 @@ describe("SessionsRepo lesson sessions (lessons visibility task 7)", () => {
   it("lesson_run_id survives /clear", () => {
     const { repo, run } = setup();
     const id = run();
-    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, lessonRunId: id });
-    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 2 });
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, lessonRunId: id });
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 2 });
     repo.setReplacedBy("a", "b", "clear");
     expect(repo.get("b")?.lessonRunId).toBe(id);
     expect(repo.forLessonRun(id)?.id).toBe("b");
@@ -25,13 +25,13 @@ describe("SessionsRepo lesson sessions (lessons visibility task 7)", () => {
   it("lesson_run_id survives /resume", () => {
     const { repo, run } = setup();
     const id = run();
-    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, lessonRunId: id });
-    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 2 });
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, lessonRunId: id });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 2 });
     repo.setReplacedBy("a", "c", "resume");
     expect(repo.get("c")?.lessonRunId).toBe(id);
     // 已经属于别的运行的不改。
     const other = run();
-    repo.insertIfAbsent({ id: "d", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 3, lessonRunId: other });
+    repo.insertIfAbsent({ id: "d", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 3, lessonRunId: other });
     repo.setReplacedBy("c", "d", "resume");
     expect(repo.get("d")?.lessonRunId).toBe(other);
   });
@@ -40,8 +40,8 @@ describe("SessionsRepo lesson sessions (lessons visibility task 7)", () => {
     const { repo, run } = setup();
     const id = run();
     expect(repo.forLessonRun(id)).toBeNull();
-    repo.insertIfAbsent({ id: "old", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, lessonRunId: id });
-    repo.insertIfAbsent({ id: "new", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 5, lessonRunId: id });
+    repo.insertIfAbsent({ id: "old", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, lessonRunId: id });
+    repo.insertIfAbsent({ id: "new", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 5, lessonRunId: id });
     repo.dismiss("new");
     expect(repo.forLessonRun(id)?.id).toBe("new");
     expect(repo.forLessonRun(id + 1)).toBeNull();
@@ -50,13 +50,13 @@ describe("SessionsRepo lesson sessions (lessons visibility task 7)", () => {
   it("listLessonSessions lists only lesson heads", () => {
     const { repo, run } = setup();
     const id = run();
-    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
-    repo.insertIfAbsent({ id: "butler", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, butler: true });
-    repo.insertIfAbsent({ id: "l1", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, lessonRunId: id });
-    repo.insertIfAbsent({ id: "l1b", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 2 });
+    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1 });
+    repo.insertIfAbsent({ id: "shipherd", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, shipherd: true });
+    repo.insertIfAbsent({ id: "l1", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, lessonRunId: id });
+    repo.insertIfAbsent({ id: "l1b", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 2 });
     repo.setReplacedBy("l1", "l1b", "clear");
-    repo.insertIfAbsent({ id: "l2", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 3, lessonRunId: id });
-    repo.insertIfAbsent({ id: "hidden", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 4, lessonRunId: id });
+    repo.insertIfAbsent({ id: "l2", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 3, lessonRunId: id });
+    repo.insertIfAbsent({ id: "hidden", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 4, lessonRunId: id });
     repo.dismiss("hidden");
     expect(repo.listLessonSessions().map((s) => s.id)).toEqual(["l2", "l1b"]);
     expect(repo.get("plain")?.lessonRunId).toBeNull();
@@ -66,26 +66,26 @@ describe("SessionsRepo lesson sessions (lessons visibility task 7)", () => {
     const { repo, run } = setup();
     const id = run();
     repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 10 });
-    repo.insertIfAbsent({ id: "lesson", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 10, lessonRunId: id });
+    repo.insertIfAbsent({ id: "lesson", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 10, lessonRunId: id });
     expect(repo.listUnclaimed(0).map((s) => s.id)).toEqual(["loose"]);
   });
 });
 
-describe("SessionsRepo.firstButlerCreatedAt (ws-h baseline cutoff)", () => {
-  it("is the earliest Butler session, lesson sessions and discovered ones excluded", () => {
+describe("SessionsRepo.firstShipherdCreatedAt (ws-h baseline cutoff)", () => {
+  it("is the earliest Shipherd session, lesson sessions and discovered ones excluded", () => {
     const { repo, run } = setup();
-    expect(repo.firstButlerCreatedAt()).toBeNull();
-    repo.insertIfAbsent({ id: "l", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 5, lessonRunId: run() });
+    expect(repo.firstShipherdCreatedAt()).toBeNull();
+    repo.insertIfAbsent({ id: "l", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 5, lessonRunId: run() });
     repo.insertIfAbsent({ id: "d", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 7 });
-    expect(repo.firstButlerCreatedAt()).toBeNull();
-    repo.insertIfAbsent({ id: "b2", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 20 });
-    repo.insertIfAbsent({ id: "b1", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 10 });
-    expect(repo.firstButlerCreatedAt()).toBe(10);
+    expect(repo.firstShipherdCreatedAt()).toBeNull();
+    repo.insertIfAbsent({ id: "b2", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 20 });
+    repo.insertIfAbsent({ id: "b1", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 10 });
+    expect(repo.firstShipherdCreatedAt()).toBe(10);
   });
 });
 
 describe("SessionsRepo hibernation (WS-M B)", () => {
-  const row = (repo: SessionsRepo, id: string, at = 1) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+  const row = (repo: SessionsRepo, id: string, at = 1) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: at });
 
   it("marks, lists and clears a hibernated head", () => {
     const { repo } = setup();
@@ -144,7 +144,7 @@ describe("SessionsRepo hibernation (WS-M B)", () => {
 describe("SessionsRepo.rootsOf", () => {
   it("maps a batch of ids to their chain roots; unknown ids map to themselves", () => {
     const { repo } = setup();
-    for (const [id, at] of [["a", 1], ["b", 2], ["c", 3], ["x", 4]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+    for (const [id, at] of [["a", 1], ["b", 2], ["c", 3], ["x", 4]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: at });
     repo.setReplacedBy("a", "b", "clear");
     repo.setReplacedBy("b", "c", "resume");
     expect(repo.rootsOf(["c", "b", "x", "nope"])).toEqual(new Map([["c", "a"], ["b", "a"], ["x", "x"], ["nope", "nope"]]));
@@ -162,7 +162,7 @@ describe("SessionsRepo.rootsOf", () => {
 describe("SessionsRepo.rootOf (workstream L)", () => {
   it("finds the oldest id of a chain from any id on it", () => {
     const { repo } = setup();
-    for (const [id, at] of [["a", 1], ["b", 2], ["c", 3]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+    for (const [id, at] of [["a", 1], ["b", 2], ["c", 3]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: at });
     repo.setReplacedBy("a", "b", "clear");
     repo.setReplacedBy("b", "c", "resume");
     expect(repo.rootOf("a")).toBe("a");
@@ -173,7 +173,7 @@ describe("SessionsRepo.rootOf (workstream L)", () => {
 
   it("returns instead of looping forever when replaced_by forms a cycle", () => {
     const { repo, db } = setup();
-    for (const [id, at] of [["a", 1], ["b", 2]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+    for (const [id, at] of [["a", 1], ["b", 2]] as const) repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: at });
     db.prepare(`UPDATE sessions SET replaced_by = 'b' WHERE id = 'a'`).run();
     db.prepare(`UPDATE sessions SET replaced_by = 'a' WHERE id = 'b'`).run();
     expect(["a", "b"]).toContain(repo.rootOf("a"));
@@ -181,31 +181,31 @@ describe("SessionsRepo.rootOf (workstream L)", () => {
 });
 
 describe("SessionsRepo.listConvTargets (UI redesign layer 4)", () => {
-  it("picks heads that Butler opened or that belong somewhere, active since the cutoff", () => {
+  it("picks heads that Shipherd opened or that belong somewhere, active since the cutoff", () => {
     const { db, repo, run } = setup();
     const feature = Number(db.prepare(`INSERT INTO features (name, workspace_dir, created_at) VALUES ('f', '/w', 1)`).run().lastInsertRowid);
     for (const k of ["PROJ-1", "PROJ-2", "PROJ-3"]) db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES (?, '/r', 'branch', 'b', 1)`).run(k);
     const add = (id: string, extra: Partial<Parameters<SessionsRepo["insertIfAbsent"]>[0]> = {}) =>
       repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 100, lastActivityAt: 100, ...extra });
-    add("butler-origin", { origin: "butler" });
+    add("shipherd-origin", { origin: "shipherd" });
     add("ticket", { ticketKey: "PROJ-1" });
     add("feature", { featureId: feature });
-    add("controller", { butler: true });
+    add("controller", { shipherd: true });
     add("stray");
     repo.recordHeadless("headless", "/w", 100);
-    add("lesson", { origin: "butler", lessonRunId: run() });
+    add("lesson", { origin: "shipherd", lessonRunId: run() });
     add("old-segment", { ticketKey: "PROJ-2" });
     add("new-segment", { ticketKey: "PROJ-2" });
     repo.setReplacedBy("old-segment", "new-segment");
     add("stale", { ticketKey: "PROJ-3", createdAt: 10, lastActivityAt: 10 });
-    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["butler-origin", "controller", "feature", "new-segment", "ticket"]);
+    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["shipherd-origin", "controller", "feature", "new-segment", "ticket"]);
   });
 });
 
 /** 以前的 epic session（BTL-246 去掉了 epic 层）：新代码不写 epic_id，老行只能直接改表做出来。 */
 function legacyEpicSession(db: ReturnType<typeof memDb>, repo: SessionsRepo, id: string, at = 100) {
   const epic = Number(db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES (?, '/e', 1)`).run(`e-${id}`).lastInsertRowid);
-  repo.insertIfAbsent({ id, ticketKey: null, cwd: "/e", origin: "butler", createdAt: at, lastActivityAt: at });
+  repo.insertIfAbsent({ id, ticketKey: null, cwd: "/e", origin: "shipherd", createdAt: at, lastActivityAt: at });
   db.prepare(`UPDATE sessions SET epic_id = ? WHERE id = ?`).run(epic, id);
 }
 
@@ -248,7 +248,7 @@ describe("SessionsRepo.listByTickets (BTL-242)", () => {
     for (const key of ["T-1", "T-2", "T-3"]) {
       insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: `feature/${key}`, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
     }
-    const add = (id: string, ticketKey: string | null, at: number) => repo.insertIfAbsent({ id, ticketKey, cwd: "/w", origin: "butler", createdAt: at });
+    const add = (id: string, ticketKey: string | null, at: number) => repo.insertIfAbsent({ id, ticketKey, cwd: "/w", origin: "shipherd", createdAt: at });
     add("a", "T-1", 1);
     add("b", "T-1", 3);
     add("c", "T-2", 2);
@@ -265,7 +265,7 @@ describe("SessionsRepo.listByTickets (BTL-242)", () => {
 });
 
 describe("SessionsRepo resume bookkeeping (BTL-256)", () => {
-  const add = (repo: SessionsRepo, id: string, at = 1) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: at });
+  const add = (repo: SessionsRepo, id: string, at = 1) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: at });
 
   it("records and clears that the user ended a session", () => {
     const { repo } = setup();

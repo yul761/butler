@@ -6,7 +6,7 @@ import { completeWizard, expect, FAKE_GH_ORIGIN, makeGitRepo, terminalText, test
 
 /**
  * 工作流 W：session 在自己的 worktree 里推了一个不是 ticket 分支的分支、开了 PR，CI 的结论递回这个 session。
- * 走真实的路径：假 claude 的 /fake-run → matcher 为 Bash 的 PostToolUse hook → butler-hook（只为 git push / gh pr create 写信封）
+ * 走真实的路径：假 claude 的 /fake-run → matcher 为 Bash 的 PostToolUse hook → shipherd-hook（只为 git push / gh pr create 写信封）
  * → BranchOwnership 记下分支是谁的、按 gh pr create 打出来的链接链接 PR（以前漏链接的就是这种 PR）→ PrWatcher 读到 CI 通过
  * → CiDelivery 按归属递给这个 session（以前因为分支不是 ticket 分支，一直不递）。
  * Windows 上跳过：假 gh 是 sh 包装，resolveGh 只认 gh.exe。

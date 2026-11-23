@@ -162,8 +162,8 @@ export interface Risk {
 
 // ---------------------------------------------------------------- 简报（设计 §8）
 
-export const BRIEF_START = "<!-- butler:brief -->";
-export const BRIEF_END = "<!-- /butler:brief -->";
+export const BRIEF_START = "<!-- shipherd:brief -->";
+export const BRIEF_END = "<!-- /shipherd:brief -->";
 
 export interface BriefView {
   id: number;

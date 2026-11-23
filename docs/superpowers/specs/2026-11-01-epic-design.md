@@ -21,9 +21,9 @@
 - **没有 epic 自己的汇总**：这一版不做 epic 的晚间 handoff，也不做 epic 的进度百分比。epic 页的进度直接来自各 feature。
 - **`/handoff` 在 epic session 里不存汇总**：规划和决定靠 epic 记忆保留。
 - **feature 的状态只用于显示**：epic 页按优先级算一个：有 ticket 卡住 > 等你回话 > 未开始（没有 ticket 也没有 session）> 进行中。不写进数据库，不影响 ticket。
-- **epic 记忆所有层都能用**：新 scope `epic:<id>`，挂成 `butler-epic` server。epic session、epic 下 feature 的总控、这些 feature 下 ticket 的所有 session 都挂，和现在 `butler-feature` 的做法一样。
+- **epic 记忆所有层都能用**：新 scope `epic:<id>`，挂成 `shipherd-epic` server。epic session、epic 下 feature 的总控、这些 feature 下 ticket 的所有 session 都挂，和现在 `shipherd-feature` 的做法一样。
 - **归档的 feature 还算数**：用户最常见的情况就是上一个 feature 做完归档了，再开下一个。所以读取 epic 信息时包含已归档的 feature，并标明。
-- **移动 feature 只改归属**：不搬文件，工作区和 worktree 都不动。可以移进、移出、在 epic 之间移动。已经在跑的 session 没有 `butler-epic`，重新打开后才有。
+- **移动 feature 只改归属**：不搬文件，工作区和 worktree 都不动。可以移进、移出、在 epic 之间移动。已经在跑的 session 没有 `shipherd-epic`，重新打开后才有。
 - **归档 epic 时连同下面的 feature**：和归档 feature 连同 ticket 的做法一致。
 - **epic 有自己的工作区和仓库列表**：默认 `<仓库的上一层>-epics/<名字>`。epic session 在这里打开，并用 `--add-dir` 加上各仓库，方便规划时读代码。feature 的工作区不放进 epic 工作区，沿用 `<仓库的上一层>-features/<名字>`。
 - epic session 建 feature 时，仓库从 epic 的仓库里选。**feature 移进 epic、或者之后给 feature 加仓库时，epic 没有的仓库自动加进 epic**，这样 epic session 总能读到这些代码。移出时不从 epic 删仓库。
@@ -31,8 +31,8 @@
   - 归档 epic 下的 feature 时，如果上次汇总之后有新活动，先生成一份汇总再归档。这一步在归档生效前做，界面显示进行中，失败时照样归档并记日志，不能卡住归档。
   - epic session 调用 `create_feature` 时，在后台给同一 epic 下未归档、上次汇总之后有新活动的 feature 各生成一份汇总。`create_feature` 不等它。
 - **epic 记忆分两部分，互不挤占**：
-  - 规划笔记：epic session 用 `remember` 写，占 scope 的 30 条笔记额度，Butler 不往这里同步任何东西。
-  - 各 feature 的情况：Butler 把它们渲染成 `epic:<id>` scope 里的**一份 handoff**，内容是最近的 10 个 feature（含已归档，标明）的进度、决定、未解决的问题，总长有上限，超出时先丢最旧的 feature。这样 `recall` 时任何层的 session 都能读到，不占笔记额度。
+  - 规划笔记：epic session 用 `remember` 写，占 scope 的 30 条笔记额度，Shipherd 不往这里同步任何东西。
+  - 各 feature 的情况：Shipherd 把它们渲染成 `epic:<id>` scope 里的**一份 handoff**，内容是最近的 10 个 feature（含已归档，标明）的进度、决定、未解决的问题，总长有上限，超出时先丢最旧的 feature。这样 `recall` 时任何层的 session 都能读到，不占笔记额度。
   - 任何一个 feature 有新汇总、移进或移出时，重新渲染相关 epic 的这份 handoff；移出的 feature 随之消失。
   - epic session 自己用 `handoff` 写的规划不能被覆盖：渲染时带上它，放在最前面，最多 6000 字符，保证最新的 feature 放得下。
 - **“过期”的判断只给交接用**：归档和 `create_feature` 时，只在 ticket 的 session 里工作、没跑 `/handoff` 也算有新活动。晚间批量沿用原来的规则，否则某个 ticket 的 handoff 一直失败时，feature 每晚都会重新生成。
@@ -51,16 +51,16 @@
 
 1. 用户建 epic（名字、仓库），打开 epic session 讨论。
 2. 定下来后，epic session 调用 `create_feature`，传名字、选用的仓库和一份简短规划（`brief`）：要做什么、为什么做、已经定下的决定。
-3. Butler 建好 feature，它出现在 epic 页和侧边栏。不开总控（`create_feature` 带 `start: true` 时建完马上像第 4 步那样打开）。
+3. Shipherd 建好 feature，它出现在 epic 页和侧边栏。不开总控（`create_feature` 带 `start: true` 时建完马上像第 4 步那样打开）。
 4. 用户点进 feature，开总控；或者用户同意开工后，epic session 用 `start_feature` 打开（BTL-190 第 4 点）。epic 打开的总控收到的第一条消息里，说明换成不用等用户确认、直接按规划建 ticket、开子 session，epic 给的 `instructions` 放在数据标签前面。
-5. **这个 feature 第一次开总控时**，Butler 把规划和其他 feature 的情况作为第一条消息发给它（走现有的 `submit` 投递，用户在终端里看得到）。内容是规划，加上同一 epic 下每个 feature 的名字、状态（含已归档）、最新的进度、决定、未解决的问题。没有 `brief` 的 feature（比如移进来的）不发。之后再开总控不重复发，需要时用下面的工具查。
+5. **这个 feature 第一次开总控时**，Shipherd 把规划和其他 feature 的情况作为第一条消息发给它（走现有的 `submit` 投递，用户在终端里看得到）。内容是规划，加上同一 epic 下每个 feature 的名字、状态（含已归档）、最新的进度、决定、未解决的问题。没有 `brief` 的 feature（比如移进来的）不发。之后再开总控不重复发，需要时用下面的工具查。
 6. 总控自己建 ticket、开子 session，流程和现在一样。
 
 `brief` 是用户可见的内容，也显示在 feature 页的整体进度区里。规划文字按数据对待：发给总控时放在固定说明后面，标明是数据不是指令，超长时只截断数据。
 
 ## 工具
 
-**epic session**（`memory-mcp/sessions-server.ts` 新增一套，`BUTLER_EPIC` 环境变量）：
+**epic session**（`memory-mcp/sessions-server.ts` 新增一套，`SHIPHERD_EPIC` 环境变量）：
 
 - `list_features`：epic 下每个 feature 的 id、名字、状态（含已归档）、最新的 `summary`、`blockers`、`decisions`、`open_questions`、汇总时间。
 - `list_repos`：epic 的仓库。
@@ -80,7 +80,7 @@
 - `features` 加 `epic_id`（可空）、`brief`（可空）、`brief_sent_at`（可空）。
 - `sessions` 加 `epic_id`（可空），含义和 `feature_id` 一样：epic session 的 `ticket_key` 和 `feature_id` 都是 null。`/clear` 后新 head 沿用，`/resume` 不改已有行的归属（和修复 session 同样的规则）。
 
-`list_features` 和 `epic_context` 直接读数据库，不经过 epic 记忆。Butler 不用 `reconcile` 管 `epic:<id>` 的笔记，否则会删掉规划笔记。
+`list_features` 和 `epic_context` 直接读数据库，不经过 epic 记忆。Shipherd 不用 `reconcile` 管 `epic:<id>` 的笔记，否则会删掉规划笔记。
 
 epic session 不算 feature 总控：feature 汇总、晚间 handoff、`/handoff` 判断总控时都看不到它，`ActivityMonitor` 不检测它。用户在 epic 工作区里手动打开的 `claude` 也算 epic session，规则同 feature 工作区。
 

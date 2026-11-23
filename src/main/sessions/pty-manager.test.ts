@@ -158,7 +158,7 @@ describe("PtyManager", () => {
     expect(await p2).toBe(false);
   });
 
-  it("remembers when the user last wrote to a terminal; Butler's own deliveries and prefills don't count", async () => {
+  it("remembers when the user last wrote to a terminal; Shipherd's own deliveries and prefills don't count", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
     expect(mgr.lastUserInputAt("t1")).toBe(0);
@@ -180,7 +180,7 @@ describe("PtyManager", () => {
     expect(mgr.lastUserInputAt("t1")).toBe(0);
   });
 
-  it("Butler's own interrupt (Esc) reaches the terminal but doesn't count as user input", async () => {
+  it("Shipherd's own interrupt (Esc) reaches the terminal but doesn't count as user input", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
     await vi.advanceTimersByTimeAsync(1000);
@@ -243,7 +243,7 @@ describe("PtyManager", () => {
   });
 
   it("holds the user's keys typed between the paste and its Enter, and writes them after the Enter (no merged line)", async () => {
-    // 回复送回 Butler 总控时用户正在打字：粘贴和回车之间打的字不能接在粘贴后面一起提交（Windows 回显慢，这段空档更长）。
+    // 回复送回 Shipherd 总控时用户正在打字：粘贴和回车之间打的字不能接在粘贴后面一起提交（Windows 回显慢，这段空档更长）。
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);
     mgr.markStarted("t1");

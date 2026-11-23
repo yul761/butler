@@ -5,8 +5,8 @@ import { normalizePromptText, type TranscriptState } from "../sessions/discovery
 
 export type HookEffect =
   /**
-   * resumed：Butler 终端里 resume 起来的 session，停在输入框等着（BTL-190 第 2+3 点：马上递卡片上答好的回答）。
-   * fresh：Butler 终端里全新启动（source startup）的 session，同样停在空输入框上（BTL-190 follow-up D）。
+   * resumed：Shipherd 终端里 resume 起来的 session，停在输入框等着（BTL-190 第 2+3 点：马上递卡片上答好的回答）。
+   * fresh：Shipherd 终端里全新启动（source startup）的 session，同样停在空输入框上（BTL-190 follow-up D）。
    */
   | { kind: "session_started"; sessionId: string; ticketKey: string | null; replaced: string | null; resumed?: true; fresh?: true }
   | { kind: "nested"; sessionId: string }
@@ -39,7 +39,7 @@ export function applyHookEnvelope(
     featureForCwd?: (cwd: string) => number | null;
   },
 ): HookEffect {
-  // 晚间 handoff、早间刷新、MCP 探测这些 Butler 自己的 claude 进程也会触发用户级 hook，全部忽略。
+  // 晚间 handoff、早间刷新、MCP 探测这些 Shipherd 自己的 claude 进程也会触发用户级 hook，全部忽略。
   if (isHeadlessEnvelope(env)) return { kind: "ignored", reason: "headless" };
   const p = (env.payload && typeof env.payload === "object" ? env.payload : {}) as HookPayload;
   const event = str(p.hook_event_name);
@@ -49,11 +49,11 @@ export function applyHookEnvelope(
   const { sessions, tickets } = deps;
   const at = env.receivedAt;
   const cwd = str(p.cwd) ?? "";
-  // 这个终端当前对应的 session（/clear 之后 id 会变，BUTLER_SESSION 不变）。
-  const prevHead = env.butlerSession ? sessions.head(env.butlerSession) : null;
+  // 这个终端当前对应的 session（/clear 之后 id 会变，SHIPHERD_SESSION 不变）。
+  const prevHead = env.shipherdSession ? sessions.head(env.shipherdSession) : null;
   const envTicket = env.ticket && tickets.get(env.ticket) ? env.ticket : null;
   const ticketKey = envTicket ?? prevHead?.ticketKey ?? null;
-  const fromButler = Boolean(env.butlerSession || env.ticket);
+  const fromShipherd = Boolean(env.shipherdSession || env.ticket);
 
   // 事件可能乱序到达（例如 Stop 先于 SessionStart 被处理），所以每种事件都先确保 session 存在。
   // 没有 ticket 的 session：终端里 /clear 之后的新段沿用上一段的 feature，不再看目录；在 feature 工作区里打开的 claude 算 feature 总控。
@@ -65,14 +65,14 @@ export function applyHookEnvelope(
     if (sessions.wasForgotten(id) && event !== "UserPromptSubmit" && deps.transcriptState?.(id) !== "present") return;
     const place = key && cwd ? deps.placement?.(key, cwd) : undefined;
     const inserted = sessions.insertIfAbsent({
-      id, ticketKey: key, cwd, origin: fromButler ? "butler" : "discovered", lastActivityAt: at, createdAt: at,
+      id, ticketKey: key, cwd, origin: fromShipherd ? "shipherd" : "discovered", lastActivityAt: at, createdAt: at,
       repoId: place?.repoId ?? null, coordinator: !key && feature !== null && !fixes, featureId: key ? null : feature, fixesSession: fixes,
     });
     if (inserted) return;
     sessions.fillDetails(id, { cwd, lastActivityAt: at });
     const cur = sessions.get(id);
-    // 先被磁盘扫描发现、后来在 Butler 终端里续接的 session：来源升级为 butler。
-    if (fromButler && cur && cur.origin === "discovered" && !cur.dismissed) sessions.setOrigin(id, "butler");
+    // 先被磁盘扫描发现、后来在 Shipherd 终端里续接的 session：来源升级为 shipherd。
+    if (fromShipherd && cur && cur.origin === "discovered" && !cur.dismissed) sessions.setOrigin(id, "shipherd");
     // 被忽略（dismissed）的 session，例如嵌套的 claude 进程（还有迁移时隐藏的以前的 epic session，BTL-246），永远不挂 ticket。
     if (key && cur && !cur.ticketKey && !cur.dismissed) sessions.setTicket(id, key, cwd ? (deps.placement?.(key, cwd).repoId ?? null) : null);
     if (!key && feature !== null && !fixes && cur && !cur.ticketKey && cur.featureId === null && !cur.dismissed) sessions.setFeature(id, feature);
@@ -82,7 +82,7 @@ export function applyHookEnvelope(
     case "SessionStart": {
       const source = str(p.source);
       if (prevHead && prevHead.id !== id && !(source && CHAIN_SOURCES.has(source))) {
-        // 终端里嵌套启动的 claude（如 `claude -p`）继承了 BUTLER_SESSION，但不是这个终端的会话。
+        // 终端里嵌套启动的 claude（如 `claude -p`）继承了 SHIPHERD_SESSION，但不是这个终端的会话。
         ensure(null, null);
         if (sessions.get(id)?.ticketKey) sessions.setTicket(id, null);
         sessions.dismiss(id);
@@ -98,12 +98,12 @@ export function applyHookEnvelope(
         if (source === "clear") sessions.setWaiting(id, true, at);
       }
       // 重新打开终端（claude --resume，id 往往不变）或者终端里 /resume：claude 也停在输入框上，不会先有 Stop。不记成在等，
-      // 关着终端时在卡片上答好的回答就一直递不进去（BTL-190 第 2+3 点）。只管 Butler 终端里的。
-      const resumed = source === "resume" && Boolean(env.butlerSession) && sessions.get(id) !== null;
+      // 关着终端时在卡片上答好的回答就一直递不进去（BTL-190 第 2+3 点）。只管 Shipherd 终端里的。
+      const resumed = source === "resume" && Boolean(env.shipherdSession) && sessions.get(id) !== null;
       if (resumed) sessions.setWaiting(id, true, at);
       // 全新启动（startup）的 claude 也停在空输入框上，没人打过字就不会有 Stop；不记成在等，guard 就一直说它忙。
-      // 只管 Butler 终端里的（嵌套的 claude 上面已经返回）。
-      const fresh = source === "startup" && env.butlerSession === id && sessions.get(id) !== null;
+      // 只管 Shipherd 终端里的（嵌套的 claude 上面已经返回）。
+      const fresh = source === "startup" && env.shipherdSession === id && sessions.get(id) !== null;
       if (fresh) sessions.setWaiting(id, true, at);
       return { kind: "session_started", sessionId: id, ticketKey, replaced, ...(resumed && { resumed: true as const }), ...(fresh && { fresh: true as const }) };
     }
@@ -121,7 +121,7 @@ export function applyHookEnvelope(
       return { kind: "waiting", sessionId: id, waiting: false };
     case "SessionEnd":
       ensure();
-      // 休眠（WS-M B）是 Butler 结束的进程：session 还在等（等你、等 CI……），等待标记留着（同 handleExit）。
+      // 休眠（WS-M B）是 Shipherd 结束的进程：session 还在等（等你、等 CI……），等待标记留着（同 handleExit）。
       if (!sessions.head(id)?.hibernatedAt) sessions.setWaiting(id, false, at);
       return { kind: "ended", sessionId: id };
     default:

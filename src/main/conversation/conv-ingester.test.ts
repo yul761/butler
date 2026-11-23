@@ -27,7 +27,7 @@ function env(extra: Partial<ConvIngesterDeps> = {}) {
   const db = memDb();
   const sessions = new SessionsRepo(db);
   const repo = new ConvRepo(db);
-  const dir = tempDir("butler-conv-");
+  const dir = tempDir("shipherd-conv-");
   const files = new Map<string, string>();
   const file = (id: string, content?: string): string => {
     const f = join(dir, `${id}.jsonl`);
@@ -44,7 +44,7 @@ function env(extra: Partial<ConvIngesterDeps> = {}) {
       repo, sessions, transcriptOf: (id) => files.get(id) ?? null, onAppended: (r) => appended.push(r), now: () => clock.now, log: (m) => logs.push(m),
       openHeads: () => [], judge, ...extra, ...over,
     });
-  for (const id of ["s1", "s2"]) sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
+  for (const id of ["s1", "s2"]) sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1 });
   const said = (root: string) => repo.page(root, { limit: 200 }).messages.map((m) => [m.role, m.text]);
   const turns = () =>
     db.prepare(`SELECT kind, asked, mutated, other_tools AS otherTools, qa, qa_by AS qaBy FROM conv_turns ORDER BY id`).all() as unknown as
@@ -87,7 +87,7 @@ describe("ConvIngester.ingest", () => {
     await e.make().ingest("s1");
     const said = e.said("s1");
     expect(said.map(([, t]) => t)).toContain("PR #12 开好了，等 CI。");
-    expect(said.some(([, t]) => t.includes("butler-handoff"))).toBe(false);
+    expect(said.some(([, t]) => t.includes("shipherd-handoff"))).toBe(false);
     expect(e.turns().at(-1)).toMatchObject({ kind: "handoff", qa: "no" });
   });
 
@@ -123,7 +123,7 @@ describe("ConvIngester.ingest", () => {
     const f = e.file("s1", base);
     const ing = e.make();
     await ing.ingest("s1");
-    const other = join(tempDir("butler-conv-"), "n.jsonl");
+    const other = join(tempDir("shipherd-conv-"), "n.jsonl");
     writeFileSync(other, base + jsonl(tool("t1", "u2", "Read", { file_path: "/x" }, 4)));
     renameSync(other, f);
     await ing.ingest("s1");
@@ -138,7 +138,7 @@ describe("ConvIngester.ingest", () => {
     const f = e.file("s1", base);
     const ing = e.make();
     await ing.ingest("s1");
-    const other = join(tempDir("butler-conv-"), "n.jsonl");
+    const other = join(tempDir("shipherd-conv-"), "n.jsonl");
     writeFileSync(other, base + jsonl(user("u2", "a1", "第二问？", 3), reply("a2", "u2", "第二答", 4)));
     renameSync(other, f);
     await ing.ingest("s1");
@@ -277,8 +277,8 @@ afterEach(() => vi.useRealTimers());
 describe("ConvIngester scheduling", () => {
   it("backfills every segment of a target's chain on start, under the root", async () => {
     const e = env();
-    e.sessions.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
-    e.sessions.insertIfAbsent({ id: "h", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+    e.sessions.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+    e.sessions.insertIfAbsent({ id: "h", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: e.clock.now, lastActivityAt: e.clock.now });
     e.sessions.setReplacedBy("a", "h");
     e.file("a", jsonl(user("u1", null, "第一问？", 1), reply("a1", "u1", "第一答", 2)));
     e.file("h", jsonl(user("u2", null, "第二问？", 3), reply("a2", "u2", "第二答", 4)));
@@ -307,7 +307,7 @@ describe("ConvIngester scheduling", () => {
 
   it("skips targets that were last active before the backfill window", async () => {
     const e = env();
-    e.sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: e.clock.now - CONV_BACKFILL_MS - 1 });
+    e.sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, lastActivityAt: e.clock.now - CONV_BACKFILL_MS - 1 });
     e.file("old", jsonl(user("u1", null, "第一问？", 1)));
     await e.make().sweep();
     expect(e.repo.cursor("old")).toBeNull();
@@ -414,7 +414,7 @@ describe("ConvIngester scheduling", () => {
     it("one paused ticket does not hold back other sessions' turns (final review 1)", async () => {
       const e = env();
       e.db.prepare(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('PROJ-1', '/r', 'branch', 'b', 1)`).run();
-      e.sessions.insertIfAbsent({ id: "p1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+      e.sessions.insertIfAbsent({ id: "p1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
       const judge = vi.fn(async (_t: unknown, s: { ticketKey: string | null }): Promise<ConvQaVerdict> => (s.ticketKey === "PROJ-1" ? "paused" : true));
       e.file("p1", turn("讲讲换新的流程", "先写 handoff，再开新会话"));
       e.file("s1", jsonl(user("u1", null, "讲讲合并的流程", 5), reply("a1", "u1", "等 CI 过了再合", 6), user("u2", "a1", "这是什么？", 7), reply("a2", "u2", "是个函数", 8)));
@@ -512,7 +512,7 @@ describe("ConvIngester scheduling", () => {
     it("ends a turn that never stopped once it has been quiet long enough, then judges it", async () => {
       const e = env();
       e.judge.mockResolvedValue(true);
-      e.sessions.insertIfAbsent({ id: "h", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+      e.sessions.insertIfAbsent({ id: "h", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: e.clock.now, lastActivityAt: e.clock.now });
       e.clock.now = Date.parse(ts(3)) + 60_000;
       e.file("h", jsonl(user("u1", null, "讲讲换新的流程", 1), reply("a1", "u1", "先写 handoff，再开新会话", 2, false)));
       const ing = e.make();
@@ -526,7 +526,7 @@ describe("ConvIngester scheduling", () => {
     it("does not end a quiet turn while its terminal is still open (PR #60 review 5)", async () => {
       const e = env();
       e.judge.mockResolvedValue(true);
-      e.sessions.insertIfAbsent({ id: "h", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+      e.sessions.insertIfAbsent({ id: "h", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: e.clock.now, lastActivityAt: e.clock.now });
       e.clock.now = Date.parse(ts(3)) + CONV_STALE_TURN_MS + 60_000;
       // 一次很长的工具调用：开了头，还没回来。
       e.file("h", jsonl(user("u1", null, "跑一下全量 e2e", 1), tool("t1", "u1", "Bash", { command: "pnpm e2e" }, 2)));
@@ -557,8 +557,8 @@ describe("ConvIngester scheduling", () => {
 
   it("drops the in-memory parent maps of sessions that are not open after a sweep (final review 6)", async () => {
     const e = env();
-    e.sessions.insertIfAbsent({ id: "h1", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
-    e.sessions.insertIfAbsent({ id: "h2", ticketKey: null, cwd: "/w", origin: "butler", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+    e.sessions.insertIfAbsent({ id: "h1", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: e.clock.now, lastActivityAt: e.clock.now });
+    e.sessions.insertIfAbsent({ id: "h2", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: e.clock.now, lastActivityAt: e.clock.now });
     e.file("h1", jsonl(user("u1", null, "第一问？", 1), reply("a1", "u1", "第一答", 2)));
     e.file("h2", jsonl(user("v1", null, "第二问？", 1), reply("b1", "v1", "第二答", 2)));
     const ing = e.make({ openHeads: () => ["h2"] });

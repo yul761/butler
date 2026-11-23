@@ -47,10 +47,10 @@ describe("StacksRepo", () => {
     const r = new StacksRepo(memDb(), () => t);
     const id = r.create(base, []);
     const run = r.startRun(id, "manual", "update_refs");
-    r.finishRun(run, { outcome: "rebased", detail: { layers: [{ position: 0, branch: "a", oldTip: "1", newTip: "2", backupRef: "refs/butler/stack-backup/1/1/0" }] } });
+    r.finishRun(run, { outcome: "rebased", detail: { layers: [{ position: 0, branch: "a", oldTip: "1", newTip: "2", backupRef: "refs/shipherd/stack-backup/1/1/0" }] } });
     expect(r.lastRestorable(id)?.id).toBe(run);
     t = 200;
-    expect(r.backupsBefore(150)).toEqual([{ runId: run, stackId: id, refs: ["refs/butler/stack-backup/1/1/0"] }]);
+    expect(r.backupsBefore(150)).toEqual([{ runId: run, stackId: id, refs: ["refs/shipherd/stack-backup/1/1/0"] }]);
     r.clearBackups(run);
     expect(r.backupsBefore(150)).toEqual([]);
     expect(r.lastRestorable(id)).toBeNull();

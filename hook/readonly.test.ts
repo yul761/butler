@@ -39,11 +39,11 @@ describe("readonlyDecision", () => {
 
   it.each(["Edit", "Write", "NotebookEdit", "Agent", "Task", "WebFetch", "WebSearch"])("denies %s", (t) => denied({ tool_name: t }));
 
-  it.each(["mcp__butler-ticket__recall", "mcp__statecore__facts", "mcp__butler-memory__why"])("allows memory read %s", (t) => allowed({ tool_name: t }));
+  it.each(["mcp__shipherd-ticket__recall", "mcp__statecore__facts", "mcp__shipherd-memory__why"])("allows memory read %s", (t) => allowed({ tool_name: t }));
 
-  it.each(["mcp__butler-ticket__remember", "mcp__butler-sessions__report", "mcp__butler-sessions__ask_user", "mcp__butler-sessions__submit_evidence", "mcp__butler-sessions__pre_review_result", "mcp__butler-sessions__progress_overview", "mcp__vercel__list_projects"])("denies %s", (t) => denied({ tool_name: t }));
+  it.each(["mcp__shipherd-ticket__remember", "mcp__shipherd-sessions__report", "mcp__shipherd-sessions__ask_user", "mcp__shipherd-sessions__submit_evidence", "mcp__shipherd-sessions__pre_review_result", "mcp__shipherd-sessions__progress_overview", "mcp__vercel__list_projects"])("denies %s", (t) => denied({ tool_name: t }));
 
-  it.each(["mcp__butler-sessions__list_tickets", "mcp__butler-sessions__list_repos", "mcp__butler-sessions__session_activity"])("allows sessions read %s", (t) => allowed({ tool_name: t }));
+  it.each(["mcp__shipherd-sessions__list_tickets", "mcp__shipherd-sessions__list_repos", "mcp__shipherd-sessions__session_activity"])("allows sessions read %s", (t) => allowed({ tool_name: t }));
 
   it.each([null, "x", {}, { tool_name: 3 }])("denies malformed input %j", (i) => denied(i));
 });

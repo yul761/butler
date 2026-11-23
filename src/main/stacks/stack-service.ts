@@ -23,12 +23,12 @@ import { prUrlKey, prUrlParts } from "../../shared/pr-url";
  * 管 draft 层、提醒、栈的总览 issue。所有改本地分支的事要 autoRebase 开着；所有对外的事走 ExternalActions。
  */
 
-/** 分支属于哪个 Butler ticket。 */
+/** 分支属于哪个 Shipherd ticket。 */
 export interface OwnedBranch {
   ticketKey: string;
   ticketRepoId: number;
   ticketTitle: string | null;
-  /** 这个 ticket 由 Butler 管理的 worktree（workMode = worktree、没清理、目录在）；没有为 null。 */
+  /** 这个 ticket 由 Shipherd 管理的 worktree（workMode = worktree、没清理、目录在）；没有为 null。 */
   worktree: string | null;
 }
 
@@ -54,13 +54,13 @@ export interface StackServiceDeps {
     attempt<T>(kind: ExternalActionKind, detail: ExternalDetail, run: () => Promise<T>): Promise<AttemptResult<T>>;
     allowed(kind: ExternalActionKind, scope?: ExternalDetail["scope"]): boolean;
   };
-  /** 临时 worktree 的目录（<BUTLER_HOME>/stack-work）。 */
+  /** 临时 worktree 的目录（<SHIPHERD_HOME>/stack-work）。 */
   workRoot: string;
   /** 跑 sequence editor 的 node。 */
   execPath: string;
   now(): number;
   log(msg: string, err?: unknown): void;
-  /** 分支是不是 Butler 的（ticket_repos.branch 或 branch_owners）。 */
+  /** 分支是不是 Shipherd 的（ticket_repos.branch 或 branch_owners）。 */
   owned(repoPath: string, branch: string): OwnedBranch | null;
   /** 仓库 slug（gh 的 GH_REPO）。 */
   slugOf(repoPath: string): Promise<string | null>;
@@ -82,7 +82,7 @@ export interface StackServiceDeps {
   onChange?(): void;
   /** 每日任务的记录（jobs 表）。 */
   jobs?: Pick<JobsRepo, "get" | "record">;
-  /** 自动检测栈的仓库（Butler 管的仓库）。 */
+  /** 自动检测栈的仓库（Shipherd 管的仓库）。 */
   repos?(): string[];
   /** 测试用：强制逐层模式。 */
   forceMode?: StackRunMode;
@@ -227,7 +227,7 @@ export class StackService {
     return layers[layers.length - 1]!.branch === parentBranch ? { ok: true } : { ok: false, message: T().errors.notTop(parentBranch) };
   }
 
-  /** 自动检测：Butler 的开着的 PR 里 base 是另一个 Butler PR 的 head 的，连成链（两层以上、都不在栈里）就建栈。 */
+  /** 自动检测：Shipherd 的开着的 PR 里 base 是另一个 Shipherd PR 的 head 的，连成链（两层以上、都不在栈里）就建栈。 */
   async detect(repoPath: string): Promise<number[]> {
     repoPath = resolve(repoPath);
     const slug = await this.d.slugOf(repoPath).catch(() => null);
@@ -478,7 +478,7 @@ export class StackService {
 
   private async forcePush(stack: StackRow, l: ApplyLayer, row: LayerRow): Promise<boolean> {
     if (!this.d.owned(stack.repoPath, l.branch)) {
-      this.d.log(`stacks: not pushing ${l.branch}: not a Butler branch`);
+      this.d.log(`stacks: not pushing ${l.branch}: not a Shipherd branch`);
       return false;
     }
     const r = await this.d.external.attempt(
@@ -900,7 +900,7 @@ export class StackService {
 
   /**
    * 改写过、但当时 force_push 关着没推出去的层（remoteOkSha 有值）：开关打开后补推。
-   * 只在远端还停在 Butler 替换掉的那个提交、本地还是 Butler 记下的顶端时推；别的情况留给下一次 run。
+   * 只在远端还停在 Shipherd 替换掉的那个提交、本地还是 Shipherd 记下的顶端时推；别的情况留给下一次 run。
    */
   private async pushPending(s: StackRow): Promise<void> {
     for (const l of this.d.repo.layers(s.id)) {
@@ -993,7 +993,7 @@ export class StackService {
     this.cleanupWork();
   }
 
-  /** 启动时和每天：上次没清掉的临时目录（Butler 中途退出）。 */
+  /** 启动时和每天：上次没清掉的临时目录（Shipherd 中途退出）。 */
   cleanupWork(): void {
     if (!existsSync(this.d.workRoot)) return;
     // tick 正要开始一次 run 时也不清（running 还没记上）
@@ -1009,7 +1009,7 @@ export class StackService {
     for (const r of repos) {
       if (existsSync(r)) {
         void runGit(r, ["worktree", "prune"]).catch(() => undefined);
-        void runGit(r, ["for-each-ref", "--format=%(refname)", "refs/heads/butler-stack/"]).then(async (o) => {
+        void runGit(r, ["for-each-ref", "--format=%(refname)", "refs/heads/shipherd-stack/"]).then(async (o) => {
           for (const ref of o.stdout.split(/\r?\n/).filter(Boolean)) await runGit(r, ["update-ref", "-d", ref]);
         }).catch(() => undefined);
       }

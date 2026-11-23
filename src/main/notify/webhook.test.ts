@@ -31,10 +31,10 @@ describe("sendWebhook", () => {
   it("posts the body with the content type and safe extra headers, and reports the status", async () => {
     const seen: { body: string; headers: RecordedHeaders }[] = [];
     const url = await listen((body, headers) => (seen.push({ body, headers }), { status: 200 }));
-    expect(await sendWebhook({ url, body: "hi", contentType: "text/plain", headers: { Title: "Butler", Bad: "x\ny" } })).toEqual({ ok: true, status: 200 });
+    expect(await sendWebhook({ url, body: "hi", contentType: "text/plain", headers: { Title: "Shipherd", Bad: "x\ny" } })).toEqual({ ok: true, status: 200 });
     expect(seen[0]!.body).toBe("hi");
     expect(seen[0]!.headers["content-type"]).toBe("text/plain");
-    expect(seen[0]!.headers.title).toBe("Butler");
+    expect(seen[0]!.headers.title).toBe("Shipherd");
     expect(seen[0]!.headers.bad).toBeUndefined();
     expect(seen[0]!.headers.cookie).toBeUndefined();
   });

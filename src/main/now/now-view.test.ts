@@ -8,7 +8,7 @@ function session(id: string, over: Partial<SessionView> = {}): SessionView {
     id,
     ticketKey: null,
     cwd: "/w",
-    origin: "butler",
+    origin: "shipherd",
     gitBranch: null,
     firstPrompt: null,
     lastActivityAt: 1000,
@@ -22,7 +22,7 @@ function session(id: string, over: Partial<SessionView> = {}): SessionView {
     featureId: null,
     fixesSession: null,
     model: null,
-    butler: false,
+    shipherd: false,
     lessonRunId: null,
     termId: id,
     rootId: id,
@@ -84,7 +84,7 @@ function input(over: Partial<NowInput> = {}): NowInput {
   return {
     tickets: [],
     features: [],
-    butler: null,
+    shipherd: null,
     activity: () => null,
     needsYouReason: () => null,
     prs: () => [],
@@ -109,9 +109,9 @@ function decision(sessionId: string, over: Partial<InboxItemView> = {}): InboxIt
 }
 
 const ids = (rows: { sessionId: string | null }[]) => rows.map((r) => r.sessionId);
-/** 所有需要你的行（Butler 总控、各 feature 下的），按 since 从早到晚，since 为 null 的排最后。 */
+/** 所有需要你的行（Shipherd 总控、各 feature 下的），按 since 从早到晚，since 为 null 的排最后。 */
 const needing = (v: NowView): NowRow[] =>
-  [...(v.butler ? [v.butler] : []), ...v.features.flatMap((f) => f.rows)]
+  [...(v.shipherd ? [v.shipherd] : []), ...v.features.flatMap((f) => f.rows)]
     .filter((r) => r.needsYou !== null)
     .sort((a, b) => (a.since ?? Infinity) - (b.since ?? Infinity));
 
@@ -146,15 +146,15 @@ describe("buildNowView", () => {
     expect(v.merges).toBe(merges);
   });
 
-  it("gives the open Butler 总控 its own row: its needs-you is listed and its work counts as running (BTL-190 5)", () => {
-    const b = session("s-b", { butler: true });
-    const v = buildNowView(input({ butler: b, needsYouReason: (id) => (id === "s-b" ? "在问你先合哪个" : null) }));
-    expect(v.butler).toMatchObject({ sessionId: "s-b", coordinator: true, needsYou: "在问你先合哪个", target: { page: "butler", sessionId: "s-b" } });
+  it("gives the open Shipherd 总控 its own row: its needs-you is listed and its work counts as running (BTL-190 5)", () => {
+    const b = session("s-b", { shipherd: true });
+    const v = buildNowView(input({ shipherd: b, needsYouReason: (id) => (id === "s-b" ? "在问你先合哪个" : null) }));
+    expect(v.shipherd).toMatchObject({ sessionId: "s-b", coordinator: true, needsYou: "在问你先合哪个", target: { page: "shipherd", sessionId: "s-b" } });
     expect(ids(needing(v))).toEqual(["s-b"]);
-    const busy = buildNowView(input({ butler: b, activity: (id) => (id === "s-b" ? act("s-b") : null) }));
+    const busy = buildNowView(input({ shipherd: b, activity: (id) => (id === "s-b" ? act("s-b") : null) }));
     expect(busy.running).toBe(1);
-    expect(buildNowView(input({ butler: { ...b, termId: null } })).butler).toBeNull();
-    expect(buildNowView(input()).butler).toBeNull();
+    expect(buildNowView(input({ shipherd: { ...b, termId: null } })).shipherd).toBeNull();
+    expect(buildNowView(input()).shipherd).toBeNull();
   });
 
   it("puts coordinators first in their group", () => {
@@ -201,7 +201,7 @@ describe("buildNowView", () => {
     expect(v.running).toBe(0);
   });
 
-  it("ignores sessions Butler did not open", () => {
+  it("ignores sessions Shipherd did not open", () => {
     const t = ticket("A-1", null, [session("s-ext", { ticketKey: "A-1", origin: "discovered" })]);
     const f = feature(10, [], [session("s-fext", { featureId: 10, coordinator: true, origin: "discovered" })]);
     const v = buildNowView(input({ tickets: [t], features: [f] }));
@@ -274,7 +274,7 @@ describe("buildNowView", () => {
       refreshing: (id) => (id === "s-quiet" ? "clear" : id === "s-asks" || id === "s-approve" ? "handoff" : null),
     }));
     const rows = v.features[0].rows;
-    // 停在确认上的照样需要你（Butler 的 /handoff 要用户批准权限），别的理由在换新时都不算。
+    // 停在确认上的照样需要你（Shipherd 的 /handoff 要用户批准权限），别的理由在换新时都不算。
     expect(rows.map((r) => [r.sessionId, r.refreshing, r.needsYou, r.idle])).toEqual([
       ["s-asks", "handoff", null, false],
       ["s-approve", "handoff", "等你确认", false],

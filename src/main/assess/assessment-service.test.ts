@@ -152,7 +152,7 @@ describe("BriefService", () => {
     const md = b.markdown;
     expect(md.startsWith(BRIEF_START) && md.endsWith(BRIEF_END)).toBe(true);
     expect(md).toContain("Fixes the parser so it keeps input.");
-    expect(md).toContain("Butler's rerun passed (`pnpm test`)");
+    expect(md).toContain("Shipherd's rerun passed (`pnpm test`)");
     expect(md).toContain("output checked");
     expect(md).not.toContain("SESSION SAYS");
     expect(md).not.toContain("SESSION CMD");
@@ -164,7 +164,7 @@ describe("BriefService", () => {
     // off by default: not posted.
     expect(s.edits).toEqual([]);
   });
-  it("posting replaces only Butler's block and records the audit", async () => {
+  it("posting replaces only Shipherd's block and records the audit", async () => {
     const s = setup();
     const b = (await s.briefs.generate(s.pre.get(s.rowId)!))!;
     expect(await s.briefs.post(s.pr.id, true)).toEqual({ ok: true, url: s.pr.url });

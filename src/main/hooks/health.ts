@@ -9,18 +9,18 @@ import { locateClaude, readLoginShellPath, wellKnownClaudePaths } from "../claud
 import { claudeLoginState } from "../claude/login";
 import type { SettingsRepo } from "../db/settings-repo";
 import { memoryOn } from "../settings/settings-values";
-import type { ButlerPaths } from "../paths";
+import type { ShipherdPaths } from "../paths";
 import type { ExecText } from "../util/exec";
 import { withPath } from "../util/env";
 import { statecorePluginInstalled } from "../memory/plugin-check";
 import { hookCommand, hookStatus, installHookBinary, installHooks, readSettings, uninstallHooks } from "./installer";
 
 export interface HealthDeps {
-  paths: ButlerPaths;
+  paths: ShipherdPaths;
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   settings: SettingsRepo;
-  /** 随 app 一起分发的 butler-hook，安装时复制到 paths.hookBin。 */
+  /** 随 app 一起分发的 shipherd-hook，安装时复制到 paths.hookBin。 */
   bundledHookBin: string;
   /** 打包的 StateCore MCP（任务 7）；不给时视为不存在。 */
   memoryMcpScript?: string;
@@ -51,7 +51,7 @@ export class HealthService {
   private state: { path: string | null; pathValue: string } = { path: null, pathValue: "" };
   /** 最近一次探测到的可选参数；探测失败或还没探测时按 2.1.0 的假设：认 --model，不认 --effort。 */
   private optional: { model: boolean; effort: boolean } = { model: true, effort: false };
-  /** 装着的 butler-hook 和随 app 分发的一样（认得 gate）。只有这时才给 session 挂合并总控的 gate hook。 */
+  /** 装着的 shipherd-hook 和随 app 分发的一样（认得 gate）。只有这时才给 session 挂合并总控的 gate hook。 */
   private binCurrent = false;
   /** 进行中的 syncHookBinary：安装要等它做完，两边写的是同一个临时文件。 */
   private binSync: Promise<boolean> = Promise.resolve(false);
@@ -83,7 +83,7 @@ export class HealthService {
   }
 
   /**
-   * 启动时：装着的 butler-hook 和随 app 分发的不一样（升级后还是旧版本，不认 gate，会把每条 Bash 命令当成普通 hook 事件）就换成新的。
+   * 启动时：装着的 shipherd-hook 和随 app 分发的不一样（升级后还是旧版本，不认 gate，会把每条 Bash 命令当成普通 hook 事件）就换成新的。
    * 用户没装过的不替他装。永不抛错：换不了就不开 gate（最终审查 1）。返回 gate 能不能开。
    */
   syncHookBinary(): Promise<boolean> {
@@ -115,7 +115,7 @@ export class HealthService {
   }
 
   /**
-   * 启动时：装着的 /handoff 是 Butler 的旧版本（hash 对得上，stale）就换成当前版本（C1，和 syncHookBinary 一样）。
+   * 启动时：装着的 /handoff 是 Shipherd 的旧版本（hash 对得上，stale）就换成当前版本（C1，和 syncHookBinary 一样）。
    * 用户自己的（conflict）、没装的不碰。永不抛错：换不了只记日志。
    */
   async syncHandoffCommand(): Promise<void> {
@@ -166,7 +166,7 @@ export class HealthService {
     try {
       handoffCommand = await handoffCommandStatus(this.commandFile());
     } catch {
-      // 读不了（权限、是目录）就当作不是 Butler 的文件，不去碰它。
+      // 读不了（权限、是目录）就当作不是 Shipherd 的文件，不去碰它。
       handoffCommand = "conflict";
     }
     return {
@@ -176,7 +176,7 @@ export class HealthService {
       hooks,
       hookBinInstalled: existsSync(this.d.paths.hookBin),
       handoffCommand,
-      butlerHome: this.d.paths.home,
+      shipherdHome: this.d.paths.home,
       claudeSettingsPath: this.d.paths.claudeSettings,
       memory: {
         enabled: memoryOn(this.d.settings),

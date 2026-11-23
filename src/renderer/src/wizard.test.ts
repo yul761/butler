@@ -9,9 +9,9 @@ const report = (claude: Partial<HealthReport["claude"]>): HealthReport => ({
   hooks: "missing",
   hookBinInstalled: false,
   handoffCommand: "missing",
-  butlerHome: "/h/.butler",
+  shipherdHome: "/h/.shipherd",
   claudeSettingsPath: "/h/.claude/settings.json",
-  memory: { enabled: true, dataDir: "/h/.butler/statecore", mcpBundle: true, statecorePlugin: false },
+  memory: { enabled: true, dataDir: "/h/.shipherd/statecore", mcpBundle: true, statecorePlugin: false },
 });
 
 describe("first-run wizard (design 9, 10)", () => {

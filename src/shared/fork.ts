@@ -47,7 +47,7 @@ export class ForkError extends Error {
 export type DevSendBlock = "not_found" | "failed" | "in_flight" | "fork_busy" | "no_conclusion";
 /** state：排队那一刻目标的状态（在忙：下一次调用工具时送；停着：马上送；关着：打开后送）。 */
 export type DevSendResult = { ok: true; at: number; state: "busy" | "idle" | "closed" } | { ok: false; reason: DevSendBlock };
-/** disabled：记忆关着；no_scope：这个 session 没有 ticket 也没有 feature（Butler 总控），没处可记。 */
+/** disabled：记忆关着；no_scope：这个 session 没有 ticket 也没有 feature（Shipherd 总控），没处可记。 */
 export type RememberResult = "written" | "full" | "disabled" | "failed" | "busy" | "no_conclusion" | "no_scope";
 /** 真去写记忆（MemoryService.rememberText）时可能的结果。 */
 export type RememberWriteResult = Exclude<RememberResult, "busy" | "no_conclusion" | "no_scope">;

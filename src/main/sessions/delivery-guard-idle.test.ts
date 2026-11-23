@@ -13,7 +13,7 @@ import type { HookEnvelope } from "../../shared/hook-envelope";
 
 /**
  * 开着的终端里 Claude Code 不发 Stop hook 的几种停下来的方式（BTL-190 follow-up D）：send_message 过 DeliveryGuard 时都应该放行。
- * 一个开着的终端 term（BUTLER_SESSION=term），feature 总控。activity 用真的 transcript 解析得出（和 ActivityMonitor.update 一样）。 */
+ * 一个开着的终端 term（SHIPHERD_SESSION=term），feature 总控。activity 用真的 transcript 解析得出（和 ActivityMonitor.update 一样）。 */
 function world() {
   const db = memDb();
   const tickets = new TicketsRepo(db);
@@ -21,11 +21,11 @@ function world() {
   const featureId = new FeaturesRepo(db).insert({ name: "f", workspaceDir: "/fs", createdAt: 1 });
   const cwd = "/fs";
   // 和 startInWorkspace 一样先插行
-  sessions.insertIfAbsent({ id: "term", ticketKey: null, cwd, origin: "butler", createdAt: 1, featureId, coordinator: true });
+  sessions.insertIfAbsent({ id: "term", ticketKey: null, cwd, origin: "shipherd", createdAt: 1, featureId, coordinator: true });
   const deps = { sessions, tickets, featureForCwd: (c: string) => (c === "/fs" ? featureId : null) };
   let at = 100;
   const hook = (event: string, id = "term", payload: Record<string, unknown> = {}) => {
-    const env: HookEnvelope = { v: 1, receivedAt: at++, ticket: null, butlerSession: "term", payload: { hook_event_name: event, session_id: id, cwd, ...payload } };
+    const env: HookEnvelope = { v: 1, receivedAt: at++, ticket: null, shipherdSession: "term", payload: { hook_event_name: event, session_id: id, cwd, ...payload } };
     return applyHookEnvelope(env, deps);
   };
   let transcript: TranscriptState | null = null; // null = 还没有 transcript 文件（readTranscript 返回 newTranscriptState）

@@ -92,8 +92,8 @@ describe("patchRanges / touches", () => {
   });
 
   it("writes the fixed, restrained reply in the chosen language", () => {
-    expect(replyText("en", "abc1234", null)).toBe("Addressed in abc1234.\n\n<sub>(automated reply from Butler)</sub>");
-    expect(replyText("zh", "abc1234", "Please add a test\nmore")).toBe("> Please add a test\n\n已在 abc1234 中修改。\n\n<sub>（Butler 自动回复）</sub>");
+    expect(replyText("en", "abc1234", null)).toBe("Addressed in abc1234.\n\n<sub>(automated reply from Shipherd)</sub>");
+    expect(replyText("zh", "abc1234", "Please add a test\nmore")).toBe("> Please add a test\n\n已在 abc1234 中修改。\n\n<sub>（Shipherd 自动回复）</sub>");
   });
 });
 
@@ -121,7 +121,7 @@ describe("CommentLoop", () => {
     await s.observe({ headSha: "bbb2222" });
     const it = s.items.byPr(s.row.id)[0];
     expect(it).toMatchObject({ state: "addressed", verified: "patch", addressedSha: "bbb2222" });
-    expect(s.calls.replies).toEqual(["101:Addressed in bbb2222.\n\n<sub>(automated reply from Butler)</sub>"]);
+    expect(s.calls.replies).toEqual(["101:Addressed in bbb2222.\n\n<sub>(automated reply from Shipherd)</sub>"]);
     expect(s.calls.resolves).toEqual(["T1"]);
     expect(s.calls.events).toEqual([{ kind: "comment_auto_handled", dedupeKey: `comment:${s.row.id}:101`, data: { who: "copilot", category: "fix", source: "model", verified: "patch" } }]);
     expect(it.repliedAt).not.toBeNull();
@@ -316,7 +316,7 @@ describe("CommentLoop", () => {
     expect(s.deliver).toHaveBeenCalledTimes(1);
     await s.observe({ headSha: "bbb2222", comments: [{ id: "IC1", author: "bob", body: "Please add a changelog entry.", createdAt: 1, url: "https://example.test/ic1", path: null, line: null, reviewId: null }] });
     expect(s.items.byPr(s.row.id)[0]).toMatchObject({ state: "addressed", verified: "commit" });
-    expect(s.calls.prComments).toEqual(["> Please add a changelog entry.\n\nAddressed in bbb2222.\n\n<sub>(automated reply from Butler)</sub>"]);
+    expect(s.calls.prComments).toEqual(["> Please add a changelog entry.\n\nAddressed in bbb2222.\n\n<sub>(automated reply from Shipherd)</sub>"]);
     expect(s.calls.resolves).toEqual([]);
   });
 

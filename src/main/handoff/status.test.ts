@@ -49,7 +49,7 @@ describe("deriveStatus", () => {
     expect(deriveStatus(h({ status: "active", prs: [pr("merged")] }), 0)).toBe("active");
   });
 
-  it("a PR Butler gave up reading does not hold the ticket in review, whether the model, the memory or a refresh reports it open", () => {
+  it("a PR Shipherd gave up reading does not hold the ticket in review, whether the model, the memory or a refresh reports it open", () => {
     const a = { number: 1, url: "https://github.com/o/app/pull/1", state: "merged" as const, review: null };
     const b = { number: 2, url: "https://github.com/o/app/pull/2", state: "open" as const, review: null };
     const givenUp = new Set(["https://github.com/o/app/pull/2"]);

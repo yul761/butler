@@ -1,10 +1,10 @@
 # BTL-242: Windows UI lag: design addendum
 
-Date: 2026-11-20. Scope: work item W2 of the Butler 4.0 simplification design. The rest of that design is unchanged.
+Date: 2026-11-20. Scope: work item W2 of the Shipherd 4.0 simplification design. The rest of that design is unchanged.
 
 ## Problem
 
-On a Windows work machine (32 GB), Butler 3.1.x feels slow: clicking buttons, switching pages and typing in a terminal all lag. Other apps are fine and the Mac is fine. No logs were available. Reading the code points at many suspects but none was measured, so the first deliverable is diagnostics the user can export, then fixes for the suspects with the most evidence.
+On a Windows work machine (32 GB), Shipherd 3.1.x feels slow: clicking buttons, switching pages and typing in a terminal all lag. Other apps are fine and the Mac is fine. No logs were available. Reading the code points at many suspects but none was measured, so the first deliverable is diagnostics the user can export, then fixes for the suspects with the most evidence.
 
 ## Decisions
 
@@ -16,8 +16,8 @@ On a Windows work machine (32 GB), Butler 3.1.x feels slow: clicking buttons, sw
   - IPC invokes per channel, with total and max handler time; a handler over 20 ms is logged once per channel per window;
   - named heavy operations (`findTranscript`, `conv.ingest`, `conv.rules`, `turn.board`, `views.tickets`, `views.features`, `procs.sample`): count, total and max; one over 50 ms is logged once per name per window;
   - renderer long tasks (count, total ms, max), sent by the renderer once a minute.
-- Every window ends with one `perf:` line in `main.log`, so a user's log already contains the data. The line is skipped when the window was idle (no long tasks, p99 < 50 ms, no slow operations), so an idle Butler adds nothing to the log.
-- `BUTLER_PERF_DIAG=0` turns everything off; `BUTLER_PERF_DIAG=verbose` writes a line every window even when idle. There is no new setting: the 4.0 design asks for fewer settings, and this costs nothing when idle.
+- Every window ends with one `perf:` line in `main.log`, so a user's log already contains the data. The line is skipped when the window was idle (no long tasks, p99 < 50 ms, no slow operations), so an idle Shipherd adds nothing to the log.
+- `SHIPHERD_PERF_DIAG=0` turns everything off; `SHIPHERD_PERF_DIAG=verbose` writes a line every window even when idle. There is no new setting: the 4.0 design asks for fewer settings, and this costs nothing when idle.
 - Renderer: `PerformanceObserver({ type: "longtask" })` adds up long tasks and sends them over a fire-and-forget IPC channel `diag:renderer` once a minute, along with which xterm renderer is in use (WebGL or DOM).
 - **Settings → Health (环境检查) → "Export diagnostics" (导出诊断)**: opens a save dialog and writes one JSON file: app version, platform, OS release, CPU, memory, `app.getAppMetrics()`, the ring of perf windows, the current window, and the last 1,000 lines of `main.log`. It holds no transcript or conversation content. (`main.log` has ticket keys and paths, and the user is the one choosing to share the file.)
 
@@ -33,7 +33,7 @@ On a Windows work machine (32 GB), Butler 3.1.x feels slow: clicking buttons, sw
 - **The activity monitor no longer notifies the UI when only `lastOutputAt` or `lastOutput` changed.** These change on every transcript write, up to about three times a second for each working session. No renderer view except the ticket glance (see `output` above) needs them that often: the turn board reads `lastOutputAt` only for stuck sessions, which by definition are not producing output. The monitor still runs its in-process follow-ups (needs-you, auto refresh, wait tracker) on every change, exactly as before. That keeps behavior the same and stops the biggest source of refetches.
 - Renderer: `src/renderer/src/state-bus.ts` attaches **one** IPC listener for `state:changed` and fans the event out to subscribers, each with a scope filter. Before this, each of the 73 subscription points attached its own IPC listener. Defaults:
   - `useStateRefetch(key, fetch)` and `api.onStateChanged(cb)` with no scopes listen to `data` only;
-  - the App refresh (now view, feature views, which carry activity) and `ButlerPage` opt into `activity` and `procs`;
+  - the App refresh (now view, feature views, which carry activity) and `ShipherdPage` opt into `activity` and `procs`;
   - `turn:changed` follows the same flush.
 
   Every existing `notify()` is a `data` notify, so a component that doesn't opt in still refetches on every event it did before, except the activity and memory-sample ticks, which it never displayed.
@@ -46,7 +46,7 @@ On a Windows work machine (32 GB), Butler 3.1.x feels slow: clicking buttons, sw
 
 ### 4. Discovery: `findTranscript` cache
 
-- `findTranscript` remembers `sessionId → path` (module-level LRU, 2,000 entries). A hit is checked with one `existsSync` on the cached path, and the directory scan runs only when that file has gone. A miss still scans, and misses are not cached, because Claude Code creates the file only after the first message. Callers keep calling the same function. Agreed with BTL-244: their setting gates only the unclaimed discovery loop (`runDiscovery`), and `findTranscript` for Butler's own sessions always works.
+- `findTranscript` remembers `sessionId → path` (module-level LRU, 2,000 entries). A hit is checked with one `existsSync` on the cached path, and the directory scan runs only when that file has gone. A miss still scans, and misses are not cached, because Claude Code creates the file only after the first message. Callers keep calling the same function. Agreed with BTL-244: their setting gates only the unclaimed discovery loop (`runDiscovery`), and `findTranscript` for Shipherd's own sessions always works.
 
 ### 5. Conversation store
 
@@ -55,7 +55,7 @@ On a Windows work machine (32 GB), Butler 3.1.x feels slow: clicking buttons, sw
 
 ### 6. Terminals
 
-- **WebGL renderer** (`@xterm/addon-webgl` 0.19.0, the release that matches xterm 6.0.0). If the addon throws or the context is lost, the terminal falls back to the DOM renderer and the diagnostics record it. The E2E fixtures set `BUTLER_TERMINAL_RENDERER=dom` (exposed through preload) because the E2E tests read `.xterm-rows`. One E2E test runs with the default and checks that a terminal still works.
+- **WebGL renderer** (`@xterm/addon-webgl` 0.19.0, the release that matches xterm 6.0.0). If the addon throws or the context is lost, the terminal falls back to the DOM renderer and the diagnostics record it. The E2E fixtures set `SHIPHERD_TERMINAL_RENDERER=dom` (exposed through preload) because the E2E tests read `.xterm-rows`. One E2E test runs with the default and checks that a terminal still works.
 - **Keep-alive instead of rebuilding**: `src/renderer/src/terminal-cache.ts` keeps xterm instances for the last 4 terminals the user looked at, as an LRU. Switching back to a cached terminal re-attaches its DOM node and re-fits it, with no snapshot replay. Evicted ones are disposed (the WS-M D memory goal is kept, with a bound of 4). A hidden xterm pauses rendering on its own (IntersectionObserver), so writes to it cost only parsing.
 - **`pty:data` only to attached terminals**: `pty:snapshot` subscribes that terminal and `pty:detach` (new, fire-and-forget) unsubscribes it. Main sends `pty:data` only for subscribed terminal ids. Ordering is unchanged: the snapshot reply still follows every data event already sent.
 - **Closed terminals** stay in the LRU until they are pushed out; it holds at most 4, so this is left as is.
@@ -81,4 +81,4 @@ On a Windows work machine (32 GB), Butler 3.1.x feels slow: clicking buttons, sw
 
 ## Measuring
 
-`e2e/perf.spec.ts` runs only with `BUTLER_E2E_PERF=1`. It opens 3 sessions with the fake `claude`'s new `/fake-work <seconds> <ms>` command, which writes a tool call and about 2 KB of terminal output every 300 ms, waits on the home page and then on a ticket page for 30 s each, and reads the counters through `diag:snapshot`. The PR description has the before and after numbers on the Mac.
+`e2e/perf.spec.ts` runs only with `SHIPHERD_E2E_PERF=1`. It opens 3 sessions with the fake `claude`'s new `/fake-work <seconds> <ms>` command, which writes a tool call and about 2 KB of terminal output every 300 ms, waits on the home page and then on a ticket page for 30 s each, and reads the counters through `diag:snapshot`. The PR description has the before and after numbers on the Mac.

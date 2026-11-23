@@ -7,17 +7,17 @@ export const USAGE_SCAN_MS = 30_000;
 export const USAGE_CHUNK_BYTES = 1024 * 1024;
 
 /**
- * 后台扫描的间隔，只在这里读环境变量。e2e 等不起 30 秒（换新要先看到上下文），用 BUTLER_USAGE_SCAN_MS 调短；
- * 和 activityIntervals 一样只有 e2e 的标记 BUTLER_BACKGROUND_WINDOWS=1 在时才算数，正常运行永远是 30 秒。
+ * 后台扫描的间隔，只在这里读环境变量。e2e 等不起 30 秒（换新要先看到上下文），用 SHIPHERD_USAGE_SCAN_MS 调短；
+ * 和 activityIntervals 一样只有 e2e 的标记 SHIPHERD_BACKGROUND_WINDOWS=1 在时才算数，正常运行永远是 30 秒。
  */
 export function usageScanMs(env: NodeJS.ProcessEnv): number {
-  const v = env.BUTLER_USAGE_SCAN_MS ?? "";
-  return env.BUTLER_BACKGROUND_WINDOWS === "1" && /^[1-9]\d*$/.test(v) ? Number(v) : USAGE_SCAN_MS;
+  const v = env.SHIPHERD_USAGE_SCAN_MS ?? "";
+  return env.SHIPHERD_BACKGROUND_WINDOWS === "1" && /^[1-9]\d*$/.test(v) ? Number(v) : USAGE_SCAN_MS;
 }
 
 export interface UsageScannerDeps {
   repo: UsageRepo;
-  /** 现在要扫的 session id（Butler 开的、终端开着的 head，以及刚退出的）。 */
+  /** 现在要扫的 session id（Shipherd 开的、终端开着的 head，以及刚退出的）。 */
   sessionIds: () => string[];
   transcriptFile: (sessionId: string) => string | null;
   /** 每次读多少字节，默认 USAGE_CHUNK_BYTES（测试用小值）。 */

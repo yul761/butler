@@ -16,12 +16,12 @@ import { MAIN_STRINGS } from "../strings";
  *     content 是数组时 text 块用 \n\n 连起来，每个 image 块记成 [image]。
  *  4. 清洗后以 <local-command-stdout|stderr|caveat>、<bash-input|stdout|stderr>、<task-notification> 开头，
  *     或者以 [Request interrupted by user 开头：noise。
- *  5. handoff（不存，这一轮 agent 的话也不存）：/handoff 调用；以前 Butler 发给 epic session 的 handoff 请求
+ *  5. handoff（不存，这一轮 agent 的话也不存）：/handoff 调用；以前 Shipherd 发给 epic session 的 handoff 请求
  *     （换新、闲置关闭，中英各取前 24 个字符，见 LEGACY_EPIC_HANDOFF_HEADS）。
- *  6. relay（存成 user 消息，但这一轮不判问答）：以 inboxAnswersIntro 开头，Butler 转给 agent 的用户回答；
+ *  6. relay（存成 user 消息，但这一轮不判问答）：以 inboxAnswersIntro 开头，Shipherd 转给 agent 的用户回答；
  *     信箱直接输入（mailboxIntro 开头）里有一段是转来的回答也算。其余信箱直接输入是 silent。
- *  7. silent（不存，开一轮 qa=no；agent 的话照存）：其他斜杠命令（含 <command-name>）；Butler：/Butler: 开头的通知；
- *     换新的恢复提示（refreshResume）、转来的汇报（inboxReportsIntro）、每日巡检（butlerPatrolMessage），中英各取前 16 个字符；
+ *  7. silent（不存，开一轮 qa=no；agent 的话照存）：其他斜杠命令（含 <command-name>）；Shipherd：/Shipherd: 开头的通知；
+ *     换新的恢复提示（refreshResume）、转来的汇报（inboxReportsIntro）、每日巡检（shipherdPatrolMessage），中英各取前 16 个字符；
  *     总控发来的消息、花费上限后的「接着做」取整段固定开头（SILENT_HEADS）；别的 session 的回复、预审结果、进件缺信息时
  *     让总控去问，开头和占位符之间的固定段都要对上（SILENT_SHAPES）。
  *  8. 其余都是 user。
@@ -65,14 +65,14 @@ const blocksOf = (content: unknown): Block[] => (Array.isArray(content) ? conten
 const STRIP = /<(system-reminder|ide_selection|ide_opened_file|ide_diagnostics)>[\s\S]*?<\/\1>/g;
 const NOISE_HEAD = /^(<(local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr|task-notification)>|\[Request interrupted by user)/;
 const COMMAND_NAME = /<command-name>/;
-const BUTLER_NOTICE = /^Butler(：|: )/;
+const SHIPHERD_NOTICE = /^Shipherd(：|: )/;
 
 const heads = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string, n: number): string[] => Object.values(MAIN_STRINGS).map((s) => pick(s).slice(0, n));
 /**
- * 以前 Butler 让 epic session 写进度的两句话（换新、闲置关闭；中英）的前 24 个字符。epic session BTL-246 去掉了，
+ * 以前 Shipherd 让 epic session 写进度的两句话（换新、闲置关闭；中英）的前 24 个字符。epic session BTL-246 去掉了，
  * 这两句文案也从 strings.ts 删了；老 transcript 里还有，照旧认成 handoff，写死在这里。
  */
-const LEGACY_EPIC_HANDOFF_HEADS = ["Butler 要清空这个 session 的上下", "这个 session 闲置很久了，Butler ", "Butler is about to clear", "This session has been id"];
+const LEGACY_EPIC_HANDOFF_HEADS = ["Shipherd 要清空这个 session 的上下", "这个 session 闲置很久了，Shipherd ", "Shipherd is about to clear", "This session has been id"];
 const HANDOFF_HEADS = LEGACY_EPIC_HANDOFF_HEADS;
 const RELAY_HEADS = heads((s) => s.inboxAnswersIntro, Number.MAX_SAFE_INTEGER);
 /** 只转一条回答时没有 intro，整条就是 inboxAnswer(问题, 回答)：认开头和中间「用户的回答」那一段。 */
@@ -88,7 +88,7 @@ const MAILBOX_HEADS = heads((s) => before0(s.mailboxIntro.replace("{n}", "\u0000
 const MAILBOX_PART = "\n\n---\n\n";
 /**
  * 模板（占位符代入 \u0000、\u0001）第一行的固定段：文本要以第一段开头，后面各段按顺序出现才算。
- * 只认开头太容易误伤用户自己的话（「Butler 对 CI 的判断对吗？」「【回复】一下 amy 的评论」）。
+ * 只认开头太容易误伤用户自己的话（「Shipherd 对 CI 的判断对吗？」「【回复】一下 amy 的评论」）。
  */
 type Shape = string[];
 const shapeOf = (template: string): Shape => template.split("\n")[0].split("\u0000").flatMap((p) => p.split("\u0001"));
@@ -105,11 +105,11 @@ const fits = (shape: Shape, text: string): boolean => {
 };
 const shapes = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string): Shape[] => Object.values(MAIN_STRINGS).map((s) => shapeOf(pick(s)));
 /**
- * Butler 往终端里打的其它固定格式（「Butler：」开头的通知另由 BUTLER_NOTICE 认）：别的 session 的回复、预审结果、
+ * Shipherd 往终端里打的其它固定格式（「Shipherd：」开头的通知另由 SHIPHERD_NOTICE 认）：别的 session 的回复、预审结果、
  * 进件缺信息时让总控去问。开头加上占位符之间的固定段一起认。
  */
 const SILENT_SHAPES: Shape[] = [
-  ...shapes((s) => s.butlerReplyLine("\u0000", ["\u0001"], "")),
+  ...shapes((s) => s.shipherdReplyLine("\u0000", ["\u0001"], "")),
   ...shapes((s) => s.intakeClarify("\u0000", "\u0001", "", false)),
   ...shapes((s) => s.intakeClarify("\u0000", "\u0001", "", true)),
   ...shapes((s) => s.intakeEpicTickets("\u0000", "\u0001", "")),
@@ -122,8 +122,8 @@ const SILENT_SHAPES: Shape[] = [
 const SILENT_HEADS = [
   ...heads((s) => s.refreshResume("ticket", "X-1", null), 16),
   ...heads((s) => s.inboxReportsIntro, 16),
-  ...heads((s) => s.butlerMessagePrefix, Number.MAX_SAFE_INTEGER),
-  ...heads((s) => s.butlerPatrolMessage, 16),
+  ...heads((s) => s.shipherdMessagePrefix, Number.MAX_SAFE_INTEGER),
+  ...heads((s) => s.shipherdPatrolMessage, 16),
   ...heads((s) => before0(s.cost.continueAfterDowngrade("\u0000")), Number.MAX_SAFE_INTEGER),
   ...heads((s) => before0(s.cost.continueAfterRaise("\u0000")), Number.MAX_SAFE_INTEGER),
 ];
@@ -149,7 +149,7 @@ export function userOpenOf(content: unknown, cleaned: string): UserOpen | "noise
   if (RELAY_HEADS.some((h) => cleaned.startsWith(h)) || isSingleRelay(cleaned)) return "relay";
   // 信箱送进来的一批：里面有转来的回答就是 relay，否则（汇报、回复、指令、约定）是 silent。
   if (MAILBOX_HEADS.some((h) => cleaned.startsWith(h))) return cleaned.split(MAILBOX_PART).slice(1).some((p) => isSingleRelay(p.replace(/^[（(][^\n]*\n/, ""))) ? "relay" : "silent";
-  if (COMMAND_NAME.test(cleaned) || BUTLER_NOTICE.test(cleaned) || SILENT_HEADS.some((h) => cleaned.startsWith(h)) || SILENT_SHAPES.some((sh) => fits(sh, cleaned))) {
+  if (COMMAND_NAME.test(cleaned) || SHIPHERD_NOTICE.test(cleaned) || SILENT_HEADS.some((h) => cleaned.startsWith(h)) || SILENT_SHAPES.some((sh) => fits(sh, cleaned))) {
     return "silent";
   }
   return "user";

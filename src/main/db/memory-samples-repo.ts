@@ -1,6 +1,6 @@
 import { withTransaction, type Db } from "./database";
 
-export type MemorySampleKind = "session" | "butler" | "system";
+export type MemorySampleKind = "session" | "shipherd" | "system";
 
 export interface MemorySampleRow {
   at: number;

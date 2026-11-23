@@ -11,7 +11,7 @@ export function openDatabase(file: string): Db {
   return db;
 }
 
-/** 数据库比这个版本的 Butler 新（装回了旧版本）：不能在不认识的表结构上运行。 */
+/** 数据库比这个版本的 Shipherd 新（装回了旧版本）：不能在不认识的表结构上运行。 */
 export class NewerDatabaseError extends Error {
   constructor(readonly found: number, readonly known: number) {
     super(M().newerDatabase(found, known));

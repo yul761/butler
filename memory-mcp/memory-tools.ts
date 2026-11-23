@@ -1,5 +1,5 @@
-// Butler 给 claude 的记忆 server（共享 MCP 的 hub 和 stdio 两种挂法都用它，BTL-243）：照 statecore-mcp 1.1.0 的工具层复刻，
-// 再叠上 BUTLER_OVERRIDES 这几处改动（Butler 不蒸馏：consolidate 的长内容作为事件原样留着）。
+// Shipherd 给 claude 的记忆 server（共享 MCP 的 hub 和 stdio 两种挂法都用它，BTL-243）：照 statecore-mcp 1.1.0 的工具层复刻，
+// 再叠上 SHIPHERD_OVERRIDES 这几处改动（Shipherd 不蒸馏：consolidate 的长内容作为事件原样留着）。
 // hub-contract.test.ts 拿真的 statecore-mcp 比：上游原文一字不差，差别只有这份清单。
 // 后端（StateCore 的嵌入式后端，backgroundDigest: false）由 hub-entry.ts / entry.ts 建好传进来，这里不 import statecore-mcp。
 
@@ -125,10 +125,10 @@ export interface Override {
 }
 
 /**
- * Butler 对上游文字的全部改动（BTL-243 addendum §4）。Butler 不调用任何模型，没有蒸馏：
+ * Shipherd 对上游文字的全部改动（BTL-243 addendum §4）。Shipherd 不调用任何模型，没有蒸馏：
  * consolidate 进来的长内容原样存成事件，recall 作为最近事件返回；facts 也不再报“等待蒸馏的事件数”。
  */
-export const BUTLER_OVERRIDES: readonly Override[] = [
+export const SHIPHERD_OVERRIDES: readonly Override[] = [
   {
     where: "instructions",
     from: "pass consolidate: true for longer conversational context.",
@@ -186,7 +186,7 @@ export function applyOverrides(instructions: string, tools: readonly unknown[], 
   return { instructions: ins, tools: out };
 }
 
-const applied = applyOverrides(UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS, BUTLER_OVERRIDES);
+const applied = applyOverrides(UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS, SHIPHERD_OVERRIDES);
 export const MEMORY_INSTRUCTIONS = applied.instructions;
 export const MEMORY_TOOLS = applied.tools as typeof UPSTREAM_TOOLS;
 

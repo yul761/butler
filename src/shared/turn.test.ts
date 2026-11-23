@@ -55,7 +55,7 @@ describe("noticeNeedsYou", () => {
     expect(noticeNeedsYou(breaker("warned"))).toBe(false);
     expect(noticeNeedsYou({ kind: "lessons_paused" })).toBe(false);
     expect(noticeNeedsYou({ kind: "check_promoted", eventId: 1, batchId: null, names: [], at: 0 })).toBe(false);
-    expect(noticeNeedsYou({ kind: "approval", target: { page: "butler", sessionId: null }, title: null })).toBe(true);
+    expect(noticeNeedsYou({ kind: "approval", target: { page: "shipherd", sessionId: null }, title: null })).toBe(true);
     const stack = (reason: string) => ({ kind: "stack", stack: { reason }, target: null }) as unknown as NowNotice;
     expect(noticeNeedsYou(stack("conflict"))).toBe(true);
     expect(noticeNeedsYou(stack("behind"))).toBe(false);
@@ -150,9 +150,9 @@ describe("sessionTurn", () => {
       turn: { owner: "you", kind: "answer", question: "用哪个库？", options: ["a", "b"], askId: 7, sessionId: "s" }, since: N - 50,
     });
   });
-  it("permission prompt → butler approval notice", () => {
+  it("permission prompt → shipherd approval notice", () => {
     expect(sessionTurn(ses({ activity: act({ kind: "approval" }) })).turn).toEqual({
-      owner: "you", kind: "butler", notice: { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" },
+      owner: "you", kind: "shipherd", notice: { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" },
     });
   });
   it("only the four sources are stuck", () => {

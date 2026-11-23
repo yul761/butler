@@ -7,7 +7,7 @@ import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket,
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
- * 假 claude → matcher 为 Skill 的 PostToolUse hook → butler-hook → HookInbox → stageEventFromHook → PrStagesService → ticket 页「PR 详情」页签的阶段。
+ * 假 claude → matcher 为 Skill 的 PostToolUse hook → shipherd-hook → HookInbox → stageEventFromHook → PrStagesService → ticket 页「PR 详情」页签的阶段。
  */
 test("a skill call in a session moves the design step to active; the timeline stays collapsed and the page keeps its tab", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
@@ -183,7 +183,7 @@ test("backfill of an old merged ticket", async ({ makeSandbox, launch }) => {
   // 补链接已经在第一次启动时跑完（当时 gh 什么都没有）：删掉记录，下次启动重跑。
   const old = mergedPr(9, "feature/OLD-1", "2025-03-01T08:00:00Z", "2025-03-02T08:00:00Z");
   s.setGh({ branches: { "feature/OLD-1": [old.list] }, prs: { [old.view.url.toLowerCase()]: old.view } });
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   db.prepare("DELETE FROM jobs WHERE name = 'pr_backfill'").run();
   db.close();
 

@@ -43,8 +43,8 @@
 - 单测：验收 1、3；贴到 PR 时块替换不动其余描述；开关关着 `briefProvider` 返回 null。
 
 ## T9 MCP 工具和总控（§3.1、§10）
-- `memory-mcp/sessions-server.ts`：`submit_evidence`、`pre_review_result`（ticket 范围，中英描述）；butler 范围 `pr_assessment`；`list_prs` 加 `risk` / `ready` / `missing`。
-- `src/shared/control.ts`、`control-handler.ts`、`butler-control.ts`；`SESSIONS_AUTO_ALLOW` 加 `pre_review_result`、`submit_evidence`、`pr_assessment`。
+- `memory-mcp/sessions-server.ts`：`submit_evidence`、`pre_review_result`（ticket 范围，中英描述）；shipherd 范围 `pr_assessment`；`list_prs` 加 `risk` / `ready` / `missing`。
+- `src/shared/control.ts`、`control-handler.ts`、`shipherd-control.ts`；`SESSIONS_AUTO_ALLOW` 加 `pre_review_result`、`submit_evidence`、`pr_assessment`。
 - 更新列出工具名的测试。
 
 ## T10 说明文件（§3.2）

@@ -46,7 +46,7 @@ export function runningTicker(rows: Pick<LessonQueueRowView, "status">[], tick: 
   return () => clearInterval(timer);
 }
 
-/** 一次运行的状态文字（详情和尝试列表用）：aborted（Butler 退出等打断的）显示“中断”，不算失败。 */
+/** 一次运行的状态文字（详情和尝试列表用）：aborted（Shipherd 退出等打断的）显示“中断”，不算失败。 */
 export function runStatusLabel(status: LessonRunStatus, S: UiStrings): string {
   return S.lessonRunStatus[status];
 }

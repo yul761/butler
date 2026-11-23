@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 export function writeRepo(files: Record<string, string>, opts: { git?: boolean } = {}): string {
-  const root = mkdtempSync(join(tmpdir(), "butler-baseline-"));
+  const root = mkdtempSync(join(tmpdir(), "shipherd-baseline-"));
   for (const [p, text] of Object.entries(files)) {
     const abs = join(root, ...p.split("/"));
     mkdirSync(dirname(abs), { recursive: true });

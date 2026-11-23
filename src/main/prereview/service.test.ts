@@ -41,7 +41,7 @@ function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean)
     git,
     recipient: () => "s1",
     cwdOf: () => "/w",
-    isButlerPr: () => true,
+    isShipherdPr: () => true,
     openPrFor: (k, t) => prs.byTicket(k ?? "").find((p) => p.state === "open" && p.slug === t.repoSlug && p.headBranch === t.branch) ?? null,
     profile: () => ({ projects: [proj], dirs: [], ci: [], pitfalls: [] }),
     policy: () => defaultPrPolicy(),
@@ -138,7 +138,7 @@ describe("pre-review runner and delivery", () => {
     // the acceptance item went to the cross-check, which did not judge it.
     expect(ev[1]).toMatchObject({ verified: "unverifiable" });
     expect(s.after).toEqual([row.id]);
-    expect(s.sent).toEqual(["Butler pre-review of aaaaaaa passed."]);
+    expect(s.sent).toEqual(["Shipherd pre-review of aaaaaaa passed."]);
     expect(s.repo.get(row.id)!.deliveredAt).toBe(1000);
   });
   it("violations: delivers the list without the rule's full text", async () => {

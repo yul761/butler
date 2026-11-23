@@ -46,7 +46,7 @@ export class McpHub {
   private lastError: string | null = null;
 
   constructor(private readonly d: {
-    /** 启动 hub：Butler 自己的 Electron 当 Node 跑 mcp-hub.cjs，参数由这里给。 */
+    /** 启动 hub：Shipherd 自己的 Electron 当 Node 跑 mcp-hub.cjs，参数由这里给。 */
     spawn: (args: string[]) => HubChild;
     dataDir: string;
     now?: () => number;
@@ -89,7 +89,7 @@ export class McpHub {
     return urls;
   }
 
-  /** 终端退出：撤掉它的路由（butler-sessions 撤回没人再等的请求）。 */
+  /** 终端退出：撤掉它的路由（shipherd-sessions 撤回没人再等的请求）。 */
   removeTerminal(termId: string): void {
     for (const [token, r] of [...this.routes]) {
       if (r.termId !== termId) continue;
@@ -99,7 +99,7 @@ export class McpHub {
     if (this.draining && this.routes.size === 0) this.stop();
   }
 
-  /** 设置关掉：不再给新终端路由；还接着 hub 的终端退完了再停（关掉开关不会让开着的 session 断掉 Butler 的 MCP）。 */
+  /** 设置关掉：不再给新终端路由；还接着 hub 的终端退完了再停（关掉开关不会让开着的 session 断掉 Shipherd 的 MCP）。 */
   stopWhenIdle(): void {
     if (this.routes.size === 0) {
       this.stop();
@@ -108,7 +108,7 @@ export class McpHub {
     this.draining = true;
   }
 
-  /** 设置关掉或 Butler 退出：停掉 hub，不再重启。已经开着的 session 的 Butler MCP 跟着断开。 */
+  /** 设置关掉或 Shipherd 退出：停掉 hub，不再重启。已经开着的 session 的 Shipherd MCP 跟着断开。 */
   stop(): void {
     this.stopped = true;
     this.draining = false;
@@ -177,7 +177,7 @@ export class McpHub {
     this.clearStartTimer();
     if (this.lastPort !== 0 && port !== this.lastPort) {
       // 旧端口上的 token 作废，不发给新的 hub：端口空着的那段时间别的程序可能占了它、收到了 token。
-      this.d.log?.(`shared MCP hub moved from port ${this.lastPort} to ${port}; sessions opened before it can no longer reach Butler's MCP until reopened`);
+      this.d.log?.(`shared MCP hub moved from port ${this.lastPort} to ${port}; sessions opened before it can no longer reach Shipherd's MCP until reopened`);
       this.routes.clear();
       if (this.draining) {
         // 设置已经关了，又没有终端接着它：不用再跑。
@@ -251,7 +251,7 @@ export class McpHub {
   }
 }
 
-/** 真的 hub 子进程：Butler 自己的 Electron 当 Node 跑 mcp-hub.cjs（和 stdio 的记忆 MCP 一样），stderr 一行一行进 Butler 的日志。 */
+/** 真的 hub 子进程：Shipherd 自己的 Electron 当 Node 跑 mcp-hub.cjs（和 stdio 的记忆 MCP 一样），stderr 一行一行进 Shipherd 的日志。 */
 export function spawnHub(script: string, log: (msg: string) => void): (args: string[]) => HubChild {
   return (args) => {
     const child = spawn(process.execPath, [script, ...args], {

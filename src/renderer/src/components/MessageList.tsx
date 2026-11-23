@@ -1,4 +1,4 @@
-// 信箱（BTL-245）的消息列表：Butler 总控页、feature 页「总控」tab 对话下面默认折起的「消息（N）」。
+// 信箱（BTL-245）的消息列表：Shipherd 总控页、feature 页「总控」tab 对话下面默认折起的「消息（N）」。
 // 谁发给谁、种类、状态（已排队 / 已送达 / 已回复）、怎么送到的、正文和回复。新的在前。
 import type { MessageScope, MessageView } from "../../../shared/types";
 import { api } from "../api";
@@ -49,7 +49,7 @@ export function MessageListSummary({ messages }: { messages: MessageView[] | nul
 }
 
 export function Messages({ scope }: { scope: MessageScope }) {
-  const key = "butler" in scope ? "messages:butler" : `messages:feature:${scope.featureId}`;
+  const key = "shipherd" in scope ? "messages:shipherd" : `messages:feature:${scope.featureId}`;
   const messages = useStateRefetch(key, () => api.messages(scope));
   return <MessageListSummary messages={messages} />;
 }

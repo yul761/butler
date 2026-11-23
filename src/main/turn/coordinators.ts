@@ -1,4 +1,4 @@
-// 「谁该动」看板上的总控 session（UI 重做第 1 层）：feature 总控和 Butler 总控的 head，各带页面 target。
+// 「谁该动」看板上的总控 session（UI 重做第 1 层）：feature 总控和 Shipherd 总控的 head，各带页面 target。
 import type { NowTarget, Session } from "../../shared/types";
 
 export interface TurnCoordinator {
@@ -12,8 +12,8 @@ type Live = Session & { termId?: string | null };
 
 export interface TurnCoordinatorDeps {
   featureViews(): { id: number; name: string; sessions: Live[] }[];
-  /** 开着终端的 Butler 总控 head（数据库里的 Session，不带 termId）。 */
-  runningButler(): Session | null;
+  /** 开着终端的 Shipherd 总控 head（数据库里的 Session，不带 termId）。 */
+  runningShipherd(): Session | null;
   hibernatedHeads(): Session[];
 }
 
@@ -33,9 +33,9 @@ export function turnCoordinators(d: TurnCoordinatorDeps): TurnCoordinator[] {
     const own = [...f.sessions, ...hib.filter((h) => h.featureId === f.id && h.ticketKey === null)];
     for (const x of own) if (x.fixesSession === null) push(x, f.id, { page: "feature", id: f.id, sessionId: x.id }, f.name);
   }
-  // runningButler 只从开着的终端里取，本身就活着；它是数据库行、没有 termId，不能再过 alive。
-  const running = d.runningButler();
-  const b = running ?? hib.find((h) => h.butler && h.ticketKey === null) ?? null;
-  if (b) push(b, null, { page: "butler", sessionId: b.id }, null, running !== null);
+  // runningShipherd 只从开着的终端里取，本身就活着；它是数据库行、没有 termId，不能再过 alive。
+  const running = d.runningShipherd();
+  const b = running ?? hib.find((h) => h.shipherd && h.ticketKey === null) ?? null;
+  if (b) push(b, null, { page: "shipherd", sessionId: b.id }, null, running !== null);
   return out;
 }

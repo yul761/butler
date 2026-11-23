@@ -13,7 +13,7 @@ Review-lessons analysis works, but the user cannot see it working:
 - The apply result (`{created, hit, dropped}`) is discarded, so a run cannot be linked to the lessons it produced.
 - Usage limits, rate limits and overload put the queue into an in-memory 10-minute loop that nothing shows and that a restart forgets.
 - Model-unavailable errors become a permanent `claude_error`.
-- Interactive Butler sessions that hit a limit look idle.
+- Interactive Shipherd sessions that hit a limit look idle.
 
 ## Decisions
 
@@ -112,14 +112,14 @@ Related changes:
 
 ### 3. "Open in Claude" for one run
 
-This is opt-in, per run. It starts a visible Butler session the same way `openFix` and the patrol do: a short submitted task message, with the bulk in a file.
+This is opt-in, per run. It starts a visible Shipherd session the same way `openFix` and the patrol do: a short submitted task message, with the bulk in a file.
 
-- **The file.** `~/.butler/workspaces/_lessons/run-<id>.md` holds the run's metadata, error, stderr, gh stderr, material, raw output and findings, all marked as data, not instructions.
+- **The file.** `~/.shipherd/workspaces/_lessons/run-<id>.md` holds the run's metadata, error, stderr, gh stderr, material, raw output and findings, all marked as data, not instructions.
 - **The session.**
   - cwd is `_lessons`, so `Read` of the file needs no prompt.
-  - It has `--add-dir` to the repo's local path and guide kind `butler`. It loads no Butler MCP and keeps the user's default model.
+  - It has `--add-dir` to the repo's local path and guide kind `shipherd`. It loads no Shipherd MCP and keeps the user's default model.
   - Its sessions row has the new `lesson_run_id`.
-- **Where it shows.** It appears on the Butler page under its own heading.
+- **Where it shows.** It appears on the Shipherd page under its own heading.
 - **What it skips.** It is excluded from stuck and needs-you judging, auto-refresh and the Now page rows.
 - **Re-opening.** Opening the same run again returns the open terminal, or resumes the closed one without re-sending the task.
 
@@ -159,7 +159,7 @@ This is opt-in, per run. It starts a visible Butler session the same way `openFi
 - **Settings → Health.** A "Claude 可用性 / Claude availability" block shows:
   - the state;
   - the current hit (kind, message, source, job, time);
-  - when Butler retries;
+  - when Shipherd retries;
   - the last hit;
   - the lessons pause;
   - Resume and Pause buttons.

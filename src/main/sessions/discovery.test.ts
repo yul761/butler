@@ -139,7 +139,7 @@ describe("syncDiscovered / suggestTicket", () => {
     const db = memDb();
     insertTicket(new TicketsRepo(db), { key: "PROJ-12", title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
     const sessions = new SessionsRepo(db);
-    sessions.insertIfAbsent({ id: ID2, ticketKey: "PROJ-12", cwd: "/r", origin: "butler", lastActivityAt: 5, createdAt: 1 });
+    sessions.insertIfAbsent({ id: ID2, ticketKey: "PROJ-12", cwd: "/r", origin: "shipherd", lastActivityAt: 5, createdAt: 1 });
     const inserted = syncDiscovered(
       [
         { id: ID1, cwd: "/w", gitBranch: "main", firstPrompt: "hi", lastActivityAt: 10 },
@@ -149,7 +149,7 @@ describe("syncDiscovered / suggestTicket", () => {
     );
     expect(inserted).toEqual([ID1]);
     expect(sessions.get(ID1)).toMatchObject({ origin: "discovered", ticketKey: null });
-    expect(sessions.get(ID2)).toMatchObject({ ticketKey: "PROJ-12", cwd: "/r", origin: "butler", lastActivityAt: 20 });
+    expect(sessions.get(ID2)).toMatchObject({ ticketKey: "PROJ-12", cwd: "/r", origin: "shipherd", lastActivityAt: 20 });
   });
 
   it("records a session found in a feature workspace as its coordinator, and leaves an already known one alone", () => {
@@ -174,7 +174,7 @@ describe("syncDiscovered / suggestTicket", () => {
 describe("needsDiscovery", () => {
   const base = {
     id: "a", ticketKey: null, cwd: "/w", origin: "discovered" as const, gitBranch: "main", firstPrompt: "hi",
-    lastActivityAt: 1, waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null,
+    lastActivityAt: 1, waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null,
   };
 
   it("only asks for a scan when an unclaimed session is missing details, once per session", () => {
@@ -189,7 +189,7 @@ describe("needsDiscovery", () => {
 
 describe("scanClaudeProjects head cache", () => {
   it("remembers complete heads and stops re-reading those files, but re-reads incomplete ones", async () => {
-    const root = tempDir("butler-scan-cache-");
+    const root = tempDir("shipherd-scan-cache-");
     const dir = join(root, "-proj");
     mkdirSync(dir);
     const complete = join(dir, "11111111-1111-4111-8111-111111111111.jsonl");

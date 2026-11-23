@@ -31,7 +31,7 @@ describe("noticeText", () => {
   it("texts and actions for each kind", () => {
     expect(noticeText({ kind: "claude_limited", hit, retryAt: at, lessonsPaused: true }, S, now)).toEqual({ text: "Claude 用量已达上限，14:30 恢复，复盘已暂停", actions: ["resume", "health"] });
     expect(noticeText({ kind: "claude_limited", hit, retryAt: at, lessonsPaused: false }, S, now).text).toBe("Claude 用量已达上限，14:30 恢复");
-    expect(noticeText({ kind: "model_unavailable", hit: { ...hit, kind: "model_unavailable", resetsAt: null }, retryAt: null }, S, now)).toEqual({ text: "复盘用的模型不可用：模型不可用，Butler 会稍后重试", actions: ["retry", "health"] });
+    expect(noticeText({ kind: "model_unavailable", hit: { ...hit, kind: "model_unavailable", resetsAt: null }, retryAt: null }, S, now)).toEqual({ text: "复盘用的模型不可用：模型不可用，Shipherd 会稍后重试", actions: ["retry", "health"] });
     expect(noticeText({ kind: "lessons_paused" }, S, now)).toEqual({ text: "复盘队列已手动暂停", actions: ["resume"] });
     expect(noticeText({ kind: "lessons_failing", count: 4 }, S, now)).toEqual({ text: "复盘连续 4 次分析失败", actions: ["lessons"] });
     expect(noticeText({ kind: "shared_mcp_failed", error: "exited (1)" }, S, now).text).toMatch(/共享 MCP 起不来（exited \(1\)）/);

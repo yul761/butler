@@ -16,7 +16,7 @@ async function typeLine(page: Page, line: string): Promise<void> {
 
 /** 这个 session 被休眠的时间（没休眠是 null）。 */
 function hibernatedAt(s: Sandbox, id: string): number | null {
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000, readOnly: true });
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"), { timeout: 5000, readOnly: true });
   try {
     return (db.prepare("SELECT hibernated_at FROM sessions WHERE id = ?").get(id) as { hibernated_at: number | null } | undefined)?.hibernated_at ?? null;
   } finally {
@@ -40,7 +40,7 @@ function messagesOf(s: Sandbox, cwd: string, id: string): string[] {
 test("a hibernated feature coordinator wakes for a report, gets it, and still has its conversation", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000", BUTLER_HIBERNATE_AFTER_MS: "3000" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000", SHIPHERD_HIBERNATE_AFTER_MS: "3000" };
   const { page } = await launch(s);
   await completeWizard(page, s);
 

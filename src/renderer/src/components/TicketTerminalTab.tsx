@@ -2,7 +2,7 @@
 // 终端面板和打开 session 的状态（useTicketTerminals）由 TicketPage 持有：切到别的页签再回来，TerminalPane 从快照重建，不丢。
 import { useEffect, useRef, useState } from "react";
 import type { OpenSessionRequest, TicketRepo, TicketView } from "../../../shared/types";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { repoName, repoWhere, sessionPlace } from "../repos";
 import { sessionLabel, splitSessions } from "../sessions";
@@ -95,7 +95,7 @@ export function useTicketTerminals(ticket: TicketView): TicketTerminals {
         setError(S.openErrors[r.reason]);
       }
     } catch (e) {
-      setError(e instanceof ButlerError ? e.message : (e as Error).message);
+      setError(e instanceof ShipherdError ? e.message : (e as Error).message);
     }
   }
 

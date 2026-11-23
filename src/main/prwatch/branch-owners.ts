@@ -6,9 +6,9 @@ import type { Ticket } from "../../shared/types";
 import type { BranchOwner, BranchOwnersRepo } from "../db/branch-owners-repo";
 import type { PrLinker } from "./pr-links";
 
-/** hook 报上来的一次推送或开 PR（butler-hook 只为这两种 Bash 调用写信封）。 */
+/** hook 报上来的一次推送或开 PR（shipherd-hook 只为这两种 Bash 调用写信封）。 */
 export interface Shipped {
-  /** BUTLER_SESSION（/clear 之后不变）；不是 Butler 开的终端用 Claude 的 session id。 */
+  /** SHIPHERD_SESSION（/clear 之后不变）；不是 Shipherd 开的终端用 Claude 的 session id。 */
   sessionId: string;
   ticket: string | null;
   cwd: string;
@@ -43,7 +43,7 @@ export function shipFromEnvelope(env: HookEnvelope): Shipped | null {
   if ((o.hook_event_name !== "PostToolUse" && o.hook_event_name !== "PostToolUseFailure") || o.tool_name !== "Bash") return null;
   const input = o.tool_input && typeof o.tool_input === "object" ? (o.tool_input as Record<string, unknown>) : {};
   const command = str(input.command);
-  const sessionId = env.butlerSession ?? str(o.session_id);
+  const sessionId = env.shipherdSession ?? str(o.session_id);
   const cwd = str(o.cwd);
   if (!sessionId || !cwd) return null;
   // 新版 hook 对整条命令解析过（命令本身截断到 2000 字）；旧版的只有命令。
@@ -79,7 +79,7 @@ const TAG_LIKE = /^v?\d+(?:\.\d+)+(?:[-+.][0-9A-Za-z.-]*)?$/;
 
 export interface BranchOwnershipDeps {
   tickets: { get(key: string): Pick<Ticket, "key" | "repos"> | null };
-  /** 没有 BUTLER_TICKET 时用 session 记着的 ticket。 */
+  /** 没有 SHIPHERD_TICKET 时用 session 记着的 ticket。 */
   sessionTicket(sessionId: string): string | null;
   currentBranch(dir: string): Promise<string>;
   /** worktree 所属的主仓库（git rev-parse --git-common-dir 的上一级）。 */

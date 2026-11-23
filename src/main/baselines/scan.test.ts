@@ -15,7 +15,7 @@ describe("baseline scan: JS / TS repo", () => {
   });
   it("merges a script, the CI step and lint-staged into one ESLint check", () => {
     const e = find(r, "", "eslint")!;
-    expect(e).toMatchObject({ category: "lint", command: "pnpm lint", fileCommand: "pnpm exec eslint {file}", stages: ["commit", "ci"], changedFiles: true, butlerStage: "edit", source: "ci", confidence: "high" });
+    expect(e).toMatchObject({ category: "lint", command: "pnpm lint", fileCommand: "pnpm exec eslint {file}", stages: ["commit", "ci"], changedFiles: true, shipherdStage: "edit", source: "ci", confidence: "high" });
     expect(e.facts).toEqual(["no-console", "no-debugger"]);
     expect(e.evidence).toEqual(expect.arrayContaining([expect.stringContaining(".github/workflows/ci.yml"), "package.json: scripts.lint"]));
   });
@@ -39,7 +39,7 @@ describe("baseline scan: Python repo", () => {
   const r = scan(PY_REPO);
   it("reads pre-commit hooks, stages and pyproject facts (CRLF files)", () => {
     expect(r.projects[0]).toMatchObject({ dir: "", langs: ["python"], pm: "uv" });
-    expect(find(r, "", "ruff")).toMatchObject({ command: "pre-commit run ruff --all-files", fileCommand: "pre-commit run ruff --files {file}", stages: ["commit", "ci"], butlerStage: "edit", facts: ["E", "F", "I"] });
+    expect(find(r, "", "ruff")).toMatchObject({ command: "pre-commit run ruff --all-files", fileCommand: "pre-commit run ruff --files {file}", stages: ["commit", "ci"], shipherdStage: "edit", facts: ["E", "F", "I"] });
     expect(find(r, "", "ruff-format")).toMatchObject({ category: "format", stages: ["commit", "ci"] });
     expect(find(r, "", "mypy")).toMatchObject({ category: "typecheck", stages: ["push"], facts: ["strict"] });
     expect(find(r, "", "pytest")).toMatchObject({ command: "uv run pytest -q", testOne: "uv run pytest {test}", stages: ["ci"], confidence: "high" });
@@ -117,6 +117,6 @@ describe("baseline scan: rules and platforms", () => {
       { key: "acme", rule: JSON.stringify({ kind: "marker", files: ["acme.toml"], tools: [{ tool: "acme-lint", category: "lint", command: "acme-lint --all", fileCommand: "acme-lint {file}" }] }), enabled: true },
       { key: "kw-acme", rule: JSON.stringify({ kind: "keyword", category: "lint", tool: "acme-lint", match: "\\bacme-lint\\b", priority: 100 }), enabled: true },
     ]]);
-    expect(find(r, "", "acme-lint")).toMatchObject({ confidence: "high", stages: ["ci"], fileCommand: "acme-lint {file}", butlerStage: "edit" });
+    expect(find(r, "", "acme-lint")).toMatchObject({ confidence: "high", stages: ["ci"], fileCommand: "acme-lint {file}", shipherdStage: "edit" });
   });
 });

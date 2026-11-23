@@ -50,19 +50,19 @@ export function parseJsonLoose(text: string): unknown {
   return undefined;
 }
 
-/** 信息串必须正好是 butler-handoff，后面只能跟空白再接别的（```butler-handoffX 不算）。 */
-const HANDOFF_BLOCK_RE = /```butler-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
+/** 信息串必须正好是 shipherd-handoff，后面只能跟空白再接别的（```shipherd-handoffX 不算）。 */
+const HANDOFF_BLOCK_RE = /```shipherd-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
 
-/** 最后一个非空的 ```butler-handoff 代码块的内容；没有就是 null。 */
+/** 最后一个非空的 ```shipherd-handoff 代码块的内容；没有就是 null。 */
 export function extractHandoffBlock(text: string): string | null {
   const blocks = [...text.matchAll(HANDOFF_BLOCK_RE)].map((m) => m[1].trim()).filter(Boolean);
   return blocks.length ? blocks[blocks.length - 1] : null;
 }
 
-/** feature 总控的 /handoff 输出（设计文档 2026-10-28）：信息串必须正好是 butler-feature-handoff，规则同上；两种代码块互不匹配。 */
-const FEATURE_HANDOFF_BLOCK_RE = /```butler-feature-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
+/** feature 总控的 /handoff 输出（设计文档 2026-10-28）：信息串必须正好是 shipherd-feature-handoff，规则同上；两种代码块互不匹配。 */
+const FEATURE_HANDOFF_BLOCK_RE = /```shipherd-feature-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
 
-/** 最后一个非空的 ```butler-feature-handoff 代码块的内容；没有就是 null。 */
+/** 最后一个非空的 ```shipherd-feature-handoff 代码块的内容；没有就是 null。 */
 export function extractFeatureHandoffBlock(text: string): string | null {
   const blocks = [...text.matchAll(FEATURE_HANDOFF_BLOCK_RE)].map((m) => m[1].trim()).filter(Boolean);
   return blocks.length ? blocks[blocks.length - 1] : null;
@@ -71,7 +71,7 @@ export function extractFeatureHandoffBlock(text: string): string | null {
 const JSON_BLOCK_RE = /```json(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
 
 /**
- * /handoff 那一轮里没有 butler-handoff 代码块时的退路：claude 有时把结果写成普通的 ```json 代码块。
+ * /handoff 那一轮里没有 shipherd-handoff 代码块时的退路：claude 有时把结果写成普通的 ```json 代码块。
  * 只收看起来就是 handoff 的那个（有 ticket 和 next_steps），取最后一个。
  */
 export function extractJsonHandoffBlock(text: string): string | null {
@@ -83,7 +83,7 @@ export function extractJsonHandoffBlock(text: string): string | null {
 }
 
 /**
- * feature 总控 /handoff 的同样退路：没有 butler-feature-handoff 代码块时，收看起来就是 feature 汇总的 ```json 代码块
+ * feature 总控 /handoff 的同样退路：没有 shipherd-feature-handoff 代码块时，收看起来就是 feature 汇总的 ```json 代码块
  * （有字符串 summary 和数组 next_steps），取最后一个。带 ticket 字段的是 ticket 的 handoff，不收。
  */
 export function extractJsonFeatureHandoffBlock(text: string): string | null {

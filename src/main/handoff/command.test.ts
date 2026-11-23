@@ -21,7 +21,7 @@ describe("/handoff command file", () => {
     expect(existsSync(file)).toBe(false);
   });
 
-  it("updates an older Butler version", async () => {
+  it("updates an older Shipherd version", async () => {
     const file = handoffCommandPath(tempDir());
     writeFileSync(file, OLD);
     expect(await handoffCommandStatus(file)).toBe("stale");
@@ -37,12 +37,12 @@ describe("/handoff command file", () => {
     expect(readFileSync(file, "utf8")).toBe(HANDOFF_COMMAND_MD);
   });
 
-  it("counts Butler's own command as usable for a refresh even when stale (C1)", async () => {
+  it("counts Shipherd's own command as usable for a refresh even when stale (C1)", async () => {
     const dir = tempDir();
     const file = handoffCommandPath(dir);
     expect(await handoffCommandUsable(file)).toBe(false); // missing
     writeFileSync(file, V161);
-    expect(await handoffCommandUsable(file)).toBe(true); // stale：照样是 Butler 的命令
+    expect(await handoffCommandUsable(file)).toBe(true); // stale：照样是 Shipherd 的命令
     writeFileSync(file, HANDOFF_COMMAND_MD);
     expect(await handoffCommandUsable(file)).toBe(true);
     writeFileSync(file, "我自己的 handoff 命令");
@@ -57,7 +57,7 @@ describe("/handoff command file", () => {
     expect(readFileSync(file, "utf8")).toBe("我自己的 handoff 命令");
   });
 
-  it("reads a BOM-prefixed Butler file and rewrites a stale one", async () => {
+  it("reads a BOM-prefixed Shipherd file and rewrites a stale one", async () => {
     const file = handoffCommandPath(tempDir());
     writeFileSync(file, `\uFEFF${HANDOFF_COMMAND_MD}`);
     expect(await handoffCommandStatus(file)).toBe("installed");
@@ -130,17 +130,17 @@ describe("/handoff command for feature coordinators", () => {
   const PREVIOUS = {
     zh: {
       hash: "e1b25b8d150d6a4496b2c2361e31cbe2b17d7c233d7430e8d724b1346aa4e8e8",
-      description: ["生成 Butler handoff（当前 ticket 的进度摘要；在 epic 总控里是 epic 汇总）", "生成 Butler handoff（当前 ticket 的进度摘要）"],
-      purpose: ["供之后的 session 和记忆使用。", "供 Butler 的早间简报使用。"],
+      description: ["生成 Shipherd handoff（当前 ticket 的进度摘要；在 epic 总控里是 epic 汇总）", "生成 Shipherd handoff（当前 ticket 的进度摘要）"],
+      purpose: ["供之后的 session 和记忆使用。", "供 Shipherd 的早间简报使用。"],
       urlRule: "- PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。\n",
     },
     en: {
       hash: "d942faeb2ca90337a20ae215bef582b6206c62eb252be0c4ad8d06eb4b6c46f8",
       description: [
-        "Write a Butler handoff (a progress summary of the current ticket; in an epic coordinator, of the epic)",
-        "Write a Butler handoff (a progress summary of the current ticket)",
+        "Write a Shipherd handoff (a progress summary of the current ticket; in an epic coordinator, of the epic)",
+        "Write a Shipherd handoff (a progress summary of the current ticket)",
       ],
-      purpose: ["for later sessions and memory.", "for Butler's morning brief."],
+      purpose: ["for later sessions and memory.", "for Shipherd's morning brief."],
       urlRule: "- Copy each PR url exactly as gh prints it; never build or guess one.\n",
     },
   } as const;
@@ -159,7 +159,7 @@ describe("/handoff command for feature coordinators", () => {
       writeFileSync(file, renderHandoffCommand(previous));
       expect(await handoffCommandStatus(file)).toBe("stale");
       expect(await installHandoffCommand(file)).toBe("installed");
-      expect(readFileSync(file, "utf8")).toContain("butler-feature-handoff");
+      expect(readFileSync(file, "utf8")).toContain("shipherd-feature-handoff");
     });
   }
 });

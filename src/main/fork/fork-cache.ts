@@ -16,16 +16,16 @@ export interface FullForkPlan {
  * --settings 换成拷贝（permissions.allow = []，hooks 只剩一个 PreToolUse），--mcp-config 换成拷贝，
  * 再加 --permission-mode dontAsk --allowedTools Read Grep Glob Bash(git …)。提示词「只回答 OK」，整次只有一轮。
  *
- * 1. 普通 ticket session（Butler 开的 BTL-235 开发 session，--model opus，无 --add-dir），开发上下文 152,125：
+ * 1. 普通 ticket session（Shipherd 开的 BTL-235 开发 session，--model opus，无 --add-dir），开发上下文 152,125：
  *    input 2、write1h 3,155、read 157,539、output 75，$0.058；r1 = 0.980，r2 = 1.036 → PASS。
  *    （开发 session 当时正在跑一轮，transcript 末尾挂着没结果的 tool_use；前缀照样命中。）
  * 2. 总控形状的 session（features/1.json 的 MCP、--add-dir、coordinator guide，不带 --model），交互模式下读了两份文件，开发上下文 93,407：
  *    input 2、write1h 2,710、read 93,405、output 4，$0.040；r1 = 0.972，r2 = 1.000 → PASS。
  * 一共跑了 2 次，合计约 $0.10。v1 / v2-no-perm / v2-dev-mcp 没有跑（v2 直接通过，按计划不用拆）。
  *
- * 前提：分叉的环境变量要跟开发 session 一样带上 CLAUDE_EFFORT 之类的 CLAUDE_*（都来自 Butler 自己的 process.env，
+ * 前提：分叉的环境变量要跟开发 session 一样带上 CLAUDE_EFFORT 之类的 CLAUDE_*（都来自 Shipherd 自己的 process.env，
  * 生产代码用同一个 baseEnv，自然一致）；参数里不能有 --disallowedTools、--json-schema、--setting-sources、--no-session-persistence。
  * 没测过的情形：开发参数里没有 --settings 时，devForkArgs 把分叉的 --settings 追加在 --fork-session 之后（readonly hook 靠它）；
- * Butler 开的 session 平常都带 --settings，只有 mcpSettings 返回 null 时才会走到。
+ * Shipherd 开的 session 平常都带 --settings，只有 mcpSettings 返回 null 时才会走到。
  */
 export const FULL_FORK: FullForkPlan = { cacheOk: true, permissionArgs: true, ownMcpConfig: true };

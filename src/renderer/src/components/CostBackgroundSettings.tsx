@@ -4,7 +4,7 @@ import { BG_PRIORITIES, BG_QUOTA_ORDERS, BG_WINDOWS, BG_YIELDS, type BgKindStatu
 import { COST_ACTIONS, COST_PAUSE_SCOPES, COST_UNITS, type CostBreakerView, type CostPolicyKey } from "../../../shared/cost";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
 import { resetClock } from "../availability-view";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { costAmount, costBreakerText, costInputValue, costOverridesFromDraft, parseCostInput, withKindOverride, type CostDraft } from "../cost-view";
 import { reportError } from "../errors";
 import { policyScopeFromKey, policyScopeKey } from "../policy-view";
@@ -38,7 +38,7 @@ function CostCaps() {
         setMessage({ text: S.policySaved, error: false });
       } else setMessage({ text: r.message, error: true });
     } catch (e) {
-      if (e instanceof ButlerError) setMessage({ text: e.message, error: true });
+      if (e instanceof ShipherdError) setMessage({ text: e.message, error: true });
       else reportError(e);
     } finally {
       setBusy(false);
@@ -175,7 +175,7 @@ function BackgroundSettings() {
       });
       await load();
     } catch (e) {
-      if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+      if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
       else reportError(e);
     }
   };

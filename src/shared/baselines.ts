@@ -27,8 +27,8 @@ export interface BaselineCheck {
   stages: RepoStage[];
   /** 能不能只跑改过的文件。 */
   changedFiles: boolean;
-  /** Butler 要把它当检查时放在哪一步。 */
-  butlerStage: "edit" | "push";
+  /** Shipherd 要把它当检查时放在哪一步。 */
+  shipherdStage: "edit" | "push";
   source: BaselineSource;
   confidence: BaselineConfidence;
   /** 从哪儿看出来的：`path` 或 `path: 说明`。 */

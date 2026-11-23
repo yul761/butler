@@ -28,8 +28,8 @@ const git = (dir: string, ...a: string[]) =>
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", "-C", dir, ...a], { encoding: "utf8" }).trim();
 
 function db(s: Sandbox): DatabaseSync {
-  // Butler 也开着这个库：等它的写锁，不直接报 SQLITE_BUSY。
-  return new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000 });
+  // Shipherd 也开着这个库：等它的写锁，不直接报 SQLITE_BUSY。
+  return new DatabaseSync(join(s.shipherdHome, "app.db"), { timeout: 5000 });
 }
 
 /** 终端会折行：比较时去掉所有空白。 */
@@ -38,16 +38,16 @@ const squash = (t: string) => t.replace(/\s+/g, "");
 /**
  * 设计文档 2026-11-04（合并总控）：两个 ticket 在同一个仓库里改了同一行 → DMS-2 占着合并 → DMS-1 合并被 gate 拦下（等 DMS-2）
  * → 「现在」页的“最近合并”有这条 → DMS-2 真的合进 main 后，停着的 DMS-1 收到“已经合完” → 再合是 rebase 提醒
- * → 不审核的命令不发请求 → Butler 不在时立即放行。
+ * → 不审核的命令不发请求 → Shipherd 不在时立即放行。
  */
 test("merge coordinator: a conflicting merge waits for the holder, is told when it merges, then is asked to rebase", async ({ makeSandbox, launch }) => {
   // /fake-run 用 Git Bash 执行带 Windows 路径的命令、gate 的引号解析和 Git Bash 的不一样：Windows 上还没验证过。
   test.skip(process.platform === "win32", "not verified on Windows yet: /fake-run passes Windows paths through Git Bash and the gate's command parser");
   const s = makeSandbox();
   // 刚在 DMS-1 的终端里打过字：通知默认要等用户 30 秒没打字才贴，这里调短。
-  s.env = { BUTLER_GATE_CHECK_MS: "500", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  s.env = { SHIPHERD_GATE_CHECK_MS: "500", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
-  const gateDir = join(s.butlerHome, "gate");
+  const gateDir = join(s.shipherdHome, "gate");
   const requests = join(gateDir, "requests");
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -133,7 +133,7 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
     await expect.poll(() => denies().length).toBe(2);
     expect(denies()[1]).toContain("rebase");
     await expect.poll(() => seen.length).toBeGreaterThan(0);
-    // 等 Butler 删掉这次的请求文件、watcher 送完它的事件，再清空。
+    // 等 Shipherd 删掉这次的请求文件、watcher 送完它的事件，再清空。
     await expect.poll(() => readdirSync(requests)).toEqual([]);
     await page.waitForTimeout(500);
 
@@ -149,7 +149,7 @@ test("merge coordinator: a conflicting merge waits for the holder, is told when 
   expect(seen).toEqual([]);
   expect(readdirSync(requests)).toEqual([]);
 
-  // 9. Butler 不在（没有 alive.json）：立即放行。
+  // 9. Shipherd 不在（没有 alive.json）：立即放行。
   rmSync(join(gateDir, "alive.json"));
   await typeLine(page, `/fake-run ${merge}`);
   await expect.poll(fakeLog).toContain(` gate allow ${merge}\n`);

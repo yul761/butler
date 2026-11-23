@@ -3,9 +3,9 @@
 //
 // 两种模式都查：
 // - app 的签名完整（codesign --verify --deep --strict），app 里每个 Mach-O（Electron 的 helper 和 framework、node-pty 的
-//   pty.node 和 spawn-helper、butler-hook）都签了名；
+//   pty.node 和 spawn-helper、shipherd-hook）都签了名；
 // - zip 解开、dmg 挂上以后，里面的 app 签名仍然完整（打包没有弄坏签名，下载的人才打得开）；
-// - 冒烟：包里的 Butler --smoke（sqlite、StateCore、node-pty 经 spawn-helper 跑命令），ELECTRON_RUN_AS_NODE 的 Butler，butler-hook。
+// - 冒烟：包里的 Shipherd --smoke（sqlite、StateCore、node-pty 经 spawn-helper 跑命令），ELECTRON_RUN_AS_NODE 的 Shipherd，shipherd-hook。
 //   developer-id 时它们都在 hardened runtime 下运行，entitlements 不够或库验证不过会在这里失败，而不是在用户机器上。
 // developer-id 另外查：每个 Mach-O 都是同一个 Team ID 的 Developer ID Application 签名、打开了 hardened runtime、带安全时间戳；
 // app 和 dmg 都 staple 了公证票据；Gatekeeper（spctl）认它们是 Notarized Developer ID。
@@ -94,7 +94,7 @@ function checkApp(app, mode, label, problems) {
   const verify = run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
   if (verify.status !== 0) problems.push(`${label}: codesign --verify --deep --strict failed:\n${both(verify).trim()}`);
   const files = machOFiles(app);
-  const main = join(app, "Contents", "MacOS", "Butler");
+  const main = join(app, "Contents", "MacOS", "Shipherd");
   const mainSig = parseCodesignDisplay(both(run("codesign", ["-dv", "--verbose=4", main])));
   for (const f of files) {
     const sig = parseCodesignDisplay(both(run("codesign", ["-dv", "--verbose=4", f])));
@@ -113,35 +113,35 @@ function checkApp(app, mode, label, problems) {
 
 /**
  * 用打出来的包跑三件事：
- * 1. Butler --smoke（src/main/smoke.ts）：Electron 主进程加载 node:sqlite、StateCore，用 node-pty 经 spawn-helper 跑 echo；
- * 2. ELECTRON_RUN_AS_NODE=1 的 Butler（记忆 MCP 就这样跑）执行一段 JavaScript 并用 node:sqlite；
- * 3. butler-hook readonly：空输入一定回答 deny，不写任何文件。
- * HOME 指向临时目录，不碰这台机器上的 ~/.butler。
+ * 1. Shipherd --smoke（src/main/smoke.ts）：Electron 主进程加载 node:sqlite、StateCore，用 node-pty 经 spawn-helper 跑 echo；
+ * 2. ELECTRON_RUN_AS_NODE=1 的 Shipherd（记忆 MCP 就这样跑）执行一段 JavaScript 并用 node:sqlite；
+ * 3. shipherd-hook readonly：空输入一定回答 deny，不写任何文件。
+ * HOME 指向临时目录，不碰这台机器上的 ~/.shipherd。
  */
 function smoke(app, home, problems) {
-  const exe = join(app, "Contents", "MacOS", "Butler");
+  const exe = join(app, "Contents", "MacOS", "Shipherd");
   const env = { ...process.env, HOME: home };
   const main = run(exe, ["--smoke"], { env, timeout: 90_000 });
-  if (main.status !== 0 || !/pty-ok/.test(main.stdout ?? "")) problems.push(`smoke: Butler --smoke failed (exit ${main.status}, signal ${main.signal}):\n${both(main).trim()}`);
+  if (main.status !== 0 || !/pty-ok/.test(main.stdout ?? "")) problems.push(`smoke: Shipherd --smoke failed (exit ${main.status}, signal ${main.signal}):\n${both(main).trim()}`);
   const script = 'const { DatabaseSync } = require("node:sqlite"); const n = new DatabaseSync(":memory:").prepare("SELECT 41 + 1 AS n").get().n; let s = 0; for (let i = 0; i < 1e6; i++) s += i; process.stdout.write(`node-ok ${n}`);';
   const node = run(exe, ["-e", script], { env: { ...env, ELECTRON_RUN_AS_NODE: "1" }, timeout: 60_000 });
-  if (node.status !== 0 || !/node-ok 42/.test(node.stdout ?? "")) problems.push(`smoke: ELECTRON_RUN_AS_NODE Butler failed (exit ${node.status}, signal ${node.signal}):\n${both(node).trim()}`);
-  const hook = run(join(app, "Contents", "Resources", "hook", "butler-hook"), ["readonly"], { env, input: "", timeout: 60_000 });
+  if (node.status !== 0 || !/node-ok 42/.test(node.stdout ?? "")) problems.push(`smoke: ELECTRON_RUN_AS_NODE Shipherd failed (exit ${node.status}, signal ${node.signal}):\n${both(node).trim()}`);
+  const hook = run(join(app, "Contents", "Resources", "hook", "shipherd-hook"), ["readonly"], { env, input: "", timeout: 60_000 });
   if (hook.status !== 0 || !/"permissionDecision":"deny"/.test(hook.stdout ?? "")) {
-    problems.push(`smoke: butler-hook failed (exit ${hook.status}, signal ${hook.signal}):\n${both(hook).trim()}`);
+    problems.push(`smoke: shipherd-hook failed (exit ${hook.status}, signal ${hook.signal}):\n${both(hook).trim()}`);
   }
 }
 
 export function verifyMacSigning(distDir, mode) {
   const problems = [];
   const dist = resolve(distDir);
-  const macDir = readdirSync(dist).find((d) => d.startsWith("mac") && existsSync(join(dist, d, "Butler.app")));
-  if (!macDir) return [`no mac*/Butler.app under ${dist}`];
-  const app = join(dist, macDir, "Butler.app");
+  const macDir = readdirSync(dist).find((d) => d.startsWith("mac") && existsSync(join(dist, d, "Shipherd.app")));
+  if (!macDir) return [`no mac*/Shipherd.app under ${dist}`];
+  const app = join(dist, macDir, "Shipherd.app");
   const count = checkApp(app, mode, "app", problems);
   console.log(`  app: checked ${count} Mach-O files`);
 
-  const scratch = mkdtempSync(join(tmpdir(), "butler-verify-sign-"));
+  const scratch = mkdtempSync(join(tmpdir(), "shipherd-verify-sign-"));
   try {
     const home = join(scratch, "home");
     mkdirSync(home);
@@ -149,14 +149,14 @@ export function verifyMacSigning(distDir, mode) {
     for (const zip of readdirSync(dist).filter((f) => f.endsWith(".zip"))) {
       const out = join(scratch, zip);
       execFileSync("ditto", ["-x", "-k", join(dist, zip), out]);
-      checkApp(join(out, "Butler.app"), mode, zip, problems);
+      checkApp(join(out, "Shipherd.app"), mode, zip, problems);
     }
     for (const dmg of readdirSync(dist).filter((f) => f.endsWith(".dmg"))) {
       const file = join(dist, dmg);
       const mount = join(scratch, `${dmg}.mount`);
       execFileSync("hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount, file], { stdio: "ignore" });
       try {
-        checkApp(join(mount, "Butler.app"), mode, dmg, problems);
+        checkApp(join(mount, "Shipherd.app"), mode, dmg, problems);
       } finally {
         execFileSync("hdiutil", ["detach", mount, "-force"], { stdio: "ignore" });
       }

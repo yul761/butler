@@ -113,7 +113,7 @@ emit(${JSON.stringify(INIT)}); setTimeout(() => {}, 60000);`;
     const e = headlessEnv(process.env, { pathValue: process.env.PATH ?? "", runId: "probe1" });
     await probeMcpTools({ claudePath: fake.path, cwd: dir, env: e });
     const call = fake.calls()[0];
-    expect(call.butlerSession).toBe("headless:probe1");
+    expect(call.shipherdSession).toBe("headless:probe1");
     expect(call.input).toBe("Reply with OK.");
     expect(call.args.join(" ")).not.toContain("Reply with OK");
     if (process.platform === "win32") return;

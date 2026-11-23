@@ -26,7 +26,7 @@ async function egressMessages(filePath: string) {
   return result.messages.filter((m) => m.ruleId !== null && EGRESS_RULES.includes(m.ruleId));
 }
 
-describe("egress lint rule (BTL-243: Butler sends nothing out on its own)", () => {
+describe("egress lint rule (BTL-243: Shipherd sends nothing out on its own)", () => {
   it("rejects every network API in main, renderer, shared, hook and MCP code, src/main/gateway/ included", async () => {
     for (const file of ["src/main/brief/egress-probe.ts", "src/renderer/src/egress-probe.tsx", "src/shared/egress-probe.ts", "hook/egress-probe.ts", "memory-mcp/egress-probe.ts", "src/main/gateway/egress-probe.ts", "src/main/notify/egress-probe.ts"]) {
       const messages = await egressMessages(file);

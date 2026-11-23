@@ -5,7 +5,7 @@ import type { HookEnvelope } from "../../shared/hook-envelope";
 import { tempDir } from "../test-utils";
 import { HookInbox, MAX_HANDLE_ATTEMPTS } from "./inbox";
 
-const envelope = (n: number) => JSON.stringify({ v: 1, receivedAt: n, ticket: null, butlerSession: null, payload: { n } });
+const envelope = (n: number) => JSON.stringify({ v: 1, receivedAt: n, ticket: null, shipherdSession: null, payload: { n } });
 
 describe("HookInbox.drain", () => {
   it("handles files in name order, deletes them, quarantines bad ones after retries, skips .tmp", async () => {

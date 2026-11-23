@@ -5,10 +5,10 @@ import { MemoryMonitor, type MemoryMonitorDeps, type MonitorSample, sampleInterv
 import { parsePsTable } from "./proc-table";
 
 const PS = [
-  "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Butler.app/Contents/MacOS/Butler",
-  "  101   100 150000 Mon Nov 17 09:00:01 2026 /Applications/Butler.app/Contents/Frameworks/Butler Helper (Renderer).app/Contents/MacOS/Butler Helper (Renderer)",
+  "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Shipherd.app/Contents/MacOS/Shipherd",
+  "  101   100 150000 Mon Nov 17 09:00:01 2026 /Applications/Shipherd.app/Contents/Frameworks/Shipherd Helper (Renderer).app/Contents/MacOS/Shipherd Helper (Renderer)",
   "  110   100 300000 Mon Nov 17 09:01:00 2026 /usr/local/bin/claude --resume abc",
-  "  111   110  80000 Mon Nov 17 09:01:01 2026 /Applications/Butler.app/Contents/MacOS/Butler /x/memory-mcp/statecore-mcp.cjs",
+  "  111   110  80000 Mon Nov 17 09:01:01 2026 /Applications/Shipherd.app/Contents/MacOS/Shipherd /x/memory-mcp/statecore-mcp.cjs",
   "  112   110  20000 Mon Nov 17 09:01:01 2026 node /x/some-mcp/server.js",
   "  120   100 200000 Mon Nov 17 09:01:00 2026 /usr/local/bin/claude --session-id def",
   "  130   100  40000 Mon Nov 17 09:05:00 2026 /usr/local/bin/claude -p --model haiku",
@@ -49,7 +49,7 @@ function setup(over: Partial<MemoryMonitorDeps> = {}) {
 }
 
 describe("MemoryMonitor", () => {
-  it("sums each open session's tree and Butler's own processes, without counting a process twice", async () => {
+  it("sums each open session's tree and Shipherd's own processes, without counting a process twice", async () => {
     const { m, mem } = setup();
     const s = await m.tick();
     expect(s?.terms.map((t) => [t.head, t.summary.totalKb])).toEqual([["h1", 400000], ["h2", 200000]]);
@@ -59,11 +59,11 @@ describe("MemoryMonitor", () => {
     expect(m.snapshot()).toEqual({
       at: 1000,
       // Electron 报的主进程和渲染进程，加上无头 claude 那棵树（40000 + 10000）和 git（utility）。
-      butlerKb: 60000 + 160000 + 50000 + 9000,
-      butler: { main: 60000, renderer: 160000, gpu: 0, utility: 9000, terminals: 0, headless: 50000, hub: 0 },
+      shipherdKb: 60000 + 160000 + 50000 + 9000,
+      shipherd: { main: 60000, renderer: 160000, gpu: 0, utility: 9000, terminals: 0, headless: 50000, hub: 0 },
       sessionsKb: 600000,
       sessions: 2,
-      butlerMcpKb: 80000,
+      shipherdMcpKb: 80000,
       system: { totalKb: 1000, freeKb: 250, freePercent: 25 },
     });
   });
@@ -77,14 +77,14 @@ describe("MemoryMonitor", () => {
     const ats = [...new Set(samples.since(0).map((r) => r.at))];
     expect(ats).toEqual([1000, 1000 + 5 * 60_000]);
     expect(m.history(0)).toEqual([
-      { at: 1000, butlerKb: 279000, sessionsKb: 600000, freePercent: 25 },
-      { at: 301000, butlerKb: 279000, sessionsKb: 600000, freePercent: 25 },
+      { at: 1000, shipherdKb: 279000, sessionsKb: 600000, freePercent: 25 },
+      { at: 301000, shipherdKb: 279000, sessionsKb: 600000, freePercent: 25 },
     ]);
   });
 
   it("prunes history older than 14 days", async () => {
     const { m, samples } = setup();
-    samples.insertMany([{ at: -20 * 24 * 3600_000, kind: "butler", sessionId: null, totalKb: 1, detail: null }]);
+    samples.insertMany([{ at: -20 * 24 * 3600_000, kind: "shipherd", sessionId: null, totalKb: 1, detail: null }]);
     await m.tick();
     expect(samples.since(-Infinity).some((r) => r.totalKb === 1)).toBe(false);
   });

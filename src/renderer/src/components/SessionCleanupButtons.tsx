@@ -19,7 +19,7 @@ function useBrief<T>(): [T | null, (v: T | null) => void] {
 
 /**
  * session 栏里的「清理闲置」（BTL-190 第 8 点）：这一栏开着终端的 session 里，停下来一阵、没有要你决定的事的，
- * 让 Butler 先写 handoff 再结束终端并隐藏（之后能恢复）。Butler 马上回答开始关了几个，关闭在后台跑。
+ * 让 Shipherd 先写 handoff 再结束终端并隐藏（之后能恢复）。Shipherd 马上回答开始关了几个，关闭在后台跑。
  */
 export function CloseIdleButton({ sessionIds }: { sessionIds: string[] }) {
   const [started, setStarted] = useBrief<number>();

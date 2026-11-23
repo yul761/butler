@@ -11,7 +11,7 @@ export const STACK_OVERVIEWS = ["off", "issue"] as const;
 export type StackOverview = (typeof STACK_OVERVIEWS)[number];
 
 export interface StackPolicy {
-  /** 允许 Butler 改这个仓库里栈的本地分支（rebase、autosquash、开 rerere）。总开关，默认关。 */
+  /** 允许 Shipherd 改这个仓库里栈的本地分支（rebase、autosquash、开 rerere）。总开关，默认关。 */
   autoRebase: boolean;
   /** 栈底合并后怎么接：auto 按合并事件检测。 */
   mergeMethod: StackMergeMethod;

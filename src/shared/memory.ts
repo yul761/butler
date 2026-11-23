@@ -20,7 +20,7 @@ export function epicScope(id: number): string {
   return `epic:${id}`;
 }
 
-/** StateCore facts() 里的一条（只取 Butler 用得到的字段）。 */
+/** StateCore facts() 里的一条（只取 Shipherd 用得到的字段）。 */
 export interface MemoryItem {
   /** forget 用的 key（分组名 + 正文的哈希）。 */
   factKey: string;
@@ -63,11 +63,11 @@ export interface MemoryView {
   error: string | null;
 }
 
-/** Butler 自己维护的条目种类（设计文档 8.3）。learnings 写在 workspace，不参与比对。 */
+/** Shipherd 自己维护的条目种类（设计文档 8.3）。learnings 写在 workspace，不参与比对。 */
 export const NOTE_KINDS = ["decision", "followup"] as const;
 export type NoteKind = (typeof NOTE_KINDS)[number];
 
-export interface ButlerNote {
+export interface ShipherdNote {
   kind: NoteKind;
   /** 决策的 key 或 followup 的 id，已经过 noteId() 处理。 */
   id: string;
@@ -75,7 +75,7 @@ export interface ButlerNote {
   body: string;
 }
 
-export interface ParsedNote extends ButlerNote {
+export interface ParsedNote extends ShipherdNote {
   /** 1 表示没有变体后缀；#n 时为 n。 */
   variant: number;
 }
@@ -159,7 +159,7 @@ function variantWords(kind: NoteKind, id: string, v: number): string[] {
   return words;
 }
 
-export function noteText(n: ButlerNote, variant = 1): string {
+export function noteText(n: ShipherdNote, variant = 1): string {
   if (!Number.isInteger(variant) || variant < 1 || variant > MAX_NOTE_VARIANT) {
     throw new RangeError(`note variant must be an integer from 1 to ${MAX_NOTE_VARIANT}, got ${variant}`);
   }

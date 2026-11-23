@@ -1,6 +1,6 @@
 # BTL-248：4.0 发版前的收尾（design addendum）
 
-日期：2026-11-20。上游设计：Butler 4.0「做减法、收概念」的 W5（信箱）和 W6（层级 A′）。前置：BTL-245（#73）和 BTL-246（#74）留下的遗留问题。
+日期：2026-11-20。上游设计：Shipherd 4.0「做减法、收概念」的 W5（信箱）和 W6（层级 A′）。前置：BTL-245（#73）和 BTL-246（#74）留下的遗留问题。
 
 ## 1. 剩下的送达路径改走信箱
 
@@ -9,20 +9,20 @@ BTL-245 之后还有几条路径在用「等它停下再送」：先过 `Deliver
 | 路径 | 以前 | 现在 | 种类（`MessageKind`） |
 |---|---|---|---|
 | CI 结论（`CiDelivery`） | guard 不过就留在内存，等下一轮 flush 重试 | 选好收件人以后 `mailbox.send`，ref `ci:pr:<id>` 或 `ci:branch:<repoId>`。送达回调里按 meta 记的 key 调 `setDelivered`；结论变了（又在跑、合并了）就撤回 | `ci` |
-| 合并占位的通知（`HoldWatcher`） | 等待者开着、停着才贴，否则等下一轮，最多 24 小时 | 一到就排进等待者的信箱，ref `merge:<waiterId>`，同时 `markNotified`。关着的下次打开时第一件事读到。24 小时的上限只剩给升级前留下、或 Butler 关了很久才查到的通知：释放超过 24 小时还没排进去的就不发了 | `merge` |
+| 合并占位的通知（`HoldWatcher`） | 等待者开着、停着才贴，否则等下一轮，最多 24 小时 | 一到就排进等待者的信箱，ref `merge:<waiterId>`，同时 `markNotified`。关着的下次打开时第一件事读到。24 小时的上限只剩给升级前留下、或 Shipherd 关了很久才查到的通知：释放超过 24 小时还没排进去的就不发了 | `merge` |
 | 栈冲突（`StackService.deliver`） | guard 不过就当没送，以后也不会再送 | 排进那一层 session 的信箱，ref `stack:<ticket>:<branch>`：同一层新的冲突换掉还没送的旧冲突 | `stack` |
-| 每日巡检（`ButlerPatrol`） | 开着的过 guard，忙就等下一次 check | 开着的直接排进信箱，当天记 ok；没开的先排进要接着用的那个 session 的信箱（`hold`），再打开，用 `mailbox.opened` 当第一条输入交进去 | `patrol` |
+| 每日巡检（`ShipherdPatrol`） | 开着的过 guard，忙就等下一次 check | 开着的直接排进信箱，当天记 ok；没开的先排进要接着用的那个 session 的信箱（`hold`），再打开，用 `mailbox.opened` 当第一条输入交进去 | `patrol` |
 | 花费提醒（`CostBreaker.nudge`） | guard 不过就留在内存，等 Stop | 排进信箱，ref `cost:<root>`：新的一句换掉旧的。暂停中的 session 信箱照样不送（`DeliveryGuard` 的 `cost_paused`），也不为它叫醒 | `cost` |
 | 对话 tab 发给开发 session、分叉的结论（`DevSender`） | guard 不过就返回「正忙 / 在打字……」，让用户稍后再发 | 一律排进信箱，返回 `{ ok, at, state }`。在忙的时候界面提示「已排队，下一次调用工具时送到」，关着的提示「打开后送到」 | `user` |
-| 接活交给全局总控（`toCoordinator`） | guard 不过就返回 false，退回成通知 | 全局总控开着就排进它的信箱，返回 true；没开照旧返回 false | `butler` |
+| 接活交给全局总控（`toCoordinator`） | guard 不过就返回 false，退回成通知 | 全局总控开着就排进它的信箱，返回 true；没开照旧返回 false | `shipherd` |
 
 ### `user` 种类
 
-用户自己的话，在对话时间线里要照旧显示成「你：」。所以 `Mailbox.batch` 遇到一批消息全是 `user` 的，就原样输入：不加信箱开头，也不加前缀。经 hook 送进在忙的 session 时，加一行「用户在 Butler 的对话 tab 里对你说：」再接正文，让 Claude 知道这是用户说的，不是别的 session 的汇报。
+用户自己的话，在对话时间线里要照旧显示成「你：」。所以 `Mailbox.batch` 遇到一批消息全是 `user` 的，就原样输入：不加信箱开头，也不加前缀。经 hook 送进在忙的 session 时，加一行「用户在 Shipherd 的对话 tab 里对你说：」再接正文，让 Claude 知道这是用户说的，不是别的 session 的汇报。
 
 经 hook 送进去的那条在 transcript 里是工具结果的附加上下文，不是用户输入，所以对话时间线里不会出现「你：」那一行；它在 session 的消息列表里显示为「你发的」，送达时间照记。用户发的和别的消息不合成一段：一批里遇到种类变了就停，下一批再送。
 
-用户发的话不看「需要你」：以前对话 tab 用的是不看「需要你」的 `answerGuard`，因为 session 停下来问问题、或者有没答的 `ask_user` 时，用户说的往往就是回答。所以 `flush` 被「需要你」挡住时，把排着的 `user` 消息单独挑出来送，Butler 的别的消息接着等。这一段也不算 Butler 输入的（不调 `typing`），它触发的 `UserPromptSubmit` 照旧算用户在终端里回答了。
+用户发的话不看「需要你」：以前对话 tab 用的是不看「需要你」的 `answerGuard`，因为 session 停下来问问题、或者有没答的 `ask_user` 时，用户说的往往就是回答。所以 `flush` 被「需要你」挡住时，把排着的 `user` 消息单独挑出来送，Shipherd 的别的消息接着等。这一段也不算 Shipherd 输入的（不调 `typing`），它触发的 `UserPromptSubmit` 照旧算用户在终端里回答了。
 
 信箱的消息没写 epic（CI、合并通知、栈、花费、对话 tab）时，按收件 session 所在的 epic 记（ticket 的 session 从 ticket 往上找），epic 的消息列表里能看到它们排着还是送到了。
 
@@ -58,7 +58,7 @@ BTL-245 之后还有几条路径在用「等它停下再送」：先过 `Deliver
 
 guard 带来的原因（`guard:*`、`deliver:*`、`busy_delivering`）都没有了。排进信箱就算交出去了，等着的状态在消息列表里能看到。「现在」页的提醒只剩认不出收件人的情况：`no_session`、`owner_closed`、`unowned`。
 
-`CiTriage` 的 `onSent` 是一个闭包，不能存进库里。做法是按 ref 留在内存里，送达回调时调用。Butler 在排队和送达之间重启过，这次就不调了：只影响 triage 行的统计状态，不影响送达。
+`CiTriage` 的 `onSent` 是一个闭包，不能存进库里。做法是按 ref 留在内存里，送达回调时调用。Shipherd 在排队和送达之间重启过，这次就不调了：只影响 triage 行的统计状态，不影响送达。
 
 ## 2. 空 epic
 
@@ -86,7 +86,7 @@ semi 档里 `toEpicCoordinator` 会在 ticket 开工之前就建 epic、打开�
 - epic 页上的说明和「按顺序推进」的提示，「总控」改成「epic 总控」。
 - README 讲升级的那段，「feature 总控」改成「这些 epic（原来的 feature）的总控」。
 
-不改的：给 session 的消息前缀，例如「Butler 总控发来的消息」/ "Message from Butler control"。BTL-246 定过：`conv-parse` 和回复匹配按这些原样的前缀认出旧的对话，改了以后旧对话就认不出来了。「Butler 总控」指的就是全局总控，不是旧概念。
+不改的：给 session 的消息前缀，例如「Shipherd 总控发来的消息」/ "Message from Shipherd control"。BTL-246 定过：`conv-parse` 和回复匹配按这些原样的前缀认出旧的对话，改了以后旧对话就认不出来了。「Shipherd 总控」指的就是全局总控，不是旧概念。
 
 
 用户看得到的文字、给 Claude 的提示词和 MCP 工具说明，中英两份都扫一遍。要去掉的残留有：
@@ -97,7 +97,7 @@ semi 档里 `toEpicCoordinator` 会在 ticket 开工之前就建 epic、打开�
 - 隐私档位；
 - 蒸馏。
 
-「feature」只在指 epic 里的一块时使用。内部名字不改：`features` 表、`featureId`、`feature:<id>` 记忆范围、`butler-feature` server。
+「feature」只在指 epic 里的一块时使用。内部名字不改：`features` 表、`featureId`、`feature:<id>` 记忆范围、`shipherd-feature` server。
 
 ## 5. 和 BTL-242 的约定
 

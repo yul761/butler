@@ -115,7 +115,7 @@ describe("ReviewEffectRepo", () => {
     db.prepare(`UPDATE ticket_prs SET state = 'merged' WHERE id = ?`).run(prId);
     expect(repo.missingMerged(10)).toEqual([prId]);
     const pr = {
-      prId, repoSlug: "a/b", number: 1, butler: true, openedAt: 1, mergedAt: 100, files: ["x.ts"], commentsHuman: 2, commentsCopilot: 1,
+      prId, repoSlug: "a/b", number: 1, shipherd: true, openedAt: 1, mergedAt: 100, files: ["x.ts"], commentsHuman: 2, commentsCopilot: 1,
       avoidable: 1, rounds: 2, firstReviewMs: 50, submitToMergeMs: 99, briefPosted: false, retroDone: false, computedAt: 100,
     };
     repo.save(pr, [
@@ -123,7 +123,7 @@ describe("ReviewEffectRepo", () => {
       { sourceId: 2, lessonId: null, who: "copilot", path: null, lessonConfirmedBefore: false, createdAt: 30 },
     ]);
     repo.save({ ...pr, retroDone: true }, [{ sourceId: 1, lessonId: 7, who: "human", path: "x.ts", lessonConfirmedBefore: true, createdAt: 20 }]);
-    expect(repo.get(prId)).toMatchObject({ retroDone: true, files: ["x.ts"], butler: true });
+    expect(repo.get(prId)).toMatchObject({ retroDone: true, files: ["x.ts"], shipherd: true });
     expect(repo.commentsOf([prId])).toHaveLength(1);
     expect(repo.mergedBetween(0, 101).map((p) => p.prId)).toEqual([prId]);
     expect(repo.mergedBetween(101, 200)).toEqual([]);

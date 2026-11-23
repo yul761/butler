@@ -8,31 +8,31 @@ import { ticketFileStem } from "../util/ticket-file";
 import type { HubRouteSpec } from "./mcp-hub";
 
 /** 挂给 claude 的 server 名：不和用户自己装的 statecore 重名（设计文档 8.4）。 */
-export const MEMORY_SERVER = "butler-memory";
-export const WORKSPACE_SERVER = "butler-workspace";
+export const MEMORY_SERVER = "shipherd-memory";
+export const WORKSPACE_SERVER = "shipherd-workspace";
 /** feature 的记忆：feature 下所有 ticket 的 session 和 feature 总控都挂（设计文档 2026-10-26）。 */
-export const FEATURE_SERVER = "butler-feature";
+export const FEATURE_SERVER = "shipherd-feature";
 /**
  * 总控 session：开子 session、列出仓库和 session（设计文档 2026-10-23 第二步）。
  * 普通 ticket session 也挂，但作用域是 member，只有 ask_user、report（BTL-190 第 2+3 点）和 submit_evidence、pre_review_result（工作流 G）。
  */
-export const SESSIONS_SERVER = "butler-sessions";
+export const SESSIONS_SERVER = "shipherd-sessions";
 /**
  * 交互 session 不用确认就能调用的 sessions 工具：
- * - ask_user 和 report（BTL-190 第 2+3 点）只是把问题、汇报交给 Butler，第一次用就弹权限确认的话 session 会卡在那里等人；
- * - 只读的查询工具（BTL-190 第 5 点，Butler 总控巡检时一路调用；同名的工具在总控里也只是读）。
- * - epic 里 feature 的整理（BTL-246）：排顺序、把 ticket 放进 feature，只改 Butler 里的分组，随时能改回来；从 Jira 导入一批 ticket 后要一个个归，每次都确认太烦。
+ * - ask_user 和 report（BTL-190 第 2+3 点）只是把问题、汇报交给 Shipherd，第一次用就弹权限确认的话 session 会卡在那里等人；
+ * - 只读的查询工具（BTL-190 第 5 点，Shipherd 总控巡检时一路调用；同名的工具在总控里也只是读）。
+ * - epic 里 feature 的整理（BTL-246）：排顺序、把 ticket 放进 feature，只改 Shipherd 里的分组，随时能改回来；从 Jira 导入一批 ticket 后要一个个归，每次都确认太烦。
  * 会动别的终端、建东西或花额度的（start_session、end_session、send_message、refresh_session、refresh_epic_summary、create_*、stack_define、stack_rebase、stack_layer_mode）照样要确认。
  */
 export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "ask_user", "report",
   "list_epics", "list_features", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "progress_overview", "metrics_overview", "list_stacks",
   "reorder_features", "set_ticket_feature",
-  // 工作流 G：交证据（只在 Butler 里排一次预审）、取预审结果、看一个 PR 的评估。
+  // 工作流 G：交证据（只在 Shipherd 里排一次预审）、取预审结果、看一个 PR 的评估。
   "submit_evidence", "pre_review_result", "pr_assessment",
 ].map((tool) => `mcp__${SESSIONS_SERVER}__${tool}`);
 
-/** 怎么启动打包好的 StateCore MCP：command 是 Butler 自己的 Electron（process.execPath），script 是 bundle。 */
+/** 怎么启动打包好的 StateCore MCP：command 是 Shipherd 自己的 Electron（process.execPath），script 是 bundle。 */
 export interface MemoryMcpLauncher {
   command: string;
   script: string;
@@ -77,30 +77,30 @@ export function memoryServers(o: {
   };
 }
 
-/** butler-sessions server：同样用 Butler 自己的 Electron 运行；ticket（或 feature）和控制目录写死在配置里。 */
+/** shipherd-sessions server：同样用 Shipherd 自己的 Electron 运行；ticket（或 feature）和控制目录写死在配置里。 */
 export function sessionsServer(o: {
   launcher: MemoryMcpLauncher;
   /**
    * ticketKey: ticket 的 session（只有 ask_user、report、submit_evidence、pre_review_result）。featureId: feature 总控。
-   * butler: Butler 总控（BTL-190 第 5 点），全局一个。
+   * shipherd: Shipherd 总控（BTL-190 第 5 点），全局一个。
    */
-  scope: { ticketKey: string } | { featureId: number } | { butler: true };
+  scope: { ticketKey: string } | { featureId: number } | { shipherd: true };
   requestsDir: string;
   resultsDir: string;
 }): Record<string, StdioServerSpec> {
   const scope = o.scope;
   const target: Record<string, string> =
-    "butler" in scope ? { BUTLER_SCOPE: "butler" }
-    : "featureId" in scope ? { BUTLER_FEATURE: String(scope.featureId) }
-    : { BUTLER_TICKET: scope.ticketKey };
-  // 工具描述跟着 Butler 的语言（设计文档 2026-10-26）。
-  target.BUTLER_LANG = currentLang();
+    "shipherd" in scope ? { SHIPHERD_SCOPE: "shipherd" }
+    : "featureId" in scope ? { SHIPHERD_FEATURE: String(scope.featureId) }
+    : { SHIPHERD_TICKET: scope.ticketKey };
+  // 工具描述跟着 Shipherd 的语言（设计文档 2026-10-26）。
+  target.SHIPHERD_LANG = currentLang();
   return {
     [SESSIONS_SERVER]: {
       type: "stdio",
       command: o.launcher.command,
       args: [o.launcher.script],
-      env: { ELECTRON_RUN_AS_NODE: "1", ...target, BUTLER_CONTROL_REQUESTS: o.requestsDir, BUTLER_CONTROL_RESULTS: o.resultsDir },
+      env: { ELECTRON_RUN_AS_NODE: "1", ...target, SHIPHERD_CONTROL_REQUESTS: o.requestsDir, SHIPHERD_CONTROL_RESULTS: o.resultsDir },
     },
   };
 }
@@ -132,13 +132,13 @@ export function writeFeatureMcpConfig(o: { mcpDir: string; featureId: number; se
   return writeConfig(featureMcpFile(o.mcpDir, o.featureId), o.servers);
 }
 
-/** Butler 总控的配置（BTL-190 第 5 点）：全局只有一个，mcp/butler.json。 */
-export function butlerMcpFile(mcpDir: string): string {
-  return join(mcpDir, "butler.json");
+/** Shipherd 总控的配置（BTL-190 第 5 点）：全局只有一个，mcp/shipherd.json。 */
+export function shipherdMcpFile(mcpDir: string): string {
+  return join(mcpDir, "shipherd.json");
 }
 
-export function writeButlerMcpConfig(o: { mcpDir: string; servers: Record<string, McpServerSpec> }): string {
-  return writeConfig(butlerMcpFile(o.mcpDir), o.servers);
+export function writeShipherdMcpConfig(o: { mcpDir: string; servers: Record<string, McpServerSpec> }): string {
+  return writeConfig(shipherdMcpFile(o.mcpDir), o.servers);
 }
 
 /** feature 归档时删掉它总控的 --mcp-config 文件。 */
@@ -180,14 +180,14 @@ export function removeTicketMcpConfigs(mcpDir: string, ticketKey: string): void 
 }
 
 /**
- * 共享 MCP（WS-M H）：stdio 的 server 换成 hub 上的路由。记忆按 STATECORE_SCOPE，butler-sessions 带着它的变量和调用者（终端 id），
- * 和 stdio 时 claude 传下去的 BUTLER_SESSION 一样。认不出的 server 返回 null（这个终端就用 stdio）。
+ * 共享 MCP（WS-M H）：stdio 的 server 换成 hub 上的路由。记忆按 STATECORE_SCOPE，shipherd-sessions 带着它的变量和调用者（终端 id），
+ * 和 stdio 时 claude 传下去的 SHIPHERD_SESSION 一样。认不出的 server 返回 null（这个终端就用 stdio）。
  */
 export function hubRoutes(servers: Record<string, StdioServerSpec>, termId: string): Record<string, HubRouteSpec> | null {
   const out: Record<string, HubRouteSpec> = {};
   for (const [name, spec] of Object.entries(servers)) {
     if (name === SESSIONS_SERVER) {
-      const env = Object.fromEntries(Object.entries(spec.env).filter(([k]) => k.startsWith("BUTLER_")));
+      const env = Object.fromEntries(Object.entries(spec.env).filter(([k]) => k.startsWith("SHIPHERD_")));
       out[name] = { server: "sessions", env, from: termId };
     } else if (spec.env.STATECORE_SCOPE) {
       out[name] = { server: "memory", scope: spec.env.STATECORE_SCOPE };
@@ -202,7 +202,7 @@ export function hubRoutes(servers: Record<string, StdioServerSpec>, termId: stri
 export const TERMINAL_MCP_SUBDIR = "terms";
 
 export function terminalMcpFile(mcpDir: string, termId: string): string {
-  // 终端 id 是 Butler 生成的 UUID；别的字符一律换掉，路径永远在 mcp/terms 里面。
+  // 终端 id 是 Shipherd 生成的 UUID；别的字符一律换掉，路径永远在 mcp/terms 里面。
   return join(mcpDir, TERMINAL_MCP_SUBDIR, `${termId.replace(/[^A-Za-z0-9-]/g, "_")}.json`);
 }
 

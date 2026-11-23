@@ -86,10 +86,10 @@ describe("inbox helpers (BTL-190 2+3)", () => {
     expect(inboxWho(item(), S)).toBe("BTL-1");
     expect(inboxWho(item({ repo: "api" }), S)).toBe("BTL-1（api）");
     expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("epic 总控");
-    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe("全局总控");
+    expect(inboxWho(item({ role: "shipherd", ticketKey: null }), S)).toBe("全局总控");
     setUiLang("en");
     expect(inboxWho(item({ role: "feature_coordinator", ticketKey: null }), S)).toBe("Epic coordinator");
-    expect(inboxWho(item({ role: "butler", ticketKey: null }), S)).toBe("Global control");
+    expect(inboxWho(item({ role: "shipherd", ticketKey: null }), S)).toBe("Global control");
   });
 
 });
@@ -97,8 +97,8 @@ describe("inbox helpers (BTL-190 2+3)", () => {
 describe("the live window (BTL-190 7)", () => {
   const ev = (at: number, label: string, over: Partial<ActivityEvent> = {}): ActivityEvent => ({ sessionId: "s1", at, kind: "tool", label, ...over });
   const counts = { active: 0, needsYou: 0, stuck: 0 };
-  const view = (rows: NowRow[], featureRows: NowRow[] = [], butler: NowRow | null = null): NowView => ({
-    butler, running: 0, merges: [], memory: [], notices: [],
+  const view = (rows: NowRow[], featureRows: NowRow[] = [], shipherd: NowRow | null = null): NowView => ({
+    shipherd, running: 0, merges: [], memory: [], notices: [],
     features: [{ id: 1, name: "e", rows, counts }, { id: 2, name: "f", rows: featureRows, counts }],
   });
 
@@ -109,10 +109,10 @@ describe("the live window (BTL-190 7)", () => {
     const decided = row({ sessionId: "d", working: false, activity: act({ kind: "waiting" }), decisions: 2 });
     const prOnly = row({ sessionId: null, working: false, activity: null });
     expect(liveRows(view([working], [stopped, approval, decided, prOnly])).map((r) => r.sessionId)).toEqual(["w", "a", "d"]);
-    // Butler 总控在最前，卡片上写「Butler 总控」。
-    const butler = row({ sessionId: "b", ticketKey: null, title: null, coordinator: true, working: false, activity: act({ kind: "waiting" }), needsYou: "在问你", target: { page: "butler", sessionId: "b" } });
-    expect(liveRows(view([working], [], butler)).map((r) => r.sessionId)).toEqual(["b", "w"]);
-    expect(rowLabel(butler, S)).toBe(S.butlerNav);
+    // Shipherd 总控在最前，卡片上写「Shipherd 总控」。
+    const shipherd = row({ sessionId: "b", ticketKey: null, title: null, coordinator: true, working: false, activity: act({ kind: "waiting" }), needsYou: "在问你", target: { page: "shipherd", sessionId: "b" } });
+    expect(liveRows(view([working], [], shipherd)).map((r) => r.sessionId)).toEqual(["b", "w"]);
+    expect(rowLabel(shipherd, S)).toBe(S.shipherdNav);
     expect(liveRows(view([], [stopped]))).toEqual([]);
   });
 

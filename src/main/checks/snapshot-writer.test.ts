@@ -7,7 +7,7 @@ import { CHECKS_SNAPSHOT_VERSION, type CheckSnapshot } from "../../shared/checks
 
 const dirs: string[] = [];
 const tmp = () => {
-  const d = mkdtempSync(join(tmpdir(), "butler-snap-"));
+  const d = mkdtempSync(join(tmpdir(), "shipherd-snap-"));
   dirs.push(d);
   return d;
 };

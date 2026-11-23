@@ -16,7 +16,7 @@
    - 送达回调 `ci` 里记 delivered，结论变了就撤回；
    - 更新 `ci-delivery.test.ts`。
 4. **HoldWatcher 改走信箱**：排队就 `markNotified`，更新测试。
-5. **ButlerPatrol 改走信箱**：开着的直接排队；没开的 hold、open、opened。更新测试。
+5. **ShipherdPatrol 改走信箱**：开着的直接排队；没开的 hold、open、opened。更新测试。
 6. **DevSender 改走信箱**
    - `DevSendResult` 加 `state`，去掉 guard 带来的原因；
    - 改 ConversationTab 的提示和中英文字；

@@ -101,7 +101,7 @@ export function escapeLiteralBraces(src: string): string {
 }
 
 /**
- * 把字符类外面、没转义的 $ 换成 repl（pygrep 按字节读行，行尾的 \r 还在：$ 要能跳过它，和 Butler 按 \r?\n 分行一样）。
+ * 把字符类外面、没转义的 $ 换成 repl（pygrep 按字节读行，行尾的 \r 还在：$ 要能跳过它，和 Shipherd 按 \r?\n 分行一样）。
  */
 export function replaceEndAnchors(src: string, repl: string): string {
   let out = "";

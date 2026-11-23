@@ -19,8 +19,8 @@ async function readOrNull(file: string): Promise<string | null> {
 }
 
 /**
- * installed：和当前语言的当前版本一字不差；stale：hash 对得上的 Butler 旧版本或另一种语言的版本；
- * conflict：用户自己的命令，或 Butler 的文件被用户改过。
+ * installed：和当前语言的当前版本一字不差；stale：hash 对得上的 Shipherd 旧版本或另一种语言的版本；
+ * conflict：用户自己的命令，或 Shipherd 的文件被用户改过。
  */
 export async function handoffCommandStatus(file: string): Promise<HandoffCommandStatus> {
   const text = await readOrNull(file);
@@ -31,7 +31,7 @@ export async function handoffCommandStatus(file: string): Promise<HandoffCommand
 }
 
 /**
- * 换新能不能用这个 /handoff（C1）：Butler 自己的命令就行，旧版本（stale）也算。采集只认输出的代码块，
+ * 换新能不能用这个 /handoff（C1）：Shipherd 自己的命令就行，旧版本（stale）也算。采集只认输出的代码块，
  * 不看命令正文里那句用途说明。读不了、用户自己的、没装的都不行。
  */
 export async function handoffCommandUsable(file: string): Promise<boolean> {
@@ -39,7 +39,7 @@ export async function handoffCommandUsable(file: string): Promise<boolean> {
   return status === "installed" || status === "stale";
 }
 
-/** 写入或更新 Butler 自己的版本；用户自己的 handoff.md（或读不了的路径）不覆盖，返回 conflict。符号链接保留，原子写入，保留权限位。 */
+/** 写入或更新 Shipherd 自己的版本；用户自己的 handoff.md（或读不了的路径）不覆盖，返回 conflict。符号链接保留，原子写入，保留权限位。 */
 export async function installHandoffCommand(file: string): Promise<HandoffCommandStatus> {
   let status: HandoffCommandStatus;
   try {
@@ -52,14 +52,14 @@ export async function installHandoffCommand(file: string): Promise<HandoffComman
   const existed = status === "stale";
   const target = existed ? await realpath(file) : file;
   const mode = existed ? (await stat(target)).mode & 0o777 : undefined;
-  const tmp = `${target}.butler-tmp`;
+  const tmp = `${target}.shipherd-tmp`;
   await writeFile(tmp, handoffCommandMd(currentLang()), "utf8");
   if (mode !== undefined) await chmod(tmp, mode);
   await renameWithRetry(tmp, target);
   return "installed";
 }
 
-/** 只删除 Butler 写的文件。 */
+/** 只删除 Shipherd 写的文件。 */
 export async function uninstallHandoffCommand(file: string): Promise<void> {
   let status: HandoffCommandStatus;
   try {

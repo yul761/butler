@@ -6,11 +6,11 @@ import { combinedPr } from "./prs";
 export type StatusInput = Pick<Handoff, "status" | "prs" | "blockers">;
 
 export interface StatusContext {
-  /** 记着的 PR（以前合并过的、Butler 存下来的）。只用来判断有没有开着的，合并的不决定状态。 */
+  /** 记着的 PR（以前合并过的、Shipherd 存下来的）。只用来判断有没有开着的，合并的不决定状态。 */
   remembered: Pr[];
   /** ticket_prs 里是否有链接的 PR 还开着。 */
   linkedOpen: boolean;
-  /** Butler 放弃读的 PR（prUrlKey 形式）：一直读不到，记着的“开着”不再当真，h.prs 和 remembered 里都去掉。 */
+  /** Shipherd 放弃读的 PR（prUrlKey 形式）：一直读不到，记着的“开着”不再当真，h.prs 和 remembered 里都去掉。 */
   givenUp?: ReadonlySet<string>;
 }
 

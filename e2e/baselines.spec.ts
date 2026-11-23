@@ -10,7 +10,7 @@ import { completeWizard, expect, makeGitRepo, terminalText, test, type Sandbox, 
 const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
 
 /**
- * 把一组文件提交进仓库，挂上 GitHub 样子的 origin（Butler 按 slug 认仓库）。
+ * 把一组文件提交进仓库，挂上 GitHub 样子的 origin（Shipherd 按 slug 认仓库）。
  * https 协议在这个仓库里关掉：导出时的 `git fetch origin` 立刻失败，不会连网；推送也一样到不了任何地方。
  */
 function seedRepo(root: string, files: FixtureRepo, slug: string): void {
@@ -28,7 +28,7 @@ function seedRepo(root: string, files: FixtureRepo, slug: string): void {
 }
 
 function registerRepos(s: Sandbox, repos: [string, string][]): void {
-  const d = new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000 });
+  const d = new DatabaseSync(join(s.shipherdHome, "app.db"), { timeout: 5000 });
   try {
     for (const [slug, path] of repos) d.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run(slug, path, Date.now());
   } finally {
@@ -41,7 +41,7 @@ function registerRepos(s: Sandbox, repos: [string, string][]): void {
  * → ticket session 的说明里有这个仓库的档案和正确的测试命令，别的仓库不在里面
  * → 只有 CI 的仓库靠模型补全（假 claude），低置信的要逐条确认才建
  * → 一条禁止 debugger; 的检查扫存量得到「存量 2 处」和明细
- * → 导出成仓库的规则：在 Butler 的 worktree 里新分支上提交就停，对外开关关着时推送被拒绝并记录，用户的 checkout 不动。
+ * → 导出成仓库的规则：在 Shipherd 的 worktree 里新分支上提交就停，对外开关关着时推送被拒绝并记录，用户的 checkout 不动。
  */
 test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, legacy count and export with push refused", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
@@ -136,15 +136,15 @@ test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, le
   const exportRow = row.locator("[data-testid^=export-]").filter({ has: page.locator("[data-testid^=export-status-]") }).first();
   await expect(exportRow.locator("[data-testid^=export-status-]")).toHaveText(S.lintExport.status.ready);
   await expect(exportRow).toContainText(S.lintExport.committed);
-  await expect(exportRow).toContainText("scripts/butler-checks/no-debugger.mjs");
-  const branch = git(s.repo, "branch", "--list", "butler/*", "--format=%(refname:short)");
-  expect(branch).toMatch(/^butler\/check-no-debugger-[0-9a-f]{6}$/);
+  await expect(exportRow).toContainText("scripts/shipherd-checks/no-debugger.mjs");
+  const branch = git(s.repo, "branch", "--list", "shipherd/*", "--format=%(refname:short)");
+  expect(branch).toMatch(/^shipherd\/check-no-debugger-[0-9a-f]{6}$/);
   expect(git(s.repo, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(s.repo, "rev-parse", "HEAD")).toBe(head);
   expect(git(s.repo, "status", "--porcelain")).toBe("");
-  const worktree = join(s.butlerHome, "exports");
+  const worktree = join(s.shipherdHome, "exports");
   expect(existsSync(worktree)).toBe(true);
-  expect(git(s.repo, "log", "-1", "--format=%s", branch)).toBe('chore: add Butler check "no debugger" as a repo rule');
+  expect(git(s.repo, "log", "-1", "--format=%s", branch)).toBe('chore: add Shipherd check "no debugger" as a repo rule');
 
   await exportRow.locator("[data-testid^=export-diff-]").first().click();
   await expect(exportRow.locator("[data-testid^=export-diff-text-]")).toContainText("no-debugger");
@@ -153,7 +153,7 @@ test("baselines: scan, adopt, profile in the ticket guide, inferred fallback, le
   await expect(exportRow.locator("[data-testid^=export-status-]")).toHaveText(S.lintExport.status.ready);
   expect(git(s.repo, "branch", "-r")).toBe("");
   // 拒绝的推送记进对外动作的审计（B 的 ExternalActions），标成 skipped。
-  const d = new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000 });
+  const d = new DatabaseSync(join(s.shipherdHome, "app.db"), { timeout: 5000 });
   try {
     const rows = d.prepare("SELECT kind, outcome, repo_slug AS slug, target FROM external_action_audit").all();
     expect(rows).toEqual([expect.objectContaining({ kind: "branch_push", outcome: "skipped", slug: "acme/web", target: branch })]);

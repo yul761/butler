@@ -88,8 +88,8 @@ export interface Material {
   fixes: { filename: string; patch: string }[];
   /** 有行内评论但算不出修改范围（多半是 force-push 改写了历史）时为 "rewritten"。 */
   fixesNote: "rewritten" | null;
-  /** Butler 做的 PR：handoff 里的 decisions 和 learnings，以及对话记录摘录；不是 Butler 做的为 null。 */
-  butler: { ticketKey: string; decisions: string[]; learnings: string[]; excerpts: string[] } | null;
+  /** Shipherd 做的 PR：handoff 里的 decisions 和 learnings，以及对话记录摘录；不是 Shipherd 做的为 null。 */
+  shipherd: { ticketKey: string; decisions: string[]; learnings: string[]; excerpts: string[] } | null;
 }
 
 export const MATERIAL_MAX_CHARS = 60_000;
@@ -104,8 +104,8 @@ const NOTES_MAX = 50;
 const NOTE_MAX = 500;
 
 const H = {
-  zh: { pr: "PR", body: "描述", commits: "提交", review: "评审意见", fixes: "之后的修改", rewritten: "无法给出修改：PR 的历史被改写过（force-push）。", butler: "Butler 上下文", decisions: "决定", learnings: "心得", excerpts: "对话摘录" },
-  en: { pr: "PR", body: "Description", commits: "Commits", review: "Review comments", fixes: "Later fixes", rewritten: "Fixes unavailable: the PR's history was rewritten (force-push).", butler: "Butler context", decisions: "Decisions", learnings: "Learnings", excerpts: "Transcript excerpts" },
+  zh: { pr: "PR", body: "描述", commits: "提交", review: "评审意见", fixes: "之后的修改", rewritten: "无法给出修改：PR 的历史被改写过（force-push）。", shipherd: "Shipherd 上下文", decisions: "决定", learnings: "心得", excerpts: "对话摘录" },
+  en: { pr: "PR", body: "Description", commits: "Commits", review: "Review comments", fixes: "Later fixes", rewritten: "Fixes unavailable: the PR's history was rewritten (force-push).", shipherd: "Shipherd context", decisions: "Decisions", learnings: "Learnings", excerpts: "Transcript excerpts" },
 } as const;
 
 const cut = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
@@ -125,9 +125,9 @@ function render(m: Material, lang: Lang, o: { excerpts: boolean; fixes: boolean;
     if (m.fixesNote === "rewritten") out.push(h.rewritten);
     if (o.fixes) for (const f of m.fixes) out.push(cut(`#### ${f.filename}`, ITEM_HEADER_MAX), cut(f.patch, PATCH_MAX));
   }
-  const b = m.butler;
+  const b = m.shipherd;
   if (b) {
-    out.push(`### ${h.butler} (${b.ticketKey})`);
+    out.push(`### ${h.shipherd} (${b.ticketKey})`);
     if (b.decisions.length > 0) out.push(`#### ${h.decisions}`, ...b.decisions.slice(0, NOTES_MAX).map((d) => `- ${cut(d, NOTE_MAX)}`));
     if (b.learnings.length > 0) out.push(`#### ${h.learnings}`, ...b.learnings.slice(0, NOTES_MAX).map((d) => `- ${cut(d, NOTE_MAX)}`));
     if (o.excerpts && b.excerpts.length > 0) out.push(`#### ${h.excerpts}`, ...b.excerpts);

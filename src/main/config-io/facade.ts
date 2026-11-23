@@ -59,7 +59,7 @@ export function configIoFacade(d: ConfigIoFacadeDeps): ConfigIoFacade {
     status: () => d.backups.status(),
     async exportTo(req) {
       const stamp = fileStamp(d.now());
-      const file = await d.dialogs.save(req.starter ? `butler-starter-${safeName(req.starter.name)}-${stamp}.json` : `butler-export-${stamp}.json`);
+      const file = await d.dialogs.save(req.starter ? `shipherd-starter-${safeName(req.starter.name)}-${stamp}.json` : `shipherd-export-${stamp}.json`);
       if (!file) return { ok: false, reason: "cancelled" };
       const r = d.io.writeExport(req, file);
       if (r.ok) d.notify();

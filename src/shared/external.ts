@@ -1,4 +1,4 @@
-// 对外动作（契约 4.8，设计文档 2026-11-17 ws-b 第 5 节）：Butler 代你在 GitHub 或别的外部服务上留下痕迹的动作。
+// 对外动作（契约 4.8，设计文档 2026-11-17 ws-b 第 5 节）：Shipherd 代你在 GitHub 或别的外部服务上留下痕迹的动作。
 // 每种一个开关，默认全关；主进程的 ExternalActions 在动手之前查开关，做没做都记进审计。
 
 export const EXTERNAL_ACTIONS = [

@@ -31,11 +31,11 @@ describe("collapsed sections", () => {
     expect(isCollapsed("sidebar:f1")).toBe(false);
     expect(isCollapsed("tickets:f1")).toBe(true);
     setCollapsed("tickets:f1", false);
-    expect(localStorage.getItem("butler.collapsed")).toBeNull();
+    expect(localStorage.getItem("shipherd.collapsed")).toBeNull();
   });
 
   it("treats a broken record as nothing collapsed", () => {
-    localStorage.setItem("butler.collapsed", "{not json");
+    localStorage.setItem("shipherd.collapsed", "{not json");
     expect(isCollapsed("sidebar:f1")).toBe(false);
     setCollapsed("sidebar:f1", true);
     expect(isCollapsed("sidebar:f1")).toBe(true);
@@ -53,7 +53,7 @@ describe("collapsed sections", () => {
     expect(isCollapsed("g", true)).toBe(false);
     setCollapsed("g", true, true);
     expect(isCollapsed("g", true)).toBe(true);
-    expect(localStorage.getItem("butler.collapsed")).toBeNull();
+    expect(localStorage.getItem("shipherd.collapsed")).toBeNull();
   });
 
   it("keeps the old default (expanded) for ids that do not ask", () => {
@@ -111,7 +111,7 @@ describe("skipped wizard (the Now page's setup reminder)", () => {
     expect(wizardSkipped()).toBe(true);
     setWizardSkipped(false);
     expect(wizardSkipped()).toBe(false);
-    expect(localStorage.getItem("butler.wizardSkipped")).toBeNull();
+    expect(localStorage.getItem("shipherd.wizardSkipped")).toBeNull();
   });
 
   it("treats missing storage as not skipped", () => {
@@ -131,7 +131,7 @@ describe("conversation tab prefs", () => {
     expect(savedSendTarget()).toBe("dev");
     saveSendTarget("fork");
     expect(savedSendTarget()).toBe("fork");
-    localStorage.setItem("butler.sendTarget", "garbage");
+    localStorage.setItem("shipherd.sendTarget", "garbage");
     expect(savedSendTarget()).toBe("fork");
   });
 
@@ -140,10 +140,10 @@ describe("conversation tab prefs", () => {
     saveConvSplit("ticket:A-1", true);
     expect(savedConvSplit("ticket:A-1")).toBe(true);
     expect(savedConvSplit("ticket:B-2")).toBe(false);
-    expect(localStorage.getItem("butler.convSplit:ticket:A-1")).toBe("1");
+    expect(localStorage.getItem("shipherd.convSplit:ticket:A-1")).toBe("1");
     saveConvSplit("ticket:A-1", false);
     expect(savedConvSplit("ticket:A-1")).toBe(false);
-    expect(localStorage.getItem("butler.convSplit:ticket:A-1")).toBeNull();
+    expect(localStorage.getItem("shipherd.convSplit:ticket:A-1")).toBeNull();
   });
 
   it("storage that throws counts as no record", () => {
@@ -162,11 +162,11 @@ describe("saved wizard step", () => {
     expect(savedWizardStep()).toBeNull();
     saveWizardStep("hooks");
     expect(savedWizardStep()).toBe("hooks");
-    localStorage.setItem("butler.wizardStep", "permissions");
+    localStorage.setItem("shipherd.wizardStep", "permissions");
     expect(savedWizardStep()).toBe("done");
-    localStorage.setItem("butler.wizardStep", "tracker");
+    localStorage.setItem("shipherd.wizardStep", "tracker");
     expect(savedWizardStep()).toBe("done");
-    localStorage.setItem("butler.wizardStep", "bogus");
+    localStorage.setItem("shipherd.wizardStep", "bogus");
     expect(savedWizardStep()).toBeNull();
   });
 });

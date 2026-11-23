@@ -13,7 +13,7 @@ const line = (id: string, extra = "") =>
   }) + "\n";
 
 function setup(opts: { chunkBytes?: number; ids?: () => string[] } = {}) {
-  const dir = tempDir("butler-usage-");
+  const dir = tempDir("shipherd-usage-");
   const repo = new UsageRepo(memDb());
   const file = (id: string) => join(dir, `${id}.jsonl`);
   const scanner = new UsageScanner({
@@ -151,15 +151,15 @@ describe("usageScanMs", () => {
     expect(USAGE_SCAN_MS).toBe(30_000);
   });
 
-  it("honours BUTLER_USAGE_SCAN_MS only under the e2e flag", () => {
-    expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: "200" })).toBe(USAGE_SCAN_MS);
-    expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: "200", BUTLER_BACKGROUND_WINDOWS: "0" })).toBe(USAGE_SCAN_MS);
-    expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: "200", BUTLER_BACKGROUND_WINDOWS: "1" })).toBe(200);
+  it("honours SHIPHERD_USAGE_SCAN_MS only under the e2e flag", () => {
+    expect(usageScanMs({ SHIPHERD_USAGE_SCAN_MS: "200" })).toBe(USAGE_SCAN_MS);
+    expect(usageScanMs({ SHIPHERD_USAGE_SCAN_MS: "200", SHIPHERD_BACKGROUND_WINDOWS: "0" })).toBe(USAGE_SCAN_MS);
+    expect(usageScanMs({ SHIPHERD_USAGE_SCAN_MS: "200", SHIPHERD_BACKGROUND_WINDOWS: "1" })).toBe(200);
   });
 
   it("keeps the default for a value that is not a positive whole number", () => {
     for (const bad of ["", "0", "-5", "1.5", "soon"]) {
-      expect(usageScanMs({ BUTLER_USAGE_SCAN_MS: bad, BUTLER_BACKGROUND_WINDOWS: "1" })).toBe(USAGE_SCAN_MS);
+      expect(usageScanMs({ SHIPHERD_USAGE_SCAN_MS: bad, SHIPHERD_BACKGROUND_WINDOWS: "1" })).toBe(USAGE_SCAN_MS);
     }
   });
 });

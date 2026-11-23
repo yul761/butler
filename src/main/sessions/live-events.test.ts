@@ -3,12 +3,12 @@ import { LABEL_LIMIT, liveEvent, memoryKind, toolLabel } from "./live-events";
 
 describe("memoryKind (BTL-190 7)", () => {
   it("remember and handoff write, recall, facts and why read, on any memory server", () => {
-    for (const n of ["mcp__butler-memory__remember", "mcp__butler-feature__handoff", "mcp__statecore__remember"]) expect(memoryKind(n)).toBe("memory-write");
-    for (const n of ["mcp__butler-workspace__recall", "mcp__butler-memory__facts", "mcp__statecore__why"]) expect(memoryKind(n)).toBe("memory-read");
+    for (const n of ["mcp__shipherd-memory__remember", "mcp__shipherd-feature__handoff", "mcp__statecore__remember"]) expect(memoryKind(n)).toBe("memory-write");
+    for (const n of ["mcp__shipherd-workspace__recall", "mcp__shipherd-memory__facts", "mcp__statecore__why"]) expect(memoryKind(n)).toBe("memory-read");
   });
 
   it("anything else is a plain tool, including forget and names that only contain the word", () => {
-    for (const n of ["Read", "Bash", "mcp__butler-memory__forget", "remember", "mcp__x__remember_me", "mcp__x__recall2", "Recall"]) expect(memoryKind(n)).toBeNull();
+    for (const n of ["Read", "Bash", "mcp__shipherd-memory__forget", "remember", "mcp__x__remember_me", "mcp__x__recall2", "Recall"]) expect(memoryKind(n)).toBeNull();
   });
 });
 
@@ -27,16 +27,16 @@ describe("toolLabel", () => {
   });
 
   it("writes MCP tools as tool (server)", () => {
-    expect(toolLabel("mcp__butler-sessions__list_sessions", {})).toBe("list_sessions (butler-sessions)");
+    expect(toolLabel("mcp__shipherd-sessions__list_sessions", {})).toBe("list_sessions (shipherd-sessions)");
   });
 
   it("memory tools show what was written or asked, falling back to the tool name", () => {
-    expect(toolLabel("mcp__butler-memory__remember", { text: "  接口改成\n v2 " })).toBe("接口改成 v2");
-    expect(toolLabel("mcp__butler-feature__handoff", { summary: "做完了登录页" })).toBe("做完了登录页");
-    expect(toolLabel("mcp__butler-memory__recall", { query: "checkout totals" })).toBe("checkout totals");
-    expect(toolLabel("mcp__butler-memory__recall", {})).toBe("recall");
-    expect(toolLabel("mcp__butler-memory__facts", {})).toBe("facts");
-    expect(toolLabel("mcp__butler-memory__why", { factId: "f_12" })).toBe("f_12");
+    expect(toolLabel("mcp__shipherd-memory__remember", { text: "  接口改成\n v2 " })).toBe("接口改成 v2");
+    expect(toolLabel("mcp__shipherd-feature__handoff", { summary: "做完了登录页" })).toBe("做完了登录页");
+    expect(toolLabel("mcp__shipherd-memory__recall", { query: "checkout totals" })).toBe("checkout totals");
+    expect(toolLabel("mcp__shipherd-memory__recall", {})).toBe("recall");
+    expect(toolLabel("mcp__shipherd-memory__facts", {})).toBe("facts");
+    expect(toolLabel("mcp__shipherd-memory__why", { factId: "f_12" })).toBe("f_12");
   });
 
   it("is one line of at most LABEL_LIMIT characters", () => {
@@ -50,8 +50,8 @@ describe("toolLabel", () => {
 describe("liveEvent", () => {
   it("turns transcript events into activity events for a session", () => {
     expect(liveEvent("s1", { type: "tool", at: 5, name: "Read", input: { file_path: "/a/b.ts" } })).toEqual({ sessionId: "s1", at: 5, kind: "tool", label: "Read b.ts" });
-    expect(liveEvent("s1", { type: "tool", at: 6, name: "mcp__butler-memory__remember", input: { text: "x" } })).toEqual({ sessionId: "s1", at: 6, kind: "memory-write", label: "x" });
-    expect(liveEvent("s1", { type: "tool", at: 7, name: "mcp__butler-memory__recall", input: {} })).toEqual({ sessionId: "s1", at: 7, kind: "memory-read", label: "recall" });
+    expect(liveEvent("s1", { type: "tool", at: 6, name: "mcp__shipherd-memory__remember", input: { text: "x" } })).toEqual({ sessionId: "s1", at: 6, kind: "memory-write", label: "x" });
+    expect(liveEvent("s1", { type: "tool", at: 7, name: "mcp__shipherd-memory__recall", input: {} })).toEqual({ sessionId: "s1", at: 7, kind: "memory-read", label: "recall" });
     expect(liveEvent("s1", { type: "turn-start", at: 8 })).toEqual({ sessionId: "s1", at: 8, kind: "turn-start", label: "" });
     expect(liveEvent("s1", { type: "turn-end", at: 9 })).toEqual({ sessionId: "s1", at: 9, kind: "turn-end", label: "" });
   });

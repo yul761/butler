@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Butler 自己存一份每条 `replaced_by` 链上双方说的话，并标出哪些轮是问答。这样换新和 `/clear` 照常进行，对话不会丢；换新后的恢复提示里多带上最近的问答。渲染进程能按链根翻页、搜索，也能收到「有新对话」的推送。本层不做界面。
+**Goal:** Shipherd 自己存一份每条 `replaced_by` 链上双方说的话，并标出哪些轮是问答。这样换新和 `/clear` 照常进行，对话不会丢；换新后的恢复提示里多带上最近的问答。渲染进程能按链根翻页、搜索，也能收到「有新对话」的推送。本层不做界面。
 
 **Architecture:**
 - **存储**：SQLite 三张新表，外加一张可选的 FTS5 索引：
@@ -44,11 +44,11 @@
   - 定义在 `src/shared/types.ts:164`，形如 `interface SessionView extends Session { termId: string | null }`。
   - 主进程有三处构造：
     - `src/main/sessions/session-service.ts:889` 的 `split()`
-    - 同一文件 `:540` 的 `butlerView()` 里的 `lessonSessions`
-    - `src/main/index.ts:2945` 给 `buildNowView` 的 `butler`
+    - 同一文件 `:540` 的 `shipherdView()` 里的 `lessonSessions`
+    - `src/main/index.ts:2945` 给 `buildNowView` 的 `shipherd`
   - 测试里手搓 `SessionView` 的有：
     - `src/main/now/now-view.test.ts` 的 `session()`
-    - `src/main/control/control-butler.test.ts:68` 的 `view()`
+    - `src/main/control/control-shipherd.test.ts:68` 的 `view()`
     - `src/renderer/src/sessions.test.ts` 的 `s()`
     - `src/renderer/src/repos.test.ts`
 
@@ -65,7 +65,7 @@
   - 主进程文案加在 `src/main/strings.ts` 的 `ZH` 和 `EN` 里。`EN` 的类型是 `MainStrings = typeof ZH`，少一个键 typecheck 就不过。
   - 英文里不能有汉字。
   - 本层不加渲染进程文案。
-- **默认值不变**：3.0 的功能默认全关、Butler 默认不对外做任何事，这两条不能改。本层的情况：
+- **默认值不变**：3.0 的功能默认全关、Shipherd 默认不对外做任何事，这两条不能改。本层的情况：
   - 不新增任何对外动作。
   - `conv_qa` 是本机 `claude` 的后台调用，和 `needs_you` 一样走路由和花费熔断。它不在 `EXEMPT_TASKS` 里，熔断后就停，等恢复了再判。
   - 换新阈值 150k 和「session 停下」这个触发条件不变。
@@ -116,7 +116,7 @@
 5. **隐私**：
    - 不经过网关，不进个人 LLM，不写 `llm_audit`。
    - `conv_qa` 只拿截断后的问答，和 `needs_you` 一样。`sensitive_terms` 不适用，这一点在 `conv-qa.ts` 文件头写明。
-   - 只读 target 的 transcript：Butler 自己开的、或者已认领到 ticket/feature/epic/Butler 总控的 session。没认领的 discovered session、headless 调用、复盘分析 session 都不读。
+   - 只读 target 的 transcript：Shipherd 自己开的、或者已认领到 ticket/feature/epic/Shipherd 总控的 session。没认领的 discovered session、headless 调用、复盘分析 session 都不读。
    - 测试在 Task 6 的「非 target 不读」，Task 4 的「判断的输入被截断」。
 
 ---
@@ -144,7 +144,7 @@
 |---|---|
 | `src/shared/types.ts` | `SessionView` 加 `rootId: string` |
 | `src/main/db/sessions-repo.ts` | 加 `rootsOf(ids)`、`listConvTargets(sinceMs)` |
-| `src/main/sessions/session-service.ts` | `split()`、`butlerView()` 填 `rootId` |
+| `src/main/sessions/session-service.ts` | `split()`、`shipherdView()` 填 `rootId` |
 | `src/main/db/migrations.ts` | 追加一条迁移 |
 | `src/shared/model-routing.ts` 及其 `.test.ts` | 登记 `conv_qa` |
 | `src/main/strings.ts` | `convResume` 文案（中英） |
@@ -153,9 +153,9 @@
 | `src/main/ipc/validate.ts` 及其 `.test.ts` | `convListOptsArg`、`convQueryArg`、`convRootArg` |
 | `src/main/ipc/register.ts` | `IpcDeps.conv` 和 handler 注册 |
 | `src/renderer/src/api.ts` | `convList`、`convSearch`、`onConvAppended` |
-| `src/main/index.ts` | 组装、生命周期、`writeTail` 接线、`butler` 视图的 `rootId` |
+| `src/main/index.ts` | 组装、生命周期、`writeTail` 接线、`shipherd` 视图的 `rootId` |
 | `src/main/sessions/session-refresher.test.ts` | 回归测试 |
-| `src/main/now/now-view.test.ts`、`src/main/control/control-butler.test.ts`、`src/renderer/src/sessions.test.ts`、`src/renderer/src/repos.test.ts` | 构造 `SessionView` 的地方补上 `rootId` |
+| `src/main/now/now-view.test.ts`、`src/main/control/control-shipherd.test.ts`、`src/renderer/src/sessions.test.ts`、`src/renderer/src/repos.test.ts` | 构造 `SessionView` 的地方补上 `rootId` |
 
 不动：`src/main/sessions/refresh-tail.ts`、`src/main/sessions/transcript-watch.ts`（只 import）、`src/main/sessions/session-refresher.ts`。
 
@@ -195,7 +195,7 @@
   - 在 `session-service.test.ts` 的 `describe("SessionService views")` 里加一个测试：
     - 准备一条链：`sessions.insertIfAbsent` 建 `old`，`setReplacedBy("old","c2")`。
     - `service.ticketViews()[0].sessions` 里 `c2` 的 `rootId` 应该是 `"old"`，`new-1` 的 `rootId` 是它自己。
-    - `butlerView().lessonSessions` 每一项都要有 `rootId`。
+    - `shipherdView().lessonSessions` 每一项都要有 `rootId`。
 
 - [ ] **Step 2: 运行确认失败**
   - `pnpm test src/main/db/sessions-repo.test.ts src/main/sessions/session-service.test.ts`
@@ -212,13 +212,13 @@
     ```
     每个 `start` 取第一行。
   - `SessionView` 加字段。
-  - `session-service.ts` 的 `split()` 改成：先 `const roots = this.d.sessions.rootsOf(rows.map((s) => s.id))`，再 `({ ...s, termId: …, rootId: roots.get(s.id) ?? s.id })`。`butlerView()` 的 `lessonSessions` 同样处理。
+  - `session-service.ts` 的 `split()` 改成：先 `const roots = this.d.sessions.rootsOf(rows.map((s) => s.id))`，再 `({ ...s, termId: …, rootId: roots.get(s.id) ?? s.id })`。`shipherdView()` 的 `lessonSessions` 同样处理。
   - `index.ts:2945` 改成 `{ ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id }`。
 
 - [ ] **Step 4: 补齐测试里的构造**
   - 跑 `pnpm typecheck`，按报错给每个手搓的 `SessionView` 补上 `rootId`：
     - `now-view.test.ts` 的 `session()` 默认 `rootId: id`。
-    - `control-butler.test.ts:68` 是 `rootId: id`。
+    - `control-shipherd.test.ts:68` 是 `rootId: id`。
     - `sessions.test.ts` 和 `repos.test.ts` 的工厂默认 `rootId: id`，放在 `...over` 前面。
   - 再跑一次 `pnpm typecheck`，预期 PASS。
 
@@ -226,7 +226,7 @@
   - `pnpm test && pnpm typecheck && pnpm lint`，预期全部 PASS。
 
 - [ ] **Step 6: Commit**
-  - `git add src/shared/types.ts src/main/db/sessions-repo.ts src/main/db/sessions-repo.test.ts src/main/sessions/session-service.ts src/main/sessions/session-service.test.ts src/main/index.ts src/main/now/now-view.test.ts src/main/control/control-butler.test.ts src/renderer/src/sessions.test.ts src/renderer/src/repos.test.ts`
+  - `git add src/shared/types.ts src/main/db/sessions-repo.ts src/main/db/sessions-repo.test.ts src/main/sessions/session-service.ts src/main/sessions/session-service.test.ts src/main/index.ts src/main/now/now-view.test.ts src/main/control/control-shipherd.test.ts src/renderer/src/sessions.test.ts src/renderer/src/repos.test.ts`
   - message 是 `feat(sessions): expose chain root id on SessionView`。
 
 ---
@@ -456,9 +456,9 @@
      - 以 `refreshEpicHandoff` 或 `idleCloseEpicHandoff` 的开头开始，中英各取文案的前 24 个字符
   6. **`silent`**（不存，开一轮 `qa='no'`；agent 的话照存）：
      - 其他含 `<command-name>` 的斜杠命令
-     - 匹配 `/^Butler(：|: )/` 的通知，CI、合并、review 评论都是这种
+     - 匹配 `/^Shipherd(：|: )/` 的通知，CI、合并、review 评论都是这种
      - 以 `refreshResume("ticket","X-1",null)` 或 `inboxReportsIntro` 的开头开始，中英各取前 16 个字符
-  7. **`relay`**（存成 user 消息，但这一轮 `qa='no'`）：以 `inboxAnswersIntro` 的开头开始。这是 Butler 转给 agent 的用户回答，内容是用户说的话。
+  7. **`relay`**（存成 user 消息，但这一轮 `qa='no'`）：以 `inboxAnswersIntro` 的开头开始。这是 Shipherd 转给 agent 的用户回答，内容是用户说的话。
   8. **其余都是 `user`**。
   9. **assistant**：
      - 只取 `text` 块，用 `\n\n` 连起来，不要 `thinking`；结果为空时不产生 assistant entry。
@@ -500,7 +500,7 @@
   7. `tool_result`
   8. assistant 回「改好了」，`end_turn`
   9. `/model` 命令，跟一条 `<local-command-stdout>`
-  10. `Butler：PROJ-1 的 CI 全部通过（abc1234）。可以继续下一步。`
+  10. `Shipherd：PROJ-1 的 CI 全部通过（abc1234）。可以继续下一步。`
   11. assistant 回「收到」
   12. 一行坏 JSON：`{"type":"user",`
   13. 一行 sidechain
@@ -520,7 +520,7 @@
     - `/handoff` 是 `handoff`，它的 isMeta 展开是 `noise`。
     - sidechain 不出现。
     - thinking 不出现在任何 text 里。
-  - Butler 文案两种语言都要认对：对 `setLang("zh")` 和 `setLang("en")` 各跑一遍，`afterEach` 还原成 zh。
+  - Shipherd 文案两种语言都要认对：对 `setLang("zh")` 和 `setLang("en")` 各跑一遍，`afterEach` 还原成 zh。
     - `M().refreshEpicHandoff` 和 `M().idleCloseEpicHandoff` 是 `handoff`。
     - `M().refreshResume("ticket","PROJ-1","/x")`、`M().ciPassedNotice("PROJ-1","abc1234")`、`M().inboxReportsIntro + "\n…"` 是 `silent`。
     - `M().inboxAnswersIntro + "\n" + M().inboxAnswer("q","a")` 是 `relay`。
@@ -530,8 +530,8 @@
     - `git log | head > /tmp/x` 是 mutate。
     - `echo hi > /dev/null` 是 read。
     - `pnpm test` 是 other。
-    - `mcp__butler-workspace__recall` 是 read。
-    - `mcp__butler-workspace__remember` 是 mutate。
+    - `mcp__shipherd-workspace__recall` 是 read。
+    - `mcp__shipherd-workspace__remember` 是 mutate。
   - **坏行和未知形状**：
     - `message` 缺失
     - `content` 是数字
@@ -669,7 +669,7 @@
   export async function readChunk(file: string, from: { ino: number | null; offset: number }, o?: { chunkBytes?: number; maxLineBytes?: number }): Promise<ReadChunk | null>;
 
   // src/main/db/sessions-repo.ts
-  /** 对话另存要读的 head：没被替换、Butler 开的或已认领到 ticket / feature / epic / Butler 总控、不是复盘分析、since 之后有活动。 */
+  /** 对话另存要读的 head：没被替换、Shipherd 开的或已认领到 ticket / feature / epic / Shipherd 总控、不是复盘分析、since 之后有活动。 */
   listConvTargets(sinceMs: number): Session[];
 
   // src/main/conversation/conv-ingester.ts
@@ -694,7 +694,7 @@
   ```sql
   SELECT * FROM sessions
    WHERE replaced_by IS NULL AND lesson_run_id IS NULL
-     AND (origin = 'butler' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR epic_id IS NOT NULL OR butler = 1)
+     AND (origin = 'shipherd' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR epic_id IS NOT NULL OR shipherd = 1)
      AND COALESCE(last_activity_at, created_at) >= ?
   ```
   - `recordHeadless` 记的行是 `discovered`，也没有归属，所以不会被选中。
@@ -742,7 +742,7 @@
       3. agent「150k。」
       4. 用户「把按钮改成蓝色」
       5. agent「改好了」
-      6. agent「收到」，属于 Butler 通知那一轮
+      6. agent「收到」，属于 Shipherd 通知那一轮
       7. 用户 `[image]`
       8. 没有 uuid 的那行 assistant 文本
 
@@ -768,7 +768,7 @@
     - **超长行**：`chunkBytes: 64`、`maxLineBytes: 10_000` 时：一条 5000 字节的 assistant 文本整条存下；一条 20000 字节的行被跳过，`log` 收到一次；后面的行照常存下。
     - **很长的回答**：一条 30000 字的回答，存下来的长度不超过 `CONV_TEXT_MAX + 40`，并且包含 `chars omitted`。
     - **改动后降级**：一轮已经 `setQa("yes","judge")`，又读到一个 `Edit`，`qa` 变成 `no`，`qa_by` 是 `rule`，同时调一次 `onAppended`。
-  - `sessions-repo.test.ts`：`listConvTargets` 选中 `butler` 来源的、有 ticket 的、有 feature 的、有 epic 的、Butler 总控；不选 `discovered` 且没归属的、`recordHeadless` 的、有 `lesson_run_id` 的、已被替换的、`since` 之前的。
+  - `sessions-repo.test.ts`：`listConvTargets` 选中 `shipherd` 来源的、有 ticket 的、有 feature 的、有 epic 的、Shipherd 总控；不选 `discovered` 且没归属的、`recordHeadless` 的、有 `lesson_run_id` 的、已被替换的、`since` 之前的。
 
 - [ ] **Step 3: 运行确认失败**
   - `pnpm test src/main/conversation/jsonl-reader.test.ts src/main/conversation/conv-ingester.test.ts src/main/db/sessions-repo.test.ts`。
@@ -928,7 +928,7 @@
   // src/main/strings.ts，ZH 和 EN 各加一组
   convResume: {
     title: string;                       // "最近的问答" / "Recent questions and answers"
-    intro: (turns: number) => string;    // 说明这是 Butler 存下的最近 N 段问答，最早的在前；以 handoff 和仓库为准
+    intro: (turns: number) => string;    // 说明这是 Shipherd 存下的最近 N 段问答，最早的在前；以 handoff 和仓库为准
   },
   ```
 - **`list`**：
@@ -1023,7 +1023,7 @@
   - `judgeConvQa`（Task 4）
   - `index.ts:724` 的 `judgeDeps`
   - `safeSend`
-  - `openButlerHeads()`（`index.ts:1665`）
+  - `openShipherdHeads()`（`index.ts:1665`）
   - `findTranscript`
   - `paths.claudeProjects`
   - `refreshTailPath`
@@ -1057,7 +1057,7 @@
   // src/renderer/src/api.ts
   convList: (sessionId: string, opts: ConvListOpts) => call<ConvPage>(IPC.convList, sessionId, opts),
   convSearch: (sessionId: string | null, query: string) => call<ConvMessage[]>(IPC.convSearch, sessionId, query),
-  onConvAppended: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.convAppended, cb),
+  onConvAppended: (cb: (rootSessionId: string) => void) => window.shipherd.on(IPC.convAppended, cb),
   ```
   - `onConvAppended` 的写法照现有 `onX` 的形状，核对 `api.ts` 里 `onMemoryChanged` 的签名。
 - **`index.ts` 接线**：
@@ -1069,11 +1069,11 @@
     const convIngester = new ConvIngester({
       repo: convRepo, sessions, onAppended: convAppended, now: Date.now, log: logger,
       transcriptOf: (id) => findTranscript(paths.claudeProjects, id),
-      openHeads: () => openButlerHeads().map((h) => h.id),
-      judge: (turn, s) => judgeConvQa({ ...judgeDeps, timeoutMs: 60_000 }, turn, existsSync(s.cwd) ? s.cwd : paths.butlerHome, s.ticketKey),
+      openHeads: () => openShipherdHeads().map((h) => h.id),
+      judge: (turn, s) => judgeConvQa({ ...judgeDeps, timeoutMs: 60_000 }, turn, existsSync(s.cwd) ? s.cwd : paths.shipherdHome, s.ticketKey),
     });
     ```
-    - `paths.butlerHome` 要按 `src/main/paths.ts` 里实际的名字改：用 Butler 自己的数据目录，原因是 worktree 被清掉以后 headless 不能在不存在的 cwd 里启动。
+    - `paths.shipherdHome` 要按 `src/main/paths.ts` 里实际的名字改：用 Shipherd 自己的数据目录，原因是 worktree 被清掉以后 headless 不能在不存在的 cwd 里启动。
   - 在 `activityMonitor.start()`（`:3140`）旁边调 `convIngester.start()`。
   - 在 `will-quit`（`:3238`）里、`db.close()` 之前调 `convIngester.stop()`。
   - 换新的 `writeTail`（`:1682` 一带）改成下面这样，`delay` 用仓库里现有的工具函数：
@@ -1128,7 +1128,7 @@
 
 - [ ] **Step 5: 手动冒烟**（不写 e2e，因为本层没有界面）
   - `pnpm dev` 起 app，开一个 ticket session，问一句「换新阈值是多少？」，等它回答。
-  - 在 DevTools 的 console 里执行 `await window.butler.invoke("conv:list", "<head id>", { limit: 20 })`，看到这一问一答，并且 `qa: true`。具体的调用方式以 preload 里实际暴露的名字为准。
+  - 在 DevTools 的 console 里执行 `await window.shipherd.invoke("conv:list", "<head id>", { limit: 20 })`，看到这一问一答，并且 `qa: true`。具体的调用方式以 preload 里实际暴露的名字为准。
   - 退出 app，在外面用 `claude --resume <id>` 再问一句，然后重新打开 app，`conv:list` 里能看到这一句。
 
 - [ ] **Step 6: Commit**
@@ -1164,7 +1164,7 @@
   - `ConvMessage`、`ConvPage`、`recentQa(rootSessionId, maxChars)`、第 5 层要的 `ConversationStore.append` 和 `ConversationStore.byFork`、`conv:list`、`conv:search`、`conv:appended` 和索引逐字一致。
   - `ConvRepo` 的 `openTurn`、`touchTurn`、`setQa`、`pendingEnded`、`endStale`、`addMessage`、`turnMessages`、`page`、`search`、`qaTurns`、`latestForkTurn`、`forkMessages`、`cursor`、`saveCursor`、`reroot`，在 Task 5、6、7 里引用时用的都是这些名字。
   - `ConvIngesterDeps` 在 Task 5 定义，Task 6 只往里加字段。
-- **没留占位**：每一步都有文件、要测什么、要跑的命令。`paths.butlerHome` 和 `onMemoryChanged` 这两处明确要求「以实际的名字为准」，因为它们只是接线时的命名，不影响设计。
+- **没留占位**：每一步都有文件、要测什么、要跑的命令。`paths.shipherdHome` 和 `onMemoryChanged` 这两处明确要求「以实际的名字为准」，因为它们只是接线时的命名，不影响设计。
 - **已知取舍**：
   - **重启后丢 `parentMap`**：两个终端交错写入时，如果中间重启了 app，重启后第一批 assistant entry 会退回挂到「当前打开的轮」，可能挂错一轮。只影响问答标记和分组，不丢话。
   - **回答里有多段 text**（中间夹着工具调用）：存成多条 assistant 消息，每条一个 `ConvMessage`，由第 5 层合并显示。

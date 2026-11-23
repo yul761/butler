@@ -10,7 +10,7 @@ import { memDb } from "../test-utils";
 import type { RegistryModel } from "../../shared/model-routing";
 import { Metrics } from "./events";
 import { readAvoidable, readFacts, readRisk, type Facts, type PrFact, type SessionFact, type UsageFact } from "./facts";
-import { computeDaily, dayOf, isButlerMade, MetricsRollup, prMetrics, ROLLUP_DAYS, startOfDay, ticketMetrics, UNRATED, usdOf, weightedOf } from "./rollup";
+import { computeDaily, dayOf, isShipherdMade, MetricsRollup, prMetrics, ROLLUP_DAYS, startOfDay, ticketMetrics, UNRATED, usdOf, weightedOf } from "./rollup";
 
 const H = 60 * 60_000;
 const T0 = new Date(2026, 9, 1, 9, 0, 0).getTime();
@@ -19,7 +19,7 @@ const pr = (o: Partial<PrFact> = {}): PrFact => ({
   id: 1, ticketKey: "T-1", url: "https://github.com/o/app/pull/7", slug: "o/app", number: 7, repoId: 1, repoPath: "/r", headBranch: "feat/a",
   state: "merged", openedAt: T0 + 2 * H, mergedAt: T0 + 10 * H, closedAt: null, source: "branch", ...o,
 });
-const session = (o: Partial<SessionFact> = {}): SessionFact => ({ id: "s1", ticketKey: "T-1", gitBranch: "feat/a", butler: true, createdAt: T0, ...o });
+const session = (o: Partial<SessionFact> = {}): SessionFact => ({ id: "s1", ticketKey: "T-1", gitBranch: "feat/a", shipherd: true, createdAt: T0, ...o });
 const use = (o: Partial<UsageFact> = {}): UsageFact => ({
   sessionId: "s1", at: T0 + H, model: "claude-opus-5-5", task: null, source: "session", input: 100, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 10, costUsd: 0.5, ...o,
 });
@@ -49,15 +49,15 @@ describe("rollup helpers", () => {
   });
 });
 
-describe("isButlerMade", () => {
-  it("is true when a Butler session pushed the branch, held the merge, or worked on the head branch", () => {
-    const f = facts({ sessions: [session({ id: "b", butler: true, gitBranch: "x" }), session({ id: "h", butler: false, gitBranch: "feat/a" })] });
-    expect(isButlerMade(pr(), f)).toBe(false);
-    expect(isButlerMade(pr(), { ...f, owners: [{ ticketKey: "T-1", repoId: 1, branch: "feat/a", sessionId: "b" }] })).toBe(true);
-    expect(isButlerMade(pr(), { ...f, owners: [{ ticketKey: "T-1", repoId: 1, branch: "feat/a", sessionId: "h" }] })).toBe(false);
+describe("isShipherdMade", () => {
+  it("is true when a Shipherd session pushed the branch, held the merge, or worked on the head branch", () => {
+    const f = facts({ sessions: [session({ id: "b", shipherd: true, gitBranch: "x" }), session({ id: "h", shipherd: false, gitBranch: "feat/a" })] });
+    expect(isShipherdMade(pr(), f)).toBe(false);
+    expect(isShipherdMade(pr(), { ...f, owners: [{ ticketKey: "T-1", repoId: 1, branch: "feat/a", sessionId: "b" }] })).toBe(true);
+    expect(isShipherdMade(pr(), { ...f, owners: [{ ticketKey: "T-1", repoId: 1, branch: "feat/a", sessionId: "h" }] })).toBe(false);
     const hold = { id: 1, repoPath: "/r", branch: "feat/a", target: "main", kind: "pr" as const, prUrl: "https://github.com/O/app/pull/7/", sessionId: "b", ticketKey: "T-1", createdAt: 0, releasedAt: null, outcome: null };
-    expect(isButlerMade(pr(), { ...f, holds: [hold] })).toBe(true);
-    expect(isButlerMade(pr(), facts())).toBe(true);
+    expect(isShipherdMade(pr(), { ...f, holds: [hold] })).toBe(true);
+    expect(isShipherdMade(pr(), facts())).toBe(true);
   });
 });
 
@@ -66,7 +66,7 @@ describe("prMetrics", () => {
     const m = prMetrics(facts(), new Map([[1, true]]), T0 + 20 * H).get(1)!;
     expect(m.cycleOpenMs).toBe(8 * H);
     expect(m.cycleTicketMs).toBe(10 * H);
-    expect(m.butler).toBe(true);
+    expect(m.shipherd).toBe(true);
   });
 
   it("counts human and Copilot comments, skips empty reviews, and takes avoidable and auto-handled counts", () => {
@@ -126,7 +126,7 @@ describe("ticketMetrics", () => {
       usage: [use(), use({ at: T0 + 50 * H })],
     });
     const t = ticketMetrics(f, prMetrics(f, new Map([[1, true]]), T0));
-    expect(t).toEqual([expect.objectContaining({ ticketKey: "T-1", doneAt: T0 + 10 * H, butler: true, costUsd: 0.5 })]);
+    expect(t).toEqual([expect.objectContaining({ ticketKey: "T-1", doneAt: T0 + 10 * H, shipherd: true, costUsd: 0.5 })]);
     const open = facts({ prs: [pr(), pr({ id: 2, state: "open", mergedAt: null })] });
     expect(ticketMetrics(open, prMetrics(open, new Map(), T0))).toEqual([]);
   });
@@ -137,17 +137,17 @@ describe("computeDaily", () => {
     const f = facts({ products: new Map([["o/app", ["Shop"]]]), risk: new Map([[1, "high"]]) });
     const rows = computeDaily(f, new Map([[1, true]]), T0 + 20 * H, "2000-01-01");
     const day = dayOf(T0 + 10 * H);
-    expect(find(rows, "pr_merged")).toEqual([{ day, groupKind: "all", groupKey: "", butler: true, metric: "pr_merged", n: 1, total: 1 }]);
+    expect(find(rows, "pr_merged")).toEqual([{ day, groupKind: "all", groupKey: "", shipherd: true, metric: "pr_merged", n: 1, total: 1 }]);
     expect(find(rows, "cycle_open_ms", "repo", "o/app")[0].total).toBe(8 * H);
     expect(find(rows, "pr_merged", "product", "Shop")).toHaveLength(1);
     expect(find(rows, "pr_merged", "risk", "high")).toHaveLength(1);
     expect(find(rows, "ticket_done")).toHaveLength(1);
   });
 
-  it("puts PRs without a risk level under unrated and splits Butler from other PRs", () => {
-    const f = facts({ prs: [pr(), pr({ id: 2, number: 8, url: "u8", headBranch: "x" })], sessions: [session({ butler: false })] });
+  it("puts PRs without a risk level under unrated and splits Shipherd from other PRs", () => {
+    const f = facts({ prs: [pr(), pr({ id: 2, number: 8, url: "u8", headBranch: "x" })], sessions: [session({ shipherd: false })] });
     const rows = computeDaily(f, new Map([[1, true], [2, false]]), T0 + 20 * H, "2000-01-01");
-    expect(find(rows, "pr_merged", "risk", UNRATED).map((r) => [r.butler, r.n])).toEqual([[true, 1], [false, 1]]);
+    expect(find(rows, "pr_merged", "risk", UNRATED).map((r) => [r.shipherd, r.n])).toEqual([[true, 1], [false, 1]]);
   });
 
   it("counts events, interrupt categories and wait spans on their own day", () => {
@@ -156,7 +156,7 @@ describe("computeDaily", () => {
       spans: [span(), span({ id: 2, kind: "idle", category: null, startedAt: T0 + 5 * H, endedAt: null })],
     });
     const rows = computeDaily(f, new Map(), T0 + 6 * H, "2000-01-01");
-    expect(find(rows, "interrupt:choice")[0]).toMatchObject({ n: 1, butler: true });
+    expect(find(rows, "interrupt:choice")[0]).toMatchObject({ n: 1, shipherd: true });
     expect(find(rows, "interrupt:choice", "repo", "o/app")).toHaveLength(1);
     expect(find(rows, "event:terminal_input")[0].n).toBe(1);
     expect(find(rows, "wait_human:permission")[0].total).toBe(H);
@@ -180,7 +180,7 @@ describe("computeDaily", () => {
     expect(rows.filter((r) => r.metric.startsWith("event_sub:") && r.groupKind !== "all")).toHaveLength(0);
   });
 
-  it("marks session-less events Butler by their PR or ticket (manual merges of Butler PRs)", () => {
+  it("marks session-less events Shipherd by their PR or ticket (manual merges of Shipherd PRs)", () => {
     const f = facts({
       prs: [pr(), pr({ id: 2, ticketKey: "T-2", number: 8, url: "u8", headBranch: "x" })],
       events: [
@@ -191,18 +191,18 @@ describe("computeDaily", () => {
       ],
     });
     const rows = computeDaily(f, new Map([[1, true], [2, false]]), T0 + 20 * H, "2000-01-01");
-    expect(find(rows, "event:manual_merge").map((r) => [r.butler, r.n]).sort()).toEqual([[false, 1], [true, 1]]);
-    expect(find(rows, "event:manual_trigger").map((r) => [r.butler, r.n]).sort()).toEqual([[false, 1], [true, 1]]);
+    expect(find(rows, "event:manual_merge").map((r) => [r.shipherd, r.n]).sort()).toEqual([[false, 1], [true, 1]]);
+    expect(find(rows, "event:manual_trigger").map((r) => [r.shipherd, r.n]).sort()).toEqual([[false, 1], [true, 1]]);
   });
 
   it("adds all spend by task and model on the day it was spent, headless runs included", () => {
     const f = facts({
-      sessions: [session(), session({ id: "h", butler: false })],
+      sessions: [session(), session({ id: "h", shipherd: false })],
       usage: [use({ sessionId: null, task: "handoff", model: "m1" }), use({ sessionId: "s1", task: null }), use({ sessionId: "h", task: null })],
     });
     const rows = computeDaily(f, new Map(), T0 + 20 * H, "2000-01-01");
-    expect(find(rows, "spend_task:handoff")).toEqual([expect.objectContaining({ butler: true, total: 150, day: dayOf(T0 + H) })]);
-    expect(find(rows, "spend_task:(interactive)").map((r) => [r.butler, r.total]).sort()).toEqual([[false, 150], [true, 150]]);
+    expect(find(rows, "spend_task:handoff")).toEqual([expect.objectContaining({ shipherd: true, total: 150, day: dayOf(T0 + H) })]);
+    expect(find(rows, "spend_task:(interactive)").map((r) => [r.shipherd, r.total]).sort()).toEqual([[false, 150], [true, 150]]);
     expect(find(rows, "spend_model:m1")).toHaveLength(1);
   });
 
@@ -263,7 +263,7 @@ describe("readers", () => {
 });
 
 describe("MetricsRollup", () => {
-  it("tags butler_made, records how merged PRs were merged, and replaces the window's daily rows idempotently", () => {
+  it("tags shipherd_made, records how merged PRs were merged, and replaces the window's daily rows idempotently", () => {
     const db = memDb();
     const tickets = new TicketsRepo(db);
     tickets.insert({ key: "T-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
@@ -274,7 +274,7 @@ describe("MetricsRollup", () => {
       prs.link({ ticketKey: "T-1", url: `https://github.com/o/app/pull/${n}`, slug: "o/app", repoId, number: n, headBranch: branch, state: "merged", source: "branch", linkedAt: T0, openedAt: T0 + H, mergedAt: T0 + 10 * H }).pr;
     const a = link(7, "feat/a");
     const b = link(8, "feat/b");
-    new SessionsRepo(db).insertIfAbsent({ id: "s1", ticketKey: "T-1", cwd: "/r/app", origin: "butler", gitBranch: "feat/a", createdAt: T0 });
+    new SessionsRepo(db).insertIfAbsent({ id: "s1", ticketKey: "T-1", cwd: "/r/app", origin: "shipherd", gitBranch: "feat/a", createdAt: T0 });
     new UsageRepo(db).record([{ messageId: "m1", sessionId: "s1", agentId: null, source: "session", job: null, at: T0 + H, model: "m", input: 10, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0, context: 10, costUsd: 0.1 }]);
     const gate = new MergeGateRepo(db);
     const holdId = gate.addHold({ repoPath: "/r/app", branch: "feat/a", target: "main", kind: "pr", prUrl: a.url, sessionId: "s1", ticketKey: "T-1", createdAt: T0 + 9 * H });
@@ -284,11 +284,11 @@ describe("MetricsRollup", () => {
     const r = new MetricsRollup({ db, repo, holds: gate, registry: () => [], record: m.recordEvent, since: () => T0, now: () => now });
     expect(r.run()).toBe(true);
     expect(r.run()).toBe(true);
-    const made = db.prepare(`SELECT id, butler_made FROM ticket_prs ORDER BY id`).all() as { id: number; butler_made: number }[];
-    expect(made.map((x) => [Number(x.id), Number(x.butler_made)])).toEqual([[a.id, 1], [b.id, 0]]);
+    const made = db.prepare(`SELECT id, shipherd_made FROM ticket_prs ORDER BY id`).all() as { id: number; shipherd_made: number }[];
+    expect(made.map((x) => [Number(x.id), Number(x.shipherd_made)])).toEqual([[a.id, 1], [b.id, 0]]);
     expect(repo.events(0).map((e) => [e.kind, e.prId]).sort()).toEqual([["agent_merge", a.id], ["manual_merge", b.id]]);
     const daily = repo.daily("2000-01-01");
-    expect(find(daily, "pr_merged").map((x) => [x.butler, x.n]).sort()).toEqual([[false, 1], [true, 1]]);
+    expect(find(daily, "pr_merged").map((x) => [x.shipherd, x.n]).sort()).toEqual([[false, 1], [true, 1]]);
     expect(find(daily, "event:manual_merge")).toHaveLength(1);
     expect(r.runIfStale(60_000)).toBe(false);
   });
@@ -312,7 +312,7 @@ describe("MetricsRollup", () => {
     const now = new Date(2026, 9, 1, 15, 30).getTime();
     const fromDay = dayOf(startOfDay(now - ROLLUP_DAYS * 24 * H));
     expect(startOfDay(now)).toBe(new Date(2026, 9, 1).getTime());
-    repo.replaceDaily("1990-01-01", [{ day: "1990-01-01", groupKind: "all", groupKey: "", butler: false, metric: "pr_merged", n: 1, total: 1 }]);
+    repo.replaceDaily("1990-01-01", [{ day: "1990-01-01", groupKind: "all", groupKey: "", shipherd: false, metric: "pr_merged", n: 1, total: 1 }]);
     const r = new MetricsRollup({ db, repo, holds: new MergeGateRepo(db), registry: () => [], record: () => false, since: () => 0, now: () => now });
     expect(r.run()).toBe(true);
     expect(repo.daily("1900-01-01").filter((x) => x.day < fromDay)).toEqual([]);

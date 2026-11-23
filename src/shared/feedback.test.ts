@@ -3,14 +3,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FEEDBACK_KINDS, FEEDBACK_TEMPLATES, FEEDBACK_URL_MAX, feedbackUrl, isFeedbackKind, type FeedbackEnv } from "./feedback";
 
-const env: FeedbackEnv = { butler: "4.0.0", os: "macOS 15.1.0", platform: "darwin", arch: "arm64", claude: "2.1.3" };
+const env: FeedbackEnv = { shipherd: "4.0.0", os: "macOS 15.1.0", platform: "darwin", arch: "arm64", claude: "2.1.3" };
 const params = (url: string) => new URL(url).searchParams;
 
 describe("feedbackUrl", () => {
   it("points at the repo's new issue page with the kind's template", () => {
     for (const kind of FEEDBACK_KINDS) {
       const { url, truncated } = feedbackUrl({ kind, title: "t", description: "d" }, env);
-      expect(url.startsWith("https://github.com/yul761/butler/issues/new?")).toBe(true);
+      expect(url.startsWith("https://github.com/yul761/shipherd/issues/new?")).toBe(true);
       expect(params(url).get("template")).toBe(FEEDBACK_TEMPLATES[kind]);
       expect(truncated).toBe(false);
     }
@@ -20,7 +20,7 @@ describe("feedbackUrl", () => {
     const p = params(feedbackUrl({ kind: "bug", title: "  Crash   on start ", description: "It crashed.\nTwice." }, env).url);
     expect(p.get("title")).toBe("Crash on start");
     expect(p.get("description")).toBe("It crashed.\nTwice.");
-    expect(p.get("environment")).toBe("- Butler: 4.0.0\n- OS: macOS 15.1.0 (darwin)\n- Architecture: arm64\n- Claude Code: 2.1.3");
+    expect(p.get("environment")).toBe("- Shipherd: 4.0.0\n- OS: macOS 15.1.0 (darwin)\n- Architecture: arm64\n- Claude Code: 2.1.3");
   });
 
   it("leaves empty fields out so the template's own defaults stay", () => {
@@ -30,9 +30,9 @@ describe("feedbackUrl", () => {
   });
 
   it("names the diagnostics file and the first-run step", () => {
-    const p = params(feedbackUrl({ kind: "first-run", title: "", description: "", step: "hooks", diagnosticsFile: "butler-diagnostics-redacted-x.json" }, env).url);
+    const p = params(feedbackUrl({ kind: "first-run", title: "", description: "", step: "hooks", diagnosticsFile: "shipherd-diagnostics-redacted-x.json" }, env).url);
     expect(p.get("step")).toBe("hooks");
-    expect(p.get("diagnostics")).toContain("butler-diagnostics-redacted-x.json");
+    expect(p.get("diagnostics")).toContain("shipherd-diagnostics-redacted-x.json");
     expect(params(feedbackUrl({ kind: "bug", title: "", description: "", step: "hooks" }, env).url).has("step")).toBe(false);
   });
 
@@ -56,7 +56,7 @@ describe("feedbackUrl", () => {
     expect(url.length).toBeLessThanOrEqual(600);
     expect(params(url).get("title")!.endsWith("…")).toBe(true);
     expect(params(url).has("description")).toBe(false);
-    expect(params(url).get("environment")).toContain("Butler: 4.0.0");
+    expect(params(url).get("environment")).toContain("Shipherd: 4.0.0");
   });
 
   it("a long Chinese title is cut so the description still gets most of the link", () => {
@@ -92,6 +92,6 @@ describe("issue templates", () => {
 
   it("config.yml points questions at Discussions", () => {
     const text = readFileSync(join(dir, "config.yml"), "utf8");
-    expect(text).toContain("https://github.com/yul761/butler/discussions");
+    expect(text).toContain("https://github.com/yul761/shipherd/discussions");
   });
 });

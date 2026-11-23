@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { CheckEffectiveView, CheckInput, CheckScope, CheckStage, ChecksAction, ChecksActResult, ChecksBulkOp, CheckType, CheckVerdict } from "../../../shared/checks";
 import { CHECK_TYPES, CHECKS_BULK_OPS } from "../../../shared/checks";
 import type { EditableSettingKey } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { adoption, checksErrorText, emptyForm, formFromInput, inputFromForm, livePickedChecks, paramsSummary, parseScopeKey, scopeKey, scopeOptions, type CheckForm } from "../checks-view";
 import { S } from "../strings";
@@ -184,7 +184,7 @@ function ChecksSettings({ settings }: { settings: { enabled: boolean; editTimeou
         return next;
       });
     } catch (e) {
-      if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+      if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
       else reportError(e);
     }
   };

@@ -149,7 +149,7 @@ describe("LessonRunsRepo", () => {
     const { db, runs } = setup();
     const now = 1_000_000;
     const ids = [1, 2, 3, 4].map((i) => mk(runs, now - i * 10));
-    db.prepare(`INSERT INTO sessions (id, cwd, origin, created_at, lesson_run_id) VALUES ('s', '/w', 'butler', 1, ?)`).run(ids[3]);
+    db.prepare(`INSERT INTO sessions (id, cwd, origin, created_at, lesson_run_id) VALUES ('s', '/w', 'shipherd', 1, ?)`).run(ids[3]);
     expect(runs.prune(now).deleted).toBe(0);
     expect(runs.get(ids[3])).not.toBeNull();
   });

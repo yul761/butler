@@ -14,7 +14,7 @@ export interface KeepAwakeDeps {
 
 /**
  * 防休眠开关：开着的时候电脑不会因为闲置而睡眠，屏幕也不熄（盖子开着让 session 自己跑）。
- * 只在内存里，Butler 每次启动都是关的；进入睡眠（合上盖子）和退出时由主进程关掉。
+ * 只在内存里，Shipherd 每次启动都是关的；进入睡眠（合上盖子）和退出时由主进程关掉。
  */
 export class KeepAwake {
   private id: number | null = null;

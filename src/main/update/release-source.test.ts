@@ -3,7 +3,7 @@ import { classifyGhFailure, latestRelease, parseRelease, RELEASE_API_PATH, type 
 import { RELEASE_NOTES_LIMIT } from "../../shared/update";
 
 const release = {
-  tag_name: "v4.1.0", html_url: "https://github.com/yul761/butler/releases/tag/v4.1.0", draft: false, prerelease: false,
+  tag_name: "v4.1.0", html_url: "https://github.com/yul761/shipherd/releases/tag/v4.1.0", draft: false, prerelease: false,
   published_at: "2026-11-21T05:44:00Z", body: "## What's new\n- update notice",
 };
 
@@ -13,11 +13,11 @@ function fake(r: Awaited<ReturnType<GhRun>>): { run: GhRun; calls: { args: strin
 }
 
 describe("latestRelease", () => {
-  it("asks gh api for the Butler repo's latest release, pinned to github.com", async () => {
+  it("asks gh api for the Shipherd repo's latest release, pinned to github.com", async () => {
     const f = fake({ stdout: JSON.stringify(release), stderr: "", spawnError: null, timedOut: false });
     const r = await latestRelease(f.run);
-    expect(f.calls).toEqual([{ args: ["api", "repos/yul761/butler/releases/latest"], env: { GH_HOST: "github.com" } }]);
-    expect(RELEASE_API_PATH).toBe("repos/yul761/butler/releases/latest");
+    expect(f.calls).toEqual([{ args: ["api", "repos/yul761/shipherd/releases/latest"], env: { GH_HOST: "github.com" } }]);
+    expect(RELEASE_API_PATH).toBe("repos/yul761/shipherd/releases/latest");
     expect(r).toEqual({
       ok: true,
       release: { version: "4.1.0", tag: "v4.1.0", url: release.html_url, publishedAt: Date.parse(release.published_at), notes: release.body },

@@ -11,11 +11,11 @@ import { allTickets, ASKING_TICKET, DEMO, type DemoData, type DemoLang, fakeClau
 /**
  * 录 README 用的动图和截图（BTL-251）：`pnpm demo:record`。不是测试，不进 CI，见 docs/demo-media.md。
  * 和 e2e 一样在沙盒里跑：假 claude（按 demo-data.ts 的剧本说话）、假 gh（PR #42）、临时的 HOME 和数据目录，
- * 碰不到真的 ~/.butler 和 ~/.claude。epic 总控拆活、开 session 这几步由这里扮演总控，经 butler-sessions MCP 调用。
- * 产物写到 docs/media/（设了 BUTLER_DEMO_OUT 就写到那里）。
+ * 碰不到真的 ~/.shipherd 和 ~/.claude。epic 总控拆活、开 session 这几步由这里扮演总控，经 shipherd-sessions MCP 调用。
+ * 产物写到 docs/media/（设了 SHIPHERD_DEMO_OUT 就写到那里）。
  */
 
-const OUT = process.env.BUTLER_DEMO_OUT ?? join(ROOT, "docs", "media");
+const OUT = process.env.SHIPHERD_DEMO_OUT ?? join(ROOT, "docs", "media");
 /** 文件名后缀：英文没有，中文是 .zh-CN（和 README.zh-CN.md 一样）。 */
 const SUFFIX: Record<DemoLang, string> = { en: "", zh: ".zh-CN" };
 const GIF_LIMIT = 5 * 1024 * 1024;
@@ -23,9 +23,9 @@ const GIF_LIMIT = 5 * 1024 * 1024;
 type McpServerConfig = { command: string; args: string[]; env: Record<string, string> };
 type ToolReply = { content: { text: string }[]; isError?: boolean };
 
-/** 以 from 这个 session 的身份连上 butler-sessions（stdio），像总控那样调用工具。环境和 Butler 一样是沙盒的。 */
+/** 以 from 这个 session 的身份连上 shipherd-sessions（stdio），像总控那样调用工具。环境和 Shipherd 一样是沙盒的。 */
 async function sessionsServer(s: Sandbox, server: McpServerConfig, from: string) {
-  const child = spawn(server.command, server.args, { env: { ...sandboxEnv(s), ...server.env, BUTLER_SESSION: from }, stdio: ["pipe", "pipe", "inherit"] });
+  const child = spawn(server.command, server.args, { env: { ...sandboxEnv(s), ...server.env, SHIPHERD_SESSION: from }, stdio: ["pipe", "pipe", "inherit"] });
   const replies = createInterface({ input: child.stdout });
   let next = 0;
   const send = (method: string, params: object) => new Promise<ToolReply>((resolve) => {
@@ -115,8 +115,8 @@ async function record(lang: DemoLang, app: ElectronApplication, page: Page, s: S
   await create(page, await newButton(page, "newFeature", T), T.featureName, d.epic, root, T);
   await openTab(page, T.lay.tabControl);
   await page.locator(".feature-page").getByRole("button", { name: `+ ${T.newCoordinator}`, exact: true }).click();
-  await expect.poll(() => fakeLog(s)).toContain("mcp=butler-workspace,butler-feature,butler-sessions");
-  const coordinatorId = /interactive new (\S+) mcp=butler-workspace,butler-feature,butler-sessions/.exec(fakeLog(s))![1];
+  await expect.poll(() => fakeLog(s)).toContain("mcp=shipherd-workspace,shipherd-feature,shipherd-sessions");
+  const coordinatorId = /interactive new (\S+) mcp=shipherd-workspace,shipherd-feature,shipherd-sessions/.exec(fakeLog(s))![1];
   const terminal = page.locator(".terminal-wrap:visible .xterm");
   await expect(terminal).toContainText(d.coordinatorBanner);
 
@@ -132,8 +132,8 @@ async function record(lang: DemoLang, app: ElectronApplication, page: Page, s: S
   await rec.hold(1500);
 
   // 2. 总控拆成 feature 和 ticket：在「概况」里一块块长出来。
-  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
-  const mcp = await sessionsServer(s, config.mcpServers["butler-sessions"], coordinatorId);
+  const config = JSON.parse(readFileSync(join(s.shipherdHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
+  const mcp = await sessionsServer(s, config.mcpServers["shipherd-sessions"], coordinatorId);
   try {
     await caption(page, d.captions.split);
     await demoClick(page, page.getByRole("tab", { name: T.lay.tabOverview, exact: true }));
@@ -200,7 +200,7 @@ async function record(lang: DemoLang, app: ElectronApplication, page: Page, s: S
     await demoClick(page, merge.getByRole("button", { name: T.hm.act.openPr, exact: true }));
     await rec.hold(1000);
     await rec.pause();
-    // 合进去以后总控通知 FERN-101；它回完话停下，Butler 马上重查这个 ticket 的 PR（不然要等 5 分钟一轮）。
+    // 合进去以后总控通知 FERN-101；它回完话停下，Shipherd 马上重查这个 ticket 的 PR（不然要等 5 分钟一轮）。
     s.setGh(ghFixture(d, true));
     await mcp.call("send_message", { session: sessionOf[PR_TICKET], text: d.mergedNote });
     await expect(merge).toHaveCount(0, { timeout: 60_000 });
@@ -236,7 +236,7 @@ for (const lang of ["en", "zh"] as const) {
     const script = join(s.dir, "fake-claude-script.json");
     writeFileSync(script, JSON.stringify(fakeClaudeScript(DEMO[lang])));
     // 活动每半秒推一次：session 的状态点和工具调用跟得上画面。
-    s.env = { FAKE_CLAUDE_SCRIPT: script, BUTLER_ACTIVITY_TICK_MS: "500" };
+    s.env = { FAKE_CLAUDE_SCRIPT: script, SHIPHERD_ACTIVITY_TICK_MS: "500" };
     const { app, page } = await launch(s);
     await record(lang, app, page, s);
   });

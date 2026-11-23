@@ -5,25 +5,25 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { MESSAGE_LIMIT, REASON_LIMIT } from "../src/shared/control";
 import {
-  BUTLER_TOOLS, BUTLER_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer,
+  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer,
   type SessionsServerOptions,
 } from "./sessions-server";
 import { serveStdio } from "./stdio";
 import { sessionsOptionsFromEnv } from "./sessions-options";
 
 function setup(timeoutMs = 2000, scope: SessionsServerOptions["scope"] = { featureId: 7 }, lang: "zh" | "en" = "zh") {
-  const dir = tempDir("butler-control-");
+  const dir = tempDir("shipherd-control-");
   const requestsDir = join(dir, "requests");
   const resultsDir = join(dir, "results");
   mkdirSync(resultsDir, { recursive: true });
   const server = new SessionsServer({ scope, lang, from: "boss", requestsDir, resultsDir, timeoutMs, pollMs: 10 });
-  /** 扮演 Butler：等一个请求出现，读出来，写回结果。 */
+  /** 扮演 Shipherd：等一个请求出现，读出来，写回结果。 */
   const answer = async (result: object) => {
     for (;;) {
       const names = readdirSync(requestsDir, { withFileTypes: true }).filter((e) => e.name.endsWith(".json")).map((e) => e.name);
       if (names.length > 0) {
         const req = JSON.parse(readFileSync(join(requestsDir, names[0]), "utf8")) as object;
-        // 和 Butler 一样拿走请求，下一次 answer 不会再读到它。
+        // 和 Shipherd 一样拿走请求，下一次 answer 不会再读到它。
         unlinkSync(join(requestsDir, names[0]));
         writeFileSync(join(resultsDir, names[0]), JSON.stringify(result));
         return req;
@@ -34,11 +34,11 @@ function setup(timeoutMs = 2000, scope: SessionsServerOptions["scope"] = { featu
   return { server, answer, requestsDir };
 }
 
-describe("butler-sessions MCP server", () => {
+describe("shipherd-sessions MCP server", () => {
   it("answers initialize, ping and tools/list, and ignores notifications", async () => {
     const { server } = setup();
     expect(await server.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26" } })).toMatchObject({
-      id: 1, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "butler-sessions" } },
+      id: 1, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "shipherd-sessions" } },
     });
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
     expect(await server.handle({ jsonrpc: "2.0", id: 2, method: "ping" })).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
@@ -82,8 +82,8 @@ describe("butler-sessions MCP server", () => {
     }
   });
 
-  it("reports Butler's errors, bad arguments and a silent Butler as tool errors", async () => {
-    // 有回答的那次用正常的超时（慢的 CI 机器上 200ms 可能来不及），只有「Butler 不回应」才用短超时。
+  it("reports Shipherd's errors, bad arguments and a silent Shipherd as tool errors", async () => {
+    // 有回答的那次用正常的超时（慢的 CI 机器上 200ms 可能来不及），只有「Shipherd 不回应」才用短超时。
     const answered = setup();
     const failing = answered.server.handle({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "list_repos" } });
     await answered.answer({ v: 1, ok: false, error: "找不到 ticket" });
@@ -130,7 +130,7 @@ describe("butler-sessions MCP server", () => {
   });
 });
 
-describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => {
+describe("shipherd-sessions for a feature coordinator (design 2026-10-26)", () => {
   it("lists the feature tools", async () => {
     const { server } = setup(2000, { featureId: 7 });
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
@@ -233,7 +233,7 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
     expect(JSON.stringify(await create)).toContain("DMS-9");
   });
 
-  it("rejects bad create_ticket arguments without asking Butler, and says what to check when Butler is slow", async () => {
+  it("rejects bad create_ticket arguments without asking Shipherd, and says what to check when Shipherd is slow", async () => {
     const { server, requestsDir } = setup(30, { featureId: 7 });
     const call = (id: number, args: object) => server.handle({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "create_ticket", arguments: args } });
     for (const [n, args] of [[1, {}], [2, { ticket: "A-1", repos: "fe" }], [3, { ticket: "A-1", repos: [1] }], [4, { ticket: "A-1", title: 3 }]] as const) {
@@ -244,7 +244,7 @@ describe("butler-sessions for a feature coordinator (design 2026-10-26)", () => 
   });
 });
 
-describe("butler-sessions in English (design 2026-10-26 i18n)", () => {
+describe("shipherd-sessions in English (design 2026-10-26 i18n)", () => {
   it("describes its tools and errors in English", async () => {
     for (const scope of [{ ticketKey: "P-1" }, { featureId: 7 }]) {
       const { server } = setup(2000, scope, "en");
@@ -261,7 +261,7 @@ const callTool = (server: SessionsServer, name: string, args: object = {}) => se
 
 describe("stack tools (workstream K)", () => {
   it("sends the stack tools and create_ticket's stack_on as requests, checking arguments first", async () => {
-    for (const scope of [{ featureId: 7 }, { butler: true as const }]) {
+    for (const scope of [{ featureId: 7 }, { shipherd: true as const }]) {
       const { server, answer } = setup(2000, scope);
       const base = { v: 1, ...scope, from: "boss" };
       const cases: [string, object, object][] = [
@@ -337,7 +337,7 @@ describe("end_session (task 11)", () => {
     }
   });
 
-  it("rejects end_session without a session or a reason, or with a reason over the limit, without asking Butler", async () => {
+  it("rejects end_session without a session or a reason, or with a reason over the limit, without asking Shipherd", async () => {
     for (const scope of scopes) {
       const { server, requestsDir } = setup(30, scope);
       for (const args of [{}, { session: "c1" }, { reason: "done" }, { session: "c1", reason: "  " }, { session: 1, reason: "done" }, { session: "c1", reason: "x".repeat(REASON_LIMIT + 1) }]) {
@@ -356,7 +356,7 @@ describe("refresh_session (plan 16)", () => {
     for (const [zh, en] of lists) {
       const find = (list: readonly object[]) => (list as readonly { name: string; description: string; inputSchema: object }[]).find((x) => x.name === "refresh_session")!;
       for (const list of [zh, en]) expect(find(list).inputSchema).toMatchObject({ required: ["session"], properties: { session: { type: "string" } } });
-      expect(find(zh).description).toBe("让 Butler 给一个停下来的子 session 换新上下文：先写 handoff，再清空，再从记忆里接上。只能对你管的、已经停下来的 session 用。");
+      expect(find(zh).description).toBe("让 Shipherd 给一个停下来的子 session 换新上下文：先写 handoff，再清空，再从记忆里接上。只能对你管的、已经停下来的 session 用。");
       expect(find(en).description).toContain("handoff");
       expect(/[\u4e00-\u9fff]/.test(find(en).description)).toBe(false);
     }
@@ -371,7 +371,7 @@ describe("refresh_session (plan 16)", () => {
     }
   });
 
-  it("rejects refresh_session without a session string, without asking Butler", async () => {
+  it("rejects refresh_session without a session string, without asking Shipherd", async () => {
     for (const scope of scopes) {
       const { server, requestsDir } = setup(30, scope);
       for (const args of [{}, { session: "" }, { session: 1 }]) {
@@ -382,7 +382,7 @@ describe("refresh_session (plan 16)", () => {
   });
 });
 
-describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
+describe("ask_user and report for every Shipherd session (BTL-190 2+3)", () => {
   it("a member (normal ticket session) has submit_evidence, pre_review_result, ask_user and report, in both languages", async () => {
     expect(await tools(setup(2000, { ticketKey: "P-1" }).server)).toEqual([...MEMBER_TOOLS, ...INBOX_TOOLS]);
     const en = await tools(setup(2000, { ticketKey: "P-1" }, "en").server);
@@ -460,7 +460,7 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
     await rep;
   });
 
-  it("refuses bad ask_user and report arguments without asking Butler", async () => {
+  it("refuses bad ask_user and report arguments without asking Shipherd", async () => {
     const { server, requestsDir } = setup(200);
     for (const [name, args] of [
       ["ask_user", {}], ["ask_user", { question: " " }], ["ask_user", { question: "q", options: ["1", "2", "3", "4", "5", "6", "7"] }],
@@ -474,32 +474,32 @@ describe("ask_user and report for every Butler session (BTL-190 2+3)", () => {
   });
 });
 
-describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
+describe("shipherd-sessions for the Shipherd 总控 (BTL-190 5)", () => {
   const NAMES = ["list_epics", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_epic_summary", "metrics_overview", "pr_assessment", "list_features"];
 
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
-    expect(await tools(setup(2000, { butler: true }).server)).toEqual([...BUTLER_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS]);
-    expect(BUTLER_TOOLS.map((t) => t.name)).toEqual(NAMES);
+    expect(await tools(setup(2000, { shipherd: true }).server)).toEqual([...SHIPHERD_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS]);
+    expect(SHIPHERD_TOOLS.map((t) => t.name)).toEqual(NAMES);
     // 不建、不删、不结束；没有开 session 的工具（send_message 会接着关掉的终端）。
     for (const t of ["create_ticket", "start_session", "end_session"]) expect(NAMES).not.toContain(t);
-    for (const t of BUTLER_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
-    expect(BUTLER_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]))
-      .toEqual(BUTLER_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
-    const en = await tools(setup(2000, { butler: true }, "en").server);
+    for (const t of SHIPHERD_TOOLS) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
+    expect(SHIPHERD_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]))
+      .toEqual(SHIPHERD_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
+    const en = await tools(setup(2000, { shipherd: true }, "en").server);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
     expect(en.map((t) => t.name)).toEqual([...NAMES, ...STACK_TOOLS.map((t) => t.name), "ask_user", "report"]);
     // send_message 说清楚只能发给 epic 总控（BTL-246）。
-    const send = BUTLER_TOOLS.find((t) => t.name === "send_message")!;
+    const send = SHIPHERD_TOOLS.find((t) => t.name === "send_message")!;
     expect(send.description).toContain("epic 总控");
     expect(send.inputSchema).toMatchObject({ required: ["text"] });
     expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "epic", "text", "interrupt"]);
     // 中英文的参数一样。
-    for (const [i, t] of BUTLER_TOOLS.entries()) expect(Object.keys(BUTLER_TOOLS_EN[i].inputSchema.properties ?? {}), t.name).toEqual(Object.keys(t.inputSchema.properties ?? {}));
+    for (const [i, t] of SHIPHERD_TOOLS.entries()) expect(Object.keys(SHIPHERD_TOOLS_EN[i].inputSchema.properties ?? {}), t.name).toEqual(Object.keys(t.inputSchema.properties ?? {}));
   });
 
-  it("sends each tool as a butler request, turning epic ids into strings", async () => {
-    const { server, answer } = setup(2000, { butler: true });
-    const base = { v: 1, butler: true, from: "boss" };
+  it("sends each tool as a shipherd request, turning epic ids into strings", async () => {
+    const { server, answer } = setup(2000, { shipherd: true });
+    const base = { v: 1, shipherd: true, from: "boss" };
     for (const op of ["list_epics", "list_features", "list_prs", "list_sessions", "list_inbox"]) {
       const call = callTool(server, op);
       expect(await answer({ v: 1, ok: true, value: [] })).toEqual({ ...base, op });
@@ -550,8 +550,8 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
     await f;
   });
 
-  it("refuses bad arguments and tools it does not have without asking Butler", async () => {
-    const { server, requestsDir } = setup(30, { butler: true });
+  it("refuses bad arguments and tools it does not have without asking Shipherd", async () => {
+    const { server, requestsDir } = setup(30, { shipherd: true });
     // { feature } 是 BTL-246 以前的目标（现在叫 epic）：只给它等于没给目标。
     for (const [name, args] of [
       ["send_message", {}], ["send_message", { session: "e1" }], ["send_message", { session: "e1", text: " " }], ["send_message", { text: "t" }],
@@ -565,11 +565,11 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
       expect(await callTool(server, name, args), `${name} ${JSON.stringify(args).slice(0, 40)}`).toMatchObject({ result: { isError: true } });
     }
     expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
-    const en = setup(30, { butler: true }, "en");
+    const en = setup(30, { shipherd: true }, "en");
     expect(JSON.stringify(await callTool(en.server, "send_message", {}))).not.toMatch(/[\u4e00-\u9fff]/);
   });
 
-  it("other scopes do not have the Butler 总控 tools", async () => {
+  it("other scopes do not have the Shipherd 总控 tools", async () => {
     for (const scope of [{ featureId: 7 }, { ticketKey: "P-1" }]) {
       expect(await callTool(setup(30, scope).server, "send_message", { session: "s", text: "t" })).toMatchObject({ result: { isError: true } });
       expect(await callTool(setup(30, scope).server, "list_prs")).toMatchObject({ result: { isError: true } });
@@ -578,17 +578,17 @@ describe("butler-sessions for the Butler 总控 (BTL-190 5)", () => {
 });
 
 describe("sessionsOptionsFromEnv", () => {
-  const dirs = { BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" };
+  const dirs = { SHIPHERD_CONTROL_REQUESTS: "/req", SHIPHERD_CONTROL_RESULTS: "/res" };
 
-  it("reads the ticket, feature or Butler scope", () => {
-    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_TICKET: "P-1" }, "s1")?.scope).toEqual({ ticketKey: "P-1" });
-    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_FEATURE: "7" }, "s1")?.scope).toEqual({ featureId: 7 });
-    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_SCOPE: "butler" }, "s1")?.scope).toEqual({ butler: true });
+  it("reads the ticket, feature or Shipherd scope", () => {
+    expect(sessionsOptionsFromEnv({ ...dirs, SHIPHERD_TICKET: "P-1" }, "s1")?.scope).toEqual({ ticketKey: "P-1" });
+    expect(sessionsOptionsFromEnv({ ...dirs, SHIPHERD_FEATURE: "7" }, "s1")?.scope).toEqual({ featureId: 7 });
+    expect(sessionsOptionsFromEnv({ ...dirs, SHIPHERD_SCOPE: "shipherd" }, "s1")?.scope).toEqual({ shipherd: true });
   });
 
   it("has no scope for the removed epic session's variables (BTL-246)", () => {
-    // 升级前写下的配置里可能还有这两个变量：BUTLER_EPIC 不再是作用域，BUTLER_FEATURE_EPIC 不再加工具。
-    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_EPIC: "3" }, "s1")).toBeNull();
-    expect(sessionsOptionsFromEnv({ ...dirs, BUTLER_FEATURE: "7", BUTLER_FEATURE_EPIC: "1" }, "s1")?.scope).toEqual({ featureId: 7 });
+    // 升级前写下的配置里可能还有这两个变量：SHIPHERD_EPIC 不再是作用域，SHIPHERD_FEATURE_EPIC 不再加工具。
+    expect(sessionsOptionsFromEnv({ ...dirs, SHIPHERD_EPIC: "3" }, "s1")).toBeNull();
+    expect(sessionsOptionsFromEnv({ ...dirs, SHIPHERD_FEATURE: "7", SHIPHERD_FEATURE_EPIC: "1" }, "s1")?.scope).toEqual({ featureId: 7 });
   });
 });

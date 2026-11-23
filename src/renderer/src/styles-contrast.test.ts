@@ -95,7 +95,7 @@ describe("PR stage text contrast (D-14)", () => {
 
 // UI 重做 §5.1：颜色只表示谁该动。每个 --turn-* 在面板和页面底色上都要到 4.5:1，
 // 标签 .turn-tag.turn-<tone> 的字在它自己混出来的底色上也要到 4.5:1。
-const TURN_TOKENS = ["--turn-agent", "--turn-ask", "--turn-butler", "--turn-done", "--turn-external", "--turn-idle", "--turn-merge", "--turn-stuck"];
+const TURN_TOKENS = ["--turn-agent", "--turn-ask", "--turn-shipherd", "--turn-done", "--turn-external", "--turn-idle", "--turn-merge", "--turn-stuck"];
 const turnTags = rules.filter((r) => /^\.turn-tag\.turn-\w+$/.test(r.selector))
   .map((r) => ({ selector: r.selector, color: decl(r.body, "color")!, background: decl(r.body, "background")! }));
 

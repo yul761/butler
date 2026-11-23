@@ -107,7 +107,7 @@ export interface NeedsYouHead {
 export interface NeedsYouDeps {
   /** sessionId 只用来把用量记到它的 ticket 名下（工作流 L）。 */
   judge: (reply: string, cwd: string, sessionId: string) => Promise<NeedsYouVerdict | null>;
-  /** 开着终端的 Butler session 的 head：id、cwd、是否停着等输入、活动、最后一条回复。 */
+  /** 开着终端的 Shipherd session 的 head：id、cwd、是否停着等输入、活动、最后一条回复。 */
   sessions: () => NeedsYouHead[];
   notify: () => void;
   log?: (msg: string, err?: unknown) => void;

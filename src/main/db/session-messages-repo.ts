@@ -5,7 +5,7 @@ import type { Db } from "./database";
 export interface SessionMessage {
   id: string;
   kind: MessageKind;
-  /** 发送方 session 的 head；Butler 自己发的（回答、预审、评论）为 null。 */
+  /** 发送方 session 的 head；Shipherd 自己发的（回答、预审、评论）为 null。 */
   fromSession: string | null;
   /** 排队那一刻接收方的 head：送的时候按 head 链找最新的。 */
   toSession: string;
@@ -64,7 +64,7 @@ const toMessage = (r: Row): SessionMessage => ({
   baseReplyId: r.base_reply_id, replyText: r.reply_text, queuedAt: Number(r.queued_at), deliveredAt: num(r.delivered_at), repliedAt: num(r.replied_at),
 });
 
-/** 界面上的范围：Butler 总控发出或收到的（给它的 session id 们），或者一个 feature 的。 */
+/** 界面上的范围：Shipherd 总控发出或收到的（给它的 session id 们），或者一个 feature 的。 */
 export type MessageFilter = { sessions: string[] } | { featureId: number };
 
 export class SessionMessagesRepo {

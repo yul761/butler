@@ -1,6 +1,6 @@
 # Workstream H：度量与「效果」页（设计补充）
 
-上级文档：`2026-11-17-butler-3-design.md`（第 3 节 H、第 4.7 节、第 4.6 节、第 4.9 节）。
+上级文档：`2026-11-17-shipherd-3-design.md`（第 3 节 H、第 4.7 节、第 4.6 节、第 4.9 节）。
 这里只记 H 自己做的决定；契约以上级文档为准，这里只扩展不修改。
 
 ## 0. 开工前核实过的点
@@ -46,7 +46,7 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 
 | kind | 采集点 | 条件 | data |
 |---|---|---|---|
-| `terminal_input` | UserPromptSubmit hook（index.ts，`pty.markSubmitted` 之前） | 只算 Butler 开着终端的 session（外部终端里认领的、复盘分析 session 不算），hook 的 session 和终端在同一条 head 链上（终端里 agent 跑的嵌套 `claude -p` 不算）；这个终端此刻**没有** Butler 在递东西（`pty.autoInputInFlight` 为 false）：Butler 递回答、递汇报、交任务、换新时的 `/handoff` 都不算 | `mode: "prompt"`；`answered`：`ask_user`（有未决的 ask_user）/ `needs_you`（被判断成需要你）/ 缺省 |
+| `terminal_input` | UserPromptSubmit hook（index.ts，`pty.markSubmitted` 之前） | 只算 Shipherd 开着终端的 session（外部终端里认领的、复盘分析 session 不算），hook 的 session 和终端在同一条 head 链上（终端里 agent 跑的嵌套 `claude -p` 不算）；这个终端此刻**没有** Shipherd 在递东西（`pty.autoInputInFlight` 为 false）：Shipherd 递回答、递汇报、交任务、换新时的 `/handoff` 都不算 | `mode: "prompt"`；`answered`：`ask_user`（有未决的 ask_user）/ `needs_you`（被判断成需要你）/ 缺省 |
 | `terminal_input` | `pty:write`（`register.ts`） | 终端停在权限确认上（`pty.permissionShowing`）或活动是 `approval` 而且有工具在跑（`startedAt` 不为空：AskUserQuestion、ExitPlanMode；只有 `approval` 的是刚答完、还没重读的权限确认），按下回车、数字、y/n、Esc；同一个终端 2 秒内只记一次 | `mode: "dialog"`，`answered: "permission"` / `"choice"` |
 | `terminal_input` | `pty:write` | session 在干活（`isWorking`）时单独按 Esc（打断）；2 秒去重 | `mode: "interrupt"` |
 | `needs_you_answer` | `InboxService.answer`（卡片上回答「待你决定」） | 答案非空、条目是未决的 decision | `via: "card"`，`options`（选项个数） |
@@ -55,7 +55,7 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 | `agent_merge` | 同上 | 有这样的占位（agent 的 `gh pr merge` 或本地合并过了合并闸） | `agent: true`（不算人介入，用来核对） |
 | `manual_trigger` | `register.ts` 的 `handle()`（`meteredIpcResult`） | IPC 通道在 `MANUAL_TRIGGERS` 里（下面的表）；调用成功、而且真做了事才记（唤醒的结果不是 `woken`、返回 `{ok: false}` 的不算） | `channel` |
 
-`MANUAL_TRIGGERS`（控制面板上推动工作的操作）：`tickets:setStatus`、`tickets:switchBranch`、`tickets:recheckCleanup`、`sessions:open`、`sessions:openFix`、`sessions:refresh`、`sessions:wake`、`sessions:switchModel`、`sessions:closeIdle`、`activity:dismiss`、`pty:kill`、`handoffs:run`、`features:summaryRun`、`features:openSession`、`epics:openSession`、`butler:openSession`、`jobs:runNightly`、`ci:resend`、`followups:setStatus`、`lessons:run`、`availability:act`。
+`MANUAL_TRIGGERS`（控制面板上推动工作的操作）：`tickets:setStatus`、`tickets:switchBranch`、`tickets:recheckCleanup`、`sessions:open`、`sessions:openFix`、`sessions:refresh`、`sessions:wake`、`sessions:switchModel`、`sessions:closeIdle`、`activity:dismiss`、`pty:kill`、`handoffs:run`、`features:summaryRun`、`features:openSession`、`epics:openSession`、`shipherd:openSession`、`jobs:runNightly`、`ci:resend`、`followups:setStatus`、`lessons:run`、`availability:act`。
 
 `inbox:answer`、`inbox:dismiss` 在 `COUNTED_ELSEWHERE` 里：它们已经记成 `needs_you_answer`，不再算一次手动触发（不重复计数）。`sessions:dismissLimit`（关掉撞限提示）是整理，不算。手动触发能看出对象的带上：`sessions:refresh` / `sessions:wake` / `sessions:switchModel` / `activity:dismiss` / `pty:kill` 的第一个参数是 session，`tickets:setStatus` / `tickets:recheckCleanup` / `handoffs:run` 的是 ticket，`sessions:open` 读请求里的 `ticketKey`（`recordInvoke`）。
 
@@ -63,13 +63,13 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 
 "需要你"的终端回答不重复记：用户在终端里回答，是一次 `terminal_input`（`answered` 标上它答的是什么），不再另记 `needs_you_answer`。
 
-**接线（index.ts）。** `Metrics` 和 `MetricsRepo` 在 `UsageRepo` 旁边建，同时 `ensureMetricsSince`（内部设置 `metricsSince`，第一次启动时写成当时）。`TerminalInputMeter.promptSubmitted` 在 `pty.markSubmitted` 之前调；"Butler 在递"= `pty.autoInputInFlight(term) || refresher.isRefreshing(head)`。`register.ts` 新加两个可选依赖：`terminalKeys(termId, data)`（`pty:write` 里）和 `onInvoked(channel, args)`（`handle()` 包装里，调用成功之后，出错吞掉）。
+**接线（index.ts）。** `Metrics` 和 `MetricsRepo` 在 `UsageRepo` 旁边建，同时 `ensureMetricsSince`（内部设置 `metricsSince`，第一次启动时写成当时）。`TerminalInputMeter.promptSubmitted` 在 `pty.markSubmitted` 之前调；"Shipherd 在递"= `pty.autoInputInFlight(term) || refresher.isRefreshing(head)`。`register.ts` 新加两个可选依赖：`terminalKeys(termId, data)`（`pty:write` 里）和 `onInvoked(channel, args)`（`handle()` 包装里，调用成功之后，出错吞掉）。
 
 ## 3. 等人时间
 
 新表 `metrics_wait_spans`：`id, session_id, ticket_key, kind ('human'|'idle'), category, source, started_at, ended_at, last_seen_at`。
 
-`WaitTracker.sync()` 在这些时候调：每次活动变化（index.ts 的 activity notify，和 needs-you 的 update 同一处）、needs-you 判断出需要你、来了一条 ask_user（分类出来后再调一次）、用户在终端里按下对话框的键之前（权限确认常常在下一次活动 tick 之前就答掉了；按完 1.5 秒后再调一次关段），以及每 30 秒一次（`TOUCH_MS`，状态没变也要更新 `last_seen_at`）。它对每个开着终端的 Butler head（复盘分析 session 除外）算出此刻的状态：
+`WaitTracker.sync()` 在这些时候调：每次活动变化（index.ts 的 activity notify，和 needs-you 的 update 同一处）、needs-you 判断出需要你、来了一条 ask_user（分类出来后再调一次）、用户在终端里按下对话框的键之前（权限确认常常在下一次活动 tick 之前就答掉了；按完 1.5 秒后再调一次关段），以及每 30 秒一次（`TOUCH_MS`，状态没变也要更新 `last_seen_at`）。它对每个开着终端的 Shipherd head（复盘分析 session 除外）算出此刻的状态：
 
 - **在等人（human）**，按优先级：
   1. 终端停在权限确认上 → `category: permission`，`source: permission_prompt`
@@ -79,7 +79,7 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 - **空闲（idle）**：停着等输入，但不在等人。
 - **不算**：在干活（有没答的 ask_user 也不算，比如总控挂着待办接着干活）、休眠、终端关了。
 
-状态变了就关掉旧段（`ended_at = now`）、开新段；没变就更新 `last_seen_at`。启动时没关的段按 `last_seen_at` 关（Butler 退出期间不算）。电脑睡眠也不算：`powerMonitor` 的 suspend 关掉所有段；两次 sync 隔了 90 秒以上（`GAP_MS`，睡眠没收到 suspend、主进程卡住）的段在最后看到的时间关掉，醒来那次 sync 重新开。「效果」页上的"等人时间"只算 `human`；`idle` 另列，供参考。
+状态变了就关掉旧段（`ended_at = now`）、开新段；没变就更新 `last_seen_at`。启动时没关的段按 `last_seen_at` 关（Shipherd 退出期间不算）。电脑睡眠也不算：`powerMonitor` 的 suspend 关掉所有段；两次 sync 隔了 90 秒以上（`GAP_MS`，睡眠没收到 suspend、主进程卡住）的段在最后看到的时间关掉，醒来那次 sync 重新开。「效果」页上的"等人时间"只算 `human`；`idle` 另列，供参考。
 
 ## 4. 打断原因（7.4 的统计部分）
 
@@ -101,10 +101,10 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 
 ## 5. 汇总：`metrics_daily`
 
-长表：`day TEXT（本地日期 YYYY-MM-DD）, group_kind TEXT, group_key TEXT, butler INTEGER, metric TEXT, n INTEGER, total REAL`，主键是前五列。
+长表：`day TEXT（本地日期 YYYY-MM-DD）, group_kind TEXT, group_key TEXT, shipherd INTEGER, metric TEXT, n INTEGER, total REAL`，主键是前五列。
 
 - `group_kind`：`all`（`group_key = ''`）/ `repo`（slug）/ `product`（C 的 `lesson_products.name`，一个仓库属于几个产品就各算一行）/ `risk`（G 的等级，或者 `unrated`）。
-- `butler`：PR 类指标是"这个 PR 是不是 Butler 做的"（第 6 节）；事件类指标是"事件所在的 session 是不是 Butler 开的"（`origin = 'butler'`）。
+- `shipherd`：PR 类指标是"这个 PR 是不是 Shipherd 做的"（第 6 节）；事件类指标是"事件所在的 session 是不是 Shipherd 开的"（`origin = 'shipherd'`）。
 - 每个指标一行，`n` 是样本数，`total` 是总和，平均 = total / n。
 
 | metric | 归到哪天 | n | total |
@@ -117,28 +117,28 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 | `wait_human_ms` | 合并日 | 1 | 归到这个 PR 的等人时间 |
 | `cost_weighted` / `cost_usd` | 合并日 | 1 | 归到这个 PR 的花费；`cost_usd_partial` 记有没算出价格的行 |
 | `cost_model:<model>` / `cost_task:<task>` | 合并日 | 1 | 归到这个 PR 的加权 token（`all` 组） |
-| `spend_model:<model>` / `spend_task:<task>` | 用量那天 | 行数 | 全部用量的加权 token（`all` 组），不分给 PR：后台的 headless 任务（handoff、需要你判断、打断分类、复盘）没有 session，只在这里看得到；没有 session 的算 Butler 的 |
+| `spend_model:<model>` / `spend_task:<task>` | 用量那天 | 行数 | 全部用量的加权 token（`all` 组），不分给 PR：后台的 headless 任务（handoff、需要你判断、打断分类、复盘）没有 session，只在这里看得到；没有 session 的算 Shipherd 的 |
 | `ci_failures` / `reopens` / `reverts` | 合并日 | 1 | 次数 |
 | `ticket_done` / `ticket_cost_weighted` / `ticket_cost_usd` | ticket 最后一个 PR 合并那天 | 1 | 整个 ticket 的花费 |
 | `event:<kind>` | 事件那天 | 次数 | 次数 |
 | `interrupt:<category>` | 事件那天 | 次数 | 次数 |
 | `wait_human:<category>` / `wait_idle` | 段开始那天 | 段数 | 毫秒 |
 
-**Butler 的还是别的**：有 session 的按 session 的 `origin`；没有 session 的事件（`manual_merge`、按 ticket 的手动触发）按 PR 的 `butler_made`，没有 PR 的看 ticket 有没有 Butler 的 session。
+**Shipherd 的还是别的**：有 session 的按 session 的 `origin`；没有 session 的事件（`manual_merge`、按 ticket 的手动触发）按 PR 的 `shipherd_made`，没有 PR 的看 ticket 有没有 Shipherd 的 session。
 
 **归到 PR**：session 的 `git_branch` 等于 PR 的 head 分支，这个 session 的花费、介入、等待都归这个 PR；ticket 里别的 session 的平均分给这个 ticket 的 PR。只算 PR 合并之前发生的。
 
 **重算**：`MetricsRollup.run()` 在一个事务里删掉窗口内（最近 400 天，从那天的本地零点算）的行，再从源表全部重算，窗口之前的行删掉——幂等，不怕重复跑、不怕源表晚到。启动后一分钟跑一次，之后每小时一次；界面打开「效果」页、控制工具查询时如果上次超过 10 分钟也跑一次。
 
-## 6. Butler 做的 PR
+## 6. Shipherd 做的 PR
 
-`ticket_prs` 加一列 `butler_made INTEGER`（null = 还没判断），rollup 时写。满足任一就是 1：
+`ticket_prs` 加一列 `shipherd_made INTEGER`（null = 还没判断），rollup 时写。满足任一就是 1：
 
-- `branch_owners` 里这个 (ticket, 仓库, head 分支) 的推送者是 Butler 开的 session；
-- 来源是 `merge_gate`，占位的 session 是 Butler 开的；
-- 这个 ticket 有 Butler 开的 session，`git_branch` 是这个 PR 的 head 分支。
+- `branch_owners` 里这个 (ticket, 仓库, head 分支) 的推送者是 Shipherd 开的 session；
+- 来源是 `merge_gate`，占位的 session 是 Shipherd 开的；
+- 这个 ticket 有 Shipherd 开的 session，`git_branch` 是这个 PR 的 head 分支。
 
-其余（链接到 ticket、但不是 Butler session 推的 PR）是 0，单独算一组，「效果」页上是"其他 PR"。
+其余（链接到 ticket、但不是 Shipherd session 推的 PR）是 0，单独算一组，「效果」页上是"其他 PR"。
 
 ## 7. 返工
 
@@ -149,7 +149,7 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 ## 8. 基线
 
 - `metricsSince`（内部设置，不可编辑，和 `skillTrackingSince` 一样）：第一次跑到这个版本的时间。
-- **基线截止点** = 最早的 Butler session 的创建时间（没有就用 `metricsSince`）：基线是"Butler 之前"。
+- **基线截止点** = 最早的 Shipherd session 的创建时间（没有就用 `metricsSince`）：基线是"Shipherd 之前"。
 - `MetricsGhJob`（`JOB_METRICS_GH`，每天一次，和 PR 回填一样同时最多 2 个 gh）对每个已知仓库（ticket 仓库和复盘仓库的 slug）只读地 `gh pr list --author @me --state merged --search "merged:<截止日"`，最多取截止点前 180 天、每个仓库 100 个，跳过 `ticket_prs` 里已有的；每个 PR 再 `gh pr view` 读开 PR 时间、合并时间、第一个 commit 的时间、评论和 review（按 `reviewerKind` 分 human / copilot）。写进 `metrics_baseline_prs`，已有的不重读。
 - 基线只有周期和评论（花费、人介入那时没记），界面上显示"—"。基线的"ticket 开始 → 合并"用第一个 commit 的时间近似，页面上注明。
 
@@ -157,17 +157,17 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 
 侧栏新加一项「效果」（Effect），在「进度」下面。和 B 的进度页分开。
 
-- **顶部四张卡**：最近 30 天 Butler PR 的平均周期（开 PR → 合并；下面小字 ticket 开始 → 合并）、平均评论数（人 / Copilot / 可避免）、平均人介入次数、平均花费（加权 token，有价格时带美元）。每张卡和基线比：差多少、百分比。
+- **顶部四张卡**：最近 30 天 Shipherd PR 的平均周期（开 PR → 合并；下面小字 ticket 开始 → 合并）、平均评论数（人 / Copilot / 可避免）、平均人介入次数、平均花费（加权 token，有价格时带美元）。每张卡和基线比：差多少、百分比。
 - **趋势**：按周（最近 12 周）/ 按月（最近 12 个月）切换，周期、评论、介入、花费四条折线（SVG，没有新依赖）。
 - **打断原因**：五类各占多少次、占多少等人时间（横向条），加上自动放行的（J 记了才有）。
 - **人介入构成**：按 kind / mode 的次数。
-- **分组**：Butler PR / 其他 PR；按仓库、按产品、按风险等级（"未分级"）的表。
+- **分组**：Shipherd PR / 其他 PR；按仓库、按产品、按风险等级（"未分级"）的表。
 - **花费构成**：按模型、按任务类型。
 - **返工**：CI 失败、重开、revert 的次数和每 PR 平均。
 
 ## 10. 控制工具 `metrics_overview`
 
-只读，参数 `days`（默认 30，1–365）。返回和「效果」页同一份 `MetricsOverview`（JSON），总控能回答"过去 30 天 Butler PR 平均周期、评论、介入、成本，和 Butler 之前比"。接线和 `progress_overview` 一样（`control.ts`、`butler-control.ts`、`sessions-server.ts`、`mcp-config.ts` 的只读列表、session guide）。
+只读，参数 `days`（默认 30，1–365）。返回和「效果」页同一份 `MetricsOverview`（JSON），总控能回答"过去 30 天 Shipherd PR 平均周期、评论、介入、成本，和 Shipherd 之前比"。接线和 `progress_overview` 一样（`control.ts`、`shipherd-control.ts`、`sessions-server.ts`、`mcp-config.ts` 的只读列表、session guide）。
 
 ## 11. 跨平台
 
@@ -178,15 +178,15 @@ export type RecordEvent = (kind: string, refs?: MetricRefs) => boolean;
 ## 12. 测试
 
 - `metrics/events.test.ts`：recordEvent 写库、dedupe、坏 kind、写库失败不抛错。
-- `metrics/interventions.test.ts`：每一个采集点各一条（prompt / Butler 递的不算 / dialog / interrupt / 2 秒去重 / 卡片回答 / 不用了 / manual_merge / agent_merge / 占位未释放先不判断 / manual_trigger），外加"每个 IPC 通道都归类了"。
+- `metrics/interventions.test.ts`：每一个采集点各一条（prompt / Shipherd 递的不算 / dialog / interrupt / 2 秒去重 / 卡片回答 / 不用了 / manual_merge / agent_merge / 占位未释放先不判断 / manual_trigger），外加"每个 IPC 通道都归类了"。
 - `metrics/wait-tracker.test.ts`：human / idle / 休眠不算 / 启动时补关 / 类别优先级。
 - `metrics/interrupts.test.ts`：五类各自的来源、ask_user 选项、模型失败退回 question、有 ask_user 时 needs-you 不另记。
-- `metrics/rollup.test.ts`、`metrics/pr-metrics.test.ts`：周期、评论、花费分摊、返工、Butler 标记、分组（风险表不存在 / 存在）。
+- `metrics/rollup.test.ts`、`metrics/pr-metrics.test.ts`：周期、评论、花费分摊、返工、Shipherd 标记、分组（风险表不存在 / 存在）。
 - `metrics/baseline.test.ts`：gh 输出解析、截止点、跳过 ticket PR、revert 匹配。
 - `metrics/overview.test.ts`：30 天 vs 基线、周 / 月趋势、打断占比。
 - e2e `effect.spec.ts`：打开「效果」页，看到四张卡和打断原因一块。
 
 ## 13. 拆 PR
 
-1. `recordEvent` + 表 + 人介入采集 + 等人时间 + 打断原因 + Butler 标记 + rollup（先合，别的 workstream 能接）。
+1. `recordEvent` + 表 + 人介入采集 + 等人时间 + 打断原因 + Shipherd 标记 + rollup（先合，别的 workstream 能接）。
 2. 返工（revert、重开，都在 `MetricsGhJob` 里读 gh）、基线回填、`metrics_overview`、「效果」页、e2e。

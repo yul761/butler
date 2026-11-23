@@ -45,14 +45,14 @@ describe("MetricsRepo", () => {
   it("replaces the daily rollup from a day on", () => {
     const r = new MetricsRepo(memDb());
     r.replaceDaily("2026-01-01", [
-      { day: "2026-01-01", groupKind: "all", groupKey: "", butler: true, metric: "pr_merged", n: 1, total: 1 },
-      { day: "2026-01-02", groupKind: "repo", groupKey: "o/r", butler: false, metric: "cycle_open_ms", n: 1, total: 10 },
+      { day: "2026-01-01", groupKind: "all", groupKey: "", shipherd: true, metric: "pr_merged", n: 1, total: 1 },
+      { day: "2026-01-02", groupKind: "repo", groupKey: "o/r", shipherd: false, metric: "cycle_open_ms", n: 1, total: 10 },
     ]);
-    r.replaceDaily("2026-01-02", [{ day: "2026-01-02", groupKind: "all", groupKey: "", butler: true, metric: "pr_merged", n: 2, total: 2 }]);
+    r.replaceDaily("2026-01-02", [{ day: "2026-01-02", groupKind: "all", groupKey: "", shipherd: true, metric: "pr_merged", n: 2, total: 2 }]);
     const rows = r.daily("2026-01-01");
     expect(rows).toHaveLength(2);
     expect(rows.map((x) => x.metric)).toEqual(["pr_merged", "pr_merged"]);
-    expect(rows[1]).toMatchObject({ day: "2026-01-02", butler: true, n: 2 });
+    expect(rows[1]).toMatchObject({ day: "2026-01-02", shipherd: true, n: 2 });
   });
 
   it("stores baseline PRs", () => {

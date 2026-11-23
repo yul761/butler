@@ -44,7 +44,7 @@ function DiagExport() {
   );
 }
 
-/** 设置 › 健康检查：claude、hook、/handoff 命令、Butler 的目录、gh、用量，和安装或卸载 hook。 */
+/** 设置 › 健康检查：claude、hook、/handoff 命令、Shipherd 的目录、gh、用量，和安装或卸载 hook。 */
 export function HealthSettings({
   report, busy, error, onRecheck, onInstall, onUninstall, scrollToAvailability,
 }: {
@@ -70,7 +70,7 @@ export function HealthSettings({
         {report.claudeLogin === "missing" && (<><dt /><dd className="error" data-testid="health-claude-login">{S.wizardClaudeLoginMissing}</dd></>)}
         <dt>{S.hooks}</dt><dd className={report.hooks === "installed" ? "ok" : "error"}>{S.hookStatus[report.hooks]}</dd>
         <dt>{S.handoffCommand}</dt><dd className={report.handoffCommand === "installed" ? "ok" : "error"}>{S.handoffCommandStatus[report.handoffCommand]}</dd>
-        <dt>{S.butlerHome}</dt><dd>{report.butlerHome}</dd>
+        <dt>{S.shipherdHome}</dt><dd>{report.shipherdHome}</dd>
         <dt>{S.claudeSettings}</dt><dd>{report.claudeSettingsPath}</dd>
         <dt>{S.set.health.gh}</dt>
         <dd className={report.gh === "ok" ? "ok" : "error"} data-testid="health-gh">{report.gh === "ok" ? S.set.health.ghOk : report.gh === "logged_out" ? S.set.health.ghLoggedOut : S.set.health.ghMissing}</dd>

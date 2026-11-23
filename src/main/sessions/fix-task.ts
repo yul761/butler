@@ -21,19 +21,19 @@ const REASON_LIMIT = 500;
 
 function zhCoordinatorRule(i: FixTaskInput): string {
   if (i.coordinatorName) return `解决后用 SendMessage 告诉总控 session ${i.coordinatorName} 问题已解决。`;
-  if (i.coordinatorDir) return `解决后告诉总控 session 问题已解决。Butler 查不到它的名字：用 ListAgents 按目录 ${i.coordinatorDir} 找到它，再用 SendMessage 告诉它。`;
+  if (i.coordinatorDir) return `解决后告诉总控 session 问题已解决。Shipherd 查不到它的名字：用 ListAgents 按目录 ${i.coordinatorDir} 找到它，再用 SendMessage 告诉它。`;
   return "现在没有运行中的总控 session，跳过这一步。";
 }
 
 function enCoordinatorRule(i: FixTaskInput): string {
   if (i.coordinatorName) return `When it is solved, use SendMessage to tell the coordinator session ${i.coordinatorName} that the problem is solved.`;
-  if (i.coordinatorDir) return `When it is solved, tell the coordinator session that the problem is solved. Butler could not find its name: use ListAgents to find it by its directory, ${i.coordinatorDir}, then tell it with SendMessage.`;
+  if (i.coordinatorDir) return `When it is solved, tell the coordinator session that the problem is solved. Shipherd could not find its name: use ListAgents to find it by its directory, ${i.coordinatorDir}, then tell it with SendMessage.`;
   return "No coordinator session is running, so skip this step.";
 }
 
 function zhMessage(i: FixTaskInput): string {
-  const findIt = i.sessionName ? "" : " Butler 查不到原 session 的名字：用 ListAgents 按下面的目录找到它。";
-  return `Butler 开了这个 session 来解决一个卡住的 session。
+  const findIt = i.sessionName ? "" : " Shipherd 查不到原 session 的名字：用 ListAgents 按下面的目录找到它。";
+  return `Shipherd 开了这个 session 来解决一个卡住的 session。
 
 规则：
 1. 目标是让卡住的 session 能继续，不接手那个 ticket 的工作。
@@ -53,8 +53,8 @@ ${i.lastOutput.join("\n") || "（没有输出）"}`;
 }
 
 function enMessage(i: FixTaskInput): string {
-  const findIt = i.sessionName ? "" : " Butler could not find its name: use ListAgents to find it by the directory below.";
-  return `Butler opened this session to resolve a stuck session.
+  const findIt = i.sessionName ? "" : " Shipherd could not find its name: use ListAgents to find it by the directory below.";
+  return `Shipherd opened this session to resolve a stuck session.
 
 Rules:
 1. The goal is to get the stuck session moving again. Do not take over the ticket's work.

@@ -212,8 +212,8 @@ describe("ControlSplit fold button (BTL-241)", () => {
     expect(STRINGS.en.lay.ctlCollapse).toBe("Collapse the conversation column");
     expect(STRINGS.en.lay.ctlExpand).toBe("Expand the conversation column");
   });
-  it("the butler page split grows to the window bottom", () => {
+  it("the shipherd page split grows to the window bottom", () => {
     const css = readFileSync(join(__dirname, "..", "styles.css"), "utf8");
-    expect(css).toMatch(/\.butler-page \.control-split\s*\{\s*flex:\s*1 1 auto/);
+    expect(css).toMatch(/\.shipherd-page \.control-split\s*\{\s*flex:\s*1 1 auto/);
   });
 });

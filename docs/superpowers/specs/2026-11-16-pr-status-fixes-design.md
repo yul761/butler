@@ -8,7 +8,7 @@ The user saw two things in the app:
 
 They asked for an overall self-audit of PR status and PR progress, and for **every problem found to be fixed, however small**, followed by a release.
 
-Two read-only audits ran against the code and the user's real DB (`~/.butler/app.db`): one on capture (C), one on derivation and display (D). The previously deferred review-lessons follow-ups (L) are in scope too.
+Two read-only audits ran against the code and the user's real DB (`~/.shipherd/app.db`): one on capture (C), one on derivation and display (D). The previously deferred review-lessons follow-ups (L) are in scope too.
 
 Note: the user's installed app is still 1.9.0 (DB `user_version` 20), not 2.0.0.
 
@@ -147,7 +147,7 @@ Decisions:
 
 ## Out of scope
 
-Non-Butler terminals; exporting lessons to repos (decided earlier: lessons stay in Butler).
+Non-Shipherd terminals; exporting lessons to repos (decided earlier: lessons stay in Shipherd).
 
 ## Verification
 

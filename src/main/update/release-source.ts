@@ -1,11 +1,11 @@
-// 经用户自己的 gh 查 Butler 的最新 release（BTL-253）。Butler 自己不发 HTTP 请求（Ruling P5-R4）：
-// 就是 `gh api repos/<BUTLER_REPO>/releases/latest`，跑法和别的 gh 调用一样（tickets/gh.ts 的 runGhDetail）。
+// 经用户自己的 gh 查 Shipherd 的最新 release（BTL-253）。Shipherd 自己不发 HTTP 请求（Ruling P5-R4）：
+// 就是 `gh api repos/<SHIPHERD_REPO>/releases/latest`，跑法和别的 gh 调用一样（tickets/gh.ts 的 runGhDetail）。
 import { homedir } from "node:os";
-import { BUTLER_REPO } from "../../shared/butler-repo";
+import { SHIPHERD_REPO } from "../../shared/shipherd-repo";
 import { displayVersion, RELEASE_NOTES_LIMIT, type ReleaseInfo, type UpdateFailReason } from "../../shared/update";
 import { runGhDetail } from "../tickets/gh";
 
-export const RELEASE_API_PATH = `repos/${BUTLER_REPO}/releases/latest`;
+export const RELEASE_API_PATH = `repos/${SHIPHERD_REPO}/releases/latest`;
 export const RELEASE_TIMEOUT_MS = 20_000;
 
 /** 跑一次 gh：成功时 stdout 不为 null；spawnError 是启动失败的代码（ENOENT：没有 gh）；timedOut：超时被杀掉。 */

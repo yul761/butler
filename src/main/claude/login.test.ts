@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { claudeLoginState } from "./login";
 
 function dirs() {
-  const dir = mkdtempSync(join(tmpdir(), "butler-login-"));
+  const dir = mkdtempSync(join(tmpdir(), "shipherd-login-"));
   return { claudeJson: join(dir, ".claude.json"), claudeConfigDir: dir, claudeSettings: join(dir, "settings.json"), env: {} as NodeJS.ProcessEnv };
 }
 

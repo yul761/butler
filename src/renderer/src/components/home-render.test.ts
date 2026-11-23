@@ -34,7 +34,7 @@ describe("Sidebar", () => {
 
   it("lists the entries in order and drops the old ones", () => {
     const html = render(null);
-    const order = [S.home, S.allWork, "Feature 11", "BTL-11", "Feature 12", "BTL-12", "BTL-9", S.butlerNav, S.selfGroup, S.lessons, S.effectNav, S.audit, S.settings, S.keepAwake];
+    const order = [S.home, S.allWork, "Feature 11", "BTL-11", "Feature 12", "BTL-12", "BTL-9", S.shipherdNav, S.selfGroup, S.lessons, S.effectNav, S.audit, S.settings, S.keepAwake];
     let at = -1;
     for (const s of order) {
       const i = html.indexOf(s, at + 1);
@@ -89,7 +89,7 @@ describe("Notice (moved out of the Now page)", () => {
 
 describe("HomeMore (the old Now page's run-status blocks)", () => {
   const view = (o: Partial<NowView> = {}): NowView => ({
-    notices: [], features: [], butler: null, running: 0, memory: [], merges: [], ...o,
+    notices: [], features: [], shipherd: null, running: 0, memory: [], merges: [], ...o,
   });
   const render = (v: NowView) => renderToStaticMarkup(createElement(HomeMore, { view: v, onOpen: () => {}, onOpenTicket: () => {}, liveTickets: new Set<string>(), onGo: () => {} }));
 
@@ -103,7 +103,7 @@ describe("HomeMore (the old Now page's run-status blocks)", () => {
     expect(html).toContain('data-testid="now-intake"');
   });
 
-  it("lists Butler's tell-you-only notices; the ones that need you are cards, not here", () => {
+  it("lists Shipherd's tell-you-only notices; the ones that need you are cards, not here", () => {
     const html = render(view({ notices: [
       { kind: "check_promoted", eventId: 3, batchId: null, names: ["lint"], at: 1 },
       { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: null } as NowNotice,
@@ -136,7 +136,7 @@ describe("AllWorkBody", () => {
   it("has the create buttons, the two entries and the four columns", () => {
     const html = render({ board: board([scope("feature", 1, { youCount: 2 }), scope("feature", 2), scope("ticket", "BTL-9", { total: 1, merged: 0 })]) });
     for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, S.archived]) expect(html).toContain(t);
-    // 「显示 Butler 之外开的 session」默认关：没有未认领入口（BTL-244）。
+    // 「显示 Shipherd 之外开的 session」默认关：没有未认领入口（BTL-244）。
     expect(html).not.toContain(S.hm.all.unclaimedBtn(0));
     expect(render({ showUnclaimed: true, unclaimedCount: 3 })).toContain(S.hm.all.unclaimedBtn(3));
     // 只有两个新建按钮（ticket、feature）和「已归档」入口（BTL-246 去掉了新建 epic）。
@@ -284,10 +284,10 @@ describe("TurnCard", () => {
     expect(render(item({ ...silent, action: null }))).not.toContain("stuck-action");
   });
 
-  it("a Butler card renders the notice with its own buttons", () => {
-    const html = render(item({ owner: "you", kind: "butler", notice: { kind: "lessons_paused" } }, { ticketKey: null, featureId: null }));
+  it("a Shipherd card renders the notice with its own buttons", () => {
+    const html = render(item({ owner: "you", kind: "shipherd", notice: { kind: "lessons_paused" } }, { ticketKey: null, featureId: null }));
     expect(html).toContain('data-testid="now-notice-lessons_paused"');
-    expect(html).toContain(S.hm.kind.butler);
+    expect(html).toContain(S.hm.kind.shipherd);
     expect(html).not.toContain(S.hm.act.look);
   });
 
@@ -309,7 +309,7 @@ describe("HomeBody", () => {
   });
   const counts = { you: 0, agent: 2, external: 1, mergedToday: 3 };
   const board = (items: TurnItem[], scopes: ScopeTurnRow[] = [scope(1, { youCount: 2 })]): TurnBoard => ({ items, counts, scopes, generatedAt: 1 });
-  const nowView: NowView = { notices: [], features: [], butler: null, running: 0, memory: [], merges: [], mem: { lines: [], updatedAt: 1 } as unknown as NowView["mem"] };
+  const nowView: NowView = { notices: [], features: [], shipherd: null, running: 0, memory: [], merges: [], mem: { lines: [], updatedAt: 1 } as unknown as NowView["mem"] };
   const render = (o: Partial<HomeBodyProps> = {}) => renderToStaticMarkup(createElement(HomeBody, {
     board: null, error: null, noWork: false, firstRun: createElement("div", { "data-testid": "first-run" }), ctx, now: 10_000, nowView,
     liveTickets: new Set<string>(), onRetry: () => {}, onFix: () => {}, onOpen: () => {}, onGo: () => {}, onOpenTicket: () => {}, onChanged: () => {}, onResumeSetup: () => {}, ...o,

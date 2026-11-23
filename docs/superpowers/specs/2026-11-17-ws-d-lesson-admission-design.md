@@ -1,6 +1,6 @@
 # Workstream D: lesson quality and automatic admission (design addendum)
 
-Date: 2026-11-17. Master design: `2026-11-17-butler-3-design.md` (uses contracts 4.1, 4.2, 4.3, 4.4, 4.5). Base: `main` after workstreams C (lessons foundation), A (model routing) and E1 (checks engine).
+Date: 2026-11-17. Master design: `2026-11-17-shipherd-3-design.md` (uses contracts 4.1, 4.2, 4.3, 4.4, 4.5). Base: `main` after workstreams C (lessons foundation), A (model routing) and E1 (checks engine).
 
 Scope: richer extraction (scope, strength, checkability) and a backfill for existing lessons; admission gates 1 to 4 (dedupe and merge, conflicts, generality, checkability); per-lesson scoring (evidence, clarity, consistency) and batch scoring (sample-review pass rate, shelved-reason shares); the admission policy keys for those; initialization wizard stages 2 and 4 with its state machine, resume and retries; the calibration page and calibration samples; principles with cases (source plan part 1 item 5); the core session guide (part 1 item 6). Out of scope, with interfaces left in place: the repo scan and wizard stage 1 (E2), backtests, verifiability and post-launch scores, batch coverage and overall backtest, shadow promotion (F), pre-review itself (G).
 
@@ -220,7 +220,7 @@ The policy keys travel with the `policies` section unchanged. Principles are der
 
 ### 14.1 Fixes from the pre-PR review
 
-- **A pass never overwrites what the user did meanwhile.** The plan batch skips a row that is no longer a candidate, was merged, or whose `updated_at` is after the pass started. Judge passes of one service are serialised. A pass whose caller is no longer interested (`live()` false: the wizard run was cancelled or accepted, or Butler is quitting) writes no plan and runs no review.
+- **A pass never overwrites what the user did meanwhile.** The plan batch skips a row that is no longer a candidate, was merged, or whose `updated_at` is after the pass started. Judge passes of one service are serialised. A pass whose caller is no longer interested (`live()` false: the wizard run was cancelled or accepted, or Shipherd is quitting) writes no plan and runs no review.
 - **Re-judging after a category change** leaves a lesson shelved as `duplicate` or `conflict` alone: those verdicts depend on other lessons, and re-judging one lesson cannot see them.
 - **Groups larger than `dedupe.maxGroup`** are split by packing the duplicate edges (`packPairs`), so every candidate pair is still asked exactly once and an oversized group does not re-ask the model on every pass.
 - **Time alone is not a change:** a score, or a score part, that moved by less than 0.01 does not make a new plan row (evidence decays daily, and its reason text changes with it).

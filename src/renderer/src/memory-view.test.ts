@@ -7,7 +7,7 @@ const item = (text: string, group = "Notes", factId: string | null = "id"): Memo
 const entry = (over: Partial<WhyEntry>): WhyEntry => ({ id: "x", content: "", addedAt: "2026-10-21T01:00:00.000Z", supersededBy: null, retiredAt: null, retiredReason: null, ...over });
 
 describe("memory view helpers", () => {
-  it("splits Butler's decisions and followups from other notes and strips the prefix", () => {
+  it("splits Shipherd's decisions and followups from other notes and strips the prefix", () => {
     const sections = memorySections([
       item("[decision:db] 用 MySQL"),
       item("[followup:f_1#2 abcd efgh ijkl] 改配置"),

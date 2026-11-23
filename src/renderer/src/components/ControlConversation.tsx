@@ -27,7 +27,7 @@ function ReportsOnly({ scope, footer }: { scope: InboxScope; footer?: ReactNode 
 export function ControlConversation(p: { scope: InboxScope; rootSessionId: string | null; sessions: { id: string; label: string }[]; footer?: ReactNode }) {
   const root = p.rootSessionId ?? p.sessions[0]?.id ?? null;
   if (root === null) return <ReportsOnly scope={p.scope} footer={p.footer} />;
-  // footer（ButlerReplies）放进对话 tab，在输入框上面。
+  // footer（ShipherdReplies）放进对话 tab，在输入框上面。
   return (
     <div className="control-feed">
       <ConversationTab rootSessionId={root} sessions={p.sessions} reportScope={p.scope} footer={p.footer} canRemember={canRememberIn(p.scope)} />

@@ -174,12 +174,12 @@ const WRITE_VERBS = new Set([
 ]);
 const MCP_NAME = /^mcp__([A-Za-z0-9_-]+?)__([A-Za-z0-9_-]+)$/;
 
-/** 只读的 MCP 工具：给它的名字（就是规则本身）；不是返回 null。Butler 自己的 server 不收（已经单独放行）。 */
+/** 只读的 MCP 工具：给它的名字（就是规则本身）；不是返回 null。Shipherd 自己的 server 不收（已经单独放行）。 */
 export function ruleForTool(name: string): string | null {
   const m = MCP_NAME.exec(name);
   if (!m) return null;
   const [, server, tool] = m;
-  if (server!.toLowerCase().startsWith("butler") || tool!.includes("__")) return null;
+  if (server!.toLowerCase().startsWith("shipherd") || tool!.includes("__")) return null;
   const words = tool!.split(/[_-]|(?=[A-Z])/).filter(Boolean).map((w) => w.toLowerCase());
   if (words.length === 0 || !READ_VERBS.has(words[0]!) || words.some((w) => WRITE_VERBS.has(w))) return null;
   return name;

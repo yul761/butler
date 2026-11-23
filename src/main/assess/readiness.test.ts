@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultPrPolicy, expandPrPolicy, PR_POLICY_DEFAULTS } from "../../shared/pr-policy";
-import { checkDescription, computeReadiness, stripButlerBlocks, type ReadinessInput } from "./readiness";
+import { checkDescription, computeReadiness, stripShipherdBlocks, type ReadinessInput } from "./readiness";
 
 const P = defaultPrPolicy().readiness;
 const DESC = "## What\nChanges the retry loop.\n\n## Why\nThe old loop never backed off.\n\n## How verified\nUnit tests added and pnpm test passes.";
@@ -62,11 +62,11 @@ describe("computeReadiness", () => {
     }
   });
 
-  it("description: Butler blocks are ignored; length and three keyword groups", () => {
-    expect(stripButlerBlocks(`hi <!-- butler:brief -->\nlots of text\n<!-- /butler:brief --> there`)).toBe("hi  there");
+  it("description: Shipherd blocks are ignored; length and three keyword groups", () => {
+    expect(stripShipherdBlocks(`hi <!-- shipherd:brief -->\nlots of text\n<!-- /shipherd:brief --> there`)).toBe("hi  there");
     expect(checkDescription(DESC, P)).toMatchObject({ ok: true, missing: [] });
     expect(checkDescription(`${"x".repeat(100)} what changed`, P).missing).toEqual(["why", "verify"]);
-    const onlyBlock = `<!-- butler:brief -->\n${DESC}\n<!-- /butler:brief -->`;
+    const onlyBlock = `<!-- shipherd:brief -->\n${DESC}\n<!-- /shipherd:brief -->`;
     expect(state(computeReadiness(base({ description: onlyBlock }), P), "description")).toBe("fail");
     expect(checkDescription("改动：重试逻辑。原因：旧的不退避，导致上游被打满，影响所有调用方的稳定性和延迟表现。验证：加了单元测试并全部通过，手工也复现过。", { ...P, descriptionMinChars: 20 }).ok).toBe(true);
   });

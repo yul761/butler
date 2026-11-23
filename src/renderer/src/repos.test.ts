@@ -6,8 +6,8 @@ const repo = (id: number, path: string, extra: Partial<TicketRepo> = {}): Ticket
   id, ticketKey: "P-1", repoPath: path, workMode: "branch", worktreePath: null, branch: "feature/P-1", createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null, ...extra,
 });
 const session = (extra: Partial<SessionView>): SessionView => ({
-  id: "s", ticketKey: "P-1", cwd: "/x", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, termId: null, rootId: extra.id ?? "s", ...extra,
+  id: "s", ticketKey: "P-1", cwd: "/x", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, termId: null, rootId: extra.id ?? "s", ...extra,
 });
 
 describe("repo labels", () => {

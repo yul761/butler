@@ -109,7 +109,7 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     const db = memDb();
     const sessions = new SessionsRepo(db);
     const repo = new InboxRepo(db);
-    for (const id of ["a", "b", "other"]) sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null });
+    for (const id of ["a", "b", "other"]) sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, lastActivityAt: null });
     sessions.setReplacedBy("a", "b", "clear");
     repo.addDecision({ ...owner("a"), question: "old", options: [], context: null, createdAt: 1 });
     repo.addReport({ ...owner("b"), text: "r", kind: "done", status: "pending", createdAt: 2 });
@@ -126,8 +126,8 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     const repo = new InboxRepo(db);
     tickets.insert({ key: "T-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
     const r1 = tickets.addRepo({ ticketKey: "T-1", repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "fix", ticketKey: "T-1", cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null, repoId: r1, gitBranch: "b" });
-    sessions.insertIfAbsent({ id: "coord", ticketKey: "T-1", cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt: null });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: "T-1", cwd: "/w", origin: "shipherd", createdAt: 1, lastActivityAt: null, repoId: r1, gitBranch: "b" });
+    sessions.insertIfAbsent({ id: "coord", ticketKey: "T-1", cwd: "/w", origin: "shipherd", createdAt: 1, lastActivityAt: null });
     repo.addReport({ ...owner("coord", { ticketKey: "T-1" }), text: "coordinator", kind: "done", status: "pending", createdAt: 3 });
     repo.addReport({ ...owner("fix", { ticketKey: "T-1" }), text: "fixer", kind: "done", status: "pending", createdAt: 2 });
     repo.addReport({ ...owner("gone", { ticketKey: "T-1" }), text: "no session row", kind: "done", status: "dismissed", createdAt: 4 });

@@ -6,9 +6,9 @@ import type { DiagMode, EventLoopDelay, PerfWindow, Timing } from "../../shared/
 
 export type { DiagMode, EventLoopDelay, PerfWindow, Timing };
 
-/** BUTLER_PERF_DIAG：0 / off 关掉；verbose 每个窗口都写一行；其余（默认）开着、闲的窗口不写。 */
+/** SHIPHERD_PERF_DIAG：0 / off 关掉；verbose 每个窗口都写一行；其余（默认）开着、闲的窗口不写。 */
 export function diagMode(env: Record<string, string | undefined>): DiagMode {
-  const v = (env.BUTLER_PERF_DIAG ?? "").trim().toLowerCase();
+  const v = (env.SHIPHERD_PERF_DIAG ?? "").trim().toLowerCase();
   if (v === "0" || v === "off" || v === "false") return "off";
   if (v === "verbose") return "verbose";
   return "on";

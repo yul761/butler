@@ -12,7 +12,7 @@ test("pending lessons are confirmed by filter in one action and the batch is und
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   const now = Date.now();
   db.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run("acme/web", s.repo, now);
   const ins = db.prepare("INSERT INTO lessons (repo_slug, text, why, status, admission, hits, last_seen_at, created_at, updated_at) VALUES ('acme/web', ?, '', ?, ?, 1, ?, ?, ?)");

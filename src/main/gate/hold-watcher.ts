@@ -17,7 +17,7 @@ const PR_GRACE_MS = 30_000;
 const PR_TIMEOUT_MS = 2000;
 const FETCH_TIMEOUT_MS = 2000;
 /**
- * 释放了这么久还没排进信箱的通知就不发了（最终审查 3）。BTL-248 起一释放就排进信箱，只有升级前留下的、或者 Butler
+ * 释放了这么久还没排进信箱的通知就不发了（最终审查 3）。BTL-248 起一释放就排进信箱，只有升级前留下的、或者 Shipherd
  * 关了很久才查到的会碰到。
  */
 export const NOTICE_KEEP_MS = 24 * 60 * 60_000;
@@ -32,7 +32,7 @@ export interface HoldWatcherDeps {
   prInfo: typeof prInfo;
   git: Pick<typeof Git, "isAncestor" | "fetchQuiet" | "upstreamRef">;
   /**
-   * 通知排进等待者的信箱（BTL-248，kind merge，ref `merge:<waiterId>`）。等待者记的是 BUTLER_SESSION（打开终端时的 id），
+   * 通知排进等待者的信箱（BTL-248，kind merge，ref `merge:<waiterId>`）。等待者记的是 SHIPHERD_SESSION（打开终端时的 id），
    * 信箱按 head 链找现在的 session：在忙的下一次调用工具时读到，停着的直接输入，关着的下次打开时读到。
    */
   mailbox: Pick<Mailbox, "send">;
@@ -47,7 +47,7 @@ export interface HoldWatcherDeps {
 /**
  * 占位跟着真正的合并走（设计文档 2026-11-04“占位跟着真正的合并走”“回复和之后的事”）：定期查占位中的合并，
  * 真的合完就释放、告诉等着的 session 可以合了；PR 关了、自动合并取消了就释放，告诉等着的 session 可以再试；查不了的 PR 最多留 2 小时，本地合并、直接 push 最多留 10 分钟。
- * 所有状态都在数据库里，Butler 重启后照样接上。
+ * 所有状态都在数据库里，Shipherd 重启后照样接上。
  */
 export class HoldWatcher {
   private running: Promise<void> | null = null;
@@ -77,7 +77,7 @@ export class HoldWatcher {
     this.stop();
     this.timer = setInterval(() => void this.check(), intervalMs);
     this.timer.unref?.();
-    // 启动时先查一轮：Butler 没开着的时候可能已经合完了。
+    // 启动时先查一轮：Shipherd 没开着的时候可能已经合完了。
     this.soon();
   }
 
@@ -142,7 +142,7 @@ export class HoldWatcher {
       await g.fetchQuiet(h.repoPath, h.target, FETCH_TIMEOUT_MS);
       if (await g.isAncestor(h.repoPath, h.branch, await g.upstreamRef(h.repoPath, h.target))) return "merged";
     } else {
-      // 本地合并、直接 push 通常在 post 阶段就定下来了；这里接住没收到 post 的（hook 超时、Butler 重启）。
+      // 本地合并、直接 push 通常在 post 阶段就定下来了；这里接住没收到 post 的（hook 超时、Shipherd 重启）。
       // 直接 push 进的是 origin/<target>，本地的目标分支不会动，所以两个都看（不 fetch，push 之后远端引用已经更新了）。
       if (await g.isAncestor(h.repoPath, h.branch, h.target)) return "merged";
       const upstream = await g.upstreamRef(h.repoPath, h.target);
@@ -156,8 +156,8 @@ export class HoldWatcher {
   }
 
   /**
-   * 发一条“X 已经合完”或“X 没有合完，可以再试”：gateWait 让等着的 session 别再试、等 Butler 告诉它，所以合没合成都要说。
-   * 排进它的信箱就记 notified（信箱存在库里，Butler 重启也照样送）。
+   * 发一条“X 已经合完”或“X 没有合完，可以再试”：gateWait 让等着的 session 别再试、等 Shipherd 告诉它，所以合没合成都要说。
+   * 排进它的信箱就记 notified（信箱存在库里，Shipherd 重启也照样送）。
    */
   private notice(n: Notice): void {
     if (this.d.now() - n.releasedAt > NOTICE_KEEP_MS) {

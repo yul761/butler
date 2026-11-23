@@ -16,7 +16,7 @@ import type { PreReviewView } from "../../shared/prereview";
 import { resultForSession } from "../prereview/delivery";
 import { admitOrRefuse, type AdmissionGate } from "./admission";
 import type { StackControl } from "./stack-control";
-import { butlerControl, type ButlerControlDeps } from "./butler-control";
+import { shipherdControl, type ShipherdControlDeps } from "./shipherd-control";
 import type { InboxService } from "../inbox/inbox-service";
 import type { DeliverResult } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
@@ -55,7 +55,7 @@ export interface ControlHandlerDeps {
   submit: (termId: string, message: string) => Promise<DeliverResult>;
   notify: () => void;
   /**
-   * 信箱（BTL-245）：Butler 总控和 feature 总控的 send_message 一律排队，不再因为对方在忙被拒。不给时 send_message 报「没开」。
+   * 信箱（BTL-245）：Shipherd 总控和 feature 总控的 send_message 一律排队，不再因为对方在忙被拒。不给时 send_message 报「没开」。
    */
   mailbox?: Pick<Mailbox, "send" | "opened" | "views">;
   /**
@@ -67,8 +67,8 @@ export interface ControlHandlerDeps {
   wakeState?: (sessionId: string) => WakeState;
   /** ask_user、report（BTL-190 第 2+3 点）；不给就拒绝。 */
   inbox?: Pick<InboxService, "ask" | "report">;
-  /** Butler 总控的请求（BTL-190 第 5 点）；不给就拒绝。 */
-  butler?: ButlerControlDeps;
+  /** Shipherd 总控的请求（BTL-190 第 5 点）；不给就拒绝。 */
+  shipherd?: ShipherdControlDeps;
   /** 开发 session 的 submit_evidence、pre_review_result（工作流 G）；不给就拒绝。 */
   preReview?: {
     submit(sessionId: string, raw: unknown): Promise<{ ok: boolean; message: string }>;
@@ -83,7 +83,7 @@ export interface ControlHandlerDeps {
   sessionModel?: (requested: string) => SessionModelChoice;
   /**
    * 开新终端前按内存放行（工作流 W，取代每 ticket、每 feature 的固定上限）：start_session、
-   * Butler 总控打开关着的总控都先问它；list_sessions 带上还能再开几个。不给时一律放行。
+   * Shipherd 总控打开关着的总控都先问它；list_sessions 带上还能再开几个。不给时一律放行。
    */
   admission?: AdmissionGate;
   /** 栈式 PR（工作流 K）：list_stacks、stack_define、stack_rebase、stack_layer_mode 和 create_ticket 的 stack_on。不给时这些都报「没开」。 */
@@ -182,7 +182,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     repo: s.coordinator ? M().ctlCoordinator : t ? repoNameOf(t, s.repoId) : null,
     firstPrompt: s.firstPrompt,
     running,
-    // 休眠着（WS-M B）：进程被 Butler 结束了，不占内存；有消息时自动唤醒，不要了就 end_session。
+    // 休眠着（WS-M B）：进程被 Shipherd 结束了，不占内存；有消息时自动唤醒，不要了就 end_session。
     hibernated: !running && !!s.hibernatedAt,
     waitingForInput: s.waitingForInput,
     lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
@@ -410,7 +410,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     const belongs = !!t && !t.dismissed && (t.ticketKey !== null ? keys.has(t.ticketKey) : t.featureId === f.id && t.fixesSession !== null);
     if (!t || !belongs) return fail(M().mailboxNotYours(req.session));
     const interrupt = req.interrupt === true;
-    const body = sanitizeTask(M().mailboxInstruction(M().butlerTargetFeature(f.name), req.text, interrupt));
+    const body = sanitizeTask(M().mailboxInstruction(M().shipherdTargetFeature(f.name), req.text, interrupt));
     const r = d.mailbox.send({ kind: "instruction", from: h.id, to: t.id, featureId: f.id, body, interrupt });
     // 终端关着（BTL-256）：信箱已经叫恢复了（同一个请求），这里等准入和打开的结果，告诉总控是在恢复、等内存还是用户结束了。
     const w = r.state === "closed" && d.resume ? await d.resume(t.id) : null;
@@ -478,18 +478,18 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   };
 
   /**
-   * ask_user、report（BTL-190 第 2+3 点）：调用的 session 必须认得出来（from），而且属于请求的作用域（ticket、feature、Butler 总控），
+   * ask_user、report（BTL-190 第 2+3 点）：调用的 session 必须认得出来（from），而且属于请求的作用域（ticket、feature、Shipherd 总控），
    * 免得别的进程冒充一个 session 提问。
    */
   const inboxRequest = (req: ControlRequest & InboxControlOp): ControlResult => {
     if (!d.inbox) return fail(M().ctlInboxOff);
     const h = req.from ? d.sessions.head(req.from) : null;
     if (!h) return fail(M().ctlInboxNoSession);
-    const mine = "butler" in req ? h.butler && h.ticketKey === null
+    const mine = "shipherd" in req ? h.shipherd && h.ticketKey === null
       : "featureId" in req ? h.featureId === req.featureId && h.ticketKey === null
       : h.ticketKey === req.ticketKey;
     if (!mine) return fail(M().ctlInboxNotYours);
-    // 归档了的 ticket、feature 不再收：归档时 Butler 已经把它们未决的条目收起来，新的没人会看。
+    // 归档了的 ticket、feature 不再收：归档时 Shipherd 已经把它们未决的条目收起来，新的没人会看。
     if ("featureId" in req) {
       const f = d.features?.get(req.featureId);
       if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
@@ -519,12 +519,12 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return r.ok ? ok({ note: r.message }) : fail(r.message);
   };
 
-  // Butler 总控（BTL-190 第 5 点）。
-  const butlerRequest = butlerControl(d, { sessionActivity, refreshSession, listedActivity, lastReply });
+  // Shipherd 总控（BTL-190 第 5 点）。
+  const shipherdRequest = shipherdControl(d, { sessionActivity, refreshSession, listedActivity, lastReply });
 
   return async (req) => {
     if (req.op === "ask_user" || req.op === "report") return inboxRequest(req);
-    if ("butler" in req) return butlerRequest(req);
+    if ("shipherd" in req) return shipherdRequest(req);
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));

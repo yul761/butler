@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 function setup() {
-  const root = tempDir("butler-mcp-");
+  const root = tempDir("shipherd-mcp-");
   const repo = join(root, "repo");
   const mcpDir = join(root, "mcp");
   const cfg = join(root, "claude-config");
@@ -464,13 +464,13 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     const s = setup();
     const plain = projectMcpApprovalSettings([s.repo], s.p);
     expect(Object.keys(read(plain!))).not.toContain("hooks");
-    const file = projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: '"/b/butler-hook"' });
-    const group = [{ matcher: "Bash", hooks: [{ type: "command", command: '"/b/butler-hook" gate', timeout: 10 }] }];
+    const file = projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: '"/b/shipherd-hook"' });
+    const group = [{ matcher: "Bash", hooks: [{ type: "command", command: '"/b/shipherd-hook" gate', timeout: 10 }] }];
     // Skill 调用只记（PR 进度），走写信封的那条路：命令不带 gate，只在 PostToolUse。
-    const skill = { matcher: "Skill", hooks: [{ type: "command", command: '"/b/butler-hook"', timeout: 10 }] };
-    const agent = { matcher: "Agent|Task", hooks: [{ type: "command", command: '"/b/butler-hook"', timeout: 10 }] };
+    const skill = { matcher: "Skill", hooks: [{ type: "command", command: '"/b/shipherd-hook"', timeout: 10 }] };
+    const agent = { matcher: "Agent|Task", hooks: [{ type: "command", command: '"/b/shipherd-hook"', timeout: 10 }] };
     // 推送、开 PR 记下分支是谁的（工作流 W）：同样走写信封的那条路，hook 只为 git push / gh pr create 写。
-    const ship = { matcher: "Bash", hooks: [{ type: "command", command: '"/b/butler-hook"', timeout: 10 }] };
+    const ship = { matcher: "Bash", hooks: [{ type: "command", command: '"/b/shipherd-hook"', timeout: 10 }] };
     expect(file).not.toBe(plain);
     expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: [...group, skill, agent, ship], PostToolUseFailure: [...group, ship] } });
   });
@@ -486,7 +486,7 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     const s = setup();
     const hooks = JSON.parse(readFileSync(projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: "/b/h", mailboxCommand: "MB" })!, "utf8")).hooks;
     const mailbox = { matcher: "", hooks: [{ type: "command", command: "MB", timeout: 10 }] };
-    expect(hooks.PostToolUse.slice(-2)).toEqual([mailbox, { matcher: "mcp__butler-feature__remember", hooks: [{ type: "command", command: "/b/h", timeout: 10 }] }]);
+    expect(hooks.PostToolUse.slice(-2)).toEqual([mailbox, { matcher: "mcp__shipherd-feature__remember", hooks: [{ type: "command", command: "/b/h", timeout: 10 }] }]);
     expect(hooks.PostToolUseFailure.at(-1)).toEqual(mailbox);
     // 没有 hook 程序就没有信箱 hook。
     expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, mailboxCommand: "MB" })!))).not.toContain("hooks");

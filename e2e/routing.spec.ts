@@ -6,7 +6,7 @@ import { completeWizard, expect, openSettingsGroup, type Sandbox, terminalText, 
 /**
  * 模型路由（3.0）的设置页和交互 session 撞限后换模型：
  * 没配置时是旧行为；在设置页登记两个模型，任务表显示第一个模型；
- * Butler 总控 session 撞限后，session 行上出现「换到 X 继续」，点了用 --resume + --model 重开。
+ * Shipherd 总控 session 撞限后，session 行上出现「换到 X 继续」，点了用 --resume + --model 重开。
  */
 
 
@@ -33,7 +33,7 @@ function interactiveModels(s: Sandbox): string[] {
 
 test("model routing: register models in settings, then switch a limited session to the next model", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);
   await completeWizard(page, s);
 
@@ -49,10 +49,10 @@ test("model routing: register models in settings, then switch a limited session 
   await expect(page.getByTestId("task-pr_brief")).toContainText("claude-fake-mid");
   await expect(page.getByTestId("health-pill").first()).toHaveText(S.rt.health.ok);
 
-  // 3. 开一个 Butler 总控 session（没指定模型：不带 --model），让它撞限。
-  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
-  const butler = page.locator(".butler-page");
-  await butler.getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  // 3. 开一个 Shipherd 总控 session（没指定模型：不带 --model），让它撞限。
+  await page.locator(".sidebar").getByRole("button", { name: S.shipherdNav, exact: true }).click();
+  const shipherd = page.locator(".shipherd-page");
+  await shipherd.getByRole("button", { name: `+ ${S.newShipherdSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   expect(interactiveModels(s)).toEqual(["-"]);
   await page.locator(".terminal-wrap:visible .xterm").click();
@@ -61,7 +61,7 @@ test("model routing: register models in settings, then switch a limited session 
   await expect.poll(() => terminalText(page)).toContain("hit your limit");
 
   // 4. session 行上：撞限提示和「换到 claude-fake-high 继续」。点了之后用 --resume + --model 重开，提示消失。
-  const hint = butler.getByTestId("session-limit");
+  const hint = shipherd.getByTestId("session-limit");
   await expect(hint).toBeVisible();
   const sw = hint.getByTestId("session-switch");
   await expect(sw).toHaveText(S.rt.switchNext("claude-fake-high"));

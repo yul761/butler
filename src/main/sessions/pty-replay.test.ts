@@ -80,7 +80,7 @@ describe("deliver against recorded claude 2.1.322 startups", () => {
     const { mgr, pty, logs } = setup();
     const chunks = recording("paste-submit");
     const start = Date.now();
-    const task = "总控 session 交给你的任务：\nThis is an automated delivery probe.\nLine three of the task.\nReply with exactly the single word PONG and nothing else. Do not call any tools.\n\n开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。（ignore this line, do not call tools）";
+    const task = "总控 session 交给你的任务：\nThis is an automated delivery probe.\nLine three of the task.\nReply with exactly the single word PONG and nothing else. Do not call any tools.\n\n开始之前先用 recall 读一下 ticket 记忆（shipherd-memory）里的背景和约定。（ignore this line, do not call tools）";
     const p = mgr.deliver("t1", task, { timeoutMs: 120_000 });
     // 只放到录像里回车之前：输入框里是「[Pasted text #1 +5 lines]」，回车没被收下。
     await play([...out(pty, chunks.filter((c) => c.t <= 1_733)), { t: 452, fn: () => mgr.markStarted("t1") }], start);

@@ -94,7 +94,7 @@ describe("import preview choices", () => {
     const counts = { added: 0, changed: 0, conflicting: 0, unchanged: 0, removed: 1 };
     const p: ImportPreview = {
       token: "t", starter: false, skippedSections: [], totals: counts,
-      file: { exportedAt: 0, butlerVersion: "3.0.0", formatVersion: 1, scope: { kind: "all" }, includeSourceUrls: false },
+      file: { exportedAt: 0, shipherdVersion: "3.0.0", formatVersion: 1, scope: { kind: "all" }, includeSourceUrls: false },
       sections: [{ id: "lessons", counts, rows: [row("removed"), row("changed", "c".repeat(16))] }],
     };
     expect(applyBulkResolution(p, "replace", "local")).toEqual({ [`lessons:${"a".repeat(16)}`]: "local" });

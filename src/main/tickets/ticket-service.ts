@@ -53,7 +53,7 @@ export interface TicketServiceDeps {
   features?: FeaturesRepo;
   settings: SettingsRepo;
   now: () => number;
-  /** 总控 session 的工作区目录放在这里面（~/.butler/workspaces）。 */
+  /** 总控 session 的工作区目录放在这里面（~/.shipherd/workspaces）。 */
   workspacesDir: string;
   /** 写进 main.log（比如新分支的起点 fetch 失败）；不给就不写。 */
   log?: (msg: string) => void;
@@ -400,7 +400,7 @@ export class TicketService {
     return r.worktreeRemovedAt !== null || r.worktreePath === null ? r.repoPath : r.worktreePath;
   }
 
-  /** 总控 session 的工作区目录（Butler 建的空目录）：~/.butler/workspaces/<ticket>。 */
+  /** 总控 session 的工作区目录（Shipherd 建的空目录）：~/.shipherd/workspaces/<ticket>。 */
   workspaceDir(ticketKey: string): string {
     const dir = this.workspacePath(ticketKey);
     mkdirSync(dir, { recursive: true });

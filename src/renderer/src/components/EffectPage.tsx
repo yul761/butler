@@ -8,7 +8,7 @@ import {
   barWidths, compare, comparisonText, DAY_CHOICES, DASH, fmtDay, fmtDuration, fmtNumber, fmtTokens, fmtUsd,
   groupName, interventionName, interventionRows, lineGeometry, spendName,
 } from "../effect-view";
-import { EFFECT_TABS, type EffectTabId } from "../butler-self-view";
+import { EFFECT_TABS, type EffectTabId } from "../shipherd-self-view";
 import { shortTime } from "../progress-ui";
 import { dayString, enoughSample } from "../review-view";
 import { S } from "../strings";
@@ -42,7 +42,7 @@ function Card({ testId, title, value, sub, extra, mine, base }: {
 }
 
 export function Cards({ o }: { o: MetricsOverview }) {
-  const b = o.butler;
+  const b = o.shipherd;
   const base = o.baseline;
   const comments = b.commentsHuman === null ? null : b.commentsHuman + (b.commentsCopilot ?? 0);
   const baseComments = base && base.commentsHuman !== null ? base.commentsHuman + (base.commentsCopilot ?? 0) : null;
@@ -267,13 +267,13 @@ function GroupTable({ children }: { children: React.ReactNode }) {
 }
 
 function Groups({ o }: { o: MetricsOverview }) {
-  const commentsOf = (a: MetricsOverview["butler"]) => (a.commentsHuman === null ? null : a.commentsHuman + (a.commentsCopilot ?? 0));
+  const commentsOf = (a: MetricsOverview["shipherd"]) => (a.commentsHuman === null ? null : a.commentsHuman + (a.commentsCopilot ?? 0));
   const kinds: GroupMetrics["kind"][] = ["repo", "product", "risk"];
   return (
     <section className="effect-section" data-testid="effect-groups">
       <h3>{E().groups}</h3>
       <GroupTable>
-        <GroupRow label={E().butlerRow} prs={o.butler.prs} cycle={o.butler.cycleOpenMs} comments={commentsOf(o.butler)} interventions={o.butler.interventions} cost={o.butler.costWeighted} />
+        <GroupRow label={E().shipherdRow} prs={o.shipherd.prs} cycle={o.shipherd.cycleOpenMs} comments={commentsOf(o.shipherd)} interventions={o.shipherd.interventions} cost={o.shipherd.costWeighted} />
         <GroupRow label={E().otherRow} hint={E().otherRowHint} prs={o.other.prs} cycle={o.other.cycleOpenMs} comments={commentsOf(o.other)} interventions={o.other.interventions} cost={o.other.costWeighted} />
       </GroupTable>
       {kinds.map((k) => {
@@ -390,7 +390,7 @@ function ReviewGroupRow({ label, g }: { label: string; g: ReviewGroupStats }) {
   );
 }
 
-/** Review 效果（工作流 G）：每 PR 的可避免评论按周、Butler 和其他 PR / 带不带简报的对比、规矩上线前后、评论落点。 */
+/** Review 效果（工作流 G）：每 PR 的可避免评论按周、Shipherd 和其他 PR / 带不带简报的对比、规矩上线前后、评论落点。 */
 export function ReviewEffectSection({ v }: { v: ReviewEffectView }) {
   const points = v.weeks.map((w) => ({ start: dayString(w.weekStart), prs: w.prs, perPr: w.perPr }));
   const cols = RV().effCols;
@@ -407,7 +407,7 @@ export function ReviewEffectSection({ v }: { v: ReviewEffectView }) {
           <tr><th>{cols.group}</th><th>{cols.prs}</th><th>{cols.comments}</th><th>{cols.rounds}</th><th>{cols.firstReview}</th><th>{cols.toMerge}</th></tr>
         </thead>
         <tbody>
-          <ReviewGroupRow label={RV().effGroup.butler} g={v.butler} />
+          <ReviewGroupRow label={RV().effGroup.shipherd} g={v.shipherd} />
           <ReviewGroupRow label={RV().effGroup.others} g={v.others} />
           <ReviewGroupRow label={RV().effGroup.withBrief} g={v.withBrief} />
           <ReviewGroupRow label={RV().effGroup.withoutBrief} g={v.withoutBrief} />
@@ -436,14 +436,14 @@ export function ReviewEffectSection({ v }: { v: ReviewEffectView }) {
   );
 }
 
-/** 概况 tab：基线说明；一个 Butler 的 PR 都没有时的空状态。 */
+/** 概况 tab：基线说明；一个 Shipherd 的 PR 都没有时的空状态。 */
 export function EffectOverview({ o }: { o: MetricsOverview }) {
   return (
     <>
       <p className="muted effect-baseline-note">
         {o.baseline ? E().baselineNote(o.baseline.prs, new Date(o.baseline.cutoff).toLocaleDateString()) : E().baselineMissing}
       </p>
-      {o.butler.prs === 0 && <p className="muted">{E().empty}</p>}
+      {o.shipherd.prs === 0 && <p className="muted">{E().empty}</p>}
     </>
   );
 }
@@ -520,7 +520,7 @@ export function EffectPage() {
         </div>
         {o && (
           <span className="muted">
-            {E().prs(o.butler.prs)} · {o.rolledUpAt === null ? E().notRolledUp : E().rolledUp(shortTime(o.rolledUpAt))}
+            {E().prs(o.shipherd.prs)} · {o.rolledUpAt === null ? E().notRolledUp : E().rolledUp(shortTime(o.rolledUpAt))}
           </span>
         )}
       </div>

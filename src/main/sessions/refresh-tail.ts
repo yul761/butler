@@ -4,7 +4,7 @@ import { isHandoffInvocation, isToolResultOnly, textOf } from "../handoff/transc
 import { M } from "../strings";
 
 /**
- * 换新前的对话尾巴（BTL-190 第 6 点）：/clear 之前 Butler 自己读旧 transcript，摘出 handoff 之前最近的几轮对话写成文件，
+ * 换新前的对话尾巴（BTL-190 第 6 点）：/clear 之前 Shipherd 自己读旧 transcript，摘出 handoff 之前最近的几轮对话写成文件，
  * 换新后的 session 读它接着做。不调用模型。
  */
 
@@ -27,7 +27,7 @@ export interface TailTurn {
 
 export interface TailExtract {
   turns: TailTurn[];
-  /** 找到了 Butler 输入的 handoff 请求（/handoff）。没找到时 turns 为空。 */
+  /** 找到了 Shipherd 输入的 handoff 请求（/handoff）。没找到时 turns 为空。 */
   commandFound: boolean;
 }
 
@@ -39,7 +39,7 @@ interface Entry {
   message?: { content?: unknown };
 }
 
-/** 这条 user 消息是不是 Butler 为这次换新输入的 handoff 请求：ticket session 和 feature 总控都是 /handoff。 */
+/** 这条 user 消息是不是 Shipherd 为这次换新输入的 handoff 请求：ticket session 和 feature 总控都是 /handoff。 */
 export function refreshCommandMatcher(): (content: unknown) => boolean {
   return isHandoffInvocation;
 }

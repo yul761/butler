@@ -4,7 +4,7 @@ import { compareVersions, displayVersion, isNewerRelease, parseVersion, type Rel
 import { RELEASE_API_PATH, type LatestReleaseResult } from "./release-source";
 
 export const UPDATE_CHECK_DAY_MS = 24 * 3600_000;
-/** 多久看一次「满 24 小时没有」：Butler 一开好几天也能每天查一次。 */
+/** 多久看一次「满 24 小时没有」：Shipherd 一开好几天也能每天查一次。 */
 export const UPDATE_CHECK_INTERVAL_MS = 3600_000;
 
 export type UpdateSettingKey = "updateCheckEnabled" | "updateLastCheckAt" | "updateLatest" | "updateSkippedVersion";

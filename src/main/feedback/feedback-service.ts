@@ -1,5 +1,5 @@
 // 「发送反馈」（BTL-254）：拼出预填好的 new issue 链接交给系统浏览器；附诊断时先给用户看脱敏后的内容，确认了再存进下载目录。
-// Butler 自己不往外发任何东西：issue 由用户在 GitHub 上点提交，诊断文件由用户自己拖进去。
+// Shipherd 自己不往外发任何东西：issue 由用户在 GitHub 上点提交，诊断文件由用户自己拖进去。
 import { join } from "node:path";
 import type { DiagnosticsFile } from "../diag/diag-export";
 import { redactedDiagnostics, type RedactTerms } from "../diag/redact";
@@ -76,7 +76,7 @@ export class FeedbackService {
     if (this.preview === null) throw new Error("no diagnostics preview to save");
     const dir = this.d.downloadsDir();
     const stamp = new Date(this.d.now()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const base = `butler-diagnostics-redacted-${stamp}`;
+    const base = `shipherd-diagnostics-redacted-${stamp}`;
     let name = `${base}.json`;
     for (let i = 1; this.d.exists(join(dir, name)); i++) name = `${base}-${i}.json`;
     const path = join(dir, name);

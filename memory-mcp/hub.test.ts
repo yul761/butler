@@ -78,25 +78,25 @@ describe("Hub", () => {
         return { handle: async () => ({ from: r.from }), withdrawAll: () => void m.withdrawn++ };
       },
     });
-    hub.apply({ op: "add", token: T1, route: { server: "sessions", env: { BUTLER_TICKET: "A" }, from: "term-1" } });
-    hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { BUTLER_TICKET: "A" }, from: "term-2" } });
+    hub.apply({ op: "add", token: T1, route: { server: "sessions", env: { SHIPHERD_TICKET: "A" }, from: "term-1" } });
+    hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { SHIPHERD_TICKET: "A" }, from: "term-2" } });
     expect(await hub.handler(T2)!({ id: 1, method: "tools/list" })).toEqual({ from: "term-2" });
     hub.apply({ op: "remove", token: T1 });
     expect(made).toEqual([{ from: "term-1", withdrawn: 1 }, { from: "term-2", withdrawn: 0 }]);
     // 重发同一个 token（hub 重启后）：旧的撤掉，换成新的。
-    hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { BUTLER_TICKET: "A" }, from: "term-2" } });
+    hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { SHIPHERD_TICKET: "A" }, from: "term-2" } });
     expect(made[1].withdrawn).toBe(1);
     await hub.closeAll();
     expect(made[2].withdrawn).toBe(1);
   });
 
-  it("builds the real butler-sessions server from the route's variables and its caller", async () => {
+  it("builds the real shipherd-sessions server from the route's variables and its caller", async () => {
     const hub = new Hub({ backend: (s) => fakeBackend(s, []) });
-    hub.apply({ op: "add", token: T1, route: { server: "sessions", env: { BUTLER_TICKET: "A", BUTLER_MEMBER: "1", BUTLER_CONTROL_REQUESTS: "/r", BUTLER_CONTROL_RESULTS: "/s" }, from: "t" } });
+    hub.apply({ op: "add", token: T1, route: { server: "sessions", env: { SHIPHERD_TICKET: "A", SHIPHERD_MEMBER: "1", SHIPHERD_CONTROL_REQUESTS: "/r", SHIPHERD_CONTROL_RESULTS: "/s" }, from: "t" } });
     const r = (await hub.handler(T1)!({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
     expect(r.result.tools.map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "ask_user", "report"]);
     // 少了控制目录：不建，也不报错。
-    hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { BUTLER_TICKET: "A" }, from: null } });
+    hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { SHIPHERD_TICKET: "A" }, from: null } });
     expect(hub.handler(T2)).toBeNull();
   });
 

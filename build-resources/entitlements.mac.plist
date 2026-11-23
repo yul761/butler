@@ -3,31 +3,31 @@
 <!--
   Hardened runtime entitlements for the Developer ID build (BTL-258). electron-builder.yml uses this file for both the
   app (mac.entitlements) and everything signed inside it (mac.entitlementsInherit): the Electron helpers, the frameworks,
-  node-pty's pty.node and spawn-helper, and the butler-hook binary. Only the Developer ID build uses it; the ad-hoc build
+  node-pty's pty.node and spawn-helper, and the shipherd-hook binary. Only the Developer ID build uses it; the ad-hoc build
   (no signing secrets) is signed without the hardened runtime by scripts/after-pack.cjs, so these do not apply there.
 
   Deliberately left out:
-  - com.apple.security.cs.disable-library-validation: every library Butler loads (Electron's frameworks, node-pty's
+  - com.apple.security.cs.disable-library-validation: every library Shipherd loads (Electron's frameworks, node-pty's
     pty.node) is inside the bundle and re-signed with the same Team ID, so library validation passes. The memory MCP
     servers (ELECTRON_RUN_AS_NODE) are plain JavaScript with no native addons.
   - com.apple.security.cs.allow-dyld-environment-variables, com.apple.security.cs.debugger: nothing needs them.
-  - com.apple.security.automation.apple-events, device.camera / device.audio-input: Butler sends no Apple Events and
+  - com.apple.security.automation.apple-events, device.camera / device.audio-input: Shipherd sends no Apple Events and
     uses no camera or microphone. Child processes (claude, git, gh, the user's shell) are separate programs with their
-    own signatures; the hardened runtime does not limit what Butler may spawn.
+    own signatures; the hardened runtime does not limit what Shipherd may spawn.
   If a change needs one of these, add it here with the reason and say so in the PR.
 -->
 <plist version="1.0">
   <dict>
     <!--
       V8 generates machine code at run time and needs MAP_JIT pages. Without this the main process, the renderer
-      helper, the memory MCP servers (the Butler binary run with ELECTRON_RUN_AS_NODE) and butler-hook (a Node SEA
+      helper, the memory MCP servers (the Shipherd binary run with ELECTRON_RUN_AS_NODE) and shipherd-hook (a Node SEA
       binary) crash at start-up under the hardened runtime.
     -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <!--
       Node and V8 still write some executable memory without MAP_JIT (Node's own macOS release builds carry this
-      entitlement for the same reason). It covers the Node side of Butler: butler-hook and the ELECTRON_RUN_AS_NODE
+      entitlement for the same reason). It covers the Node side of Shipherd: shipherd-hook and the ELECTRON_RUN_AS_NODE
       memory MCP servers.
     -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>

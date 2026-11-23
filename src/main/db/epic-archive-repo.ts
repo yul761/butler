@@ -1,7 +1,7 @@
 import type { Db } from "./database";
 
 /**
- * epic 记忆的溢出存档（BTL-246 §5）：StateCore 每个 scope 最多 30 条笔记，挤不下的旧笔记 Butler 先搬到这里，
+ * epic 记忆的溢出存档（BTL-246 §5）：StateCore 每个 scope 最多 30 条笔记，挤不下的旧笔记 Shipherd 先搬到这里，
  * 再渲染进 epic 记忆的 handoff（「以前的约定」）。source：ticket 或总控 session 写进 epic 记忆的是 "notes"，
  * 从旧 epic 记忆搬过来的是 "epic:<id>"（每个旧 epic 只搬一次）。
  */
