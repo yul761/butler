@@ -610,6 +610,13 @@ export const EN: UiStrings = {
   keepAwakeOn: "Keeping awake",
   keepAwakeHint: "While on, the computer won't sleep when idle and the screen stays on, so sessions can keep running with the lid open. Turns off when you close the lid or quit Shipherd.",
   ticketKey: "Ticket id",
+  ticketKeyHint: (example: string, suggested: "feature" | "all" | null, custom: string | null) =>
+    `Format: ${custom ? `matches the ticket id format in Settings, ${custom}` : "PREFIX-NUMBER, where the prefix is two or more capital letters or digits starting with a letter"}, e.g. ${example}.` +
+    (suggested === "feature" ? " The next number after this epic's tickets is filled in; you can change it." : suggested === "all" ? " The next number after your existing tickets is filled in; you can change it." : ""),
+  ticketKeyFormatError: (input: string, example: string, custom: string | null) =>
+    custom
+      ? `“${input}” is not a valid ticket id: it must match the ticket id format in Settings, ${custom}, e.g. ${example}.`
+      : `“${input}” is not a valid ticket id. Use PREFIX-NUMBER: a prefix of two or more capital letters or digits that starts with a letter, then a hyphen and a number, e.g. ${example}.`,
   title: "Title (optional)",
   repo: "Repo folder",
   pick: "Choose…",
@@ -710,7 +717,7 @@ export const EN: UiStrings = {
   oldWorkdir: (cwd: string, current: string, expected: string) =>
     `This session was started in ${cwd}, which is now ${current === "HEAD" ? "not on any branch (the ticket's work mode changed)" : `on ${current}`}, not on this ticket's branch ${expected}. Continuing there may change the wrong place; you can also start a new session.`,
   createErrors: {
-    invalid_key: "The ticket id is not in the expected format.",
+    invalid_key: "The ticket id is not in the expected format. Use PREFIX-NUMBER, e.g. PROJ-123.",
     exists: "This ticket already exists.",
     not_git_repo: "The chosen folder is not a git repo. Pick the repo's folder; for a new project, run git init in the folder and make one commit first.",
     worktree_exists: "The worktree folder already exists.",

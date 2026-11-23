@@ -315,6 +315,7 @@ export function App() {
       )}
       {showNew && (
         <NewTicketDialog
+          contextTickets={allTickets}
           onClose={() => setShowNew(false)}
           onRestored={showRestored}
           onCreated={(key) => {

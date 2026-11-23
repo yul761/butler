@@ -1,9 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { renderBranch } from "../../../shared/branch";
+import { DEFAULT_TICKET_PATTERN } from "../../../shared/ticket-pattern";
 import type { Feature, WorkMode } from "../../../shared/types";
 import { api, ShipherdError } from "../api";
 import { lastSegment } from "../repos";
 import { S } from "../strings";
+import { isValidTicketKey, suggestNextKey } from "../ticket-key-suggest";
 import { RepoPicker } from "./RepoPicker";
 
 interface Props {
@@ -13,10 +15,21 @@ interface Props {
   onRestored: (key: string) => void;
   /** 建在这个 feature 下：仓库从 feature 的仓库里勾选，worktree 放进 feature 的工作区（设计文档 2026-10-26）。 */
   feature?: Feature;
+  /** 下一个号按这些 ticket 算（BTL-264）：在 epic 下建是这个 epic 的 ticket，否则是所有 ticket。 */
+  contextTickets?: { key: string; createdAt: number }[];
+  /** 别处已经用掉的号（不在 contextTickets 里的），建议时跳过；已归档的对话框自己去取。 */
+  takenKeys?: string[];
 }
 
-export function NewTicketDialog({ onClose, onCreated, onRestored, feature }: Props) {
+export function NewTicketDialog({ onClose, onCreated, onRestored, feature, contextTickets = [], takenKeys = [] }: Props) {
   const [key, setKey] = useState("");
+  const keyInput = useRef<HTMLInputElement>(null);
+  /** 用户自己动过 ticket 号：之后不再自动填建议的号。 */
+  const keyTouched = useRef(false);
+  const [pattern, setPattern] = useState<string | null>(null);
+  const [archivedKeys, setArchivedKeys] = useState<string[] | null>(null);
+  /** ticket 号格式不对时的提示（失焦或提交时检查）。 */
+  const [keyError, setKeyError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [repoPaths, setRepoPaths] = useState<string[]>(feature?.repos[0] ? [feature.repos[0].repoPath] : []);
   const [workMode, setWorkMode] = useState<WorkMode>("worktree");
@@ -29,8 +42,30 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature }: Pro
   const hasRepo = repoPaths.length > 0;
 
   useEffect(() => {
-    api.settings().then((s) => setTemplate(s.branchTemplate), () => setTemplate(null));
+    api.settings().then(
+      (s) => (setTemplate(s.branchTemplate), setPattern(s.ticketPattern || DEFAULT_TICKET_PATTERN)),
+      () => (setTemplate(null), setPattern(DEFAULT_TICKET_PATTERN)),
+    );
+    api.archivedTickets().then((ts) => setArchivedKeys(ts.map((t) => t.key)), () => setArchivedKeys([]));
   }, []);
+  // 设置和已归档的号都到了才算建议，免得先建议一个已归档的号再改掉。
+  const suggestion = useMemo(
+    () => (pattern === null || archivedKeys === null ? null : suggestNextKey(contextTickets, [...takenKeys, ...archivedKeys], pattern)),
+    // 打开对话框时的 ticket 列表就够了：之后列表刷新不改建议。
+    [pattern, archivedKeys],
+  );
+  useEffect(() => {
+    if (!suggestion || keyTouched.current) return;
+    setKey(suggestion);
+    // 光标还在号的输入框里：选中填好的号，直接打字就换掉。
+    const el = keyInput.current;
+    if (el && document.activeElement === el) requestAnimationFrame(() => el.select());
+  }, [suggestion]);
+  const customPattern = pattern && pattern !== DEFAULT_TICKET_PATTERN ? pattern : null;
+  const example = suggestion ?? "PROJ-123";
+  /** 号的格式不对时的提示；格式对或者还没填返回 null。 */
+  const formatError = (k: string) =>
+    k.trim() && pattern !== null && !isValidTicketKey(k.trim().toUpperCase(), pattern) ? S.ticketKeyFormatError(k.trim(), example, customPattern) : null;
   const preview = template && key.trim() ? renderBranch(template, key.trim().toUpperCase(), title) : "feature/PROJ-123";
 
   async function restore(k: string) {
@@ -44,6 +79,12 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature }: Pro
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    const bad = formatError(key);
+    setKeyError(bad);
+    if (bad) {
+      keyInput.current?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     setArchivedKey(null);
@@ -71,7 +112,34 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature }: Pro
     <div className="modal-backdrop">
       <form className="modal" onSubmit={submit}>
         <h2>{feature ? S.newTicketIn(feature.name) : S.newTicket}</h2>
-        <label>{S.ticketKey}<input value={key} onChange={(e) => { setKey(e.target.value); setArchivedKey(null); }} placeholder="PROJ-123" autoFocus required /></label>
+        <label>
+          {S.ticketKey}
+          <input
+            ref={keyInput}
+            value={key}
+            onChange={(e) => {
+              keyTouched.current = true;
+              setKey(e.target.value);
+              setArchivedKey(null);
+              // 已经报过格式错：改对了就马上消掉。
+              if (keyError) setKeyError(formatError(e.target.value));
+            }}
+            onBlur={() => setKeyError(formatError(key))}
+            placeholder={example}
+            aria-invalid={keyError ? true : undefined}
+            aria-describedby="new-ticket-key-hint"
+            data-testid="new-ticket-key"
+            autoFocus
+            required
+          />
+        </label>
+        {keyError ? (
+          <p className="error" id="new-ticket-key-hint" data-testid="new-ticket-key-error">{keyError}</p>
+        ) : (
+          <p className="muted field-hint" id="new-ticket-key-hint" data-testid="new-ticket-key-hint">
+            {S.ticketKeyHint(example, suggestion && key === suggestion ? (feature ? "feature" : "all") : null, customPattern)}
+          </p>
+        )}
         <label>{S.title}<input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         {feature ? (
           <fieldset>

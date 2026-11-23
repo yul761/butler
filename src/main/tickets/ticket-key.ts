@@ -1,4 +1,6 @@
-export const DEFAULT_TICKET_PATTERN = "[A-Z][A-Z0-9]+-\\d+";
+import { DEFAULT_TICKET_PATTERN } from "../../shared/ticket-pattern";
+
+export { DEFAULT_TICKET_PATTERN };
 
 export function isValidTicketKey(key: string, pattern = DEFAULT_TICKET_PATTERN): boolean {
   return new RegExp(`^(?:${pattern})$`).test(key);

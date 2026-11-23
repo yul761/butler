@@ -905,3 +905,42 @@ test("archiving a feature: refused while a terminal is open, then archived with 
   await expect.poll(() => [...(existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "").matchAll(new RegExp(`interactive new \\S+ mcp=\\S* cwd=${escapeRe(workspace)} `, "g"))].length).toBe(2);
   expect(existsSync(mcpFile)).toBe(true);
 });
+
+test("new ticket dialog: fills in the epic's next number, explains the format and refuses a malformed id (BTL-264)", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await createCheckoutFeature(page, s);
+  await newFeatureTicket(page, "DMS-7", "frontend");
+  await page.locator(".feature-link").getByRole("button", { name: "checkout", exact: true }).click();
+
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newTicket}`, exact: true }).click();
+  const keyBox = page.getByTestId("new-ticket-key");
+  await expect(keyBox).toHaveValue("DMS-8");
+  await expect(page.getByTestId("new-ticket-key-hint")).toHaveText(S.ticketKeyHint("DMS-8", "feature", null));
+
+  // 格式不对：失焦就说明应该是什么格式；提交被拦下，不建 ticket。
+  await keyBox.fill("dms8");
+  await keyBox.blur();
+  await expect(page.getByTestId("new-ticket-key-error")).toHaveText(S.ticketKeyFormatError("dms8", "DMS-8", null));
+  await expect(keyBox).toHaveAttribute("aria-invalid", "true");
+  await page.getByRole("button", { name: S.create, exact: true }).click();
+  await expect(page.getByTestId("new-ticket-key-error")).toBeVisible();
+  await expect(page.locator(".modal")).toBeVisible();
+  // 改对了提示马上回来（用户改过的号不算建议的，提示里不说「已填好」）。
+  await keyBox.fill("dms-8");
+  await expect(page.getByTestId("new-ticket-key-hint")).toHaveText(S.ticketKeyHint("DMS-8", null, null));
+  await keyBox.fill("DMS-8");
+  for (const name of ["frontend", "backend"]) {
+    const box = page.locator(".modal").getByRole("checkbox", { name, exact: true });
+    if (name === "frontend") await box.check();
+    else await box.uncheck();
+  }
+  await page.getByRole("button", { name: S.create, exact: true }).click();
+  await expect(page.getByRole("heading", { name: "DMS-8", exact: true })).toBeVisible();
+
+  // 不在 epic 里建：按所有 ticket 算下一个号。
+  await (await newButton(page, "newTicket")).click();
+  await expect(page.getByTestId("new-ticket-key")).toHaveValue("DMS-9");
+  await expect(page.getByTestId("new-ticket-key-hint")).toHaveText(S.ticketKeyHint("DMS-9", "all", null));
+});
