@@ -8,6 +8,7 @@ import type { Ticket } from "../../shared/types";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, type LegacyTicket, makeRepo, makeStaleClone, memDb, tempDir } from "../test-utils";
 import { branchExists, currentBranch, git } from "./git";
+import { repoLockKey, repoLocks } from "./repo-lock";
 import { TicketError, TicketService } from "./ticket-service";
 
 function setup() {
@@ -636,6 +637,37 @@ describe("TicketService serializes git work per repo (BTL-264)", () => {
     const first = service.create({ key: "PROJ-305", repoPath: repo, workMode: "worktree" });
     expect(await code(service.create({ key: "proj-305", repoPath: repo, workMode: "worktree" }))).toBe("exists");
     expect(await currentBranch(only(await first).worktreePath!)).toBe("feature/PROJ-305");
+  });
+
+  it("a busy ticket that already exists says busy, not exists", async () => {
+    const { service } = setup();
+    await service.create({ key: "PROJ-306" });
+    let release!: () => void;
+    const held = service.exclusive("PROJ-306", () => new Promise<void>((r) => (release = r)));
+    expect(await code(service.create({ key: "PROJ-306" }))).toBe("busy");
+    release();
+    await held;
+    expect(await code(service.create({ key: "PROJ-306" }))).toBe("exists");
+  });
+
+  it("switching branches checks again for a ticket change once it has the repo lock", async () => {
+    const { service } = setup();
+    const repo = makeRepo();
+    const t = await service.create({ key: "PROJ-307", repoPath: repo, workMode: "branch" });
+    execFileSync("git", ["checkout", "-q", "main"], { cwd: repo, stdio: "ignore" });
+    let releaseRepo!: () => void;
+    const repoHeld = repoLocks.run(await repoLockKey(repo), () => new Promise<void>((r) => (releaseRepo = r)));
+    while (!releaseRepo) await new Promise((r) => setImmediate(r));
+    const sw = code(service.switchBranch(only(t)));
+    // 排着队的时候这个 ticket 开始改了。
+    let releaseTicket!: () => void;
+    const ticketHeld = service.exclusive("PROJ-307", () => new Promise<void>((r) => (releaseTicket = r)));
+    releaseRepo();
+    await repoHeld;
+    expect(await sw).toBe("busy");
+    expect(out(repo, "branch", "--show-current")).toBe("main");
+    releaseTicket();
+    await ticketHeld;
   });
 });
 

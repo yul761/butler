@@ -44,15 +44,16 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature, conte
   useEffect(() => {
     api.settings().then(
       (s) => (setTemplate(s.branchTemplate), setPattern(s.ticketPattern || DEFAULT_TICKET_PATTERN)),
-      () => (setTemplate(null), setPattern(DEFAULT_TICKET_PATTERN)),
+      // 设置读不到：不知道用户配的格式，界面上不拦（空串），交给主进程判；建议照默认格式算。
+      () => (setTemplate(null), setPattern("")),
     );
     api.archivedTickets().then((ts) => setArchivedKeys(ts.map((t) => t.key)), () => setArchivedKeys([]));
   }, []);
   // 设置和已归档的号都到了才算建议，免得先建议一个已归档的号再改掉。
   const suggestion = useMemo(
-    () => (pattern === null || archivedKeys === null ? null : suggestNextKey(contextTickets, [...takenKeys, ...archivedKeys], pattern)),
-    // 打开对话框时的 ticket 列表就够了：之后列表刷新不改建议。
-    [pattern, archivedKeys],
+    () => (pattern === null || archivedKeys === null ? null : suggestNextKey(contextTickets, [...takenKeys, ...archivedKeys], pattern || DEFAULT_TICKET_PATTERN)),
+    // 列表刷新了（别处刚建了这个号）建议跟着往后挪；用户动过输入框就不再覆盖（见下）。
+    [pattern, archivedKeys, contextTickets, takenKeys],
   );
   useEffect(() => {
     if (!suggestion || keyTouched.current) return;
@@ -65,7 +66,7 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature, conte
   const example = suggestion ?? "PROJ-123";
   /** 号的格式不对时的提示；格式对或者还没填返回 null。 */
   const formatError = (k: string) =>
-    k.trim() && pattern !== null && !isValidTicketKey(k.trim().toUpperCase(), pattern) ? S.ticketKeyFormatError(k.trim(), example, customPattern) : null;
+    k.trim() && pattern && !isValidTicketKey(k.trim().toUpperCase(), pattern) ? S.ticketKeyFormatError(k.trim(), example, customPattern) : null;
   const preview = template && key.trim() ? renderBranch(template, key.trim().toUpperCase(), title) : "feature/PROJ-123";
 
   async function restore(k: string) {

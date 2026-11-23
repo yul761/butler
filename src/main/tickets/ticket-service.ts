@@ -144,8 +144,9 @@ export class TicketService {
   async create(input: CreateTicketInput): Promise<Ticket> {
     const key = input.key.trim().toUpperCase();
     if (!isValidTicketKey(key, this.d.settings.get("ticketPattern"))) throw new TicketError("invalid_key", M().invalidKey(input.key));
-    // 同一个号正在建（还没存进库）：当作已存在，免得两边在同一个目录上建 worktree（BTL-264）。
-    if (this.updatingKeys.has(key)) throw new TicketError("exists", M().ticketExists(key));
+    // 同一个号正在建（拿着锁、还没存进库）：当作已存在，免得两边在同一个目录上建 worktree（BTL-264）。
+    // 库里已有的 ticket 在忙（加仓库、收尾）交给 exclusive 报 busy。
+    if (this.updatingKeys.has(key) && !this.d.tickets.get(key)) throw new TicketError("exists", M().ticketExists(key));
     return this.exclusive(key, () => this.createLocked(key, input));
   }
 
@@ -487,6 +488,8 @@ export class TicketService {
   async switchBranch(r: TicketRepo): Promise<void> {
     if (this.updatingKeys.has(r.ticketKey)) throw new TicketError("busy", M().ticketBusy);
     await this.locked(r.repoPath, async () => {
+      // 排队等仓库锁的时候这个 ticket 可能开始改了：拿到锁再看一次。
+      if (this.updatingKeys.has(r.ticketKey)) throw new TicketError("busy", M().ticketBusy);
       if (await isDirty(r.repoPath)) throw new TicketError("dirty", M().repoDirtyNoSwitch);
       try {
         await checkout(r.repoPath, r.branch);
