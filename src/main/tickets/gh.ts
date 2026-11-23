@@ -419,7 +419,40 @@ const PR_FIELDS =
 
 /** gh pr view <ref>：ref 可以是分支名、PR 号或 PR 的 URL。没有 PR、gh 不可用、输出不对都返回 null。 */
 export async function prStatus(cwd: string, ref: string, timeoutMs: number): Promise<PrStatus | null> {
-  return parsePr(await runGh(cwd, ["pr", "view", ref, "--json", PR_FIELDS], timeoutMs, 8 * 1024 * 1024));
+  const r = await prRead(cwd, ref, timeoutMs);
+  return r === GH_NOT_FOUND ? null : r;
+}
+
+/** GitHub 回答了「没有这个仓库 / 这个 PR」：和 gh 不可用、超时、网络断了不一样，gh 是在线的。 */
+export const GH_NOT_FOUND = "not_found" as const;
+
+/**
+ * gh 的 stderr 是不是在说仓库或 PR 不存在（或者当前账号看不到）。改了名的仓库 GitHub 会跳转到新名字，不会走到这里。
+ * 「Could not resolve host」是网络问题，不算。
+ */
+export function ghNotFound(stderr: string): boolean {
+  return /Could not resolve to a (?:Repository|PullRequest)\b|\bHTTP 404\b/i.test(stderr);
+}
+
+/** 同 prStatus，另外分出 GitHub 说不存在的（GH_NOT_FOUND）；null 仍是 gh 不可用、超时、输出不对。 */
+export async function prRead(cwd: string, ref: string, timeoutMs: number): Promise<PrStatus | typeof GH_NOT_FOUND | null> {
+  const r = await runGhDetail(cwd, ["pr", "view", ref, "--json", PR_FIELDS], timeoutMs, 8 * 1024 * 1024);
+  if (r.stdout === null) return !r.timedOut && !r.spawnError && ghNotFound(r.stderr) ? GH_NOT_FOUND : null;
+  return parsePr(r.stdout);
+}
+
+/**
+ * gh repo view <slug>：GitHub 上这个仓库现在的 slug（小写；github.com 以外的主机带主机名，和 parseRemoteSlug 一样）。
+ * 改过名、转过 owner 的，GitHub 跳转到新名字，返回的就和传进来的不一样。GH_NOT_FOUND：仓库不在了或看不到；null：gh 失败。
+ */
+export async function repoCurrentSlug(cwd: string, slug: string, timeoutMs: number): Promise<string | typeof GH_NOT_FOUND | null> {
+  // 和别的按 slug 调的 gh 一样带上主机（repoEnv）：环境里的 GH_HOST 指着企业版时，github.com 的 slug 不能去那边查。
+  const r = await runGhDetail(cwd, ["repo", "view", slug, "--json", "nameWithOwner"], timeoutMs, 1024 * 1024, repoEnv(slug));
+  if (r.stdout === null) return !r.timedOut && !r.spawnError && ghNotFound(r.stderr) ? GH_NOT_FOUND : null;
+  const nwo = obj(parseJson(r.stdout))?.nameWithOwner;
+  if (typeof nwo !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(nwo)) return null;
+  const parts = slug.split("/");
+  return (parts.length === 3 ? `${parts[0]}/${nwo}` : nwo).toLowerCase();
 }
 
 /** gh pr list --head <branch> --state all：一个分支的所有 PR。[] 是没有 PR，null 是 gh 失败（不可用、超时、输出不对）。给了 repo（slug）时列那个仓库的，不看 cwd。 */

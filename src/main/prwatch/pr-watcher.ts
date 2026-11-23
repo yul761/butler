@@ -3,9 +3,10 @@ import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
 import { prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
-  latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prStatus, type prsForBranch, type reviewAuthors,
+  GH_NOT_FOUND, latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prRead, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
+import { prUrlParts } from "../../shared/pr-url";
 import type { firstCommitAt } from "../tickets/git";
 import type { Ticket, TicketRepo, WatchedPr } from "../../shared/types";
 import type { CiItem } from "./ci-delivery";
@@ -53,7 +54,8 @@ export interface PrWatcherDeps {
   slugOf(path: string): string | null;
   linker: Pick<PrLinker, "linkBranchPrs">;
   gh: {
-    prStatus: typeof prStatus; prsForBranch: typeof prsForBranch; branchRuns: typeof branchRuns; failedLog: typeof failedLog;
+    /** 读一个 PR：GH_NOT_FOUND 是 GitHub 说没有这个 PR（或这个仓库），null 是 gh 失败。 */
+    prStatus: typeof prRead; prsForBranch: typeof prsForBranch; branchRuns: typeof branchRuns; failedLog: typeof failedLog;
     reviewComments: typeof reviewComments; reviewAuthors: typeof reviewAuthors;
   };
   git: { firstCommitAt: typeof firstCommitAt };
@@ -62,6 +64,8 @@ export interface PrWatcherDeps {
   owners?: Pick<BranchOwnersRepo, "since">;
   /** Shipherd 跟踪的 PR 合并了：复盘规矩的分析排队用。抛错下一轮再来，成功后不再调用。repoPath 是 PR 所在的 ticket 仓库。 */
   onMerged(pr: TicketPr, repoPath: string | null): void;
+  /** 按旧 slug 读到的 PR，GitHub 给的链接是另一个仓库名（仓库改了名、换了 owner）：交给改名处理去确认、改写。不等它。 */
+  onSlugMoved?(oldSlug: string, newSlug: string): void;
   /** PR 的状态或 review 变了：把这个 ticket 所有 PR 写成一条 refresh handoff。 */
   onPrChanged(ticketKey: string): void;
   /** CI 有了新的结论。 */
@@ -86,6 +90,12 @@ interface Marks {
 
 type Forced = (ticketKey: string, repoId: number | null) => boolean;
 
+/** 一轮里读失败的 PR：notFound 是 GitHub 说没有这个 PR，其余是 gh 失败。 */
+interface Unread {
+  poll: PrPoll;
+  notFound: boolean;
+}
+
 const sameChecks = (a: CiCheck[], b: CiCheck[]) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
@@ -98,9 +108,9 @@ export class PrWatcher {
   private running: Promise<void> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private soonTimer: ReturnType<typeof setTimeout> | null = null;
-  /** soon() / soonTicket() 要求马上查的仓库和 ticket。 */
+  /** soon() / soonTicket() 要求马上查的仓库和 ticket；ticket 的值：放弃了的 PR 要不要也读。 */
   private dueRepos = new Set<number>();
-  private dueTickets = new Set<string>();
+  private dueTickets = new Map<string, boolean>();
   private ghActive = 0;
   private readonly ghWaiting: (() => void)[] = [];
   /** Copilot review 的行内评论拉失败的次数，键 `${url}:${reviewId}`；拉到了就删掉。只在内存里。 */
@@ -133,9 +143,12 @@ export class PrWatcher {
     this.schedule();
   }
 
-  /** 立刻查这个 ticket 所有仓库的分支和它所有的 PR。 */
-  soonTicket(ticketKey: string): void {
-    this.dueTickets.add(ticketKey);
+  /**
+   * 立刻查这个 ticket 所有仓库的分支和它所有的 PR。retryGivenUp（默认 true）：放弃读了的 PR 也读一次（用户点了刷新、ticket 的 session 停下来）。
+   * 总控停下来时把 epic 里每个 ticket 都查一遍，那时传 false：不然放弃了的 PR 总控每停一次就读一次，放弃等于没放弃。
+   */
+  soonTicket(ticketKey: string, o: { retryGivenUp?: boolean } = {}): void {
+    this.dueTickets.set(ticketKey, (this.dueTickets.get(ticketKey) ?? false) || (o.retryGivenUp ?? true));
     this.schedule();
   }
 
@@ -205,15 +218,16 @@ export class PrWatcher {
     const repos = this.dueRepos;
     const keys = this.dueTickets;
     this.dueRepos = new Set();
-    this.dueTickets = new Set();
+    this.dueTickets = new Map();
     const forced: Forced = (key, repoId) => keys.has(key) || (repoId !== null && repos.has(repoId));
+    const retryGivenUp: Forced = (key, repoId) => keys.get(key) === true || (repoId !== null && repos.has(repoId));
     const marks: Marks = { prChanged: new Set(), changed: false };
     let tickets: Pick<Ticket, "key" | "repos">[] = [];
     await this.part("listing tickets", () => {
       tickets = this.d.tickets();
     });
     await this.part("pruning old branches", () => this.prune(tickets, marks));
-    await this.part("reading PRs", () => this.pollPrs(tickets, forced, marks));
+    await this.part("reading PRs", () => this.pollPrs(tickets, forced, retryGivenUp, marks));
     await this.part("checking branches", () => this.checkBranches(tickets, forced, marks));
     await this.part("checking owned branches", () => this.checkOwnedBranches(tickets, forced, marks));
     await this.part("handling merged PRs", () => this.handleMerged());
@@ -237,57 +251,66 @@ export class PrWatcher {
     }
   }
 
-  private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
+  private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, retryGivenUp: Forced, marks: Marks): Promise<void> {
     const live = new Set(tickets.map((t) => t.key));
     const now = this.d.now();
-    // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。
-    // 放弃了的（read_retry_at 还没到）不读，除非这一轮是强制的（用户点了刷新、session 刚 push）。
+    // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。认定不存在的 needingRead 也不给。
+    // 放弃了的（read_retry_at 还没到）不读，除非这一轮强制、而且要重试放弃了的（用户点了刷新、session 刚 push 或停下；总控停下的那种不算）。
     const rows = this.d.prs
-      .needingRead()
-      .filter((r) => (live.has(r.ticketKey) || r.checkedAt === 0) && (r.readRetryAt === null || r.readRetryAt <= now || forced(r.ticketKey, r.repoId)));
+      .needingRead(now)
+      .filter((r) => (live.has(r.ticketKey) || r.checkedAt === 0) && (r.readRetryAt === null || r.readRetryAt <= now || retryGivenUp(r.ticketKey, r.repoId)));
     const urls = new Set(rows.map((r) => r.url));
     for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);
     const polls = prPolls(rows, {
       repoOf: (id) => this.d.repoOf(id), ghWorkDir: (r) => this.d.ghWorkDir(r), home: this.d.home, sessionOpen: (k, id) => this.d.sessionOpen(k, id),
     });
+    // 总控停下来那种强制（retryGivenUp 为 false）也守着没读成功过的退避：坏链接不跟着总控每停一次读一次。
     const due = capRound(
-      polls.filter((p) =>
-        p.rows.some((r) => forced(r.ticketKey, r.repoId) || (now >= nextPrCheckAt(r, p.sessionOpen) && now >= (this.unreadBackoff.get(p.url)?.at ?? 0))),
-      ),
+      polls.filter((p) => {
+        const backedOff = now < (this.unreadBackoff.get(p.url)?.at ?? 0);
+        return p.rows.some((r) => retryGivenUp(r.ticketKey, r.repoId) || (!backedOff && (forced(r.ticketKey, r.repoId) || now >= nextPrCheckAt(r, p.sessionOpen))));
+      }),
     );
-    const unread: PrPoll[] = [];
+    const unread: Unread[] = [];
     await Promise.all(due.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, unread, marks))));
-    // 这一轮读了两个以上、全都失败：多半是 gh 离线 / 没登录 / 网络断了，不是这些 PR 的问题，不算进失败次数。
-    const outage = due.length >= 2 && unread.length === due.length;
+    // 这一轮读了两个以上、全都是 gh 失败：多半是 gh 离线 / 没登录 / 网络断了，不是这些 PR 的问题，不算进失败次数。
+    // GitHub 回答了「不存在」的不算 gh 失败（有一个这样的，gh 就是在线的），它们自己一定计数，不然全是坏链接的时候永远停不下来。
+    const outage = due.length >= 2 && unread.length === due.length && unread.every((u) => !u.notFound);
     if (outage) this.d.log(`pr watch: all ${due.length} PR reads failed this round; not counting them (gh offline?)`);
-    for (const p of unread) await this.part(`noting the failed read of ${p.url}`, () => this.noteFailed(p, !outage, marks));
+    for (const u of unread) await this.part(`noting the failed read of ${u.poll.url}`, () => this.noteFailed(u, !outage, marks));
   }
 
   /**
    * C-V7：读失败不是 PR 变了。ci、state 留着上一次的，只记下读失败；从没读成功过的 checkedAt 留 0（还算第一次读），过一会儿再试。
    * 失败了 10 次（PR_READ_GIVE_UP）、持续一天：停一天（只有强制读会读它），开着的状态也不再挡着 ticket。
    */
-  private noteFailed(p: PrPoll, count: boolean, marks: Marks): void {
+  private noteFailed(u: Unread, count: boolean, marks: Marks): void {
+    const p = u.poll;
     const now = this.d.now();
-    let gaveUp = false;
+    let gone = false;
+    let stopped = false;
     for (const r of p.rows) {
-      if (this.d.prs.noteReadFailure(r.id, now, { count }).gaveUp) gaveUp = true;
+      const res = this.d.prs.noteReadFailure(r.id, now, { count, notFound: u.notFound });
+      if (res.gone) gone = true;
+      else if (res.gaveUp) stopped = true;
       if (!r.readError) marks.changed = true;
     }
-    if (gaveUp) {
-      this.d.log(`pr watch: giving up on ${p.url} after a day of failed reads; trying again once a day`);
+    if (gone || stopped) {
+      if (gone) this.d.log(`pr watch: GitHub keeps saying ${p.url} does not exist; trying it again in a week`);
+      if (stopped) this.d.log(`pr watch: giving up on ${p.url} after a day of failed reads; trying again once a day`);
       marks.changed = true;
       for (const r of p.rows) marks.prChanged.add(r.ticketKey);
     }
   }
 
   /** 读一个 PR，写进链接它的每个 ticket 的行。读失败的放进 unread，整轮读完再记（要先知道是不是整轮都失败了）。 */
-  private async poll(p: PrPoll, unread: PrPoll[], marks: Marks): Promise<void> {
-    const pr = await this.gh(() => this.d.gh.prStatus(p.cwd, p.url, PR_GH_TIMEOUT_MS));
+  private async poll(p: PrPoll, unread: Unread[], marks: Marks): Promise<void> {
+    const got = await this.gh(() => this.d.gh.prStatus(p.cwd, p.url, PR_GH_TIMEOUT_MS));
     const now = this.d.now();
-    if (!pr) {
-      this.d.log(`pr watch: reading ${p.url} failed`);
-      unread.push(p);
+    if (got === null || got === GH_NOT_FOUND) {
+      const notFound = got === GH_NOT_FOUND;
+      this.d.log(`pr watch: reading ${p.url} failed${notFound ? " (not found)" : ""}`);
+      unread.push({ poll: p, notFound });
       if (p.rows.some((r) => r.checkedAt === 0)) {
         const prev = this.unreadBackoff.get(p.url);
         const delay = prev ? Math.min(prev.delay * 2, PR_SLOW_MS) : UNREAD_RETRY_MS;
@@ -295,7 +318,16 @@ export class PrWatcher {
       }
       return;
     }
+    const pr = got;
     this.unreadBackoff.delete(p.url);
+    const moved = prUrlParts(pr.url)?.slug;
+    if (moved && moved !== p.slug) {
+      try {
+        this.d.onSlugMoved?.(p.slug, moved);
+      } catch (e) {
+        this.d.log(`pr watch: reporting that ${p.slug} moved to ${moved} failed`, e);
+      }
+    }
     // 合并了、关闭了的不再取失败日志：没人会再看，省下 gh 调用。失败的检查照记（不带日志）。
     // 行内评论和 review 作者只在开着变成合并 / 关闭的那一次还取（合并前刚交的 review 要记对）；之后的读（例如补链接来的）不取。
     const open = pr.state === "OPEN";
@@ -348,7 +380,8 @@ export class PrWatcher {
     // 状态最后一次变化（ws-b）：汇总新鲜度和"卡了多久"看它；第一次读到也算。标题、label 不算状态。
     const statusChanged = prStatusChanged(r, { state, review: pr.review, ci: pr.ci, headSha: pr.headSha, ...detail }, first);
     this.d.prs.update(r.id, {
-      state, review: pr.review, ci: pr.ci, headSha: pr.headSha, headBranch, failed, readError: false, readFailures: 0, readFailingSince: null, readRetryAt: null, checkedAt: now,
+      state, review: pr.review, ci: pr.ci, headSha: pr.headSha, headBranch, failed, readError: false, readFailures: 0, readFailingSince: null, readRetryAt: null,
+      readNotFound: 0, readNotFoundSince: null, readGoneAt: null, checkedAt: now,
       openedAt: pr.createdAt ?? r.openedAt, mergedAt, closedAt,
       ...detail, baseBranch: detail.baseBranch ?? r.baseBranch, title: detail.title ?? r.title, author: detail.author ?? r.author,
       ...(statusChanged && { statusChangedAt: now }),

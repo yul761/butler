@@ -259,7 +259,9 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prStatus, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { RepoRenamesRepo } from "./db/repo-renames-repo";
+import { RepoRenames } from "./tickets/repo-renames";
 import { LessonsRepo } from "./db/lessons-repo";
 import { LessonRunsRepo } from "./db/lesson-runs-repo";
 import { RepoIdentity } from "./lessons/repo-identity";
@@ -2190,7 +2192,27 @@ async function bootstrap(): Promise<void> {
   // 放弃读了的 PR：handoff 里（模型报的、记着的）开着也不再把 ticket 留在 in_review。
   const givenUpPrs = (k: string): ReadonlySet<string> => new Set(ticketPrs.byTicket(k).filter(prGivenUp).map((p) => p.url));
   const branchWatch = new BranchWatchRepo(db);
-  const prLinker = new PrLinker({ prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), now: Date.now });
+  // 仓库改名（BTL-261）：记下的改名启动时先改写一遍（读 PR 之前），之后启动扫一遍、watcher / linker 看到链接换了仓库名时再查。
+  const repoRenamesRepo = new RepoRenamesRepo(db);
+  // 汇总还没建好（启动时改写）就先记着，建好以后马上重算。
+  let rerollPending = false;
+  let afterRename = (): void => {
+    rerollPending = true;
+  };
+  const repoRenames = new RepoRenames({
+    repo: repoRenamesRepo,
+    currentSlug: (slug) => repoCurrentSlug(homedir(), slug, 20_000),
+    candidates: () => repoRenamesRepo.candidates(Date.now() - 90 * 24 * 60 * 60_000),
+    slugOf: (path) => repoIdentity.slugOf(path),
+    now: Date.now,
+    log: logger,
+    onApplied: () => afterRename(),
+  });
+  repoRenames.applyRecorded();
+  const prLinker = new PrLinker({
+    prs: ticketPrs, tickets, slugOf: (path) => repoIdentity.slugOf(path), canonical: (slug) => repoRenamesRepo.canonical(slug),
+    onSlugMoved: (from, to) => repoRenames.suggest(from, to), log: logger, now: Date.now,
+  });
   // 合并通知排进等待者的信箱（BTL-248）：在忙的下一次调用工具读到，关着的下次打开时读到，休眠的信箱叫它醒。
   const holdWatcher = new HoldWatcher({
     repo: gateRepo, prInfo, git,
@@ -2524,7 +2546,8 @@ async function bootstrap(): Promise<void> {
     home: homedir(),
     slugOf: (path) => repoIdentity.slugOf(path),
     linker: prLinker,
-    gh: { prStatus, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
+    gh: { prStatus: prRead, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
+    onSlugMoved: (from, to) => repoRenames.suggest(from, to),
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
     owners: branchOwners,
@@ -2803,7 +2826,8 @@ async function bootstrap(): Promise<void> {
     // 栈（工作流 K）：这一层有新提交就 rebase 上面的层；没递进去的冲突趁现在补送。
     if (head?.ticketKey) void stackService.sessionStopped(head.ticketKey).catch((e: unknown) => logger(`stacks: after ${stopped} stopped failed`, e));
     if (head?.ticketKey) prWatcher.soonTicket(head.ticketKey);
-    else if (head?.coordinator && head.featureId != null) for (const t of tickets.listByFeature(head.featureId)) prWatcher.soonTicket(t.key);
+    // 总控停下来：epic 里每个 ticket 都查一遍，但放弃了的 PR 不跟着重试（BTL-261：不然它们每一轮都被读）。
+    else if (head?.coordinator && head.featureId != null) for (const t of tickets.listByFeature(head.featureId)) prWatcher.soonTicket(t.key, { retryGivenUp: false });
     else if (head?.repoId != null) prWatcher.soon(head.repoId);
   };
 
@@ -3772,6 +3796,16 @@ async function bootstrap(): Promise<void> {
     since: () => metricsSince(settings) ?? Date.now(), now: Date.now, log: logger,
   });
   const rollupFirst = setTimeout(() => metricsRollup.run(), 60_000);
+  // 改名改写了按仓库分的汇总（并进新名字时是相加的）：马上整窗重算一遍。
+  afterRename = () => {
+    try {
+      metricsRollup.run();
+    } catch (e) {
+      logger("metrics: re-rolling up after a repo rename failed", e);
+    }
+  };
+  if (rerollPending) afterRename();
+  const renameScan = setTimeout(() => void repoRenames.scan(), 30_000);
   const rollupTimer = setInterval(() => metricsRollup.run(), 60 * 60_000);
   const METRICS_VIEW_STALE_MS = 10 * 60_000;
   const metricsCutoff = () => baselineCutoffOf(settings, () => sessions.firstShipherdCreatedAt(), metricsSince(settings) ?? Date.now());
@@ -3821,6 +3855,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(upgradeTimer);
     clearInterval(waitTimer);
     clearTimeout(rollupFirst);
+    clearTimeout(renameScan);
     clearInterval(rollupTimer);
     lessonAdmission.stop();
     lessonWizard.stop();

@@ -22,7 +22,9 @@ const cols = (db: DatabaseSync, t: string) => (db.prepare(`PRAGMA table_info(${t
 
 describe("rename migration (BTL-260)", () => {
   it("is the migration right after the last shipped one", () => {
-    expect(MIGRATIONS.length).toBe(PRE + 1);
+    // 后面还可以再加迁移（BTL-261 的 58），改名这一条固定在第 57 条。
+    expect(MIGRATIONS.length).toBeGreaterThanOrEqual(PRE + 1);
+    expect(MIGRATIONS[PRE]).toContain("RENAME COLUMN butler TO shipherd");
   });
 
   it("renames butler columns and tables and keeps their values", () => {
@@ -33,7 +35,7 @@ describe("rename migration (BTL-260)", () => {
     db.exec(`INSERT INTO metrics_daily (day, group_kind, group_key, butler, metric, n, total) VALUES ('2026-01-01', 'all', '', 1, 'm', 2, 3)`);
     db.exec(`INSERT INTO review_effect_prs (pr_id, repo_slug, number, butler, computed_at) VALUES (1, 'o/r', 1, 1, 1)`);
     db.exec(`INSERT INTO butler_messages (id, from_session, text, status, queued_at) VALUES ('m1', 'c', 'hi', 'replied', 1)`);
-    expect(migrate(db)).toBe(PRE + 1);
+    expect(migrate(db)).toBe(MIGRATIONS.length);
 
     expect(cols(db, "sessions")).toContain("shipherd");
     expect(cols(db, "sessions")).not.toContain("butler");

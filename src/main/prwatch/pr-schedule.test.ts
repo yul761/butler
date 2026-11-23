@@ -10,7 +10,7 @@ const bw = (o: Partial<BranchWatchRow> = {}): BranchWatchRow => ({
 const pr = (o: Partial<TicketPr> = {}): TicketPr => ({
   id: 1, ticketKey: "T-1", url: "https://github.com/a/x/pull/3", slug: "a/x", repoId: 1, number: 3, headBranch: "b", state: "open", review: null, ci: "pending",
   readError: false, headSha: null, failed: [], openedAt: null, mergedAt: null, closedAt: null, source: "branch", linkedAt: 0, checkedAt: 1000, deliveredKey: null, deliveredAt: null, deliveredTo: null,
-  mergedHandledAt: null, readFailures: 0, readFailingSince: null, readRetryAt: null, baseBranch: null, isDraft: false, title: null, author: null, labels: [], reviewRequests: [], reviewers: [], mergeable: null, mergeState: null, statusChangedAt: null, ...o,
+  mergedHandledAt: null, readFailures: 0, readFailingSince: null, readRetryAt: null, readNotFound: 0, readNotFoundSince: null, readGoneAt: null, baseBranch: null, isDraft: false, title: null, author: null, labels: [], reviewRequests: [], reviewers: [], mergeable: null, mergeState: null, statusChangedAt: null, ...o,
 });
 const repo = (id: number, o: Partial<TicketRepo> = {}): TicketRepo => ({
   id, ticketKey: "T-1", repoPath: `/r${id}`, workMode: "worktree", worktreePath: `/w${id}`, branch: "b", createdAt: 0, worktreeRemovedAt: null, cleanupBlocked: null, ...o,
