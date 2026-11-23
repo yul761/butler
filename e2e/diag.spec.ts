@@ -33,7 +33,14 @@ test("a renderer crash is logged with its reason, the window reloads, and the di
   await app.evaluate(({ dialog }, f) => {
     dialog.showSaveDialog = (async () => ({ canceled: false, filePath: f })) as unknown as typeof dialog.showSaveDialog;
   }, file);
+  await app.evaluate(({ app: a }) => {
+    const g = globalThis as unknown as { gone: number };
+    g.gone = 0;
+    a.on("render-process-gone", () => g.gone++);
+  });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
+  // Windows 上崩溃是异步生效的：先等主进程收到 render-process-gone，不然旧页面还能应答，下面的 poll 会提前通过。
+  await expect.poll(() => app.evaluate(() => (globalThis as unknown as { gone: number }).gone), { timeout: 15_000 }).toBe(1);
   // 崩了以后等一秒再重新加载：新的渲染进程起来、界面又画出来了。Playwright 接不回崩过的页面，从主进程看。
   await expect.poll(() => app.evaluate(async ({ BrowserWindow }) => {
     const wc = BrowserWindow.getAllWindows()[0].webContents;
@@ -60,9 +67,13 @@ test("after the reloads run out, Esc on the crash dialog closes only the window 
   const { app, page } = await launch(s);
   await completeWizard(page, s);
   // 系统对话框 e2e 点不到：换成「按了 Esc」（cancelId）。
-  await app.evaluate(({ dialog }) => {
-    const g = globalThis as unknown as { crashDialogs: number };
+  // Windows 上崩溃是异步生效的：forcefullyCrashRenderer 返回后旧页面还能应答一小会儿。
+  // 每次崩溃先等主进程收到 render-process-gone，再等重新加载完，不然下一次崩溃会落在「等 1 秒再重新加载」里被忽略。
+  await app.evaluate(({ app: a, dialog }) => {
+    const g = globalThis as unknown as { crashDialogs: number; gone: number };
     g.crashDialogs = 0;
+    g.gone = 0;
+    a.on("render-process-gone", () => g.gone++);
     dialog.showMessageBox = (async (...a: unknown[]) => {
       const o = (a.length > 1 ? a[1] : a[0]) as { cancelId: number };
       g.crashDialogs++;
@@ -74,12 +85,19 @@ test("after the reloads run out, Esc on the crash dialog closes only the window 
     if (!w || w.webContents.isCrashed() || w.webContents.isLoading()) return false;
     return w.webContents.executeJavaScript("document.querySelector('.sidebar') !== null").catch(() => false);
   });
+  const gone = () => app.evaluate(() => (globalThis as unknown as { gone: number }).gone);
+  let crashes = 0;
+  const crash = async () => {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
+    crashes++;
+    await expect.poll(gone, { timeout: 15_000 }).toBe(crashes);
+  };
   // 三次自动重新加载，第四次崩溃弹对话框。
   for (let i = 0; i < 3; i++) {
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
+    await crash();
     await expect.poll(loaded, { timeout: 15_000 }).toBe(true);
   }
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
+  await crash();
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), { timeout: 15_000 }).toBe(0);
   expect(await app.evaluate(() => (globalThis as unknown as { crashDialogs: number }).crashDialogs)).toBe(1);
   // app 还在（没有走 before-quit）：主进程照常应答。
@@ -87,7 +105,7 @@ test("after the reloads run out, Esc on the crash dialog closes only the window 
   await app.evaluate(({ app: a }) => a.emit("activate"));
   await expect.poll(loaded, { timeout: 15_000 }).toBe(true);
   // 新窗口重新计数：再崩一次是自动重新加载，不弹对话框。
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
+  await crash();
   await expect.poll(loaded, { timeout: 15_000 }).toBe(true);
   expect(await app.evaluate(() => (globalThis as unknown as { crashDialogs: number }).crashDialogs)).toBe(1);
 });
