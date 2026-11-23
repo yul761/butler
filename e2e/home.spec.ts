@@ -188,6 +188,17 @@ test("the All work page has the create buttons, the entries and every piece of w
 
 /** 一个元素的文字色和它实际的底色（往上找到不透明为止，半透明的叠起来），算对比度。在页面里用 canvas 换算任何 CSS 颜色。 */
 async function contrastOf(el: Locator): Promise<{ ratio: number; color: string; background: string }> {
+  // 定位到节点和在页面里量之间隔着一次往返：这中间 React 重挂了（活动每 200ms 刷一次）就重新定位再量，别的错照常抛（BTL-264）。
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await measureContrast(el);
+    } catch (e) {
+      if (attempt >= 4 || !String(e).includes("element was detached")) throw e;
+    }
+  }
+}
+
+function measureContrast(el: Locator): Promise<{ ratio: number; color: string; background: string }> {
   return el.evaluate((node) => {
     // 脱离页面的节点 getComputedStyle 全是空串：直接说清楚是重挂了，别报成颜色换算不了。
     if (!node.isConnected) throw new Error("element was detached (re-rendered) before its contrast was read");

@@ -41,10 +41,14 @@ test("the pinyin box stays on the cursor and inside the terminal", async ({ make
   // 2. 光标靠近右边缘、输入长拼音：页面不横向滚动，UI 不动，拼音框不超出终端右边。
   const wrapRight = () => wrap.evaluate((e) => e.getBoundingClientRect().right);
   // 先大步走，离右边 120px 内改成一格一格走，免得一步跨过去折到下一行。
+  // 每走一步等光标真的挪了再量（BTL-264）：回显慢的时候（CI、终端输出攒批）不等就接着打，会多打几步折到下一行，
+  // room 又变大，600 步用完还停不下（CI 上报过 337 / 74 > 30）。
   for (let i = 0; i < 600; i++) {
-    const room = (await wrapRight()) - (await caretLeft());
+    const before = await caretLeft();
+    const room = (await wrapRight()) - before;
     if (room <= 30) break;
     await page.keyboard.insertText(room > 120 ? "a".repeat(8) : "a");
+    await expect.poll(caretLeft).not.toBe(before);
   }
   expect((await wrapRight()) - (await caretLeft())).toBeLessThanOrEqual(30);
   await compose("zhong'guo'ren'min'gong'he'guo'wan'sui'wan'sui'wan'wan'sui");
