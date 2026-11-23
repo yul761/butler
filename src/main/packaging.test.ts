@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -44,7 +45,7 @@ describe("packaging config (design 2.1, 12)", () => {
 
   it("uses the same app id as the Windows notification identity", () => {
     expect(cfg.appId).toBe(APP_ID);
-    expect(cfg.productName).toBe("Butler");
+    expect(cfg.productName).toBe("Shipherd");
   });
 
   it("never publishes, signs macOS in after-pack or electron-builder, and keeps RunAsNode available for the memory MCP", () => {
@@ -62,7 +63,7 @@ describe("packaging config (design 2.1, 12)", () => {
   it("signs the Developer ID build with the hardened runtime and only the entitlements it needs (BTL-258)", () => {
     expect(cfg.mac.hardenedRuntime).toBe(true);
     expect(cfg.mac.entitlements).toBe("build-resources/entitlements.mac.plist");
-    // 包里的 helper、node-pty、butler-hook 和主程序用同一份：它们都跑 V8 或 Node。
+    // 包里的 helper、node-pty、shipherd-hook 和主程序用同一份：它们都跑 V8 或 Node。
     expect(cfg.mac.entitlementsInherit).toBe(cfg.mac.entitlements);
     expect(cfg.dmg.sign).toBe(true);
     const plist = read(String(cfg.mac.entitlements));
@@ -76,7 +77,7 @@ describe("packaging config (design 2.1, 12)", () => {
     expect(cfg.mac.files).toEqual(["!**/node_modules/node-pty/prebuilds/win32-*/**", "!**/node_modules/node-pty/prebuilds/darwin-x64/**"]);
   });
 
-  it("uses the Butler icon (direction E1) on both platforms, not the default Electron one", () => {
+  it("uses the Shipherd icon (direction E1) on both platforms, not the default Electron one", () => {
     expect(cfg.mac.icon).toBe("build-resources/icon.png");
     expect(cfg.win.icon).toBe("build-resources/icon.ico");
     for (const f of [cfg.mac.icon, cfg.win.icon]) expect(existsSync(`${root}${String(f)}`), f).toBe(true);
@@ -94,14 +95,14 @@ describe("packaging config (design 2.1, 12)", () => {
     expect(cfg.extraResources).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ from: "build/hook", to: "hook" }),
-        expect.objectContaining({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs", "butler-sessions-mcp.cjs", "mcp-hub.cjs"] }),
+        expect.objectContaining({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs", "shipherd-sessions-mcp.cjs", "mcp-hub.cjs"] }),
       ]),
     );
     expect(cfg.asarUnpack).toContain("**/node_modules/node-pty/**");
-    // 主进程按 process.resourcesPath/hook/butler-hook[.exe] 和 process.resourcesPath/memory-mcp/statecore-mcp.cjs 找（index.ts）。
+    // 主进程按 process.resourcesPath/hook/shipherd-hook[.exe] 和 process.resourcesPath/memory-mcp/statecore-mcp.cjs 找（index.ts）。
     const byFrom = (from: string) => cfg.extraResources.find((r) => r.from === from);
-    expect(byFrom("build/hook")).toEqual({ from: "build/hook", to: "hook", filter: ["butler-hook", "butler-hook.exe"] });
-    expect(byFrom("build/memory-mcp")).toEqual({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs", "butler-sessions-mcp.cjs", "mcp-hub.cjs"] });
+    expect(byFrom("build/hook")).toEqual({ from: "build/hook", to: "hook", filter: ["shipherd-hook", "shipherd-hook.exe"] });
+    expect(byFrom("build/memory-mcp")).toEqual({ from: "build/memory-mcp", to: "memory-mcp", filter: ["statecore-mcp.cjs", "shipherd-sessions-mcp.cjs", "mcp-hub.cjs"] });
   });
 
   it("ships the built app but not source maps", () => {
@@ -115,24 +116,43 @@ describe("packaging config (design 2.1, 12)", () => {
 
   it("pins the NSIS install behaviour: per-user, both shortcuts, user data kept on uninstall", () => {
     expect(cfg.nsis).toEqual({
-      artifactName: "Butler-Setup-${version}.${ext}",
+      artifactName: "Shipherd-Setup-${version}.${ext}",
       oneClick: false,
       perMachine: false,
       allowToChangeInstallationDirectory: true,
       deleteAppDataOnUninstall: false,
       createDesktopShortcut: true,
       createStartMenuShortcut: true,
+      include: "build-resources/installer.nsh",
     });
   });
 
+  // BTL-260：appId 改了，NSIS 的卸载注册表项 GUID 也跟着变；installer.nsh 要按旧 appId 的 GUID 找旧 Butler。
+  it("detects the pre-rename Butler install by the uninstall key electron-builder derived from the old appId", () => {
+    const uuidV5 = (name: string, ns: string): string => {
+      const h = createHash("sha1").update(Buffer.concat([Buffer.from(ns.replace(/-/g, ""), "hex"), Buffer.from(name)])).digest();
+      h[6] = (h[6] & 0x0f) | 0x50;
+      h[8] = (h[8] & 0x3f) | 0x80;
+      const x = h.subarray(0, 16).toString("hex");
+      return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+    };
+    // electron-builder（app-builder-lib NsisTarget）的命名空间。
+    const NS = "50e065bc-3134-11e6-9bab-38c9862bdaf3";
+    const nsh = read("build-resources/installer.nsh");
+    expect(nsh).toContain(`!define LEGACY_BUTLER_GUID "${uuidV5("io.statecore.butler", NS)}"`);
+    expect(uuidV5("io.statecore.butler", NS)).not.toBe(uuidV5(cfg.appId, NS));
+    expect(nsh).toMatch(/!macro customInit[\s\S]*MessageBox MB_YESNO[^\n]*\/SD IDNO[\s\S]*!macroend/);
+    expect(existsSync(`${root}${cfg.nsis.include as string}`)).toBe(true);
+  });
+
   it("names the installers without spaces, as the README and the CI upload globs expect", () => {
-    // GitHub turns spaces in release asset names into dots, so "Butler Setup 1.0.0.exe" would not match the README.
-    expect(cfg.nsis.artifactName).toBe("Butler-Setup-${version}.${ext}");
-    expect(cfg.dmg.artifactName).toBe("Butler-${version}-${arch}.${ext}");
-    expect(cfg.mac.artifactName).toBe("Butler-${version}-${arch}-mac.${ext}");
+    // GitHub turns spaces in release asset names into dots, so "Shipherd Setup 1.0.0.exe" would not match the README.
+    expect(cfg.nsis.artifactName).toBe("Shipherd-Setup-${version}.${ext}");
+    expect(cfg.dmg.artifactName).toBe("Shipherd-${version}-${arch}.${ext}");
+    expect(cfg.mac.artifactName).toBe("Shipherd-${version}-${arch}-mac.${ext}");
     const readme = read("README.md");
-    for (const name of ["Butler-x.y.z-arm64.dmg", "Butler-x.y.z-arm64-mac.zip", "Butler-Setup-x.y.z.exe"]) expect(readme, name).toContain(name);
-    expect(readme).not.toContain("Butler Setup");
+    for (const name of ["Shipherd-x.y.z-arm64.dmg", "Shipherd-x.y.z-arm64-mac.zip", "Shipherd-Setup-x.y.z.exe"]) expect(readme, name).toContain(name);
+    expect(readme).not.toContain("Shipherd Setup");
   });
 
   it("has release metadata and scripts", () => {

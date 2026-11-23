@@ -162,8 +162,11 @@ export interface Risk {
 
 // ---------------------------------------------------------------- 简报（设计 §8）
 
-export const BRIEF_START = "<!-- butler:brief -->";
-export const BRIEF_END = "<!-- /butler:brief -->";
+export const BRIEF_START = "<!-- shipherd:brief -->";
+export const BRIEF_END = "<!-- /shipherd:brief -->";
+/** 改名前（BTL-260）写进 PR 描述的简报块标记：已经在 GitHub 上的 PR 里，更新时要认得、整块换成新的，不能再追加一份。 */
+export const LEGACY_BRIEF_START = "<!-- butler:brief -->";
+export const LEGACY_BRIEF_END = "<!-- /butler:brief -->";
 
 export interface BriefView {
   id: number;

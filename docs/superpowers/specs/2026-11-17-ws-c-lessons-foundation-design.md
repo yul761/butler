@@ -1,6 +1,6 @@
 # Workstream C: lessons foundation (design addendum)
 
-Date: 2026-11-17. Master design: `2026-11-17-butler-3-design.md` (contracts 4.2, 4.3, 4.4). Base: `main` at 2.1.0.
+Date: 2026-11-17. Master design: `2026-11-17-shipherd-3-design.md` (contracts 4.2, 4.3, 4.4). Base: `main` at 2.1.0.
 
 Scope: the data model for lessons admission and scoring, bulk actions with undoable batches, the layered (global → product → repo) resolver and the admission policies built on it, and the export / import framework with the `products`, `lessons` and `policies` sections. This is stage 0 ("foundation") of the lessons plan. Nothing here calls a model.
 
@@ -136,8 +136,8 @@ class LayeredResolver<T> {
 
 `src/main/config-io/`:
 
-- `format.ts`: the file is one JSON object: `{ format: "butler-config", formatVersion, exportedAt, butlerVersion, scope, options, sections }`. `CURRENT_FORMAT_VERSION = 1`. A file with a higher version is refused ("made by a newer Butler, upgrade first"); a lower one runs the registered migration functions in order (`migrateDoc`). A file that is not JSON, not `butler-config`, or fails a section's schema is refused with the section named.
-- `registry.ts`: `ConfigSection<Item>` = `{ id, order, schema, export(scope, options), preview(incoming, ctx) → SectionPreview, apply(incoming, plan, ctx) → counts }`. Sections register at startup; the file lists whatever sections were exported, and import skips (and reports) sections this Butler does not know.
+- `format.ts`: the file is one JSON object: `{ format: "shipherd-config", formatVersion, exportedAt, shipherdVersion, scope, options, sections }`. `CURRENT_FORMAT_VERSION = 1`. A file with a higher version is refused ("made by a newer Shipherd, upgrade first"); a lower one runs the registered migration functions in order (`migrateDoc`). A file that is not JSON, not `shipherd-config`, or fails a section's schema is refused with the section named.
+- `registry.ts`: `ConfigSection<Item>` = `{ id, order, schema, export(scope, options), preview(incoming, ctx) → SectionPreview, apply(incoming, plan, ctx) → counts }`. Sections register at startup; the file lists whatever sections were exported, and import skips (and reports) sections this Shipherd does not know.
 - `fingerprint.ts`: sha256 of a canonical JSON of the item's identity fields, first 16 hex characters. Lessons: normalised text (trim, collapse spaces, lower case) + scope (repo slug or product name) + sorted globs. Products: name. Policies: the layer (global / product name / repo slug). Fingerprints never use local ids.
 - `service.ts`: `exportDoc(scope, options)`, `writeExport(file, …)`, `preview(file)` (parse → migrate → each section's preview; keeps the parsed document under a token), `apply(token, mode, resolutions)`.
 
@@ -150,10 +150,10 @@ Per section and in total: **added** (fingerprint not here), **changed** (same fi
 ### 5.2 Apply
 
 - Mode **merge**: added items are created; for changed / conflicting items the resolution chosen per row, or in bulk ("All imported" / "All local"), decides; the default is local. Local items absent from the file are kept.
-- Mode **replace**: first writes an automatic backup export of everything (to `<BUTLER_HOME>/backups/before-replace-<time>.json`; if the backup fails, nothing is imported), then applies as merge with "imported" as the default resolution, then removes the local items in the file's scope that the file does not have.
+- Mode **replace**: first writes an automatic backup export of everything (to `<SHIPHERD_HOME>/backups/before-replace-<time>.json`; if the backup fails, nothing is imported), then applies as merge with "imported" as the default resolution, then removes the local items in the file's scope that the file does not have.
 - **Imported lessons enter pending**: new lessons get `status = pending`, `admission = pending`; a lesson the file marks `rejected` arrives `rejected` (a rejection never makes anything reach a session). An existing lesson's status is only changed when the person picks "imported" on a conflict. Hits become the larger of the two.
 - Every apply is **one batch** (`kind = import` or `replace`, `origin = import`) covering lessons; Batches can undo it. Products and policies are written in the same transaction; products and policies created by an import are recorded as entities `product` / `policy` in the same batch so undo removes them too.
-- Repos named in the file that this machine does not know get a `lesson_repos` row with an empty local path ("not cloned here"). Analysis, backfill and "open in Claude" refuse such repos (`unknown_repo` / `not_found`), and the page shows "not cloned on this machine". When Butler later finds a clone with that slug, the path is filled in as usual.
+- Repos named in the file that this machine does not know get a `lesson_repos` row with an empty local path ("not cloned here"). Analysis, backfill and "open in Claude" refuse such repos (`unknown_repo` / `not_found`), and the page shows "not cloned on this machine". When Shipherd later finds a clone with that slug, the path is filled in as usual.
 
 ### 5.3 What an export contains
 
@@ -167,7 +167,7 @@ Per section and in total: **added** (fingerprint not here), **changed** (same fi
 
 ### 5.5 Automatic backups and reminders
 
-- `configBackupIntervalDays` (default `0` = off): when set, the scheduler tick writes a full export to `<BUTLER_HOME>/backups/auto-<time>.json` once per interval (job `config_backup`) and keeps the newest `configBackupKeep` (default `10`) automatic backups. Backups go to Butler's own folder; they never contain secrets or local paths.
+- `configBackupIntervalDays` (default `0` = off): when set, the scheduler tick writes a full export to `<SHIPHERD_HOME>/backups/auto-<time>.json` once per interval (job `config_backup`) and keeps the newest `configBackupKeep` (default `10`) automatic backups. Backups go to Shipherd's own folder; they never contain secrets or local paths.
 - `configExportReminderDays` (default `30`, `0` = off): the Import / export tab, and a line on the Lessons tab, remind the user when there are confirmed lessons and neither a manual export nor a backup has happened in that many days.
 - "Back up now" and "Open backups folder" on the Import / export tab.
 
@@ -179,16 +179,16 @@ Per section and in total: **added** (fingerprint not here), **changed** (same fi
 4. **Both platforms.** Only Node / Electron APIs (`node:crypto`, `node:fs`, `dialog`, `shell.openPath`); file names avoid `:` so they are valid on Windows.
 5. **Merged rows** are invisible everywhere except Batches history and the export of a batch's items.
 6. **Repos with an empty local path** are treated as "not cloned here" (5.2).
-7. **File dialogs stay in the main process.** `config-io/facade.ts` opens the save / open dialogs and passes only the chosen path to `ConfigIoService`; the renderer never sends a file path, so a compromised page cannot make Butler read or write an arbitrary file. A cancelled dialog returns `{ ok: false, reason: "cancelled" }` and shows nothing. The e2e tests replace `dialog.showSaveDialog` / `showOpenDialog` through `electronApp.evaluate`, so no system window opens and focus is never taken.
+7. **File dialogs stay in the main process.** `config-io/facade.ts` opens the save / open dialogs and passes only the chosen path to `ConfigIoService`; the renderer never sends a file path, so a compromised page cannot make Shipherd read or write an arbitrary file. A cancelled dialog returns `{ ok: false, reason: "cancelled" }` and shows nothing. The e2e tests replace `dialog.showSaveDialog` / `showOpenDialog` through `electronApp.evaluate`, so no system window opens and focus is never taken.
 8. **Two-phase apply.** Preview parses, migrates and validates the file once and keeps the result under a random token; apply takes the token and the choices, never the file again, so what is applied is exactly what was previewed. A token is dropped after apply, after six hours unused (each use, such as picking a starter target, restarts the clock; resolving rows one by one can take a while), or when more than five previews are open (oldest first). The renderer mirrors the main process's per-row default (added and removed rows follow the file; otherwise the bulk choice; otherwise imported for replace, local for merge) to show what each row will do before Apply.
 9. **Semantic conflicts.** D's detector runs during preview, after fingerprint matching; its hits turn a row into `conflicting` with the reason and the related local lesson. If the detector throws, the preview still succeeds without its rows and logs the error.
 10. **Reminder baseline.** "Days since export" counts from the later of the last manual export and the last automatic backup; before either has happened it counts from the oldest confirmed lesson, so a fresh install with nothing confirmed never reminds.
-11. **Backup kinds.** Files in `<BUTLER_HOME>/backups/` are named by kind: `auto-` (scheduled; only these are pruned to `configBackupKeep`), `before-replace-` (written before a replace import; never pruned automatically) and `manual-` ("Back up now"; never pruned).
+11. **Backup kinds.** Files in `<SHIPHERD_HOME>/backups/` are named by kind: `auto-` (scheduled; only these are pruned to `configBackupKeep`), `before-replace-` (written before a replace import; never pruned automatically) and `manual-` ("Back up now"; never pruned).
 12. **Docs.** `docs/configuration.md` and its Chinese twin get the three new settings, the admission policy keys, and the export file format.
 
 ## 7. Acceptance
 
 - Existing pending lessons can be confirmed or rejected in one action by filter, and the whole batch undone (unit + integration tests, and an e2e test on the page).
-- A file exported from one `BUTLER_HOME` imports into another and the preview shows added / changed / conflicting (integration test with two databases, and an e2e test with two sandboxes and stubbed file dialogs).
+- A file exported from one `SHIPHERD_HOME` imports into another and the preview shows added / changed / conflicting (integration test with two databases, and an e2e test with two sandboxes and stubbed file dialogs).
 - 2.1.0 data migrates with statuses unchanged and `admission = manual` on decided rows.
 - `pnpm typecheck && pnpm lint && pnpm test && pnpm e2e` pass on macOS and Windows.

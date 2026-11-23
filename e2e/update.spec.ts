@@ -1,9 +1,9 @@
 import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, ghCalls, openSettingsTab, test, unsupportedGhCalls, type FakeGhFixture } from "./fixtures";
 
-// 更新提示（BTL-253）：假 gh 给 releases/latest 的结果。Butler 只经 gh 查，不自己发 HTTP 请求，只提示不下载。
+// 更新提示（BTL-253）：假 gh 给 releases/latest 的结果。Shipherd 只经 gh 查，不自己发 HTTP 请求，只提示不下载。
 const release = (tag: string, body = "## Fixes\n- Faster startup") => ({
-  tag_name: tag, html_url: `https://github.com/yul761/butler/releases/tag/${tag}`, body, draft: false, prerelease: false, published_at: "2026-11-20T08:00:00Z",
+  tag_name: tag, html_url: `https://github.com/yul761/shipherd/releases/tag/${tag}`, body, draft: false, prerelease: false, published_at: "2026-11-20T08:00:00Z",
 });
 const withRelease = (r: FakeGhFixture["release"]): FakeGhFixture => ({ branches: {}, prs: {}, ...(r ? { release: r } : {}) });
 const releaseCalls = (calls: string[][]) => calls.filter((a) => a[0] === "api" && /\/releases\/latest$/.test(a[1] ?? ""));
@@ -57,7 +57,7 @@ test.describe("update notice", () => {
     expect(unsupportedGhCalls(s)).toEqual([]);
   });
 
-  test("a manual check says why it could not check, and when Butler is up to date", async ({ makeSandbox, launch }) => {
+  test("a manual check says why it could not check, and when Shipherd is up to date", async ({ makeSandbox, launch }) => {
     const s = makeSandbox({ gh: withRelease(undefined) });
     const { page } = await launch(s);
     await completeWizard(page, s);

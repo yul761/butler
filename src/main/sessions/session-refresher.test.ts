@@ -10,9 +10,9 @@ import {
 } from "./session-refresher";
 
 const base = (o: Partial<Session> = {}): Session => ({
-  id: "x", ticketKey: null, cwd: "/r", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
+  id: "x", ticketKey: null, cwd: "/r", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
+  featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, ...o,
 });
 
 /** 一个开着的终端：chain[0] 是终端启动时的 id（termId），最后一个是 head。 */
@@ -190,7 +190,7 @@ function setup(o: { threshold?: number; commandReady?: boolean; noEndTerminal?: 
 }
 
 /** 测试里 writeTail 默认写到的尾巴文件。 */
-const tailOf = (termId: string) => `/butler/refresh/${termId}.md`;
+const tailOf = (termId: string) => `/shipherd/refresh/${termId}.md`;
 
 afterEach(() => setLang("zh"));
 
@@ -228,7 +228,7 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t2.texts()).toEqual(["/handoff"]);
   });
 
-  it("stops before /clear when the user typed anything after Butler typed /handoff, however long ago (I3)", async () => {
+  it("stops before /clear when the user typed anything after Shipherd typed /handoff, however long ago (I3)", async () => {
     const t = setup();
     const term = t.addTerm("s1", {
       // 用户在等 handoff 的时候打了一下字（之后又安静了很久，guard 的 30 秒早过了）。
@@ -268,7 +268,7 @@ describe("SessionRefresher (plan 16)", () => {
     expect(ok.resumes).toHaveLength(1);
   });
 
-  it("input before Butler typed /handoff does not stop the refresh (I3)", async () => {
+  it("input before Shipherd typed /handoff does not stop the refresh (I3)", async () => {
     const t = setup();
     t.addTerm("s1", { typedAt: t.state.now - 60_000 });
     expect(await t.r.refresh("s1", "manual")).toBe("done");
@@ -369,17 +369,17 @@ describe("SessionRefresher (plan 16)", () => {
   });
 
   it("the resume sentence recalls the handoff, reads the tail and carries on, in both languages (BTL-190)", () => {
-    const path = "/Users/me/.butler/refresh/s1.md";
+    const path = "/Users/me/.shipherd/refresh/s1.md";
     expect(M().refreshResume("ticket", "DMS-1", path)).toBe(
-      `上下文已由 Butler 换新。先用 recall 调出 DMS-1 最新的 handoff，再读一下 ${path} 里换新前的最近对话，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。`,
+      `上下文已由 Shipherd 换新。先用 recall 调出 DMS-1 最新的 handoff，再读一下 ${path} 里换新前的最近对话，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。`,
     );
     expect(M().refreshResume("feature", "支付", null)).toBe(
-      "上下文已由 Butler 换新。先用 butler-feature 的 recall 调出这个 epic 最新的 handoff，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。",
+      "上下文已由 Shipherd 换新。先用 shipherd-feature 的 recall 调出这个 epic 最新的 handoff，然后接着做换新前正在做的事。如果换新前是在等用户、等 CI 或者等子 session，就用一句话说明在等什么，然后继续等。",
     );
     // 不再叫它停下来等用户。
     expect(M().refreshResume("ticket", "DMS-1", path)).not.toContain("不要自己开始");
     // Windows 上的路径（有空格、反斜杠）照样是一行，过了 sanitizeTask 也不变。
-    const win = "C:\\Users\\John Doe\\.butler\\refresh\\s1.md";
+    const win = "C:\\Users\\John Doe\\.shipherd\\refresh\\s1.md";
     for (const lang of ["zh", "en"] as const) {
       setLang(lang);
       for (const kind of ["ticket", "feature"] as const) {
@@ -391,9 +391,9 @@ describe("SessionRefresher (plan 16)", () => {
     }
     setLang("en");
     expect(M().refreshResume("ticket", "DMS-1", path)).toBe(
-      `Butler has refreshed the context. First use recall to load the latest handoff of DMS-1 and read ${path} for the conversation right before the refresh, then carry on with whatever you were doing before the refresh. If you were waiting for the user, for CI or for child sessions, say in one sentence what you're waiting for and keep waiting.`,
+      `Shipherd has refreshed the context. First use recall to load the latest handoff of DMS-1 and read ${path} for the conversation right before the refresh, then carry on with whatever you were doing before the refresh. If you were waiting for the user, for CI or for child sessions, say in one sentence what you're waiting for and keep waiting.`,
     );
-    expect(M().refreshResume("feature", "x", null)).toContain("butler-feature");
+    expect(M().refreshResume("feature", "x", null)).toContain("shipherd-feature");
     expect(M().refreshResume("feature", "x", null)).not.toContain("read ");
   });
 
@@ -531,7 +531,7 @@ describe("SessionRefresher (plan 16)", () => {
     expect(await t.r.refresh("s1", "manual")).toBe("done");
   });
 
-  it("skips tickets when the handoff command is not Butler's", async () => {
+  it("skips tickets when the handoff command is not Shipherd's", async () => {
     const t = setup({ commandReady: false });
     t.addTerm("s1");
     t.addTerm("f1", { kind: "feature", session: { featureId: 3 } });
@@ -638,7 +638,7 @@ describe("SessionRefresher (plan 16)", () => {
     expect(t.r.precheck("s1", "manual")).toBeNull();
   });
 
-  it("only counts a handoff stored after Butler typed /handoff (review: the user's own /handoff during the checks)", async () => {
+  it("only counts a handoff stored after Shipherd typed /handoff (review: the user's own /handoff during the checks)", async () => {
     const t = setup();
     t.addTerm("s1");
     t.state.onCommandCheck = () => t.r.handoffStored("s1");
@@ -854,7 +854,7 @@ describe("SessionRefresher.close (BTL-190 item 8)", () => {
     expect(t.texts()).toEqual([]);
   });
 
-  it("cannot close without a way to end the terminal, or a session Butler cannot refresh", async () => {
+  it("cannot close without a way to end the terminal, or a session Shipherd cannot refresh", async () => {
     const t = setup({ noEndTerminal: true });
     t.addTerm("s1");
     expect(await t.r.close("s1", "manual")).toBe("failed");
@@ -893,7 +893,7 @@ describe("SessionRefresher.stop (plan 16 review)", () => {
     let readsAtStop = -1;
     const term = t.addTerm("s1", {
       reactions: {
-        // handoff 收进来之后一直忙：换新停在 /clear 之前的等待里，这时 Butler 退出。
+        // handoff 收进来之后一直忙：换新停在 /clear 之前的等待里，这时 Shipherd 退出。
         "/handoff": { ms: 30_000, run: () => { t.r.handoffStored("s1"); term.block = "busy"; t.later(5_000, () => { t.r.stop(); readsAtStop = t.state.reads; }); } },
       },
     });
@@ -921,7 +921,7 @@ describe("refreshKindOf (plan 16)", () => {
     expect(open(base({ ticketKey: "DMS-1" }))).toBe("ticket");
     expect(open(base({ ticketKey: "DMS-1", coordinator: true }))).toBe("ticket");
     expect(open(base({ featureId: 3, coordinator: true }))).toBe("feature");
-    // 修复 session、不是 Butler 开的、没开终端的、什么都不属于的：不换新。
+    // 修复 session、不是 Shipherd 开的、没开终端的、什么都不属于的：不换新。
     expect(open(base({ featureId: 3, fixesSession: "s-stuck" }))).toBeNull();
     expect(open(base({ ticketKey: "DMS-1", origin: "discovered" }))).toBeNull();
     expect(refreshKindOf(base({ ticketKey: "DMS-1" }), false)).toBeNull();

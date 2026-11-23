@@ -39,11 +39,11 @@ describe("SessionMessagesRepo", () => {
   it("lists recent messages by feature or by sessions, newest first, and prunes old ones", () => {
     const repo = new SessionMessagesRepo(memDb());
     repo.enqueue({ ...base, id: "a", queuedAt: 1 });
-    repo.enqueue({ ...base, id: "b", queuedAt: 2, featureId: 2, fromSession: "butler", toSession: "x" });
-    repo.enqueue({ ...base, id: "c", queuedAt: 3, featureId: null, fromSession: "y", toSession: "butler" });
+    repo.enqueue({ ...base, id: "b", queuedAt: 2, featureId: 2, fromSession: "shipherd", toSession: "x" });
+    repo.enqueue({ ...base, id: "c", queuedAt: 3, featureId: null, fromSession: "y", toSession: "shipherd" });
     expect(repo.recent({ featureId: 1 }, 10).map((x) => x.id)).toEqual(["a"]);
-    expect(repo.recent({ sessions: ["butler"] }, 10).map((x) => x.id)).toEqual(["c", "b"]);
-    expect(repo.recent({ sessions: ["butler"] }, 1).map((x) => x.id)).toEqual(["c"]);
+    expect(repo.recent({ sessions: ["shipherd"] }, 10).map((x) => x.id)).toEqual(["c", "b"]);
+    expect(repo.recent({ sessions: ["shipherd"] }, 1).map((x) => x.id)).toEqual(["c"]);
     expect(repo.recent({ sessions: [] }, 10)).toEqual([]);
     expect(repo.prune(3)).toBe(2);
     expect(repo.queued().map((x) => x.id)).toEqual(["c"]);

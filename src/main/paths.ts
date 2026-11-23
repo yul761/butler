@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { envValue } from "../shared/legacy-env";
 
-export interface ButlerPaths {
+export interface ShipherdPaths {
   home: string;
   db: string;
   inbox: string;
@@ -10,30 +12,30 @@ export interface ButlerPaths {
   bin: string;
   hookBin: string;
   logs: string;
-  /** Butler 生成的 --mcp-config 文件。 */
+  /** Shipherd 生成的 --mcp-config 文件。 */
   mcp: string;
-  /** 信箱（BTL-245）的磁盘投影：每个开着、有消息在排队的终端一个 <BUTLER_SESSION> 目录。 */
+  /** 信箱（BTL-245）的磁盘投影：每个开着、有消息在排队的终端一个 <SHIPHERD_SESSION> 目录。 */
   mailbox: string;
-  /** 孤儿清理（WS-M F）记下的 Butler 起过的进程：procs/owned.json。 */
+  /** 孤儿清理（WS-M F）记下的 Shipherd 起过的进程：procs/owned.json。 */
   procsOwned: string;
   /** StateCore 的嵌入式存储目录（里面是 statecore.db）。 */
   statecore: string;
   /** 总控 session 的工作区目录（每个 ticket 一个空目录）。 */
   workspaces: string;
-  /** Butler 总控（BTL-190 第 5 点）的工作目录：workspaces/_butler，全局只有一个。 */
-  butlerWorkspace: string;
+  /** Shipherd 总控（BTL-190 第 5 点）的工作目录：workspaces/_shipherd，全局只有一个。 */
+  shipherdWorkspace: string;
   /** 复盘分析 session 的工作目录：workspaces/_lessons，每次运行的记录文件 run-<id>.md 也写在这里。 */
   lessonsWorkspace: string;
   /** 换新前的对话尾巴（BTL-190 第 6 点）：每个 session 一个 <session id>.md，见 refreshTailPath。 */
   refresh: string;
-  /** 总控开子 session 的请求和结果（sessions MCP server ↔ Butler，走文件）。 */
+  /** 总控开子 session 的请求和结果（sessions MCP server ↔ Shipherd，走文件）。 */
   controlRequests: string;
   controlResults: string;
-  /** 合并总控的闸门：hook 写请求、Butler 写结果；alive.json 是 Butler 在线的标记（{ pid }）。 */
+  /** 合并总控的闸门：hook 写请求、Shipherd 写结果；alive.json 是 Shipherd 在线的标记（{ pid }）。 */
   gateRequests: string;
   gateResults: string;
   gateAlive: string;
-  /** 确定性检查（契约 4.5）：Butler 写的只读快照、hook 写的命中日志、hook 的防抖状态。见 checksLayout。 */
+  /** 确定性检查（契约 4.5）：Shipherd 写的只读快照、hook 写的命中日志、hook 的防抖状态。见 checksLayout。 */
   checksSnapshot: string;
   checksHits: string;
   checksState: string;
@@ -56,38 +58,53 @@ export function dirFromEnv(v: string | undefined, home: string = homedir()): str
   return isAbsolute(t) ? t : resolve(t);
 }
 
+/**
+ * 数据目录：SHIPHERD_HOME > BUTLER_HOME（改名前的变量，TODO(5.0) 删）> ~/.shipherd。
+ * Shipherd 和 hook（hook/*.ts）都用它，两边算出来的目录才一致。
+ * BTL-260：~/.shipherd 还不存在而 ~/.butler 在（还没迁移，或者这次迁移失败、Shipherd 正用着旧目录）时用 ~/.butler：
+ * Shipherd 外面起的 claude 调 hook 时没有 SHIPHERD_HOME，不能替它建出一个只有 inbox 的 ~/.shipherd。
+ * 迁移（migrateLegacyHome）不经过这里，按家目录直接找两个目录。TODO(5.0)：和迁移一起删。
+ */
+export function homeFromEnv(env: Record<string, string | undefined>, home: string = homedir(), exists: (p: string) => boolean = existsSync): string {
+  const fromEnv = dirFromEnv(envValue(env, "HOME"), home);
+  if (fromEnv) return fromEnv;
+  const current = join(home, ".shipherd");
+  const legacy = join(home, ".butler");
+  return !exists(current) && exists(legacy) ? legacy : current;
+}
+
 export function resolvePaths(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   home: string = homedir(),
-): ButlerPaths {
-  const butlerHome = dirFromEnv(env.BUTLER_HOME, home) ?? join(home, ".butler");
+): ShipherdPaths {
+  const shipherdHome = homeFromEnv(env, home);
   const configOverride = dirFromEnv(env.CLAUDE_CONFIG_DIR, home);
   const claudeConfigDir = configOverride ?? join(home, ".claude");
-  const inbox = join(butlerHome, "inbox");
-  const bin = join(butlerHome, "bin");
+  const inbox = join(shipherdHome, "inbox");
+  const bin = join(shipherdHome, "bin");
   return {
-    home: butlerHome,
-    db: join(butlerHome, "app.db"),
+    home: shipherdHome,
+    db: join(shipherdHome, "app.db"),
     inbox,
     inboxBad: join(inbox, "bad"),
     bin,
-    hookBin: join(bin, platform === "win32" ? "butler-hook.exe" : "butler-hook"),
-    logs: join(butlerHome, "logs"),
-    mcp: join(butlerHome, "mcp"),
-    mailbox: join(butlerHome, "mailbox"),
-    procsOwned: join(butlerHome, "procs", "owned.json"),
-    statecore: join(butlerHome, "statecore"),
-    workspaces: join(butlerHome, "workspaces"),
-    butlerWorkspace: join(butlerHome, "workspaces", "_butler"),
-    lessonsWorkspace: join(butlerHome, "workspaces", "_lessons"),
-    refresh: join(butlerHome, "refresh"),
-    controlRequests: join(butlerHome, "control", "requests"),
-    controlResults: join(butlerHome, "control", "results"),
-    gateRequests: join(butlerHome, "gate", "requests"),
-    gateResults: join(butlerHome, "gate", "results"),
-    gateAlive: join(butlerHome, "gate", "alive.json"),
-    ...checksLayout(butlerHome),
+    hookBin: join(bin, platform === "win32" ? "shipherd-hook.exe" : "shipherd-hook"),
+    logs: join(shipherdHome, "logs"),
+    mcp: join(shipherdHome, "mcp"),
+    mailbox: join(shipherdHome, "mailbox"),
+    procsOwned: join(shipherdHome, "procs", "owned.json"),
+    statecore: join(shipherdHome, "statecore"),
+    workspaces: join(shipherdHome, "workspaces"),
+    shipherdWorkspace: join(shipherdHome, "workspaces", "_shipherd"),
+    lessonsWorkspace: join(shipherdHome, "workspaces", "_lessons"),
+    refresh: join(shipherdHome, "refresh"),
+    controlRequests: join(shipherdHome, "control", "requests"),
+    controlResults: join(shipherdHome, "control", "results"),
+    gateRequests: join(shipherdHome, "gate", "requests"),
+    gateResults: join(shipherdHome, "gate", "results"),
+    gateAlive: join(shipherdHome, "gate", "alive.json"),
+    ...checksLayout(shipherdHome),
     claudeConfigDir,
     claudeSettings: join(claudeConfigDir, "settings.json"),
     claudeProjects: join(claudeConfigDir, "projects"),
@@ -97,9 +114,9 @@ export function resolvePaths(
   };
 }
 
-/** 检查用到的几个位置；hook 和 Butler 都从 BUTLER_HOME 算，所以放在一处。 */
-export function checksLayout(butlerHome: string): { checksSnapshot: string; checksHits: string; checksState: string } {
-  const dir = join(butlerHome, "checks");
+/** 检查用到的几个位置；hook 和 Shipherd 都从 SHIPHERD_HOME 算，所以放在一处。 */
+export function checksLayout(shipherdHome: string): { checksSnapshot: string; checksHits: string; checksState: string } {
+  const dir = join(shipherdHome, "checks");
   return { checksSnapshot: join(dir, "snapshot.json"), checksHits: join(dir, "hits"), checksState: join(dir, "state") };
 }
 
@@ -107,11 +124,11 @@ export function checksLayout(butlerHome: string): { checksSnapshot: string; chec
  * 这个 session 换新前的对话尾巴文件（BTL-190 第 6 点）。路径只由 session id 决定：下一次换新覆盖它，删 session 时按 id 找到它一起删。
  * id 里只留字母、数字、- 和 _（Claude Code 的 session id 是 UUID，本来就是这样），免得拼出别的目录。
  */
-export function refreshTailPath(p: Pick<ButlerPaths, "refresh">, sessionId: string): string {
+export function refreshTailPath(p: Pick<ShipherdPaths, "refresh">, sessionId: string): string {
   return join(p.refresh, `${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}.md`);
 }
 
-export async function ensureDirs(p: ButlerPaths): Promise<void> {
+export async function ensureDirs(p: ShipherdPaths): Promise<void> {
   for (const dir of [p.home, p.inbox, p.inboxBad, p.bin, p.logs, p.mcp, p.statecore, p.workspaces, p.refresh, p.controlRequests, p.controlResults, p.gateRequests, p.gateResults, p.checksHits, p.checksState]) {
     await mkdir(dir, { recursive: true });
   }

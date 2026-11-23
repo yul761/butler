@@ -95,12 +95,12 @@ function setup() {
     });
   /** 修复 session：feature 下的行，但不是总控。 */
   const addFix = (id: string, mtime: number, lastActivityAt = 1) => {
-    sessions.insertIfAbsent({ id, ticketKey: null, cwd: WS, origin: "butler", lastActivityAt, createdAt: 1, featureId, fixesSession: "stuck-1" });
+    sessions.insertIfAbsent({ id, ticketKey: null, cwd: WS, origin: "shipherd", lastActivityAt, createdAt: 1, featureId, fixesSession: "stuck-1" });
     mtimes[id] = mtime;
   };
   /** 总控 session；mtime 为 null 表示没有 transcript。 */
   const addCoordinator = (id: string, mtime: number | null, lastActivityAt = 1, fId: number = featureId) => {
-    sessions.insertIfAbsent({ id, ticketKey: null, cwd: WS, origin: "butler", lastActivityAt, createdAt: 1, coordinator: true, featureId: fId });
+    sessions.insertIfAbsent({ id, ticketKey: null, cwd: WS, origin: "shipherd", lastActivityAt, createdAt: 1, coordinator: true, featureId: fId });
     if (mtime !== null) mtimes[id] = mtime;
   };
   const ticketHandoff = (key: string, at: number, over: Partial<Handoff> = {}, trigger: IngestInput["trigger"] = "nightly") =>
@@ -257,7 +257,7 @@ describe("FeatureSummaryRunner generation", () => {
       "--resume", "c-new", "--fork-session",
     ]);
     expect(req.args.filter((a, i) => req.args[i - 1] === "--add-dir")).toEqual(["/r/api"]);
-    expect(req.env).toMatchObject({ BUTLER_SESSION: "headless:run-1", PATH: "/login/bin" });
+    expect(req.env).toMatchObject({ SHIPHERD_SESSION: "headless:run-1", PATH: "/login/bin" });
     for (const s of ["登录改版", "A-1", "B-2", "#455 open", "和前端联调登录接口"]) expect(req.prompt).toContain(s);
     expect(sessions.get("fork-1")).toMatchObject({ dismissed: true });
     expect(featureHandoffs.latest(featureId)).toMatchObject({ trigger: "nightly", sessionId: "c-new", degraded: false, payload: summary() });
@@ -270,7 +270,7 @@ describe("FeatureSummaryRunner generation", () => {
     addCoordinator("c-1", 20, 1);
     await runner.runNightly();
     expect(calls[0].args).not.toContain("--model");
-    sessions.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: WS, origin: "butler", lastActivityAt: 9, createdAt: 1, coordinator: true, featureId: sessions.get("c-1")!.featureId!, model: "opus" });
+    sessions.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: WS, origin: "shipherd", lastActivityAt: 9, createdAt: 1, coordinator: true, featureId: sessions.get("c-1")!.featureId!, model: "opus" });
     mtimes["c-2"] = 1e12;
     await runner.runNightly();
     const args = calls[1].args;

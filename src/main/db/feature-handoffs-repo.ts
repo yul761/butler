@@ -52,7 +52,7 @@ export interface NewFeatureHandoff {
   rawText: string | null;
   /** /handoff 输出所在的 transcript 条目 uuid，用来去重。 */
   sourceRef?: string | null;
-  /** Butler 自己生成的汇总读 ticket_prs 的时间（ws-b）；总控 /handoff 交上来的没有。 */
+  /** Shipherd 自己生成的汇总读 ticket_prs 的时间（ws-b）；总控 /handoff 交上来的没有。 */
   prStatusAt?: number | null;
 }
 

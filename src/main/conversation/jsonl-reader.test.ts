@@ -5,7 +5,7 @@ import { tempDir } from "../test-utils";
 import { readChunk } from "./jsonl-reader";
 
 const fresh = (content: string): string => {
-  const f = join(tempDir("butler-jsonl-"), "t.jsonl");
+  const f = join(tempDir("shipherd-jsonl-"), "t.jsonl");
   writeFileSync(f, content);
   return f;
 };
@@ -37,7 +37,7 @@ describe("readChunk", () => {
   it("starts over when the file was replaced (new inode)", async () => {
     const f = fresh("a\n");
     const r = await readChunk(f, { ino: null, offset: 0 });
-    const other = join(tempDir("butler-jsonl-"), "n.jsonl");
+    const other = join(tempDir("shipherd-jsonl-"), "n.jsonl");
     writeFileSync(other, "a\nb\nc\n");
     renameSync(other, f);
     const r2 = await readChunk(f, { ino: r!.ino, offset: r!.next });

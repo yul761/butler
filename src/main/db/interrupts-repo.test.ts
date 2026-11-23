@@ -49,7 +49,7 @@ describe("ChoiceDefaultsRepo", () => {
 describe("NotificationLogRepo", () => {
   it("keeps the newest first and prunes old rows", () => {
     const r = new NotificationLogRepo(memDb());
-    r.insert({ ts: 1, event: "decision_needed", count: 2, status: "sent", host: "ntfy.example", payload: "Butler: 2", error: null });
+    r.insert({ ts: 1, event: "decision_needed", count: 2, status: "sent", host: "ntfy.example", payload: "Shipherd: 2", error: null });
     r.insert({ ts: 5, event: "cost_breaker", count: 1, status: "quiet", host: null, payload: null, error: null });
     expect(r.recent().map((e) => e.event)).toEqual(["cost_breaker", "decision_needed"]);
     expect(r.prune(3)).toBe(1);

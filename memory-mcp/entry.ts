@@ -1,5 +1,5 @@
 // 给 claude 挂载的记忆 MCP server（设计文档 8.4），经 stdio。用法：statecore-mcp.cjs --data <StateCore 数据目录>，作用域在 STATECORE_SCOPE。
-// BTL-243 起不再加载 statecore-mcp 的 bin（它的说明许诺后台蒸馏）：和共享 MCP 的 hub 一样用 Butler 自己的 MemoryServer，
+// BTL-243 起不再加载 statecore-mcp 的 bin（它的说明许诺后台蒸馏）：和共享 MCP 的 hub 一样用 Shipherd 自己的 MemoryServer，
 // 后端是嵌入式 StateCore，backgroundDigest: false。
 // 顺序就是执行顺序（ES 模块按 import 的先后求值，esbuild 打包后保持不变）：先清掉环境变量里的模型 key（R1），再加载 StateCore。
 import "./clean-env";
@@ -11,7 +11,7 @@ const i = process.argv.indexOf("--data");
 const dataDir = i >= 0 ? process.argv[i + 1] : undefined;
 const scope = process.env.STATECORE_SCOPE?.trim();
 if (!dataDir || !scope) {
-  process.stderr.write("butler-memory: --data <dir> and STATECORE_SCOPE are required\n");
+  process.stderr.write("shipherd-memory: --data <dir> and STATECORE_SCOPE are required\n");
   process.exit(2);
 }
 
@@ -24,7 +24,7 @@ const open = () => {
     const p = backend.init().then(() => backend);
     ready = p;
     p.catch((e: unknown) => {
-      process.stderr.write(`butler-memory: memory did not open: ${e instanceof Error ? e.message : String(e)}\n`);
+      process.stderr.write(`shipherd-memory: memory did not open: ${e instanceof Error ? e.message : String(e)}\n`);
       if (ready === p) ready = null;
     });
   }

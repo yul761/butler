@@ -130,7 +130,7 @@ describe("buildProgress", () => {
     expect(v.freshness).toEqual({ generatedAt: 1000, prsCheckedOldest: 500, prsCheckedNewest: 900, readErrors: 1, unread: 1, summaryOldest: 50 });
   });
 
-  it("does not trust a PR Butler gave up reading", () => {
+  it("does not trust a PR Shipherd gave up reading", () => {
     const v = buildProgress(input({ tickets: [ticket("A")], prs: [pr("A", 1, { ci: "failing", gaveUp: true, readError: true })] }));
     expect(v.counts).toMatchObject({ blocked: 0, not_started: 1 });
     expect(v.stuck).toEqual([]);

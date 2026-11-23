@@ -1,5 +1,5 @@
 // 「谁该动」状态模型（UI 重做第 1 层，spec §5.1、§7）。
-// 每个 PR、ticket、总控 session、要你动手的 Butler 提醒和「别人请你 review 的 PR」都算成一个 Turn。
+// 每个 PR、ticket、总控 session、要你动手的 Shipherd 提醒和「别人请你 review 的 PR」都算成一个 Turn。
 // 这里只放纯函数和类型；名字和类型逐字照 docs/superpowers/plans/2026-11-19-ui-redesign-00-index.md 的「第 1 层产出」。
 import type { CiUndeliveredReason, NowNotice, NowTarget } from "./types";
 import { INTAKE_DECISION_STATES } from "./intake";
@@ -23,9 +23,9 @@ export type Turn =
   // action：卡住裁判建议你怎么做（只有 silent 有，卡片上原因下面一行）；没有为 null 或不写。
   | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked"; detail: string | null; action?: string | null; sessionId: string | null }
   | { owner: "you"; kind: "unattended"; why: UnattendedWhy; canSend: boolean; sessionId: string | null }
-  | { owner: "you"; kind: "butler"; notice: NowNotice }
+  | { owner: "you"; kind: "shipherd"; notice: NowNotice }
   | { owner: "agent"; kind: "fixing_ci" | "addressing_review" | "rebasing" | "working"; sessionId: string }
-  // stack_below：Butler 管的栈里、下面一层还没合的 draft（names 是下面那层的分支），等它合了 Butler 自己 rebase 并改成 ready。
+  // stack_below：Shipherd 管的栈里、下面一层还没合的 draft（names 是下面那层的分支），等它合了 Shipherd 自己 rebase 并改成 ready。
   | { owner: "external"; kind: "ci_running" | "awaiting_review" | "merge_queue" | "stack_below"; names: string[] }
   | { owner: "done"; kind: "merged" }
   | { owner: "idle"; kind: "not_started" };
@@ -96,7 +96,7 @@ export function normTurnFilter(f: TurnFilter | null | undefined): TurnFilter | n
 
 export type YouKind = Extract<Turn, { owner: "you" }>["kind"];
 /** 同为 you 时的急的顺序：先回答、再卡住、再提醒…… */
-export const YOU_KIND_RANK: Record<YouKind, number> = { answer: 0, stuck: 1, butler: 2, unattended: 3, review: 4, merge: 5 };
+export const YOU_KIND_RANK: Record<YouKind, number> = { answer: 0, stuck: 1, shipherd: 2, unattended: 3, review: 4, merge: 5 };
 
 /** 一个 turn 和它进入这个状态的时间。 */
 export interface TimedTurn { turn: Turn; since: number }
@@ -135,7 +135,7 @@ export function ticketTurn(prTurns: Turn[], sessionTurn: Turn | null): { turn: T
   return { turn: best.turn, others };
 }
 
-/** R5：哪些 Butler 提醒算「要你动手」。其余只是提示，不进首页。 */
+/** R5：哪些 Shipherd 提醒算「要你动手」。其余只是提示，不进首页。 */
 export function noticeNeedsYou(n: NowNotice): boolean {
   switch (n.kind) {
     case "claude_limited":
@@ -175,7 +175,7 @@ export interface PrTurnInput extends Omit<PrStatusInput, "author"> {
   ciUndelivered: boolean;
   canResendCi: boolean;
   canSendComments: boolean;
-  /** 这个 PR 是 Butler 管的栈里的一层、下面还有没合的层时，最近的那层的分支；不在栈里或是栈底为 null。 */
+  /** 这个 PR 是 Shipherd 管的栈里的一层、下面还有没合的层时，最近的那层的分支；不在栈里或是栈底为 null。 */
   stackBelow: string | null;
 }
 
@@ -255,13 +255,13 @@ export function sessionTurn(i: SessionTurnInput): TimedTurn {
   const working = isWorking(a);
   if (i.ask) return { turn: { owner: "you", kind: "answer", question: i.ask.question, options: i.ask.options, askId: i.ask.id, sessionId }, since: i.ask.at };
   if (a?.kind === "approval" || i.needsYou?.category === "permission") {
-    return { turn: { owner: "you", kind: "butler", notice: { kind: "approval", target: i.target, title: i.title } }, since: i.now };
+    return { turn: { owner: "you", kind: "shipherd", notice: { kind: "approval", target: i.target, title: i.title } }, since: i.now };
   }
   if (i.refreshing) return { turn: { owner: "agent", kind: "working", sessionId }, since: a?.startedAt ?? i.now };
   if (i.needsYou && (i.needsYou.category === "stuck" || i.needsYou.category === "missing_info")) {
     return { turn: { owner: "you", kind: "stuck", source: "needs_you", detail: i.needsYou.reason, sessionId }, since: stopped };
   }
-  if (a?.limit) return { turn: { owner: "you", kind: "butler", notice: { kind: "session_limited", target: i.target, title: i.title, limit: a.limit } }, since: i.now };
+  if (a?.limit) return { turn: { owner: "you", kind: "shipherd", notice: { kind: "session_limited", target: i.target, title: i.title, limit: a.limit } }, since: i.now };
   if (a?.stuck === true) {
     return { turn: { owner: "you", kind: "stuck", source: "silent", detail: a.reason, action: a.action ?? null, sessionId }, since: a.lastOutputAt ?? a.startedAt ?? i.now };
   }

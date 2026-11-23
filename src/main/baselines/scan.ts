@@ -669,7 +669,7 @@ export function scanFiles(input: ScanInput): ScanOutput {
     if (!cur) {
       byId.set(id, {
         id, dir, category: f.category, tool: f.tool, command, fileCommand: fileTpl ? fill(ctx, dir, fileTpl) : undefined,
-        testOne: spec?.testOne ? fill(ctx, dir, spec.testOne) : undefined, stages: stage ? [stage] : [], changedFiles: !!(f.passFiles || fileTpl), butlerStage: "push",
+        testOne: spec?.testOne ? fill(ctx, dir, spec.testOne) : undefined, stages: stage ? [stage] : [], changedFiles: !!(f.passFiles || fileTpl), shipherdStage: "push",
         source: ci ? "ci" : "marker", confidence, evidence: [...new Set(evidence)], facts: [], exts: f.exts ?? spec?.exts, rank: f.rank, fileRank,
       });
       return;
@@ -707,7 +707,7 @@ export function scanFiles(input: ScanInput): ScanOutput {
     for (const [tool, fs] of info(ctx, c.dir).facts) if (tool === c.tool) for (const x of fs) facts.add(x);
     rest.facts = [...facts].sort();
     rest.stages.sort((a, b) => STAGE_ORDER.indexOf(a) - STAGE_ORDER.indexOf(b));
-    rest.butlerStage = rest.fileCommand && (rest.category === "lint" || rest.category === "format" || rest.category === "typecheck") ? "edit" : "push";
+    rest.shipherdStage = rest.fileCommand && (rest.category === "lint" || rest.category === "format" || rest.category === "typecheck") ? "edit" : "push";
     rest.evidence = rest.evidence.slice(0, 8);
     checks.push(rest);
   }

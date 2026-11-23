@@ -13,10 +13,10 @@ describe("stack PR text", () => {
   it("writes the depends line first and replaces only that line", () => {
     expect(dependsLine({ prNumber: 123, branch: "a" }, "zh")).toBe("依赖 #123，暂不需要 review");
     expect(dependsLine({ prNumber: null, branch: "a" }, "en")).toBe("Depends on branch `a`; no review needed yet");
-    const body = "依赖 #1，暂不需要 review\n\n<!-- butler:brief -->x<!-- /butler:brief -->";
-    expect(withDependsLine(body, "依赖 #2，暂不需要 review")).toBe("依赖 #2，暂不需要 review\n\n<!-- butler:brief -->x<!-- /butler:brief -->");
+    const body = "依赖 #1，暂不需要 review\n\n<!-- shipherd:brief -->x<!-- /shipherd:brief -->";
+    expect(withDependsLine(body, "依赖 #2，暂不需要 review")).toBe("依赖 #2，暂不需要 review\n\n<!-- shipherd:brief -->x<!-- /shipherd:brief -->");
     expect(withDependsLine("hello", "Depends on #2; no review needed yet")).toBe("Depends on #2; no review needed yet\n\nhello");
-    expect(withoutDependsLine(body)).toBe("<!-- butler:brief -->x<!-- /butler:brief -->");
+    expect(withoutDependsLine(body)).toBe("<!-- shipherd:brief -->x<!-- /shipherd:brief -->");
     expect(withoutDependsLine("hello")).toBe("hello");
   });
 

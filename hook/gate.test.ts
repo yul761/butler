@@ -19,7 +19,7 @@ function setup(opts: { alive?: boolean | "missing"; onSleep?: (home: string) => 
     pidAlive: () => opts.alive !== false,
     newId: () => "abcd1234-req",
   };
-  const env = { BUTLER_HOME: home, BUTLER_SESSION: " s1 ", BUTLER_TICKET: "DMS-2" };
+  const env = { SHIPHERD_HOME: home, SHIPHERD_SESSION: " s1 ", SHIPHERD_TICKET: "DMS-2" };
   const input = (command: string, event = "PreToolUse", tool = "Bash") => JSON.stringify({ hook_event_name: event, tool_name: tool, tool_input: { command }, cwd: "/work/repo" });
   return { home, deps, env, input, now: () => t, requests: () => readdirSync(join(home, "gate", "requests")) };
 }

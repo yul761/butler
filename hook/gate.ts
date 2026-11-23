@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { classifyGateCommand } from "../src/shared/gate-command";
 import { GATE_VERSION, GATE_WAIT_MS, type GateRequest, type GateResult } from "../src/shared/gate";
-import { dirFromEnv } from "../src/main/paths";
+import { homeFromEnv } from "../src/main/paths";
+import { envValue } from "../src/shared/legacy-env";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 
 export interface GateDeps {
@@ -61,11 +62,11 @@ export async function runGate(raw: string, env: NodeJS.ProcessEnv, deps: GateDep
     if (!action) return "";
 
     const home = homedir();
-    const gateDir = join(dirFromEnv(env.BUTLER_HOME, home) ?? join(home, ".butler"), "gate");
+    const gateDir = join(homeFromEnv(env, home), "gate");
     const alive = readJson(join(gateDir, "alive.json")) as { pid?: unknown } | null;
     if (!alive || typeof alive.pid !== "number" || !deps.pidAlive(alive.pid)) return "";
 
-    const request: GateRequest = { v: GATE_VERSION, phase, action, cwd: p.cwd, session: env.BUTLER_SESSION?.trim() || null, ticket: env.BUTLER_TICKET?.trim() || null };
+    const request: GateRequest = { v: GATE_VERSION, phase, action, cwd: p.cwd, session: envValue(env, "SESSION")?.trim() || null, ticket: envValue(env, "TICKET")?.trim() || null };
     const id = deps.newId();
     const reqDir = join(gateDir, "requests");
     mkdirSync(reqDir, { recursive: true });

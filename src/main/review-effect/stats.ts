@@ -144,7 +144,7 @@ const mean = (xs: (number | null)[]): number | null => {
 
 interface EffRow {
   prId: number;
-  butler: boolean;
+  shipherd: boolean;
   mergedAt: number;
   human: number;
   copilot: number;
@@ -181,7 +181,7 @@ export function reviewEffect(db: Db, days: number, now: number): ReviewEffectVie
     db.prepare(`SELECT * FROM review_effect_prs WHERE merged_at IS NOT NULL AND merged_at >= ? ORDER BY merged_at`).all(Math.min(from, trendFrom)) as Row[]
   ).map(
     (r): EffRow => ({
-      prId: Number(r.pr_id), butler: Number(r.butler) === 1, mergedAt: Number(r.merged_at), human: Number(r.comments_human),
+      prId: Number(r.pr_id), shipherd: Number(r.shipherd) === 1, mergedAt: Number(r.merged_at), human: Number(r.comments_human),
       copilot: Number(r.comments_copilot), avoidable: Number(r.avoidable), rounds: Number(r.rounds), firstReviewMs: num(r.first_review_ms),
       submitToMergeMs: num(r.submit_to_merge_ms), brief: Number(r.brief_posted) === 1,
     }),
@@ -190,13 +190,13 @@ export function reviewEffect(db: Db, days: number, now: number): ReviewEffectVie
   const weeks: ReviewEffectWeek[] = [];
   for (let i = 0; i < WEEKS; i++) {
     const start = trendFrom + i * WEEK;
-    const inWeek = rows.filter((r) => r.butler && r.mergedAt >= start && r.mergedAt < start + WEEK);
+    const inWeek = rows.filter((r) => r.shipherd && r.mergedAt >= start && r.mergedAt < start + WEEK);
     const avoidable = inWeek.reduce((a, r) => a + r.avoidable, 0);
     weeks.push({ weekStart: start, prs: inWeek.length, avoidable, perPr: inWeek.length ? avoidable / inWeek.length : null });
   }
 
   const win = rows.filter((r) => r.mergedAt >= from && r.mergedAt <= now);
-  const butler = win.filter((r) => r.butler);
+  const shipherd = win.filter((r) => r.shipherd);
 
   const lessons: ReviewEffectLesson[] = [];
   const candidates = db
@@ -230,8 +230,8 @@ export function reviewEffect(db: Db, days: number, now: number): ReviewEffectVie
   const total = win.reduce((a, r) => a + r.human + r.copilot, 0);
 
   return {
-    days, weeks, butler: group(butler), others: group(win.filter((r) => !r.butler)),
-    withBrief: group(butler.filter((r) => r.brief)), withoutBrief: group(butler.filter((r) => !r.brief)),
+    days, weeks, shipherd: group(shipherd), others: group(win.filter((r) => !r.shipherd)),
+    withBrief: group(shipherd.filter((r) => r.brief)), withoutBrief: group(shipherd.filter((r) => !r.brief)),
     lessons: lessons.slice(0, LESSON_SHOW),
     landing: { confirmedBefore, notYet, unattributed: Math.max(0, total - confirmedBefore - notYet) },
   };

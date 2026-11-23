@@ -6,8 +6,8 @@ import { turnSentence } from "./turn-text";
 
 const item = (turn: Turn): TurnItem => ({ ticketKey: "BTL-1", pr: null, featureId: null, turn, since: 0, others: 0 });
 const say = (turn: Turn) => turnSentence(turn, item(turn), S);
-const butler = (notice: NowNotice): Turn => ({ owner: "you", kind: "butler", notice });
-const T = { page: "butler", sessionId: null } as const;
+const shipherd = (notice: NowNotice): Turn => ({ owner: "you", kind: "shipherd", notice });
+const T = { page: "shipherd", sessionId: null } as const;
 afterEach(() => setUiLang("zh"));
 
 describe("turnSentence", () => {
@@ -56,17 +56,17 @@ describe("turnSentence", () => {
     expect(say({ owner: "external", kind: "stack_below", names: ["feature/a"] })).toBe("Waiting for the layer below (feature/a) to merge");
   });
 
-  it("butler sentences come from the notice kind", () => {
-    expect(say(butler({ kind: "approval", target: T, title: null }))).toBe("在终端里等你确认权限");
-    const waiting = (reason: "review" | "undelivered") => butler({ kind: "comments_waiting", waiting: { reason, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 0 }, target: T, title: null });
+  it("shipherd sentences come from the notice kind", () => {
+    expect(say(shipherd({ kind: "approval", target: T, title: null }))).toBe("在终端里等你确认权限");
+    const waiting = (reason: "review" | "undelivered") => shipherd({ kind: "comments_waiting", waiting: { reason, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 0 }, target: T, title: null });
     expect(say(waiting("review"))).toBe("有 2 条评论等你分类");
     expect(say(waiting("undelivered"))).toBe("有 2 条评论没送到 session");
-    const stack = (reason: "conflict" | "stuck") => butler({ kind: "stack", stack: { reason, stackId: 1, stackName: "s", branch: "b" }, target: null });
+    const stack = (reason: "conflict" | "stuck") => shipherd({ kind: "stack", stack: { reason, stackId: 1, stackName: "s", branch: "b" }, target: null });
     expect(say(stack("conflict"))).toBe("栈里有冲突没交给 session");
     expect(say(stack("stuck"))).toBe("栈的 rebase 卡住了");
-    expect(say(butler({ kind: "lessons_paused" }))).toBe("Butler 要你点一下");
+    expect(say(shipherd({ kind: "lessons_paused" }))).toBe("Shipherd 要你点一下");
     setUiLang("en");
     expect(say(waiting("review"))).toBe("2 comments to triage");
-    expect(say(butler({ kind: "approval", target: T, title: null }))).toBe("Waiting for you to confirm a permission prompt");
+    expect(say(shipherd({ kind: "approval", target: T, title: null }))).toBe("Waiting for you to confirm a permission prompt");
   });
 });

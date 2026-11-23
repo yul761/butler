@@ -26,7 +26,7 @@ test("confirmed lessons reach a ticket session's guide file; rejected and disabl
   // 2. 直接插一个仓库和两条待确认的规矩。
   const A = "改 schema 要加迁移";
   const B = "不要在渲染进程调 gh";
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   const now = Date.now();
   db.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run("acme/web", s.repo, now);
   const ins = db.prepare("INSERT INTO lessons (repo_slug, text, why, status, hits, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, 'pending', 1, ?, ?, ?)");
@@ -95,7 +95,7 @@ test("the default lessons view edits and confirms a pending lesson", async ({ ma
   const { page } = await launch(s);
   await completeWizard(page, s);
 
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   const now = Date.now();
   db.prepare("INSERT INTO lesson_repos (slug, local_path, created_at) VALUES (?, ?, ?)").run("acme/web", s.repo, now);
   const id = Number(

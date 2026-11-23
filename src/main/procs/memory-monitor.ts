@@ -1,6 +1,6 @@
-import { BUTLER_PARTS, type ButlerPart, type MemoryHistoryPoint, type MemorySnapshot, type SessionMemory } from "../../shared/mem-usage";
+import { SHIPHERD_PARTS, type ShipherdPart, type MemoryHistoryPoint, type MemorySnapshot, type SessionMemory } from "../../shared/mem-usage";
 import type { MemorySampleRow } from "../db/memory-samples-repo";
-import { butlerPartOf, childrenIndex, classifyTree, summarize, treeOf, type ProcTable, type TreeProc, type TreeSummary } from "./proc-table";
+import { shipherdPartOf, childrenIndex, classifyTree, summarize, treeOf, type ProcTable, type TreeProc, type TreeSummary } from "./proc-table";
 import type { SystemMemory } from "./system-memory";
 import { perfOpAsync } from "../diag/perf-stats";
 
@@ -78,17 +78,17 @@ export interface MemoryMonitorDeps {
 }
 
 /** Electron 的进程类型对应到哪一份。 */
-function partOfMetric(type: string): ButlerPart {
+function partOfMetric(type: string): ShipherdPart {
   if (type === "Browser") return "main";
   if (type === "Tab") return "renderer";
   if (type === "GPU") return "gpu";
   return "utility";
 }
 
-const emptyParts = (): Record<ButlerPart, number> => Object.fromEntries(BUTLER_PARTS.map((p) => [p, 0])) as Record<ButlerPart, number>;
+const emptyParts = (): Record<ShipherdPart, number> => Object.fromEntries(SHIPHERD_PARTS.map((p) => [p, 0])) as Record<ShipherdPart, number>;
 
 /**
- * 内存监控（WS-M A，设计 §2）：每分钟读一次整张进程表，算每个开着的 session 的整棵树和 Butler 自己的进程，读系统可用内存。
+ * 内存监控（WS-M A，设计 §2）：每分钟读一次整张进程表，算每个开着的 session 的整棵树和 Shipherd 自己的进程，读系统可用内存。
  * 最近一次的结果给「现在」页，每 5 次写一次历史；采样结果再交给注册的 hook（优先级、孤儿、换新……）。一次采样没结束不起下一次。
  */
 export class MemoryMonitor {
@@ -154,12 +154,12 @@ export class MemoryMonitor {
     return this.d.recordOn() ? this.snap : null;
   }
 
-  /** since 以后的历史，每个时间点一个：Butler、所有 session 加起来、系统可用百分比。 */
+  /** since 以后的历史，每个时间点一个：Shipherd、所有 session 加起来、系统可用百分比。 */
   history(since: number): MemoryHistoryPoint[] {
     const points = new Map<number, MemoryHistoryPoint>();
     for (const r of this.d.samples.since(since)) {
-      const p = points.get(r.at) ?? { at: r.at, butlerKb: 0, sessionsKb: 0, freePercent: null };
-      if (r.kind === "butler") p.butlerKb += r.totalKb;
+      const p = points.get(r.at) ?? { at: r.at, shipherdKb: 0, sessionsKb: 0, freePercent: null };
+      if (r.kind === "shipherd") p.shipherdKb += r.totalKb;
       else if (r.kind === "session") p.sessionsKb += r.totalKb;
       else if (r.detail && typeof r.detail.freePercent === "number") p.freePercent = r.detail.freePercent;
       points.set(r.at, p);
@@ -198,7 +198,7 @@ export class MemoryMonitor {
       for (const p of tree) inSessions.add(p.pid);
       terms.push({ ...t, tree, summary: summarize(tree) });
     }
-    const snapshot = this.butlerSnapshot(at, table, children, inSessions, terms, system);
+    const snapshot = this.shipherdSnapshot(at, table, children, inSessions, terms, system);
     const sample: MonitorSample = { at, table, children, terms, system, snapshot };
     this.record(sample);
     for (const hook of this.hooks) {
@@ -213,10 +213,10 @@ export class MemoryMonitor {
   }
 
   /**
-   * Butler 自己：Electron 报的各个进程（主进程、渲染、GPU、utility），加上主进程下面不在任何 session 树里的进程
+   * Shipherd 自己：Electron 报的各个进程（主进程、渲染、GPU、utility），加上主进程下面不在任何 session 树里的进程
    * （共享 MCP、无头 claude 和它的子进程、Windows 的终端宿主）。Electron 报过的进程不再从进程表重复算。
    */
-  private butlerSnapshot(at: number, table: ProcTable, children: Map<number, number[]>, inSessions: Set<number>, terms: TermSample[], system: SystemMemory | null): MemorySnapshot {
+  private shipherdSnapshot(at: number, table: ProcTable, children: Map<number, number[]>, inSessions: Set<number>, terms: TermSample[], system: SystemMemory | null): MemorySnapshot {
     const parts = emptyParts();
     const electron = new Set<number>();
     for (const m of this.d.appMetrics()) {
@@ -227,17 +227,17 @@ export class MemoryMonitor {
       if (electron.has(c) || inSessions.has(c)) continue;
       const proc = table.get(c);
       if (!proc) continue;
-      const part = butlerPartOf(proc.args);
+      const part = shipherdPartOf(proc.args);
       for (const p of treeOf(c, table, children)) if (!electron.has(p.pid) && !inSessions.has(p.pid)) parts[part] += p.rssKb;
     }
-    const butlerKb = Object.values(parts).reduce((a, b) => a + b, 0);
+    const shipherdKb = Object.values(parts).reduce((a, b) => a + b, 0);
     return {
       at,
-      butlerKb,
-      butler: parts,
+      shipherdKb,
+      shipherd: parts,
       sessionsKb: terms.reduce((n, t) => n + t.summary.totalKb, 0),
       sessions: terms.length,
-      butlerMcpKb: terms.reduce((n, t) => n + t.summary.byClass.mcp_butler, 0),
+      shipherdMcpKb: terms.reduce((n, t) => n + t.summary.byClass.mcp_shipherd, 0),
       system: system ? { totalKb: system.totalKb, freeKb: system.freeKb, freePercent: system.freePercent } : null,
     };
   }
@@ -257,7 +257,7 @@ export class MemoryMonitor {
     if (this.count % HISTORY_EVERY === 1) {
       const rows: MemorySampleRow[] = [
         ...s.terms.map((t) => ({ at: s.at, kind: "session" as const, sessionId: t.head, totalKb: t.summary.totalKb, detail: { ...t.summary.byClass } })),
-        { at: s.at, kind: "butler", sessionId: null, totalKb: s.snapshot.butlerKb, detail: { ...s.snapshot.butler } },
+        { at: s.at, kind: "shipherd", sessionId: null, totalKb: s.snapshot.shipherdKb, detail: { ...s.snapshot.shipherd } },
         ...(s.system ? [{ at: s.at, kind: "system" as const, sessionId: null, totalKb: s.system.freeKb, detail: { totalKb: s.system.totalKb, freePercent: s.system.freePercent } }] : []),
       ];
       this.d.samples.insertMany(rows);

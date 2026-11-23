@@ -10,7 +10,7 @@ export interface RedactTerms {
   home: string[];
   /** 系统用户名：作为一个词出现时换成 <user>。 */
   users: string[];
-  /** 其他绝对路径（仓库、worktree、epic 目录、Butler / Claude 的数据目录）。 */
+  /** 其他绝对路径（仓库、worktree、epic 目录、Shipherd / Claude 的数据目录）。 */
   paths: string[];
   titles: string[];
   epics: string[];
@@ -33,8 +33,8 @@ const ASCII_WORD = /^[a-z0-9_]$/i;
 const NOT_BEFORE = "(?<![A-Za-z0-9_])";
 const NOT_AFTER = "(?![A-Za-z0-9_])";
 
-/** 太常见、换掉只会让文件没法读的词（分支名 main、Butler 自己的名字……）。 */
-const STOP_WORDS = new Set(["main", "master", "develop", "dev", "trunk", "head", "origin", "upstream", "butler", "claude", "src", "test", "tests", "docs", "app", "null", "undefined", "true", "false"]);
+/** 太常见、换掉只会让文件没法读的词（分支名 main、Shipherd 自己的名字和改名前的 butler……）。 */
+const STOP_WORDS = new Set(["main", "master", "develop", "dev", "trunk", "head", "origin", "upstream", "shipherd", "butler", "claude", "src", "test", "tests", "docs", "app", "null", "undefined", "true", "false"]);
 
 const isWindowsPath = (p: string): boolean => /^[a-z]:[\\/]/i.test(p) || p.startsWith("\\\\") || p.includes("\\");
 
@@ -254,7 +254,7 @@ export function collectRedactTerms(db: Db, extras: RedactExtras = {}): RedactTer
   for (const table of ["tickets", "intake_items"]) if (tables.includes(table)) t.tickets.push(...values(table, "key"));
   for (const table of ["features", "blocks"]) if (tables.includes(table)) t.epics.push(...values(table, "name"));
   if (tables.includes("merge_holds")) t.branches.push(...values("merge_holds", "target"));
-  // 仓库、worktree、epic 目录的最后一段（目录名常常就是仓库名）。只看数据库里的：Butler 自己的目录、下载目录这些的名字不用删。
+  // 仓库、worktree、epic 目录的最后一段（目录名常常就是仓库名）。只看数据库里的：Shipherd 自己的目录、下载目录这些的名字不用删。
   for (const p of t.paths) t.repos.push(basename(p.replace(/\\/g, "/").replace(/\/+$/, "")));
 
   for (const k of Object.keys(t) as (keyof RedactTerms)[]) t[k].push(...(extras[k] ?? []));

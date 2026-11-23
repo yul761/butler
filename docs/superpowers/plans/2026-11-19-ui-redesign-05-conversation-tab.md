@@ -6,7 +6,7 @@
 
 **Architecture:**
 - **先做 spike。** 第 1 个任务实测一件事：用 `claude -p --resume <id> --fork-session`，参数跟开发 session 完全一样，第一轮能不能读到开发 session 留下的缓存。结果写成常量 `FULL_FORK`，决定「完整上下文」用哪套参数。
-- **只读靠 hook 保证。** 分叉的只读不靠删工具，因为删工具会破缓存。保证它的是一个新的 PreToolUse hook 模式 `butler-hook readonly`，只放行读的工具，出错时一律拒绝。
+- **只读靠 hook 保证。** 分叉的只读不靠删工具，因为删工具会破缓存。保证它的是一个新的 PreToolUse hook 模式 `shipherd-hook readonly`，只放行读的工具，出错时一律拒绝。
 - **主进程。** `ForkService` 管 `fork_discussions` 表：
   - 选模式：完整或精简；
   - 起跑：直接调 `HeadlessRun`，不走 `execHeadlessJson`，因为它的路由会换模型、破缓存；
@@ -78,7 +78,7 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
   - `pnpm typecheck`、`pnpm lint`；
   - `pnpm e2e`（会先 `pnpm build && pnpm build:hook`）；只跑一个 spec 写 `pnpm e2e e2e/conversation.spec.ts`。
   - e2e 里的 ticket 号必须带数字，比如 `E2E-7`。
-- **3.0 的功能默认全关，Butler 默认不对外做任何事。**
+- **3.0 的功能默认全关，Shipherd 默认不对外做任何事。**
   - 分叉讨论和「发给开发 session」只在用户点了以后才跑，没有后台触发，所以不加开关。
   - 分叉对外的事一律被 readonly hook 拒绝：不发评论、不 push、不调 WebFetch。
 - **不能留两套并存的算法。**
@@ -179,7 +179,7 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
 - `src/main/ipc/register.ts`、`src/main/ipc/validate.ts`、`.test.ts`；
 - `src/shared/ipc.ts`；
 - `src/renderer/src/api.ts`、`strings.ts`、`strings-en.ts`、`styles.css`、`local-prefs.ts`；
-- `src/renderer/src/components/TicketPage.tsx`、`ControlConversation.tsx`、`EpicPage.tsx`、`FeaturePage.tsx`、`ButlerPage.tsx`；
+- `src/renderer/src/components/TicketPage.tsx`、`ControlConversation.tsx`、`EpicPage.tsx`、`FeaturePage.tsx`、`ShipherdPage.tsx`；
 - `src/renderer/src/ticket-tabs.ts`、`.test.ts`；
 - `e2e/fake-claude/fake-claude.cjs`。
 
@@ -191,7 +191,7 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
 
 这一个任务不写 app 代码，只写一个实测脚本、跑它，再把结论写成常量。其余任务都按常量写，这样 Task 2 起可以并行开工，Task 6 合并前再核对一次常量的值。
 
-**背景：** 现有的 handoff 分叉走 `headlessArgs`，带着 `--disallowedTools`、`--json-schema`、自己的 MCP 配置、`--setting-sources user` 和 `--no-session-persistence`。它们的第一轮一直是整段写 1h 缓存，从来没有读到过。比如 `~/.butler/app.db` 里 handoff 的行是 write1h 113386、read 112810，这是两轮合计，第一轮全是写。
+**背景：** 现有的 handoff 分叉走 `headlessArgs`，带着 `--disallowedTools`、`--json-schema`、自己的 MCP 配置、`--setting-sources user` 和 `--no-session-persistence`。它们的第一轮一直是整段写 1h 缓存，从来没有读到过。比如 `~/.shipherd/app.db` 里 handoff 的行是 write1h 113386、read 112810，这是两轮合计，第一轮全是写。
 
 原因可以从缓存前缀的规则推出来。前缀的顺序是：工具列表 → system → 消息。下面任何一样变了，缓存都会失效：
 - 工具列表：`--disallowedTools` 删掉整个工具、MCP server 集合不一样、`--json-schema` 加进来的结构化输出工具；
@@ -224,7 +224,7 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
     - 找不到就退出，提示「这个 session 得开着」。
     - 参数里有空格，`ps` 拆不准，就打印出来让人确认。
   - 取进程的工作目录：`lsof -a -p <pid> -d cwd -Fn`。
-  - 取开发 session 的上下文大小：只读打开 `~/.butler/app.db`（`node:sqlite`，`{ readOnly: true }`），查这个 session 最新一行 `source='session'` 的 `context` 和 `at`。查法照 `src/main/db/usage-repo.ts` 里的 `latestContext`。
+  - 取开发 session 的上下文大小：只读打开 `~/.shipherd/app.db`（`node:sqlite`，`{ readOnly: true }`），查这个 session 最新一行 `source='session'` 的 `context` 和 `at`。查法照 `src/main/db/usage-repo.ts` 里的 `latestContext`。
   - 四个变体的参数：
     - **v1**：开发参数原样。只把 `--session-id X` 换成 `--resume X`（原来就是 `--resume X` 的不动），再加 `-p --output-format json --fork-session`。`--mcp-config`、`--settings`、`--add-dir`、`--append-system-prompt-file`、`--model` 都照抄，不加 `--setting-sources`。
     - **v2**（生产候选）：v1 再加下面三样：
@@ -233,7 +233,7 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
       - 把 `--mcp-config` 换成一份拷贝：原文件内容里开发 session 的 termId 全部换成 `fork-spike`。
     - **v2-no-perm**：v2 去掉 `--permission-mode` 和 `--allowedTools`。
     - **v2-dev-mcp**：v2 的 `--mcp-config` 用开发 session 的原文件。
-  - 环境变量：`process.env` 加上 `BUTLER_SESSION=headless:spike`、`CLAUDE_CODE_SUBAGENT_MODEL`（没设就是 `sonnet`）、`CLAUDE_CODE_AUTO_COMPACT_WINDOW`（没设就是 `250000`），跟 `sessionEnv` 一致。
+  - 环境变量：`process.env` 加上 `SHIPHERD_SESSION=headless:spike`、`CLAUDE_CODE_SUBAGENT_MODEL`（没设就是 `sonnet`）、`CLAUDE_CODE_AUTO_COMPACT_WINDOW`（没设就是 `250000`），跟 `sessionEnv` 一致。
   - 提示词经 stdin 传，内容是「只回答 OK 两个字母，不要调用任何工具。」。不调工具，整次运行就只有一轮，usage 的合计就等于第一轮。
   - 输出：
     - `input`、`cacheWrite5m`、`cacheWrite1h`、`cacheRead`、`output`、`total_cost_usd`、分叉的 `session_id`；
@@ -243,7 +243,7 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
     - `PASS` 或 `FAIL`。
   - `--dry-run`：只打印拼好的参数，不跑。
   - 跑完提示分叉 transcript 在 `~/.claude/projects/` 下，可以手动删。
-- [ ] **Step 2: 干跑核对参数。** 在 Butler 里开一个 ticket session，让它跑一两轮（上下文最好大于 50k），等它停在输入框。然后跑 `node scripts/fork-cache-spike.mjs <id> --variant v2 --dry-run`，确认下面几点：
+- [ ] **Step 2: 干跑核对参数。** 在 Shipherd 里开一个 ticket session，让它跑一两轮（上下文最好大于 50k），等它停在输入框。然后跑 `node scripts/fork-cache-spike.mjs <id> --variant v2 --dry-run`，确认下面几点：
   - 参数里**没有** `--disallowedTools`、`--json-schema`、`--setting-sources`、`--no-session-persistence`；
   - `--model` 跟开发 session 一样；
   - 工作目录跟开发 session 一样。
@@ -257,7 +257,7 @@ ticket：BTL-235，叠在 BTL-233（第 3 层）上。开工前 BTL-234（第 4 
   - **A（v2 通过）**：`{ cacheOk: true, permissionArgs: true, ownMcpConfig: true }`。
   - **A'（v2 不通过，但 v1 通过）**：一次加一样来找出破缓存的那一项，最多再跑 3 次：
     - 先跑 `v2-no-perm`：通过的话，设 `permissionArgs: false`；
-    - 再跑 `v2-dev-mcp`：通过的话，设 `ownMcpConfig: false`。只读由 hook 拦，开发 session 那份 MCP 配置里的 butler-sessions 会把分叉当成开发 session 本人，所以 readonly hook 必须拦住它所有会写东西的工具，Task 2 已经这么做；
+    - 再跑 `v2-dev-mcp`：通过的话，设 `ownMcpConfig: false`。只读由 hook 拦，开发 session 那份 MCP 配置里的 shipherd-sessions 会把分叉当成开发 session 本人，所以 readonly hook 必须拦住它所有会写东西的工具，Task 2 已经这么做；
     - 两样都去掉还是不通过，说明 `--settings` 拷贝（权限或 hook）进了 prompt，按 B 处理。
   - **B（v1 也不通过，说明 `-p` 模式本身就跟交互模式的前缀不一样）**：`{ cacheOk: false, permissionArgs: true, ownMcpConfig: true }`。这时：
     - 完整分叉走 `strictForkArgs`，它的保护跟现有 handoff 一样，再加 readonly hook；
@@ -292,9 +292,9 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   export type ReadonlyDecision = { allow: true } | { allow: false; reason: string };
   export function readonlyDecision(input: unknown): ReadonlyDecision;
   export const READONLY_MCP_SUFFIXES: readonly string[];   // ["__recall", "__facts", "__why"]
-  export const READONLY_SESSIONS_TOOLS: readonly string[]; // butler-sessions 里只读的那几个
+  export const READONLY_SESSIONS_TOOLS: readonly string[]; // shipherd-sessions 里只读的那几个
   ```
-  `butler-hook readonly` 从 stdin 读 PreToolUse 的 JSON：
+  `shipherd-hook readonly` 从 stdin 读 PreToolUse 的 JSON：
   - 拒绝时，在 stdout 写 `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":<reason>}}`，格式跟 `hook/gate.ts` 一样；
   - 放行时什么都不写；
   - 退出码总是 0。
@@ -309,22 +309,22 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   | `Bash`，`git status; rm -rf x`、`git log \| sh`、`git diff > a`、`` git log `id` ``、`git log $(id)`、带换行的命令 | 拒绝 |
   | `Bash`，`git push`、`git commit -m x`、`git checkout .`、`npm test`、`ls` | 拒绝 |
   | `Edit`、`Write`、`NotebookEdit`、`Agent`、`Task`、`WebFetch`、`WebSearch` | 拒绝 |
-  | `mcp__butler-ticket__recall`、`mcp__statecore__facts` | 放行 |
-  | `mcp__butler-ticket__remember`、`mcp__butler-sessions__report`、`mcp__butler-sessions__ask_user`、`mcp__butler-sessions__submit_evidence` | 拒绝 |
-  | `mcp__butler-sessions__list_tickets`、`mcp__butler-sessions__session_activity` | 放行 |
+  | `mcp__shipherd-ticket__recall`、`mcp__statecore__facts` | 放行 |
+  | `mcp__shipherd-ticket__remember`、`mcp__shipherd-sessions__report`、`mcp__shipherd-sessions__ask_user`、`mcp__shipherd-sessions__submit_evidence` | 拒绝 |
+  | `mcp__shipherd-sessions__list_tickets`、`mcp__shipherd-sessions__session_activity` | 放行 |
   | `null`、`"x"`、`{}`、`{tool_name: 3}` | 拒绝 |
 
   拒绝的理由要用英文写一句话，说明这是只读的讨论，不能改东西。理由会回给模型看，所以不进 i18n。
 - [ ] **Step 2: 运行确认失败。** 跑 `pnpm test hook/readonly.test.ts`，预期 FAIL（找不到模块）。
 - [ ] **Step 3: 实现 `hook/readonly.ts`。** 用白名单：
   - Bash 先拒绝含 `;&|<>` `` ` `` `$(`、换行、`--output` 的命令，再匹配 `^git (status|diff|log|show)(\s|$)`；
-  - MCP 工具按后缀判断，`butler-sessions` 只放行 `list_*` 和 `session_activity`；
+  - MCP 工具按后缀判断，`shipherd-sessions` 只放行 `list_*` 和 `session_activity`；
   - 其余一律拒绝。
 - [ ] **Step 4: 给 `hook/entry.test.ts` 加用例。** 用已经打好的 bundle 跑 `[bundle, "readonly"]`：
   - stdin 是 `{"hook_event_name":"PreToolUse","tool_name":"Edit"}`：stdout 解析出 `permissionDecision: "deny"`，退出码 0；
   - stdin 是 `Read`：stdout 为空；
   - stdin 是坏 JSON `{{`：stdout 也是 deny；
-  - 不写 inbox 信封：`BUTLER_HOME` 下没有 `inbox/*.json`。
+  - 不写 inbox 信封：`SHIPHERD_HOME` 下没有 `inbox/*.json`。
 - [ ] **Step 5: 改 `hook/entry.ts`。** 在 `mode === "gate"` 那一串判断里加一支 `mode === "readonly"`：
   - 同步读 stdin，调 `readonlyDecision`，写出结果；
   - 这一支自己 `try/catch`，catch 里也写 deny。这跟其他模式「出错就放行」**正好相反**，要在注释里写明原因：分叉是用户要求的只读讨论，宁可错拒，也不能错放。
@@ -368,7 +368,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   export function forkSettings(dev: Record<string, unknown> | null, guardCommand: string): Record<string, unknown>;
 
   // session-service.ts
-  devLaunchOf(sessionId: string): DevLaunch | null;   // 只有这个 Butler 进程里开过、pty 还开着的 head 才有
+  devLaunchOf(sessionId: string): DevLaunch | null;   // 只有这个 Shipherd 进程里开过、pty 还开着的 head 才有
   ```
 
 - [ ] **Step 1: 写 `fork-args.test.ts` 的失败测试。** 用一个固定的 `DevLaunch`（`claudeArgs` 用 `claudeArgs({ mode: "new", sessionId: "s1", mcpConfigPath: "/m.json", settingsPath: "/s.json", addDirs: ["/r2"], guidePath: "/g.md", model: "opus" })` 生成），断言下面几组。
@@ -475,7 +475,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   export type DevSendBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused"
     | "refreshing" | "exited" | "timeout" | "blocked" | "in_flight" | "fork_busy" | "no_conclusion" | "not_found";
   export type DevSendResult = { ok: true; at: number } | { ok: false; reason: DevSendBlock };
-  /** disabled：记忆关着；no_scope：没有 ticket 也没有 feature（Butler、epic 页面）。 */
+  /** disabled：记忆关着；no_scope：没有 ticket 也没有 feature（Shipherd、epic 页面）。 */
   export type RememberResult = "written" | "full" | "disabled" | "failed" | "busy" | "no_conclusion" | "no_scope";
   ```
   ```ts
@@ -514,7 +514,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
 - [ ] **Step 2: 运行确认失败。** 跑 `pnpm test src/main/db/fork-discussions-repo.test.ts`。
 - [ ] **Step 3: 实现。**
   - 在 `MIGRATIONS` 末尾追加一条（只能追加，不改前面的）。
-  - repo 照 `src/main/db/butler-messages-repo.ts` 的写法：`Row` 类型、`toFork` 映射、构造函数收 `Db`。
+  - repo 照 `src/main/db/shipherd-messages-repo.ts` 的写法：`Row` 类型、`toFork` 映射、构造函数收 `Db`。
   - `finish` 的费用用一条 SQL 累计：`cost_usd = CASE WHEN ? IS NULL THEN cost_usd ELSE COALESCE(cost_usd, 0) + ? END`，`cost_partial = MAX(cost_partial, ?)`。
   - 写 `src/shared/fork.ts`。
   - 第 4 层没有 `byFork` 的话，在它的 store 里补上，连同一条测试（两条分叉消息、一条普通消息，只返回前两条，按 `at` 排序）。
@@ -789,7 +789,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     - 用结论（先确保有）调 `rememberText(scope, 结论)`，返回 `"written"`；
     - 槽满返回 `"full"`；
     - 连点返回 `"busy"`；
-    - ticket 和 feature 都没有时返回 `"no_scope"`，不要结论、不调用 `rememberText`（界面提示「这里的结论没有 ticket 或 feature 可记」，不当成记忆没开）。这只是兜底：Butler 页和 epic 页本来就不出「记进记忆」（`ControlConversation` 按 `canRememberIn(scope)` 传 `canRemember`，ticket 页默认有）。
+    - ticket 和 feature 都没有时返回 `"no_scope"`，不要结论、不调用 `rememberText`（界面提示「这里的结论没有 ticket 或 feature 可记」，不当成记忆没开）。这只是兜底：Shipherd 页和 epic 页本来就不出「记进记忆」（`ControlConversation` 按 `canRememberIn(scope)` 传 `canRemember`，ticket 页默认有）。
 - [ ] **Step 2: 运行确认失败。** 跑 `pnpm test src/main/fork/dev-send.test.ts src/main/fork/fork-service.test.ts`。
 - [ ] **Step 3: 实现。** `DevSender.send` 照 `src/main/inbox/inbox-service.ts`（约 281 行）的回答投递写：先 `guard.check(head.id)`，通过后调 `deliver(g.termId, sanitize(text), { singleLine: platform === "win32", timeoutMs: 60_000, recheck: guard.recheckAfter(head.id, g) })`。在途标记用 `Set<headId>`，放在 `finally` 里清掉。
 - [ ] **Step 4: 运行。** 跑同上的命令，再跑 `pnpm typecheck`，预期 PASS。
@@ -831,7 +831,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   forkRemember: (forkId: number) => call<{ result: RememberResult }>(IPC.forkRemember, forkId),
   convSend: (anyId: string, text: string) => call<DevSendResult>(IPC.convSend, anyId, text),
   inboxReports: (scope: InboxScope, o: { before?: number; limit: number }) => call<{ reports: InboxItemView[]; hasMore: boolean }>(IPC.inboxReports, scope, o),
-  onForkChanged: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.forkChanged, cb),
+  onForkChanged: (cb: (rootSessionId: string) => void) => window.shipherd.on(IPC.forkChanged, cb),
   // validate.ts
   export function forkIdArg(v: unknown): number;        // 正整数
   export function forkQuestionArg(v: unknown): string;  // trim 后非空、≤ 20000 字
@@ -907,7 +907,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   export function errorText(e: NonNullable<ForkView["error"]>, t: UiStrings, now: number): string;
   export function sendBlockText(r: DevSendBlock, t: UiStrings): string;
   export function rememberText(r: RememberResult, t: UiStrings): string;
-  export function refusalText(code: string, t: UiStrings): string;   // ButlerError.code → 句子；不认识的给通用的
+  export function refusalText(code: string, t: UiStrings): string;   // ShipherdError.code → 句子；不认识的给通用的
   ```
 
 - [ ] **Step 1: 写失败测试 `conversation-view.test.ts`。**
@@ -947,7 +947,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
 **Files:**
 - Create: `src/renderer/src/components/ConversationTab.tsx`、`src/renderer/src/components/ForkBox.tsx`、`src/renderer/src/components/conversation-tab-render.test.ts`
 - Modify:
-  - 组件：`components/TicketPage.tsx`、`components/ControlConversation.tsx`、`components/EpicPage.tsx`、`components/FeaturePage.tsx`、`components/ButlerPage.tsx`；
+  - 组件：`components/TicketPage.tsx`、`components/ControlConversation.tsx`、`components/EpicPage.tsx`、`components/FeaturePage.tsx`、`components/ShipherdPage.tsx`；
   - 组件测试：`components/ticket-page-render.test.ts`、`components/scope-tabs-render.test.ts`；
   - 其他：`ticket-tabs.ts`、`ticket-tabs.test.ts`、`local-prefs.ts`、`styles.css`。
 - Delete: `components/ConversationPlaceholder.tsx`、`S.lay.convPlaceholder`（中英）
@@ -1020,13 +1020,13 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
   - **筛选**：「全部」「只看讨论」「搜索」：
     - 选「搜索」时出一个输入框，用 `conv:search(根, q)` 拿结果，平铺显示；属于分叉的那条带「讨论」标记。
     - 「只看讨论」把 `filter: "forks"` 交给 `buildTimeline`。
-  - **「并排显示终端」**：只在给了 `renderTerminal` 时显示。点了以后外层加 `conv-split` 类，左边是 `renderTerminal(selected)`，右边是对话。这个开关按页面记在 `local-prefs`：`butler.convSplit:<page>`。
+  - **「并排显示终端」**：只在给了 `renderTerminal` 时显示。点了以后外层加 `conv-split` 类，左边是 `renderTerminal(selected)`，右边是对话。这个开关按页面记在 `local-prefs`：`shipherd.convSplit:<page>`。
   - **输入框**：`SendBar` 下面的「发给」切换，用 `savedSendTarget` 记住上次选的。
     - 选「开发 session」：调 `api.convSend(selected, text)`。
       - `ok`：清空输入框；这句话由第 4 层从 transcript 记进对话，会自己出现。
       - 不 `ok`：保留草稿，用 `sendBlockText` 显示原因。
     - 选「只问不改」：调 `api.forkAsk(selected, null, text)`，成功后清空。
-    - `ButlerError` 用 `refusalText(code)` 显示。
+    - `ShipherdError` 用 `refusalText(code)` 显示。
     - 发送中把按钮禁用。
   - **`ForkActions`**：
     - 每个动作都先把 `pending[id]` 设好，`finally` 里清掉。
@@ -1046,7 +1046,7 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
     - `rootSessionId ?? sessions[0]?.id` 有值时，渲染 `<ConversationTab rootSessionId=… sessions={p.sessions} reportScope={p.scope} />`，再加 `footer`；
     - 都没有，也就是还没有总控 session 时，保留 `ControlFeed`，汇报照旧按时间显示，不丢。
     - `ControlFeed` 里自己排序的那段删掉，改用 `buildTimeline({ messages: [], …, reports })`，只留一种排法。
-  - **`EpicPage.tsx`、`FeaturePage.tsx`、`ButlerPage.tsx`**：把传给 `ControlConversation` 的 `rootSessionId={null}` 改成那个总控 session 的 `SessionView.rootId`（第 4 层加的字段），也就是 `sessions` 列表的第一个。
+  - **`EpicPage.tsx`、`FeaturePage.tsx`、`ShipherdPage.tsx`**：把传给 `ControlConversation` 的 `rootSessionId={null}` 改成那个总控 session 的 `SessionView.rootId`（第 4 层加的字段），也就是 `sessions` 列表的第一个。
   - **`ticket-tabs.ts`**：按 Step 1 的测试改 `landingTab`，文件里的规则注释同步改。
 - [ ] **Step 5: CSS（`styles.css`）。** 照草图 `#t-conv` 的样式，颜色用变量，写在 `:root` 和暗色两处：
   - `.conv`、`.conv .tools`、`.conv .feed`；
@@ -1126,8 +1126,8 @@ PreToolUse hook 返回 `deny`，能压过所有放行规则；而且 hook 不进
 | `sending` / `sentAt(time)` / `remembered` / `memoryFull` / `memoryOff` / `memoryFailed` | 正在发… / `已发给 session · {time}` / 已记下 / 记忆满了，先清掉几条 / 记忆没开 / 没记上，稍后再试 | Sending… / `Sent to session · {time}` / Saved / Memory is full; clear some first / Memory is off / Couldn't save; try again later |
 | `sendTo` / `toDev` / `toFork` / `askPlaceholder` / `send` | 发给： / 开发 session / 只问不改（分叉讨论） / 问点什么… / 发送 | Send to: / Dev session / Ask only (forked discussion) / Ask something… / Send |
 | `block.closed` / `hibernated` / `busy` / `screen` / `needs_you` / `typing` / `draft` / `cost_paused` / `refreshing` / `exited` / `timeout` / `blocked` / `in_flight` / `fork_busy` / `no_conclusion` / `not_found` | session 没开着，先到终端 tab 打开它 / session 睡着了，先唤醒 / session 正在跑，等它停下再发 / 终端里开着别的界面，先关掉 / session 在等你回答，先回答它 / 你正在终端里打字，等一下再发 / 你在终端里打了半句，先发完或清掉 / 花费超了，已暂停 / 正在换新，等一下再发 / session 退出了 / 等了一分钟没发出去 / 没发出去 / 上一条还在发 / 讨论还在回答，等它答完 / 没拿到结论，再试一次 / 找不到这个 session | The session isn't open; open it in the Terminal tab / The session is asleep; wake it first / The session is working; send when it stops / Another screen is open in the terminal; close it first / The session is waiting for your answer; answer it first / You're typing in the terminal; send in a moment / There's a half-typed line in the terminal; send or clear it first / Spending is over the limit and paused / Refreshing; send in a moment / The session exited / Couldn't send within a minute / Not sent / The last one is still sending / The discussion is still answering; wait for it / Didn't get a conclusion; try again / Can't find this session |
-| `refusal.fork_busy` / `dev_busy` / `no_transcript` / `no_claude` / `not_found` / `bad_question` / `other` | 这个讨论还在回答 / 开发 session 正在跑，等它停下再用完整上下文 / 这个 session 还没有对话记录，只能用精简上下文 / 找不到 claude，或 butler-hook 没装好（只读保护要靠它） / 找不到这个讨论 / 问题是空的或太长 / 出错了，再试一次 | This discussion is still answering / The dev session is working; use full context once it stops / This session has no transcript yet; only light context is possible / Can't find claude, or butler-hook isn't installed (read-only protection needs it) / Can't find this discussion / The question is empty or too long / Something went wrong; try again |
-| `error.rate_limited(time\|null)` / `interrupted` / `no_answer` / `timeout` / `other` | `撞到用量限额了，{time} 恢复` / 撞到用量限额了 / Butler 退出时还没答完 / 答完了，但是是空的 / 等太久没答完 / 没答上来 | `Hit the usage limit; back at {time}` / Hit the usage limit / Butler quit before it finished / It finished with an empty answer / Took too long / Couldn't answer |
+| `refusal.fork_busy` / `dev_busy` / `no_transcript` / `no_claude` / `not_found` / `bad_question` / `other` | 这个讨论还在回答 / 开发 session 正在跑，等它停下再用完整上下文 / 这个 session 还没有对话记录，只能用精简上下文 / 找不到 claude，或 shipherd-hook 没装好（只读保护要靠它） / 找不到这个讨论 / 问题是空的或太长 / 出错了，再试一次 | This discussion is still answering / The dev session is working; use full context once it stops / This session has no transcript yet; only light context is possible / Can't find claude, or shipherd-hook isn't installed (read-only protection needs it) / Can't find this discussion / The question is empty or too long / Something went wrong; try again |
+| `error.rate_limited(time\|null)` / `interrupted` / `no_answer` / `timeout` / `other` | `撞到用量限额了，{time} 恢复` / 撞到用量限额了 / Shipherd 退出时还没答完 / 答完了，但是是空的 / 等太久没答完 / 没答上来 | `Hit the usage limit; back at {time}` / Hit the usage limit / Shipherd quit before it finished / It finished with an empty answer / Took too long / Couldn't answer |
 | `forkTag` | 讨论 | Discussion |
 
 ---

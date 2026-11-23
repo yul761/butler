@@ -89,7 +89,7 @@ describe("readAvailableMemory", () => {
   });
 });
 
-describe("fixed reading for e2e (BUTLER_E2E_AVAILABLE_MB)", () => {
+describe("fixed reading for e2e (SHIPHERD_E2E_AVAILABLE_MB)", () => {
   it("uses the fixed number on every platform and runs nothing; ignores a value that is not a whole number", async () => {
     for (const platform of ["darwin", "win32", "linux"] as const) {
       const d = deps({ platform, fixedAvailableMb: "1000" });
@@ -102,15 +102,15 @@ describe("fixed reading for e2e (BUTLER_E2E_AVAILABLE_MB)", () => {
   });
 });
 
-describe("BUTLER_E2E_AVAILABLE_MB only outside a packaged build", () => {
+describe("SHIPHERD_E2E_AVAILABLE_MB only outside a packaged build", () => {
   it("a packaged build ignores it; an unpackaged one (e2e) reads it", async () => {
-    const env = { BUTLER_E2E_AVAILABLE_MB: "1000" };
+    const env = { SHIPHERD_E2E_AVAILABLE_MB: "1000" };
     expect(e2eFixedAvailableMb(env, true)).toBeUndefined();
     expect(e2eFixedAvailableMb(env, false)).toBe("1000");
     expect(e2eFixedAvailableMb({}, false)).toBeUndefined();
     // 走一遍 defaultReadDeps：打包环境里设了这个变量，读的还是这台机器。
-    const before = process.env.BUTLER_E2E_AVAILABLE_MB;
-    process.env.BUTLER_E2E_AVAILABLE_MB = "1000";
+    const before = process.env.SHIPHERD_E2E_AVAILABLE_MB;
+    process.env.SHIPHERD_E2E_AVAILABLE_MB = "1000";
     try {
       const run = vi.fn(async () => {
         throw new Error("no command");
@@ -120,8 +120,8 @@ describe("BUTLER_E2E_AVAILABLE_MB only outside a packaged build", () => {
       expect(defaultReadDeps(run, true).fixedAvailableMb).toBeUndefined();
       expect((await readAvailableMemory({ ...defaultReadDeps(run, false), platform: "linux" })).source).toBe("fixed");
     } finally {
-      if (before === undefined) delete process.env.BUTLER_E2E_AVAILABLE_MB;
-      else process.env.BUTLER_E2E_AVAILABLE_MB = before;
+      if (before === undefined) delete process.env.SHIPHERD_E2E_AVAILABLE_MB;
+      else process.env.SHIPHERD_E2E_AVAILABLE_MB = before;
     }
   });
 });
@@ -133,7 +133,7 @@ describe("log lines", () => {
     // memory_pressure 读不到只是少一段对照；别的平台不跑它。
     expect(await memorySnapshotLine(deps({ out: { vm_stat: VM_STAT } }))).not.toContain("memory_pressure");
     // e2e 定死了读数：照样读真实的，再注明准入用的是定死的。
-    expect(await memorySnapshotLine(deps({ out: { vm_stat: VM_STAT }, fixedAvailableMb: "65536" }))).toMatch(/^vm_stat: total 49152 MB, .*; admission uses a fixed 65536 MB \(BUTLER_E2E_AVAILABLE_MB\)$/);
+    expect(await memorySnapshotLine(deps({ out: { vm_stat: VM_STAT }, fixedAvailableMb: "65536" }))).toMatch(/^vm_stat: total 49152 MB, .*; admission uses a fixed 65536 MB \(SHIPHERD_E2E_AVAILABLE_MB\)$/);
     const win = deps({ platform: "win32", freemem: () => 9 * GB, totalmem: () => 32 * GB });
     expect(await memorySnapshotLine(win)).toBe("os: total 32768 MB, available 9216 MB, pressure ?, os.freemem 9216 MB");
     expect(win.run).not.toHaveBeenCalled();

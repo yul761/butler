@@ -131,7 +131,7 @@ describe("applyAnalysis", () => {
 describe("analysisPrompt / schema", () => {
   const m: Material = {
     pr: { number: 7, title: "T", body: "", url: "https://x/7", author: "a", headRefName: "h", mergedAt: null, reviews: [], comments: [], inline: [], commits: [], botLogins: new Set() },
-    items: [], fixes: [], fixesNote: null, butler: null,
+    items: [], fixes: [], fixesNote: null, shipherd: null,
   };
   it("lists existing lessons with id and status, and products with product_id", () => {
     const { repo, shop } = setup();
@@ -180,7 +180,7 @@ describe("applyAnalysis, scope and checkability (workstream D)", () => {
   });
 
   it("the prompt explains the new fields in both languages", () => {
-    const m = { pr: { number: 7, title: "t", body: "", url: PR_URL, headRefName: "b", baseRefName: "main", mergedAt: "", reviews: [], comments: [], reviewThreads: [], commits: [] }, items: [], fixes: [], fixesNote: null, butler: null } as unknown as Material;
+    const m = { pr: { number: 7, title: "t", body: "", url: PR_URL, headRefName: "b", baseRefName: "main", mergedAt: "", reviews: [], comments: [], reviewThreads: [], commits: [] }, items: [], fixes: [], fixesNote: null, shipherd: null } as unknown as Material;
     expect(analysisPrompt("zh", "acme/web", m, [], [])).toContain("rule.checkability");
     expect(analysisPrompt("en", "acme/web", m, [], [])).toContain("rule.globs");
   });

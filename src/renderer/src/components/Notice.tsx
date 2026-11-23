@@ -1,4 +1,4 @@
-// Butler 要你点一下的那条提醒（从「现在」页原样搬出，UI 重做第 2 层）：一句话加原来的按钮。testid 保持 now-notice-*。
+// Shipherd 要你点一下的那条提醒（从「现在」页原样搬出，UI 重做第 2 层）：一句话加原来的按钮。testid 保持 now-notice-*。
 import { useState } from "react";
 import type { NowNotice, NowTarget } from "../../../shared/types";
 import { api } from "../api";

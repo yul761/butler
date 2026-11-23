@@ -40,7 +40,7 @@ describe("buildDiagnostics", () => {
       memory: { totalMb: 32000, freeMb: 4000 }, appMetrics: [], mainMemory: { rss: 1 }, mode: "on",
       current: s.current(), history: [w], logTail: Array.from({ length: 1500 }, (_, i) => `l${i}`),
     });
-    expect(d.kind).toBe("butler-diagnostics");
+    expect(d.kind).toBe("shipherd-diagnostics");
     expect(d.logTail).toHaveLength(1000);
     expect(d.logTail[999]).toBe("l1499");
     expect(d.perf.history[0].sends["state:changed"].n).toBe(1);

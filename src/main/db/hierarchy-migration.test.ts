@@ -34,6 +34,7 @@ describe("hierarchy A′ migration (BTL-246)", () => {
     db.prepare("INSERT INTO features (id, name, workspace_dir, created_at, epic_id) VALUES (12, 'f3', '/w/f3', 1, 2)").run();
     db.prepare("INSERT INTO features (id, name, workspace_dir, created_at) VALUES (13, 'loose', '/w/loose', 1)").run();
     db.prepare(`INSERT INTO tickets (key, title, repo_path, work_mode, branch, status, created_at) VALUES ('T-1', NULL, '', 'branch', '', 'active', 1)`).run();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
     const session = db.prepare("INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, coordinator, epic_id, feature_id) VALUES (?, ?, '/c', 'butler', 1, ?, ?, ?)");
     session.run("epic-s", null, 0, 1, null);
     session.run("ticket-coord", "T-1", 1, null, null);

@@ -6,8 +6,8 @@ import type { StackService } from "../stacks/stack-service";
 import { T } from "../stacks/pr-text";
 import { samePath } from "../tickets/ticket-service";
 
-/** 谁在问：feature 总控、Butler 总控。 */
-export type StackScope = { kind: "feature"; featureId: number } | { kind: "butler" };
+/** 谁在问：feature 总控、Shipherd 总控。 */
+export type StackScope = { kind: "feature"; featureId: number } | { kind: "shipherd" };
 
 export interface StackControlDeps {
   service: Pick<StackService, "define" | "view" | "rebaseNow" | "setLayerMode" | "canStackOn" | "stackOn">;
@@ -40,7 +40,7 @@ export class StackControl {
 
   private scopeTickets(scope: StackScope): Ticket[] {
     const all = this.d.tickets();
-    if (scope.kind === "butler") return all;
+    if (scope.kind === "shipherd") return all;
     return all.filter((t) => t.featureId === scope.featureId);
   }
 
@@ -49,7 +49,7 @@ export class StackControl {
    * 改（write）：栈是它的，或者每一层都是它的 ticket——别的 feature 的层不能借一层共有的就被 rebase、force push。
    */
   private belongs(scope: StackScope, s: StackView, keys: Set<string>, write = false): boolean {
-    if (scope.kind === "butler") return true;
+    if (scope.kind === "shipherd") return true;
     if (scope.kind === "feature" && s.featureId === scope.featureId) return true;
     const mine = (l: StackView["layers"][number]) => l.ticketKey !== null && keys.has(l.ticketKey);
     return write ? s.layers.filter((l) => l.state !== "merged").every(mine) : s.layers.some(mine);
@@ -136,15 +136,15 @@ export class StackControl {
       } else {
         const b = raw.trim();
         const owner = tickets.find((x) => x.repos.some((r) => r.branch === b && samePath(r.repoPath, repoPath!)));
-        // feature 总控只能用自己 feature 的 ticket 的分支（Butler 总控可以用任何 Butler 分支，service 会再核对）
+        // feature 总控只能用自己 feature 的 ticket 的分支（Shipherd 总控可以用任何 Shipherd 分支，service 会再核对）
         if (!owner && scope.kind === "feature") return fail(e.notYours);
         branches.push(b);
         if (owner) layerTickets.push(owner);
       }
     }
-    // Butler 总控建的：各层的 ticket 都在同一个 feature 里就记上它
+    // Shipherd 总控建的：各层的 ticket 都在同一个 feature 里就记上它
     let featureId: number | null = feature?.id ?? null;
-    if (scope.kind === "butler") {
+    if (scope.kind === "shipherd") {
       const fids = new Set(layerTickets.map((t) => t.featureId));
       const only = fids.size === 1 ? [...fids][0]! : null;
       featureId = only ?? null;

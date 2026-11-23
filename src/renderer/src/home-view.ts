@@ -19,8 +19,8 @@ export const HOME_SCOPE_CAP = 8;
 const youRank = (t: Turn) => (t.owner === "you" ? YOU_KIND_RANK[t.kind] : 99);
 
 /**
- * 工作区里什么都没有（ticket、feature 都是 0），轮到你的板上也空着，也没有别的 Butler 提醒：首页只放空状态。
- * 板上有 Butler 自己的提醒、或者有只是告知的提醒（noticeCount，放在「运行情况」里）时照常显示。
+ * 工作区里什么都没有（ticket、feature 都是 0），轮到你的板上也空着，也没有别的 Shipherd 提醒：首页只放空状态。
+ * 板上有 Shipherd 自己的提醒、或者有只是告知的提醒（noticeCount，放在「运行情况」里）时照常显示。
  */
 export function isNoWork(workCount: number, items: TurnItem[] | null, noticeCount = 0): boolean {
   return workCount === 0 && (items ?? []).length === 0 && noticeCount === 0;
@@ -52,7 +52,7 @@ export function cardKey(item: TurnItem): string {
     case "answer": return `${base}|${t.askId ?? `s:${t.sessionId ?? ""}`}`;
     case "stuck":
     case "unattended": return `${base}|${t.sessionId ?? ""}`;
-    case "butler": return `${base}|${noticeKey(t.notice)}`;
+    case "shipherd": return `${base}|${noticeKey(t.notice)}`;
     case "review": return `${base}|${t.url}`;
     case "merge": return base;
   }
@@ -77,7 +77,7 @@ export function homeLede(c: TurnBoard["counts"], S: UiStrings): string {
 
 export type CardAction = { id: "answer"; option: string; primary: boolean } | { id: "openPr" | "look" | "fix" | "send" | "ignore"; primary: boolean };
 
-/** 卡片上的 1–3 个按钮；butler 卡用 Notice 自己的按钮，这里给空。 */
+/** 卡片上的 1–3 个按钮；shipherd 卡用 Notice 自己的按钮，这里给空。 */
 export function cardActions(item: TurnItem): CardAction[] {
   const t = item.turn;
   const look = (primary: boolean): CardAction => ({ id: "look", primary });
@@ -98,7 +98,7 @@ export function cardActions(item: TurnItem): CardAction[] {
       return [look(true), ...fix, ...ignore];
     }
     case "unattended": return t.canSend && item.ticketKey !== null && item.pr !== null ? [{ id: "send", primary: true }, look(false)] : [look(true)];
-    case "butler": return [];
+    case "shipherd": return [];
   }
 }
 
@@ -122,7 +122,7 @@ export function lookTarget(item: TurnItem): NowTarget | null {
   if (item.ticketKey !== null) return { page: "ticket", key: item.ticketKey, sessionId };
   if (sessionId === null) return null;
   if (item.featureId !== null) return { page: "feature", id: item.featureId, sessionId };
-  return { page: "butler", sessionId };
+  return { page: "shipherd", sessionId };
 }
 
 /** 「N 分钟前」；不到一分钟就是「刚刚」，不拼成「刚刚前」/“just now ago”。 */
@@ -145,7 +145,7 @@ export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrin
   const parts: string[] = [];
   const feature = item.featureId === null ? undefined : ctx.features.get(item.featureId);
   if (feature) parts.push(feature);
-  if (parts.length === 0 && item.ticketKey === null && item.featureId === null) parts.push(S.butlerNav);
+  if (parts.length === 0 && item.ticketKey === null && item.featureId === null) parts.push(S.shipherdNav);
   const scope = parts.join(" › ");
   const key = item.ticketKey;
   const age = since === null ? "" : agoText(since, S, S.hm.ago);

@@ -1,17 +1,17 @@
-# BTL-244 界面减法（Butler 4.0 W4）设计补充
+# BTL-244 界面减法（Shipherd 4.0 W4）设计补充
 
-日期：2026-11-20。上位设计：Butler 4.0「做减法、收概念」的 W4。这里只写实现时自己定的事。
+日期：2026-11-20。上位设计：Shipherd 4.0「做减法、收概念」的 W4。这里只写实现时自己定的事。
 
 ## 1. 未认领 session
 
-- 新设置 `showOutsideSessions`（「显示 Butler 之外开的 session」），默认 `"0"`，放在 **设置 → 基本**。
+- 新设置 `showOutsideSessions`（「显示 Shipherd 之外开的 session」），默认 `"0"`，放在 **设置 → 基本**。
 - 关着时：
   - 主进程的 `runDiscovery()`（启动时一次、每 5 分钟一次、hook 触发的补全）直接返回，**不读 `~/.claude/projects`**。
   - `sessionService.unclaimed()` 返回空数组。
   - 「全部工作」上的「未认领 session」入口不出；直接进那一页（旧的路由）时，只说一句「已关闭，可以在设置 → 基本里打开」。
 - 打开时：`settingChanged` 马上跑一次发现，之后照旧。
-- 不受影响：Butler 自己的 session 照常用 `findTranscript` / `transcriptState`（这两个函数归 BTL-242 做缓存）。hook 事件照常记行。Butler 外开的 session 的事件也照常记进数据库，只是不显示。
-- 以前 `gitBranch` 只靠扫描补，所有 Butler 自己的 session 都是（CI 结论按分支挑接收者、PR 阶段事件、度量都用它）。扫描默认关以后，改成 hook 事件到来时对 Butler 自己的 session（`origin = butler`）在它的目录里跑一次 `git rev-parse --abbrev-ref HEAD` 补上（`fillBranchFromCwd`，每个 session 每次运行最多一次；游离 HEAD 和不是仓库的目录不记）。补 `firstPrompt` 本来就走 `UserPromptSubmit` 的 hook，删空 session 前也会先确认 transcript 不存在，所以不会误删。
+- 不受影响：Shipherd 自己的 session 照常用 `findTranscript` / `transcriptState`（这两个函数归 BTL-242 做缓存）。hook 事件照常记行。Shipherd 外开的 session 的事件也照常记进数据库，只是不显示。
+- 以前 `gitBranch` 只靠扫描补，所有 Shipherd 自己的 session 都是（CI 结论按分支挑接收者、PR 阶段事件、度量都用它）。扫描默认关以后，改成 hook 事件到来时对 Shipherd 自己的 session（`origin = shipherd`）在它的目录里跑一次 `git rev-parse --abbrev-ref HEAD` 补上（`fillBranchFromCwd`，每个 session 每次运行最多一次；游离 HEAD 和不是仓库的目录不记）。补 `firstPrompt` 本来就走 `UserPromptSubmit` 的 hook，删空 session 前也会先确认 transcript 不存在，所以不会误删。
 - 关着时 hook 也不再往等待扫描的集合里加 session。
 - 和 BTL-242 的约定：BTL-244 不改 `discovery.ts`，也不改 `App.tsx` 的 `state:changed` 重取那一块。「全部工作」入口是否显示，由 `AllWorkPage` 自己读设置决定。
 

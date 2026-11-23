@@ -9,18 +9,19 @@ import { locateClaude, readLoginShellPath, wellKnownClaudePaths } from "../claud
 import { claudeLoginState } from "../claude/login";
 import type { SettingsRepo } from "../db/settings-repo";
 import { memoryOn } from "../settings/settings-values";
-import type { ButlerPaths } from "../paths";
+import type { ShipherdPaths } from "../paths";
 import type { ExecText } from "../util/exec";
 import { withPath } from "../util/env";
 import { statecorePluginInstalled } from "../memory/plugin-check";
-import { hookCommand, hookStatus, installHookBinary, installHooks, readSettings, uninstallHooks } from "./installer";
+import { pathUnder, readMigrationMarker } from "../migrate/legacy-home";
+import { hookBins, hookCommand, hookStatus, installHookBinary, installHooks, readSettings, uninstallHooks } from "./installer";
 
 export interface HealthDeps {
-  paths: ButlerPaths;
+  paths: ShipherdPaths;
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   settings: SettingsRepo;
-  /** 随 app 一起分发的 butler-hook，安装时复制到 paths.hookBin。 */
+  /** 随 app 一起分发的 shipherd-hook，安装时复制到 paths.hookBin。 */
   bundledHookBin: string;
   /** 打包的 StateCore MCP（任务 7）；不给时视为不存在。 */
   memoryMcpScript?: string;
@@ -51,7 +52,7 @@ export class HealthService {
   private state: { path: string | null; pathValue: string } = { path: null, pathValue: "" };
   /** 最近一次探测到的可选参数；探测失败或还没探测时按 2.1.0 的假设：认 --model，不认 --effort。 */
   private optional: { model: boolean; effort: boolean } = { model: true, effort: false };
-  /** 装着的 butler-hook 和随 app 分发的一样（认得 gate）。只有这时才给 session 挂合并总控的 gate hook。 */
+  /** 装着的 shipherd-hook 和随 app 分发的一样（认得 gate）。只有这时才给 session 挂合并总控的 gate hook。 */
   private binCurrent = false;
   /** 进行中的 syncHookBinary：安装要等它做完，两边写的是同一个临时文件。 */
   private binSync: Promise<boolean> = Promise.resolve(false);
@@ -83,7 +84,7 @@ export class HealthService {
   }
 
   /**
-   * 启动时：装着的 butler-hook 和随 app 分发的不一样（升级后还是旧版本，不认 gate，会把每条 Bash 命令当成普通 hook 事件）就换成新的。
+   * 启动时：装着的 shipherd-hook 和随 app 分发的不一样（升级后还是旧版本，不认 gate，会把每条 Bash 命令当成普通 hook 事件）就换成新的。
    * 用户没装过的不替他装。永不抛错：换不了就不开 gate（最终审查 1）。返回 gate 能不能开。
    */
   syncHookBinary(): Promise<boolean> {
@@ -93,6 +94,7 @@ export class HealthService {
 
   private async syncOnce(): Promise<boolean> {
     const dest = this.d.paths.hookBin;
+    await this.migrateLegacyHook();
     this.binCurrent = false;
     if (!existsSync(dest)) return false;
     try {
@@ -115,7 +117,56 @@ export class HealthService {
   }
 
   /**
-   * 启动时：装着的 /handoff 是 Butler 的旧版本（hash 对得上，stale）就换成当前版本（C1，和 syncHookBinary 一样）。
+   * BTL-260：改名前 Butler 装过 hook（settings.json 里有 butler-hook 条目）就替用户换成 shipherd-hook：
+   * 用户装过等于同意过，不换的话升级后 hook 状态是 stale，gate、收件箱都断了。旧条目由 installHooks 去掉，不会新旧各一份。
+   * 数据目录里还有旧的 bin/butler-hook（升级前起的 claude 还按旧路径调它）就把内容也换成新版本，新版本认得新旧两套环境变量。
+   * 永不抛错。TODO(5.0)：保留一个大版本后删掉。
+   */
+  private legacyHookMigrated = false;
+  /** 这次启动替用户把旧 hook 换掉了：和 syncHookBinary 并行跑的那次 refresh 可能读到换之前的设置，要再 refresh 一次。读一次就清掉。 */
+  takeLegacyHookMigrated(): boolean {
+    const v = this.legacyHookMigrated;
+    this.legacyHookMigrated = false;
+    return v;
+  }
+
+  /**
+   * 要替用户换掉的条目必须是这个数据目录自己的：旧 butler-hook 在本目录的 bin 里（BUTLER_HOME 原样沿用的），
+   * 或者 hook（新旧名字都算）在迁移标记记下的旧目录的 bin 里（~/.butler 搬过来的；以及上次没搬成、临时用旧目录装的）。
+   * 另起的隔离实例（SHIPHERD_HOME 指向别处）不碰真实 settings 里别人的 hook：用户没点安装就不装。
+   */
+  private ownsLegacyHookEntries(settings: Record<string, unknown>): boolean {
+    const home = this.d.paths.home;
+    const marker = readMigrationMarker(home);
+    const same = (a: string, b: string) => pathUnder(a, b) === "" || pathUnder(b, a) === "";
+    return hookBins(settings).some(({ bin, legacy }) => {
+      const binHome = path.dirname(path.dirname(bin));
+      if (legacy && same(binHome, home)) return true;
+      return marker !== null && same(marker.to, home) && same(binHome, marker.from);
+    });
+  }
+
+  private async migrateLegacyHook(): Promise<void> {
+    const bundled = this.d.bundledHookBin;
+    const legacyBin = path.join(path.dirname(this.d.paths.hookBin), this.d.platform === "win32" ? "butler-hook.exe" : "butler-hook");
+    try {
+      if (existsSync(legacyBin) && !(await sameContent(bundled, legacyBin))) await installHookBinary(bundled, legacyBin);
+    } catch (e) {
+      this.d.log?.(`hook binary: could not refresh the legacy ${legacyBin}`, e);
+    }
+    try {
+      if (!this.ownsLegacyHookEntries(await readSettings(this.d.paths.claudeSettings))) return;
+      this.d.log?.(`hooks: replacing the legacy butler-hook entries in ${this.d.paths.claudeSettings} with ${this.d.paths.hookBin}`);
+      await installHookBinary(bundled, this.d.paths.hookBin);
+      await installHooks(this.d.paths.claudeSettings, this.d.paths.hookBin, this.d.platform);
+      this.legacyHookMigrated = true;
+    } catch (e) {
+      this.d.log?.(`hooks: could not replace the legacy butler-hook entries`, e);
+    }
+  }
+
+  /**
+   * 启动时：装着的 /handoff 是 Shipherd 的旧版本（hash 对得上，stale）就换成当前版本（C1，和 syncHookBinary 一样）。
    * 用户自己的（conflict）、没装的不碰。永不抛错：换不了只记日志。
    */
   async syncHandoffCommand(): Promise<void> {
@@ -166,7 +217,7 @@ export class HealthService {
     try {
       handoffCommand = await handoffCommandStatus(this.commandFile());
     } catch {
-      // 读不了（权限、是目录）就当作不是 Butler 的文件，不去碰它。
+      // 读不了（权限、是目录）就当作不是 Shipherd 的文件，不去碰它。
       handoffCommand = "conflict";
     }
     return {
@@ -176,7 +227,7 @@ export class HealthService {
       hooks,
       hookBinInstalled: existsSync(this.d.paths.hookBin),
       handoffCommand,
-      butlerHome: this.d.paths.home,
+      shipherdHome: this.d.paths.home,
       claudeSettingsPath: this.d.paths.claudeSettings,
       memory: {
         enabled: memoryOn(this.d.settings),

@@ -85,7 +85,7 @@ function ExportRow({ e, onMsg }: { e: CheckExportView; onMsg(text: string, error
 
 /**
  * 一条检查在某个仓库上的两个动作（设计 §7、§9）：整个仓库扫一遍存量（「存量 N 处」+ 明细），
- * 和导出成仓库自己的规则（写进 Butler 管的 worktree 就停）。
+ * 和导出成仓库自己的规则（写进 Shipherd 管的 worktree 就停）。
  */
 export function CheckRepoTools({ checkId, checkKey, repos, defaultSlug }: { checkId: number; checkKey: string; repos: string[]; defaultSlug: string | null }) {
   const [slug, setSlug] = useState<string>(defaultSlug ?? repos[0] ?? "");

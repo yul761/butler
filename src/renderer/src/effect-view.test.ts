@@ -89,7 +89,7 @@ const point = (start: string, o: Partial<TrendPoint> = {}): TrendPoint => ({ sta
 
 const overview = (o: Partial<MetricsOverview> = {}): MetricsOverview => ({
   days: 30, from: "2026-10-20", to: "2026-11-18", generatedAt: 0, rolledUpAt: null,
-  butler: avg({ prs: 4, cycleOpenMs: 6 * H, commentsHuman: 1, commentsCopilot: 1, commentsAvoidable: 0.5, interventions: 2, waitHumanMs: H, costWeighted: 2_000_000 }),
+  shipherd: avg({ prs: 4, cycleOpenMs: 6 * H, commentsHuman: 1, commentsCopilot: 1, commentsAvoidable: 0.5, interventions: 2, waitHumanMs: H, costWeighted: 2_000_000 }),
   other: avg({ prs: 1, cycleOpenMs: 30 * H }),
   baseline: { prs: 20, cycleOpenMs: 12 * H, cycleTicketMs: null, commentsHuman: 3, commentsCopilot: 1, cutoff: new Date(2026, 5, 1).getTime() },
   trend: { week: [point("2026-11-09"), point("2026-11-16", { prs: 4, cycleOpenMs: 6 * H })], month: [point("2026-11-01", { prs: 4 })] },
@@ -125,8 +125,8 @@ describe("EffectBody (ws-h)", () => {
     expect(html).not.toContain('data-testid="effect-other-events"');
   });
 
-  it("shows — for the baseline when there is none, and the empty note without Butler PRs", () => {
-    const html = renderToStaticMarkup(createElement(EffectBody, { o: overview({ baseline: null, butler: avg() }) }));
+  it("shows — for the baseline when there is none, and the empty note without Shipherd PRs", () => {
+    const html = renderToStaticMarkup(createElement(EffectBody, { o: overview({ baseline: null, shipherd: avg() }) }));
     expect(html.split(S.effect.noBaseline).length - 1).toBe(4);
     expect(html).toContain(S.effect.baselineMissing);
     expect(html).toContain(S.effect.empty);

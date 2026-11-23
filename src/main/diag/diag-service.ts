@@ -155,7 +155,7 @@ export class DiagService {
   /** 导出：选了路径就写进去，返回路径；取消返回 null。 */
   async export(): Promise<string | null> {
     const stamp = new Date(this.d.now()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const path = await this.d.pickSavePath(`butler-diagnostics-${stamp}.json`);
+    const path = await this.d.pickSavePath(`shipherd-diagnostics-${stamp}.json`);
     if (!path) return null;
     await this.d.writeFile(path, `${JSON.stringify(await this.build(), null, 2)}\n`);
     this.d.log(`perf: diagnostics exported to ${path}`);

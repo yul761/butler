@@ -44,7 +44,7 @@ export function findShell(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, exi
 const COMPOUND = /[;&|<>`()\n]|\$\(/;
 
 /**
- * 命令文字里的 {file} 换成 "$1"，文件名作为参数传进去，绝不拼进 shell 文字里（另外也在 BUTLER_CHECK_FILE 里）。
+ * 命令文字里的 {file} 换成 "$1"，文件名作为参数传进去，绝不拼进 shell 文字里（另外也在 SHIPHERD_CHECK_FILE 里）。
  * 编辑时的命令没写 {file}：一条简单命令就把文件接在最后；复合命令原样跑（接在最后只会接到最后一条上）。
  * push 时（file 为 null）只把 {file} 去掉。
  */
@@ -115,9 +115,10 @@ export function runCommand(o: {
     };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(shell, ["-c", commandScript(o.command, o.file), "butler-check", ...(o.file === null ? [] : [o.file])], {
+      child = spawn(shell, ["-c", commandScript(o.command, o.file), "shipherd-check", ...(o.file === null ? [] : [o.file])], {
         cwd: o.cwd,
-        env: o.file === null ? o.env : { ...o.env, BUTLER_CHECK_FILE: o.file },
+        // BUTLER_CHECK_FILE：改名前（BTL-260）写下的检查命令里用的是旧名字，存在数据库和用户仓库里，一直要给。
+        env: o.file === null ? o.env : { ...o.env, SHIPHERD_CHECK_FILE: o.file, BUTLER_CHECK_FILE: o.file },
         stdio: ["ignore", "pipe", "pipe"],
         detached: platform !== "win32",
         windowsHide: true,

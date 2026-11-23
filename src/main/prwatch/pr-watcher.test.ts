@@ -680,7 +680,7 @@ describe("PrWatcher: branches", () => {
     expect(s.w.statusOf("BTL-1")).toEqual([expect.objectContaining({ prId: null, readError: true, ci: "passing" })]);
   });
 
-  it("an open PR Butler gave up reading still counts as the branch's open PR: the branch check stays paused", async () => {
+  it("an open PR Shipherd gave up reading still counts as the branch's open PR: the branch check stays paused", async () => {
     const s = setup();
     const row = s.link();
     s.prs.update(row.id, { checkedAt: s.now(), readFailures: PR_READ_GIVE_UP + 1, readFailingSince: 1, readRetryAt: s.now() + PR_READ_RETRY_MS, readError: true });

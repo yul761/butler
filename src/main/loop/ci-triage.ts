@@ -11,7 +11,7 @@ import { safeRecord, type RecordEvent } from "./metrics";
 
 /**
  * CI 失败分类和自动重跑（工作流 I，设计补充第 4 节）。CiDelivery 递一条失败的结论之前问 decide：
- * 原样递、递并附上 Butler 的判断、或者先不递（在分类、刚重跑、在等重跑的结果）。要调 gh 或模型时 decide 先返回 hold，
+ * 原样递、递并附上 Shipherd 的判断、或者先不递（在分类、刚重跑、在等重跑的结果）。要调 gh 或模型时 decide 先返回 hold，
  * 后台做完调 wake(item) 让 CiDelivery 重新问。状态都在 ci_triage 里，重启不丢。
  */
 
@@ -162,7 +162,7 @@ export class CiTriage {
         if (row.outcome === "rerun_failed") return { kind: "deliver", row, outcome: "rerun_failed", note: m.ciTriageRerunFailed(reason) };
         if (row.outcome === "rerun_lost") return { kind: "deliver", row, outcome: "rerun_lost", note: m.ciTriageRerunLost(row.reruns) };
         if (row.prevSignature !== null && row.signature === row.prevSignature) {
-          // reruns > 0：Butler 自己重跑以后又是这样；否则是上一次（之前的 commit）就是同样的失败。
+          // reruns > 0：Shipherd 自己重跑以后又是这样；否则是上一次（之前的 commit）就是同样的失败。
           const note = row.reruns > 0 ? m.ciTriageSameTwice(reason, row.category === "flaky") : m.ciTriageSameAsBefore(reason, row.category === "flaky");
           return { kind: "deliver", row, outcome: "same_twice", note };
         }

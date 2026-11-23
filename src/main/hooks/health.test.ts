@@ -10,7 +10,7 @@ import { HealthService } from "./health";
 describe("HealthService", () => {
   it("reports claude, installs hooks + binary, and detects invalid settings", async () => {
     const home = tempDir();
-    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
     const fakeClaude = join(home, "claude");
     writeFileSync(fakeClaude, "");
     const bundled = join(home, "bundled-hook");
@@ -43,8 +43,8 @@ describe("HealthService", () => {
 
   it("finds claude in ~/.local/bin when the login shell's PATH has none, and puts that folder on the session PATH (BTL-249)", async () => {
     const home = tempDir();
-    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
-    // platform 是 darwin，Butler 按 posix 拼回退路径；期望值也用 posix，Windows 上跑才对得上。
+    const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    // platform 是 darwin，Shipherd 按 posix 拼回退路径；期望值也用 posix，Windows 上跑才对得上。
     const localBin = posix.join(home, ".local", "bin");
     mkdirSync(localBin, { recursive: true });
     const fakeClaude = posix.join(localBin, "claude");
@@ -60,7 +60,7 @@ describe("HealthService", () => {
 
   it("treats any settings read failure (e.g. a directory at the path) as settings_invalid", async () => {
     const home = tempDir();
-    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
     mkdirSync(paths.claudeSettings, { recursive: true });
     const health = new HealthService({
       paths, platform: "darwin", env: {}, settings: new SettingsRepo(memDb()), bundledHookBin: "/none",
@@ -71,7 +71,7 @@ describe("HealthService", () => {
 
   it("keeps a user's own /handoff command and reports the conflict", async () => {
     const home = tempDir();
-    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
     mkdirSync(paths.claudeCommands, { recursive: true });
     writeFileSync(join(paths.claudeCommands, "handoff.md"), "mine");
     const bundled = join(home, "bundled-hook");
@@ -86,7 +86,7 @@ describe("HealthService", () => {
 
   it("reports the memory store, the MCP bundle and a StateCore capture plugin the user installed", async () => {
     const home = tempDir();
-    const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+    const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
     mkdirSync(paths.claudeConfigDir, { recursive: true });
     const bundle = join(home, "statecore-mcp.cjs");
     const settings = new SettingsRepo(memDb());
@@ -101,10 +101,10 @@ describe("HealthService", () => {
     expect((await health.refresh()).memory).toEqual({ enabled: false, dataDir: paths.statecore, mcpBundle: true, statecorePlugin: true });
   });
 
-  describe("syncHookBinary（最终审查 1：升级后旧的 butler-hook 不认 gate）", () => {
+  describe("syncHookBinary（最终审查 1：升级后旧的 shipherd-hook 不认 gate）", () => {
     const setup = () => {
       const home = tempDir();
-      const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+      const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
       const bundled = join(home, "bundled-hook");
       writeFileSync(bundled, "#!/bin/sh\necho new\n");
       const logs: string[] = [];
@@ -175,7 +175,7 @@ describe("HealthService", () => {
     it("installHooks calls onHookBinCurrent after a successful install, not after a failed one", async () => {
       const mk = (withBundled: boolean) => {
         const home = tempDir();
-        const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+        const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
         const bundled = join(home, "bundled-hook");
         if (withBundled) writeFileSync(bundled, "#!/bin/sh\necho new\n");
         let calls = 0;
@@ -203,7 +203,7 @@ describe("HealthService", () => {
   describe("syncHandoffCommand（C1：升级后旧版本的 /handoff 读成 stale，换新全部失败）", () => {
     const setup = () => {
       const home = tempDir();
-      const paths = resolvePaths({ BUTLER_HOME: join(home, ".butler"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
+      const paths = resolvePaths({ SHIPHERD_HOME: join(home, ".shipherd"), CLAUDE_CONFIG_DIR: join(home, ".claude") }, "darwin", home);
       mkdirSync(paths.claudeCommands, { recursive: true });
       const logs: string[] = [];
       const health = new HealthService({
@@ -236,7 +236,7 @@ describe("HealthService", () => {
     it("only logs when the upgrade fails", async () => {
       const { file, health, logs } = setup();
       writeFileSync(file, V161);
-      mkdirSync(`${file}.butler-tmp`); // 临时文件的位置是个目录：写不进去
+      mkdirSync(`${file}.shipherd-tmp`); // 临时文件的位置是个目录：写不进去
       await expect(health.syncHandoffCommand()).resolves.toBeUndefined();
       expect(readFileSync(file, "utf8")).toBe(V161);
       expect(logs.some((m) => m.includes("could not upgrade"))).toBe(true);

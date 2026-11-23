@@ -126,7 +126,7 @@ test("intake: a file source is sorted, a complete ticket starts, a missing one o
 });
 
 /**
- * BTL-246 §7：手动档（不自动开工）下，有父 epic 的 ticket 建进 Butler 里对应的 epic（按 Jira epic key 去重，没有就新建「KEY 标题」），
+ * BTL-246 §7：手动档（不自动开工）下，有父 epic 的 ticket 建进 Shipherd 里对应的 epic（按 Jira epic key 去重，没有就新建「KEY 标题」），
  * 不开 session；没有 epic 的照旧只在队列里等。
  */
 test("intake in manual mode: tickets are grouped into an epic per Jira epic and nothing starts", async ({ makeSandbox, launch }) => {

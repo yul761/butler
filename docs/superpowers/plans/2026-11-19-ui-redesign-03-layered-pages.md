@@ -1,14 +1,14 @@
-# UI 重做第 3 层：epic / feature / ticket 页分层、总控页、「Butler 自己」各页 Implementation Plan
+# UI 重做第 3 层：epic / feature / ticket 页分层、总控页、「Shipherd 自己」各页 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 epic、feature、ticket 三种页面改成「默认层只答一个问题、细节进 tab、tab 记住上次」，总控页改成左终端右对话，「Butler 自己」三页（复盘与规矩、效果与花费、审计）各加一句话说明和一个主层重点，并把被新状态模型取代的旧组件、旧 tab、旧算法删干净。
+**Goal:** 把 epic、feature、ticket 三种页面改成「默认层只答一个问题、细节进 tab、tab 记住上次」，总控页改成左终端右对话，「Shipherd 自己」三页（复盘与规矩、效果与花费、审计）各加一句话说明和一个主层重点，并把被新状态模型取代的旧组件、旧 tab、旧算法删干净。
 
 **Architecture:** 状态一律来自第 1 层的 `turn:board`，页面不再自己算 PR 状态；每页拆成「取数据的薄壳 + 只吃 props 的展示组件 + 纯函数 view 文件」，展示组件用 `renderToStaticMarkup` 测，纯函数直接测。`PageTabs` 改成永远展开、只有一个选中 tab（去掉收起），tab 记在 `local-prefs`，从「轮到你」进来时由纯函数 `landingTab(turn)` 指定落点。对话、总控右栏先放现有的汇报内容，各留一个挂载点给第 5 层。
 
 **Tech Stack:** Electron、React 18、TypeScript、vitest（`src/**/*.test.ts`，环境 node，渲染测试用 `react-dom/server`）、Playwright e2e。
 
-**Spec:** `docs/superpowers/specs/2026-11-19-ui-redesign-design.md`（§5.2 分层规矩、§5.3 epic 页 / ticket 页 / 总控页 / Butler 自己）；索引和共用接口：`docs/superpowers/plans/2026-11-19-ui-redesign-00-index.md`；草图：`.superpowers/brainstorm/1247-1795150005/content/full-mockup.html`（`#p-epic`、`#p-ticket`、`#p-butler`、`#p-lessons`、`#p-effect`、`#p-audit`）。
+**Spec:** `docs/superpowers/specs/2026-11-19-ui-redesign-design.md`（§5.2 分层规矩、§5.3 epic 页 / ticket 页 / 总控页 / Shipherd 自己）；索引和共用接口：`docs/superpowers/plans/2026-11-19-ui-redesign-00-index.md`；草图：`.superpowers/brainstorm/1247-1795150005/content/full-mockup.html`（`#p-epic`、`#p-ticket`、`#p-shipherd`、`#p-lessons`、`#p-effect`、`#p-audit`）。
 
 ## 对前两层的假设（开工前先核对，对不上就只改本计划里引用的名字）
 
@@ -20,7 +20,7 @@
 
 - 文案中英都要有：每个新键同时加到 `src/renderer/src/strings.ts` 和 `strings-en.ts`，`strings.test.ts` 要求两边键、类型、函数参数个数完全一致，英文里不能有汉字。英文数字旁用 ASCII 标点。
 - 测试命令：`pnpm test`（= `vitest run`）、`pnpm typecheck`、`pnpm lint`、`pnpm e2e`（先 build）。e2e 里的 ticket 号必须带数字，如 `E2E-7`。
-- 3.0 的功能默认全关，Butler 默认不对外做任何事；本层不新增任何对外动作。
+- 3.0 的功能默认全关，Shipherd 默认不对外做任何事；本层不新增任何对外动作。
 - 不能留两套状态算法：用到 PR/ticket 状态的地方只调 `turn:board`、`ticketTurn`、`turnSentence`，不再看 `prPill`、`waitingOnOf`、`epicRowText`。
 - 一页只回答一个问题，默认层不用滚动就能看完；不用你动手的东西只显示成数字或放进默认折起的块。
 - 谁该动的颜色只用 `--turn-*` 变量；风险、费用这类信息写成文字，不上色。
@@ -56,7 +56,7 @@
 | `components/EpicSummaryTab.tsx` | epic「AI 总结」tab |
 | `src/shared/ticket-glance.ts`、`src/main/tickets/ticket-glance.ts` | `ticket:glance` 的类型和实现 |
 
-重写：`PageTabs.tsx`、`page-tabs.ts`、`EpicPage.tsx`、`FeaturePage.tsx`、`TicketPage.tsx`、`ButlerPage.tsx`；改：`LessonsPage.tsx`、`EffectPage.tsx`、`AuditPage.tsx`、`App.tsx`、`local-prefs.ts`、`styles.css`。
+重写：`PageTabs.tsx`、`page-tabs.ts`、`EpicPage.tsx`、`FeaturePage.tsx`、`TicketPage.tsx`、`ShipherdPage.tsx`；改：`LessonsPage.tsx`、`EffectPage.tsx`、`AuditPage.tsx`、`App.tsx`、`local-prefs.ts`、`styles.css`。
 
 ---
 
@@ -92,12 +92,12 @@
   | `you/answer`、`you/stuck`（任何 source）、`you/unattended` 且 `why === "agent_stopped"` | `terminal` | 要在终端里回话或看现场；第 5 层把前两种改成 `conversation` |
   | `you/unattended` 的其余 `why`（`ci_failing`、`changes_requested`、`conflicts`、`behind`、`draft`、`no_reviewer`、`ci_undelivered`） | `pr` | 要看 CI、评论 |
   | `external/*` | `pr` | 看在等什么 |
-  | `you/merge`、`you/review`、`you/butler`、`agent/*`、`done`、`idle` | `overview` | 主按钮就在概况里 |
+  | `you/merge`、`you/review`、`you/shipherd`、`agent/*`、`done`、`idle` | `overview` | 主按钮就在概况里 |
 
 - [ ] **Step 2: 运行确认失败**：`pnpm vitest run src/renderer/src/ticket-tabs.test.ts`，预期 FAIL（找不到 `landingTab`）。
 - [ ] **Step 3: 实现 `ticket-tabs.ts`**，纯函数，按上表 `switch`。
 - [ ] **Step 4: 改 `page-tabs.test.ts`**：删掉 `clickTab`、`toggleTabs`、`readTabState` 的用例，加 `resolveTab`：`resolveTab("log", null, ids, "overview") === "log"`；`resolveTab("gone", null, ids, "overview") === "overview"`；`resolveTab("log", "pr", ids, "overview") === "pr"`（落点压过记着的）；`resolveTab(null, "nope", ids, "overview") === "overview"`（落点不存在就当没有）；`resolveTab("", null, [], "x") === ""`。实现 `resolveTab`（落点有效 > 记着的有效 > fallback > 第一个）。
-- [ ] **Step 5: 重写 `PageTabs.tsx`**：没有展开/收起，永远有一个选中 tab；`forceTab` 变化时 `saveTab(page, forceTab)` 并立刻选中（落点也被记住）；去掉 toggle 按钮和 `collapsed` 类；`aria-selected` 只给选中的；`actions` 仍放 tab 条右边。`local-prefs.ts` 删 `savedTabOpen`、`saveTabOpen`（旧键 `butler.tabOpen:*` 留在存储里不管）。
+- [ ] **Step 5: 重写 `PageTabs.tsx`**：没有展开/收起，永远有一个选中 tab；`forceTab` 变化时 `saveTab(page, forceTab)` 并立刻选中（落点也被记住）；去掉 toggle 按钮和 `collapsed` 类；`aria-selected` 只给选中的；`actions` 仍放 tab 条右边。`local-prefs.ts` 删 `savedTabOpen`、`saveTabOpen`（旧键 `shipherd.tabOpen:*` 留在存储里不管）。
 - [ ] **Step 6: 改 `page-tabs-render.test.ts`**：渲染 `PageTabs`（`page: "test-page"`，两个 tab，默认 `overview`），断言：HTML 含 `aria-selected="true"` 恰好一个、含默认 tab 的内容、不含 `page-tabs-toggle`、不含 `collapsed`；带 `className: "attention"` 的 tab 仍有该类和 `<span class="count">3</span>`。
 - [ ] **Step 7: CSS**：`.page-tabs` 改成 `flex: 1 1 auto; min-height: 0`，`.page-tabs-panel` `flex: 1 1 auto; overflow-y: auto`；删 `.page-tabs.collapsed`、`.page-tabs-toggle` 相关规则；加 `.who`、`.who-you/-agent/-external/-done/-idle`（颜色取 `--turn-*`）和 `.scope-bar`（分色进度条，四段按 `--turn-*`）、`.control-split`（`display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0`，窄窗口 `@media (max-width: 900px)` 改单列）。
 - [ ] **Step 8: App 与 TurnCard**：`Route` 的 ticket 项加 `landing?: boolean`；`App.tsx` 里 `openTicket` 保持不变，`TurnCard` 里「去看看」改成带 `landing: true` 的 `setRoute`（经第 2 层的跳转回调，不新增别的入口）。`TicketPage` 在 Task 5 读它。
@@ -218,7 +218,7 @@
   ```
 
 - [ ] **Step 1: 写 `ticket-view.test.ts`**：
-  - `mainActions`：`you/merge` 且 `hasPr` → `[open_pr 主按钮]`；`you/merge` 且 `!hasPr`（不该发生，防御）→ `[]`；`you/answer` → `[answer, goTab:"terminal"]`；`you/stuck` → `[look(terminal)]`，`canFix` 时再加 `fix`；`you/unattended` 且 `canSend` → `[send, pr_details]`，不能送则只有 `pr_details`（`agent_stopped` 是 `look(terminal)`）；`agent/*`、`external/*`、`done`、`idle`、`you/butler` → `[]`。
+  - `mainActions`：`you/merge` 且 `hasPr` → `[open_pr 主按钮]`；`you/merge` 且 `!hasPr`（不该发生，防御）→ `[]`；`you/answer` → `[answer, goTab:"terminal"]`；`you/stuck` → `[look(terminal)]`，`canFix` 时再加 `fix`；`you/unattended` 且 `canSend` → `[send, pr_details]`，不能送则只有 `pr_details`（`agent_stopped` 是 `look(terminal)`）；`agent/*`、`external/*`、`done`、`idle`、`you/shipherd` → `[]`。
   - `contextLine`：`{tokens:148000, threshold:150000}` → `{text:"148k / 150k", nearRefresh:true}`（≥ 阈值 80% 即 `nearRefresh`）；`{tokens:30000, threshold:150000}` → `nearRefresh:false`；`threshold:0` → `{text:"30k（自动换新已关）", nearRefresh:false}`；`null` → `{text:"还不知道", nearRefresh:false}`。
   - `prStageLine`：`[]` 或全是 `noPr` → `还没开 PR`；一行 `stages` 里 6 个有 5 个 `done` → `6 个阶段走完 5 个`；两个未关闭的 PR 行 → 取 `newestRow` 那行再加 `· 另有 1 个 PR`；全部 `closed` → 取最新一行并加 `（已关闭）`。
   - `primarySession`：优先非修复（`fixesSession === null`）、非 `spawnedBy` 的最近一个；全是修复 session 时取第一个；空数组 `null`。`conversationSessions` 返回所有可见 session 的 `{id, label: sessionLabel(...)}`，修复 session 标签前加 `S.lay.fixPrefix`。
@@ -343,7 +343,7 @@
 
 **Files:**
 - Modify: `components/FeaturePage.tsx`、`App.tsx`（去掉 `onOpenProgress`）、`feature-summary-view.ts`、`feature-summary-view.test.ts`、`components/PrStages.tsx`、`components/pr-stages-render.test.ts`
-- Delete: `FeaturePage` 里的 `TicketRow`（含 `stuck-dot` 展开面板）、`openFix`、`dismissStuck`、`PrStuckBlock`、`useProgress` 引用、`summary-stale` 提示；`feature-summary-view.ts` 的 `prPill`、`prLabel`、`firstSentence` 及其测试；`PrStages.tsx` 的 `FeaturePrRows`、`FeaturePrStages`；`components/StuckPanel.tsx`（先 `grep -rn StuckPanel src`，第 2 层的 `TurnCard` 若在用就保留并只删本页的引用）；`InboxPanes.tsx` 在 Task 9 才删（`ButlerPage` 还在用）
+- Delete: `FeaturePage` 里的 `TicketRow`（含 `stuck-dot` 展开面板）、`openFix`、`dismissStuck`、`PrStuckBlock`、`useProgress` 引用、`summary-stale` 提示；`feature-summary-view.ts` 的 `prPill`、`prLabel`、`firstSentence` 及其测试；`PrStages.tsx` 的 `FeaturePrRows`、`FeaturePrStages`；`components/StuckPanel.tsx`（先 `grep -rn StuckPanel src`，第 2 层的 `TurnCard` 若在用就保留并只删本页的引用）；`InboxPanes.tsx` 在 Task 9 才删（`ShipherdPage` 还在用）
 
 **Interfaces:**
 - Consumes: Task 2、6；`FeatureView`（含 `tickets`、`summary`、`brief`、`sessions`）。
@@ -361,47 +361,47 @@
 
 ---
 
-### Task 9: 总控页（`ButlerPage`）
+### Task 9: 总控页（`ShipherdPage`）
 
 **Files:**
-- Modify: `components/ButlerPage.tsx`、`components/InboxPanes.tsx`、`strings.ts` / `strings-en.ts`（`butlerIntro` 换成一句话说明）、`App.tsx`（`ButlerPage` 的 `onOpenTarget` 若不再用就删）
-- Create: `components/butler-page-render.test.ts`
+- Modify: `components/ShipherdPage.tsx`、`components/InboxPanes.tsx`、`strings.ts` / `strings-en.ts`（`shipherdIntro` 换成一句话说明）、`App.tsx`（`ShipherdPage` 的 `onOpenTarget` 若不再用就删）
+- Create: `components/shipherd-page-render.test.ts`
 - Delete: `InboxPanes.tsx` 里的 `inboxTabs`、`InboxDecisions`、`DecisionCard`（先 `grep -rn DecisionCard src`，第 2 层已不用才删）
 
 **Interfaces:**
-- Consumes: `ControlSplit`、`ControlConversation`（Task 6）、已有的 `ButlerRepliesList`。
+- Consumes: `ControlSplit`、`ControlConversation`（Task 6）、已有的 `ShipherdRepliesList`。
 - Produces: 无新对外接口。
 
-- [ ] **Step 1: 写 `butler-page-render.test.ts`**：渲染拆出的展示件 `ButlerLayout({ title, lede, left, right })`：含 `h1`/`h2` 标题 `总控`、一句话说明 `管所有 epic 的那个 session：每天早上巡检、跨 epic 协调。子 session 的汇报都送到这里。`、`control-split`；不含 `page-tabs`（总控页没有 tab）。`ButlerRepliesList` 的现有测试照旧通过。
-- [ ] **Step 2: 改 `ButlerPage`**：去掉 `PageTabs`、`useInbox`、`inboxTabs`、`goTo`；`left` 是原来的 `SessionArea`（含复盘分析 session 那一节）；`right` 是 `ControlConversation scope={{ all: true }} rootSessionId={null} sessions={…}`，`footer` 是默认折起的 `<details>`「总控发出的消息（N）」，里面放 `ButlerRepliesList`（`useStateRefetch("butler:messages", …)`；N 是消息数，没取到不显示）。
+- [ ] **Step 1: 写 `shipherd-page-render.test.ts`**：渲染拆出的展示件 `ShipherdLayout({ title, lede, left, right })`：含 `h1`/`h2` 标题 `总控`、一句话说明 `管所有 epic 的那个 session：每天早上巡检、跨 epic 协调。子 session 的汇报都送到这里。`、`control-split`；不含 `page-tabs`（总控页没有 tab）。`ShipherdRepliesList` 的现有测试照旧通过。
+- [ ] **Step 2: 改 `ShipherdPage`**：去掉 `PageTabs`、`useInbox`、`inboxTabs`、`goTo`；`left` 是原来的 `SessionArea`（含复盘分析 session 那一节）；`right` 是 `ControlConversation scope={{ all: true }} rootSessionId={null} sessions={…}`，`footer` 是默认折起的 `<details>`「总控发出的消息（N）」，里面放 `ShipherdRepliesList`（`useStateRefetch("shipherd:messages", …)`；N 是消息数，没取到不显示）。
 - [ ] **Step 3: 删 `InboxPanes` 旧件**；`InboxPanes.tsx` 只剩 `useInbox`、`ReportFeed`。
 - [ ] **Step 4: 运行** `pnpm vitest run src && pnpm typecheck && pnpm lint`，预期 PASS。
 - [ ] **Step 5: Commit** `feat(ui): control page as terminal + conversation split`
 
 ---
 
-### Task 10: 「Butler 自己」三页
+### Task 10: 「Shipherd 自己」三页
 
 **Files:**
-- Create: `src/renderer/src/butler-self-view.ts`、`butler-self-view.test.ts`、`components/butler-self-render.test.ts`
+- Create: `src/renderer/src/shipherd-self-view.ts`、`shipherd-self-view.test.ts`、`components/shipherd-self-render.test.ts`
 - Modify: `components/LessonsPage.tsx`、`components/EffectPage.tsx`、`components/AuditPage.tsx`、`strings.ts` / `strings-en.ts`
 
 **Interfaces:**
 - Produces:
   ```ts
-  // butler-self-view.ts
+  // shipherd-self-view.ts
   export function pendingLessons(s: Pick<LessonsState, "lessons">): number;               // status === "pending"
   export function firstPendingSelection(s: LessonsState): LessonsSelection | null;       // 第一个有待确认规矩的仓库或产品
   export function auditIsEmpty(a: { llmEntries: number; externalEntries: number }): boolean;
   export const EFFECT_TABS = ["overview", "trend", "spend", "rework", "automation"] as const;
   ```
 
-- [ ] **Step 1: 写 `butler-self-view.test.ts`**：`pendingLessons` 数 `pending`、不数 `confirmed`/`disabled`；`lessons` 为空 → 0；`firstPendingSelection` 优先返回产品（`{kind:"product", id}`）下有待确认的，否则仓库 `{kind:"repo", slug}`，没有待确认返回 `null`；`auditIsEmpty({0,0})` 为真，任一为正为假。
+- [ ] **Step 1: 写 `shipherd-self-view.test.ts`**：`pendingLessons` 数 `pending`、不数 `confirmed`/`disabled`；`lessons` 为空 → 0；`firstPendingSelection` 优先返回产品（`{kind:"product", id}`）下有待确认的，否则仓库 `{kind:"repo", slug}`，没有待确认返回 `null`；`auditIsEmpty({0,0})` 为真，任一为正为假。
 - [ ] **Step 2: 运行确认失败**，实现。
 - [ ] **Step 3: 复盘与规矩**：`h2` 下一句话说明换成 `S.lay.lessonsLede`；其下，`pendingLessons > 0` 时一张主层卡片（沿用 `.lessons-suggest` 样式）：`N 条新规矩等你看一眼` + `逐条看` 按钮（切到 `规矩` tab 并 `select(firstPendingSelection(state))`）；`= 0` 时不显示卡片。现有 7 个 tab 和 `data-testid` 一个都不改（e2e 依赖），但 `pageTab` 的初值改成 `pickTab(savedTab("lessons"), ids, "lessons")`，切换时 `saveTab("lessons", t)`，从「现在」页跳来的 `tab="checks"` 仍然优先。
-- [ ] **Step 4: 效果与花费**：`EffectPage` 改成「说明 + 时间范围切换 + 四张卡（`Cards`，主层） + `PageTabs page="effect" defaultTab="overview"`」，tab：`overview`（基线说明、`o.butler.prs === 0` 的空状态）、`trend`（`Interrupts`、`InterruptCompareTable`、`Trend`）、`spend`（`Spend`、`Groups`）、`rework`（`Rework`、`Interventions`、`OtherEvents`）、`automation`（`LoopEffectSection`、`ReviewEffectSection`、`IntakeEffectSection`）。说明换成 `S.lay.effectLede(days)`。`data-testid` 不变。
-- [ ] **Step 5: 审计**：`h2` 下一句话 `S.lay.auditLede`；`auditIsEmpty` 为真时在 tab 条上方放空状态说明 `S.lay.auditEmpty`（「Butler 默认不替你对外做任何事……」）；`PageTabs page="audit" defaultTab="external"`，`external` tab 放 `ExternalAudit`（`data-testid="external-audit"` 和 `externalAuditNone` 文案保持，所以 `defaults.spec.ts`、`progress.spec.ts` 里对它的断言不用改），`llm` tab 放现有的模型调用列表和 `monthSpend` 那一行。`AuditPage` 要多拿外部审计条数：`useStateRefetch("externalAudit", …)` 提到页面顶层，`ExternalAudit` 改成吃 props。
-- [ ] **Step 6: 写 `butler-self-render.test.ts`**：`EffectBody` 的现有渲染测试（`review-effect-render.test.ts`）保持通过；新增 `AuditEmptyNote` 展示件含 `Butler 默认不替你对外做任何事`；`LessonsAttention({ count: 4, onOpen })` 含 `4 条新规矩等你看一眼`，`count: 0` 返回空串。
+- [ ] **Step 4: 效果与花费**：`EffectPage` 改成「说明 + 时间范围切换 + 四张卡（`Cards`，主层） + `PageTabs page="effect" defaultTab="overview"`」，tab：`overview`（基线说明、`o.shipherd.prs === 0` 的空状态）、`trend`（`Interrupts`、`InterruptCompareTable`、`Trend`）、`spend`（`Spend`、`Groups`）、`rework`（`Rework`、`Interventions`、`OtherEvents`）、`automation`（`LoopEffectSection`、`ReviewEffectSection`、`IntakeEffectSection`）。说明换成 `S.lay.effectLede(days)`。`data-testid` 不变。
+- [ ] **Step 5: 审计**：`h2` 下一句话 `S.lay.auditLede`；`auditIsEmpty` 为真时在 tab 条上方放空状态说明 `S.lay.auditEmpty`（「Shipherd 默认不替你对外做任何事……」）；`PageTabs page="audit" defaultTab="external"`，`external` tab 放 `ExternalAudit`（`data-testid="external-audit"` 和 `externalAuditNone` 文案保持，所以 `defaults.spec.ts`、`progress.spec.ts` 里对它的断言不用改），`llm` tab 放现有的模型调用列表和 `monthSpend` 那一行。`AuditPage` 要多拿外部审计条数：`useStateRefetch("externalAudit", …)` 提到页面顶层，`ExternalAudit` 改成吃 props。
+- [ ] **Step 6: 写 `shipherd-self-render.test.ts`**：`EffectBody` 的现有渲染测试（`review-effect-render.test.ts`）保持通过；新增 `AuditEmptyNote` 展示件含 `Shipherd 默认不替你对外做任何事`；`LessonsAttention({ count: 4, onOpen })` 含 `4 条新规矩等你看一眼`，`count: 0` 返回空串。
 - [ ] **Step 7: 运行** `pnpm vitest run src && pnpm typecheck && pnpm lint`，预期 PASS。
 - [ ] **Step 8: Commit** `feat(ui): one-line ledes and primary-layer focus on lessons, effect, audit`
 
@@ -410,18 +410,18 @@
 ### Task 11: e2e 更新和旧件清零检查
 
 **Files:**
-- Modify: `e2e/fixtures.ts`（`pageTab`/`openTab` 注释和实现去掉「再点会收起」；新增 `openTicketTab(page, tab)`）、`e2e/epics.spec.ts`、`e2e/features.spec.ts`、`e2e/butler.spec.ts`、`e2e/pr-stages.spec.ts`、`e2e/main-flow.spec.ts`、`e2e/multi-repo.spec.ts`、`e2e/refresh.spec.ts`、`e2e/hibernate.spec.ts`、`e2e/now.spec.ts`（若第 2 层已改写就只补终端 tab）、`e2e/ticket-edit.spec.ts`、`e2e/terminal-scroll.spec.ts`、`e2e/effect.spec.ts`
+- Modify: `e2e/fixtures.ts`（`pageTab`/`openTab` 注释和实现去掉「再点会收起」；新增 `openTicketTab(page, tab)`）、`e2e/epics.spec.ts`、`e2e/features.spec.ts`、`e2e/shipherd.spec.ts`、`e2e/pr-stages.spec.ts`、`e2e/main-flow.spec.ts`、`e2e/multi-repo.spec.ts`、`e2e/refresh.spec.ts`、`e2e/hibernate.spec.ts`、`e2e/now.spec.ts`（若第 2 层已改写就只补终端 tab）、`e2e/ticket-edit.spec.ts`、`e2e/terminal-scroll.spec.ts`、`e2e/effect.spec.ts`
 - Test: 以上各 spec；新增 `e2e/layered-pages.spec.ts`
 
 **Interfaces:**
 - Produces: `openTicketTab(page: Page, tab: "overview" | "conversation" | "terminal" | "pr" | "log"): Promise<void>`（按 tab 的中文名点，已选中就不点）。
 
-- [ ] **Step 1: 先跑出会坏的**：`pnpm e2e e2e/epics.spec.ts e2e/features.spec.ts e2e/butler.spec.ts e2e/pr-stages.spec.ts e2e/main-flow.spec.ts e2e/multi-repo.spec.ts e2e/refresh.spec.ts e2e/hibernate.spec.ts e2e/ticket-edit.spec.ts e2e/terminal-scroll.spec.ts e2e/effect.spec.ts`，记下失败点。
+- [ ] **Step 1: 先跑出会坏的**：`pnpm e2e e2e/epics.spec.ts e2e/features.spec.ts e2e/shipherd.spec.ts e2e/pr-stages.spec.ts e2e/main-flow.spec.ts e2e/multi-repo.spec.ts e2e/refresh.spec.ts e2e/hibernate.spec.ts e2e/ticket-edit.spec.ts e2e/terminal-scroll.spec.ts e2e/effect.spec.ts`，记下失败点。
 - [ ] **Step 2: 按下面的规则改**（不改产品代码来迁就旧断言）：
   - 凡是点 `.sessions-bar` 里的按钮、看 `.terminals`、用 `.repos-bar`、新建 session 的，先 `openTicketTab(page, "terminal")`（ticket 页默认落在概况）；epic / feature 的同类操作先 `openTab(page, S.lay.tabControl)`。
   - epic 的 feature 表断言（`.epic-features .ticket-table`）改到「全部 ticket」tab：`.scope-tickets .ticket-table`；feature 行的内容从「一句汇总」改成 `WhoTag` 加句子，断言改成按 `你`/`agent` 文案。
   - feature 页的 `.feature-progress` 断言改到 `AI 总结` tab；「汇报和待你决定又多又长」那个用例（`features.spec.ts:380` 附近）整段删：汇报改在 `总控` tab 的右栏，待你决定已不在这里，各留一个新用例（见 Step 3）。
-  - 「收起再展开」一类的用例（`features.spec.ts:311-321`、`epics.spec.ts:480-490`、`butler.spec.ts:48-71`）改成「切到别的 tab，离开再回来还是那个 tab」。
+  - 「收起再展开」一类的用例（`features.spec.ts:311-321`、`epics.spec.ts:480-490`、`shipherd.spec.ts:48-71`）改成「切到别的 tab，离开再回来还是那个 tab」。
   - `effect.spec.ts` 里一次性断言多块的循环，拆成：先在概况断言四张卡，再 `openTab` 到对应 tab 断言 `effect-interrupts`、`effect-trend` 等。
   - `S.prPill.*` 英文断言（`features.spec.ts:426`）改成句子文案。
 - [ ] **Step 3: 写 `e2e/layered-pages.spec.ts`**（用现有 `makeSandbox`、`launch`、假 gh 夹具，ticket 号 `E2E-1`、`E2E-2`）：
@@ -467,14 +467,14 @@
 | `logFollowups` / `logHandoffs` / `logMemory` | 待跟进 / 交接记录 / 记忆 | Follow-ups / Handoffs / Memory |
 | `convPlaceholder` / `convNoSession` | 所有说过的话会按时间排在这里，换新也不会丢。现在先到「终端」看。 | Everything said will be listed here in time order and kept across refreshes. For now, use the Terminal tab. / This ticket has no session yet. |
 | `fixPrefix` | 修复 · | Fix · |
-| `butlerLede` | 管所有 epic 的那个 session：每天早上巡检、跨 epic 协调。子 session 的汇报都送到这里。 | The session that oversees every epic: a morning sweep and cross-epic coordination. Reports from child sessions arrive here. |
-| `butlerSent(n)` | 总控发出的消息（{n}） | Messages sent by control ({n}) |
-| `lessonsLede` | Butler 从合了的 PR 里总结出来的规矩。确认过的会在以后的 session 里提醒 agent。 | Rules Butler distilled from merged PRs. Confirmed ones are passed to future sessions. |
+| `shipherdLede` | 管所有 epic 的那个 session：每天早上巡检、跨 epic 协调。子 session 的汇报都送到这里。 | The session that oversees every epic: a morning sweep and cross-epic coordination. Reports from child sessions arrive here. |
+| `shipherdSent(n)` | 总控发出的消息（{n}） | Messages sent by control ({n}) |
+| `lessonsLede` | Shipherd 从合了的 PR 里总结出来的规矩。确认过的会在以后的 session 里提醒 agent。 | Rules Shipherd distilled from merged PRs. Confirmed ones are passed to future sessions. |
 | `lessonsAttention(n)` / `lessonsReview` | `{n} 条新规矩等你看一眼` / 逐条看 | `{n} new rule(s) waiting for a look` / Review one by one |
-| `effectLede(days)` | 最近 {days} 天 Butler 替你省了多少事、花了多少钱。 | What Butler saved you and what it cost over the last {days} days. |
+| `effectLede(days)` | 最近 {days} 天 Shipherd 替你省了多少事、花了多少钱。 | What Shipherd saved you and what it cost over the last {days} days. |
 | `effectTabs` | 概况 / 趋势 / 花费明细 / 返工 / 自动化的效果 | Overview / Trend / Spend / Rework / Automation effect |
-| `auditLede` | Butler 自己调过的模型和替你做过的对外动作，一条一条可查。 | Every model call Butler made and every outside action it took for you, one by one. |
-| `auditEmpty` | Butler 默认不替你对外做任何事（发评论、改 PR 都默认关着），所以这里还没有记录。 | Butler does nothing outside by default (commenting and editing PRs are off), so there is nothing here yet. |
+| `auditLede` | Shipherd 自己调过的模型和替你做过的对外动作，一条一条可查。 | Every model call Shipherd made and every outside action it took for you, one by one. |
+| `auditEmpty` | Shipherd 默认不替你对外做任何事（发评论、改 PR 都默认关着），所以这里还没有记录。 | Shipherd does nothing outside by default (commenting and editing PRs are off), so there is nothing here yet. |
 | `auditTabs` | 对外动作 / 模型调用 | Outside actions / Model calls |
 
 ---
@@ -484,7 +484,7 @@
 - 旧 tab：epic / feature 的「汇报」「待你决定」（`inboxTabs`）、feature 的「整体进度」「PR 进度」（`stages`）和 epic 的「PR 进度」；ticket 的 `stages` / `comments` / `review` 三个上半部 tab（并入「PR 详情」）；ticket 页下半截固定的 `TicketOverview` 切换条；`PageTabs` 的展开/收起和 `tabOpen` 存储。
 - 旧组件和函数：`epicRowText`、`firstSentence`（`epic-row.ts`）、`prPill`、`prLabel`、`firstSentence`（`feature-summary-view.ts`）、`EpicPrRows`/`EpicPrStages`/`FeaturePrRows`/`FeaturePrStages`、`epicPrSummary`、`FeaturePage` 的 `TicketRow` 和 stuck 展开面板（`StuckPanel` 在无人使用时一并删）、`PrStuckBlock`、`DecisionCard`/`InboxDecisions`、`useProgress` 在 feature 页的「汇总可能过期」。
 - 对应测试：`epic-row.test.ts` 里 `firstSentence`、`epicRowText` 的用例，`feature-summary-view.test.ts` 里 `firstSentence`、`prPill`、`prLabel` 的用例，`pr-stages-view.test.ts` 里 `epicPrSummary` 的用例，`pr-stages-render.test.ts` 里 epic/feature 表的用例，`page-tabs.test.ts` 里收起相关用例；旧的 e2e 收起/汇报/待你决定用例。保留的测试按新行为改写，不留「旧算法 + 新算法」两套。
-- 不在本层删：`S.prPill`（`NowPage` 和 PR 阶段表还在用，第 2 层负责）、`main/progress/*` 和 `shared/progress.ts` 的 `waitingOnOf`（`butler-control` 和 `feature-templates` 的后台文案还在调，属于第 1 层「替换状态算法」的范围）。
+- 不在本层删：`S.prPill`（`NowPage` 和 PR 阶段表还在用，第 2 层负责）、`main/progress/*` 和 `shared/progress.ts` 的 `waitingOnOf`（`shipherd-control` 和 `feature-templates` 的后台文案还在调，属于第 1 层「替换状态算法」的范围）。
 
 ## 对共用接口的建议
 

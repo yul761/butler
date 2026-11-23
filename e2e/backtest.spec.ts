@@ -8,8 +8,8 @@ import { completeWizard, expect, test, type Sandbox, openLessonsAdvanced } from 
 const DAY = 86_400_000;
 
 function db(s: Sandbox): DatabaseSync {
-  // Butler 也开着这个库：等它的写锁，不直接报 SQLITE_BUSY。
-  return new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000 });
+  // Shipherd 也开着这个库：等它的写锁，不直接报 SQLITE_BUSY。
+  return new DatabaseSync(join(s.shipherdHome, "app.db"), { timeout: 5000 });
 }
 
 const modeOf = (s: Sandbox, id: number): string => {
@@ -60,14 +60,14 @@ test("backtest: a shadow check that passed its backtest is promoted by the revie
   d.close();
   await first.app.close();
 
-  // 2. 复查任务启动时排在 5 分钟后：改成已经到时间，再开 Butler。
+  // 2. 复查任务启动时排在 5 分钟后：改成已经到时间，再开 Shipherd。
   const d2 = db(s);
   const moved = d2.prepare("UPDATE background_jobs SET not_before = 0 WHERE kind = 'backtest' AND dedupe_key = 'review' AND state = 'queued'").run();
   d2.close();
   expect(Number(moved.changes)).toBe(1);
   const { page } = await launch(s);
 
-  // 3. 复查把检查升为强制，首页「运行情况」里的「Butler 的其他提醒」写着（只是告知，不是轮到你的卡片）。
+  // 3. 复查把检查升为强制，首页「运行情况」里的「Shipherd 的其他提醒」写着（只是告知，不是轮到你的卡片）。
   await expect.poll(() => modeOf(s, checkId), { timeout: 30_000 }).toBe("enforce");
   const more = page.locator(".home-more-fold > h3 .section-toggle");
   if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();

@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { checksLayout, dirFromEnv } from "../src/main/paths";
+import { checksLayout, homeFromEnv } from "../src/main/paths";
+import { envValue } from "../src/shared/legacy-env";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import { pathKey } from "../src/main/util/env";
 import { GIT_SAFE_ARGS, resolveGit } from "../src/main/util/git-path";
@@ -37,7 +38,7 @@ const BLOCKED_KEEP_MS = 24 * 3600_000;
 const SUPPRESS_DISTANCE = 2;
 /** 常见的压制写法：检查不认这些，加了说明 agent 想压掉而不是改掉。 */
 const SUPPRESSION_MARKER =
-  /eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck|\bnoqa\b|\bnolint\b|#\[allow\(|@SuppressWarnings|pylint:\s*disable|rubocop:\s*disable|NOSONAR|butler-ignore|biome-ignore|prettier-ignore/;
+  /eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck|\bnoqa\b|\bnolint\b|#\[allow\(|@SuppressWarnings|pylint:\s*disable|rubocop:\s*disable|NOSONAR|shipherd-ignore|biome-ignore|prettier-ignore/;
 
 type Hit = Extract<CheckLogRecord, { kind: "hit" }>;
 
@@ -92,13 +93,13 @@ interface Layout {
 }
 
 function layoutOf(env: NodeJS.ProcessEnv): Layout {
-  const home = dirFromEnv(env.BUTLER_HOME, homedir()) ?? path.join(homedir(), ".butler");
+  const home = homeFromEnv(env, homedir());
   const l = checksLayout(home);
   return { snapshot: l.checksSnapshot, hits: l.checksHits, state: l.checksState };
 }
 
 const sessionOf = (env: NodeJS.ProcessEnv): string | null => {
-  const s = env.BUTLER_SESSION?.trim();
+  const s = envValue(env, "SESSION")?.trim();
   return s && /^[A-Za-z0-9_.-]{1,200}$/.test(s) ? s : null;
 };
 
@@ -124,7 +125,7 @@ function loadState(d: CheckHookDeps, file: string): CheckState {
 
 type SnapshotRead = { ok: true; snap: CheckSnapshot } | { ok: false; reason: CheckAbsenceReason };
 
-/** hook 从不打开 SQLite：只读 Butler 写的快照（契约 4.5）。读不懂就放行并记「没有检查」。 */
+/** hook 从不打开 SQLite：只读 Shipherd 写的快照（契约 4.5）。读不懂就放行并记「没有检查」。 */
 export function readSnapshot(d: Pick<CheckHookDeps, "readText">, file: string): SnapshotRead {
   const text = d.readText(file);
   if (text === null) return { ok: false, reason: "no_snapshot" };
@@ -494,7 +495,7 @@ function safeWrite(d: CheckHookDeps, file: string, state: CheckState, touched: R
   }
 }
 
-/** 这个 session 记过「没有检查」，现在又检查上了：记一条 present，Butler 清掉标记。返回要不要在状态里清掉。 */
+/** 这个 session 记过「没有检查」，现在又检查上了：记一条 present，Shipherd 清掉标记。返回要不要在状态里清掉。 */
 function presentAgain(d: CheckHookDeps, state: CheckState, session: string | null, records: CheckLogRecord[]): boolean {
   if (!session || state.absent === null) return false;
   records.push({ kind: "present", session, at: d.now() });

@@ -31,7 +31,7 @@ export interface MetricAverages {
   costUsdPartial: boolean;
 }
 
-/** Butler 之前（基线）：只有周期和评论，花费、人介入那时没记。 */
+/** Shipherd 之前（基线）：只有周期和评论，花费、人介入那时没记。 */
 export interface BaselineAverages {
   prs: number;
   cycleOpenMs: number | null;
@@ -39,11 +39,11 @@ export interface BaselineAverages {
   cycleTicketMs: number | null;
   commentsHuman: number | null;
   commentsCopilot: number | null;
-  /** 基线截止点：最早的 Butler session 的创建时间（没有就是开始记度量的时间）。 */
+  /** 基线截止点：最早的 Shipherd session 的创建时间（没有就是开始记度量的时间）。 */
   cutoff: number;
 }
 
-/** 趋势的一格（一周或一个月），只算 Butler 的 PR。 */
+/** 趋势的一格（一周或一个月），只算 Shipherd 的 PR。 */
 export interface TrendPoint {
   /** 这一格第一天（本地日期 YYYY-MM-DD）。 */
   start: string;
@@ -87,8 +87,8 @@ export interface MetricsOverview {
   generatedAt: number;
   /** 上一次汇总的时间；还没汇总过为 null。 */
   rolledUpAt: number | null;
-  butler: MetricAverages;
-  /** 链接到 ticket、但不是 Butler session 推的 PR。 */
+  shipherd: MetricAverages;
+  /** 链接到 ticket、但不是 Shipherd session 推的 PR。 */
   other: MetricAverages;
   /** 还没回填到基线 PR 时为 null。 */
   baseline: BaselineAverages | null;
@@ -102,7 +102,7 @@ export interface MetricsOverview {
   interventions: KeyCount[];
   groups: GroupMetrics[];
   spend: { byModel: KeyCount[]; byTask: KeyCount[] };
-  /** Butler 的 PR 的返工次数。 */
+  /** Shipherd 的 PR 的返工次数。 */
   rework: { prs: number; ciFailures: number; reopens: number; reverts: number };
   /** 不算人介入、也不是打断的事件（熔断、后台让路等）。 */
   otherEvents: KeyCount[];

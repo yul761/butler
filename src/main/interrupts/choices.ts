@@ -32,7 +32,7 @@ export function patternMatches(pattern: string, question: string): boolean {
 }
 
 /**
- * 选择（ws-j 设计 3）：session 按规则自己选了推荐项（report kind choice），或者 Butler 按用户设的默认答案替用户答了。
+ * 选择（ws-j 设计 3）：session 按规则自己选了推荐项（report kind choice），或者 Shipherd 按用户设的默认答案替用户答了。
  * 都存进 auto_choices 等用户事后看，记一条 interrupt_auto_resolved（不算人介入）。
  */
 export class ChoiceService {
@@ -61,7 +61,7 @@ export class ChoiceService {
     return null;
   }
 
-  /** Butler 按默认答案替用户答了 decisionId。 */
+  /** Shipherd 按默认答案替用户答了 decisionId。 */
   recordDefault(s: { sessionId: string; ticketKey: string | null }, decisionId: number, defaultId: number, question: string, answer: string): number {
     const at = this.d.now();
     const id = this.d.choices.add({ source: "default", sessionId: s.sessionId, ticketKey: s.ticketKey, decisionId, defaultId, text: M().interrupts.autoChoiceDefault(question, answer), at });

@@ -28,7 +28,7 @@ export interface DiagInput {
 }
 
 export interface DiagnosticsFile {
-  kind: "butler-diagnostics";
+  kind: "shipherd-diagnostics";
   schema: 1;
   generatedAt: string;
   app: { version: string; versions: Record<string, string | undefined>; mode: string };
@@ -41,7 +41,7 @@ export interface DiagnosticsFile {
 
 export function buildDiagnostics(i: DiagInput): DiagnosticsFile {
   return {
-    kind: "butler-diagnostics",
+    kind: "shipherd-diagnostics",
     schema: 1,
     generatedAt: new Date(i.now).toISOString(),
     app: { version: i.version, versions: i.versions, mode: i.mode },

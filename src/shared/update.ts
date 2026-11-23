@@ -88,7 +88,7 @@ export type UpdateCheckResult =
 
 /** 界面要的状态（update:state）。 */
 export interface UpdateView {
-  /** 正在跑的 Butler 的版本。 */
+  /** 正在跑的 Shipherd 的版本。 */
   current: string;
   /** 设置 updateCheckEnabled。 */
   enabled: boolean;

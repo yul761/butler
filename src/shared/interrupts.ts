@@ -38,7 +38,7 @@ export interface ProfileScan {
 export const AUTO_CHOICE_SOURCES = ["rule", "default"] as const;
 export type AutoChoiceSource = (typeof AUTO_CHOICE_SOURCES)[number];
 
-/** session 按规则自己做的选择（rule），或 Butler 按默认答案替你答的（default）。 */
+/** session 按规则自己做的选择（rule），或 Shipherd 按默认答案替你答的（default）。 */
 export interface AutoChoice {
   id: number;
   source: AutoChoiceSource;

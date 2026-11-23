@@ -67,35 +67,43 @@ describe("loose parsing", () => {
     expect(parseJsonLoose("没有 JSON")).toBeUndefined();
   });
 
-  it("takes the last butler-handoff block", () => {
-    const text = '示例：\n```butler-handoff\n{"n":1}\n```\n真正的：\n```butler-handoff\n{"n":2}\n```';
+  it("takes the last shipherd-handoff block", () => {
+    const text = '示例：\n```shipherd-handoff\n{"n":1}\n```\n真正的：\n```shipherd-handoff\n{"n":2}\n```';
     expect(extractHandoffBlock(text)).toBe('{"n":2}');
     expect(extractHandoffBlock('```json\n{}\n```')).toBeNull();
   });
 
+  // BTL-260：升级前装的 /handoff 命令、升级时还在跑的 session 输出的是改名前的代码块名。
+  it("reads the pre-rename butler-handoff and butler-feature-handoff blocks", () => {
+    expect(extractHandoffBlock('```butler-handoff\n{"n":1}\n```')).toBe('{"n":1}');
+    expect(extractHandoffBlock('```butler-handoff\n{"n":1}\n```\n```shipherd-handoff\n{"n":2}\n```')).toBe('{"n":2}');
+    expect(extractFeatureHandoffBlock('```butler-feature-handoff\n{"f":1}\n```')).toBe('{"f":1}');
+    expect(extractHandoffBlock('```butler-feature-handoff\n{"f":1}\n```')).toBeNull();
+  });
+
   it("accepts CRLF line endings", () => {
-    expect(extractHandoffBlock('```butler-handoff\r\n{"n":1}\r\n```')).toBe('{"n":1}');
-    expect(extractHandoffBlock('```butler-handoff json\r\n{"n":2}\r\n```')).toBe('{"n":2}');
+    expect(extractHandoffBlock('```shipherd-handoff\r\n{"n":1}\r\n```')).toBe('{"n":1}');
+    expect(extractHandoffBlock('```shipherd-handoff json\r\n{"n":2}\r\n```')).toBe('{"n":2}');
   });
 
   it("ignores look-alike info strings and an empty last block", () => {
-    expect(extractHandoffBlock('```butler-handoffX\n{"n":1}\n```')).toBeNull();
-    expect(extractHandoffBlock('```butler-handoff json\n{"n":1}\n```')).toBe('{"n":1}');
-    expect(extractHandoffBlock('```butler-handoff\n{"n":1}\n```\n```butler-handoff\n\n```')).toBe('{"n":1}');
+    expect(extractHandoffBlock('```shipherd-handoffX\n{"n":1}\n```')).toBeNull();
+    expect(extractHandoffBlock('```shipherd-handoff json\n{"n":1}\n```')).toBe('{"n":1}');
+    expect(extractHandoffBlock('```shipherd-handoff\n{"n":1}\n```\n```shipherd-handoff\n\n```')).toBe('{"n":1}');
   });
 
   it("keeps the ticket and the feature fences apart", () => {
-    expect(extractHandoffBlock('```butler-feature-handoff\n{"n":1}\n```')).toBeNull();
-    expect(extractFeatureHandoffBlock('```butler-handoff\n{"n":1}\n```')).toBeNull();
-    const both = '```butler-handoff\n{"t":1}\n```\n```butler-feature-handoff\n{"f":1}\n```';
+    expect(extractHandoffBlock('```shipherd-feature-handoff\n{"n":1}\n```')).toBeNull();
+    expect(extractFeatureHandoffBlock('```shipherd-handoff\n{"n":1}\n```')).toBeNull();
+    const both = '```shipherd-handoff\n{"t":1}\n```\n```shipherd-feature-handoff\n{"f":1}\n```';
     expect(extractHandoffBlock(both)).toBe('{"t":1}');
     expect(extractFeatureHandoffBlock(both)).toBe('{"f":1}');
   });
 
   it("finds the last non-empty feature block, with CRLF and an info suffix, but not a look-alike", () => {
-    expect(extractFeatureHandoffBlock('```butler-feature-handoff\n{"n":1}\n```\n```butler-feature-handoff json\r\n{"n":2}\r\n```')).toBe('{"n":2}');
-    expect(extractFeatureHandoffBlock('```butler-feature-handoff\n{"n":1}\n```\n```butler-feature-handoff\n\n```')).toBe('{"n":1}');
-    expect(extractFeatureHandoffBlock('```butler-feature-handoffX\n{"n":1}\n```')).toBeNull();
+    expect(extractFeatureHandoffBlock('```shipherd-feature-handoff\n{"n":1}\n```\n```shipherd-feature-handoff json\r\n{"n":2}\r\n```')).toBe('{"n":2}');
+    expect(extractFeatureHandoffBlock('```shipherd-feature-handoff\n{"n":1}\n```\n```shipherd-feature-handoff\n\n```')).toBe('{"n":1}');
+    expect(extractFeatureHandoffBlock('```shipherd-feature-handoffX\n{"n":1}\n```')).toBeNull();
     expect(extractFeatureHandoffBlock("没有代码块")).toBeNull();
   });
 
@@ -107,7 +115,7 @@ describe("loose parsing", () => {
     // 带 ticket 字段的对象就算也有 summary 和 next_steps，也不当成 feature 汇总。
     expect(extractJsonFeatureHandoffBlock(`\`\`\`json\n${JSON.stringify({ ...emptyHandoff("PROJ-1"), summary: "x" })}\n\`\`\``)).toBeNull();
     expect(extractJsonFeatureHandoffBlock('```json\n{"summary":1,"next_steps":[]}\n```')).toBeNull();
-    expect(extractJsonFeatureHandoffBlock(`\`\`\`butler-handoff\n${feature}\n\`\`\``)).toBeNull();
+    expect(extractJsonFeatureHandoffBlock(`\`\`\`shipherd-handoff\n${feature}\n\`\`\``)).toBeNull();
   });
 
   it("prefers structured_output and falls back to the result text", () => {
@@ -125,27 +133,27 @@ describe("templates", () => {
   });
 
   it("the refresh prompt and the /handoff command say to copy each PR url exactly as gh prints it", () => {
-    // BTL-190：模型在 handoff 里自己拼了 yuchenlin/Butler/pull/N，真的是 yul761/butler；拼出来的读不到。
+    // BTL-190：模型在 handoff 里自己拼了 yuchenlin/Shipherd/pull/N，真的是 yul761/shipherd；拼出来的读不到。
     for (const text of [defaultRefreshPrompt("zh"), handoffCommandBody("zh")]) expect(text).toContain("PR 的 url 照 gh 输出的原样复制，不要自己拼或猜。");
     for (const text of [defaultRefreshPrompt("en"), handoffCommandBody("en")]) expect(text).toContain("Copy each PR url exactly as gh prints it; never build or guess one.");
   });
 
-  it("the /handoff command asks for a butler-handoff block and passes arguments", () => {
+  it("the /handoff command asks for a shipherd-handoff block and passes arguments", () => {
     expect(HANDOFF_COMMAND_MD.startsWith("---\ndescription:")).toBe(true);
     expect(HANDOFF_COMMAND_MD).toContain(HANDOFF_COMMAND_MARKER);
-    expect(HANDOFF_COMMAND_MD).toContain("```butler-handoff");
+    expect(HANDOFF_COMMAND_MD).toContain("```shipherd-handoff");
     expect(HANDOFF_COMMAND_MD).toContain("$ARGUMENTS");
   });
 
-  it("the /handoff command tells a feature coordinator to check list_tickets and write a butler-feature-handoff block", () => {
+  it("the /handoff command tells a feature coordinator to check list_tickets and write a shipherd-feature-handoff block", () => {
     for (const l of ["zh", "en"] as const) {
       const body = handoffCommandBody(l);
       expect(body).toContain("list_tickets");
-      expect(body).toContain("butler-sessions");
-      expect(body).toContain("```butler-feature-handoff");
+      expect(body).toContain("shipherd-sessions");
+      expect(body).toContain("```shipherd-feature-handoff");
       expect(body).toContain(featureHandoffSchemaDoc(l));
-      expect(body).toContain(`\`\`\`butler-feature-handoff\n${featureHandoffExample(l)}\n\`\`\``);
-      expect(extractFeatureHandoffBlock(`\`\`\`butler-feature-handoff\n${featureHandoffExample(l)}\n\`\`\``)).toBe(featureHandoffExample(l));
+      expect(body).toContain(`\`\`\`shipherd-feature-handoff\n${featureHandoffExample(l)}\n\`\`\``);
+      expect(extractFeatureHandoffBlock(`\`\`\`shipherd-feature-handoff\n${featureHandoffExample(l)}\n\`\`\``)).toBe(featureHandoffExample(l));
     }
   });
 });

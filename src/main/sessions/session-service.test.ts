@@ -36,7 +36,7 @@ async function setup(opts: {
   pathValue?: string;
   lessonsWorkspace?: string;
   checksAbsence?: () => CheckAbsenceReason | null;
-  butlerWorkspace?: string;
+  shipherdWorkspace?: string;
 } = {}) {
   const stateOf = (id: string): TranscriptState =>
     opts.transcriptState ?? (opts.transcripts === undefined || opts.transcripts.includes(id) ? "present" : "absent");
@@ -44,7 +44,7 @@ async function setup(opts: {
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const settings = new SettingsRepo(db);
-  const ticketService = new TicketService({ tickets, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
+  const ticketService = new TicketService({ tickets, settings, now: () => 1, workspacesDir: tempDir("shipherd-ws-") });
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(opts.factory ?? factory, { data: () => undefined, exit: () => undefined });
   const logs: string[] = [];
@@ -68,7 +68,7 @@ async function setup(opts: {
     launchFs: opts.launchFs,
     lessonsWorkspace: opts.lessonsWorkspace,
     checksAbsence: opts.checksAbsence,
-    butlerWorkspace: opts.butlerWorkspace,
+    shipherdWorkspace: opts.shipherdWorkspace,
     submit: async (termId, message) => (submitted.push([termId, message]), "sent"),
     log: (m) => logs.push(m),
   });
@@ -81,7 +81,7 @@ describe("SessionService and cleaned-up worktrees (design 2026-10-26)", () => {
   it("rebuilds the worktree before resuming a session that ran in it, and before a new one", async () => {
     const { service, sessions, spawned, ticket, tickets, ticketService, pty } = await setup({ workMode: "worktree" });
     const dir = ticket.repos[0].worktreePath!;
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: dir, origin: "butler", createdAt: 1, repoId: ticket.repos[0].id });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: dir, origin: "shipherd", createdAt: 1, repoId: ticket.repos[0].id });
     await cleanupTicketWorktrees({ tickets, ticketService, repoBusy: () => false, now: () => 5 }, "PROJ-1");
     expect(existsSync(dir)).toBe(false);
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "old" })).toMatchObject({ ok: true });
@@ -143,10 +143,10 @@ describe("SessionService.devLaunchOf", () => {
     expect(service.devLaunchOf("nope")).toBeNull();
   });
 
-  it("records the args of a workspace session too (butler)", async () => {
-    const ws = join(tempDir("butler-home-"), "_butler");
-    const { service, spawned } = await setup({ butlerWorkspace: ws, mcpSettings: () => "/s.json" });
-    expect(await service.openButler({})).toMatchObject({ ok: true });
+  it("records the args of a workspace session too (shipherd)", async () => {
+    const ws = join(tempDir("shipherd-home-"), "_shipherd");
+    const { service, spawned } = await setup({ shipherdWorkspace: ws, mcpSettings: () => "/s.json" });
+    expect(await service.openShipherd({})).toMatchObject({ ok: true });
     const dev = service.devLaunchOf("new-1");
     expect(dev).toMatchObject({ sessionId: "new-1", cwd: ws, mcpConfigPath: null, settingsPath: "/s.json", addDirs: [], model: null });
     expect(dev?.claudeArgs).toEqual(spawned[0].args);
@@ -156,7 +156,7 @@ describe("SessionService.devLaunchOf", () => {
   it("is null for the new head after /clear: the recorded args still point at the old conversation", async () => {
     const { service, sessions } = await setup();
     await service.open({ ticketKey: "PROJ-1" });
-    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 3 });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 3 });
     sessions.setReplacedBy("new-1", "c2");
     expect(service.devLaunchOf("c2")).toBeNull();
     expect(service.devLaunchOf("new-1")).toBeNull();
@@ -169,15 +169,15 @@ describe("SessionService.open", () => {
     await service.open({ ticketKey: "PROJ-1" }, { model: "sonnet" });
     expect(sessions.get("new-1")?.model).toBe("sonnet");
     expect(spawned[0].args).toEqual(["--session-id", "new-1", "--model", "sonnet"]);
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1, model: "opus" });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 1, model: "opus" });
     await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
     expect(spawned[1].args).toEqual(["--resume", "old", "--model", "opus"]);
   });
 
   it("does not pass --model for sessions without one or with an unknown one", async () => {
     const { service, spawned, sessions } = await setup();
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "odd", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 2, model: "gpt" });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "odd", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 2, model: "gpt" });
     await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
     await service.open({ ticketKey: "PROJ-1", sessionId: "odd" });
     await service.open({ ticketKey: "PROJ-1", force: true });
@@ -189,7 +189,7 @@ describe("SessionService.open", () => {
     const { service, spawned, sessions } = await setup({ mcpConfig: (key) => (asked.push(key), "/b/mcp/PROJ-1.json") });
     await service.open({ ticketKey: "PROJ-1" });
     expect(spawned[0].args).toEqual(["--session-id", "new-1", "--mcp-config", "/b/mcp/PROJ-1.json"]);
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 1 });
     await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
     expect(spawned[1].args).toEqual(["--resume", "old", "--mcp-config", "/b/mcp/PROJ-1.json"]);
     expect(asked).toEqual(["PROJ-1", "PROJ-1"]);
@@ -216,7 +216,7 @@ describe("SessionService.open", () => {
     await service.open({ ticketKey: "PROJ-1" });
     expect(spawned[0].args).toEqual(["--session-id", "new-1", "--settings", "/b/mcp/approve-1.json"]);
     expect(asked[0]).toEqual([ticket.repos[0].worktreePath, repo]);
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 1 });
     await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
     expect(spawned[1].args).toEqual(["--resume", "old", "--settings", "/b/mcp/approve-1.json"]);
   });
@@ -258,7 +258,7 @@ describe("SessionService.open", () => {
     expect(broken.spawned[0].args).toEqual(["--session-id", "new-1"]);
     expect(broken.logs.some((l) => l.includes("memory MCP config for PROJ-1 not written"))).toBe(true);
 
-    const shim = await setup({ platform: "win32", claudePath: "C:\\npm\\claude.cmd", mcpConfig: () => "C:\\Users\\John Smith\\.butler\\mcp\\PROJ-1.json" });
+    const shim = await setup({ platform: "win32", claudePath: "C:\\npm\\claude.cmd", mcpConfig: () => "C:\\Users\\John Smith\\.shipherd\\mcp\\PROJ-1.json" });
     await shim.service.open({ ticketKey: "PROJ-1" });
     expect(shim.spawned[0].args).not.toContain("--mcp-config");
     expect(shim.logs.some((l) => l.includes("memory MCP config not passed for PROJ-1"))).toBe(true);
@@ -271,7 +271,7 @@ describe("SessionService.open", () => {
     const npmDir = "C:\\Users\\John Smith\\AppData\\Roaming\\npm";
     const cli = `${npmDir}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
     const files = new Map([[`${npmDir}\\claude.cmd`, NPM_SHIM], [`${npmDir}\\node.exe`, ""], [cli, ""]]);
-    const config = "C:\\Users\\John Smith\\.butler\\mcp\\tickets\\PROJ-1.json";
+    const config = "C:\\Users\\John Smith\\.shipherd\\mcp\\tickets\\PROJ-1.json";
     const shim = await setup({
       platform: "win32",
       claudePath: `${npmDir}\\claude.cmd`,
@@ -288,7 +288,7 @@ describe("SessionService.open", () => {
     const npmDir = "C:\\Users\\John Smith\\AppData\\Roaming\\npm";
     const exe = `${npmDir}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`;
     const files = new Map([[`${npmDir}\\claude.cmd`, NPM_EXE_SHIM], [exe, ""]]);
-    const config = "C:\\Users\\John Smith\\.butler\\mcp\\tickets\\PROJ-1.json";
+    const config = "C:\\Users\\John Smith\\.shipherd\\mcp\\tickets\\PROJ-1.json";
     const shim = await setup({
       platform: "win32",
       claudePath: `${npmDir}\\claude.cmd`,
@@ -322,7 +322,7 @@ describe("SessionService.open", () => {
     const synced: string[] = [];
     const { service, sessions } = await setup({ syncMemory: (key) => synced.push(key) });
     await service.open({ ticketKey: "PROJ-1" });
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 1 });
     await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
     // 已经开着的 session 只是切过去，不再同步；不存在的 ticket 什么都不做。
     await service.open({ ticketKey: "PROJ-1", sessionId: "old" });
@@ -341,20 +341,20 @@ describe("SessionService.open", () => {
     expect(logs.some((l) => l.includes("memory sync for PROJ-1 not started"))).toBe(true);
   });
 
-  it("starts a new session in the ticket workdir with Butler env", async () => {
+  it("starts a new session in the ticket workdir with Shipherd env", async () => {
     const { service, sessions, spawned, ticket } = await setup();
     expect(await service.open({ ticketKey: "PROJ-1" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
     expect(spawned[0].file).toBe("/bin/claude");
     expect(spawned[0].args).toEqual(["--session-id", "new-1"]);
     expect(spawned[0].opts.cwd).toBe(ticket.repos[0].worktreePath);
-    expect(spawned[0].opts.env).toMatchObject({ PATH: "/login/bin", BUTLER_TICKET: "PROJ-1", BUTLER_SESSION: "new-1" });
-    expect(sessions.get("new-1")).toMatchObject({ ticketKey: "PROJ-1", origin: "butler", cwd: ticket.repos[0].worktreePath });
+    expect(spawned[0].opts.env).toMatchObject({ PATH: "/login/bin", SHIPHERD_TICKET: "PROJ-1", SHIPHERD_SESSION: "new-1" });
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: "PROJ-1", origin: "shipherd", cwd: ticket.repos[0].worktreePath });
   });
 
   it("resumes the head of a replaced chain in the session's own cwd", async () => {
     const { service, sessions, spawned } = await setup();
     sessions.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "discovered", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "b", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "b", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy("a", "b");
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "a" })).toEqual({ ok: true, termId: "b", alreadyOpen: false });
     expect(spawned[0].args).toEqual(["--resume", "b"]);
@@ -363,7 +363,7 @@ describe("SessionService.open", () => {
 
   it("starts a session with no saved transcript fresh under the same id instead of resuming", async () => {
     const { service, sessions, spawned } = await setup({ transcripts: [] });
-    sessions.insertIfAbsent({ id: "empty", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "empty", ticketKey: "PROJ-1", cwd: "/elsewhere", origin: "shipherd", createdAt: 1 });
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "empty" })).toEqual({ ok: true, termId: "empty", alreadyOpen: false });
     expect(spawned[0].args).toEqual(["--session-id", "empty"]);
     expect(spawned[0].opts.cwd).toBe("/elsewhere");
@@ -376,7 +376,7 @@ describe("SessionService.open", () => {
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "new-1" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
 
     // 终端里执行了 /clear：hook 把 new-1 链到了 c2
-    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 3 });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 3 });
     sessions.setReplacedBy("new-1", "c2");
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "c2" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
     expect(spawned).toHaveLength(1);
@@ -445,8 +445,8 @@ describe("SessionService views", () => {
   it("ticketViews hides replaced sessions and marks open/waiting ones", async () => {
     const { service, sessions } = await setup();
     await service.open({ ticketKey: "PROJ-1" });
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
     sessions.setReplacedBy("old", "c2");
     sessions.setWaiting("new-1", true, 2000);
     const [view] = service.ticketViews();
@@ -458,8 +458,8 @@ describe("SessionService views", () => {
   it("views carry the chain root id", async () => {
     const { service, sessions } = await setup();
     await service.open({ ticketKey: "PROJ-1" });
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
     sessions.setReplacedBy("old", "c2");
     const [view] = service.ticketViews();
     expect(view.sessions.map((s) => [s.id, s.rootId])).toEqual([["new-1", "new-1"], ["c2", "old"]]);
@@ -468,9 +468,9 @@ describe("SessionService views", () => {
   it("ticketHeads matches ticketViews().sessions: dismissed with an open terminal stays, dismissed without goes", async () => {
     const { service, sessions } = await setup();
     await service.open({ ticketKey: "PROJ-1" });
-    sessions.insertIfAbsent({ id: "gone", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
-    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "gone", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "c2", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
     sessions.setReplacedBy("old", "c2");
     sessions.dismiss("gone", 5);
     sessions.dismiss("new-1", 5);
@@ -540,7 +540,7 @@ describe("SessionService orphan rows", () => {
 });
 
 describe("SessionService.handleExit clears the waiting mark (a dead process cannot be waiting)", () => {
-  const row = (id: string) => ({ id, ticketKey: "PROJ-1", cwd: "/w", origin: "butler" as const, firstPrompt: "修登录", lastActivityAt: 500, createdAt: 1 });
+  const row = (id: string) => ({ id, ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd" as const, firstPrompt: "修登录", lastActivityAt: 500, createdAt: 1 });
 
   it("clears it on a session that stays, and leaves its last activity alone: ending it is not activity", async () => {
     const { service, sessions } = await setup();
@@ -587,11 +587,11 @@ describe("SessionService.handleExit clears the waiting mark (a dead process cann
 });
 
 describe("SessionService.pruneEmptySessions (startup, after a quit that skipped handleExit)", () => {
-  const row = (id: string, extra: Partial<{ origin: "butler" | "discovered"; firstPrompt: string }> = {}) => ({
-    id, ticketKey: "PROJ-1", cwd: "/w", origin: extra.origin ?? ("butler" as const), firstPrompt: extra.firstPrompt ?? null, createdAt: 1,
+  const row = (id: string, extra: Partial<{ origin: "shipherd" | "discovered"; firstPrompt: string }> = {}) => ({
+    id, ticketKey: "PROJ-1", cwd: "/w", origin: extra.origin ?? ("shipherd" as const), firstPrompt: extra.firstPrompt ?? null, createdAt: 1,
   });
 
-  it("deletes only Butler sessions with no prompt, no replacement and no transcript", async () => {
+  it("deletes only Shipherd sessions with no prompt, no replacement and no transcript", async () => {
     const { service, sessions } = await setup({ transcripts: ["has-transcript"] });
     sessions.insertIfAbsent(row("empty"));
     sessions.insertIfAbsent(row("prompted", { firstPrompt: "修登录" }));
@@ -639,7 +639,7 @@ describe("SessionService.hasOpenTerminal", () => {
 describe("SessionService.open after the ticket's work mode changed", () => {
   it("warns before resuming an old session in a worktree that left the ticket branch; force opens it there", async () => {
     const { service, sessions, ticket, ticketService, spawned } = await setup({ workMode: "worktree" });
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: ticket.repos[0].worktreePath!, origin: "butler", createdAt: 1, repoId: ticket.repos[0].id });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: ticket.repos[0].worktreePath!, origin: "shipherd", createdAt: 1, repoId: ticket.repos[0].id });
     await ticketService.updateRepo({ repoId: ticket.repos[0].id, workMode: "branch" }, { terminalsOpen: false });
     expect(await service.open({ ticketKey: "PROJ-1", sessionId: "old" })).toEqual({
       ok: false, reason: "old_workdir", cwd: ticket.repos[0].worktreePath, current: "HEAD", expected: "feature/PROJ-1",
@@ -684,7 +684,7 @@ describe("SessionService with several repos", () => {
     await env.ticketService.addRepo({ ticketKey: "PROJ-1", repoPath: api, workMode: "worktree" });
     const ws = env.ticketService.workspaceDir("PROJ-1");
     // 迁移以后的样子：隐藏、没有仓库、coordinator 清掉了。
-    env.sessions.insertIfAbsent({ id: "old-boss", ticketKey: "PROJ-1", cwd: ws, origin: "butler", createdAt: 1, repoId: null });
+    env.sessions.insertIfAbsent({ id: "old-boss", ticketKey: "PROJ-1", cwd: ws, origin: "shipherd", createdAt: 1, repoId: null });
     expect(await env.service.open({ ticketKey: "PROJ-1", sessionId: "old-boss" })).toMatchObject({ ok: true });
     expect(env.spawned[0].opts.cwd).toBe(ws);
     // 不再给每个仓库一个 --add-dir；工具和说明都是 ticket session 的。
@@ -704,7 +704,7 @@ describe("SessionService with several repos", () => {
     await service.open({ ticketKey: "PROJ-1", repoId: web.id });
     expect(service.hasOpenTerminal("PROJ-1", web.id)).toBe(true);
     expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(false);
-    sessions.insertIfAbsent({ id: "nowhere", ticketKey: "PROJ-1", cwd: ticketService.workspaceDir("PROJ-1"), origin: "butler", createdAt: 1, repoId: null });
+    sessions.insertIfAbsent({ id: "nowhere", ticketKey: "PROJ-1", cwd: ticketService.workspaceDir("PROJ-1"), origin: "shipherd", createdAt: 1, repoId: null });
     await service.open({ ticketKey: "PROJ-1", sessionId: "nowhere" });
     expect(service.hasOpenTerminal("PROJ-1", apiRepo.id)).toBe(true);
     expect(service.hasOpenTerminal("PROJ-2", web.id)).toBe(false);
@@ -725,7 +725,7 @@ describe("SessionService.hide / unhide", () => {
     await service.open({ ticketKey: "PROJ-1" });
     expect(() => service.hide("new-1")).toThrow(expect.objectContaining({ code: "sessions_open" }));
     spawned[0].pty.emitExit(0);
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1, firstPrompt: "旧的对话" });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1, firstPrompt: "旧的对话" });
     service.hide("old");
     const [view] = service.ticketViews();
     expect(view.sessions.map((s) => s.id)).not.toContain("old");
@@ -744,7 +744,7 @@ describe("SessionService.hide / unhide", () => {
 
   it("keeps showing a hidden session while its terminal runs again", async () => {
     const { service, sessions } = await setup({ transcripts: ["old"] });
-    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     service.hide("old");
     await service.open({ ticketKey: "PROJ-1", sessionId: "old", force: true });
     const [view] = service.ticketViews();
@@ -765,17 +765,17 @@ describe("FeatureView.activity", () => {
     const sessions = new SessionsRepo(db);
     const features = new FeaturesRepo(db);
     const settings = new SettingsRepo(db);
-    const featureId = features.insert({ name: "f", workspaceDir: tempDir("butler-fv-"), createdAt: 1 });
+    const featureId = features.insert({ name: "f", workspaceDir: tempDir("shipherd-fv-"), createdAt: 1 });
     tickets.insert({ key: "DMS-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null, featureId });
     const { factory } = fakePtyFactory();
     const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
     for (const id of terminals) {
-      sessions.insertIfAbsent({ id, ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 1 });
+      sessions.insertIfAbsent({ id, ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
       pty.open(id, { file: "/bin/claude", args: [] }, { cwd: "/w", env: {} });
     }
     const service = new SessionService({
       tickets, sessions, settings, features, pty,
-      ticketService: new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") }),
+      ticketService: new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("shipherd-ws-") }),
       ready: async () => undefined,
       transcriptExists: () => true,
       transcriptState: () => "present",
@@ -791,7 +791,7 @@ describe("FeatureView.activity", () => {
 
   it("is empty for a ticket without a live session", () => {
     const { service, sessions } = setupFeature([], { gone: activity("gone") });
-    sessions.insertIfAbsent({ id: "gone", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "gone", ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     expect(service.featureViews()[0].activity).toEqual({});
   });
 
@@ -821,7 +821,7 @@ describe("FeatureView.activity", () => {
 
 describe("SessionService.openLessonRun (lessons visibility task 7)", () => {
   async function lessonSetup() {
-    const lessonsWorkspace = join(tempDir("butler-home-"), "workspaces", "_lessons");
+    const lessonsWorkspace = join(tempDir("shipherd-home-"), "workspaces", "_lessons");
     const guides: [GuideKind, string[]][] = [];
     const h = await setup({ lessonsWorkspace, guidePath: (kind, paths) => (guides.push([kind, paths]), null), mcpSettings: () => "/mcp/approve.json" });
     h.db.prepare(`INSERT INTO lesson_repos (slug, local_path, created_at) VALUES ('acme/app', ?, 1)`).run(h.repo);
@@ -835,10 +835,10 @@ describe("SessionService.openLessonRun (lessons visibility task 7)", () => {
     expect(await service.openLessonRun(req)).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
     expect(spawned[0].opts.cwd).toBe(lessonsWorkspace);
     expect(existsSync(lessonsWorkspace)).toBe(true);
-    // 没有 Butler 的 MCP；仓库加进来，它的 .mcp.json 审批照旧。
+    // 没有 Shipherd 的 MCP；仓库加进来，它的 .mcp.json 审批照旧。
     expect(spawned[0].args).toEqual(["--session-id", "new-1", "--settings", "/mcp/approve.json", "--add-dir", repo]);
     expect(guides).toEqual([["lessons", []]]);
-    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, butler: false, coordinator: false, lessonRunId: runId, origin: "butler" });
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, shipherd: false, coordinator: false, lessonRunId: runId, origin: "shipherd" });
     await new Promise((r) => setImmediate(r));
     expect(submitted).toEqual([["new-1", M().lessonRunTask(req.file)]]);
   });
@@ -852,17 +852,17 @@ describe("SessionService.openLessonRun (lessons visibility task 7)", () => {
     expect(submitted).toHaveLength(1);
   });
 
-  it("butlerView lesson sessions carry their root id", async () => {
+  it("shipherdView lesson sessions carry their root id", async () => {
     const { service, sessions, runId } = await lessonSetup();
-    sessions.insertIfAbsent({ id: "l1", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, lessonRunId: runId });
-    expect(service.butlerView().lessonSessions.map((s) => [s.id, s.rootId])).toEqual([["l1", "l1"]]);
+    sessions.insertIfAbsent({ id: "l1", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 1, lessonRunId: runId });
+    expect(service.shipherdView().lessonSessions.map((s) => [s.id, s.rootId])).toEqual([["l1", "l1"]]);
   });
 
   it("openLessonRun reopens a closed session without submitting", async () => {
     const { service, spawned, sessions, submitted, runId, req } = await lessonSetup();
-    const elsewhere = tempDir("butler-lessons-old-");
-    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: elsewhere, origin: "butler", createdAt: 1, lessonRunId: runId });
-    sessions.insertIfAbsent({ id: "old-2", ticketKey: null, cwd: elsewhere, origin: "butler", createdAt: 2 });
+    const elsewhere = tempDir("shipherd-lessons-old-");
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: elsewhere, origin: "shipherd", createdAt: 1, lessonRunId: runId });
+    sessions.insertIfAbsent({ id: "old-2", ticketKey: null, cwd: elsewhere, origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy("old", "old-2", "clear");
     sessions.dismiss("old-2");
     expect(await service.openLessonRun(req)).toEqual({ ok: true, termId: "old-2", alreadyOpen: false });
@@ -875,19 +875,19 @@ describe("SessionService.openLessonRun (lessons visibility task 7)", () => {
   });
 
   it("openLessonRun reports a missing claude", async () => {
-    const lessonsWorkspace = join(tempDir("butler-home-"), "workspaces", "_lessons");
+    const lessonsWorkspace = join(tempDir("shipherd-home-"), "workspaces", "_lessons");
     const { service, spawned } = await setup({ lessonsWorkspace, claudePath: null });
     expect(await service.openLessonRun({ runId: 1, repoPath: "/r", file: "/f.md", label: "x" })).toEqual({ ok: false, reason: "claude_missing" });
     expect(spawned).toEqual([]);
   });
 
-  it("butlerView lists lesson sessions with their terminals, not among the Butler sessions", async () => {
+  it("shipherdView lists lesson sessions with their terminals, not among the Shipherd sessions", async () => {
     const { service, sessions, runId, req } = await lessonSetup();
     await service.openLessonRun(req);
-    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, lessonRunId: runId });
-    sessions.insertIfAbsent({ id: "hidden", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, lessonRunId: runId });
+    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 1, lessonRunId: runId });
+    sessions.insertIfAbsent({ id: "hidden", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 1, lessonRunId: runId });
     sessions.dismiss("hidden");
-    const view = service.butlerView();
+    const view = service.shipherdView();
     expect(view.sessions).toEqual([]);
     expect(view.lessonSessions.map((s) => [s.id, s.termId])).toEqual([["new-1", "new-1"], ["closed", null]]);
   });

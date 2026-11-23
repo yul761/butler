@@ -1,11 +1,11 @@
 import type { Handoff } from "../../shared/handoff";
-import { NOTE_BODY_LIMIT, noteBody, noteId, parseNote, sameBody, truncateUnits, type ButlerNote, type MemoryItem } from "../../shared/memory";
+import { NOTE_BODY_LIMIT, noteBody, noteId, parseNote, sameBody, truncateUnits, type ShipherdNote, type MemoryItem } from "../../shared/memory";
 import type { Lang } from "../../shared/i18n";
 import type { Followup, FollowupKind, FollowupTrigger, HandoffRecord } from "../../shared/types";
 import { currentLang } from "../i18n";
 
-/** 一个 ticket scope 里 Butler 自己最多维护多少条：StateCore 每个 scope 的 notes 上限是 30（超出淘汰最旧的），给 Claude 自己的 remember 留 6 条。 */
-export const BUTLER_NOTE_LIMIT = 24;
+/** 一个 ticket scope 里 Shipherd 自己最多维护多少条：StateCore 每个 scope 的 notes 上限是 30（超出淘汰最旧的），给 Claude 自己的 remember 留 6 条。 */
+export const SHIPHERD_NOTE_LIMIT = 24;
 
 /** 写进记忆的标签跟着语言走（设计文档 2026-10-26）：claude 读到的是当前语言。 */
 const KIND_LABEL: Record<Lang, Record<FollowupKind, string>> = {
@@ -20,7 +20,7 @@ const TRIGGER_LABEL: Record<Lang, Record<FollowupTrigger, string>> = {
 /** 到期日在说明后缀里最多占的字数：它本该是 YYYY-MM-DD，限长是为了永远给描述留下空间。 */
 const DUE_LIMIT = 32;
 
-export function followupNote(f: Followup): ButlerNote {
+export function followupNote(f: Followup): ShipherdNote {
   // 说明后缀由原始片段拼成、不过 noteBody（NFKC 会把全角括号和逗号变成半角）；到期日只压空白并限长。
   const due = f.trigger === "on_date" && f.dueDate ? ` ${truncateUnits(f.dueDate.replace(/\s+/g, " ").trim(), DUE_LIMIT)}` : "";
   const l = currentLang();
@@ -30,7 +30,7 @@ export function followupNote(f: Followup): ButlerNote {
   return { kind: "followup", id: noteId(f.id), body: desc ? `${desc}${suffix}` : "" };
 }
 
-export function decisionNote(key: string, statement: string): ButlerNote {
+export function decisionNote(key: string, statement: string): ShipherdNote {
   return { kind: "decision", id: noteId(key), body: noteBody(statement) };
 }
 
@@ -38,13 +38,13 @@ export type FullHandoff = HandoffRecord & { payload: Handoff };
 export const isFull = (h: HandoffRecord): h is FullHandoff => h.payload !== null && h.trigger !== "refresh";
 
 /**
- * 这个 ticket 在 StateCore 里应该有的 Butler 条目（设计文档 8.3）：
+ * 这个 ticket 在 StateCore 里应该有的 Shipherd 条目（设计文档 8.3）：
  * - 未完成（open / snoozed）的 followup，按创建时间；
  * - 决策：所有有效的完整 handoff（不含早间刷新）里每个 key 最新的那句话，按最近一次变化从新到旧。
- * followup 在前；正文为空的跳过；总数不超过 BUTLER_NOTE_LIMIT。handoffs 的顺序不限。
+ * followup 在前；正文为空的跳过；总数不超过 SHIPHERD_NOTE_LIMIT。handoffs 的顺序不限。
  */
-export function desiredNotes(handoffs: HandoffRecord[], followups: Followup[]): ButlerNote[] {
-  const decisions = new Map<string, { note: ButlerNote; at: number }>();
+export function desiredNotes(handoffs: HandoffRecord[], followups: Followup[]): ShipherdNote[] {
+  const decisions = new Map<string, { note: ShipherdNote; at: number }>();
   const full = handoffs.filter(isFull).sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
   for (const h of full) {
     for (const d of h.payload.decisions) {
@@ -63,35 +63,35 @@ export function desiredNotes(handoffs: HandoffRecord[], followups: Followup[]): 
     .map(followupNote)
     .filter((n) => n.body && !seen.has(n.id) && seen.add(n.id));
   const decided = [...decisions.values()].sort((a, b) => b.at - a.at).map((d) => d.note);
-  return [...open, ...decided].slice(0, BUTLER_NOTE_LIMIT);
+  return [...open, ...decided].slice(0, SHIPHERD_NOTE_LIMIT);
 }
 
 /**
  * epic 记忆 handoff 里的「约定」（BTL-246 §5，以前写成 feature scope 的笔记）：最新一份有效汇总里的决策。
  * 汇总每次都重述整个 epic 的约定，所以只看最新那份。同一个 key 写了两次的，取后一句。
  */
-export function featureDecisionNotes(decisions: { key: string; statement: string }[]): ButlerNote[] {
-  const byId = new Map<string, ButlerNote>();
+export function featureDecisionNotes(decisions: { key: string; statement: string }[]): ShipherdNote[] {
+  const byId = new Map<string, ShipherdNote>();
   for (const d of decisions) {
     const note = decisionNote(d.key, d.statement);
     if (note.body) byId.set(note.id, note);
   }
-  return [...byId.values()].slice(0, BUTLER_NOTE_LIMIT);
+  return [...byId.values()].slice(0, SHIPHERD_NOTE_LIMIT);
 }
 
 export interface ReconcilePlan {
   /** 要 forget 的 factKey。 */
   forget: string[];
   /** 要写的条目（写的时候先试不带变体的前缀）；write.length 就是这次想新增的条数。 */
-  write: ButlerNote[];
+  write: ShipherdNote[];
 }
 
 /**
- * 现状（StateCore facts()）和期望之间的差异。只看 Butler 前缀的条目，Claude 自己写的一律不动。
+ * 现状（StateCore facts()）和期望之间的差异。只看 Shipherd 前缀的条目，Claude 自己写的一律不动。
  * 同一个条目：正文相同（宽松比较，任何变体后缀）的留一条，其余的 forget；正文变了就 forget 全部旧的、写新的。
  * 期望里已经没有的条目全部 forget。
  */
-export function planReconcile(current: MemoryItem[], desired: ButlerNote[]): ReconcilePlan {
+export function planReconcile(current: MemoryItem[], desired: ShipherdNote[]): ReconcilePlan {
   const byKey = new Map<string, { factKey: string; body: string }[]>();
   for (const it of current) {
     const p = parseNote(it.text);

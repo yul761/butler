@@ -7,7 +7,7 @@ import { renameWithRetrySync } from "../util/fs-retry";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
 /** feature 记忆的 remember 工具：约定广播（BTL-245）的来源。 */
-export const REMEMBER_TOOL = "mcp__butler-feature__remember";
+export const REMEMBER_TOOL = "mcp__shipherd-feature__remember";
 
 /**
  * 计划 3 任务 1 的实测（Ruling P3-R1）：--setting-sources user 下本地级（~/.claude.json 里按目录记录的）MCP 会不会丢。
@@ -20,7 +20,7 @@ export interface ProjectMcpPaths {
   claudeJson: string;
   /** 用户级 settings.json，只读（可选）。 */
   claudeSettings?: string;
-  /** ~/.butler/mcp：生成的 --mcp-config 文件只写在这里。 */
+  /** ~/.shipherd/mcp：生成的 --mcp-config 文件只写在这里。 */
   mcpDir: string;
   log?: (msg: string, err?: unknown) => void;
 }
@@ -246,7 +246,7 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
 }
 
 /**
- * Butler 打开的交互 session 用的 --settings 文件：仓库 .mcp.json 里的 server 直接启用，不再停在
+ * Shipherd 打开的交互 session 用的 --settings 文件：仓库 .mcp.json 里的 server 直接启用，不再停在
  * “发现新的 MCP server，选择要启用哪些”的对话框上（worktree 是新目录，Claude Code 每次都会问；总控交给子 session 的任务会一直等着）。
  * 用户在这些目录（session 的目录、仓库主目录）里禁用过的 server 一并写进 disabledMcpjsonServers：禁用优先于全部启用。
  * 文件名按内容取 hash，内容一样就是同一个文件。写不了记日志返回 null（照旧弹出对话框）。

@@ -262,7 +262,7 @@ function ImportFlow({ s }: { s: LessonsState }) {
       {preview && (
         <div className="config-io-preview" data-testid="io-preview">
           <p className="muted">
-            {S.ioFileInfo(preview.file.butlerVersion, formatTime(preview.file.exportedAt))} · {S.ioFileScope(preview.file.scope)}
+            {S.ioFileInfo(preview.file.shipherdVersion, formatTime(preview.file.exportedAt))} · {S.ioFileScope(preview.file.scope)}
             {preview.file.includeSourceUrls && <> · {S.ioFileHasUrls}</>}
           </p>
           {preview.semanticFailed && <p className="muted" data-testid="io-semantic-failed">{S.ioSemanticFailed}</p>}

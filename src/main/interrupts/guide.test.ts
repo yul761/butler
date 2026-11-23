@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { interruptGuideLines } from "./guide";
 
 describe("interruptGuideLines", () => {
-  it("writes nothing while both switches are off, and nothing for butler or lessons sessions", () => {
+  it("writes nothing while both switches are off, and nothing for shipherd or lessons sessions", () => {
     expect(interruptGuideLines("zh", "ticket", { choiceRule: false, selfServe: false })).toEqual([]);
-    for (const kind of ["butler", "lessons"] as const) expect(interruptGuideLines("en", kind, { choiceRule: true, selfServe: true })).toEqual([]);
+    for (const kind of ["shipherd", "lessons"] as const) expect(interruptGuideLines("en", kind, { choiceRule: true, selfServe: true })).toEqual([]);
   });
 
   it("tells ticket sessions and coordinators to pick the recommended option and record it, with the exceptions", () => {

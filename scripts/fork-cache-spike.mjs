@@ -60,7 +60,7 @@ console.log(`  工作目录：${cwd}\n  CLAUDE_* 环境：${JSON.stringify(devEn
 let devContext = null;
 let lastAt = null;
 try {
-  const db = new DatabaseSync(join(homedir(), ".butler", "app.db"), { readOnly: true });
+  const db = new DatabaseSync(join(homedir(), ".shipherd", "app.db"), { readOnly: true });
   const r = db.prepare(`SELECT context, at FROM session_usage WHERE session_id = ? AND source = 'session' ORDER BY at DESC LIMIT 1`).get(devId);
   if (r) {
     devContext = Number(r.context);
@@ -68,10 +68,10 @@ try {
   }
   db.close();
 } catch (e) {
-  console.warn(`读不到 ~/.butler/app.db：${e.message}`);
+  console.warn(`读不到 ~/.shipherd/app.db：${e.message}`);
 }
 if (devContext === null) {
-  // 不是 Butler 开的 session（比如手动开的对照组）：从 transcript 最后一条 assistant 的 usage 取。
+  // 不是 Shipherd 开的 session（比如手动开的对照组）：从 transcript 最后一条 assistant 的 usage 取。
   try {
     const dir = execFileSync("find", [join(homedir(), ".claude", "projects"), "-name", `${devId}.jsonl`], { encoding: "utf8" }).trim().split("\n")[0];
     for (const l of readFileSync(dir, "utf8").trim().split("\n").reverse()) {
@@ -129,7 +129,7 @@ if (variant !== "v1") {
   if (variant !== "v2-no-perm") args.push("--permission-mode", "dontAsk", "--allowedTools", ...ALLOWED);
 }
 
-const env = { ...process.env, ...devEnv, BUTLER_SESSION: "headless:spike" };
+const env = { ...process.env, ...devEnv, SHIPHERD_SESSION: "headless:spike" };
 env.CLAUDE_CODE_SUBAGENT_MODEL ??= "sonnet";
 env.CLAUDE_CODE_AUTO_COMPACT_WINDOW ??= "250000";
 

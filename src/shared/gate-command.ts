@@ -267,8 +267,8 @@ function shipTokens(tokens: string[]): string[] {
 /** Bash 里绕过检查的手法（工作流 F 第 7.1 节；suppress 是编辑里加的压制注释，由 hook 的编辑检查认）。 */
 export type BashBypass = Exclude<BypassHow, "suppress">;
 
-/** 动 Butler 的检查文件或 Claude Code 的 hook 设置。 */
-const TAMPER_TARGET = /[\\/]\.butler[\\/]checks\b|[\\/]\.claude[\\/]settings(\.local)?\.json\b/;
+/** 动 Shipherd 的检查文件或 Claude Code 的 hook 设置。 */
+const TAMPER_TARGET = /[\\/]\.shipherd[\\/]checks\b|[\\/]\.claude[\\/]settings(\.local)?\.json\b/;
 /** 会写东西的命令或重定向（只读的 cat / grep 不算）。 */
 const WRITES = /(^|[\s;&|(])(rm|mv|cp|sed\s+-i|perl\s+-[a-z]*i|tee|truncate|chmod|ln|dd)\b|[^<>&0-9]>{1,2}\s*\S/;
 
@@ -284,8 +284,8 @@ function commitShortN(a: string): boolean {
 
 /**
  * 一条 Bash 命令里绕过检查的写法：`git commit/push/merge … --no-verify`（commit 的 `-n`）、关掉 git hook
- * （`-c core.hooksPath=`、`git config core.hooksPath …`、HUSKY=0、SKIP=…）、改 Butler 的检查文件或 Claude 的 hook 设置、
- * 把 BUTLER_HOME 指到别处。只认出手法；算到哪条检查头上由调用方看这个 session 最近被拦过什么。纯字符串，不跑 shell。
+ * （`-c core.hooksPath=`、`git config core.hooksPath …`、HUSKY=0、SKIP=…）、改 Shipherd 的检查文件或 Claude 的 hook 设置、
+ * 把 SHIPHERD_HOME 指到别处。只认出手法；算到哪条检查头上由调用方看这个 session 最近被拦过什么。纯字符串，不跑 shell。
  */
 export function classifyBypass(command: string): { how: BashBypass; detail: string }[] {
   const out: { how: BashBypass; detail: string }[] = [];
@@ -298,12 +298,12 @@ export function classifyBypass(command: string): { how: BashBypass; detail: stri
     for (; i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]); i++) {
       const t = tokens[i];
       if (/^(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0|SKIP=.+)$/.test(t)) add("hooks_off", t);
-      else if (/^BUTLER_HOME=/.test(t)) add("tamper", t);
+      else if (/^SHIPHERD_HOME=/.test(t)) add("tamper", t);
     }
     if (tokens[i] === "export" || tokens[i] === "unset") {
       for (const t of tokens.slice(i + 1)) {
         if (/^(HUSKY=0|HUSKY_SKIP_HOOKS=1|LEFTHOOK=0|SKIP=.+)$/.test(t)) add("hooks_off", `${tokens[i]} ${t}`);
-        else if (/^BUTLER_(HOME=.*|SESSION)$/.test(t)) add("tamper", `${tokens[i]} ${t}`);
+        else if (/^SHIPHERD_(HOME=.*|SESSION)$/.test(t)) add("tamper", `${tokens[i]} ${t}`);
       }
       continue;
     }

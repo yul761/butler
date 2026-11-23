@@ -15,8 +15,8 @@ async function typeLine(page: Page, line: string): Promise<void> {
 }
 
 function db(s: Sandbox): DatabaseSync {
-  // Butler 也开着这个库：等它的写锁，不直接报 SQLITE_BUSY。
-  return new DatabaseSync(join(s.butlerHome, "app.db"), { timeout: 5000 });
+  // Shipherd 也开着这个库：等它的写锁，不直接报 SQLITE_BUSY。
+  return new DatabaseSync(join(s.shipherdHome, "app.db"), { timeout: 5000 });
 }
 
 type Hit = { file: string; stage: string; mode: string; outcome: string; blocked: number; detail: string };
@@ -29,9 +29,9 @@ const hits = (s: Sandbox): Hit[] => {
   }
 };
 
-/** 快照里 acme/web 的检查（Butler 合并一小段时间才写）。 */
+/** 快照里 acme/web 的检查（Shipherd 合并一小段时间才写）。 */
 const snapshotChecks = (s: Sandbox): { name: string; mode: string; type: string }[] => {
-  const f = join(s.butlerHome, "checks", "snapshot.json");
+  const f = join(s.shipherdHome, "checks", "snapshot.json");
   if (!existsSync(f)) return [];
   try {
     return (JSON.parse(readFileSync(f, "utf8")) as { repos: Record<string, { name: string; mode: string; type: string }[]> }).repos["acme/web"] ?? [];

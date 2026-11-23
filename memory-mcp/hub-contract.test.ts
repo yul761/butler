@@ -1,5 +1,5 @@
-// Butler 的记忆 server 和真的 statecore-mcp 比（WS-M 设计 §8 的契约测试，BTL-243 改过）：
-// Butler 留的上游原文和真的一字不差；Butler 的 server 和真的之间，差别只有 BUTLER_OVERRIDES 这份清单（和 overrideResult 对结果的改动）。
+// Shipherd 的记忆 server 和真的 statecore-mcp 比（WS-M 设计 §8 的契约测试，BTL-243 改过）：
+// Shipherd 留的上游原文和真的一字不差；Shipherd 的 server 和真的之间，差别只有 SHIPHERD_OVERRIDES 这份清单（和 overrideResult 对结果的改动）。
 // statecore-mcp 升级改了工具层，这里会失败。
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createEmbeddedBackend } from "statecore-mcp/lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
-import { applyOverrides, BUTLER_OVERRIDES, MemoryServer, overrideResult, STATECORE_MCP_VERSION, UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS } from "./memory-tools";
+import { applyOverrides, SHIPHERD_OVERRIDES, MemoryServer, overrideResult, STATECORE_MCP_VERSION, UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS } from "./memory-tools";
 
 type Reply = { id?: number; result?: Record<string, unknown>; error?: unknown };
 
@@ -62,8 +62,8 @@ const toolJson = (r: Reply, fix: (body: unknown) => unknown = (b) => b) => {
   const res = r.result as { content: { text: string }[]; isError?: boolean };
   return { isError: res.isError ?? false, body: res.isError ? res.content[0].text : shape(fix(JSON.parse(res.content[0].text))) };
 };
-/** 真的 statecore-mcp 的结果在 Butler 这边应该变成什么：remember 走 overrideResult，facts 去掉等待蒸馏的 pending。 */
-const butlerSide = (name: string) => (body: unknown) => {
+/** 真的 statecore-mcp 的结果在 Shipherd 这边应该变成什么：remember 走 overrideResult，facts 去掉等待蒸馏的 pending。 */
+const shipherdSide = (name: string) => (body: unknown) => {
   if (name === "facts" && body && typeof body === "object") {
     const rest = { ...(body as Record<string, unknown>) };
     delete rest.pending;
@@ -79,7 +79,7 @@ describe("shared MCP memory server vs statecore-mcp", () => {
       const [a, b] = await Promise.all([real.send("initialize", params), hubSend("initialize", params)]);
       const upstream = (a.result as { instructions: string }).instructions;
       expect(upstream).toBe(UPSTREAM_INSTRUCTIONS);
-      expect(b.result).toEqual({ ...a.result, instructions: applyOverrides(upstream, [], BUTLER_OVERRIDES.filter((o) => o.where === "instructions")).instructions });
+      expect(b.result).toEqual({ ...a.result, instructions: applyOverrides(upstream, [], SHIPHERD_OVERRIDES.filter((o) => o.where === "instructions")).instructions });
     }
     real.notify("notifications/initialized");
     expect(await hub.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
@@ -89,7 +89,7 @@ describe("shared MCP memory server vs statecore-mcp", () => {
     const [a, b] = await Promise.all([real.send("tools/list"), hubSend("tools/list")]);
     const upstream = (a.result as { tools: unknown[] }).tools;
     expect(upstream).toEqual(UPSTREAM_TOOLS);
-    expect(b.result).toEqual({ tools: applyOverrides("", upstream, BUTLER_OVERRIDES.filter((o) => o.where !== "instructions")).tools });
+    expect(b.result).toEqual({ tools: applyOverrides("", upstream, SHIPHERD_OVERRIDES.filter((o) => o.where !== "instructions")).tools });
     // 说明里不再许诺蒸馏。
     expect(JSON.stringify(b.result)).not.toMatch(/distil/i);
   });
@@ -97,7 +97,7 @@ describe("shared MCP memory server vs statecore-mcp", () => {
   it("fails loudly when an override no longer matches the upstream text", () => {
     expect(() => applyOverrides(UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS, [{ where: "instructions", from: "no such words", to: "x" }])).toThrow(/no longer matches/);
     expect(() => applyOverrides(UPSTREAM_INSTRUCTIONS, UPSTREAM_TOOLS, [{ where: "remember.nope", from: "a", to: "b" }])).toThrow(/no parameter/);
-    for (const o of BUTLER_OVERRIDES) expect(o.to, o.where).not.toBe(o.from);
+    for (const o of SHIPHERD_OVERRIDES) expect(o.to, o.where).not.toBe(o.from);
   });
 
   it("is the statecore-mcp version it was copied from", async () => {
@@ -121,7 +121,7 @@ describe("shared MCP memory server vs statecore-mcp", () => {
     ];
     for (const [name, args] of steps) {
       const [a, b] = await Promise.all([real.send("tools/call", { name, arguments: args }), hubSend("tools/call", { name, arguments: args })]);
-      expect({ name, ...toolJson(b) }).toEqual({ name, ...toolJson(a, butlerSide(name)) });
+      expect({ name, ...toolJson(b) }).toEqual({ name, ...toolJson(a, shipherdSide(name)) });
     }
   });
 

@@ -2,8 +2,8 @@
 
 设计见 `docs/superpowers/specs/2026-11-21-btl-253-update-notice-design.md`。每一步先写测试，再写实现。
 
-1. `src/shared/butler-repo.ts`、`src/shared/update.ts`：`BUTLER_REPO`、`parseVersion`、`compareVersions`、`isNewerRelease`、视图和结果的类型。单测：预发布、build 元数据、`v` 前缀、解析不了、draft / prerelease 标志。
-2. `src/main/tickets/gh.ts`：`runGhDetail` 多带回 `exitCode` / `errorCode`（不改已有调用方的行为）；`src/main/update/release-source.ts`：`latestRelease()` 调 `gh api repos/<BUTLER_REPO>/releases/latest`，把失败按 stderr 分成几种原因。单测：每种 stderr、没有 gh、JSON 不对。
+1. `src/shared/shipherd-repo.ts`、`src/shared/update.ts`：`SHIPHERD_REPO`、`parseVersion`、`compareVersions`、`isNewerRelease`、视图和结果的类型。单测：预发布、build 元数据、`v` 前缀、解析不了、draft / prerelease 标志。
+2. `src/main/tickets/gh.ts`：`runGhDetail` 多带回 `exitCode` / `errorCode`（不改已有调用方的行为）；`src/main/update/release-source.ts`：`latestRelease()` 调 `gh api repos/<SHIPHERD_REPO>/releases/latest`，把失败按 stderr 分成几种原因。单测：每种 stderr、没有 gh、JSON 不对。
 3. `src/main/update/update-checker.ts`：`UpdateChecker`（自动检查的节流、手动检查、跳过、关闭、视图、审计）。单测：首次检查、24 小时内不查、失败也算一次、开关关着不自动查、手动不看节流、跳过和关闭、审计记录、并发只跑一次。
 4. 设置：`updateCheckEnabled`（可编辑，基本）、`updateLastCheckAt` / `updateLatest` / `updateSkippedVersion`（内部）。默认值测试。
 5. 审计：`AUDIT_KINDS`、`ExternalAuditRepo.list`、`ExternalActions.record` 接受 `update_check`；审计页的种类名。

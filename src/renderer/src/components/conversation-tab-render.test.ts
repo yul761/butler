@@ -104,7 +104,7 @@ describe("ForkBox", () => {
     expect(isDisabled(box({}, { memoryOn: false }), "记进记忆")).toBe(true);
   });
 
-  it("no ticket or feature to remember under (the Butler page): save to memory isn't shown at all", () => {
+  it("no ticket or feature to remember under (the Shipherd page): save to memory isn't shown at all", () => {
     expect(box({}, { canRemember: false })).not.toContain(S.conv.actRemember);
     expect(box({}, { canRemember: false })).toContain(S.conv.actSend);
     expect(box({}, { canRemember: true })).toContain(S.conv.actRemember);
@@ -263,7 +263,7 @@ describe("SearchHits", () => {
 });
 
 describe("ConversationTab", () => {
-  it("the footer (Butler replies) sits above the send bar", () => {
+  it("the footer (Shipherd replies) sits above the send bar", () => {
     const html = renderToStaticMarkup(createElement(ConversationTab, { rootSessionId: "r", sessions: [], footer: createElement("div", { className: "the-footer" }) }));
     expect(html).toContain("the-footer");
     expect(html.indexOf("the-footer")).toBeLessThan(html.indexOf("conv-input"));

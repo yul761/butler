@@ -5,12 +5,12 @@ function assertAllowed(list: readonly string[], channel: string): void {
   if (!list.includes(channel)) throw new Error(`IPC channel not allowed: ${channel}`);
 }
 
-contextBridge.exposeInMainWorld("butler", {
+contextBridge.exposeInMainWorld("shipherd", {
   platform: process.platform,
-  // 终端用什么画（BTL-242）：默认 WebGL；BUTLER_TERMINAL_RENDERER=dom 用 DOM（e2e 要读 .xterm-rows 里的字）。
-  terminalRenderer: process.env.BUTLER_TERMINAL_RENDERER === "dom" ? "dom" : "webgl",
+  // 终端用什么画（BTL-242）：默认 WebGL；SHIPHERD_TERMINAL_RENDERER=dom 用 DOM（e2e 要读 .xterm-rows 里的字）。
+  terminalRenderer: process.env.SHIPHERD_TERMINAL_RENDERER === "dom" ? "dom" : "webgl",
   // 留几个切走的终端的 xterm（BTL-242，默认 4）；e2e 测快照重建时设成 0。
-  terminalCacheMax: /^\d+$/.test(process.env.BUTLER_TERMINAL_CACHE ?? "") ? Number(process.env.BUTLER_TERMINAL_CACHE) : null,
+  terminalCacheMax: /^\d+$/.test(process.env.SHIPHERD_TERMINAL_CACHE ?? "") ? Number(process.env.SHIPHERD_TERMINAL_CACHE) : null,
   pathForFile(file: File): string {
     return webUtils.getPathForFile(file);
   },

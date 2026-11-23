@@ -38,7 +38,7 @@ If it were split into layers, each upper layer would rebase on top of a ~150-fil
    - Update the e2e `multi-repo.spec` and `hibernate.spec` to use a plain ticket session or a feature coordinator.
 3. **Remove the old epic layer.**
    - Delete `src/main/epics/`, `epics-repo` and `epic-history-repo`, and their code paths in session-service, session-refresher, refresh-tail, memory-service, mcp-config, inbox, now, turn, progress, prwatch, stacks, gate/who, daily-jobs, metrics, conv-parse, ipc, validate, api, App, Sidebar, AllWorkPage, ArchivedPage, FeaturePage, FirstRunHome, home-view, sidebar-view, scope-view, route-view and the strings.
-   - Delete `EPIC_TOOLS`, `EPIC_CONTEXT_TOOL`, `epicRequest`, `BUTLER_EPIC` and `BUTLER_FEATURE_EPIC`.
+   - Delete `EPIC_TOOLS`, `EPIC_CONTEXT_TOOL`, `epicRequest`, `SHIPHERD_EPIC` and `SHIPHERD_FEATURE_EPIC`.
    - Delete `e2e/epics.spec.ts` and move what still applies (archiving a feature, the stuck mark) to `features.spec`.
    - Keep the `epic_id` columns. Remove the `model-routing` task `epic_digest`, and load stored settings that still name it without error.
 4. **Blocks.**
@@ -48,7 +48,7 @@ If it were split into layers, each upper layer would rebase on top of a ~150-fil
    - The epic page overview groups tickets by block (`ScopeBlocks`).
    - Update the guide text (in order, independent blocks in parallel, which memory holds what).
 5. **Epic memory.**
-   - `syncFeatureNow` renders Plan, Conventions and Earlier conventions into the handoff and stops writing decision notes; existing Butler decision notes are forgotten.
+   - `syncFeatureNow` renders Plan, Conventions and Earlier conventions into the handoff and stops writing decision notes; existing Shipherd decision notes are forgotten.
    - Add `archiveOverflow(featureId)`, called from `sessionStopped` and from `syncAll`.
    - Add the one-time copy of the old `epic:<id>` notes.
    - Tests in `memory-service.test`.

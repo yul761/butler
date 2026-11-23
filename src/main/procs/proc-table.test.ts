@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, procTableReader, readProcTable, summarize, treeOf, type ProcTable } from "./proc-table";
+import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, procTableReader, readProcTable, shortName, summarize, treeOf, type ProcTable } from "./proc-table";
 
 const PS = [
-  "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Butler.app/Contents/MacOS/Butler",
+  "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Shipherd.app/Contents/MacOS/Shipherd",
   "  200   100 400000 Mon Nov 17 09:01:00 2026 /usr/local/bin/claude --resume abc",
-  "  201   200  80000 Mon Nov 17 09:01:01 2026 /Applications/Butler.app/Contents/MacOS/Butler /x/memory-mcp/statecore-mcp.cjs --data /d",
-  "  202   200  60000 Mon Nov 17 09:01:01 2026 /Applications/Butler.app/Contents/MacOS/Butler /x/memory-mcp/butler-sessions-mcp.cjs",
+  "  201   200  80000 Mon Nov 17 09:01:01 2026 /Applications/Shipherd.app/Contents/MacOS/Shipherd /x/memory-mcp/statecore-mcp.cjs --data /d",
+  "  202   200  60000 Mon Nov 17 09:01:01 2026 /Applications/Shipherd.app/Contents/MacOS/Shipherd /x/memory-mcp/shipherd-sessions-mcp.cjs",
   "  203   200 330000 Mon Nov 17 09:01:02 2026 node /u/.npm/_npx/chrome-devtools-mcp/index.js",
   "  204   203 200000 Mon Nov 17 09:01:03 2026 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless",
   "  205   200   3000 Mon Nov 17 09:02:00 2026 /bin/zsh -c pnpm dev",
@@ -57,13 +57,13 @@ describe("parseWinTable", () => {
     const out = [
       "4\t0\t100\t0\tSystem\t",
       "5000\t4000\t300000\t133000000000000000\tclaude.exe\t\"C:\\Users\\me\\.local\\bin\\claude.exe\" --resume abc",
-      "5001\t5000\t80000\t133000000000000001\tButler.exe\t\"C:\\Program Files\\Butler\\Butler.exe\" C:\\x\\statecore-mcp.cjs\tand\ta tab",
+      "5001\t5000\t80000\t133000000000000001\tShipherd.exe\t\"C:\\Program Files\\Shipherd\\Shipherd.exe\" C:\\x\\statecore-mcp.cjs\tand\ta tab",
       "",
     ].join("\r\n");
     const t = parseWinTable(out);
     expect(t.get(4)?.args).toBe("System");
     expect(t.get(5000)).toEqual({ pid: 5000, ppid: 4000, rssKb: 300000, start: "133000000000000000", args: "\"C:\\Users\\me\\.local\\bin\\claude.exe\" --resume abc" });
-    expect(t.get(5001)?.args).toBe("\"C:\\Program Files\\Butler\\Butler.exe\" C:\\x\\statecore-mcp.cjs\tand\ta tab");
+    expect(t.get(5001)?.args).toBe("\"C:\\Program Files\\Shipherd\\Shipherd.exe\" C:\\x\\statecore-mcp.cjs\tand\ta tab");
   });
 });
 
@@ -84,10 +84,10 @@ describe("treeOf and classifyTree", () => {
     expect(treeOf(1, cyc).map((p) => p.pid)).toEqual([1, 2]);
   });
 
-  it("classes claude, Butler's MCP, other MCP with its children, shells, dev servers, watchers and the rest", () => {
+  it("classes claude, Shipherd's MCP, other MCP with its children, shells, dev servers, watchers and the rest", () => {
     const cls = Object.fromEntries(classifyTree(200, t).map((p) => [p.pid, p.cls]));
     expect(cls).toEqual({
-      200: "claude", 201: "mcp_butler", 202: "mcp_butler", 203: "mcp_other", 204: "mcp_other",
+      200: "claude", 201: "mcp_shipherd", 202: "mcp_shipherd", 203: "mcp_other", 204: "mcp_other",
       205: "shell", 206: "dev_server", 207: "shell", 208: "watcher", 209: "other",
     });
   });
@@ -95,14 +95,14 @@ describe("treeOf and classifyTree", () => {
   it("classes Windows command lines the same way", () => {
     const w: ProcTable = new Map([
       [10, { pid: 10, ppid: 1, rssKb: 1, start: "1", args: "\"C:\\Users\\me\\.local\\bin\\claude.exe\" --resume x" }],
-      [11, { pid: 11, ppid: 10, rssKb: 1, start: "1", args: "\"C:\\Program Files\\Butler\\Butler.exe\" C:\\Program Files\\Butler\\resources\\memory-mcp\\butler-sessions-mcp.cjs" }],
+      [11, { pid: 11, ppid: 10, rssKb: 1, start: "1", args: "\"C:\\Program Files\\Shipherd\\Shipherd.exe\" C:\\Program Files\\Shipherd\\resources\\memory-mcp\\shipherd-sessions-mcp.cjs" }],
       [12, { pid: 12, ppid: 10, rssKb: 1, start: "1", args: "C:\\Program Files\\Git\\bin\\bash.exe -c \"npm run dev\"" }],
       [13, { pid: 13, ppid: 12, rssKb: 1, start: "1", args: "node.exe C:\\repo\\node_modules\\next\\dist\\bin\\next dev" }],
       [14, { pid: 14, ppid: 10, rssKb: 1, start: "1", args: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile" }],
       [15, { pid: 15, ppid: 12, rssKb: 1, start: "1", args: "node.exe C:\\repo\\node_modules\\vitest\\vitest.mjs" }],
     ]);
     const cls = Object.fromEntries(classifyTree(10, w).map((p) => [p.pid, p.cls]));
-    expect(cls).toEqual({ 10: "claude", 11: "mcp_butler", 12: "shell", 13: "dev_server", 14: "shell", 15: "watcher" });
+    expect(cls).toEqual({ 10: "claude", 11: "mcp_shipherd", 12: "shell", 13: "dev_server", 14: "shell", 15: "watcher" });
   });
 
   it("treats claude started through cmd.exe as claude, with its MCP under it", () => {
@@ -134,7 +134,7 @@ describe("summarize", () => {
     const s = summarize(classifyTree(200, parsePsTable(PS)), 3);
     expect(s.totalKb).toBe(400000 + 80000 + 60000 + 330000 + 200000 + 3000 + 90000 + 3000 + 120000 + 5000);
     expect(s.count).toBe(10);
-    expect(s.byClass).toEqual({ claude: 400000, mcp_butler: 140000, mcp_other: 530000, shell: 6000, watcher: 120000, dev_server: 90000, other: 5000 });
+    expect(s.byClass).toEqual({ claude: 400000, mcp_shipherd: 140000, mcp_other: 530000, shell: 6000, watcher: 120000, dev_server: 90000, other: 5000 });
     expect(s.top.map((p) => [p.pid, p.cls, p.name])).toEqual([
       [200, "claude", "claude"],
       [203, "mcp_other", "chrome-devtools-mcp"],
@@ -211,4 +211,17 @@ describe("readProcTable", () => {
     const t = await readProcTable(process.platform);
     expect(t?.get(process.pid)).toBeDefined();
   }, 20_000);
+});
+
+// BTL-260：升级时还没退出的旧 sessions MCP server（butler-sessions-mcp.cjs）也算 Shipherd 自己的。
+describe("pre-rename process names", () => {
+  it("classes the old butler-sessions-mcp as Shipherd's own MCP and names the old Butler runner by its script", () => {
+    const t: ProcTable = new Map([
+      [10, { pid: 10, ppid: 1, rssKb: 1, start: "1", args: "/Users/me/.local/bin/claude --resume x" }],
+      [11, { pid: 11, ppid: 10, rssKb: 1, start: "1", args: "/Applications/Butler.app/Contents/MacOS/Butler /x/memory-mcp/butler-sessions-mcp.cjs" }],
+    ]);
+    expect(Object.fromEntries(classifyTree(10, t).map((p) => [p.pid, p.cls]))).toEqual({ 10: "claude", 11: "mcp_shipherd" });
+    // Windows 上没有 .app 名字，按解释器跑的脚本起名：旧的 Butler.exe 也是解释器。
+    expect(shortName("\"C:\\Users\\me\\AppData\\Local\\Programs\\Butler\\Butler.exe\" C:\\x\\memory-mcp\\butler-sessions-mcp.cjs")).toBe("butler-sessions-mcp");
+  });
 });

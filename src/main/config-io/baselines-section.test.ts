@@ -16,7 +16,7 @@ function home() {
   const now = () => (t += 10);
   let version = 1;
   const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => version, set: (v) => (version = v) }, now });
-  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), butlerVersion: "3.0.0", backupDir: join(tempDir(), "b"), now });
+  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), shipherdVersion: "3.0.0", backupDir: join(tempDir(), "b"), now });
   return { db, repo, recorder, io, baselines: new BaselinesRepo(db) };
 }
 
@@ -28,7 +28,7 @@ function scan(slug: string, at: number, over: Partial<NewBaseline> = {}): NewBas
     projects: [{ dir: "", langs: ["ts"], markers: ["node"], pm: "pnpm" }],
     checks: [{
       id: "|test|vitest", dir: "", category: "test", tool: "vitest", command: "pnpm test", fileCommand: "pnpm vitest run {file}", stages: ["ci"], changedFiles: true,
-      butlerStage: "push", source: "marker", confidence: "high", evidence: ["package.json"], facts: [],
+      shipherdStage: "push", source: "marker", confidence: "high", evidence: ["package.json"], facts: [],
     }],
     advice: [],
     profile: { projects: [{ dir: "", langs: ["ts"], install: "pnpm install", build: null, testAll: "pnpm test", testOne: "pnpm vitest run {file}", fastest: null, lint: null, typecheck: null, inferred: [] }], dirs: ["src/"], ci: [], pitfalls: ["never call the db from views"] },
@@ -165,6 +165,24 @@ describe("config-io baselines section", () => {
     expect(b.baselines.latest("acme/api")).toMatchObject({ scannedAt: 600, origin: "local" });
     expect(b.recorder.undo(r.batchId!, 99_999_999_999_999).ok).toBe(true);
     expect(b.baselines.latest("acme/web")).toMatchObject({ scannedAt: 400, origin: "local" });
+  });
+
+  // BTL-260：改名前导出的文件（以及 backups 里的自动备份）：format 是 butler-config，版本字段 butlerVersion，检查的 butlerStage。
+  it("imports a file exported by Butler before the rename, keeping each check's stage", async () => {
+    const a = home();
+    a.baselines.insert(scan("acme/web", 500, { checks: [{ ...scan("x", 1).checks[0], shipherdStage: "edit" }] }));
+    const text = JSON.stringify(a.io.exportDoc(all(true))!)
+      .replace('"format":"shipherd-config"', '"format":"butler-config"')
+      .replace('"shipherdVersion"', '"butlerVersion"')
+      .replaceAll('"shipherdStage"', '"butlerStage"');
+    expect(text).not.toMatch(/shipherd/i);
+    const b = home();
+    const pr = await b.io.previewText(text);
+    if (!pr.ok) throw new Error(`preview: ${JSON.stringify(pr)}`);
+    expect(pr.preview.file.shipherdVersion).toBe("3.0.0");
+    const r = b.io.apply({ token: pr.preview.token, mode: "merge" });
+    if (!r.ok) throw new Error("apply");
+    expect(b.baselines.latest("acme/web")!.checks[0].shipherdStage).toBe("edit");
   });
 
   it("clamps a future scan time to the import time, so the next local scan replaces it", async () => {

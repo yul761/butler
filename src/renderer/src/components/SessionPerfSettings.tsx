@@ -46,7 +46,7 @@ export function SessionPerfSettings() {
         </div>
       </div>
 
-      {/* 内存与性能（WS-M）：三个开关、按内存换新的阈值，和 Butler 管不了的建议（J）。 */}
+      {/* 内存与性能（WS-M）：三个开关、按内存换新的阈值，和 Shipherd 管不了的建议（J）。 */}
       <h2>{S.perf.section}</h2>
       {(["memoryMonitor", "backgroundPriority", "orphanCleanup"] as const).map((k) => (
         <div key={k} className="field">

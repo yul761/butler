@@ -1,6 +1,6 @@
 # Workstream I：评论到修复的闭环、CI 失败分类与自动重跑（设计补充）
 
-上级文档：`2026-11-17-butler-3-design.md`（第 3 节 I、第 4.1 / 4.2 / 4.7 / 4.8 / 4.9 节、第 5 节）。
+上级文档：`2026-11-17-shipherd-3-design.md`（第 3 节 I、第 4.1 / 4.2 / 4.7 / 4.8 / 4.9 节、第 5 节）。
 源计划 7.2、7.6。这里只记 I 自己做的决定；契约以上级文档为准，这里只扩展不修改。
 
 ## 0. 开工前核实过的点
@@ -74,7 +74,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 
 1. thread 已经 resolve：跳过（不建项）。
 2. thread `isOutdated`，或者行内评论的 `line` 为空：评论的位置已经被后来的 commit 改掉了，`ignore`，理由 `outdated`。
-3. 作者是 PR 作者（包括 Butler 自己代你发的回复）、或者是 Copilot 以外的 bot（覆盖率、部署预览之类）：跳过。
+3. 作者是 PR 作者（包括 Shipherd 自己代你发的回复）、或者是 Copilot 以外的 bot（覆盖率、部署预览之类）：跳过。
 4. thread 最后一条是 PR 作者发的：已经有人回过了，`ignore`，理由 `answered`。
 5. 正文为空、只有表情、或者是 `LGTM`、`thanks`、`👍` 这类：`ignore`，理由 `ack`。
 6. 正文命中策略 `comments.ignorePatterns` 的任何一条（不区分大小写的子串，`/…/` 包起来的按正则）：`ignore`，理由 `pattern`。
@@ -106,7 +106,7 @@ PR #34 有 3 条 review 评论要处理（Copilot 2 条，人 1 条）：
 1. src/a.ts:12（Copilot）
    <原文，截到 800 字>
 2. …
-请逐条修改，改好后 commit 并 push。不同意的那条，在终端里说明原因，不要改。Butler 会在你 push 之后核对这些位置并回复评论。
+请逐条修改，改好后 commit 并 push。不同意的那条，在终端里说明原因，不要改。Shipherd 会在你 push 之后核对这些位置并回复评论。
 ```
 
 整条过 `sanitizeTask`（和 CI 一样的长度上限）。送出去才把这些项标成 `delivered`（记下送达时的 head sha 和 session）；没送出去留着下一次。超过 30 分钟还没送出去的，「现在」页提醒（和 CI 的「未能送达」同一种提醒，可以重发）。
@@ -122,7 +122,7 @@ PR 的 head sha 变了，而且有 `delivered` 的项：`CommentLoop` 拉一次 
 `addressed` 之后：
 
 1. `recordEvent("comment_auto_handled", {prId, ticketKey, repoSlug, sessionId, dedupeKey: "comment:<prId>:<评论键>", data: {who, category, source}})`（契约 4.7）。
-2. 策略 `comments.reply` 为真：`externalActions.attempt("comment_reply", …)`。行内评论回复在 thread 里，PR 级评论和 review 回复成一条新的 PR 评论（引用原文第一行）。回复措辞是固定模板，克制、不自夸：英文 `Addressed in abc1234.`、中文 `已在 abc1234 中修改。`，后面跟一行小字 `(automated reply from Butler)` / `（Butler 自动回复）`。模板的语言跟 `comments.replyLanguage`（`en` 默认，GitHub 上的同事多半读英文；可选 `zh`）。开关关着：记 `skipped`，`payload` 是本来要发的那句话。
+2. 策略 `comments.reply` 为真：`externalActions.attempt("comment_reply", …)`。行内评论回复在 thread 里，PR 级评论和 review 回复成一条新的 PR 评论（引用原文第一行）。回复措辞是固定模板，克制、不自夸：英文 `Addressed in abc1234.`、中文 `已在 abc1234 中修改。`，后面跟一行小字 `(automated reply from Shipherd)` / `（Shipherd 自动回复）`。模板的语言跟 `comments.replyLanguage`（`en` 默认，GitHub 上的同事多半读英文；可选 `zh`）。开关关着：记 `skipped`，`payload` 是本来要发的那句话。
 3. 行内评论、策略 `comments.resolve` 为真、回复成功（或者回复开关关着）：`externalActions.attempt("comment_resolve", …)` 调 `resolveReviewThread`。
 
 回复、resolve 失败只记审计和日志，项标成 `addressed`（不重试，避免重复回复）；用户可以在「评论」标签里点「再回复一次」。
@@ -166,7 +166,7 @@ PR 的 head sha 变了，而且有 `delivered` 的项：`CommentLoop` 拉一次 
 `CiDelivery` 加一个可选依赖 `triage`。`tryDeliver` 拿到一条失败的结论、认出递给谁之前，先问 `triage.decide(item, row)`：
 
 - `{ action: "deliver" }`：原样递（2.1.0 的行为；`ci.enabled` 关着时永远是这个）。
-- `{ action: "deliver", note }`：递，通知里多一段 Butler 的判断（「可能是 flaky：已经自动重跑 2 次还是失败」「这次失败和上一次一样，按代码问题处理」「像是环境问题，但自动重跑没开」）。
+- `{ action: "deliver", note }`：递，通知里多一段 Shipherd 的判断（「可能是 flaky：已经自动重跑 2 次还是失败」「这次失败和上一次一样，按代码问题处理」「像是环境问题，但自动重跑没开」）。
 - `{ action: "hold" }`：先不递：正在分类（调模型）、刚触发了重跑、在等重跑的结果。这一条不进「未能送达」的提醒。
 
 `decide` 不阻塞：要调 gh 或模型时先返回 `hold`，后台做完再调 `ciDelivery.settled(item)` 让它重新问。结论按 (条目, head sha, run id, attempt) 缓存在 `ci_triage` 表里，重启不丢。

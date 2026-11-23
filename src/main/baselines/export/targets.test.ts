@@ -49,11 +49,11 @@ describe("forbidden_pattern", () => {
     const out = file(p, ".pre-commit-config.yaml")!.content;
     expect(out.startsWith(PRE_COMMIT)).toBe(true);
     expect(out).not.toMatch(/[^\r]\n/);
-    expect(out).toContain("  - repo: local\r\n    hooks:\r\n      - id: 'butler-no-console'\r\n");
+    expect(out).toContain("  - repo: local\r\n    hooks:\r\n      - id: 'shipherd-no-console'\r\n");
     expect(out).toContain("        entry: 'console\\.(log|debug)\\('\r\n        language: 'pygrep'\r\n");
     expect(out).toContain("        files: '^src/(?:.*/)?[^/]*\\.ts$'");
     expect(out).toContain("        exclude: '^(?:.*/)?[^/]*\\.test\\.ts$'");
-    expect(p.runAll).toBe("pre-commit run butler-no-console --all-files");
+    expect(p.runAll).toBe("pre-commit run shipherd-no-console --all-files");
   });
 
   it("uses a Node script in a JS repo: lint-staged for commits, a package script, and the CI lint script", () => {
@@ -61,12 +61,12 @@ describe("forbidden_pattern", () => {
     const p = plan(check("forbidden_pattern", { pattern: "console\\.log" }, ["*.ts"]), { "package.json": pkg, "pnpm-lock.yaml": "" }, baseline({ profile: { projects: [], dirs: [], pitfalls: [], ci: [{ category: "lint", command: "pnpm lint", dir: "" }] } }), ["pre-commit"]);
     expect(p.target).toBe("script");
     expect(p.runtime).toBe("node");
-    expect(p.script).toBe("scripts/butler-checks/no-console.mjs");
+    expect(p.script).toBe("scripts/shipherd-checks/no-console.mjs");
     expect(file(p, p.script!)!.content).toContain("const CHECK = {");
     const json = parseJsonc(file(p, "package.json")!.content) as { scripts: Record<string, string>; "lint-staged": Record<string, unknown> };
-    expect(json["lint-staged"]["*.ts"]).toEqual(["eslint --fix", "node scripts/butler-checks/no-console.mjs"]);
-    expect(json.scripts["butler:no-console"]).toBe("node scripts/butler-checks/no-console.mjs --all");
-    expect(json.scripts.lint).toBe("eslint . && pnpm run butler:no-console");
+    expect(json["lint-staged"]["*.ts"]).toEqual(["eslint --fix", "node scripts/shipherd-checks/no-console.mjs"]);
+    expect(json.scripts["shipherd:no-console"]).toBe("node scripts/shipherd-checks/no-console.mjs --all");
+    expect(json.scripts.lint).toBe("eslint . && pnpm run shipherd:no-console");
     // lint-staged 已经接了，husky 不再加一行（免得跑两遍）
     expect(file(p, ".husky/pre-commit")).toBeUndefined();
     expect(p.wired.map((w) => w.kind)).toEqual(["lint_staged", "pkg_script", "ci_pkg_lint"]);
@@ -74,33 +74,33 @@ describe("forbidden_pattern", () => {
 
   it("adds a husky line when there is no other commit hook, creating the hook file executable", () => {
     const p = plan(check("forbidden_pattern", { pattern: "x" }), { "package.json": "{}\n" }, baseline(), ["_"]);
-    expect(file(p, ".husky/pre-commit")).toMatchObject({ content: "#!/usr/bin/env sh\nnode scripts/butler-checks/no-console.mjs\n", exec: true, created: true });
+    expect(file(p, ".husky/pre-commit")).toMatchObject({ content: "#!/usr/bin/env sh\nnode scripts/shipherd-checks/no-console.mjs\n", exec: true, created: true });
   });
 
   it("uses a Python script and the Makefile in a Python repo; CI's make lint runs it", () => {
     const mk = "lint:\r\n\truff check .\r\n";
     const p = plan(check("forbidden_pattern", { pattern: "print\\(" }, ["**/*.py"]), { "pyproject.toml": "[project]\nname='x'\n", Makefile: mk }, baseline({ profile: { projects: [], dirs: [], pitfalls: [], ci: [{ category: "lint", command: "make lint", dir: "" }] } }));
     expect(p.runtime).toBe("python");
-    expect(p.script).toBe("scripts/butler_checks/no-console.py");
-    expect(file(p, "Makefile")!.content).toBe("lint: butler-no-console\r\n\truff check .\r\n\r\n.PHONY: butler-no-console\r\nbutler-no-console:\r\n\tpython3 scripts/butler_checks/no-console.py --all\r\n");
-    expect(p.runAll).toBe("python3 scripts/butler_checks/no-console.py --all");
+    expect(p.script).toBe("scripts/shipherd_checks/no-console.py");
+    expect(file(p, "Makefile")!.content).toBe("lint: shipherd-no-console\r\n\truff check .\r\n\r\n.PHONY: shipherd-no-console\r\nshipherd-no-console:\r\n\tpython3 scripts/shipherd_checks/no-console.py --all\r\n");
+    expect(p.runAll).toBe("python3 scripts/shipherd_checks/no-console.py --all");
   });
 
   it("falls back to a shell script (executable) when the repo has neither Node nor Python", () => {
     const p = plan(check("forbidden_pattern", { pattern: "panic\\(" }), { "go.mod": "module x\n" });
     expect(p.runtime).toBe("sh");
-    expect(file(p, "scripts/butler-checks/no-console.sh")).toMatchObject({ exec: true, created: true });
+    expect(file(p, "scripts/shipherd-checks/no-console.sh")).toMatchObject({ exec: true, created: true });
     expect(p.wired).toEqual([]);
   });
 
   it("pins generated shell files and husky hooks to LF in .gitattributes, keeping the file's own lines and EOL", () => {
     const p = plan(check("forbidden_pattern", { pattern: "x" }), { "go.mod": "", ".gitattributes": "*.png binary\r\n" });
-    expect(file(p, ".gitattributes")!.content).toBe("*.png binary\r\n/scripts/butler-checks/no-console.sh text eol=lf\r\n");
+    expect(file(p, ".gitattributes")!.content).toBe("*.png binary\r\n/scripts/shipherd-checks/no-console.sh text eol=lf\r\n");
     expect(p.notes).toContain("sh_windows");
     const h = plan(check("run_command", { command: "a && b {file}", stage: "edit" }, ["src/**"]), { "package.json": "{}\n" }, baseline(), ["pre-commit"]);
-    expect(file(h, ".gitattributes")!.content.split("\n").filter(Boolean).sort()).toEqual(["/.husky/pre-commit text eol=lf", "/scripts/butler-checks/no-console.sh text eol=lf"]);
+    expect(file(h, ".gitattributes")!.content.split("\n").filter(Boolean).sort()).toEqual(["/.husky/pre-commit text eol=lf", "/scripts/shipherd-checks/no-console.sh text eol=lf"]);
     // 已经有这一行：不重复
-    const again = plan(check("forbidden_pattern", { pattern: "x" }), { "go.mod": "", ".gitattributes": "/scripts/butler-checks/no-console.sh text eol=lf\n" });
+    const again = plan(check("forbidden_pattern", { pattern: "x" }), { "go.mod": "", ".gitattributes": "/scripts/shipherd-checks/no-console.sh text eol=lf\n" });
     expect(file(again, ".gitattributes")).toBeUndefined();
     // Node 脚本不用
     expect(file(plan(check("forbidden_pattern", { pattern: "x" }), { "package.json": "{}\n" }), ".gitattributes")).toBeUndefined();
@@ -112,7 +112,7 @@ describe("forbidden_pattern", () => {
     const p = plan(check("forbidden_pattern", { pattern: "\\p{L}" }), { ".pre-commit-config.yaml": PRE_COMMIT, "package.json": "{}" });
     expect(p.target).toBe("script");
     expect(p.notes).toContain("pygrep_unicode_property");
-    expect(file(p, ".pre-commit-config.yaml")!.content).toContain("entry: 'node scripts/butler-checks/no-console.mjs'");
+    expect(file(p, ".pre-commit-config.yaml")!.content).toContain("entry: 'node scripts/shipherd-checks/no-console.mjs'");
   });
 });
 
@@ -124,10 +124,10 @@ describe("import_boundary", () => {
     const p = plan(ib(["electron", "node:*"], ["electron/common"]), { "eslint.config.mjs": flat, "package.json": "{}", src: "" });
     expect(p.target).toBe("eslint");
     const out = file(p, "eslint.config.mjs")!.content;
-    expect(out).toContain("const butlerBaseConfig = [\n  js.configs.recommended,\n];");
+    expect(out).toContain("const shipherdBaseConfig = [\n  js.configs.recommended,\n];");
     expect(out).toContain('"group": [\n              "electron",\n              "node:*",\n              "!electron/common"\n            ]');
     expect(out).toContain('"files": [\n    "src/renderer/**"\n  ]');
-    expect(out.trimEnd().endsWith("export default [butlerBaseConfig, butlerCheckConfig];")).toBe(true);
+    expect(out.trimEnd().endsWith("export default [shipherdBaseConfig, shipherdCheckConfig];")).toBe(true);
   });
 
   it("uses the script target for repo paths or when the rule is already configured", () => {
@@ -172,10 +172,17 @@ describe("run_command", () => {
   });
 
   it("writes a per-file runner for compound commands and wires it into husky", () => {
-    const p = plan(rc('cd api && ruff check "$OLDPWD/$BUTLER_CHECK_FILE"'), { "package.json": "{}" }, baseline(), ["pre-commit"]);
+    const p = plan(rc('cd api && ruff check "$OLDPWD/$SHIPHERD_CHECK_FILE"'), { "package.json": "{}" }, baseline(), ["pre-commit"]);
     expect(p.target).toBe("husky");
-    expect(file(p, "scripts/butler-checks/no-console.sh")).toMatchObject({ exec: true });
+    expect(file(p, "scripts/shipherd-checks/no-console.sh")).toMatchObject({ exec: true });
     expect(file(p, ".husky/pre-commit")).toBeDefined();
+  });
+
+  // BTL-260：改名前写下的命令用 $BUTLER_CHECK_FILE，也要走逐文件脚本（脚本里两个名字都设）。
+  it("treats a command using the pre-rename BUTLER_CHECK_FILE like one using SHIPHERD_CHECK_FILE", () => {
+    const p = plan(rc('ruff check "$BUTLER_CHECK_FILE"'), { "package.json": "{}" }, baseline(), ["pre-commit"]);
+    expect(p.target).toBe("husky");
+    expect(file(p, "scripts/shipherd-checks/no-console.sh")).toMatchObject({ exec: true });
   });
 
   it("push-stage commands go into husky pre-push, else pre-commit's pre-push stage", () => {
@@ -189,7 +196,7 @@ describe("run_command", () => {
     expect(refusal(rc("ruff check"), { "pyproject.toml": "" })).toMatchObject({ reason: "no_hook_manager" });
     const ci: BaselineCheck = {
       id: "|lint|ruff", dir: "", category: "lint", tool: "ruff", command: "ruff check .", fileCommand: "ruff check {file}", stages: ["ci"], changedFiles: true,
-      butlerStage: "edit", source: "ci", confidence: "high", evidence: [], facts: [],
+      shipherdStage: "edit", source: "ci", confidence: "high", evidence: [], facts: [],
     };
     expect(refusal(rc("ruff check {file}"), { ".pre-commit-config.yaml": "repos:\n" }, baseline({ checks: [ci] }))).toMatchObject({ reason: "already_in_ci" });
     expect(refusal(rc("ruff check ."), { ".pre-commit-config.yaml": "repos:\n" }, baseline({ checks: [ci] }))).toMatchObject({ reason: "already_in_ci" });

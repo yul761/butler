@@ -3,7 +3,7 @@ import { EXTERNAL_LINK_MAX, openExternalLink, safeExternalUrl } from "./external
 
 describe("safeExternalUrl", () => {
   it("lets http and https through, normalised by the URL parser", () => {
-    expect(safeExternalUrl("https://github.com/yul761/butler/pull/1")).toBe("https://github.com/yul761/butler/pull/1");
+    expect(safeExternalUrl("https://github.com/yul761/shipherd/pull/1")).toBe("https://github.com/yul761/shipherd/pull/1");
     expect(safeExternalUrl("http://localhost:5173/x?y=1#z")).toBe("http://localhost:5173/x?y=1#z");
     expect(safeExternalUrl("HTTPS://Example.COM")).toBe("https://example.com/");
   });

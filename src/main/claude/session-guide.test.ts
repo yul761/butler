@@ -7,7 +7,7 @@ import { GUIDE_SECTIONS, pruneSessionGuides, sessionGuide, writeSessionGuide } f
 describe("session guide", () => {
   it("包含 CI 那一段，中英各一份", () => {
     expect(sessionGuide("zh", "ticket")).toContain("不要循环查 CI");
-    expect(sessionGuide("en", "coordinator")).toContain("Butler watches your PR and CI");
+    expect(sessionGuide("en", "coordinator")).toContain("Shipherd watches your PR and CI");
     expect(GUIDE_SECTIONS.length).toBeGreaterThan(0);
   });
 
@@ -24,16 +24,16 @@ describe("session guide", () => {
   it("epic 总控有 epic 里 feature 的说明（BTL-246）：按顺序推进、约定写进 epic 记忆；别的 session 没有", () => {
     for (const lang of ["zh", "en"] as const) {
       const g = sessionGuide(lang, "coordinator");
-      for (const w of ["list_features", "create_feature", "set_ticket_feature", "reorder_features", "butler-feature", "butler-memory"]) expect(g, w).toContain(w);
-      for (const kind of ["ticket", "butler", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("set_ticket_feature");
+      for (const w of ["list_features", "create_feature", "set_ticket_feature", "reorder_features", "shipherd-feature", "shipherd-memory"]) expect(g, w).toContain(w);
+      for (const kind of ["ticket", "shipherd", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("set_ticket_feature");
     }
   });
 
-  it("feature 总控和 Butler 总控有栈的说明（工作流 K），stack_on 只给 feature 总控", () => {
+  it("feature 总控和 Shipherd 总控有栈的说明（工作流 K），stack_on 只给 feature 总控", () => {
     for (const lang of ["zh", "en"] as const) {
       expect(sessionGuide(lang, "coordinator")).toContain("stack_on");
-      expect(sessionGuide(lang, "butler")).toContain("stack_define");
-      expect(sessionGuide(lang, "butler")).not.toContain("stack_on");
+      expect(sessionGuide(lang, "shipherd")).toContain("stack_define");
+      expect(sessionGuide(lang, "shipherd")).not.toContain("stack_on");
       for (const kind of ["ticket", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("stack_define");
     }
   });
@@ -43,7 +43,7 @@ describe("session guide", () => {
     expect(sessionGuide("zh", "ticket")).toContain("进度时间线");
     expect(sessionGuide("en", "ticket")).toContain("progress timeline");
     expect(sessionGuide("en", "ticket")).toContain("self-review");
-    for (const kind of ["coordinator", "butler"] as const) {
+    for (const kind of ["coordinator", "shipherd"] as const) {
       expect(sessionGuide("zh", kind)).not.toContain("自我 review");
       expect(sessionGuide("en", kind)).not.toContain("self-review");
     }
@@ -70,7 +70,7 @@ describe("session guide", () => {
   });
 
   it("全局总控知道自己只看不建，跨 epic 协调用 send_message（BTL-190 第 5 点，BTL-246）", () => {
-    const zh = sessionGuide("zh", "butler");
+    const zh = sessionGuide("zh", "shipherd");
     expect(zh).toContain("全局总控");
     expect(zh).toContain("send_message");
     expect(zh).toContain("不能建");
@@ -85,7 +85,7 @@ describe("session guide", () => {
     expect(zh).not.toContain("不要循环查 CI");
     expect(zh).not.toContain("start_session");
     expect(zh).not.toContain("start_feature");
-    const en = sessionGuide("en", "butler");
+    const en = sessionGuide("en", "shipherd");
     expect(en).toContain("global control");
     expect(en).toContain("send_message");
     expect(en).toContain("cannot create");
@@ -95,7 +95,7 @@ describe("session guide", () => {
     for (const kind of ["ticket", "coordinator"] as const) expect(sessionGuide("zh", kind)).not.toContain("全局总控");
   });
 
-  it("复盘分析 session 没有 Butler 的工具：不提 ask_user、report、记忆和 CI，只留子代理的模型准则（lessons visibility task 7）", () => {
+  it("复盘分析 session 没有 Shipherd 的工具：不提 ask_user、report、记忆和 CI，只留子代理的模型准则（lessons visibility task 7）", () => {
     for (const lang of ["zh", "en"] as const) {
       const g = sessionGuide(lang, "lessons");
       expect(g).toContain('model: "opus"');
@@ -123,7 +123,7 @@ describe("session guide", () => {
       expect(zh).toContain("- [acme/web] 改 schema 要加迁移");
       expect(sessionGuide("en", "ticket", [{ label: "a/b", text: "x" }])).toContain("- [a/b] x");
       expect(/[\u4e00-\u9fff]/.test(sessionGuide("en", "ticket", [{ label: "a/b", text: "x" }]))).toBe(false);
-      for (const kind of ["coordinator", "butler"] as const) expect(sessionGuide("zh", kind, lessons)).not.toContain("acme/web");
+      for (const kind of ["coordinator", "shipherd"] as const) expect(sessionGuide("zh", kind, lessons)).not.toContain("acme/web");
       expect(sessionGuide("zh", "ticket", [])).toBe(sessionGuide("zh", "ticket"));
     });
 

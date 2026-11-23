@@ -138,7 +138,7 @@ export function ScopeTicketTable(p: {
 
 /**
  * 「总控」页签：上面一句说明（lede，可不给），下面左终端、右对话。
- * 分栏线上有个按钮把右栏收起来（左边终端占满），再点展开；`page` 是页面种类（epic / feature / butler），各记各的。
+ * 分栏线上有个按钮把右栏收起来（左边终端占满），再点展开；`page` 是页面种类（epic / feature / shipherd），各记各的。
  * 终端靠自己的 ResizeObserver 重新 fit，这里不用管。
  */
 export function ControlSplit(p: { lede?: string; left: ReactNode; right: ReactNode; page?: string }) {

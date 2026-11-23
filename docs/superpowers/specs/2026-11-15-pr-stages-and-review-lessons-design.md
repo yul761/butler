@@ -12,11 +12,11 @@
 目标：
 - ticket 页、feature 总控页、epic 页各有一个「PR 进度」tab，内容实时更新。
 - 有一个单独的「review 经验」页面（左侧菜单），按仓库和产品分组，管理从历史 PR 提炼出来的规矩。
-- 已确认的规矩自动送进 Butler 开的 ticket session，开发时和自我 review 时都要用上。
+- 已确认的规矩自动送进 Shipherd 开的 ticket session，开发时和自我 review 时都要用上。
 
 非目标（这次不做）：
 - 把规矩导出到仓库自己的 `CLAUDE.md` 或 `.github/copilot-instructions.md`，以后可以加一个按钮。
-- 给不是 Butler 开的 session（用户自己在终端里开的 claude）送规矩。
+- 给不是 Shipherd 开的 session（用户自己在终端里开的 claude）送规矩。
 - 统计每个仓库的 review 问题数量、画趋势图。
 
 反目标（做出来但出现这些就算失败）：
@@ -29,14 +29,14 @@
 
 - **tab。** `PageTabs`（`src/renderer/src/components/PageTabs.tsx`，`page-tabs.ts`）已经支持点当前 tab 收起、记住选中的 tab。feature 页有 `progress`、`tickets`，后面跟着汇报和待你决定两个 tab（`...inboxTabs`，`InboxPanes.tsx:50,55`）。epic 页有 `features` 加同样两个 inbox tab。ticket 页（`TicketPage.tsx`）还没有 tab，从上到下是标题、仓库条、提示、session 条、终端。
 - **PR / CI。** `prwatch/pr-watcher.ts` 按 ticket 的每个仓库分支轮询 `gh`：开着 session 且 CI 在跑时每分钟一次，否则 5 分钟一次。PR 合并或关闭后不再查（`pr-watcher.ts:54`），只看未归档 ticket 的分支（`pr-targets.ts`）。存在 `pr_watch` 表，有 `state`、`review`、`ci`、`headSha`。`review` 来自 GitHub 的 `reviewDecision`，可能是 pending / changes_requested / approved，也可能是 null：仓库没开"必须 review"时一直是 null（`tickets/gh.ts:86,176`）。目前不拉 review 和评论的内容。
-- **hook。** 全局 hook（`hooks/installer.ts`）只装了 `SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`，hook 往 `~/.butler/inbox` 写信封，`hooks/hook-events.ts` 处理。session 的 `--settings` 文件（`claude/project-mcp.ts:261`）另有 `PreToolUse` / `PostToolUse` 的 Bash matcher，给合并闸门用。这个文件按内容取 hash，内容相同的 session 共用一个（`project-mcp.ts:265`）。hook 程序是当前版本时才写进 hook（`project-mcp.ts:260`）。现在看不到 session 调了哪个 skill。
+- **hook。** 全局 hook（`hooks/installer.ts`）只装了 `SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`，hook 往 `~/.shipherd/inbox` 写信封，`hooks/hook-events.ts` 处理。session 的 `--settings` 文件（`claude/project-mcp.ts:261`）另有 `PreToolUse` / `PostToolUse` 的 Bash matcher，给合并闸门用。这个文件按内容取 hash，内容相同的 session 共用一个（`project-mcp.ts:265`）。hook 程序是当前版本时才写进 hook（`project-mcp.ts:260`）。现在看不到 session 调了哪个 skill。
 - **换新。** 换新是在原来的终端里敲 `/clear`（`session-refresher.ts`），不重启 claude，`--append-system-prompt-file` 只在启动时传一次（`spawn.ts:34`）。
 - **隐私。** handoff 的 headless claude（`headless-exec.ts`）只记用量，不写 `llm_audit`，也不做敏感词过滤。`llm_audit` 和隐私档位只管可选的个人 LLM API（StateCore 蒸馏，`gateway/gateway.ts`）。README 的说法是：公司的活只走用户自己的 `claude`。
 - **session 归属。** 多仓库 ticket 的总控 session `repoId` 是 null（`ticket-service.ts:384`）。修复 session 在 feature 工作区里跑，`ticketKey` 是 null（`session-service.ts:590-597`）。
 - **汇报。** session 的 `report` 工具（`memory-mcp/sessions-server.ts`）有 progress / done / blocked 三种，存在 `inbox_items` 表里。
 - **session 说明。** `claude/session-guide.ts` 按 kind 和语言生成一份文件，用 `--append-system-prompt-file` 带上。现在同一种 kind 的所有 session 共用一个文件（`guide-${kind}-${lang}.md`）。
 - **后台 claude。** `handoff/headless-exec.ts` 已经能跑 headless claude、拿结构化输出、记用量。
-- **仓库。** Butler 里没有独立的仓库表。仓库只是 `ticket_repos`、`feature_repos`、`epic_repos` 里的路径，同一个仓库的不同 worktree 路径也不同。
+- **仓库。** Shipherd 里没有独立的仓库表。仓库只是 `ticket_repos`、`feature_repos`、`epic_repos` 里的路径，同一个仓库的不同 worktree 路径也不同。
 
 ## 第一件：PR 进度条
 
@@ -65,13 +65,13 @@ peer review 不看 `reviewDecision`，看拉回来的 reviews 列表，这样没
 具体规则：
 - **回退和轮数。** CI 失败、peer review 要求修改都会回到"开发"，之后的自我 review、CI、peer review 按新一轮重新走（还在的批准带进新一轮，peer review 不用重做）。步骤条显示当前这一轮。轮数大于 1 时，在当前那一步上标"第 N 轮"。
 - **识别 skill 调用。** 两条来源都要：
-  - session 的 `--settings` 内容加一个 `PostToolUse` 的 `Skill` matcher，命令走现有的 butler hook（写信封），不走闸门。按内容 hash 共用文件不影响这件事；和闸门一样，只在 hook 程序是当前版本时写进去，不是当前版本时这两步显示"未知"而不是"跳过"。
+  - session 的 `--settings` 内容加一个 `PostToolUse` 的 `Skill` matcher，命令走现有的 shipherd hook（写信封），不走闸门。按内容 hash 共用文件不影响这件事；和闸门一样，只在 hook 程序是当前版本时写进去，不是当前版本时这两步显示"未知"而不是"跳过"。
   - `UserPromptSubmit` 里，用户输入以 `/skill名` 开头的也算。
 - **事件挂到哪条进度条（我的判断）。**
   - session 有 `repoId`：挂到那个仓库。
   - 多仓库 ticket 的总控（`repoId` 为 null）：挂到这个 ticket 的所有仓库。
   - 修复 session：挂到它修的那个 session 所属的 ticket 和仓库；找不到就不挂。
-- **feature 层的设计（我的判断）。** Butler 的 feature / epic 流程里，设计常常是 feature 总控或 epic session 做的。如果 ticket 建出来之前，它所在 feature 的总控或 epic session 调用过设计类 skill，这个 ticket 的"设计"显示"在 feature 层完成"（算完成，悬停显示时间）。
+- **feature 层的设计（我的判断）。** Shipherd 的 feature / epic 流程里，设计常常是 feature 总控或 epic session 做的。如果 ticket 建出来之前，它所在 feature 的总控或 epic session 调用过设计类 skill，这个 ticket 的"设计"显示"在 feature 层完成"（算完成，悬停显示时间）。
 
   哪些 skill 名算"设计"、哪些算"自我 review"，写成一张可以改的表，放在代码里一处，匹配时忽略插件前缀（`superpowers:brainstorming` 也算 brainstorming）。
 - **commit。** 不额外轮询 git：PR 监视查分支时顺便取第一个 commit 的时间（没有 PR 时用 `git log base..branch`）。精确到分钟级就够。
@@ -121,7 +121,7 @@ epic 页：新加「PR 进度」tab。每个 feature 一行：一条分段彩色
 ### 怎么做（用户选的做法）
 
 考虑过三种把规矩送进开发的办法：
-1. **存在 Butler 里，开 session 时带上（用户选了这个）。** 规矩存在 Butler 的数据库里，打开 ticket session 时，按它的仓库和产品挑出已确认的规矩，写进这个 session 的说明。
+1. **存在 Shipherd 里，开 session 时带上（用户选了这个）。** 规矩存在 Shipherd 的数据库里，打开 ticket session 时，按它的仓库和产品挑出已确认的规矩，写进这个 session 的说明。
 2. 写进仓库的 `CLAUDE.md` 或 `.github/copilot-instructions.md`：Copilot 也能读到，但每改一次规矩都要在用户的仓库里提一次 PR，团队都看得见，产品级的规矩要在前后端各写一份。以后可以作为导出按钮补上。
 3. 放进 StateCore 记忆：recall 按相关度截断，条目多了会被截掉，不适合"必须遵守"的规矩。
 
@@ -135,15 +135,15 @@ epic 页：新加「PR 进度」tab。每个 feature 一行：一条分段彩色
 
 对每个已合并的 PR：
 - **review 挑出来的。** Copilot 的 review 和评论、人的 review 和评论（`gh api`），按作者分开。
-- **开发时的决定。** Butler 做的 PR（能对上 ticket 的）用它的 handoff 和对话记录里讲到为什么这样写的部分。不是 Butler 做的 PR 只用 PR 描述和 commit message。
+- **开发时的决定。** Shipherd 做的 PR（能对上 ticket 的）用它的 handoff 和对话记录里讲到为什么这样写的部分。不是 Shipherd 做的 PR 只用 PR 描述和 commit message。
 - **最后怎么改的。** 评论之后的 commit diff，只看评论指到的那几处。
 
 ### 分析流程
 
 1. **回溯。** 用户在页面上对一个仓库点"分析历史"，处理最近 100 个已合并的 PR。没有任何 review 评论的 PR 直接跳过，不花分析的钱。
 2. **持续（我的判断）。** 两条路进队列：
-   - PR 监视看到 Butler 跟踪的 PR merged，马上排进去。
-   - 对每个分析过历史的仓库，每天一次按仓库拉"上次拉取以来合并的 PR"（`gh pr list --state merged --search merged:>…`），同事的、不经 Butler 的 PR 也进来。每个仓库记一个游标（上次拉到的合并时间）。
+   - PR 监视看到 Shipherd 跟踪的 PR merged，马上排进去。
+   - 对每个分析过历史的仓库，每天一次按仓库拉"上次拉取以来合并的 PR"（`gh pr list --state merged --search merged:>…`），同事的、不经 Shipherd 的 PR 也进来。每个仓库记一个游标（上次拉到的合并时间）。
 3. **每个 PR 一次后台 claude**（`headless-exec`）。输入这个 PR 的素材，加上这个仓库现有的规矩（已确认的和待确认的）。输出结构化 JSON：每个 review 挑出的问题，判断它是不是开发时本来能避免的、为什么当时漏了；能提炼成规矩的，给出规矩正文、适用范围（仓库或产品）和出处（PR 号、评论链接）。和现有规矩意思一样的，标成"又出现一次"，不新建。
 4. 新规矩进「待确认」，不送进任何 session。
 
@@ -159,7 +159,7 @@ epic 页：新加「PR 进度」tab。每个 feature 一行：一条分段彩色
 
 ### 送进 session
 
-- **每个 session 一份说明。** session 说明改成每个 session 单独生成一个文件（现在同一种 kind 共用一个）。共用的那些段落不变，最后加一段这个 ticket 所有仓库和产品的已确认规矩。只给 ticket session 和修复 session 加，总控、epic、Butler 总控不加。修复 session 用它修的那个 session 所属 ticket 的仓库；找不到就用 feature 的仓库（我的判断）。
+- **每个 session 一份说明。** session 说明改成每个 session 单独生成一个文件（现在同一种 kind 共用一个）。共用的那些段落不变，最后加一段这个 ticket 所有仓库和产品的已确认规矩。只给 ticket session 和修复 session 加，总控、epic、Shipherd 总控不加。修复 session 用它修的那个 session 所属 ticket 的仓库；找不到就用 feature 的仓库（我的判断）。
 - **规矩这一段的内容：**
   - 开头说明：这是从这个仓库以前的 review 里总结出来的规矩，写代码时就照着做；做自我 review 时逐条对照，在 report 里写明对照的结果。
   - 每条一行，前面是仓库名或产品名。
@@ -180,7 +180,7 @@ epic 页：新加「PR 进度」tab。每个 feature 一行：一条分段彩色
 - 新表通过 `db/migrations.ts` 加。
 - 所有对 GitHub 的调用走现有 `tickets/gh.ts` 的模式（超时、并发上限）。PR 监视现有的轮询频率不变：评论只在 PR 状态或 headSha 变化时多拉一次。
 - 渲染进程不直接调 `gh`。
-- 后台分析和 handoff 一样走用户自己的 `claude`（`headless-exec`），只记用量，不写 `llm_audit`，不受隐私档位影响，因为不用个人 LLM API（我的判断，和 README"公司的活只走你自己的 claude"一致）。README 的隐私一节要补一句：review 经验的分析会把 PR 评论和 Butler 的对话记录交给你自己的 `claude`。
+- 后台分析和 handoff 一样走用户自己的 `claude`（`headless-exec`），只记用量，不写 `llm_audit`，不受隐私档位影响，因为不用个人 LLM API（我的判断，和 README"公司的活只走你自己的 claude"一致）。README 的隐私一节要补一句：review 经验的分析会把 PR 评论和 Shipherd 的对话记录交给你自己的 `claude`。
 
 ## 留给实现的人
 

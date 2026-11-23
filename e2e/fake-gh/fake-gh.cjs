@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// E2E 用的假 gh（计划 2026-11-16 任务 19）。只实现 Butler 的 PR 监视、补链接和复盘分析用到的部分，绝不联网：
+// E2E 用的假 gh（计划 2026-11-16 任务 19）。只实现 Shipherd 的 PR 监视、补链接和复盘分析用到的部分，绝不联网：
 //   每次调用都重新读 FAKE_GH_FIXTURE 指向的 JSON（测试中途可以改）：{ branches: { <分支>: [pr list 的项] }, prs: { <PR 链接，prUrlKey 形式>: pr view 的结果 } }；
 //   每次调用把参数（JSON 数组）追加一行到 FAKE_GH_LOG；
 //   --version；
@@ -93,7 +93,7 @@ if (cmd === "--version") {
 } else if (cmd === "pr" && sub === "edit" && /^\d+$/.test(ref ?? "") && ["--base", "--title", "--body-file", "--add-label", "--remove-label"].some((f) => args.includes(f))) {
   process.stdout.write(`https://github.com/acme/app/pull/${ref}\n`);
 } else if (cmd === "pr" && (sub === "ready" || sub === "close") && /^\d+$/.test(ref ?? "")) {
-  // 成功：真 gh 打一行提示，Butler 不读。
+  // 成功：真 gh 打一行提示，Shipherd 不读。
 } else if (cmd === "label" && sub === "create" && ref !== undefined && !ref.startsWith("-")) {
   // 成功
 } else if (cmd === "issue" && sub === "create" && args.includes("--title")) {

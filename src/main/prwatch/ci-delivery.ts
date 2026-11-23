@@ -155,7 +155,7 @@ export class CiDelivery {
   /** 还没排进信箱的结论，键 itemId。只在内存里：重启后第一轮会再试一次，排不进再从头计时。 */
   private readonly waiting = new Map<string, Waiting>();
   /**
-   * 排着的结论送到时要告诉 triage 的（onSent 是闭包，存不进库），键 ref。只在内存里：排队和送到之间 Butler 重启过的，
+   * 排着的结论送到时要告诉 triage 的（onSent 是闭包，存不进库），键 ref。只在内存里：排队和送到之间 Shipherd 重启过的，
    * 这一次就不告诉 triage 了（只影响 triage 那一行的状态，不影响送达）。
    */
   private readonly onSent = new Map<string, { key: string; fn: () => void }>();
@@ -361,7 +361,7 @@ export class CiDelivery {
   }
 }
 
-/** Butler 的判断放在通知最后。日志最多 LOG_CHARS_TOTAL 字，加上判断也在 sanitizeTask 的上限以内。 */
+/** Shipherd 的判断放在通知最后。日志最多 LOG_CHARS_TOTAL 字，加上判断也在 sanitizeTask 的上限以内。 */
 function withNote(text: string, note: string | null): string {
   return note ? `${text}\n\n${note}` : text;
 }

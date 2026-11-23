@@ -6,7 +6,7 @@ import { ProfileHitCounter } from "./hits";
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "butler-hits-"));
+  dir = mkdtempSync(join(tmpdir(), "shipherd-hits-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -17,10 +17,10 @@ const use = (id: string, name: string, input: unknown, at = T0 + 1000) =>
 describe("ProfileHitCounter", () => {
   it("counts calls allowed by the rules the session got at spawn, once each, reading only what was added", async () => {
     const file = join(dir, "s1.jsonl");
-    writeFileSync(file, use("a", "Bash", { command: "gh pr view 1" }) + use("b", "Bash", { command: "git push" }) + use("c", "mcp__butler-memory__recall", {}));
+    writeFileSync(file, use("a", "Bash", { command: "gh pr view 1" }) + use("b", "Bash", { command: "git push" }) + use("c", "mcp__shipherd-memory__recall", {}));
     const recordEvent = vi.fn();
-    const c = new ProfileHitCounter({ transcriptOf: () => file, builtIn: ["mcp__butler-memory__recall"], recordEvent });
-    c.spawned("s1", ["Bash(gh pr view:*)", "mcp__butler-memory__recall"], T0);
+    const c = new ProfileHitCounter({ transcriptOf: () => file, builtIn: ["mcp__shipherd-memory__recall"], recordEvent });
+    c.spawned("s1", ["Bash(gh pr view:*)", "mcp__shipherd-memory__recall"], T0);
     expect(await c.sessionStopped("s1")).toBe(1);
     expect(recordEvent).toHaveBeenCalledWith("interrupt_auto_resolved", expect.objectContaining({ sessionId: "s1", dedupeKey: "profile:s1:a", data: { category: "permission", via: "profile" } }));
     expect(JSON.stringify(recordEvent.mock.calls)).not.toContain("gh pr view");
@@ -41,7 +41,7 @@ describe("ProfileHitCounter", () => {
     writeFileSync(file, use("old", "Bash", { command: "gh pr view 1" }, T0 - 1000) + use("new", "Bash", { command: "gh pr view 2" }, T0 + 1000));
     const recordEvent = vi.fn();
     const c = new ProfileHitCounter({ transcriptOf: () => file, recordEvent });
-    // Butler 重启前就开着的 session：没有启动记录，不算。
+    // Shipherd 重启前就开着的 session：没有启动记录，不算。
     expect(await c.sessionStopped("s2")).toBe(0);
     c.spawned("s2", ["Bash(gh pr view:*)"], T0);
     expect(await c.sessionStopped("s2")).toBe(1);

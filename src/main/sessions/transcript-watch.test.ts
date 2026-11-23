@@ -95,7 +95,7 @@ describe("DebouncedWatch (BTL-190 7)", () => {
   });
 
   it("nodeWatch sees appends to a real file and survives the file being replaced", async () => {
-    const dir = tempDir("butler-watch-");
+    const dir = tempDir("shipherd-watch-");
     const file = join(dir, "t.jsonl");
     writeFileSync(file, "a\n");
     let calls = 0;

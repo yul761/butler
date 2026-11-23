@@ -21,7 +21,7 @@ export interface ProgressInput {
   tickets: Ticket[];
   /** 未归档的 feature。 */
   features: { id: number; name: string }[];
-  /** Butler 在盯的 PR（PrWatcher.statusOf），分支行（prId null）会被跳过。 */
+  /** Shipherd 在盯的 PR（PrWatcher.statusOf），分支行（prId null）会被跳过。 */
   prs: WatchedPr[];
   summary: (featureId: number) => ProgressSummary | null;
   /** 开工过：有过 session，或者 PR 进度里记过第一个 commit。 */

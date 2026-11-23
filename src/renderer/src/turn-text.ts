@@ -3,8 +3,8 @@ import type { Turn, TurnItem } from "../../shared/turn";
 import type { NowNotice } from "../../shared/types";
 import type { UiStrings } from "./strings";
 
-/** 要你动手的 Butler 提醒的一句短话；只覆盖 noticeNeedsYou 为真的几种，其余是 other。 */
-function butlerSentence(n: NowNotice, t: UiStrings["turn"]["butler"]): string {
+/** 要你动手的 Shipherd 提醒的一句短话；只覆盖 noticeNeedsYou 为真的几种，其余是 other。 */
+function shipherdSentence(n: NowNotice, t: UiStrings["turn"]["shipherd"]): string {
   switch (n.kind) {
     case "approval":
     case "claude_limited":
@@ -39,8 +39,8 @@ export function turnSentence(turn: Turn, _item: TurnItem, s: UiStrings): string 
           return t.stuck[turn.source](turn.detail);
         case "unattended":
           return t.unattended[turn.why];
-        case "butler":
-          return butlerSentence(turn.notice, t.butler);
+        case "shipherd":
+          return shipherdSentence(turn.notice, t.shipherd);
       }
       break;
     case "agent":

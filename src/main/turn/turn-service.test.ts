@@ -13,7 +13,7 @@ const ticket = (key: string, over: Partial<TicketView> = {}): TicketView => ({
   effectiveStatus: "active", sessions: [], hiddenSessions: [], waiting: false, ...over,
 });
 const sv = (id: string, over: Partial<SessionView> = {}): SessionView =>
-  ({ id, ticketKey: "BTL-1", origin: "butler", termId: `t-${id}`, replacedBy: null, coordinator: false, repoId: 1, featureId: null, butler: false, ...over }) as SessionView;
+  ({ id, ticketKey: "BTL-1", origin: "shipherd", termId: `t-${id}`, replacedBy: null, coordinator: false, repoId: 1, featureId: null, shipherd: false, ...over }) as SessionView;
 const watched = (over: Partial<WatchedPr> = {}): WatchedPr => ({
   ticketKey: "BTL-1", prId: 1, repoId: 1, repoPath: "/r", branch: "feat", number: 3, url: URL3, state: "open", review: null,
   ci: "failing", headSha: "abc", checkedAt: 10, readError: false, ...over,
@@ -129,14 +129,14 @@ describe("TurnService.board", () => {
       notices: () => [{ kind: "comments_waiting", waiting, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
     }));
     const b = s.board({ ticketKey: "BTL-1" });
-    expect(b.items.some((i) => i.turn.kind === "butler")).toBe(false);
+    expect(b.items.some((i) => i.turn.kind === "shipherd")).toBe(false);
     expect(b.items.find((i) => i.pr?.number === 3)?.turn).toMatchObject({ kind: "unattended", why: "changes_requested", canSend: true });
     // PR 不在「没人在改」时（比如 agent 在改），提醒照旧挂着
     const busy = new TurnService(failingPr({
       prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing", reviewers: [human] }), activity: (id) => (id === "s1" ? act("edit") : null),
       notices: () => [{ kind: "comments_waiting", waiting, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
     }));
-    expect(busy.board({ ticketKey: "BTL-1" }).items.some((i) => i.turn.kind === "butler")).toBe(true);
+    expect(busy.board({ ticketKey: "BTL-1" }).items.some((i) => i.turn.kind === "shipherd")).toBe(true);
   });
 
   it("comments waiting are matched to their own PR by id, and kept when that PR row cannot send", () => {
@@ -148,7 +148,7 @@ describe("TurnService.board", () => {
       comments: { deliveredAt: () => null, sendable: () => true, sendAll: vi.fn(async () => 2) },
       notices: () => [{ kind: "comments_waiting", waiting: other, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
     }));
-    expect(s.board({ ticketKey: "BTL-1" }).items.some((i) => i.turn.kind === "butler")).toBe(true);
+    expect(s.board({ ticketKey: "BTL-1" }).items.some((i) => i.turn.kind === "shipherd")).toBe(true);
     // 排队超过 30 分钟没送出：PR 行发不了（canSend false），提醒要留着
     const stuck = { reason: "undelivered" as const, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 40 };
     const u = new TurnService(failingPr({
@@ -158,7 +158,7 @@ describe("TurnService.board", () => {
     }));
     const b = u.board({ ticketKey: "BTL-1" });
     expect(b.items.find((i) => i.pr?.number === 3)?.turn).toMatchObject({ why: "changes_requested", canSend: false });
-    expect(b.items.some((i) => i.turn.kind === "butler")).toBe(true);
+    expect(b.items.some((i) => i.turn.kind === "shipherd")).toBe(true);
   });
 
   it("a passing PR whose CI verdict never reached the agent keeps its ci_undelivered notice", () => {
@@ -169,7 +169,7 @@ describe("TurnService.board", () => {
       notices: () => [{ kind: "ci_undelivered", ci: prCi, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null }],
     }));
     const b = s.board({ ticketKey: "BTL-1" });
-    expect(b.items.find((i) => i.turn.kind === "butler")).toMatchObject({ turn: { notice: { kind: "ci_undelivered" } }, since: 77 });
+    expect(b.items.find((i) => i.turn.kind === "shipherd")).toMatchObject({ turn: { notice: { kind: "ci_undelivered" } }, since: 77 });
   });
 
   it("a blocked report only makes its own session stuck on a multi-repo ticket", () => {
@@ -200,30 +200,30 @@ describe("TurnService.board", () => {
   });
 
   it("an idle coordinator without asks only shows when it needs you", () => {
-    const c = sv("c1", { ticketKey: null, featureId: null, butler: true, coordinator: true });
+    const c = sv("c1", { ticketKey: null, featureId: null, shipherd: true, coordinator: true });
     const working = new TurnService(fakeDeps({
-      coordinators: () => [{ session: c, featureId: null, target: { page: "butler", sessionId: "c1" }, title: null }],
+      coordinators: () => [{ session: c, featureId: null, target: { page: "shipherd", sessionId: "c1" }, title: null }],
       activity: () => act("edit"),
     }));
     expect(working.board(null).items).toEqual([]);
-    // 停在提示符等输入的总控（Butler、feature 的）不占一张「轮到你」
+    // 停在提示符等输入的总控（Shipherd、feature 的）不占一张「轮到你」
     const idle = new TurnService(fakeDeps({
-      coordinators: () => [{ session: c, featureId: null, target: { page: "butler", sessionId: "c1" }, title: null }],
+      coordinators: () => [{ session: c, featureId: null, target: { page: "shipherd", sessionId: "c1" }, title: null }],
       activity: () => act("idle"), lastReplyAt: () => 500,
     }));
     expect(idle.board(null).items).toEqual([]);
     expect(idle.board(null).counts.you).toBe(0);
   });
 
-  it("the Butler session hitting its usage limit is a loose you/butler session_limited", () => {
-    const c = sv("b1", { ticketKey: null, butler: true, coordinator: true });
+  it("the Shipherd session hitting its usage limit is a loose you/shipherd session_limited", () => {
+    const c = sv("b1", { ticketKey: null, shipherd: true, coordinator: true });
     const limit = { kind: "usage_limit" as const, resetsAt: null, message: "limit" };
     const s = new TurnService(fakeDeps({
-      coordinators: () => [{ session: c, featureId: null, target: { page: "butler", sessionId: "b1" }, title: null }],
+      coordinators: () => [{ session: c, featureId: null, target: { page: "shipherd", sessionId: "b1" }, title: null }],
       activity: () => act("idle", { sessionId: "b1", limit } as never), lastReplyAt: () => 500,
     }));
     const b = s.board(null);
-    expect(b.items.map((i) => i.turn)).toEqual([{ owner: "you", kind: "butler", notice: { kind: "session_limited", target: { page: "butler", sessionId: "b1" }, title: null, limit } }]);
+    expect(b.items.map((i) => i.turn)).toEqual([{ owner: "you", kind: "shipherd", notice: { kind: "session_limited", target: { page: "shipherd", sessionId: "b1" }, title: null, limit } }]);
     expect(b.counts.you).toBe(1);
   });
 
@@ -288,7 +288,7 @@ describe("TurnService.board", () => {
     }));
     const b = s.board(null);
     expect(b.items.find((i) => i.ticketKey === "BTL-1")?.turn).toMatchObject({ kind: "unattended", why: "ci_undelivered" });
-    expect(b.items.find((i) => i.ticketKey === "BTL-2")).toMatchObject({ turn: { kind: "butler", notice: { kind: "ci_undelivered" } }, since: 77 });
+    expect(b.items.find((i) => i.ticketKey === "BTL-2")).toMatchObject({ turn: { kind: "shipherd", notice: { kind: "ci_undelivered" } }, since: 77 });
     expect(b.items).toHaveLength(2);
   });
 

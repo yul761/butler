@@ -68,7 +68,7 @@ export interface HitIngestOptions {
 const MAX_FILE = 4 * 1024 * 1024;
 
 /**
- * 把 hook 写的命中日志（<BUTLER_HOME>/checks/hits/*.jsonl，每次 hook 运行一个文件，tmp + rename 写）收进 check_hits。
+ * 把 hook 写的命中日志（<SHIPHERD_HOME>/checks/hits/*.jsonl，每次 hook 运行一个文件，tmp + rename 写）收进 check_hits。
  * 文件名 + 行号是 ingest_key：同一个文件读两次也不会重复记。fs.watch 加定时轮询兜底，和收件箱一样。
  */
 export class HitIngest {

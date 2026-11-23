@@ -34,17 +34,17 @@ export function deliveryText(i: DeliveryInput): string {
   const gaps = i.gaps.filter((g) => g.state !== "explained");
   if (i.verdict === "error") {
     return en
-      ? `Butler pre-review of ${i.shortSha} could not finish (${i.error ?? "unknown error"}). Nothing to fix from it; you can carry on.`
-      : `Butler 对 ${i.shortSha} 的预审没做完（${i.error ?? "原因不明"}）。没有要你改的，可以继续。`;
+      ? `Shipherd pre-review of ${i.shortSha} could not finish (${i.error ?? "unknown error"}). Nothing to fix from it; you can carry on.`
+      : `Shipherd 对 ${i.shortSha} 的预审没做完（${i.error ?? "原因不明"}）。没有要你改的，可以继续。`;
   }
   if (i.verdict === "clean" && gaps.length === 0 && i.violations.length === 0) {
-    return en ? `Butler pre-review of ${i.shortSha} passed.` : `Butler 预审通过（${i.shortSha}）。`;
+    return en ? `Shipherd pre-review of ${i.shortSha} passed.` : `Shipherd 预审通过（${i.shortSha}）。`;
   }
   const lines: string[] = [];
   lines.push(
     en
-      ? `Butler pre-review of ${i.shortSha}: ${i.verdict === "clean" ? "no blocking violations" : "found violations"}.`
-      : `Butler 预审（${i.shortSha}）：${i.verdict === "clean" ? "没有必须改的违规" : "有违规"}。`,
+      ? `Shipherd pre-review of ${i.shortSha}: ${i.verdict === "clean" ? "no blocking violations" : "found violations"}.`
+      : `Shipherd 预审（${i.shortSha}）：${i.verdict === "clean" ? "没有必须改的违规" : "有违规"}。`,
   );
   if (i.violations.length) {
     lines.push("", en ? "Violations (file:line, what is wrong, how to fix):" : "违规（文件:行、哪里不对、怎么改）：");

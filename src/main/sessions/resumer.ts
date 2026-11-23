@@ -5,7 +5,7 @@ import type { TranscriptState } from "./discovery";
 
 /**
  * 在后台恢复关着的 session（BTL-256，设计 docs/superpowers/specs/2026-11-21-btl-256-resume-closed-sessions-design.md）。
- * 信箱里有给它的消息、它的终端关着（Butler 重启过、闲置时自动关掉、总控 end_session 过）时，按它的种类 --resume 接上原来的对话。
+ * 信箱里有给它的消息、它的终端关着（Shipherd 重启过、闲置时自动关掉、总控 end_session 过）时，按它的种类 --resume 接上原来的对话。
  * claude 起来以后 SessionStart(resume) 照常调 sessionStopped，信箱按「停着的 session」的方式把消息送进去（看屏幕、等信任框，guard 照旧）。
  * 休眠着的不归这里（Hibernator.wake）。
  */
@@ -14,7 +14,7 @@ import type { TranscriptState } from "./discovery";
 export const MEMORY_RETRY_MS = 60_000;
 /** 一时的失败以后这么久再试。 */
 export const RESUME_RETRY_MS = 10 * 60_000;
-/** 一次 Butler 运行里对同一个 session 最多试这么多次。 */
+/** 一次 Shipherd 运行里对同一个 session 最多试这么多次。 */
 export const MAX_RESUME_ATTEMPTS = 3;
 /** 等 claude 的 SessionStart 最多这么久。 */
 export const RESUME_START_TIMEOUT_MS = 60_000;
@@ -37,12 +37,12 @@ export interface ResumableContext {
 }
 
 /**
- * 能不能自动恢复：Butler 开的、属于一个 epic 或 ticket 的、总控管的 session。ticket 的 session 要是总控开的（用户自己点开的不算），
- * epic 级的（epic 总控、修复 session）都算。Butler 总控、复盘分析 session、隐藏了的、被替换的、ticket 或 epic 归档了的不算。
+ * 能不能自动恢复：Shipherd 开的、属于一个 epic 或 ticket 的、总控管的 session。ticket 的 session 要是总控开的（用户自己点开的不算），
+ * epic 级的（epic 总控、修复 session）都算。Shipherd 总控、复盘分析 session、隐藏了的、被替换的、ticket 或 epic 归档了的不算。
  * 用户点 × 结束的另外看（userEndedAt）。
  */
 export function resumable(h: Session, ctx: ResumableContext): boolean {
-  if (h.origin !== "butler" || h.butler || h.lessonRunId !== null || h.dismissed || h.replacedBy !== null) return false;
+  if (h.origin !== "shipherd" || h.shipherd || h.lessonRunId !== null || h.dismissed || h.replacedBy !== null) return false;
   if (h.ticketKey !== null) return h.spawnedBy !== null && !ctx.ticketArchived(h.ticketKey);
   return h.featureId !== null && !ctx.epicArchived(h.featureId);
 }
@@ -67,9 +67,9 @@ export interface ResumerDeps {
   started(termId: string): boolean;
   isOpen(termId: string): boolean;
   setWakeError(headId: string, error: string | null, at: number | null): void;
-  /** 排着等这个 head 的、总控发的消息（instruction、butler）。 */
+  /** 排着等这个 head 的、总控发的消息（instruction、shipherd）。 */
   waitingSenders(headId: string): { id: string; from: string; featureId: number | null }[];
-  /** 发一条回执（信箱 reply，发送方是 Butler）。 */
+  /** 发一条回执（信箱 reply，发送方是 Shipherd）。 */
   receipt(to: string, featureId: number | null, body: string): void;
   nameOf(id: string): string;
   notify(): void;
@@ -86,7 +86,7 @@ interface Failure {
   permanent: boolean;
 }
 
-const RECEIPT_KINDS = new Set(["instruction", "butler"]);
+const RECEIPT_KINDS = new Set(["instruction", "shipherd"]);
 
 export class Resumer {
   /** head → 正在进行的这一次（准入、打开）。同时来的请求拿到同一个。 */
@@ -100,12 +100,12 @@ export class Resumer {
   /** 这一轮同步送到的、要发回执的：head → 发送方 → 消息 id。 */
   private readonly pendingReceipts = new Map<string, Map<string, { ids: string[]; featureId: number | null }>>();
 
-  /** Butler 在退出：不再恢复，进行中的也不记失败、不发回执。 */
+  /** Shipherd 在退出：不再恢复，进行中的也不记失败、不发回执。 */
   private stopped = false;
 
   constructor(private readonly d: ResumerDeps) {}
 
-  /** 退出 Butler 时（shutdownSessions）：之后的请求都不做，正在等的不算失败。 */
+  /** 退出 Shipherd 时（shutdownSessions）：之后的请求都不做，正在等的不算失败。 */
   stop(): void {
     this.stopped = true;
   }
@@ -214,7 +214,7 @@ export class Resumer {
       if (this.d.now() - f.at < RESUME_RETRY_MS) return f.error;
       return null;
     }
-    // 上一次 Butler 运行（或休眠唤醒）留下的失败：一样等过 10 分钟。
+    // 上一次 Shipherd 运行（或休眠唤醒）留下的失败：一样等过 10 分钟。
     if (h.wakeError && h.wakeErrorAt != null && this.d.now() - h.wakeErrorAt < RESUME_RETRY_MS) return h.wakeError;
     return null;
   }

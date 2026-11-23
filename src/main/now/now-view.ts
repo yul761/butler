@@ -5,13 +5,13 @@ import type { FeatureView, InboxItemView, MergeEvent, NowCounts, NowFeature, Now
 export interface NowInput {
   tickets: TicketView[];
   features: FeatureView[];
-  /** 开着的 Butler 总控的 head（SessionService.runningButler 加上终端 id）；没开为 null。 */
-  butler: SessionView | null;
+  /** 开着的 Shipherd 总控的 head（SessionService.runningShipherd 加上终端 id）；没开为 null。 */
+  shipherd: SessionView | null;
   activity: (sessionId: string) => SessionActivity | null;
   needsYouReason: (sessionId: string) => string | null;
   prs: (ticketKey: string) => WatchedPr[];
   mergeQueued: (sessionId: string) => boolean;
-  /** Butler 正在给这个 session 换新时做到哪一步（SessionRefresher.stepOf）；不在换新为 null。 */
+  /** Shipherd 正在给这个 session 换新时做到哪一步（SessionRefresher.stepOf）；不在换新为 null。 */
   refreshing: (sessionId: string) => RefreshStep | null;
   merges: MergeEvent[];
   /** 停在确认（权限、AskUserQuestion、ExitPlanMode）上时的理由文案，比如"等你确认"。 */
@@ -32,10 +32,10 @@ export interface NowInput {
 }
 
 /**
- * 算进「现在」页的 session：Butler 开的、终端开着或者休眠着（WS-M B：休眠的照样在等东西）；
+ * 算进「现在」页的 session：Shipherd 开的、终端开着或者休眠着（WS-M B：休眠的照样在等东西）；
  * 上次自动唤醒失败的也留着，直到用户点开或者隐藏它（等的东西不会再送进去了，要让用户看见）。
  */
-const live = (s: SessionView): boolean => (s.termId !== null || !!s.hibernatedAt || !!s.wakeError) && s.origin === "butler";
+const live = (s: SessionView): boolean => (s.termId !== null || !!s.hibernatedAt || !!s.wakeError) && s.origin === "shipherd";
 
 /** 停着：没有活动记录，或者回合结束在等下一条指令。 */
 const stopped = (a: SessionActivity | null): boolean => a === null || a.kind === "waiting" || a.kind === "idle";
@@ -68,8 +68,8 @@ function childDecision(i: NowInput, s: SessionView, scope: Scope): boolean {
  *   已经在卡片上答了、还没送进去的不算进 decisions（不再等你），但 needsYou 照样为 null、行照样不折起来。
  * - 总控所管范围里有子 session 的未决条目时，总控的 Haiku 判断不算（needsYouReason 不问）。
  * 已停的 session 不因为有 PR 开着就不算空闲（BTL-190 第 7 点）：PR 和 CI 只显示在行上。
- * needsYouReason 每行最多问一次。正在换新的不折起来，也不算需要你（回复、卡住都是 Butler 输入的 /handoff 带来的），只有停在确认上的照样算：
- * Butler 的 /handoff 也可能要用户批准权限，不显示出来换新就一直卡着。
+ * needsYouReason 每行最多问一次。正在换新的不折起来，也不算需要你（回复、卡住都是 Shipherd 输入的 /handoff 带来的），只有停在确认上的照样算：
+ * Shipherd 的 /handoff 也可能要用户批准权限，不显示出来换新就一直卡着。
  */
 function sessionRow(i: NowInput, s: SessionView, base: RowBase, scope: Scope = null): NowRow {
   const activity = i.activity(s.id);
@@ -166,11 +166,11 @@ export function buildNowView(i: NowInput): NowView {
     nowFeature(null, "", (ticketsOf.get(null) ?? []).flatMap((t) => ticketRows(i, t))),
   ].filter((f) => f.rows.length > 0);
 
-  // Butler 总控：不属于任何 feature，单独一行。它的 Haiku 判断不因为子 session 有待决条目就不算：它被判成需要你时，送给它的报告和巡检都在等。
-  const butler = i.butler && live(i.butler)
-    ? sessionRow(i, i.butler, { ticketKey: null, title: null, repo: null, where: null, coordinator: true, prs: [], target: { page: "butler", sessionId: i.butler.id } })
+  // Shipherd 总控：不属于任何 feature，单独一行。它的 Haiku 判断不因为子 session 有待决条目就不算：它被判成需要你时，送给它的报告和巡检都在等。
+  const shipherd = i.shipherd && live(i.shipherd)
+    ? sessionRow(i, i.shipherd, { ticketKey: null, title: null, repo: null, where: null, coordinator: true, prs: [], target: { page: "shipherd", sessionId: i.shipherd.id } })
     : null;
-  const all = [...(butler ? [butler] : []), ...features.flatMap((f) => f.rows)];
+  const all = [...(shipherd ? [shipherd] : []), ...features.flatMap((f) => f.rows)];
   const limited: NowNotice[] = all.flatMap((r) => (r.activity?.limit ? [{ kind: "session_limited" as const, target: r.target, title: r.title, limit: r.activity.limit }] : []));
-  return { notices: [...i.notices, ...limited], features, butler, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null, ...(i.sharedMcp !== undefined && { sharedMcp: i.sharedMcp }) };
+  return { notices: [...i.notices, ...limited], features, shipherd, running: all.filter((r) => r.working).length, memory: i.memory, merges: i.merges, mem: i.memorySnapshot ?? null, ...(i.sharedMcp !== undefined && { sharedMcp: i.sharedMcp }) };
 }

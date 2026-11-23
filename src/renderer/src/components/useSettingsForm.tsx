@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type ReactElement } from "react";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { S } from "../strings";
 
@@ -52,7 +52,7 @@ export function useSettingsForm(onSaved?: (k: EditableSettingKey) => void): Sett
     });
 
   function failed(e: unknown) {
-    if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+    if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
     else reportError(e);
   }
 

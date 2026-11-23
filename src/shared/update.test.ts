@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUTLER_REPO, releasesLatestUrl, isButlerReleaseUrl } from "./butler-repo";
+import { SHIPHERD_REPO, releasesLatestUrl, isShipherdReleaseUrl } from "./shipherd-repo";
 import { compareVersions, isNewerRelease, parseVersion } from "./update";
 
 describe("parseVersion", () => {
@@ -60,20 +60,20 @@ describe("isNewerRelease", () => {
   });
 });
 
-describe("butler repo", () => {
+describe("shipherd repo", () => {
   it("builds links from the one constant", () => {
-    expect(BUTLER_REPO).toBe("yul761/butler");
-    expect(releasesLatestUrl()).toBe("https://github.com/yul761/butler/releases/latest");
+    expect(SHIPHERD_REPO).toBe("yul761/shipherd");
+    expect(releasesLatestUrl()).toBe("https://github.com/yul761/shipherd/releases/latest");
   });
 
-  it("accepts only release pages of the Butler repo", () => {
-    expect(isButlerReleaseUrl("https://github.com/yul761/butler/releases/tag/v4.1.0")).toBe(true);
-    expect(isButlerReleaseUrl("https://github.com/YUL761/Butler/releases/tag/v4.1.0")).toBe(true);
-    expect(isButlerReleaseUrl("https://github.com/yul761/butler-evil/releases/tag/v4.1.0")).toBe(false);
-    expect(isButlerReleaseUrl("https://github.com/other/butler/releases/tag/v4.1.0")).toBe(false);
-    expect(isButlerReleaseUrl("http://github.com/yul761/butler/releases/tag/v4.1.0")).toBe(false);
-    expect(isButlerReleaseUrl("https://github.com.evil/yul761/butler/releases/x")).toBe(false);
-    expect(isButlerReleaseUrl("https://user@github.com/yul761/butler/releases/x")).toBe(false);
-    expect(isButlerReleaseUrl("not a url")).toBe(false);
+  it("accepts only release pages of the Shipherd repo", () => {
+    expect(isShipherdReleaseUrl("https://github.com/yul761/shipherd/releases/tag/v4.1.0")).toBe(true);
+    expect(isShipherdReleaseUrl("https://github.com/YUL761/Shipherd/releases/tag/v4.1.0")).toBe(true);
+    expect(isShipherdReleaseUrl("https://github.com/yul761/shipherd-evil/releases/tag/v4.1.0")).toBe(false);
+    expect(isShipherdReleaseUrl("https://github.com/other/shipherd/releases/tag/v4.1.0")).toBe(false);
+    expect(isShipherdReleaseUrl("http://github.com/yul761/shipherd/releases/tag/v4.1.0")).toBe(false);
+    expect(isShipherdReleaseUrl("https://github.com.evil/yul761/shipherd/releases/x")).toBe(false);
+    expect(isShipherdReleaseUrl("https://user@github.com/yul761/shipherd/releases/x")).toBe(false);
+    expect(isShipherdReleaseUrl("not a url")).toBe(false);
   });
 });

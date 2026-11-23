@@ -105,7 +105,7 @@ function gitWorld(branches: readonly string[]) {
   const key = branches.join(",");
   let t = worldTemplates.get(key);
   if (!t) {
-    const remote = tempDir("butler-remote-");
+    const remote = tempDir("shipherd-remote-");
     g(remote, "init", "-q", "--bare", "-b", "main");
     const repo = makeRepo();
     g(repo, "remote", "add", "origin", remote);
@@ -113,7 +113,7 @@ function gitWorld(branches: readonly string[]) {
     // 一次推完：每次 push 都要起好几个进程，40 层的栈在 Windows 上一层一次推会慢很多。
     g(repo, "push", "-q", "origin", "main", ...branches);
     g(repo, "fetch", "-q", "origin");
-    const hub = tempDir("butler-hub-");
+    const hub = tempDir("shipherd-hub-");
     g(hub, "clone", "-q", remote, ".");
     g(hub, "config", "user.email", "hub@example.com");
     g(hub, "config", "user.name", "Hub");
@@ -121,9 +121,9 @@ function gitWorld(branches: readonly string[]) {
     t = { remote, repo, hub };
     worldTemplates.set(key, t);
   }
-  const remote = copyRepo(t.remote, "butler-remote-");
+  const remote = copyRepo(t.remote, "shipherd-remote-");
   const repo = copyRepo(t.repo);
-  const hub = copyRepo(t.hub, "butler-hub-");
+  const hub = copyRepo(t.hub, "shipherd-hub-");
   setOriginUrl(repo, remote);
   setOriginUrl(hub, remote);
   return { remote, repo, hub };
@@ -155,7 +155,7 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?:
       },
       allowed: (k, scope) => allow(k, scope),
     },
-    workRoot: join(tempDir("butler-stackwork-"), "stack-work"),
+    workRoot: join(tempDir("shipherd-stackwork-"), "stack-work"),
     execPath: process.execPath,
     now: () => clock,
     log: () => undefined,
@@ -165,7 +165,7 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?:
     gateHeld: () => false,
     trunkBusy: () => false,
     deliver: vi.fn(async (to: { ticketKey: string }, text: string) => (delivered.push({ ticketKey: to.ticketKey, text }), true)),
-    briefProvider: (l) => ({ markdown: `<!-- butler:brief -->brief for ${l.branch}<!-- /butler:brief -->`, posted: (url) => posted.push(url) }),
+    briefProvider: (l) => ({ markdown: `<!-- shipherd:brief -->brief for ${l.branch}<!-- /shipherd:brief -->`, posted: (url) => posted.push(url) }),
     forceMode: o.mode,
   };
   const svc = new StackService(deps);
@@ -289,7 +289,7 @@ describe("StackService.define", () => {
     expect(w.repoT.layers(r.stackId!).map((l) => l.branch)).toEqual(["a", "b", "e"]);
   });
 
-  it("detects chains of Butler PRs", async () => {
+  it("detects chains of Shipherd PRs", async () => {
     const w = world();
     for (const [i, b] of BRANCHES.entries()) {
       fake.prs.set(10 + i, { number: 10 + i, url: `https://github.com/acme/app/pull/${10 + i}`, state: "OPEN", isDraft: i > 0, title: b, body: "", base: i ? BRANCHES[i - 1]! : "main", head: b, headSha: null, labels: [] });
@@ -479,7 +479,7 @@ describe("StackService switches", () => {
     const lr = w.repoT.lastRun(id)!;
     expect(lr.detail.unpushed).toEqual(["b", "c", "d"]);
     expect(w.repoT.layers(id)[1]).toMatchObject({ state: "branch_only", remoteOkSha: oldRemote });
-    // 再改一次（layer_commits）：远端还停在 Butler 上次替换掉的提交，照样能改
+    // 再改一次（layer_commits）：远端还停在 Shipherd 上次替换掉的提交，照样能改
     g(w.repo, "checkout", "-q", "c");
     commit(w.repo, "c2.txt", "c2\n", "c two");
     g(w.repo, "checkout", "-q", "main");
@@ -540,7 +540,7 @@ describe("StackService triggers", () => {
     expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
   });
 
-  it("defers when a layer is checked out somewhere Butler does not manage and collapses repeats", async () => {
+  it("defers when a layer is checked out somewhere Shipherd does not manage and collapses repeats", async () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
     const wt = join(tempDir(), "wt");
@@ -584,7 +584,7 @@ describe("StackService triggers", () => {
     await w.svc.rebaseNow(id);
     expect(w.delivered).toHaveLength(1);
     expect(w.svc.notices().filter((n) => n.reason === "conflict")).toEqual([]);
-    expect(g(w.repo, "for-each-ref", "refs/heads/butler-stack/")).toBe("");
+    expect(g(w.repo, "for-each-ref", "refs/heads/shipherd-stack/")).toBe("");
     expect(g(w.repo, "worktree", "list").split("\n")).toHaveLength(1);
   });
 
@@ -595,7 +595,7 @@ describe("StackService triggers", () => {
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict" });
     const cmd = /git rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
-    // session 在自己的 worktree 里照做、解决冲突（这里做完把 worktree 拿掉，免得算成 Butler 不管的检出）
+    // session 在自己的 worktree 里照做、解决冲突（这里做完把 worktree 拿掉，免得算成 Shipherd 不管的检出）
     const wt = join(tempDir(), "wt-b");
     g(w.repo, "worktree", "add", "-q", wt, "b");
     try {
@@ -702,10 +702,10 @@ describe("StackService restore", () => {
     await defineAll(w);
     w.pushMain("m.txt", "m\n");
     await w.svc.tick();
-    expect(g(w.repo, "for-each-ref", "refs/butler/stack-backup/")).not.toBe("");
+    expect(g(w.repo, "for-each-ref", "refs/shipherd/stack-backup/")).not.toBe("");
     w.advance(31 * 24 * 3600_000);
     await w.svc.daily();
-    expect(g(w.repo, "for-each-ref", "refs/butler/stack-backup/")).toBe("");
+    expect(g(w.repo, "for-each-ref", "refs/shipherd/stack-backup/")).toBe("");
   });
 
   it("runs the daily job once a day and retries a failure after 30 minutes", async () => {

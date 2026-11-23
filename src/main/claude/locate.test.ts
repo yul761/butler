@@ -3,7 +3,7 @@ import { absolutePathEntries, findOnPath, locateClaude, readLoginShellPath, well
 
 describe("readLoginShellPath", () => {
   it("extracts PATH between markers, ignoring shell noise", async () => {
-    const run = async () => "Welcome!\n__BUTLER_PATH_START__/opt/bin:/usr/bin__BUTLER_PATH_END__\n";
+    const run = async () => "Welcome!\n__SHIPHERD_PATH_START__/opt/bin:/usr/bin__SHIPHERD_PATH_END__\n";
     expect(await readLoginShellPath("darwin", { SHELL: "/bin/zsh", PATH: "/usr/bin" }, run)).toBe("/opt/bin:/usr/bin");
   });
 

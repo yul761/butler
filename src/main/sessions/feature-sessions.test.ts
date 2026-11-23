@@ -29,9 +29,9 @@ async function setup() {
   // 这里的断言要看「不进未认领」：先打开未认领列表（默认关着时它总是空的）。
   settings.set("showOutsideSessions", "1");
   const blocks = new BlocksRepo(db);
-  const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
+  const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("shipherd-ws-") });
   const featureService = new FeatureService({ features, tickets, now: () => 1 });
-  const parent = join(tempDir("butler-code-"), "shop");
+  const parent = join(tempDir("shipherd-code-"), "shop");
   mkdirSync(parent);
   const frontend = join(parent, "frontend");
   const backend = join(parent, "backend");
@@ -46,7 +46,7 @@ async function setup() {
   const mcpAsked: { key: string; featureId: number | null }[] = [];
   const featureMcpAsked: number[] = [];
   const guidesAsked: (string | string[])[][] = [];
-  const butlerWorkspace = join(tempDir("butler-home-"), "workspaces", "_butler");
+  const shipherdWorkspace = join(tempDir("shipherd-home-"), "workspaces", "_shipherd");
   const settingsAsked: string[][] = [];
   const activities = new Map<string, SessionActivity>();
   const names = new Map<string, string>();
@@ -75,8 +75,8 @@ async function setup() {
     mcpConfig: (key, o) => (mcpAsked.push({ key, ...o }), `/mcp/${key}.json`),
     featureMcpConfig: (id) => (featureMcpAsked.push(id), `/mcp/features/${id}.json`),
     mcpSettings: (dirs) => (settingsAsked.push(dirs), "/mcp/approve.json"),
-    butlerWorkspace,
-    butlerMcpConfig: () => "/mcp/butler.json",
+    shipherdWorkspace,
+    shipherdMcpConfig: () => "/mcp/shipherd.json",
     guidePath: (kind, paths) => (guidesAsked.push([kind, paths]), null),
     hidden: (id) => void retired.push(id),
     recordEvent: (kind, refs) => (events.push({ kind, ...refs }), true),
@@ -84,7 +84,7 @@ async function setup() {
   return { blocks,
     retired, events,
     service, featureService, ticketService, db, featureHandoffs, handoffs, sessions, tickets, features, spawned, pty, feature, fe, be, frontend, backend, mcpAsked, featureMcpAsked, settingsAsked,
-    guidesAsked, butlerWorkspace, activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
+    guidesAsked, shipherdWorkspace, activities, names, namesAsked, submitted, claude, logs, setSubmit: (f: typeof submit) => (submit = f),
   };
 }
 
@@ -97,8 +97,8 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend]);
     // 仓库 .mcp.json 的审批：工作区和 feature 的每个仓库里用户禁用过的照旧禁用。
     expect(settingsAsked).toEqual([[feature.workspaceDir, frontend, backend]]);
-    expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
-    expect(s.opts.env.BUTLER_SESSION).toBe("new-1");
+    expect(s.opts.env.SHIPHERD_TICKET).toBeUndefined();
+    expect(s.opts.env.SHIPHERD_SESSION).toBe("new-1");
     expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: feature.id, coordinator: true, cwd: feature.workspaceDir });
   });
 
@@ -193,8 +193,8 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
   it("claims a claude the user opened in the workspace as the feature coordinator, across /clear", async () => {
     const { sessions, tickets, features, feature, service } = await setup();
     const deps = { sessions, tickets, featureForCwd: (cwd: string) => features.byWorkspace(cwd)?.id ?? null };
-    const env = (id: string, over: Record<string, unknown> = {}, butlerSession: string | null = null) => ({
-      v: 1 as const, receivedAt: 100, ticket: null, butlerSession,
+    const env = (id: string, over: Record<string, unknown> = {}, shipherdSession: string | null = null) => ({
+      v: 1 as const, receivedAt: 100, ticket: null, shipherdSession,
       payload: { hook_event_name: "SessionStart", session_id: id, cwd: feature.workspaceDir, ...over },
     });
     applyHookEnvelope(env("d1"), deps);
@@ -215,7 +215,7 @@ describe("feature coordinator sessions (design 2026-10-26)", () => {
     const r = await service.openFeature({ featureId: fid });
     if (!r.ok) throw new Error("did not open");
     expect(service.runningCoordinator(fid)?.id).toBe(r.termId);
-    sessions.insertIfAbsent({ id: "after-clear", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 2, featureId: fid, coordinator: true });
+    sessions.insertIfAbsent({ id: "after-clear", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 2, featureId: fid, coordinator: true });
     sessions.setReplacedBy(r.termId, "after-clear");
     expect(service.runningCoordinator(fid)?.id).toBe("after-clear");
   });
@@ -262,13 +262,13 @@ describe("fix sessions (design 2026-10-31)", () => {
   it("opens a non-coordinator feature-level session in the workspace, started like a coordinator", async () => {
     const { service, spawned, sessions, feature, backend, req, stuckId } = await stuckSetup();
     expect(await service.openFix(req)).toEqual({ ok: true, termId: "new-2", alreadyOpen: false });
-    expect(sessions.get("new-2")).toMatchObject({ ticketKey: null, featureId: feature.id, coordinator: false, fixesSession: stuckId, cwd: feature.workspaceDir, origin: "butler" });
+    expect(sessions.get("new-2")).toMatchObject({ ticketKey: null, featureId: feature.id, coordinator: false, fixesSession: stuckId, cwd: feature.workspaceDir, origin: "shipherd" });
     const s = spawned[1];
     expect(s.opts.cwd).toBe(feature.workspaceDir);
     expect(s.args).toEqual(["--session-id", "new-2", "--mcp-config", `/mcp/features/${feature.id}.json`, "--settings", "/mcp/approve.json", "--add-dir", backend, "--model", "sonnet"]);
     expect(sessions.get("new-2")?.model).toBe("sonnet");
-    expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
-    expect(s.opts.env.BUTLER_SESSION).toBe("new-2");
+    expect(s.opts.env.SHIPHERD_TICKET).toBeUndefined();
+    expect(s.opts.env.SHIPHERD_SESSION).toBe("new-2");
   });
 
   it("records stuck_fix_opened once per fix session (ws-j)", async () => {
@@ -291,7 +291,7 @@ describe("fix sessions (design 2026-10-31)", () => {
 
   it("uses the feature's repos when the stuck session has no ticket", async () => {
     const { service, sessions, feature, guidesAsked, frontend, backend } = await stuckSetup();
-    sessions.insertIfAbsent({ id: "fx", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "ghost" });
+    sessions.insertIfAbsent({ id: "fx", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, fixesSession: "ghost" });
     guidesAsked.length = 0;
     await service.openFeature({ featureId: feature.id, sessionId: "fx" });
     expect(guidesAsked).toEqual([["ticket", [frontend, backend]]]);
@@ -367,7 +367,7 @@ describe("fix sessions (design 2026-10-31)", () => {
   it("finds the running fix session after /clear in it", async () => {
     const { service, spawned, sessions, feature, req, stuckId } = await stuckSetup();
     await service.openFix(req);
-    sessions.insertIfAbsent({ id: "fix-2", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "fix-2", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy("new-2", "fix-2");
     expect(sessions.get("fix-2")?.fixesSession).toBe(stuckId);
     expect(await service.openFix(req)).toEqual({ ok: true, termId: "new-2", alreadyOpen: true });
@@ -377,7 +377,7 @@ describe("fix sessions (design 2026-10-31)", () => {
   it("follows /clear in the stuck session: an old id reaches the new head, and the fix session still counts", async () => {
     const { service, spawned, sessions, activities, req, stuckId } = await stuckSetup();
     await service.openFix(req);
-    sessions.insertIfAbsent({ id: "stuck-2", ticketKey: "DMS-1", cwd: sessions.get(stuckId)!.cwd, origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "stuck-2", ticketKey: "DMS-1", cwd: sessions.get(stuckId)!.cwd, origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy(stuckId, "stuck-2");
     activities.delete(stuckId);
     activities.set("stuck-2", stuckActivity("stuck-2"));
@@ -411,7 +411,7 @@ describe("fix sessions (design 2026-10-31)", () => {
   it("refuses an unknown session, a feature-level session, and a session of another feature's ticket", async () => {
     const { service, sessions, features, activities, feature, req, stuckId } = await stuckSetup();
     expect(await service.openFix({ ...req, stuckSessionId: "nope" })).toEqual({ ok: false, reason: "no_session" });
-    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    sessions.insertIfAbsent({ id: "c", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, coordinator: true });
     activities.set("c", stuckActivity("c"));
     expect(await service.openFix({ ...req, stuckSessionId: "c" })).toEqual({ ok: false, reason: "no_session" });
     const elsewhere = features.insert({ name: "x", workspaceDir: "/ws/x", createdAt: 1 });
@@ -420,7 +420,7 @@ describe("fix sessions (design 2026-10-31)", () => {
 
   it("openFix for a stuck session without a ticket returns no_session", async () => {
     const { service, sessions, activities, feature, spawned } = await stuckSetup();
-    sessions.insertIfAbsent({ id: "nt", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id });
+    sessions.insertIfAbsent({ id: "nt", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id });
     activities.set("nt", stuckActivity("nt"));
     expect(await service.openFix({ featureId: feature.id, stuckSessionId: "nt" })).toEqual({ ok: false, reason: "no_session" });
     expect(spawned).toHaveLength(1);
@@ -464,7 +464,7 @@ describe("fix sessions (design 2026-10-31)", () => {
 
   it("says no coordinator is running when none is, even if a closed one exists", async () => {
     const { service, feature, names, sessions, submitted, req, stuckId } = await stuckSetup();
-    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, coordinator: true });
     names.set(stuckId, "swift-fox");
     await service.openFix(req);
     expect(submitted[0][1]).toContain("没有运行中的总控 session，跳过这一步");
@@ -474,7 +474,7 @@ describe("fix sessions (design 2026-10-31)", () => {
   it("uses the coordinator's current head after /clear", async () => {
     const { service, feature, names, submitted, sessions, req } = await stuckSetup();
     await service.openFeature({ featureId: feature.id });
-    sessions.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy("new-2", "c-2");
     names.set("c-2", "calm-owl");
     await service.openFix(req);
@@ -483,7 +483,7 @@ describe("fix sessions (design 2026-10-31)", () => {
 
   it("does not take a coordinator without a terminal or another fix session for the coordinator", async () => {
     const { service, activities, names, namesAsked, submitted, sessions, feature, req, stuckId } = await stuckSetup();
-    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
+    sessions.insertIfAbsent({ id: "closed", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, coordinator: true });
     names.set("closed", "closed-name");
     await service.openFix(req);
     names.set("new-2", "first-fix");
@@ -509,81 +509,81 @@ describe("fix sessions (design 2026-10-31)", () => {
   });
 });
 
-describe("the Butler 总控 session (BTL-190 5)", () => {
+describe("the Shipherd 总控 session (BTL-190 5)", () => {
   it("opens in its own workspace (created on demand), with its MCP config and guide, as no ticket or feature session", async () => {
-    const { service, spawned, sessions, settingsAsked, guidesAsked, butlerWorkspace, feature } = await setup();
-    expect(existsSync(butlerWorkspace)).toBe(false);
-    expect(await service.openButler({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
-    expect(existsSync(butlerWorkspace)).toBe(true);
+    const { service, spawned, sessions, settingsAsked, guidesAsked, shipherdWorkspace, feature } = await setup();
+    expect(existsSync(shipherdWorkspace)).toBe(false);
+    expect(await service.openShipherd({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: false });
+    expect(existsSync(shipherdWorkspace)).toBe(true);
     const s = spawned[0];
-    expect(s.opts.cwd).toBe(butlerWorkspace);
-    expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", "/mcp/butler.json", "--settings", "/mcp/approve.json"]);
-    expect(settingsAsked).toEqual([[butlerWorkspace]]);
-    expect(guidesAsked).toEqual([["butler", []]]);
-    expect(s.opts.env.BUTLER_TICKET).toBeUndefined();
-    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, coordinator: false, butler: true, cwd: butlerWorkspace });
+    expect(s.opts.cwd).toBe(shipherdWorkspace);
+    expect(s.args).toEqual(["--session-id", "new-1", "--mcp-config", "/mcp/shipherd.json", "--settings", "/mcp/approve.json"]);
+    expect(settingsAsked).toEqual([[shipherdWorkspace]]);
+    expect(guidesAsked).toEqual([["shipherd", []]]);
+    expect(s.opts.env.SHIPHERD_TICKET).toBeUndefined();
+    expect(sessions.get("new-1")).toMatchObject({ ticketKey: null, featureId: null, coordinator: false, shipherd: true, cwd: shipherdWorkspace });
     expect(service.unclaimed()).toEqual([]);
     expect(service.featureViews()[0].sessions).toEqual([]);
     expect(service.featureTerminalCount(feature.id)).toBe(0);
-    expect(service.runningButler()?.id).toBe("new-1");
+    expect(service.runningShipherd()?.id).toBe("new-1");
   });
 
   it("runs only one: opening again, or another conversation, returns the running one", async () => {
-    const { service, spawned, sessions, butlerWorkspace } = await setup();
-    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, butler: true });
-    await service.openButler({});
-    expect(await service.openButler({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
-    expect(await service.openButler({ sessionId: "old" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    const { service, spawned, sessions, shipherdWorkspace } = await setup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: shipherdWorkspace, origin: "shipherd", createdAt: 1, shipherd: true });
+    await service.openShipherd({});
+    expect(await service.openShipherd({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(await service.openShipherd({ sessionId: "old" })).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
     expect(spawned).toHaveLength(1);
   });
 
-  it("opening another conversation retires a hibernated Butler 总控, so deliveries stop waking it (WS-M B)", async () => {
-    const { service, sessions, butlerWorkspace, retired } = await setup();
-    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, butler: true });
+  it("opening another conversation retires a hibernated Shipherd 总控, so deliveries stop waking it (WS-M B)", async () => {
+    const { service, sessions, shipherdWorkspace, retired } = await setup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: shipherdWorkspace, origin: "shipherd", createdAt: 1, shipherd: true });
     sessions.setHibernated("old", 5, "idle", null);
-    expect(await service.openButler({})).toMatchObject({ ok: true, termId: "new-1" });
+    expect(await service.openShipherd({})).toMatchObject({ ok: true, termId: "new-1" });
     expect(retired).toEqual(["old"]);
   });
 
   it("resumes its own session and refuses anyone else's", async () => {
-    const { service, spawned, sessions, feature, butlerWorkspace, claude } = await setup();
-    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, butler: true });
-    sessions.insertIfAbsent({ id: "coord", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, coordinator: true });
-    for (const sessionId of ["coord", "nope"]) expect(await service.openButler({ sessionId }), sessionId).toEqual({ ok: false, reason: "no_session" });
+    const { service, spawned, sessions, feature, shipherdWorkspace, claude } = await setup();
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: shipherdWorkspace, origin: "shipherd", createdAt: 1, shipherd: true });
+    sessions.insertIfAbsent({ id: "coord", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, coordinator: true });
+    for (const sessionId of ["coord", "nope"]) expect(await service.openShipherd({ sessionId }), sessionId).toEqual({ ok: false, reason: "no_session" });
     claude.path = null;
-    expect(await service.openButler({ sessionId: "old" })).toEqual({ ok: false, reason: "claude_missing" });
+    expect(await service.openShipherd({ sessionId: "old" })).toEqual({ ok: false, reason: "claude_missing" });
     claude.path = "/bin/claude";
-    expect(await service.openButler({ sessionId: "old" })).toEqual({ ok: true, termId: "old", alreadyOpen: false });
+    expect(await service.openShipherd({ sessionId: "old" })).toEqual({ ok: true, termId: "old", alreadyOpen: false });
     expect(spawned[0].args.slice(0, 2)).toEqual(["--resume", "old"]);
   });
 
-  it("follows /clear: the new head stays the Butler 总控 on the same terminal", async () => {
-    const { service, sessions, tickets, butlerWorkspace, spawned } = await setup();
-    await service.openButler({});
+  it("follows /clear: the new head stays the Shipherd 总控 on the same terminal", async () => {
+    const { service, sessions, tickets, shipherdWorkspace, spawned } = await setup();
+    await service.openShipherd({});
     applyHookEnvelope(
-      { v: 1, receivedAt: 100, ticket: null, butlerSession: "new-1", payload: { hook_event_name: "SessionStart", session_id: "b-2", cwd: butlerWorkspace, source: "clear" } },
+      { v: 1, receivedAt: 100, ticket: null, shipherdSession: "new-1", payload: { hook_event_name: "SessionStart", session_id: "b-2", cwd: shipherdWorkspace, source: "clear" } },
       { sessions, tickets },
     );
-    expect(sessions.head("new-1")).toMatchObject({ id: "b-2", butler: true, featureId: null });
-    expect(service.runningButler()?.id).toBe("b-2");
-    expect(await service.openButler({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
+    expect(sessions.head("new-1")).toMatchObject({ id: "b-2", shipherd: true, featureId: null });
+    expect(service.runningShipherd()?.id).toBe("b-2");
+    expect(await service.openShipherd({})).toEqual({ ok: true, termId: "new-1", alreadyOpen: true });
     expect(spawned).toHaveLength(1);
   });
 
   it("lists its sessions for the page, hides finished ones and picks the latest shown one", async () => {
-    const { service, sessions, butlerWorkspace, spawned } = await setup();
-    sessions.insertIfAbsent({ id: "a", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 1, lastActivityAt: 10, butler: true });
-    sessions.insertIfAbsent({ id: "b", ticketKey: null, cwd: butlerWorkspace, origin: "butler", createdAt: 2, lastActivityAt: 20, butler: true });
-    expect(service.latestButler()?.id).toBe("b");
+    const { service, sessions, shipherdWorkspace, spawned } = await setup();
+    sessions.insertIfAbsent({ id: "a", ticketKey: null, cwd: shipherdWorkspace, origin: "shipherd", createdAt: 1, lastActivityAt: 10, shipherd: true });
+    sessions.insertIfAbsent({ id: "b", ticketKey: null, cwd: shipherdWorkspace, origin: "shipherd", createdAt: 2, lastActivityAt: 20, shipherd: true });
+    expect(service.latestShipherd()?.id).toBe("b");
     service.hide("b");
-    expect(service.latestButler()?.id).toBe("a");
-    expect(service.butlerView()).toMatchObject({ workspaceDir: butlerWorkspace, sessions: [{ id: "a", termId: null }], hiddenSessions: [{ id: "b" }] });
+    expect(service.latestShipherd()?.id).toBe("a");
+    expect(service.shipherdView()).toMatchObject({ workspaceDir: shipherdWorkspace, sessions: [{ id: "a", termId: null }], hiddenSessions: [{ id: "b" }] });
     service.unhide("b");
-    await service.openButler({ sessionId: "a" });
-    expect(service.butlerView().sessions.map((s) => [s.id, s.termId])).toEqual([["b", null], ["a", "a"]]);
+    await service.openShipherd({ sessionId: "a" });
+    expect(service.shipherdView().sessions.map((s) => [s.id, s.termId])).toEqual([["b", null], ["a", "a"]]);
     expect(() => service.hide("a")).toThrow(expect.objectContaining({ code: "sessions_open" }));
     spawned[0].pty.emitExit(0);
-    expect(service.runningButler()).toBeNull();
+    expect(service.runningShipherd()).toBeNull();
   });
 
   it("gives one row per unarchived feature", async () => {

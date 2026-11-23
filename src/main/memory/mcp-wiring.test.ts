@@ -47,7 +47,7 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
     const fork = block("const forkMcpConfig = (dev: DevLaunch, runId: string)", "\n  };");
     expect(fork).toContain("const termId = null;");
     expect(fork).not.toMatch(/sharedMcpConfig|mcpHub|writeTerminalMcpConfig/);
-    for (const name of ["memoryMcpConfig", "featureMcpConfig", "butlerMcpConfig"]) {
+    for (const name of ["memoryMcpConfig", "featureMcpConfig", "shipherdMcpConfig"]) {
       expect(fork, name).toMatch(new RegExp(`\\b${name}\\([^\\n]*termId\\)`));
       // 每个配置函数都经 placeMcp 决定写到哪。
       expect(block(`const ${name} = (`, "\n  };"), name).toMatch(/return placeMcp\(termId, servers, /);
@@ -75,7 +75,7 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
   });
 
   it("projectMcp never returns a file under mcp/tickets, even when ticket configs with look-alike keys sit next to it", () => {
-    const base = tempDir("butler-wiring-");
+    const base = tempDir("shipherd-wiring-");
     const repo = join(base, "repo");
     const mcpDir = join(base, "mcp");
     const claudeJson = join(base, ".claude.json");
@@ -85,7 +85,7 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
       claudeJson,
       JSON.stringify({ projects: { [repo]: { enabledMcpjsonServers: ["jira"], mcpServers: { mine: { command: "node", args: ["mine"] } } } } }),
     );
-    const launcher = { command: "/x/Butler", script: "/x/statecore-mcp.cjs" };
+    const launcher = { command: "/x/Shipherd", script: "/x/statecore-mcp.cjs" };
     const ticketFiles = ["PROJ-1", "PROJECT-123456789012", "project-123456789012", "LOCAL-123456789012"].map((ticketKey) =>
       writeTicketMcpConfig({ mcpDir, ticketKey, servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey }) }),
     );
@@ -96,9 +96,9 @@ describe("the ticket memory MCP only reaches interactive sessions (P4-R6)", () =
     for (const f of files) {
       expect(dirname(f)).toBe(mcpDir);
       expect(relative(mcpDir, f).split(sep)).not.toContain(TICKET_MCP_SUBDIR);
-      expect(readFileSync(f, "utf8")).not.toContain("butler-memory");
+      expect(readFileSync(f, "utf8")).not.toContain("shipherd-memory");
     }
     // 计划 3 的文件也没有覆盖 ticket 的配置。
-    for (const f of ticketFiles) expect(readFileSync(f, "utf8")).toContain("butler-memory");
+    for (const f of ticketFiles) expect(readFileSync(f, "utf8")).toContain("shipherd-memory");
   });
 });

@@ -90,7 +90,7 @@ export function mergeInferred(out: ScanOutput, raw: unknown, files: string[]): {
     checks.push({
       id: baselineCheckId(dir, c.category, tool), dir, category: c.category, tool, command, fileCommand: fileCommand && fileCommand.includes("{file}") ? fileCommand : undefined,
       stages: [...new Set(c.stages ?? [])], changedFiles: !!c.changedFiles || !!(fileCommand && fileCommand.includes("{file}")),
-      butlerStage: fileCommand?.includes("{file}") && (c.category === "lint" || c.category === "format" || c.category === "typecheck") ? "edit" : "push",
+      shipherdStage: fileCommand?.includes("{file}") && (c.category === "lint" || c.category === "format" || c.category === "typecheck") ? "edit" : "push",
       source: "inferred", confidence: "low", evidence: [c.evidence?.trim() || "inferred"], facts: [],
     });
     added++;

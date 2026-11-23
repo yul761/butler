@@ -20,13 +20,13 @@ function setup() {
   const repo = new ReviewEffectRepo(db);
   const files = new Map<number, string[]>();
   const collector = new ReviewEffectCollector({ db, repo, files: async (p) => files.get(p.number) ?? null, now: () => NOW, log: () => {} });
-  const pr = (number: number, o: { opened: number; merged: number | null; butler?: boolean; author?: string; files?: string[] }) => {
+  const pr = (number: number, o: { opened: number; merged: number | null; shipherd?: boolean; author?: string; files?: string[] }) => {
     const id = prs.link({
       ticketKey: "T-1", url: `https://github.com/a/b/pull/${number}`, slug: "a/b", repoId: null, number, headBranch: `b${number}`, state: "open",
       source: "branch", linkedAt: 1,
     }).pr.id;
-    db.prepare(`UPDATE ticket_prs SET state = ?, opened_at = ?, merged_at = ?, butler_made = ?, author = ? WHERE id = ?`).run(
-      o.merged === null ? "open" : "merged", o.opened, o.merged, o.butler ? 1 : 0, o.author ?? "me", id,
+    db.prepare(`UPDATE ticket_prs SET state = ?, opened_at = ?, merged_at = ?, shipherd_made = ?, author = ? WHERE id = ?`).run(
+      o.merged === null ? "open" : "merged", o.opened, o.merged, o.shipherd ? 1 : 0, o.author ?? "me", id,
     );
     files.set(number, o.files ?? ["src/x.ts"]);
     return id;
@@ -60,7 +60,7 @@ describe("review effect collector (ws-g §11.1)", () => {
 
   it("collects comments, rounds, waits, avoidable and lesson attribution for a merged PR", async () => {
     const s = setup();
-    const id = s.pr(7, { opened: 1000, merged: 9000, butler: true, author: "me" });
+    const id = s.pr(7, { opened: 1000, merged: 9000, shipherd: true, author: "me" });
     s.stage(id, "review", 2000, { who: "human", id: "r1", body: "fix this" });
     s.stage(id, "review", 2100, { who: "human", id: "r1", body: "fix this" }); // 同一个 review 换了状态
     s.stage(id, "review", 2200, { who: "human", id: "r2", body: "" }); // 只有 approve，不算评论
@@ -79,7 +79,7 @@ describe("review effect collector (ws-g §11.1)", () => {
     await s.collector.collect(id);
     const got = s.repo.get(id)!;
     expect(got).toMatchObject({
-      butler: true, commentsHuman: 2, commentsCopilot: 1, avoidable: 2, rounds: 2, firstReviewMs: 1000, submitToMergeMs: 8000,
+      shipherd: true, commentsHuman: 2, commentsCopilot: 1, avoidable: 2, rounds: 2, firstReviewMs: 1000, submitToMergeMs: 8000,
       retroDone: true, briefPosted: false, files: ["src/x.ts"],
     });
     const cs = s.repo.commentsOf([id]);
@@ -155,10 +155,10 @@ describe("lesson comment trend for F (ws-g §11.2)", () => {
 });
 
 describe("review effect view (ws-g §11.3)", () => {
-  it("groups Butler and other PRs, brief vs none, weekly avoidable and comment landing", async () => {
+  it("groups Shipherd and other PRs, brief vs none, weekly avoidable and comment landing", async () => {
     const s = setup();
-    const a = s.pr(1, { opened: NOW - 3 * DAY, merged: NOW - 2 * DAY, butler: true });
-    const b = s.pr(2, { opened: NOW - 3 * DAY, merged: NOW - DAY, butler: false });
+    const a = s.pr(1, { opened: NOW - 3 * DAY, merged: NOW - 2 * DAY, shipherd: true });
+    const b = s.pr(2, { opened: NOW - 3 * DAY, merged: NOW - DAY, shipherd: false });
     s.stage(a, "comment", NOW - 2.5 * DAY, { who: "human", body: "x" });
     s.stage(b, "comment", NOW - 2.5 * DAY, { who: "human", body: "x" });
     s.stage(b, "comment", NOW - 2.4 * DAY, { who: "human", body: "y" });
@@ -173,7 +173,7 @@ describe("review effect view (ws-g §11.3)", () => {
     expect(v.weeks.at(-1)!.weekStart).toBe(weekStart(NOW));
     expect(v.weeks.reduce((n, w) => n + w.prs, 0)).toBe(1);
     expect(v.weeks.find((w) => w.prs)!.perPr).toBe(1);
-    expect(v.butler).toMatchObject({ prs: 1, humanComments: 1 });
+    expect(v.shipherd).toMatchObject({ prs: 1, humanComments: 1 });
     expect(v.others).toMatchObject({ prs: 1, humanComments: 2 });
     expect(v.withBrief.prs).toBe(1);
     expect(v.withoutBrief.prs).toBe(0);

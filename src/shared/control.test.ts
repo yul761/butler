@@ -35,8 +35,8 @@ describe("sanitizeTask", () => {
 
 describe("taskMessage", () => {
   it("adds the recall hint after the task only when there is memory to read (R36)", () => {
-    expect(taskMessage("写接口", "zh", "ticket")).toBe("总控 session 交给你的任务：\n写接口\n\n开始之前先用 recall 读一下 ticket 记忆（butler-memory）里的背景和约定。");
-    expect(taskMessage("写接口", "zh", "feature")).toContain("butler-feature");
+    expect(taskMessage("写接口", "zh", "ticket")).toBe("总控 session 交给你的任务：\n写接口\n\n开始之前先用 recall 读一下 ticket 记忆（shipherd-memory）里的背景和约定。");
+    expect(taskMessage("写接口", "zh", "feature")).toContain("shipherd-feature");
     expect(taskMessage("写接口", "zh", null)).toBe("总控 session 交给你的任务：\n写接口");
     expect(taskMessage("write the API", "en", null)).not.toContain("recall");
   });
@@ -134,9 +134,9 @@ describe("parseControlRequest for features inside an epic (blocks, BTL-246)", ()
     expect(parseControlRequest({ ...base, op: "set_ticket_feature", feature: "P" })).toBeNull();
     expect(parseControlRequest({ ...base, op: "set_ticket_feature", ticket: "DMS-1", feature: 1.5 })).toBeNull();
     expect(parseControlRequest({ ...base, op: "create_ticket", ticket: "DMS-9", feature: "" })).toBeNull();
-    // 只有 epic 总控有：ticket session 和 Butler 总控都不认。
+    // 只有 epic 总控有：ticket session 和 Shipherd 总控都不认。
     expect(parseControlRequest({ v: 1, ticketKey: "A-1", from: null, op: "create_feature", name: "P" })).toBeNull();
-    expect(parseControlRequest({ v: 1, butler: true, from: null, op: "create_feature", name: "P" })).toBeNull();
+    expect(parseControlRequest({ v: 1, shipherd: true, from: null, op: "create_feature", name: "P" })).toBeNull();
   });
 });
 
@@ -231,36 +231,36 @@ describe("parseControlRequest for ask_user and report (BTL-190 2+3)", () => {
   });
 });
 
-describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
-  const base = { v: 1, butler: true } as const;
+describe("parseControlRequest for the Shipherd 总控 (BTL-190 5)", () => {
+  const base = { v: 1, shipherd: true } as const;
 
   it("accepts the read-only ops, session ops, send_message and the inbox ops", () => {
     for (const op of ["list_epics", "list_features", "list_prs", "list_sessions", "list_inbox"]) {
-      expect(parseControlRequest({ ...base, from: "b", op })).toEqual({ v: 1, butler: true, from: "b", op });
+      expect(parseControlRequest({ ...base, from: "b", op })).toEqual({ v: 1, shipherd: true, from: "b", op });
     }
-    expect(parseControlRequest({ ...base, op: "list_tickets" })).toEqual({ v: 1, butler: true, from: null, op: "list_tickets" });
+    expect(parseControlRequest({ ...base, op: "list_tickets" })).toEqual({ v: 1, shipherd: true, from: null, op: "list_tickets" });
     // epic 过滤（BTL-246：以前叫 feature）；旧的 feature 参数不认，丢掉。
     expect(parseControlRequest({ ...base, op: "list_tickets", epic: "checkout", feature: "7" }))
-      .toEqual({ v: 1, butler: true, from: null, op: "list_tickets", epic: "checkout" });
-    expect(parseControlRequest({ ...base, op: "list_features", epic: "checkout" })).toEqual({ v: 1, butler: true, from: null, op: "list_features", epic: "checkout" });
-    expect(parseControlRequest({ ...base, op: "progress_overview" })).toEqual({ v: 1, butler: true, from: null, op: "progress_overview" });
-    expect(parseControlRequest({ ...base, op: "progress_overview", epic: "Q4" })).toEqual({ v: 1, butler: true, from: null, op: "progress_overview", epic: "Q4" });
-    expect(parseControlRequest({ ...base, op: "metrics_overview" })).toEqual({ v: 1, butler: true, from: null, op: "metrics_overview" });
-    expect(parseControlRequest({ ...base, op: "metrics_overview", days: 365 })).toEqual({ v: 1, butler: true, from: null, op: "metrics_overview", days: 365 });
+      .toEqual({ v: 1, shipherd: true, from: null, op: "list_tickets", epic: "checkout" });
+    expect(parseControlRequest({ ...base, op: "list_features", epic: "checkout" })).toEqual({ v: 1, shipherd: true, from: null, op: "list_features", epic: "checkout" });
+    expect(parseControlRequest({ ...base, op: "progress_overview" })).toEqual({ v: 1, shipherd: true, from: null, op: "progress_overview" });
+    expect(parseControlRequest({ ...base, op: "progress_overview", epic: "Q4" })).toEqual({ v: 1, shipherd: true, from: null, op: "progress_overview", epic: "Q4" });
+    expect(parseControlRequest({ ...base, op: "metrics_overview" })).toEqual({ v: 1, shipherd: true, from: null, op: "metrics_overview" });
+    expect(parseControlRequest({ ...base, op: "metrics_overview", days: 365 })).toEqual({ v: 1, shipherd: true, from: null, op: "metrics_overview", days: 365 });
     expect(parseControlRequest({ ...base, from: "b", op: "refresh_epic_summary", epic: "3" }))
-      .toEqual({ v: 1, butler: true, from: "b", op: "refresh_epic_summary", epic: "3" });
-    expect(parseControlRequest({ ...base, op: "session_activity", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "session_activity", session: "s1" });
-    expect(parseControlRequest({ ...base, op: "refresh_session", session: "s1" })).toEqual({ v: 1, butler: true, from: null, op: "refresh_session", session: "s1" });
+      .toEqual({ v: 1, shipherd: true, from: "b", op: "refresh_epic_summary", epic: "3" });
+    expect(parseControlRequest({ ...base, op: "session_activity", session: "s1" })).toEqual({ v: 1, shipherd: true, from: null, op: "session_activity", session: "s1" });
+    expect(parseControlRequest({ ...base, op: "refresh_session", session: "s1" })).toEqual({ v: 1, shipherd: true, from: null, op: "refresh_session", session: "s1" });
     expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "先合 A" }))
-      .toEqual({ v: 1, butler: true, from: null, op: "send_message", session: "s1", text: "先合 A" });
+      .toEqual({ v: 1, shipherd: true, from: null, op: "send_message", session: "s1", text: "先合 A" });
     expect(parseControlRequest({ ...base, op: "send_message", epic: "checkout", text: "先合 A" }))
-      .toEqual({ v: 1, butler: true, from: null, op: "send_message", epic: "checkout", text: "先合 A" });
+      .toEqual({ v: 1, shipherd: true, from: null, op: "send_message", epic: "checkout", text: "先合 A" });
     expect(parseControlRequest({ ...base, op: "send_message", session: "s1", text: "x".repeat(MESSAGE_LIMIT) })).toMatchObject({ op: "send_message" });
-    expect(parseControlRequest({ ...base, op: "ask_user", question: "合吗？" })).toEqual({ v: 1, butler: true, from: null, op: "ask_user", question: "合吗？" });
-    expect(parseControlRequest({ ...base, op: "report", text: "巡检完了" })).toEqual({ v: 1, butler: true, from: null, op: "report", text: "巡检完了", kind: "progress" });
+    expect(parseControlRequest({ ...base, op: "ask_user", question: "合吗？" })).toEqual({ v: 1, shipherd: true, from: null, op: "ask_user", question: "合吗？" });
+    expect(parseControlRequest({ ...base, op: "report", text: "巡检完了" })).toEqual({ v: 1, shipherd: true, from: null, op: "report", text: "巡检完了", kind: "progress" });
   });
 
-  it("rejects anything that creates, deletes or ends, malformed fields, the old names, and butler next to another scope", () => {
+  it("rejects anything that creates, deletes or ends, malformed fields, the old names, and shipherd next to another scope", () => {
     for (const bad of [
       { ...base, op: "create_feature", name: "c", brief: "b" }, { ...base, op: "create_ticket", ticket: "P-1" }, { ...base, op: "start_session", repo: "r", task: "t" },
       { ...base, op: "start_feature", feature: "c" }, { ...base, op: "end_session", session: "s", reason: "r" }, { ...base, op: "set_epic_plan", plan: "p" },
@@ -272,7 +272,7 @@ describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
       { ...base, op: "session_activity" }, { ...base, op: "list_tickets", epic: 3 }, { ...base, op: "list_features", epic: "" },
       { ...base, op: "refresh_feature_summary", feature: "3" }, { ...base, op: "refresh_epic_summary" }, { ...base, op: "refresh_epic_summary", epic: 3 }, { ...base, op: "progress_overview", epic: "" },
       { ...base, op: "metrics_overview", days: 0 }, { ...base, op: "metrics_overview", days: 366 }, { ...base, op: "metrics_overview", days: 2.5 }, { ...base, op: "metrics_overview", days: "7" },
-      { v: 1, butler: "yes", op: "list_epics" }, { v: 1, butler: false, op: "list_epics" },
+      { v: 1, shipherd: "yes", op: "list_epics" }, { v: 1, shipherd: false, op: "list_epics" },
       { ...base, epicId: 3, op: "list_epics" }, { ...base, featureId: 3, op: "list_epics" }, { ...base, ticketKey: "P-1", op: "list_epics" },
       { v: 1, featureId: 3, op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },
     ]) {
@@ -282,8 +282,8 @@ describe("parseControlRequest for the Butler 总控 (BTL-190 5)", () => {
 });
 
 describe("parseControlRequest for stacks (workstream K)", () => {
-  it("accepts the four stack ops for a feature and Butler control", () => {
-    for (const base of [{ v: 1, featureId: 2 }, { v: 1, butler: true }] as const) {
+  it("accepts the four stack ops for a feature and Shipherd control", () => {
+    for (const base of [{ v: 1, featureId: 2 }, { v: 1, shipherd: true }] as const) {
       expect(parseControlRequest({ ...base, op: "list_stacks" })).toEqual({ ...base, from: null, op: "list_stacks" });
       expect(parseControlRequest({ ...base, op: "stack_define", branches: ["a", "b"], repo: "shop", name: "n", stack: 3 }))
         .toEqual({ ...base, from: null, op: "stack_define", branches: ["a", "b"], repo: "shop", name: "n", stack: 3 });

@@ -1,12 +1,12 @@
 import type { ExternalActionEntry } from "../../../shared/external";
 import { api } from "../api";
-import { auditIsEmpty } from "../butler-self-view";
+import { auditIsEmpty } from "../shipherd-self-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-/** 审计页：只有 Butler 替你做过的对外动作（BTL-243 起 Butler 不再调用任何模型，没有模型调用的记录了）。 */
+/** 审计页：只有 Shipherd 替你做过的对外动作（BTL-243 起 Shipherd 不再调用任何模型，没有模型调用的记录了）。 */
 export function AuditPage() {
   const external = useStateRefetch("externalAudit", () => api.externalAudit());
   return (
@@ -19,7 +19,7 @@ export function AuditPage() {
   );
 }
 
-/** 一条记录都没有时的说明：Butler 默认不对外做事，所以空是正常的。 */
+/** 一条记录都没有时的说明：Shipherd 默认不对外做事，所以空是正常的。 */
 export function AuditEmptyNote() {
   return <p className="muted" data-testid="audit-empty-note">{S.lay.auditEmpty}</p>;
 }

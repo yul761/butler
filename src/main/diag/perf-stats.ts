@@ -1,3 +1,4 @@
+import { envValue } from "../../shared/legacy-env";
 // 性能诊断（BTL-242）：默认开着、开销很低的计数。每 60 秒一个窗口，滚进最近一小时的环里；
 // 窗口不闲（有 long task、事件循环 p99 高、有慢操作）时往 main.log 写一行 perf:，「导出诊断」把整个环导出去。
 import { performance } from "node:perf_hooks";
@@ -6,9 +7,9 @@ import type { DiagMode, EventLoopDelay, PerfWindow, Timing } from "../../shared/
 
 export type { DiagMode, EventLoopDelay, PerfWindow, Timing };
 
-/** BUTLER_PERF_DIAG：0 / off 关掉；verbose 每个窗口都写一行；其余（默认）开着、闲的窗口不写。 */
+/** SHIPHERD_PERF_DIAG：0 / off 关掉；verbose 每个窗口都写一行；其余（默认）开着、闲的窗口不写。 */
 export function diagMode(env: Record<string, string | undefined>): DiagMode {
-  const v = (env.BUTLER_PERF_DIAG ?? "").trim().toLowerCase();
+  const v = (envValue(env, "PERF_DIAG") ?? "").trim().toLowerCase();
   if (v === "0" || v === "off" || v === "false") return "off";
   if (v === "verbose") return "verbose";
   return "on";

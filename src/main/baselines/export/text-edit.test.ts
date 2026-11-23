@@ -12,11 +12,11 @@ describe("json edits keep the file as it was", () => {
 }
 `;
   it("adds a key to a nested object with the file's indent and keeps comments", () => {
-    const out = jsonAddKey(pkg, ["scripts"], "butler:x", "node a.mjs --all")!;
+    const out = jsonAddKey(pkg, ["scripts"], "shipherd:x", "node a.mjs --all")!;
     expect(out).toContain("// the app");
     expect(out).toContain("// keep me");
-    expect(out).toContain(`    "lint": "eslint .", // keep me\n    "butler:x": "node a.mjs --all"\n  }`);
-    expect((parseJsonc(out) as { scripts: Record<string, string> }).scripts["butler:x"]).toBe("node a.mjs --all");
+    expect(out).toContain(`    "lint": "eslint .", // keep me\n    "shipherd:x": "node a.mjs --all"\n  }`);
+    expect((parseJsonc(out) as { scripts: Record<string, string> }).scripts["shipherd:x"]).toBe("node a.mjs --all");
   });
   it("creates the missing parent object", () => {
     const out = jsonAddKey(`{\n  "name": "x"\n}\n`, ["lint-staged"], "*.ts", "node a.mjs")!;
@@ -79,9 +79,9 @@ describe("makefile", () => {
     expect(makeTargets(mk)).toEqual(["lint", "fmt"]);
   });
   it("adds a target with a tab recipe and a prerequisite", () => {
-    const out = makeAddTarget(mk, "butler-x", ["sh scripts/butler-checks/x.sh --all"]);
-    expect(out.endsWith("\n\n.PHONY: butler-x\nbutler-x:\n\tsh scripts/butler-checks/x.sh --all\n")).toBe(true);
-    expect(makeAddPrereq(out, "lint", "butler-x")).toContain("lint: fmt butler-x ## run lint\n");
+    const out = makeAddTarget(mk, "shipherd-x", ["sh scripts/shipherd-checks/x.sh --all"]);
+    expect(out.endsWith("\n\n.PHONY: shipherd-x\nshipherd-x:\n\tsh scripts/shipherd-checks/x.sh --all\n")).toBe(true);
+    expect(makeAddPrereq(out, "lint", "shipherd-x")).toContain("lint: fmt shipherd-x ## run lint\n");
     expect(makeAddPrereq("lint:\n\tx\n", "lint", "b")).toBe("lint: b\n\tx\n");
     expect(makeAddPrereq("a:\n", "lint", "b")).toBeNull();
     expect(makeAddTarget("a:\r\n\tx\r\n", "b", ["y"])).toBe("a:\r\n\tx\r\n\r\n.PHONY: b\r\nb:\r\n\ty\r\n");

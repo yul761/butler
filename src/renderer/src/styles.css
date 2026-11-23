@@ -24,7 +24,7 @@
   --live-wire: #b9b9b3;
   --live-grain: #e4e4e0;
   /* 谁该动（UI 重做 §5.1）：颜色只表示谁该动，不表示严重程度。 */
-  --turn-ask: #b91c1c; --turn-merge: #166534; --turn-stuck: #6d28d9; --turn-butler: #92400e;
+  --turn-ask: #b91c1c; --turn-merge: #166534; --turn-stuck: #6d28d9; --turn-shipherd: #92400e;
   --turn-agent: #1d4ed8; --turn-external: #5f5f5a; --turn-done: #276b42; --turn-idle: #66665f;
   /* 对话 tab 的黄框（分叉讨论，UI 重做第 5 层）：边框、底色、标题字。 */
   --fork-border: #f0c36d; --fork-bg: #fffaf0; --fork-head: #9c6400;
@@ -53,7 +53,7 @@
     --live-need: #e2b84a;
     --live-wire: #55554f;
     --live-grain: #2e2e2b;
-    --turn-ask: #f87171; --turn-merge: #4ade80; --turn-stuck: #c4b5fd; --turn-butler: #fbbf24;
+    --turn-ask: #f87171; --turn-merge: #4ade80; --turn-stuck: #c4b5fd; --turn-shipherd: #fbbf24;
     --turn-agent: #6b9cf0; --turn-external: #9b9b96; --turn-done: #86d9a6; --turn-idle: var(--muted);
     --fork-border: #7a5c1e; --fork-bg: #2a251a; --fork-head: #f0c36d;
   }
@@ -91,7 +91,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .twisty:disabled { visibility: hidden; }
 .section-toggle { display: inline-flex; gap: 6px; align-items: baseline; padding: 0; border: none; background: transparent; color: inherit; font: inherit; }
 .section-toggle .twisty { width: auto; }
-/* feature、Butler 总控页终端上面的部分：一排 tab，一次只显示一块（整体进度、ticket 表、汇报、待你决定……）。
+/* feature、Shipherd 总控页终端上面的部分：一排 tab，一次只显示一块（整体进度、ticket 表、汇报、待你决定……）。
    tab 条不缩；内容框在空间不够时先缩、自己滚动，不挤掉 tab 条，也不挤占终端（终端区至少占窗口一半高，见 .terminals）。 */
 .page-tabs { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
 .page-tabs-bar { flex-shrink: 0; display: flex; gap: 2px; padding: 0 12px; overflow-x: auto; }
@@ -109,8 +109,8 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .page-tabs-panel h3 { display: flex; gap: 8px; align-items: baseline; margin: 6px 0 4px; font-size: 12px; color: var(--muted); }
 .page-tabs-panel h3 .section-toggle { flex-shrink: 0; }
 .control-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; position: relative; }
-/* Butler 总控页：分栏是 .ticket-page 的直接子元素，要自己长高到窗口底。 */
-.butler-page .control-split { flex: 1 1 auto; }
+/* Shipherd 总控页：分栏是 .ticket-page 的直接子元素，要自己长高到窗口底。 */
+.shipherd-page .control-split { flex: 1 1 auto; }
 .control-fold { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2; width: 16px; padding: 2px 0; line-height: 1; font-size: 14px; }
 .control-split.right-folded .control-fold { left: auto; right: 4px; transform: none; }
 @media (max-width: 900px) { .control-fold { display: none; } }
@@ -165,7 +165,7 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .card { width: 100%; display: flex; gap: 10px; text-align: left; padding: 10px 12px; }
 
 .ticket-page { display: flex; flex-direction: column; height: 100%; }
-/* 空间不够时只有页签（feature、Butler、ticket 页的 tab）缩小、自己滚动；标题栏保持原高。 */
+/* 空间不够时只有页签（feature、Shipherd、ticket 页的 tab）缩小、自己滚动；标题栏保持原高。 */
 .ticket-page > :not(.page-tabs) { flex-shrink: 0; }
 .ticket-header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .ticket-header h2 { margin: 0; font-size: 15px; }
@@ -370,8 +370,8 @@ p.inbox-reports { margin: 2px 0; }
 .inbox-kind { border-radius: 4px; padding: 0 6px; background: var(--pill-pending-bg); color: var(--pill-pending); }
 .inbox-kind.done { background: var(--pill-approved-bg); color: var(--pill-approved); }
 .inbox-kind.blocked { background: var(--pill-changes-bg); color: var(--pill-changes); }
-/* Butler 总控页（BTL-190 第 5 点）。 */
-.butler-intro { margin: 0; padding: 0 16px 8px; }
+/* Shipherd 总控页（BTL-190 第 5 点）。 */
+.shipherd-intro { margin: 0; padding: 0 16px 8px; }
 .messages-box { margin-top: 12px; }
 .messages-box > summary { cursor: pointer; color: var(--muted); }
 .lesson-sessions h3 { margin: 8px 16px 0; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -543,7 +543,7 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .stack-layer.state-merged { opacity: 0.7; }
 .stack-layer-action { margin-inline-start: 8px; }
 
-/* Butler 页「回复」tab（ws-b）。 */
+/* Shipherd 页「回复」tab（ws-b）。 */
 .message-list { list-style: none; margin: 0; padding: 0; }
 .message { border-bottom: 1px solid var(--border); padding: 8px 0; }
 .message-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
@@ -609,7 +609,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-tag.turn-ask { color: var(--turn-ask); background: color-mix(in srgb, var(--turn-ask) 14%, var(--bg)); }
 .turn-tag.turn-merge { color: var(--turn-merge); background: color-mix(in srgb, var(--turn-merge) 14%, var(--bg)); }
 .turn-tag.turn-stuck { color: var(--turn-stuck); background: color-mix(in srgb, var(--turn-stuck) 14%, var(--bg)); }
-.turn-tag.turn-butler { color: var(--turn-butler); background: color-mix(in srgb, var(--turn-butler) 14%, var(--bg)); }
+.turn-tag.turn-shipherd { color: var(--turn-shipherd); background: color-mix(in srgb, var(--turn-shipherd) 14%, var(--bg)); }
 .turn-tag.turn-agent { color: var(--turn-agent); background: color-mix(in srgb, var(--turn-agent) 14%, var(--bg)); }
 .turn-tag.turn-external { color: var(--turn-external); background: color-mix(in srgb, var(--turn-external) 14%, var(--bg)); }
 .turn-tag.turn-done { color: var(--turn-done); background: color-mix(in srgb, var(--turn-done) 14%, var(--bg)); }
@@ -618,7 +618,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-dot.turn-ask { background: var(--turn-ask); }
 .turn-dot.turn-merge { background: var(--turn-merge); }
 .turn-dot.turn-stuck { background: var(--turn-stuck); }
-.turn-dot.turn-butler { background: var(--turn-butler); }
+.turn-dot.turn-shipherd { background: var(--turn-shipherd); }
 .turn-dot.turn-agent { background: var(--turn-agent); }
 .turn-dot.turn-external { background: var(--turn-external); }
 .turn-dot.turn-done { background: var(--turn-done); }
@@ -628,7 +628,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .turn-bar > i.turn-ask { background: var(--turn-ask); }
 .turn-bar > i.turn-merge { background: var(--turn-merge); }
 .turn-bar > i.turn-stuck { background: var(--turn-stuck); }
-.turn-bar > i.turn-butler { background: var(--turn-butler); }
+.turn-bar > i.turn-shipherd { background: var(--turn-shipherd); }
 .turn-bar > i.turn-agent { background: var(--turn-agent); }
 .turn-bar > i.turn-external { background: var(--turn-external); }
 .turn-bar > i.turn-done { background: var(--turn-done); }
@@ -641,7 +641,7 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .scope-block > summary .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .scope-block > summary .line { flex-shrink: 0; }
 
-/* 侧栏（UI 重做第 2 层）：树在自己的区域里滚动，「总控」「Butler 自己」和防休眠始终看得见；点和数字靠右。 */
+/* 侧栏（UI 重做第 2 层）：树在自己的区域里滚动，「总控」「Shipherd 自己」和防休眠始终看得见；点和数字靠右。 */
 .sidebar .ticket-groups { min-height: 0; }
 .sidebar .ticket .key { flex-shrink: 0; }
 .sidebar .ticket.feature .key { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -7,10 +7,10 @@ import { locateClaude, readLoginShellPath } from "./locate";
 import { headlessEnv } from "./spawn";
 
 /**
- * 只在 BUTLER_LIVE_CLAUDE=1 时运行：真的调用一次本机已登录的 claude（会花一点公司额度）。
+ * 只在 SHIPHERD_LIVE_CLAUDE=1 时运行：真的调用一次本机已登录的 claude（会花一点公司额度）。
  * 它验证 dontAsk + --json-schema 能拿到结构化结果，并且写工具被拒绝。
  */
-describe.skipIf(process.env.BUTLER_LIVE_CLAUDE !== "1")("runHeadless against the real claude", () => {
+describe.skipIf(process.env.SHIPHERD_LIVE_CLAUDE !== "1")("runHeadless against the real claude", () => {
   it("returns structured output under dontAsk and cannot write files", async () => {
     const pathValue = await readLoginShellPath(process.platform, process.env);
     const claudePath = locateClaude({ override: "", pathValue, platform: process.platform });
@@ -26,8 +26,8 @@ describe.skipIf(process.env.BUTLER_LIVE_CLAUDE !== "1")("runHeadless against the
       cwd: repo,
       args: headlessArgs({ schema, allowedTools: READ_ONLY_TOOLS }),
       prompt: "先运行 `git status`，再尝试创建文件 live.txt（内容 x）。然后回答：gitClean = 工作区是否干净，wroteFile = live.txt 现在是否存在。",
-      // BUTLER_HOME 指向临时目录：用户级 butler-hook 的上报只会落进临时 inbox。
-      env: { ...headlessEnv(process.env, { pathValue, runId: "live-test" }), BUTLER_HOME: tempDir("butler-home-") },
+      // SHIPHERD_HOME 指向临时目录：用户级 shipherd-hook 的上报只会落进临时 inbox。
+      env: { ...headlessEnv(process.env, { pathValue, runId: "live-test" }), SHIPHERD_HOME: tempDir("shipherd-home-") },
     });
     expect(out.ok).toBe(true);
     if (!out.ok) return;

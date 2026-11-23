@@ -60,7 +60,7 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
 /**
  * feature 页的「轮到你」卡片、概况页签的标红和「进行中」：和首页、全部 ticket 表格、进度那一句同一口径（spec「不并存两套状态算法」）。
  * 每个 ticket 一条（主进程标了 ticketLevel 的那条，带着别的 PR 个数）；再加这个 ticket 多出来的没回答的提问（首页也各出一张），
- * 和不属于 ticket 的（总控 session、Butler 提醒）。被 ticket 级口径排除的 session 级那条（有 PR 时 session 停着）不出。
+ * 和不属于 ticket 的（总控 session、Shipherd 提醒）。被 ticket 级口径排除的 session 级那条（有 PR 时 session 停着）不出。
  */
 export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { youItems: TurnItem[]; running: RunningRow[]; attention: boolean } {
   const out: TurnItem[] = [];

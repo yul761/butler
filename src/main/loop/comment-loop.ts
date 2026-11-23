@@ -92,7 +92,7 @@ export function touches(patch: string, oldLine: number | null, newLine: number |
 /** 自动回复的固定措辞（语言跟 comments.replyLanguage，不跟界面）。 */
 export function replyText(lang: "en" | "zh", sha: string, quote: string | null): string {
   const q = quote ? `> ${cut(quote.split("\n")[0].trim(), 200)}\n\n` : "";
-  return lang === "zh" ? `${q}已在 ${sha} 中修改。\n\n<sub>（Butler 自动回复）</sub>` : `${q}Addressed in ${sha}.\n\n<sub>(automated reply from Butler)</sub>`;
+  return lang === "zh" ? `${q}已在 ${sha} 中修改。\n\n<sub>（Shipherd 自动回复）</sub>` : `${q}Addressed in ${sha}.\n\n<sub>(automated reply from Shipherd)</sub>`;
 }
 
 type Where = { cwd: string; slug: string | null };

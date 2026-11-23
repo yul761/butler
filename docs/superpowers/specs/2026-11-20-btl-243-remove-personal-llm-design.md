@@ -1,6 +1,6 @@
 # BTL-243: remove the personal LLM API, privacy levels and memory distillation
 
-Addendum to the Butler 4.0 simplification (work item W3). Butler stops talking to any LLM provider of its own. After this change, data leaves the machine only through the user's own `claude`, plus the two outward channels the user switches on themselves: GitHub writes through `gh` (outward actions) and the notification webhook.
+Addendum to the Shipherd 4.0 simplification (work item W3). Shipherd stops talking to any LLM provider of its own. After this change, data leaves the machine only through the user's own `claude`, plus the two outward channels the user switches on themselves: GitHub writes through `gh` (outward actions) and the notification webhook.
 
 ## 1. What is removed
 
@@ -47,16 +47,16 @@ What StateCore does (checked with the embedded backend, `backgroundDigest: false
 Decision: **keep consolidate as an event**, and say so.
 
 - Not a note. Notes are capped at 500 characters and 30 per scope; splitting a long entry into notes would push out the decisions and constraints that notes are for.
-- Both ways `claude` reaches memory now use Butler's own memory server: the shared MCP hub already did, and the stdio server (the default, `sharedMcp` is off) now does too. `memory-mcp/entry.ts` used to load the statecore-mcp bin, whose tool text promises background distillation. It now runs `MemoryServer` over stdio on the embedded backend with `backgroundDigest: false`, the same as the hub.
-- Text changes (English, as Claude Code shows it; the hub and stdio say the same). They are the `BUTLER_OVERRIDES` list in `memory-mcp/memory-tools.ts`:
+- Both ways `claude` reaches memory now use Shipherd's own memory server: the shared MCP hub already did, and the stdio server (the default, `sharedMcp` is off) now does too. `memory-mcp/entry.ts` used to load the statecore-mcp bin, whose tool text promises background distillation. It now runs `MemoryServer` over stdio on the embedded backend with `backgroundDigest: false`, the same as the hub.
+- Text changes (English, as Claude Code shows it; the hub and stdio say the same). They are the `SHIPHERD_OVERRIDES` list in `memory-mcp/memory-tools.ts`:
   - server instructions: "pass consolidate: true for longer conversational context — it is kept word for word and `recall` returns it among recent events";
   - `remember`: "…accepted up to 2000 characters and kept word for word as an event, not a fact; recall returns recent events";
   - `remember.consolidate`: "kept word for word as an event that recall returns among recent events" instead of "distilled into facts in the background";
   - `recall`: no longer mentions a distilled digest; it lists "recent events (including longer context stored with consolidate=true)";
   - `facts`: no longer mentions events waiting for distillation, and its result no longer carries `pending`.
-- The stdio line reader moves from `sessions-server.ts` to `memory-mcp/stdio.ts`, so the memory bundle doesn't pull in the butler-sessions code.
+- The stdio line reader moves from `sessions-server.ts` to `memory-mcp/stdio.ts`, so the memory bundle doesn't pull in the shipherd-sessions code.
 - `remember(consolidate: true)` answers `{ ok: true, mode: "event" }` instead of `distillation: "deferred", reason: "background digest disabled"`.
-- The contract test still compares Butler's copy of statecore-mcp 1.1.0's tool layer with the real one, word for word. Butler's changes are applied on top as a short, named list of overrides, and the test checks exactly those differences. A statecore-mcp upgrade still fails the test.
+- The contract test still compares Shipherd's copy of statecore-mcp 1.1.0's tool layer with the real one, word for word. Shipherd's changes are applied on top as a short, named list of overrides, and the test checks exactly those differences. A statecore-mcp upgrade still fails the test.
 
 Older events that were waiting for distillation when the user upgrades simply stay as events and keep showing up in `recall`.
 

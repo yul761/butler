@@ -4,7 +4,7 @@
 
 1. **PR 字段**
    - `gh.ts`：`PR_FIELDS` 加 `baseRefName,title,labels,reviewRequests,mergeable,mergeStateStatus`；`PrStatus` 加对应字段；`latestReviewers(reviews, author)`。
-   - migration：`ticket_prs` 加列；`feature_handoffs.pr_status_at`；`butler_messages`；`external_action_audit`。
+   - migration：`ticket_prs` 加列；`feature_handoffs.pr_status_at`；`shipherd_messages`；`external_action_audit`。
    - `ticket-prs-repo.ts`：新列读写。`pr-watcher.ts` `apply()` 写新列、算 `status_changed_at`；`statusOf` 带出。
    - `src/shared/types.ts` `WatchedPr` 加字段。
 2. **卡在谁 / 进度聚合**
@@ -12,12 +12,12 @@
    - `src/main/progress/progress-view.ts`：`buildProgress`。
 3. **控制操作**
    - `src/shared/control.ts`：`refresh_feature_summary`、`progress_overview` 两个 op。
-   - `butler-control.ts`：`list_prs` 新字段；`send_message` 返回 `requestId`；两个新 op。
-   - `sessions-server.ts`：工具定义（中英）、`butlerRequest` 分支。
+   - `shipherd-control.ts`：`list_prs` 新字段；`send_message` 返回 `requestId`；两个新 op。
+   - `sessions-server.ts`：工具定义（中英）、`shipherdRequest` 分支。
 4. **回复回流**
    - `activity-parse.ts` / `activity-monitor.ts`：`lastReplyAt`。
-   - `src/main/db/butler-messages-repo.ts`、`src/main/control/butler-messages.ts`（`ButlerMessages`）。
-   - `index.ts`：`sessionStopped` 里调 `targetStopped`，tick 里 `flush`；`list_inbox` 带 `messages`；Butler 页的"回复"tab。
+   - `src/main/db/shipherd-messages-repo.ts`、`src/main/control/shipherd-messages.ts`（`ShipherdMessages`）。
+   - `index.ts`：`sessionStopped` 里调 `targetStopped`，tick 里 `flush`；`list_inbox` 带 `messages`；Shipherd 页的"回复"tab。
 5. **汇总新鲜度**
    - `feature-runner.ts`：`hasNewActivity` 第三条；prompt 用实时 PR；`pr_status_at`。
    - `feature-templates.ts`：PR 行带实时状态和"截至"。

@@ -41,7 +41,7 @@ function setup() {
   /** 以前的 epic session（BTL-246 去掉了）：新代码不写 epic_id，直接写库（迁移会建好 epics 表和这一行）。 */
   const legacyEpicSession = (id: string) => {
     db.prepare(`INSERT INTO epics (name, workspace_dir, created_at) VALUES ('e', '/e', 1)`).run();
-    sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/e", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/e", origin: "shipherd", createdAt: 1 });
     db.prepare(`UPDATE sessions SET epic_id = (SELECT MAX(id) FROM epics) WHERE id = ?`).run(id);
   };
   return { deps: { sessions, tickets, ingest, ingestFeature, afterFeatureCommand }, sessions, handoffs, featureHandoffs, featureInputs, afterCalls, legacyEpicSession };
@@ -53,14 +53,14 @@ function transcript(payload: unknown, uuid = "a1"): string {
   const body = typeof payload === "string" ? payload : JSON.stringify(payload);
   const entries = [
     { type: "user", message: { role: "user", content: "/handoff" } },
-    { type: "assistant", uuid, message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-handoff\n${body}\n${FENCE}` }] } },
+    { type: "assistant", uuid, message: { role: "assistant", content: [{ type: "text", text: `${FENCE}shipherd-handoff\n${body}\n${FENCE}` }] } },
   ];
   writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
   return file;
 }
 
 describe("stopFromEnvelope", () => {
-  const env = (payload: unknown, butlerSession: string | null = null): HookEnvelope => ({ v: 1, receivedAt: 1, ticket: null, butlerSession, payload });
+  const env = (payload: unknown, shipherdSession: string | null = null): HookEnvelope => ({ v: 1, receivedAt: 1, ticket: null, shipherdSession, payload });
 
   it("extracts session and transcript from Stop only, never from headless runs", () => {
     const stop = { hook_event_name: "Stop", session_id: "s1", transcript_path: "/t.jsonl" };
@@ -75,7 +75,7 @@ describe("stopFromEnvelope", () => {
 describe("captureCommandHandoff", () => {
   it("stores a /handoff block under the session's ticket with trigger command", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const file = transcript({ ...emptyHandoff("WHATEVER-1"), done_today: ["写完了"] });
     expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file })).toMatchObject({ stored: true, degraded: false });
     expect(handoffs.latest("PROJ-1")).toMatchObject({ trigger: "command", sessionId: "s1", sourceRef: "a1", payload: { ticket: "PROJ-1", done_today: ["写完了"] } });
@@ -83,7 +83,7 @@ describe("captureCommandHandoff", () => {
 
   it("does not store the same output twice when Stop is handled again", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const file = transcript(emptyHandoff("PROJ-1"));
     await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file });
     expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file })).toEqual({ stored: false, reason: "duplicate" });
@@ -101,7 +101,7 @@ describe("captureCommandHandoff", () => {
 
   it("keeps an invalid block as a degraded handoff with its raw text", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const raw = '{"ticket":"PROJ-1","status":"shipping"}';
     expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: transcript(raw) })).toMatchObject({ stored: true, degraded: true });
     expect(handoffs.latest("PROJ-1")).toMatchObject({ degraded: true, rawText: raw });
@@ -117,11 +117,11 @@ describe("captureCommandHandoff", () => {
 
   it("ignores a turn where the assistant merely quotes a fence without /handoff", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const file = join(tempDir(), "quote.jsonl");
     const entries = [
       { type: "user", message: { role: "user", content: "给我看看 handoff 的格式" } },
-      { type: "assistant", uuid: "q1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] } },
+      { type: "assistant", uuid: "q1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}shipherd-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] } },
     ];
     writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
     expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file })).toBeNull();
@@ -130,12 +130,12 @@ describe("captureCommandHandoff", () => {
 
   it("ingests the V4-shaped /handoff turn (command message + isMeta expansion)", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const file = join(tempDir(), "v4.jsonl");
     const entries = [
       { type: "user", message: { role: "user", content: "<command-message>handoff</command-message>\n<command-name>/handoff</command-name>" } },
-      { type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: `示例：\n${FENCE}butler-handoff\n{}\n${FENCE}` }] } },
-      { type: "assistant", uuid: "v1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] } },
+      { type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: `示例：\n${FENCE}shipherd-handoff\n{}\n${FENCE}` }] } },
+      { type: "assistant", uuid: "v1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}shipherd-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] } },
     ];
     writeFileSync(file, entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
     expect(await captureCommandHandoff(deps, { sessionId: "s1", transcriptPath: file })).toMatchObject({ stored: true });
@@ -150,7 +150,7 @@ describe("captureCommandHandoff when the transcript lags behind the Stop hook", 
 
   it("reads again until the answer shows up, then stores it", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const file = join(tempDir(), "lag.jsonl");
     write(file, [userHandoff, narration]);
     const waits: number[] = [];
@@ -159,7 +159,7 @@ describe("captureCommandHandoff when the transcript lags behind the Stop hook", 
       // claude 写完最后一条回答。
       if (waits.length === 2) {
         write(file, [userHandoff, narration, {
-          type: "assistant", uuid: "a9", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] },
+          type: "assistant", uuid: "a9", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}shipherd-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}` }] },
         }]);
       }
     };
@@ -186,9 +186,9 @@ describe("captureCommandHandoff when the transcript lags behind the Stop hook", 
     expect(waits).toEqual([]);
   });
 
-  it("accepts the handoff in a plain ```json block when claude did not use the butler-handoff fence", async () => {
+  it("accepts the handoff in a plain ```json block when claude did not use the shipherd-handoff fence", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const file = join(tempDir(), "json.jsonl");
     write(file, [userHandoff, {
       type: "assistant", uuid: "j1",
@@ -207,7 +207,7 @@ describe("captureCommandHandoff in a legacy epic session (BTL-246)", () => {
     const summary = { summary: "规划", blockers: [], next_steps: [], decisions: [], open_questions: [] };
     writeFileSync(feature, [
       { type: "user", message: { role: "user", content: "/handoff" } },
-      { type: "assistant", uuid: "f1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}butler-feature-handoff\n${JSON.stringify(summary)}\n${FENCE}` }] } },
+      { type: "assistant", uuid: "f1", message: { role: "assistant", content: [{ type: "text", text: `${FENCE}shipherd-feature-handoff\n${JSON.stringify(summary)}\n${FENCE}` }] } },
     ].map((e) => JSON.stringify(e)).join("\n") + "\n");
     expect(await captureCommandHandoff(deps, { sessionId: "e1", transcriptPath: transcript(emptyHandoff("PROJ-1")) })).toBeNull();
     expect(await captureCommandHandoff(deps, { sessionId: "e1", transcriptPath: feature })).toBeNull();
@@ -218,10 +218,10 @@ describe("captureCommandHandoff in a legacy epic session (BTL-246)", () => {
   });
 });
 
-describe("captureCommandHandoff in the Butler 总控", () => {
+describe("captureCommandHandoff in the Shipherd 总控", () => {
   it("stores nothing, even a block naming an existing ticket", async () => {
     const { deps, sessions, handoffs } = setup();
-    sessions.insertIfAbsent({ id: "b1", ticketKey: null, cwd: "/b", origin: "butler", createdAt: 1, butler: true });
+    sessions.insertIfAbsent({ id: "b1", ticketKey: null, cwd: "/b", origin: "shipherd", createdAt: 1, shipherd: true });
     expect(await captureCommandHandoff(deps, { sessionId: "b1", transcriptPath: transcript(emptyHandoff("PROJ-1")) })).toBeNull();
     expect(handoffs.listByTicket("PROJ-1")).toEqual([]);
   });
@@ -236,9 +236,9 @@ describe("captureCommandHandoff in a feature coordinator", () => {
   };
   const answer = (uuid: string, text: string) => ({ type: "assistant", uuid, message: { role: "assistant", content: [{ type: "text", text }] } });
   const summary = { summary: "前端等 review，后端还差错误码。", blockers: [], next_steps: [{ ticket: "proj-1", text: "补错误码" }], decisions: [], open_questions: [] };
-  const featureBlock = (v: unknown) => `${FENCE}butler-feature-handoff\n${typeof v === "string" ? v : JSON.stringify(v)}\n${FENCE}`;
+  const featureBlock = (v: unknown) => `${FENCE}shipherd-feature-handoff\n${typeof v === "string" ? v : JSON.stringify(v)}\n${FENCE}`;
   const coordinator = (sessions: SessionsRepo, id = "c1") =>
-    sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w/c", origin: "butler", createdAt: 1, coordinator: true, featureId: 3 });
+    sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w/c", origin: "shipherd", createdAt: 1, coordinator: true, featureId: 3 });
 
   it("stores the feature block as a command summary and starts the child handoffs once", async () => {
     const { deps, sessions, handoffs, featureHandoffs, featureInputs, afterCalls } = setup();
@@ -282,7 +282,7 @@ describe("captureCommandHandoff in a feature coordinator", () => {
       ingested.push(i);
       return deps.ingest(i);
     };
-    const file = write([userHandoff, answer("t1", `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}`)]);
+    const file = write([userHandoff, answer("t1", `${FENCE}shipherd-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}`)]);
     const r = await captureCommandHandoff({ ...deps, ingest, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file });
     expect(r).toEqual({ featureId: 3, stored: false, reason: "wrong_block" });
     expect(ingested).toHaveLength(0);
@@ -339,7 +339,7 @@ describe("captureCommandHandoff in a feature coordinator", () => {
   it("treats the new head after /clear as the same coordinator", async () => {
     const { deps, sessions, featureHandoffs, featureInputs, afterCalls } = setup();
     coordinator(sessions, "c0");
-    sessions.insertIfAbsent({ id: "c1", ticketKey: null, cwd: "/w/c", origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "c1", ticketKey: null, cwd: "/w/c", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy("c0", "c1");
     expect(sessions.get("c1")?.featureId).toBe(3);
     const file = write([userHandoff, answer("f1", featureBlock(summary))]);
@@ -360,8 +360,8 @@ describe("captureCommandHandoff in a feature coordinator", () => {
 
   it("does not take a fix session's /handoff as a feature summary or a ticket handoff", async () => {
     const { deps, sessions, handoffs, featureHandoffs, featureInputs, afterCalls } = setup();
-    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/w/c", origin: "butler", createdAt: 1, featureId: 3, fixesSession: "stuck-1" });
-    for (const body of [featureBlock(summary), `${FENCE}butler-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}`]) {
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/w/c", origin: "shipherd", createdAt: 1, featureId: 3, fixesSession: "stuck-1" });
+    for (const body of [featureBlock(summary), `${FENCE}shipherd-handoff\n${JSON.stringify(emptyHandoff("PROJ-1"))}\n${FENCE}`]) {
       const file = write([userHandoff, answer("a1", body)]);
       expect(await captureCommandHandoff(deps, { sessionId: "fix", transcriptPath: file })).toBeNull();
     }
@@ -373,7 +373,7 @@ describe("captureCommandHandoff in a feature coordinator", () => {
 
   it("leaves a ticket session alone even if it outputs a feature block", async () => {
     const { deps, sessions, featureInputs, afterCalls } = setup();
-    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "s1", ticketKey: "PROJ-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     const file = write([userHandoff, answer("f1", featureBlock(summary))]);
     expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "s1", transcriptPath: file })).toEqual({ stored: false, reason: "no_block" });
     expect(featureInputs).toHaveLength(0);

@@ -1,8 +1,8 @@
-// review 简报（设计 §8.1）：一页 Markdown，包在 <!-- butler:brief --> … <!-- /butler:brief --> 里。
+// review 简报（设计 §8.1）：一页 Markdown，包在 <!-- shipherd:brief --> … <!-- /shipherd:brief --> 里。
 // 只有「改了什么、为什么」那一段是模型写的；其余全是确定的数据。证据只列核实过的，session 的自述不原样进来。
 import { matchAny } from "../../shared/glob";
 import type { ResolvedPrPolicy } from "../../shared/pr-policy";
-import { BRIEF_END, BRIEF_START, type DiffFile, type EvidenceGap, type EvidenceItem, type Risk, type RiskRule, type Violation } from "../../shared/prereview";
+import { BRIEF_END, BRIEF_START, LEGACY_BRIEF_END, LEGACY_BRIEF_START, type DiffFile, type EvidenceGap, type EvidenceItem, type Risk, type RiskRule, type Violation } from "../../shared/prereview";
 import { gapLine } from "../prereview/delivery";
 import { CAT, type Lang } from "./readiness";
 
@@ -72,7 +72,7 @@ export function focusFiles(files: readonly DiffFile[], policy: ResolvedPrPolicy[
 
 export function renderBrief(i: BriefInput): string {
   const en = i.lang === "en";
-  const out: string[] = [BRIEF_START, en ? "## Butler review brief" : "## Butler review 简报", ""];
+  const out: string[] = [BRIEF_START, en ? "## Shipherd review brief" : "## Shipherd review 简报", ""];
 
   // 1. 改了什么、为什么
   out.push(en ? "### What changed and why" : "### 改了什么、为什么", "", one(i.summary ?? fallbackSummary(i)), "");
@@ -95,7 +95,7 @@ export function renderBrief(i: BriefInput): string {
   for (const e of i.evidence) {
     if (e.kind === "not_run") continue;
     const label = e.kind === "check" ? (e.category && e.category !== "other" ? CAT[i.lang][e.category] : one(e.name)) : one(e.name);
-    if (e.verified === "rerun_pass") ev.push(en ? `- ${label}: Butler's rerun passed${e.verifyDetail ? ` (${code(e.verifyDetail)})` : ""}` : `- ${label}：Butler 复跑通过${e.verifyDetail ? `（${code(e.verifyDetail)}）` : ""}`);
+    if (e.verified === "rerun_pass") ev.push(en ? `- ${label}: Shipherd's rerun passed${e.verifyDetail ? ` (${code(e.verifyDetail)})` : ""}` : `- ${label}：Shipherd 复跑通过${e.verifyDetail ? `（${code(e.verifyDetail)}）` : ""}`);
     else if (e.verified === "consistent") ev.push(en ? `- ${cut(label, 120)}: output checked` : `- ${cut(label, 120)}：已核对输出`);
     else if (e.verified === "rerun_fail" || e.verified === "mismatch") ev.push(en ? `- ${cut(label, 120)}: does not match: ${cut(one(e.verifyDetail ?? ""), 200)}` : `- ${cut(label, 120)}：对不上：${cut(one(e.verifyDetail ?? ""), 200)}`);
   }
@@ -133,11 +133,13 @@ export function renderBrief(i: BriefInput): string {
   return `${BRIEF_START}\n${body.trim()}\n${BRIEF_END}`;
 }
 
-/** 把简报块写进 PR 描述：已有块就整块替换，没有就追加在末尾；块以外的内容原样不动。 */
+/** 把简报块写进 PR 描述：已有块（含改名前的 butler:brief 块）就整块替换，没有就追加在末尾；块以外的内容原样不动。 */
 export function upsertBriefBlock(body: string, block: string): string {
-  const start = body.indexOf(BRIEF_START);
-  const end = start >= 0 ? body.indexOf(BRIEF_END, start) : -1;
-  if (start >= 0 && end >= 0) return body.slice(0, start) + block + body.slice(end + BRIEF_END.length);
+  for (const [open, close] of [[BRIEF_START, BRIEF_END], [LEGACY_BRIEF_START, LEGACY_BRIEF_END]]) {
+    const start = body.indexOf(open);
+    const end = start >= 0 ? body.indexOf(close, start) : -1;
+    if (start >= 0 && end >= 0) return body.slice(0, start) + block + body.slice(end + close.length);
+  }
   const base = body.replace(/\s+$/, "");
   return base ? `${base}\n\n${block}\n` : `${block}\n`;
 }

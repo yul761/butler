@@ -3,7 +3,7 @@ import { EXTERNAL_ACTION_SETTINGS } from "../../../shared/external";
 import type { LoopPolicyOverrides, LoopScope } from "../../../shared/loop-policy";
 import type { FlakyKind } from "../../../shared/loop";
 import type { EditableSettings } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { loopGroups, loopInputValue, loopOverridesFromDraft, parseLoopInput, type LoopDraft } from "../loop-view";
 import { policyScopeFromKey, policyScopeKey } from "../policy-view";
@@ -50,7 +50,7 @@ function LoopPolicyEditor() {
       setDraft({});
       setMessage({ text: S.lp.saved, error: false });
     } catch (e) {
-      if (e instanceof ButlerError) setMessage({ text: e.message, error: true });
+      if (e instanceof ShipherdError) setMessage({ text: e.message, error: true });
       else reportError(e);
     } finally {
       setBusy(false);

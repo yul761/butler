@@ -1,5 +1,5 @@
 /**
- * 用户是不是另外装了 StateCore 自己的 Claude Code 捕获插件（设计文档 8.5：Butler 已覆盖它的功能，不要另装）。
+ * 用户是不是另外装了 StateCore 自己的 Claude Code 捕获插件（设计文档 8.5：Shipherd 已覆盖它的功能，不要另装）。
  * 看用户级 settings.json：enabledPlugins 里有启用的 statecore 插件，或者有调用 `statecore-mcp hook` 的 hook 命令。
  * 只读，不改任何东西。
  */

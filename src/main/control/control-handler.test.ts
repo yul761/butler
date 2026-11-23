@@ -36,7 +36,7 @@ async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlH
   const sessions = new SessionsRepo(db);
   const settings = new SettingsRepo(db);
   const features = new FeaturesRepo(db);
-  const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
+  const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("shipherd-ws-") });
   const featureService = new FeatureService({ features, tickets, now: () => 1 });
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
@@ -84,7 +84,7 @@ async function setup(o: { memoryEnabled?: () => boolean; sessionModel?: ControlH
     log: (msg) => void logs.push(msg),
   });
   // 仓库名固定成 web / api，start_session 里按名字选。
-  const parent = join(tempDir("butler-code-"), "full");
+  const parent = join(tempDir("shipherd-code-"), "full");
   mkdirSync(parent);
   const web = join(parent, "web");
   const api = join(parent, "api");
@@ -314,7 +314,7 @@ describe("controlHandler", () => {
       expect(t.refresh.prechecked).toEqual([["s-2", "coordinator"]]);
       expect(t.refresh.started).toEqual([["s-2", "coordinator"]]);
       // /clear 之前的旧 id 也认：按 head 换新。
-      t.sessions.insertIfAbsent({ id: "s-2b", ticketKey: "FULL-1", cwd: "/w", origin: "butler", createdAt: 2 });
+      t.sessions.insertIfAbsent({ id: "s-2b", ticketKey: "FULL-1", cwd: "/w", origin: "shipherd", createdAt: 2 });
       t.sessions.setReplacedBy("s-2", "s-2b", "clear");
       expect(await t.refreshSession("s-2")).toMatchObject({ ok: true });
       expect(t.refresh.started.at(-1)).toEqual(["s-2b", "coordinator"]);

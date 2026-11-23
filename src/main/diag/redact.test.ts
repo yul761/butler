@@ -20,7 +20,7 @@ describe("redactText: generic paths", () => {
     ["share \\\\fileserver\\team\\acme here", "share <path> here"],
     ["branch feature/acme-login pushed", "branch <path> pushed"],
     ["repo acme-corp/payments merged", "repo <path> merged"],
-    ["(/var/folders/xy/T/butler-1)", "(<path>)"],
+    ["(/var/folders/xy/T/shipherd-1)", "(<path>)"],
   ];
   for (const [input, want] of cases) it(input, () => expect(redactText(input, NONE)).toBe(want));
 
@@ -130,7 +130,7 @@ describe("redactedDiagnostics", () => {
   it("marks the file and leaves no trace of the terms anywhere", () => {
     const t = terms({ home: ["/Users/alice"], users: ["alice"], titles: ["Secret launch"], repos: ["acme"] });
     const file = {
-      kind: "butler-diagnostics", schema: 1, generatedAt: "2026-11-21T00:00:00.000Z",
+      kind: "shipherd-diagnostics", schema: 1, generatedAt: "2026-11-21T00:00:00.000Z",
       app: { version: "4.0.0", versions: {}, mode: "on" }, system: { platform: "darwin", arch: "arm64", osRelease: "25.2.0", cpus: { model: "M", count: 1 }, memory: { totalMb: 1, freeMb: 1 } },
       processes: [], mainMemory: {}, perf: { current: { ops: { "acme:scan": 1 } }, history: [] },
       logTail: ["start Secret launch in /Users/alice/Code/acme", "alice opened acme"],
@@ -194,15 +194,15 @@ describe("redactText: review findings", () => {
     expect(redactText("MY_PROJ-12 done", NONE)).toBe("<ticket> done");
   });
 
-  it("common branch names and Butler's own name stay readable", () => {
-    const t = terms({ branches: ["main", "feature/x"], repos: ["Butler", "acme"] });
-    expect(redactText("butler: merged into main from acme", t)).toBe("butler: merged into main from <repo>");
+  it("common branch names and Shipherd's own name stay readable", () => {
+    const t = terms({ branches: ["main", "feature/x"], repos: ["Shipherd", "acme"] });
+    expect(redactText("shipherd: merged into main from acme", t)).toBe("shipherd: merged into main from <repo>");
   });
 });
 
 describe("redactedDiagnostics: log free text", () => {
   const file = (logTail: string[]) => ({
-    kind: "butler-diagnostics", schema: 1, generatedAt: "2026-11-21T00:00:00.000Z",
+    kind: "shipherd-diagnostics", schema: 1, generatedAt: "2026-11-21T00:00:00.000Z",
     app: { version: "4.0.0", versions: {}, mode: "on" }, system: { platform: "darwin", arch: "arm64", osRelease: "25.2.0", cpus: { model: "M", count: 1 }, memory: { totalMb: 1, freeMb: 1 } },
     processes: [], mainMemory: {}, perf: { current: {}, history: [] }, logTail,
   }) as never;
@@ -235,8 +235,8 @@ describe("collectRedactTerms: more columns", () => {
     const cols = (table: string) => (db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[]).map((c) => c.name);
     expect(cols("sessions")).toContain("git_branch");
     expect(cols("blocks")).toContain("name");
-    const t = collectRedactTerms(db as never, { paths: ["/Users/alice/Library/Application Support/Butler"] });
+    const t = collectRedactTerms(db as never, { paths: ["/Users/alice/Library/Application Support/Shipherd"] });
     // 额外传进来的目录不拿最后一段当仓库名。
-    expect(t.repos).not.toContain("Butler");
+    expect(t.repos).not.toContain("Shipherd");
   });
 });

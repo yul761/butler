@@ -61,7 +61,7 @@ describe("StackControl (workstream K)", () => {
       (value(await c.handle(scope, { op: "list_stacks" })) as { id: number }[]).map((s) => s.id);
     expect(await ids({ kind: "feature", featureId: 1 })).toEqual([1]);
     expect(await ids({ kind: "feature", featureId: 2 })).toEqual([2]);
-    expect(await ids({ kind: "butler" })).toEqual([1, 2, 3]);
+    expect(await ids({ kind: "shipherd" })).toEqual([1, 2, 3]);
   });
 
   it("refuses another feature's stack and unknown stacks", async () => {
@@ -109,15 +109,15 @@ describe("StackControl (workstream K)", () => {
     // 别的 feature 的分支不能放进自己的栈
     expect(await c.handle({ kind: "feature", featureId: 1 }, { op: "stack_define", branches: ["a1", "b1"], repo: "shop" })).toMatchObject({ ok: false });
     expect(service.define).not.toHaveBeenCalled();
-    // Butler 总控都行
-    expect(await c.handle({ kind: "butler" }, { op: "stack_rebase", stack: 2 })).toMatchObject({ ok: true });
+    // Shipherd 总控都行
+    expect(await c.handle({ kind: "shipherd" }, { op: "stack_rebase", stack: 2 })).toMatchObject({ ok: true });
   });
 
-  it("records the feature for a Butler-control stack only when every ticket shares it", async () => {
+  it("records the feature for a Shipherd-control stack only when every ticket shares it", async () => {
     const { c, service } = setup();
-    await c.handle({ kind: "butler" }, { op: "stack_define", branches: ["a1", "a2"], repo: repo });
+    await c.handle({ kind: "shipherd" }, { op: "stack_define", branches: ["a1", "a2"], repo: repo });
     expect(service.define).toHaveBeenLastCalledWith(expect.objectContaining({ featureId: 1 }));
-    await c.handle({ kind: "butler" }, { op: "stack_define", branches: ["a1", "b1"], repo: repo });
+    await c.handle({ kind: "shipherd" }, { op: "stack_define", branches: ["a1", "b1"], repo: repo });
     expect(service.define).toHaveBeenLastCalledWith(expect.objectContaining({ featureId: null }));
   });
 

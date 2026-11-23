@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { jobResultMessage } from "../job-view";
 import { hasDay, mergeTools, toggleDay, WEEK_ORDER } from "../settings-form";
@@ -55,7 +55,7 @@ export function ScheduleSettings() {
 
   /** 校验失败（invalid_setting）的 message 直接显示在表单里；其他失败走全局错误条。 */
   function writeFailed(e: unknown) {
-    if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+    if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
     else reportError(e);
   }
 
@@ -122,14 +122,14 @@ export function ScheduleSettings() {
         <input type="time" value={value("nightlyTime")} onChange={(e) => edit("nightlyTime", e.target.value)} onBlur={() => saveIfEdited("nightlyTime")} />
       </label>
 
-      {/* Butler 总控的每日巡检（BTL-190 第 5 点）：空 = 关。 */}
+      {/* Shipherd 总控的每日巡检（BTL-190 第 5 点）：空 = 关。 */}
       <div className="field">
-        {S.butlerPatrolTime}
-        <input type="time" aria-label={S.butlerPatrolTime} value={value("butlerPatrolTime")} onChange={(e) => edit("butlerPatrolTime", e.target.value)} onBlur={() => saveIfEdited("butlerPatrolTime")} />
-        <p className="muted">{S.butlerPatrolHelp}</p>
-        {current.butlerPatrolTime !== "" && (
+        {S.shipherdPatrolTime}
+        <input type="time" aria-label={S.shipherdPatrolTime} value={value("shipherdPatrolTime")} onChange={(e) => edit("shipherdPatrolTime", e.target.value)} onBlur={() => saveIfEdited("shipherdPatrolTime")} />
+        <p className="muted">{S.shipherdPatrolHelp}</p>
+        {current.shipherdPatrolTime !== "" && (
           <div className="actions">
-            <button onClick={() => void save("butlerPatrolTime", "")}>{S.butlerPatrolOff}</button>
+            <button onClick={() => void save("shipherdPatrolTime", "")}>{S.shipherdPatrolOff}</button>
           </div>
         )}
       </div>

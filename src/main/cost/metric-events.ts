@@ -4,7 +4,7 @@ import type { CostBreakerDeps } from "./cost-breaker";
 
 /**
  * 熔断的每一步记成 H 的度量事件（契约 4.7）：kind 是 cost.<步骤>，ticket 的挂在 ticketKey 上，session 的挂在 sessionId（链的根 id）上。
- * data 只放花了多少、上限、单位和 Butler 自己写的短说明（模型名、上限变化），不放用户写的东西。
+ * data 只放花了多少、上限、单位和 Shipherd 自己写的短说明（模型名、上限变化），不放用户写的东西。
  */
 export function costMetricEvents(record: RecordEvent): NonNullable<CostBreakerDeps["onEvent"]> {
   return (kind, r) => {

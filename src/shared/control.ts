@@ -2,7 +2,7 @@ import type { Lang } from "./i18n";
 import { isModelName, isTier } from "./model-routing";
 
 /**
- * 总控 session 开子 session（设计文档 2026-10-23 第二步）：butler-sessions MCP server ↔ Butler 主进程，走文件。
+ * 总控 session 开子 session（设计文档 2026-10-23 第二步）：shipherd-sessions MCP server ↔ Shipherd 主进程，走文件。
  * 请求：<control>/requests/<id>.json；结果：<control>/results/<id>.json（同一个 id）。
  */
 
@@ -64,8 +64,8 @@ export const OPTION_LIMIT = 200;
 export const REPORT_LIMIT = 4000;
 
 /**
- * 所有 Butler session 都有的两个请求（BTL-190 第 2+3 点）：ask_user 记一条「待你决定」，report 交一条汇报。
- * 三种作用域的请求都带它们；普通 ticket session 的 butler-sessions 只有这两个工具（member 作用域）。
+ * 所有 Shipherd session 都有的两个请求（BTL-190 第 2+3 点）：ask_user 记一条「待你决定」，report 交一条汇报。
+ * 三种作用域的请求都带它们；普通 ticket session 的 shipherd-sessions 只有这两个工具（member 作用域）。
  */
 export type InboxControlOp =
   | { op: "ask_user"; question: string; options?: string[]; context?: string; recommended?: number }
@@ -75,7 +75,7 @@ export type InboxControlOp =
 export const MAX_STACK_LAYERS = 1000;
 
 /**
- * 栈式 PR（工作流 K）：feature 总控和 Butler 总控有全部四个。
+ * 栈式 PR（工作流 K）：feature 总控和 Shipherd 总控有全部四个。
  * stack_define 的 branches 从下到上，每一项是分支名或 ticket 号；stack 给了就整个换掉那个栈的层。
  */
 export type StackControlOp =
@@ -134,42 +134,42 @@ export const BLOCK_NAME_LIMIT = 100;
 export const BLOCK_DESCRIPTION_LIMIT = 2000;
 export const BLOCK_ORDER_MAX = 200;
 
-/** Butler 总控 send_message 的正文最多这么多字符，超出直接拒绝。 */
+/** Shipherd 总控 send_message 的正文最多这么多字符，超出直接拒绝。 */
 export const MESSAGE_LIMIT = 4000;
 
 /**
- * 全局总控的请求（内部叫 Butler 总控，BTL-190 第 5 点）：全局只有一个，看得到所有 epic、ticket、PR 和 session，但什么都不建、不删、不结束，
+ * 全局总控的请求（内部叫 Shipherd 总控，BTL-190 第 5 点）：全局只有一个，看得到所有 epic、ticket、PR 和 session，但什么都不建、不删、不结束，
  * 也不开 ticket 的 session。send_message 只能发给 epic 总控（排进它的信箱，BTL-245）：session、epic 给且只给一个，
- * epic 是名字或 id；interrupt 先按 Esc 叫停再送。目标的终端关着时 Butler 接着它最近的那个 session（epic 从没开过总控时新开一个）再把消息交进去。
+ * epic 是名字或 id；interrupt 先按 Esc 叫停再送。目标的终端关着时 Shipherd 接着它最近的那个 session（epic 从没开过总控时新开一个）再把消息交进去。
  * list_tickets、list_features、progress_overview 的 epic 是名字或 id（list_epics 里的），可以不给。
  */
 /** send_message 发给谁：一个 session，或者一个 epic（它的总控；BTL-246 以前叫 feature）。 */
-export type ButlerMessageTarget = { session: string; epic?: undefined } | { epic: string; session?: undefined };
+export type ShipherdMessageTarget = { session: string; epic?: undefined } | { epic: string; session?: undefined };
 
-export type ButlerControlRequest =
-  | ({ v: 1; butler: true; from: string | null } & InboxControlOp)
-  | ({ v: 1; butler: true; from: string | null } & StackControlOp)
+export type ShipherdControlRequest =
+  | ({ v: 1; shipherd: true; from: string | null } & InboxControlOp)
+  | ({ v: 1; shipherd: true; from: string | null } & StackControlOp)
   /** epic（内部是 features 表）和它们里面 feature 的进度（BTL-246）。 */
-  | { v: 1; butler: true; from: string | null; op: "list_epics" }
+  | { v: 1; shipherd: true; from: string | null; op: "list_epics" }
   /** epic 里的 feature（内部是 block），可以只看一个 epic。 */
-  | { v: 1; butler: true; from: string | null; op: "list_features"; epic?: string }
-  | { v: 1; butler: true; from: string | null; op: "list_tickets"; epic?: string }
-  | { v: 1; butler: true; from: string | null; op: "list_prs" }
-  | { v: 1; butler: true; from: string | null; op: "list_sessions" }
-  | { v: 1; butler: true; from: string | null; op: "session_activity"; session: string }
-  | { v: 1; butler: true; from: string | null; op: "list_inbox" }
-  | ({ v: 1; butler: true; from: string | null; op: "send_message"; text: string; interrupt?: boolean } & ButlerMessageTarget)
-  | { v: 1; butler: true; from: string | null; op: "refresh_session"; session: string }
+  | { v: 1; shipherd: true; from: string | null; op: "list_features"; epic?: string }
+  | { v: 1; shipherd: true; from: string | null; op: "list_tickets"; epic?: string }
+  | { v: 1; shipherd: true; from: string | null; op: "list_prs" }
+  | { v: 1; shipherd: true; from: string | null; op: "list_sessions" }
+  | { v: 1; shipherd: true; from: string | null; op: "session_activity"; session: string }
+  | { v: 1; shipherd: true; from: string | null; op: "list_inbox" }
+  | ({ v: 1; shipherd: true; from: string | null; op: "send_message"; text: string; interrupt?: boolean } & ShipherdMessageTarget)
+  | { v: 1; shipherd: true; from: string | null; op: "refresh_session"; session: string }
   /** 后台给一个 epic 重新生成汇总（ws-b）：立刻返回，生成完 list_epics 能看到新的 summaryAt。 */
-  | { v: 1; butler: true; from: string | null; op: "refresh_epic_summary"; epic: string }
+  | { v: 1; shipherd: true; from: string | null; op: "refresh_epic_summary"; epic: string }
   /** 进度总览（ws-b）：buildProgress 的聚合，PR 轮到谁和看板同一套算法，可以按 epic 过滤。只读。 */
-  | { v: 1; butler: true; from: string | null; op: "progress_overview"; epic?: string }
+  | { v: 1; shipherd: true; from: string | null; op: "progress_overview"; epic?: string }
   /** 效果总览（ws-h）：和「效果」页同一份 MetricsOverview。只读。 */
-  | { v: 1; butler: true; from: string | null; op: "metrics_overview"; days?: number }
+  | { v: 1; shipherd: true; from: string | null; op: "metrics_overview"; days?: number }
   /** 一个 PR 的就绪条件、风险理由、预审和简报（ws-g）。pr 是 ticket_prs 的 id 或 PR 链接。只读。 */
-  | { v: 1; butler: true; from: string | null; op: "pr_assessment"; pr: string };
+  | { v: 1; shipherd: true; from: string | null; op: "pr_assessment"; pr: string };
 
-export type ControlRequest = TicketControlRequest | FeatureControlRequest | ButlerControlRequest;
+export type ControlRequest = TicketControlRequest | FeatureControlRequest | ShipherdControlRequest;
 
 export type ControlResult = { v: 1; ok: true; value: unknown; capacity?: SessionCapacity } | { v: 1; ok: false; error: string };
 
@@ -250,10 +250,15 @@ const isSessionOp = (op: unknown) => op === "session_activity" || op === "end_se
 
 /** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。ticketKey 和 featureId 必须正好有一个。 */
 export function parseControlRequest(raw: unknown): ControlRequest | null {
-  const o = raw as Record<string, unknown> | null;
+  let o = raw as Record<string, unknown> | null;
   if (!o || typeof o !== "object" || o.v !== CONTROL_VERSION) return null;
+  // 改名前（BTL-260）的 sessions MCP server 写的是 butler: true（升级前起的总控还在跑时）。TODO(5.0) 删。
+  if ("butler" in o && !("shipherd" in o)) {
+    const { butler, ...rest } = o;
+    o = { ...rest, shipherd: butler };
+  }
   const from = typeof o.from === "string" && o.from.length > 0 && o.from.length <= 100 ? o.from : null;
-  if ("butler" in o) return parseButlerRequest(o, from);
+  if ("shipherd" in o) return parseShipherdRequest(o, from);
   // 以前的 epic session（BTL-246 去掉了）：它的 MCP server 可能还在跑，请求一律不认。
   if ("epicId" in o) return null;
   if ("featureId" in o) {
@@ -330,10 +335,10 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   return null;
 }
 
-/** Butler 总控的请求：butler 必须是 true，而且不能和别的作用域一起出现。 */
-function parseButlerRequest(o: Record<string, unknown>, from: string | null): ButlerControlRequest | null {
-  if (o.butler !== true || "ticketKey" in o || "featureId" in o || "epicId" in o) return null;
-  const base = { v: 1 as const, butler: true as const, from };
+/** Shipherd 总控的请求：shipherd 必须是 true，而且不能和别的作用域一起出现。 */
+function parseShipherdRequest(o: Record<string, unknown>, from: string | null): ShipherdControlRequest | null {
+  if (o.shipherd !== true || "ticketKey" in o || "featureId" in o || "epicId" in o) return null;
+  const base = { v: 1 as const, shipherd: true as const, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
   if (isStackOp(o.op)) return stackOp(base, o);
   if (o.op === "list_epics" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
@@ -368,7 +373,7 @@ function parseButlerRequest(o: Record<string, unknown>, from: string | null): Bu
     const key = given[0];
     if (!okName(o[key], key === "session" ? 200 : 500)) return null;
     if (o.interrupt !== undefined && typeof o.interrupt !== "boolean") return null;
-    return { ...base, op: "send_message", text: o.text, [key]: o[key], ...(o.interrupt === true && { interrupt: true }) } as ButlerControlRequest;
+    return { ...base, op: "send_message", text: o.text, [key]: o[key], ...(o.interrupt === true && { interrupt: true }) } as ShipherdControlRequest;
   }
   return null;
 }
@@ -398,8 +403,8 @@ export function taskMessage(task: string, lang: Lang, memory: "feature" | "ticke
   // 记忆关着（null）：没有可以 recall 的东西，不提（R36）。
   if (memory === null) return `${TASK_PREFIX[en ? "en" : "zh"]}\n${task}`;
   // 背景和约定放在记忆里；feature 总控开的 session 读 feature 记忆，ticket 总控开的读 ticket 记忆。
-  const featureMemory = en ? "epic memory (butler-feature)" : "epic 记忆（butler-feature）";
-  const ticketMemory = en ? "ticket memory (butler-memory)" : "ticket 记忆（butler-memory）";
+  const featureMemory = en ? "epic memory (shipherd-feature)" : "epic 记忆（shipherd-feature）";
+  const ticketMemory = en ? "ticket memory (shipherd-memory)" : "ticket 记忆（shipherd-memory）";
   const where = memory === "feature" ? featureMemory : ticketMemory;
   const hint = en ? `Read the background and agreements from the ${where} with recall before you start.` : `开始之前先用 recall 读一下 ${where}里的背景和约定。`;
   // 记忆那句放在任务后面，这样会话按钮上显示的是任务本身。

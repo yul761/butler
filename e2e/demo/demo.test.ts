@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { concatList, frameDurations } from "./capture";
 import { allTickets, ASKING_TICKET, DEMO, fakeClaudeScript, ORG, PR_NUMBER, PR_TICKET, STARTED, WORKING_TICKET } from "./demo-data";
 
-/** 演示录制（BTL-251）里不用启动 Butler 就能核对的部分：帧时长、演示数据、假 claude 的剧本。 */
+/** 演示录制（BTL-251）里不用启动 Shipherd 就能核对的部分：帧时长、演示数据、假 claude 的剧本。 */
 
 describe("frame timing", () => {
   it("shows each frame until the next one, caps long gaps, and keeps holds", () => {
@@ -36,7 +36,7 @@ describe("demo data", () => {
 
   it("uses no real company, person or repo names", () => {
     const text = JSON.stringify(DEMO).toLowerCase();
-    for (const word of ["acme", "anthropic", "github.com/yul761", "butler-center"]) expect(text).not.toContain(word);
+    for (const word of ["acme", "anthropic", "github.com/yul761", "shipherd-center"]) expect(text).not.toContain(word);
     // github.com/fernleaf 是真实的个人账号（2026-11-21 查过）；fernleaf-notes 当时不存在。
     expect(ORG).not.toBe("fernleaf");
   });
@@ -49,8 +49,8 @@ describe("demo data", () => {
       expect(match(`mailbox header\n---\n${d.tasks[PR_TICKET]}`)?.reply).toBe(d.doneReply);
       expect(match(d.tasks[WORKING_TICKET])?.then?.length).toBeGreaterThan(0);
       expect(match(d.tasks[ASKING_TICKET])?.then?.at(-1)?.line).toContain("ask_user");
-      // Butler 送来的 CI 消息带 PR 号；合并的通知不能被它的规则抢走。
-      expect(match(`Butler: CI passed on PR #${PR_NUMBER} (abc). You can move on.`)?.reply).toBe(d.ciReply);
+      // Shipherd 送来的 CI 消息带 PR 号；合并的通知不能被它的规则抢走。
+      expect(match(`Shipherd: CI passed on PR #${PR_NUMBER} (abc). You can move on.`)?.reply).toBe(d.ciReply);
       expect(match(d.mergedNote)?.reply).toBe(d.mergedReply);
       expect(match(`Answered: ${d.options[0]}`)?.then?.length).toBeGreaterThan(0);
     }
@@ -69,7 +69,7 @@ describe("fake claude with a demo script", () => {
   });
 
   it("shows the banner, replies by rule, and plays scripted steps that are not user messages and trigger no rule", { timeout: 15_000 }, async () => {
-    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "butler-demo-script-")));
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "shipherd-demo-script-")));
     dirs.push(dir);
     const script = join(dir, "script.json");
     writeFileSync(script, JSON.stringify({

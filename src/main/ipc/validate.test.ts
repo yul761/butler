@@ -10,7 +10,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openButlerArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
 import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 describe("memory IPC arguments", () => {
@@ -115,11 +115,11 @@ describe("feature IPC arguments (design 2026-10-26)", () => {
 });
 
 describe("session request IPC arguments", () => {
-  it("checks the Butler 总控 session request (BTL-190 5)", () => {
-    expect(openButlerArg({ sessionId: "abc-1", prefill: "hi", extra: 1 })).toEqual({ sessionId: "abc-1", prefill: "hi" });
-    expect(openButlerArg({})).toEqual({});
+  it("checks the Shipherd 总控 session request (BTL-190 5)", () => {
+    expect(openShipherdArg({ sessionId: "abc-1", prefill: "hi", extra: 1 })).toEqual({ sessionId: "abc-1", prefill: "hi" });
+    expect(openShipherdArg({})).toEqual({});
     for (const bad of [null, 3, { sessionId: "../x" }, { prefill: 3 }, { prefill: "x".repeat(100_001) }]) {
-      expect(() => openButlerArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
+      expect(() => openShipherdArg(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow();
     }
   });
 
@@ -132,9 +132,9 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     expect(inboxAnswerArg("用 A")).toBe("用 A");
     for (const bad of ["", "   ", 3, null, "x".repeat(4001)]) expect(() => inboxAnswerArg(bad)).toThrow();
     expect(inboxScopeArg({ featureId: 2 })).toEqual({ featureId: 2 });
-    expect(messageScopeArg({ butler: true })).toEqual({ butler: true });
+    expect(messageScopeArg({ shipherd: true })).toEqual({ shipherd: true });
     expect(messageScopeArg({ featureId: 4 })).toEqual({ featureId: 4 });
-    for (const bad of [null, {}, { butler: 1 }, { featureId: -1 }, { epicId: 1 }]) expect(() => messageScopeArg(bad)).toThrow();
+    for (const bad of [null, {}, { shipherd: 1 }, { featureId: -1 }, { epicId: 1 }]) expect(() => messageScopeArg(bad)).toThrow();
     expect(inboxScopeArg({ all: true })).toEqual({ all: true });
     for (const bad of [null, {}, { all: 1 }, { featureId: 0 }, { epicId: 3 }, "all"]) expect(() => inboxScopeArg(bad), JSON.stringify(bad)).toThrow();
   });

@@ -1,5 +1,5 @@
-// 把 Butler 的记忆 MCP server（memory-mcp/entry.ts：MemoryServer + 嵌入式 StateCore）连同依赖打成一个文件。Butler 用自己的 Electron（ELECTRON_RUN_AS_NODE=1）运行它，挂给 claude。
-// 同一个目录里还有总控 session 的 butler-sessions MCP server（butler-sessions-mcp.cjs，设计文档 2026-10-23 第二步）
+// 把 Shipherd 的记忆 MCP server（memory-mcp/entry.ts：MemoryServer + 嵌入式 StateCore）连同依赖打成一个文件。Shipherd 用自己的 Electron（ELECTRON_RUN_AS_NODE=1）运行它，挂给 claude。
+// 同一个目录里还有总控 session 的 shipherd-sessions MCP server（shipherd-sessions-mcp.cjs，设计文档 2026-10-23 第二步）
 // 和共享 MCP hub（mcp-hub.cjs，WS-M H）。
 // 用法：node scripts/build-memory-mcp.mjs [输出文件]，默认 build/memory-mcp/statecore-mcp.cjs。
 import { mkdirSync } from "node:fs";
@@ -34,7 +34,7 @@ await build({
 });
 console.log(`built ${outfile}`);
 
-const sessionsOut = join(dirname(outfile), "butler-sessions-mcp.cjs");
+const sessionsOut = join(dirname(outfile), "shipherd-sessions-mcp.cjs");
 await build({
   entryPoints: ["memory-mcp/sessions-entry.ts"],
   bundle: true,
@@ -46,7 +46,7 @@ await build({
 });
 console.log(`built ${sessionsOut}`);
 
-// 共享 MCP hub（WS-M H）：记忆和 butler-sessions 都在里面，经本机回环 HTTP 给所有 session 用。
+// 共享 MCP hub（WS-M H）：记忆和 shipherd-sessions 都在里面，经本机回环 HTTP 给所有 session 用。
 const hubOut = join(dirname(outfile), "mcp-hub.cjs");
 await build({
   entryPoints: ["memory-mcp/hub-entry.ts"],

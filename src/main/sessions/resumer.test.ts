@@ -4,9 +4,9 @@ import type { SessionMessage } from "../db/session-messages-repo";
 import { MAX_RESUME_ATTEMPTS, MEMORY_RETRY_MS, RESUME_RETRY_MS, Resumer, restartOrder, resumable, type ResumerDeps } from "./resumer";
 
 const session = (over: Partial<Session> = {}): Session => ({
-  id: "s1", ticketKey: "ABC-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
+  id: "s1", ticketKey: "ABC-1", cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
   replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: "coord", featureId: null, fixesSession: null,
-  model: null, butler: false, lessonRunId: null, ...over,
+  model: null, shipherd: false, lessonRunId: null, ...over,
 });
 
 const ctx = { ticketArchived: () => false, epicArchived: () => false };
@@ -19,9 +19,9 @@ describe("resumable", () => {
     expect(resumable(session({ ticketKey: null, featureId: 3, coordinator: true, spawnedBy: null }), ctx)).toBe(true);
     expect(resumable(session({ ticketKey: null, featureId: 3, fixesSession: "x", spawnedBy: null }), ctx)).toBe(true);
   });
-  it("leaves out sessions the user opened, the Butler coordinator, lesson sessions, hidden and outside ones", () => {
+  it("leaves out sessions the user opened, the Shipherd coordinator, lesson sessions, hidden and outside ones", () => {
     expect(resumable(session({ spawnedBy: null }), ctx)).toBe(false);
-    expect(resumable(session({ ticketKey: null, butler: true, spawnedBy: null }), ctx)).toBe(false);
+    expect(resumable(session({ ticketKey: null, shipherd: true, spawnedBy: null }), ctx)).toBe(false);
     expect(resumable(session({ ticketKey: null, lessonRunId: 4 }), ctx)).toBe(false);
     expect(resumable(session({ dismissed: true }), ctx)).toBe(false);
     expect(resumable(session({ origin: "discovered" as Session["origin"] }), ctx)).toBe(false);
@@ -72,7 +72,7 @@ function setup(over: Partial<ResumerDeps> = {}) {
     }),
     waitingSenders: () => [{ id: "m1", from: "coord", featureId: 7 }],
     receipt: (to, _f, body) => receipts.push({ to, body }),
-    nameOf: (id) => id ?? "Butler",
+    nameOf: (id) => id ?? "Shipherd",
     notify: () => undefined,
     now: () => now,
     sleep: async (ms) => {
@@ -193,7 +193,7 @@ describe("Resumer", () => {
     expect(b.r.status("s1")).toBe("ended_by_user");
   });
 
-  it("does nothing once Butler is quitting", async () => {
+  it("does nothing once Shipherd is quitting", async () => {
     const { r, d, receipts } = setup({ started: () => false, isOpen: () => false });
     r.stop();
     await expect(r.request("s1", "mail")).resolves.toEqual({ state: "not_managed" });

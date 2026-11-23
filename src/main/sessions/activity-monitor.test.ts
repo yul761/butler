@@ -39,13 +39,13 @@ const backgroundDone = (taskId: string) => ({
 
 const flush = () => new Promise((r) => setImmediate(r));
 const row = (id: string, over: Partial<Session> = {}): Session => ({
-  id, ticketKey: "DMS-1", cwd: "/work", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
-  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...over,
+  id, ticketKey: "DMS-1", cwd: "/work", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
+  replacedBy: null, dismissed: false, createdAt: 1, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, ...over,
 });
 
 /** 假的依赖：session、ticket、feature 是内存表，transcript 和输出文件是真的临时文件。 */
 function harness(over: Partial<ActivityDeps> = {}) {
-  const dir = tempDir("butler-activity-");
+  const dir = tempDir("shipherd-activity-");
   const heads = new Map<string, Session>();
   const open = new Set<string>();
   const screens = new Map<string, string>();
@@ -544,7 +544,7 @@ describe("ActivityMonitor stuck detection scope", () => {
     await judgedOnce(h, "s1");
   });
 
-  it("does not check a session that Butler did not start", async () => {
+  it("does not check a session that Shipherd did not start", async () => {
     const h = harness();
     h.openSession("s1", { origin: "discovered" });
     await judgedNever(h, "s1");
@@ -1485,7 +1485,7 @@ describe("ActivityMonitor stuck detection", () => {
 
 describe("activityIntervals", () => {
   const production = { tickMs: ACTIVITY_TICK_MS, stuckCheckMs: STUCK_CHECK_MS };
-  const asked = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_STUCK_CHECK_MS: "1000" };
+  const asked = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_STUCK_CHECK_MS: "1000" };
 
   it("stays at 10 seconds and 3 minutes by default", () => {
     expect(activityIntervals({})).toEqual({ tickMs: 10_000, stuckCheckMs: 180_000 });
@@ -1493,13 +1493,13 @@ describe("activityIntervals", () => {
 
   it("honours the variables only under the e2e flag", () => {
     expect(activityIntervals(asked)).toEqual(production);
-    expect(activityIntervals({ ...asked, BUTLER_BACKGROUND_WINDOWS: "0" })).toEqual(production);
-    expect(activityIntervals({ ...asked, BUTLER_BACKGROUND_WINDOWS: "1" })).toEqual({ tickMs: 200, stuckCheckMs: 1000 });
+    expect(activityIntervals({ ...asked, SHIPHERD_BACKGROUND_WINDOWS: "0" })).toEqual(production);
+    expect(activityIntervals({ ...asked, SHIPHERD_BACKGROUND_WINDOWS: "1" })).toEqual({ tickMs: 200, stuckCheckMs: 1000 });
   });
 
   it("keeps the default for a value that is not a positive whole number", () => {
     for (const bad of ["", "0", "-5", "1.5", "soon"]) {
-      expect(activityIntervals({ BUTLER_BACKGROUND_WINDOWS: "1", BUTLER_ACTIVITY_TICK_MS: bad, BUTLER_STUCK_CHECK_MS: bad }), bad).toEqual(production);
+      expect(activityIntervals({ SHIPHERD_BACKGROUND_WINDOWS: "1", SHIPHERD_ACTIVITY_TICK_MS: bad, SHIPHERD_STUCK_CHECK_MS: bad }), bad).toEqual(production);
     }
   });
 });
@@ -1636,8 +1636,8 @@ describe("the live window's signals (BTL-190 7)", () => {
     h.transcript("s1", say("go"), use("t1", "Read", { file_path: "/r/a.ts" }), toolResult("t1"));
     await h.beat();
     h.transcript("s1",
-      use("t2", "mcp__butler-memory__remember", { text: "接口改成 v2" }), toolResult("t2"),
-      use("t3", "mcp__butler-feature__recall", { query: "checkout" }), toolResult("t3"),
+      use("t2", "mcp__shipherd-memory__remember", { text: "接口改成 v2" }), toolResult("t2"),
+      use("t3", "mcp__shipherd-feature__recall", { query: "checkout" }), toolResult("t3"),
       use("t4", "Bash", { command: "pnpm test" }),
     );
     await h.beat();
@@ -1789,7 +1789,7 @@ describe("the live window's signals (BTL-190 7)", () => {
     const events: ActivityEvent[] = [];
     const h = harness({ onEvent: (e) => events.push(e) });
     h.openSession("s1");
-    h.transcript("s1", say("old", OLD), use("t1", "mcp__butler-memory__remember", { text: "旧的" }, OLD), toolResult("t1"), done(OLD));
+    h.transcript("s1", say("old", OLD), use("t1", "mcp__shipherd-memory__remember", { text: "旧的" }, OLD), toolResult("t1"), done(OLD));
     await h.beat();
     expect(events).toEqual([]);
     expect(h.monitor.recent("s1").map((e) => e.label)).toEqual(["旧的"]);

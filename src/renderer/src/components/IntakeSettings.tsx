@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { PolicyScope } from "../../../shared/admission-policy";
 import { INTAKE_SOURCES } from "../../../shared/intake";
 import type { EditableSettingKey, EditableSettings } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { INTAKE_ENUMS, intakeInputValue, intakeOverridesFromDraft, intakeValueText, parseIntakeInput, type IntakeDraft } from "../intake-view";
 import { policyScopeFromKey, policyScopeKey } from "../policy-view";
@@ -29,7 +29,7 @@ function IntakeSource() {
       });
       await load();
     } catch (e) {
-      if (e instanceof ButlerError && e.code === "invalid_setting") setError(e.message);
+      if (e instanceof ShipherdError && e.code === "invalid_setting") setError(e.message);
       else reportError(e);
     }
   };
@@ -93,7 +93,7 @@ function IntakePolicyEditor() {
         setMessage({ text: S.policySaved, error: false });
       } else setMessage({ text: S.policyBadValue(r.key), error: true });
     } catch (e) {
-      if (e instanceof ButlerError) setMessage({ text: e.message, error: true });
+      if (e instanceof ShipherdError) setMessage({ text: e.message, error: true });
       else reportError(e);
     } finally {
       setBusy(false);

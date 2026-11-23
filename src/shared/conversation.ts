@@ -1,4 +1,4 @@
-// UI 重做第 4 层（BTL-234）：Butler 自己另存的对话（只存双方说的话，不存工具调用）。
+// UI 重做第 4 层（BTL-234）：Shipherd 自己另存的对话（只存双方说的话，不存工具调用）。
 
 export interface ConvMessage {
   id: number;

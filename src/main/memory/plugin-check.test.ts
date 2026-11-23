@@ -7,9 +7,9 @@ describe("StateCore capture plugin check (design 8.5)", () => {
     expect(statecorePluginInstalled({ hooks: { Stop: [{ hooks: [{ type: "command", command: "npx -y statecore-mcp hook stop" }] }] } })).toBe(true);
   });
 
-  it("ignores disabled plugins, Butler's own hook and anything malformed", () => {
+  it("ignores disabled plugins, Shipherd's own hook and anything malformed", () => {
     expect(statecorePluginInstalled({ enabledPlugins: { "statecore@x": false } })).toBe(false);
-    expect(statecorePluginInstalled({ hooks: { Stop: [{ hooks: [{ type: "command", command: '"/Users/me/.butler/bin/butler-hook"' }] }] } })).toBe(false);
+    expect(statecorePluginInstalled({ hooks: { Stop: [{ hooks: [{ type: "command", command: '"/Users/me/.shipherd/bin/shipherd-hook"' }] }] } })).toBe(false);
     expect(statecorePluginInstalled({ mcpServers: { statecore: { command: "statecore-mcp" } } })).toBe(false);
     for (const v of [null, undefined, "x", 1, [], { enabledPlugins: "statecore" }]) expect(statecorePluginInstalled(v)).toBe(false);
   });

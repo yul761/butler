@@ -1,4 +1,4 @@
-// review 简报的生成和贴到 PR（设计 §8.2）。默认只在 Butler 里看；「贴到 PR」是用户亲手点的（record 审计），
+// review 简报的生成和贴到 PR（设计 §8.2）。默认只在 Shipherd 里看；「贴到 PR」是用户亲手点的（record 审计），
 // 自动贴要 externalPrBriefPost 打开（attempt）。K 开栈底 PR 时用 briefProvider 拿简报。
 import type { AssessRepo, StoredBrief } from "../db/assess-repo";
 import type { PreReviewRepo, PreReviewRow } from "../db/prereview-repo";
@@ -9,7 +9,7 @@ import type { ResolvedPrPolicy } from "../../shared/pr-policy";
 import { briefSummaryByModel, type ExecRun } from "../prereview/model";
 import type { AssessmentService } from "./assessment-service";
 import { renderBrief, upsertBriefBlock } from "./brief";
-import { stripButlerBlocks, type Lang } from "./readiness";
+import { stripShipherdBlocks, type Lang } from "./readiness";
 
 /** 送给模型的 PR 描述最多这么多字。 */
 const DESCRIPTION_CHARS = 4000;
@@ -49,7 +49,7 @@ export class BriefService {
     const desc = pr ? this.d.assessment.description(pr.id) : null;
     const summary = await briefSummaryByModel(this.d.exec, {
       cwd: row.cwd ?? process.cwd(), ticketKey: row.ticketKey, ticketTitle, prTitle: pr?.title ?? null,
-      description: desc ? stripButlerBlocks(desc).slice(0, DESCRIPTION_CHARS) : null, files: row.files,
+      description: desc ? stripShipherdBlocks(desc).slice(0, DESCRIPTION_CHARS) : null, files: row.files,
       acceptance: evidence.filter((e) => e.kind === "acceptance").map((e) => ({ criterion: e.name, how: e.summary })), lang,
     });
     let risk: Risk | null = pr && pr.headSha === row.target.headSha ? this.d.repo.risk(pr.id) : null;

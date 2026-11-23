@@ -2,6 +2,7 @@ import { HEADLESS_SESSION_PREFIX } from "../../shared/hook-envelope";
 import { dirFromEnv } from "../paths";
 import { pathKey } from "../util/env";
 import { isCmdShim } from "./launch";
+import { envValue, LEGACY_SESSION_VARS } from "../../shared/legacy-env";
 
 export interface SpawnSpec {
   file: string;
@@ -27,7 +28,7 @@ export const AUTO_COMPACT_WINDOW_DEFAULT = "250000";
 
 /**
  * model：不传（或 null）就用 Claude Code 自己的默认。
- * guidePath：Butler 的 session 说明文件。addDirs：总控 session 能看到的额外目录（每个一个 --add-dir）。settingsPath：Butler 写的 --settings 文件（自动启用仓库 .mcp.json 的 server）。
+ * guidePath：Shipherd 的 session 说明文件。addDirs：总控 session 能看到的额外目录（每个一个 --add-dir）。settingsPath：Shipherd 写的 --settings 文件（自动启用仓库 .mcp.json 的 server）。
  * 只有路径，prompt 永远不进 argv。
  */
 export function claudeArgs(req: { mode: "new" | "resume"; sessionId: string; mcpConfigPath?: string; settingsPath?: string; addDirs?: string[]; guidePath?: string; model?: SessionModel | null }): string[] {
@@ -50,7 +51,7 @@ export function cmdShimSafe(file: string, arg: string, platform: NodeJS.Platform
 }
 
 /**
- * 外层 Claude Code 会话注入的会话级标记。Butler 若从一个 claude 会话里启动，这些变量会被继承，
+ * 外层 Claude Code 会话注入的会话级标记。Shipherd 若从一个 claude 会话里启动，这些变量会被继承，
  * 被启动的 claude 会把自己当成子会话（例如不保存 transcript，导致无法 --resume），所以必须去掉。
  * 用户自己的配置（CLAUDE_CODE_USE_BEDROCK、ANTHROPIC_* 等）保留。
  */
@@ -67,18 +68,19 @@ const PARENT_SESSION_VARS = new Set([
   "CLAUDE_PID",
 ]);
 
-/** 去掉 Electron 和外层 Claude Code 的标记变量（以及 Butler 自己的标记），换上登录 shell 的 PATH。 */
+/** 去掉 Electron 和外层 Claude Code 的标记变量（以及 Shipherd 自己的标记），换上登录 shell 的 PATH。 */
 function cleanEnv(base: NodeJS.ProcessEnv, pathValue: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {
-    if (v === undefined || k.startsWith("ELECTRON_") || PARENT_SESSION_VARS.has(k) || k === "BUTLER_TICKET" || k === "BUTLER_SESSION") continue;
+    if (v === undefined || k.startsWith("ELECTRON_") || PARENT_SESSION_VARS.has(k) || k === "SHIPHERD_TICKET" || k === "SHIPHERD_SESSION" || LEGACY_SESSION_VARS.includes(k)) continue;
     out[k] = v;
   }
-  // 相对路径按 Butler 自己的当前目录解析成绝对路径：子进程的 cwd 不同，hook 才会写到同一个 inbox。
-  for (const k of ["BUTLER_HOME", "CLAUDE_CONFIG_DIR"]) {
-    const dir = dirFromEnv(out[k]);
-    if (dir) out[k] = dir;
-  }
+  // 相对路径按 Shipherd 自己的当前目录解析成绝对路径：子进程的 cwd 不同，hook 才会写到同一个 inbox。
+  // 数据目录按 Shipherd 自己的规则算（SHIPHERD_HOME > 旧的 BUTLER_HOME），只用新名字传下去：hook 和 Shipherd 一定落在同一个目录。
+  const home = dirFromEnv(envValue(base, "HOME"));
+  if (home) out.SHIPHERD_HOME = home;
+  const config = dirFromEnv(out.CLAUDE_CONFIG_DIR);
+  if (config) out.CLAUDE_CONFIG_DIR = config;
   if (pathValue) out[pathKey(out)] = pathValue;
   return out;
 }
@@ -91,8 +93,8 @@ export function sessionEnv(
   const out = cleanEnv(base, x.pathValue);
   out.TERM = "xterm-256color";
   out.COLORTERM = "truecolor";
-  if (x.ticketKey !== undefined) out.BUTLER_TICKET = x.ticketKey;
-  out.BUTLER_SESSION = x.sessionId;
+  if (x.ticketKey !== undefined) out.SHIPHERD_TICKET = x.ticketKey;
+  out.SHIPHERD_SESSION = x.sessionId;
   // 用户自己的环境里有就不动。
   out.CLAUDE_CODE_SUBAGENT_MODEL ??= SUBAGENT_MODEL_DEFAULT;
   out.CLAUDE_CODE_AUTO_COMPACT_WINDOW ??= AUTO_COMPACT_WINDOW_DEFAULT;
@@ -116,9 +118,9 @@ export function bypassProxyForLoopback(env: Record<string, string>): void {
   }
 }
 
-/** headless claude（handoff、刷新、MCP 探测）：不挂 ticket；BUTLER_SESSION 带 headless: 前缀，hook 上报会被整体忽略。 */
+/** headless claude（handoff、刷新、MCP 探测）：不挂 ticket；SHIPHERD_SESSION 带 headless: 前缀，hook 上报会被整体忽略。 */
 export function headlessEnv(base: NodeJS.ProcessEnv, x: { pathValue: string; runId: string }): Record<string, string> {
   const out = cleanEnv(base, x.pathValue);
-  out.BUTLER_SESSION = `${HEADLESS_SESSION_PREFIX}${x.runId}`;
+  out.SHIPHERD_SESSION = `${HEADLESS_SESSION_PREFIX}${x.runId}`;
   return out;
 }

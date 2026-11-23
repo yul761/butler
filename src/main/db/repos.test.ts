@@ -49,7 +49,7 @@ describe("SessionsRepo", () => {
     return new SessionsRepo(db);
   };
 
-  it("recordHeadless hides Butler's own headless sessions from unclaimed, even after a disk scan", () => {
+  it("recordHeadless hides Shipherd's own headless sessions from unclaimed, even after a disk scan", () => {
     const repo = setup();
     repo.recordHeadless("h1", "/w", 100);
     expect(repo.get("h1")).toMatchObject({ dismissed: true, ticketKey: null });
@@ -59,7 +59,7 @@ describe("SessionsRepo", () => {
 
   it("recordHeadless never dismisses a pre-existing session", () => {
     const repo = setup();
-    repo.insertIfAbsent({ id: "real", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    repo.insertIfAbsent({ id: "real", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
     repo.recordHeadless("real", "/w", 100);
     expect(repo.get("real")).toMatchObject({ dismissed: false, ticketKey: "PROJ-1", cwd: "/x" });
   });
@@ -67,7 +67,7 @@ describe("SessionsRepo", () => {
   it("insertIfAbsent only inserts once", () => {
     const repo = setup();
     expect(repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "discovered", createdAt: 1 })).toBe(true);
-    expect(repo.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/y", origin: "butler", createdAt: 2 })).toBe(false);
+    expect(repo.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/y", origin: "shipherd", createdAt: 2 })).toBe(false);
     expect(repo.get("a")).toMatchObject({ ticketKey: null, cwd: "/x", origin: "discovered", waitingForInput: false, dismissed: false });
   });
 
@@ -84,7 +84,7 @@ describe("SessionsRepo", () => {
 
   it("head follows replacedBy and survives cycles", () => {
     const repo = setup();
-    for (const id of ["a", "b", "c"]) repo.insertIfAbsent({ id, ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    for (const id of ["a", "b", "c"]) repo.insertIfAbsent({ id, ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
     repo.setReplacedBy("a", "b");
     repo.setReplacedBy("b", "c");
     expect(repo.head("a")?.id).toBe("c");
@@ -95,17 +95,17 @@ describe("SessionsRepo", () => {
 
   it("stores the model of a new session", () => {
     const repo = setup();
-    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, model: "sonnet" });
-    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1 });
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 1, model: "sonnet" });
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 1 });
     expect(repo.get("a")?.model).toBe("sonnet");
     expect(repo.get("b")?.model).toBeNull();
   });
 
   it("copies the model to the session that replaces it, without overwriting one the new row already has", () => {
     const repo = setup();
-    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1, model: "opus" });
-    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 2 });
-    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 3, model: "sonnet" });
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 1, model: "opus" });
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 2 });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 3, model: "sonnet" });
     repo.setReplacedBy("a", "b", "clear");
     repo.setReplacedBy("b", "c", "clear");
     expect(repo.get("b")?.model).toBe("opus");
@@ -115,9 +115,9 @@ describe("SessionsRepo", () => {
   it("setOrigin and delete (clearing pointers to the deleted row)", () => {
     const repo = setup();
     repo.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/x", origin: "discovered", createdAt: 1 });
-    repo.insertIfAbsent({ id: "b", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 2 });
-    repo.setOrigin("a", "butler");
-    expect(repo.get("a")?.origin).toBe("butler");
+    repo.insertIfAbsent({ id: "b", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 2 });
+    repo.setOrigin("a", "shipherd");
+    expect(repo.get("a")?.origin).toBe("shipherd");
     repo.setReplacedBy("a", "b");
     repo.delete("b");
     expect(repo.get("b")).toBeNull();
@@ -126,7 +126,7 @@ describe("SessionsRepo", () => {
 
   it("deleting the tail of a chain keeps the head pointing at the middle row", () => {
     const repo = setup();
-    for (const id of ["a", "b", "c"]) repo.insertIfAbsent({ id, ticketKey: "PROJ-1", cwd: "/x", origin: "butler", createdAt: 1 });
+    for (const id of ["a", "b", "c"]) repo.insertIfAbsent({ id, ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", createdAt: 1 });
     repo.setReplacedBy("a", "b");
     repo.setReplacedBy("b", "c");
     repo.delete("c");
@@ -136,10 +136,10 @@ describe("SessionsRepo", () => {
 
   it("remembers deleted ids until they are inserted again", () => {
     const repo = setup();
-    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 1 });
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 1 });
     repo.delete("a");
     expect(repo.wasForgotten("a")).toBe(true);
-    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "butler", createdAt: 2 });
+    repo.insertIfAbsent({ id: "a", ticketKey: null, cwd: "/x", origin: "shipherd", createdAt: 2 });
     expect(repo.wasForgotten("a")).toBe(false);
   });
 
@@ -159,8 +159,8 @@ describe("SessionsRepo", () => {
 
   it("setWaiting sets the flag and bumps activity; listByTicket orders by recency", () => {
     const repo = setup();
-    repo.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", lastActivityAt: 1, createdAt: 1 });
-    repo.insertIfAbsent({ id: "b", ticketKey: "PROJ-1", cwd: "/x", origin: "butler", lastActivityAt: 2, createdAt: 1 });
+    repo.insertIfAbsent({ id: "a", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", lastActivityAt: 1, createdAt: 1 });
+    repo.insertIfAbsent({ id: "b", ticketKey: "PROJ-1", cwd: "/x", origin: "shipherd", lastActivityAt: 2, createdAt: 1 });
     repo.setWaiting("a", true, 9);
     expect(repo.get("a")).toMatchObject({ waitingForInput: true, lastActivityAt: 9 });
     expect(repo.listByTicket("PROJ-1").map((s) => s.id)).toEqual(["a", "b"]);
@@ -184,6 +184,7 @@ describe("migration 5 (several repos per ticket)", () => {
     db.exec("PRAGMA user_version = 4");
     db.exec(`INSERT INTO tickets (key, title, repo_path, work_mode, worktree_path, branch, created_at)
              VALUES ('OLD-1', 't', '/code/web', 'worktree', '/code/web-worktrees/OLD-1', 'feature/OLD-1', 5)`);
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
     db.exec(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('s1', 'OLD-1', '/code/web-worktrees/OLD-1', 'butler', 6)`);
     db.exec(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('s2', NULL, '/elsewhere', 'discovered', 6)`);
     expect(migrate(db)).toBe(MIGRATIONS.length);
@@ -212,7 +213,7 @@ describe("TicketsRepo repos and session placement", () => {
     tickets.updateRepo({ id, workMode: "worktree", worktreePath: "/web-wt/M-1", branch: "c" });
     expect(tickets.getRepo(id)).toMatchObject({ workMode: "worktree", worktreePath: "/web-wt/M-1", branch: "c" });
 
-    sessions.insertIfAbsent({ id: "s", ticketKey: "M-1", cwd: "/api-wt/M-1", origin: "butler", createdAt: 1, repoId: api });
+    sessions.insertIfAbsent({ id: "s", ticketKey: "M-1", cwd: "/api-wt/M-1", origin: "shipherd", createdAt: 1, repoId: api });
     tickets.removeRepo(api);
     expect(tickets.get("M-1")!.repos.map((r) => r.id)).toEqual([id]);
     expect(sessions.get("s")).toMatchObject({ ticketKey: "M-1", repoId: null });
@@ -225,23 +226,23 @@ describe("TicketsRepo repos and session placement", () => {
     const repoId = tickets.insert({ key: "M-2", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null }, {
       ticketKey: "M-2", repoPath: "/web", workMode: "branch", worktreePath: null, branch: "b", createdAt: 1,
     })!;
-    sessions.insertIfAbsent({ id: "a", ticketKey: "M-2", cwd: "/web", origin: "butler", createdAt: 1, repoId, spawnedBy: "boss" });
-    sessions.insertIfAbsent({ id: "b", ticketKey: "M-2", cwd: "/web", origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "a", ticketKey: "M-2", cwd: "/web", origin: "shipherd", createdAt: 1, repoId, spawnedBy: "boss" });
+    sessions.insertIfAbsent({ id: "b", ticketKey: "M-2", cwd: "/web", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy("a", "b");
     expect(sessions.get("b")).toMatchObject({ repoId, coordinator: false, spawnedBy: "boss" });
-    sessions.insertIfAbsent({ id: "c", ticketKey: "M-2", cwd: "/ws", origin: "butler", createdAt: 1, coordinator: true });
-    sessions.insertIfAbsent({ id: "d", ticketKey: "M-2", cwd: "/ws", origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "c", ticketKey: "M-2", cwd: "/ws", origin: "shipherd", createdAt: 1, coordinator: true });
+    sessions.insertIfAbsent({ id: "d", ticketKey: "M-2", cwd: "/ws", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy("c", "d");
     expect(sessions.get("d")).toMatchObject({ coordinator: true, repoId: null });
   });
 });
 
-describe("opening data from a newer Butler", () => {
+describe("opening data from a newer Shipherd", () => {
   it("refuses a database whose version is newer than this build knows", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(`PRAGMA user_version = ${MIGRATIONS.length + 1}`);
     expect(() => migrate(db)).toThrow(NewerDatabaseError);
-    expect(() => migrate(db)).toThrow(/更新版本的 Butler/);
+    expect(() => migrate(db)).toThrow(/更新版本的 Shipherd/);
     db.close();
   });
 });
@@ -281,6 +282,7 @@ describe("migration 9: fix sessions", () => {
 
   it("gives existing sessions no fixesSession", () => {
     const db = upTo8();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
     db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
     expect(migrate(db)).toBe(MIGRATIONS.length);
     expect(new SessionsRepo(db).get("old")?.fixesSession).toBeNull();
@@ -288,8 +290,8 @@ describe("migration 9: fix sessions", () => {
 
   it("stores fixesSession on insert and defaults it to null", () => {
     const repo = new SessionsRepo(memDb());
-    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, fixesSession: "stuck-1" });
-    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1 });
     expect(repo.get("fix")?.fixesSession).toBe("stuck-1");
     expect(repo.get("plain")?.fixesSession).toBeNull();
   });
@@ -302,15 +304,15 @@ describe("migration 9: fix sessions", () => {
 
   it("hands fixesSession on to the session that replaces a fix session, which stays a non-coordinator", () => {
     const { repo, featureId } = featureDb();
-    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
-    repo.insertIfAbsent({ id: "fix-2", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 2 });
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "fix-2", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 2 });
     repo.setReplacedBy("fix", "fix-2");
     expect(repo.head("fix")).toMatchObject({ id: "fix-2", featureId, coordinator: false, fixesSession: "stuck-1" });
   });
 
   it("does not leave a coordinator mark on a fix session's new head that a disk scan recorded first", () => {
     const { repo, featureId } = featureDb();
-    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, fixesSession: "stuck-1" });
     syncDiscovered([{ id: "fix-2", cwd: "/ws", gitBranch: null, firstPrompt: null, lastActivityAt: 2 }], repo, 2, () => featureId);
     expect(repo.get("fix-2")).toMatchObject({ coordinator: true, fixesSession: null });
     repo.setReplacedBy("fix", "fix-2");
@@ -319,8 +321,8 @@ describe("migration 9: fix sessions", () => {
 
   it("leaves an existing session its own role when /resume picks it", () => {
     const { repo, featureId } = featureDb();
-    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, fixesSession: "stuck-1" });
-    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, coordinator: true });
     repo.setReplacedBy("fix", "c", "resume");
     expect(repo.get("fix")?.replacedBy).toBe("c");
     expect(repo.get("c")).toMatchObject({ coordinator: true, fixesSession: null, featureId });
@@ -328,7 +330,7 @@ describe("migration 9: fix sessions", () => {
 
   it("does not hand a feature or a role to an existing session on /resume, but still its opener", () => {
     const { repo, featureId } = featureDb();
-    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, spawnedBy: "boss", fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, spawnedBy: "boss", fixesSession: "stuck-1" });
     repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 1 });
     repo.setReplacedBy("fix", "loose", "resume");
     expect(repo.get("loose")).toMatchObject({ coordinator: false, fixesSession: null, featureId: null, spawnedBy: "boss" });
@@ -336,16 +338,16 @@ describe("migration 9: fix sessions", () => {
 
   it("still carries the coordinator mark across /clear for a real coordinator", () => {
     const { repo, featureId } = featureDb();
-    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
-    repo.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 2 });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, coordinator: true });
+    repo.insertIfAbsent({ id: "c-2", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 2 });
     repo.setReplacedBy("c", "c-2");
     expect(repo.get("c-2")).toMatchObject({ coordinator: true, featureId, fixesSession: null });
   });
 
   it("lists a feature's fix sessions with its sessions, but not among its coordinators", () => {
     const { repo, featureId } = featureDb();
-    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 1, featureId, coordinator: true });
-    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "butler", createdAt: 2, featureId, fixesSession: "stuck-1" });
+    repo.insertIfAbsent({ id: "c", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 1, featureId, coordinator: true });
+    repo.insertIfAbsent({ id: "fix", ticketKey: null, cwd: "/ws", origin: "shipherd", createdAt: 2, featureId, fixesSession: "stuck-1" });
     expect(repo.listByFeature(featureId).map((s) => s.id)).toEqual(["fix", "c"]);
     expect(repo.listFeatureCoordinators(featureId).map((s) => s.id)).toEqual(["c"]);
   });
@@ -362,10 +364,11 @@ describe("hidden-session cleanup (BTL-190 item 8)", () => {
     return db;
   };
   const add = (repo: SessionsRepo, id: string, o: { lastActivityAt?: number; createdAt?: number } = {}) =>
-    repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: o.createdAt ?? 1, lastActivityAt: o.lastActivityAt ?? null });
+    repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: o.createdAt ?? 1, lastActivityAt: o.lastActivityAt ?? null });
 
   it("upgrades an existing database: sessions already hidden count from the upgrade, not from the epoch", () => {
     const db = previous();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
     db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-hidden', NULL, '/w', 'butler', 1, 1)`).run();
     db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-shown', NULL, '/w', 'butler', 1, 0)`).run();
     const before = Date.now();
@@ -402,7 +405,7 @@ describe("hidden-session cleanup (BTL-190 item 8)", () => {
     const repo = new SessionsRepo(memDb());
     add(repo, "old", { lastActivityAt: 50 });
     repo.dismiss("old", 100);
-    // 隐藏得早，但之后还有活动（比如在 Butler 外面 --resume 过）：不删。
+    // 隐藏得早，但之后还有活动（比如在 Shipherd 外面 --resume 过）：不删。
     add(repo, "active-later", { lastActivityAt: 5_000 });
     repo.dismiss("active-later", 100);
     add(repo, "recent", { lastActivityAt: 50 });
@@ -446,47 +449,48 @@ describe("hidden-session cleanup (BTL-190 item 8)", () => {
   });
 });
 
-describe("Butler 总控 sessions (BTL-190 item 5)", () => {
-  const butlerRow = (repo: SessionsRepo, id: string, over: Partial<Parameters<SessionsRepo["insertIfAbsent"]>[0]> = {}) =>
-    repo.insertIfAbsent({ id, ticketKey: null, cwd: "/b/_butler", origin: "butler", createdAt: 1, lastActivityAt: 10, butler: true, ...over });
+describe("Shipherd 总控 sessions (BTL-190 item 5)", () => {
+  const shipherdRow = (repo: SessionsRepo, id: string, over: Partial<Parameters<SessionsRepo["insertIfAbsent"]>[0]> = {}) =>
+    repo.insertIfAbsent({ id, ticketKey: null, cwd: "/b/_shipherd", origin: "shipherd", createdAt: 1, lastActivityAt: 10, shipherd: true, ...over });
 
-  it("stores the butler flag, defaults it to false, and lists the butler sessions newest first", () => {
+  it("stores the shipherd flag, defaults it to false, and lists the shipherd sessions newest first", () => {
     const repo = new SessionsRepo(memDb());
-    butlerRow(repo, "old", { lastActivityAt: 10 });
-    butlerRow(repo, "new", { lastActivityAt: 20 });
-    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1 });
-    expect(repo.get("old")?.butler).toBe(true);
-    expect(repo.get("plain")?.butler).toBe(false);
-    expect(repo.listButler().map((s) => s.id)).toEqual(["new", "old"]);
+    shipherdRow(repo, "old", { lastActivityAt: 10 });
+    shipherdRow(repo, "new", { lastActivityAt: 20 });
+    repo.insertIfAbsent({ id: "plain", ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1 });
+    expect(repo.get("old")?.shipherd).toBe(true);
+    expect(repo.get("plain")?.shipherd).toBe(false);
+    expect(repo.listShipherd().map((s) => s.id)).toEqual(["new", "old"]);
   });
 
-  it("does not list a butler session as unclaimed", () => {
+  it("does not list a shipherd session as unclaimed", () => {
     const repo = new SessionsRepo(memDb());
-    butlerRow(repo, "b");
+    shipherdRow(repo, "b");
     repo.insertIfAbsent({ id: "loose", ticketKey: null, cwd: "/w", origin: "discovered", createdAt: 1, lastActivityAt: 10 });
     expect(repo.listUnclaimed(0).map((s) => s.id)).toEqual(["loose"]);
   });
 
   it("hands the role on to the /clear successor, but not on /resume", () => {
     const repo = new SessionsRepo(memDb());
-    butlerRow(repo, "a");
-    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/b/_butler", origin: "butler", createdAt: 2 });
+    shipherdRow(repo, "a");
+    repo.insertIfAbsent({ id: "b", ticketKey: null, cwd: "/b/_shipherd", origin: "shipherd", createdAt: 2 });
     repo.setReplacedBy("a", "b", "clear");
-    expect(repo.get("b")?.butler).toBe(true);
+    expect(repo.get("b")?.shipherd).toBe(true);
     expect(repo.head("a")?.id).toBe("b");
-    butlerRow(repo, "c");
-    repo.insertIfAbsent({ id: "d", ticketKey: null, cwd: "/b/_butler", origin: "butler", createdAt: 2 });
+    shipherdRow(repo, "c");
+    repo.insertIfAbsent({ id: "d", ticketKey: null, cwd: "/b/_shipherd", origin: "shipherd", createdAt: 2 });
     repo.setReplacedBy("c", "d", "resume");
-    expect(repo.get("d")?.butler).toBe(false);
+    expect(repo.get("d")?.shipherd).toBe(false);
   });
 
-  it("gives sessions from before the migration no butler flag", () => {
+  it("gives sessions from before the migration no shipherd flag", () => {
     const db = new DatabaseSync(":memory:");
     for (const sql of MIGRATIONS.slice(0, MIGRATIONS.length - 1)) db.exec(sql);
     db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
     db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
     expect(migrate(db)).toBe(MIGRATIONS.length);
-    expect(new SessionsRepo(db).get("old")?.butler).toBe(false);
+    expect(new SessionsRepo(db).get("old")?.shipherd).toBe(false);
   });
 });
 
@@ -612,6 +616,7 @@ describe("migration 24: lesson runs", () => {
 
   it("sessions gain lesson_run_id; claude_availability allows one row", () => {
     const db = memDb();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
     db.prepare(`INSERT INTO sessions (id, cwd, origin, created_at) VALUES ('s', '/w', 'butler', 1)`).run();
     expect(db.prepare(`SELECT lesson_run_id FROM sessions WHERE id = 's'`).get()).toEqual({ lesson_run_id: null });
     db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (1, '{}', 1)`).run();

@@ -16,7 +16,7 @@ function home() {
   const now = () => (t += 10);
   let version = 1;
   const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => version, set: (v) => (version = v) }, now });
-  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), butlerVersion: "3.0.0", backupDir: join(tempDir(), "b"), now });
+  const io = new ConfigIoService({ db, repo, policies, recorder, registry: defaultRegistry(), shipherdVersion: "3.0.0", backupDir: join(tempDir(), "b"), now });
   const stacks = new StackPolicyService({ db, productsOf: (slug) => repo.products().filter((p) => p.slugs.includes(slug)).map((p) => ({ id: p.id, name: p.name })), productName: (id) => repo.products().find((p) => p.id === id)?.name ?? null, now });
   return { db, repo, recorder, io, stacks };
 }

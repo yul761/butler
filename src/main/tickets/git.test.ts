@@ -59,7 +59,7 @@ describe("git invocation without git", () => {
 describe("scanRepos", () => {
   /** 上一层目录：两个仓库、一个普通目录、一个隐藏的仓库。 */
   function parentDir(): string {
-    const parent = tempDir("butler-parent-");
+    const parent = tempDir("shipherd-parent-");
     for (const name of ["frontend", "backend", ".hidden"]) renameSync(makeRepo(), join(parent, name));
     mkdirSync(join(parent, "docs"));
     return parent;
@@ -79,7 +79,7 @@ describe("scanRepos", () => {
 
   it("finds the repos of a parent directory reached through a symlink", async () => {
     const parent = parentDir();
-    const link = join(tempDir("butler-link-"), "code");
+    const link = join(tempDir("shipherd-link-"), "code");
     symlinkSync(parent, link);
     const r = await scanRepos(link);
     expect(r.kind).toBe("parent");
@@ -87,7 +87,7 @@ describe("scanRepos", () => {
   });
 
   it("does not count a plain directory inside a repo-less parent", async () => {
-    const parent = tempDir("butler-parent-");
+    const parent = tempDir("shipherd-parent-");
     mkdirSync(join(parent, "docs"));
     execFileSync("git", ["init", "-q", join(parent, "empty")]);
     expect(await scanRepos(parent)).toEqual({ kind: "parent", repos: [join(parent, "empty")] });

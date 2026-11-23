@@ -174,7 +174,7 @@ const CATEGORY = z.enum(BASELINE_CATEGORIES);
 const ProjectItem = z.object({ dir: DIR, langs: z.array(LINE(40)).max(20), markers: z.array(LINE(60)).max(60), pm: LINE(30).optional() });
 const CheckItemSchema = z.object({
   id: LINE(700), dir: DIR, category: CATEGORY, tool: LINE(60), command: STR, fileCommand: STR.optional(), testOne: STR.optional(),
-  stages: z.array(z.enum(REPO_STAGES)).max(3), changedFiles: z.boolean(), butlerStage: z.enum(["edit", "push"]),
+  stages: z.array(z.enum(REPO_STAGES)).max(3), changedFiles: z.boolean(), shipherdStage: z.enum(["edit", "push"]),
   source: z.enum(["marker", "ci", "inferred"]), confidence: z.enum(["high", "medium", "low"]),
   evidence: z.array(STR).max(30), facts: z.array(LINE(200)).max(500), exts: z.array(LINE(10)).max(30).optional(),
 });

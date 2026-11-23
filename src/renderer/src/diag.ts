@@ -33,7 +33,7 @@ export function startLongTaskReporter(d: LongTaskReporterDeps): () => void {
   });
   const flush = () => {
     const x = xtermRenderer;
-    // 什么都没有时不发：闲着的 Butler 不多一次 IPC。
+    // 什么都没有时不发：闲着的 Shipherd 不多一次 IPC。
     if (acc.longTasks === 0 && x === null) return;
     d.send({ longTasks: acc.longTasks, totalMs: Math.round(acc.totalMs), maxMs: Math.round(acc.maxMs), xterm: x });
     acc = { longTasks: 0, totalMs: 0, maxMs: 0 };

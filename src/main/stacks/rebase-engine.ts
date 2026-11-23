@@ -7,7 +7,7 @@ import {
 import { sequenceEditorEnv } from "./seq-editor";
 
 /**
- * 整栈 rebase 的引擎（设计 3.1–3.3 节）：只在 Butler 自己的临时 detached worktree 里、用指向各层顶端的临时分支做，
+ * 整栈 rebase 的引擎（设计 3.1–3.3 节）：只在 Shipherd 自己的临时 detached worktree 里、用指向各层顶端的临时分支做，
  * 真分支一个都不动；成功时返回各层的新顶端，由 apply 去 CAS 更新真分支。
  */
 
@@ -111,9 +111,9 @@ async function upstreams(i: EngineInput): Promise<Planned[] | string> {
   return out;
 }
 
-const tmpPrefix = (runId: number) => `refs/heads/butler-stack/${runId}/`;
+const tmpPrefix = (runId: number) => `refs/heads/shipherd-stack/${runId}/`;
 const tmpRef = (runId: number, pos: number) => `${tmpPrefix(runId)}${pos}`;
-const tmpName = (runId: number, pos: number) => `butler-stack/${runId}/${pos}`;
+const tmpName = (runId: number, pos: number) => `shipherd-stack/${runId}/${pos}`;
 
 /** 分段：同一段里每层都正好叠在下一层现在的顶端上（下一层后来没再加提交、也没被改写），一条 --update-refs 命令搬完。 */
 function segments(plan: Planned[], from: number, mode: StackRunMode): Planned[][] {

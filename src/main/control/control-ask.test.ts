@@ -4,8 +4,8 @@ import type { Session } from "../../shared/types";
 import { controlHandler, type ControlHandlerDeps } from "./control-handler";
 
 const session = (id: string, o: Partial<Session> = {}): Session => ({
-  id, ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false, replacedBy: null,
-  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
+  id, ticketKey: null, cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false, replacedBy: null,
+  dismissed: false, createdAt: 1, repoId: null, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, ...o,
 });
 
 /** 只用到 sessions.head、inbox 和 ticket / feature 的归档时间：别的依赖给个空壳。archived 里的 ticket 号、feature-<id> 算归档了。 */

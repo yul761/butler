@@ -15,14 +15,14 @@ describe("metricsSince", () => {
 });
 
 describe("baselineCutoffOf (ws-h)", () => {
-  it("uses the metrics start until there is a Butler session, then stores the first one and keeps it", () => {
+  it("uses the metrics start until there is a Shipherd session, then stores the first one and keeps it", () => {
     const s = new SettingsRepo(memDb());
     let first: number | null = null;
     expect(baselineCutoffOf(s, () => first, 9)).toBe(9);
     expect(s.get("metricsBaselineCutoff")).toBe("");
     first = 5;
     expect(baselineCutoffOf(s, () => first, 9)).toBe(5);
-    // 最早的 session 删了、或者更早的改成了 Butler 的：截止点不动。
+    // 最早的 session 删了、或者更早的改成了 Shipherd 的：截止点不动。
     first = 50;
     expect(baselineCutoffOf(s, () => first, 9)).toBe(5);
     first = 1;

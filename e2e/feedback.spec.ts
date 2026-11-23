@@ -57,13 +57,13 @@ test("send feedback opens a prefilled GitHub issue page and sends nothing itself
   const { opened, revealed } = await recorded(app);
   expect(opened).toHaveLength(1);
   const u = new URL(opened[0]);
-  expect(`${u.origin}${u.pathname}`).toBe("https://github.com/yul761/butler/issues/new");
+  expect(`${u.origin}${u.pathname}`).toBe("https://github.com/yul761/shipherd/issues/new");
   expect(u.searchParams.get("template")).toBe("idea.yml");
   expect(u.searchParams.get("title")).toBe("Group tickets by repo");
   expect(u.searchParams.get("description")).toBe("A toggle on the epic page.");
   const envText = u.searchParams.get("environment")!;
   expect(envText).toContain("Claude Code: 2.1.306");
-  expect(envText).toMatch(/Butler: \d+\.\d+\.\d+/);
+  expect(envText).toMatch(/Shipherd: \d+\.\d+\.\d+/);
   expect(u.searchParams.has("diagnostics")).toBe(false);
   expect(revealed).toEqual([]);
   await page.getByRole("button", { name: S.feedback.close, exact: true }).click();
@@ -86,8 +86,8 @@ test("attached diagnostics are redacted, shown first, then saved to Downloads an
   const preview = page.getByTestId("feedback-preview-text");
   await expect(preview).toContainText('"redacted": true');
   const text = (await preview.textContent())!;
-  // 沙盒的路径（Butler 的数据目录故意带空格）一个都不能留下。
-  for (const leak of [s.dir, s.butlerHome, s.claudeConfigDir]) expect(text).not.toContain(leak);
+  // 沙盒的路径（Shipherd 的数据目录故意带空格）一个都不能留下。
+  for (const leak of [s.dir, s.shipherdHome, s.claudeConfigDir]) expect(text).not.toContain(leak);
   // 还没确认：什么都没存。
   expect(readdirSync(downloads)).toEqual([]);
 
@@ -95,7 +95,7 @@ test("attached diagnostics are redacted, shown first, then saved to Downloads an
   await expect(page.getByTestId("feedback-saved")).toBeVisible();
   const files = readdirSync(downloads);
   expect(files).toHaveLength(1);
-  expect(files[0]).toMatch(/^butler-diagnostics-redacted-.*\.json$/);
+  expect(files[0]).toMatch(/^shipherd-diagnostics-redacted-.*\.json$/);
   const saved = join(downloads, files[0]);
   expect(readFileSync(saved, "utf8")).toBe(text);
   const { opened, revealed } = await recorded(app);

@@ -21,7 +21,7 @@ export interface AdmissionDeps {
    * 这时用设置里的预估值。
    */
   measuredSessionsKb?(): number[];
-  /** Butler 现在开着的终端数（硬上限用）。 */
+  /** Shipherd 现在开着的终端数（硬上限用）。 */
   running(): number;
   now(): number;
   log(msg: string, err?: unknown): void;

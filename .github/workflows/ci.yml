@@ -42,7 +42,7 @@ jobs:
       - name: Unit and integration tests (includes the privacy invariant, a release blocker)
         run: pnpm test
       - run: pnpm build
-      - name: Build butler-hook (Node SEA for this platform)
+      - name: Build shipherd-hook (Node SEA for this platform)
         run: pnpm build:hook
       # Claude Code runs hooks through Git Bash on Windows (P5-R3). windows-latest ships it; fail early if it is gone.
       - name: Check Git Bash is available (Windows hooks run through it)
@@ -52,7 +52,7 @@ jobs:
           command -v bash
           bash --version | head -1
           git --version
-      # The sandboxes are created under the OS temp dir (butler-e2e-*): point it at the runner temp dir on both
+      # The sandboxes are created under the OS temp dir (shipherd-e2e-*): point it at the runner temp dir on both
       # platforms (os.tmpdir() reads TMPDIR on macOS, TEMP/TMP on Windows) so a failure can upload them.
       - name: Locate the E2E temp dir (forward slashes for the upload glob)
         shell: bash
@@ -72,7 +72,7 @@ jobs:
           name: e2e-${{ matrix.os }}
           path: |
             test-results/
-            ${{ env.E2E_TMP }}/butler-e2e-*/
+            ${{ env.E2E_TMP }}/shipherd-e2e-*/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
@@ -109,13 +109,13 @@ jobs:
       - name: Verify the ad-hoc signature and run the packaged app
         if: runner.os == 'macOS'
         run: node scripts/verify-mac-signing.mjs dist --mode ad-hoc
-      # Installers only: dist/Butler-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
+      # Installers only: dist/Shipherd-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
       - uses: actions/upload-artifact@v7
         with:
-          name: butler-${{ matrix.os }}
+          name: shipherd-${{ matrix.os }}
           path: |
             dist/*.dmg
             dist/*.zip
-            dist/Butler-Setup-*.exe
+            dist/Shipherd-Setup-*.exe
           if-no-files-found: error
           retention-days: 14

@@ -28,11 +28,11 @@ describe("descendantCpuMs", () => {
 
 /** 真实的样子（macOS）：claude 下面是 MCP server、Bash 工具的 zsh，zsh 下面是后台命令。 */
 const CLAUDE_TREE = [
-  "100 1 1:00.00 /Users/x/.local/bin/claude --session-id s --mcp-config /Users/x/.butler/mcp/tickets/A-1.json",
+  "100 1 1:00.00 /Users/x/.local/bin/claude --session-id s --mcp-config /Users/x/.shipherd/mcp/tickets/A-1.json",
   "101 100 0:01.00 node /Users/x/.nvm/versions/node/v26.3.0/bin/statecore-mcp",
   "102 100 0:01.00 npm exec chrome-devtools-mcp@latest --autoConnect",
   "103 102 0:01.00 sh -c chrome-devtools-mcp",
-  "104 100 0:01.00 /Applications/Butler.app/Contents/MacOS/Butler /Applications/Butler.app/Contents/Resources/memory-mcp/butler-sessions-mcp.cjs",
+  "104 100 0:01.00 /Applications/Shipherd.app/Contents/MacOS/Shipherd /Applications/Shipherd.app/Contents/Resources/memory-mcp/shipherd-sessions-mcp.cjs",
   "105 100 0:00.01 caffeinate -i -t 300",
 ].join("\n");
 const BASH = "106 100 0:00.10 /bin/zsh -c source /Users/x/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval 'python3 -m http.server 8000' < /dev/null && pwd -P >| /tmp/claude-1-cwd";

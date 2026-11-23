@@ -107,7 +107,7 @@ import { hookCommand } from "./hooks/installer";
 import { HealthService } from "./hooks/health";
 import { applyHookEnvelope } from "./hooks/hook-events";
 import { createFileLogger, type Logger } from "./logger";
-import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeButlerMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
+import { hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, removeFeatureMcpConfig, removeTerminalMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, type StdioServerSpec, writeShipherdMcpConfig, writeFeatureMcpConfig, writeTerminalMcpConfig, writeTicketMcpConfig } from "./memory/mcp-config";
 import { McpHub, spawnHub } from "./memory/mcp-hub";
 import { MemoryService } from "./memory/memory-service";
 import { admitOrRefuse } from "./control/admission";
@@ -145,9 +145,13 @@ import type { PolicyScope } from "../shared/admission-policy";
 import type { StackPolicySetResult } from "../shared/stacks";
 import type { IntakePolicySetResult } from "../shared/intake";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
+import { finishLegacyHome } from "./migrate/legacy-finish";
+import { migrateLegacyHome } from "./migrate/legacy-home";
+import { legacyButlerHolder, legacyUserDataDir } from "./migrate/legacy-user-data";
+import { envValue } from "../shared/legacy-env";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
-import { ButlerPatrol } from "./schedule/butler-patrol";
+import { ShipherdPatrol } from "./schedule/shipherd-patrol";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { AdmissionPolicyService } from "./lessons/admission-policies";
 import { ConfigIoService, defaultRegistry } from "./config-io";
@@ -222,7 +226,7 @@ import { M } from "./strings";
 import { appMenuTemplate } from "./app-menu";
 import { UpdateChecker } from "./update/update-checker";
 import { latestRelease } from "./update/release-source";
-import { isButlerReleaseUrl, releasesLatestUrl } from "../shared/butler-repo";
+import { isShipherdReleaseUrl, releasesLatestUrl } from "../shared/shipherd-repo";
 import type { AppMenuAction } from "../shared/update";
 import { pathKey } from "./util/env";
 import { resolveGh } from "./util/gh-path";
@@ -322,8 +326,8 @@ let win: BrowserWindow | null = null;
 /** 窗口 show / restore 时调（bootstrap 里接到 WS-M 的优先级上）。 */
 let windowShownHook: () => void = () => undefined;
 let tray: Tray | null = null;
-/** e2e 设 BUTLER_BACKGROUND_WINDOWS=1：窗口不激活、macOS 上不进 Dock，测试跑起来不把焦点从别的程序抢过来。 */
-const BACKGROUND_WINDOWS = process.env.BUTLER_BACKGROUND_WINDOWS === "1";
+/** e2e 设 SHIPHERD_BACKGROUND_WINDOWS=1：窗口不激活、macOS 上不进 Dock，测试跑起来不把焦点从别的程序抢过来。 */
+const BACKGROUND_WINDOWS = process.env.SHIPHERD_BACKGROUND_WINDOWS === "1";
 /** 防休眠开关（托盘菜单和侧边栏都能开关）；bootstrap 里建好。 */
 let keepAwake: KeepAwake | null = null;
 const quitState = createQuitState(() => app.quit());
@@ -347,9 +351,17 @@ let shutdownSessions: () => void = () => undefined;
 /** 所有 headless claude 运行（handoff、刷新、MCP 探测）共用：退出时一起取消，调度器也不再发起新任务。 */
 const headlessAbort = new AbortController();
 
-// 隔离运行（BUTLER_HOME 指向别的目录）时也换一个 Electron 用户目录，否则单实例锁会和正在用的 Butler 冲突。
+/** BTL-260：用的是改名前的 userData，单实例锁和旧版 Butler 共用。 */
+let usingLegacyUserData = false;
+// 隔离运行（SHIPHERD_HOME 指向别的目录）时也换一个 Electron 用户目录，否则单实例锁会和正在用的 Shipherd 冲突。
 // 用 resolvePaths 解析：相对路径会变成绝对路径（setPath 只接受绝对路径）。
-if (process.env.BUTLER_HOME?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
+if (envValue(process.env, "HOME")?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
+else {
+  // BTL-260：改名前的老用户接着用旧的 userData（<appData>/butler），见 legacyUserDataDir。必须在 ready、单实例锁之前。
+  const legacy = legacyUserDataDir(app.getPath("appData"), existsSync);
+  if (legacy) app.setPath("userData", legacy);
+  usingLegacyUserData = legacy !== null;
+}
 // Windows 的通知要有 AppUserModelID，否则点击通知没有反应（计划 2 Task 13）。
 if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
@@ -369,7 +381,7 @@ function safeSend(channel: string, ...args: unknown[]): void {
 const devBuildDir = (): string => join(__dirname, "..", "..", "build");
 
 function bundledHookPath(): string {
-  const name = process.platform === "win32" ? "butler-hook.exe" : "butler-hook";
+  const name = process.platform === "win32" ? "shipherd-hook.exe" : "shipherd-hook";
   return app.isPackaged ? join(process.resourcesPath, "hook", name) : join(devBuildDir(), "hook", name);
 }
 
@@ -383,9 +395,9 @@ function bundledHubPath(): string {
   return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "mcp-hub.cjs") : join(devBuildDir(), "memory-mcp", "mcp-hub.cjs");
 }
 
-/** 总控 session 的 butler-sessions MCP（和记忆 MCP 一起打包，放在同一个目录）。 */
+/** 总控 session 的 shipherd-sessions MCP（和记忆 MCP 一起打包，放在同一个目录）。 */
 function bundledSessionsMcpPath(): string {
-  return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "butler-sessions-mcp.cjs") : join(devBuildDir(), "memory-mcp", "butler-sessions-mcp.cjs");
+  return app.isPackaged ? join(process.resourcesPath, "memory-mcp", "shipherd-sessions-mcp.cjs") : join(devBuildDir(), "memory-mcp", "shipherd-sessions-mcp.cjs");
 }
 
 /** dev 模式下的渲染器地址；打包后永远不用环境变量。 */
@@ -410,7 +422,7 @@ function createWindow(): BrowserWindow {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    title: "Butler",
+    title: "Shipherd",
     webPreferences: { preload: join(__dirname, "../preload/index.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   // 自动化测试（e2e）在后台开窗口：不抢焦点，不打断用户在别的程序里打字。
@@ -498,11 +510,15 @@ function trayMenu(): Menu {
 let costPausedCount = 0;
 
 function trayTooltip(): string {
-  const base = keepAwake?.isOn() ? M().trayTooltipKeepAwake : "Butler";
+  const base = keepAwake?.isOn() ? M().trayTooltipKeepAwake : "Shipherd";
   return costPausedCount > 0 ? `${base}\n${M().cost.trayPaused(costPausedCount)}` : base;
 }
 
 async function bootstrap(): Promise<void> {
+  // BTL-260：老用户的 ~/.butler 搬到 ~/.shipherd。在建目录、打开数据库之前（结果等日志建好再记）。
+  const legacyHome = migrateLegacyHome({ env: process.env });
+  // 没搬成：数据原样在旧目录，这次就用它（传给子进程的也是它），下次启动再搬。不能拿空的新目录启动，那样下次就当成已经搬过了。
+  if (legacyHome.kind === "failed") process.env.SHIPHERD_HOME = legacyHome.legacy;
   const paths = resolvePaths();
   await ensureDirs(paths);
   const fileLog = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
@@ -539,20 +555,21 @@ async function bootstrap(): Promise<void> {
   });
   diag.start();
   if (!app.isPackaged) process.stderr.on("error", () => { teeBroken = true; });
-  // 先用 Butler 自己的 PATH 定下 git 和 gh 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
+  // 先用 Shipherd 自己的 PATH 定下 git 和 gh 的绝对路径；登录 shell 的 PATH 读到之后再更新一次。
   const ownPath = process.env[pathKey(process.env)] ?? "";
   applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
   applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
   void probeGh(5000);
   const db = openDatabase(paths.db);
+  await finishLegacyHome(legacyHome, paths, db, (m) => logger(m));
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
   const blocks = new BlocksRepo(db);
   const featureForCwd = (cwd: string): number | null => features.byWorkspace(cwd)?.id ?? null;
   const settings = new SettingsRepo(db);
-  /** 当前语言：BUTLER_LANG > 设置 > 系统首选语言（设计文档 2026-10-26）。 */
-  const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), process.env.BUTLER_LANG));
+  /** 当前语言：SHIPHERD_LANG > 设置 > 系统首选语言（设计文档 2026-10-26）。 */
+  const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), envValue(process.env, "LANG")));
   applyLanguage();
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
@@ -612,11 +629,14 @@ async function bootstrap(): Promise<void> {
   // session 只是又有了输出：隔 5 秒才告诉界面一次（只有 ticket 速览听 output）。
   const outputChanged = throttle(() => notify("output"), OUTPUT_NOTIFY_MS);
   // 健康探测可能很慢（登录 shell、claude --version）：后台进行，窗口先出来。
-  // 同时把升级后还是旧版本的 butler-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
-  // Butler 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
+  // 同时把升级后还是旧版本的 shipherd-hook 换成新的（最终审查 1）：打开 session 要等 healthReady，gate 开不开在那之前就定了。syncHookBinary 不抛错。
+  // Shipherd 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
   /** 登录 shell 的 PATH 下 gh 探测完（BTL-253 的更新检查等它，免得 gh 明明装了却被当成没装）。 */
   let ghProbed: Promise<void> = Promise.resolve();
-  const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
+  const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()])
+    // BTL-260：syncHookBinary 替用户换掉了改名前的 butler-hook 条目，上面那次 refresh 可能是换之前读的。
+    .then(() => (health.takeLegacyHookMigrated() ? health.refresh().then(() => undefined) : undefined))
+    .then(
     () => {
       if (health.hookBinCurrent() && existsSync(paths.hookBin)) seedSkillTracking();
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));
@@ -668,7 +688,7 @@ async function bootstrap(): Promise<void> {
   };
   const usageScanner = new UsageScanner({
     repo: usageRepo,
-    sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "butler").map((s) => s!.id),
+    sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "shipherd").map((s) => s!.id),
     transcriptFile: (id) => transcriptLocator.find(id),
     // 扫完一遍：成本熔断按新用量看一遍（工作流 L）。
     onScanned: () => costCheckSoon(),
@@ -684,7 +704,7 @@ async function bootstrap(): Promise<void> {
   let memoryAdmission: MemoryAdmission | null = null;
   // 后台恢复关着的 session（BTL-256）：和休眠一样，等下面的服务都建好才装。
   let resumer: Resumer | null = null;
-  /** 休眠着的 head（Butler 结束了它的终端，等事情来了再 --resume）。 */
+  /** 休眠着的 head（Shipherd 结束了它的终端，等事情来了再 --resume）。 */
   const hibernatedHeads = (): Session[] => sessions.listHibernated();
   /** 这条链休眠着（正在休眠、正在唤醒的也算）。 */
   const isHibernated = (id: string): boolean => hibernator?.isHibernated(id) ?? false;
@@ -696,7 +716,7 @@ async function bootstrap(): Promise<void> {
     },
     opened: (id) => {
       procs?.terminalOpened(id);
-      // 重启后自动恢复（BTL-256）：记下终端开着；Butler 运行时退出才清，退出 Butler 时留着，下次启动看得到。
+      // 重启后自动恢复（BTL-256）：记下终端开着；Shipherd 运行时退出才清，退出 Shipherd 时留着，下次启动看得到。
       sessions.markTermOpen(id, Date.now());
     },
     exit: (id, code) => {
@@ -738,12 +758,12 @@ async function bootstrap(): Promise<void> {
   let memoryMcpMissingLogged = false;
   let sessionsMcpMissingLogged = false;
   /**
-   * 记忆 server（记忆开着时）加上 butler-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
+   * 记忆 server（记忆开着时）加上 shipherd-sessions（设计文档 2026-10-23 第二步，和记忆开关无关）。
    * mem 是要挂哪些记忆：ticket 的、feature 的（设计文档 2026-10-26）；scope 是总控管的 ticket 或 feature，
    * 普通 ticket session 是 member（只有 ask_user、report，BTL-190 第 2+3 点）。
    */
   const launcher = (script: string) => ({ command: process.execPath, script });
-  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null }, scope: { ticketKey: string } | { featureId: number } | { butler: true }) => {
+  const mcpServers = (mem: { ticketKey?: string; featureId?: number | null }, scope: { ticketKey: string } | { featureId: number } | { shipherd: true }) => {
     let servers = {};
     if (memoryOn(settings)) {
       if (existsSync(memoryMcpScript)) servers = memoryServers({ launcher: launcher(memoryMcpScript), statecoreDir: paths.statecore, ...mem });
@@ -756,14 +776,14 @@ async function bootstrap(): Promise<void> {
     if (existsSync(script)) {
       servers = { ...servers, ...sessionsServer({ launcher: launcher(script), scope, requestsDir: paths.controlRequests, resultsDir: paths.controlResults }) };
     } else if (!sessionsMcpMissingLogged) {
-      logger(`sessions MCP bundle missing at ${script}; sessions have no butler-sessions tools (run pnpm build:memory-mcp)`);
+      logger(`sessions MCP bundle missing at ${script}; sessions have no shipherd-sessions tools (run pnpm build:memory-mcp)`);
       sessionsMcpMissingLogged = true;
     }
     return servers as Record<string, StdioServerSpec>;
   };
   /**
    * 共享 MCP 开着、hub 在跑：这个终端的 server 换成 hub 上的路由，写进 mcp/terms/<终端>.json；否则 null，调用方写今天的 stdio 配置。
-   * hub 还在启动、挂了、bundle 不在的时候都是 stdio，session 照样有 Butler 的 MCP。
+   * hub 还在启动、挂了、bundle 不在的时候都是 stdio，session 照样有 Shipherd 的 MCP。
    */
   let hubMissingLogged = false;
   const sharedMcpConfig = (termId: string, servers: Record<string, StdioServerSpec>): string | null => {
@@ -797,17 +817,17 @@ async function bootstrap(): Promise<void> {
     if (Object.keys(servers).length === 0) return null;
     return placeMcp(termId, servers, () => writeTicketMcpConfig({ mcpDir: paths.mcp, ticketKey, servers }));
   };
-  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 butler-sessions。 */
+  /** feature 总控：feature 记忆、全局记忆和 feature 模式的 shipherd-sessions。 */
   const featureMcpConfig = (featureId: number, termId: string | null): string | null => {
     const servers = mcpServers({ featureId }, { featureId });
     if (Object.keys(servers).length === 0) return null;
     return placeMcp(termId, servers, () => writeFeatureMcpConfig({ mcpDir: paths.mcp, featureId, servers }));
   };
-  /** Butler 总控（BTL-190 第 5 点）：只有全局记忆（butler-workspace）和 Butler 模式的 butler-sessions。 */
-  const butlerMcpConfig = (termId: string | null): string | null => {
-    const servers = mcpServers({}, { butler: true });
+  /** Shipherd 总控（BTL-190 第 5 点）：只有全局记忆（shipherd-workspace）和 Shipherd 模式的 shipherd-sessions。 */
+  const shipherdMcpConfig = (termId: string | null): string | null => {
+    const servers = mcpServers({}, { shipherd: true });
     if (Object.keys(servers).length === 0) return null;
-    return placeMcp(termId, servers, () => writeButlerMcpConfig({ mcpDir: paths.mcp, servers }));
+    return placeMcp(termId, servers, () => writeShipherdMcpConfig({ mcpDir: paths.mcp, servers }));
   };
   const availability = new ClaudeAvailability({ repo: new AvailabilityRepo(db, logger), now: Date.now, onChange: notify, log: logger });
   /** headless 运行报告限流 / 成功给可用状态。 */
@@ -887,7 +907,7 @@ async function bootstrap(): Promise<void> {
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
   const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), baselineRuleAdapter(db), baselineAdapter(db), stackPolicyAdapter(db)]);
-  // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Butler 写出来的快照（<BUTLER_HOME>/checks/snapshot.json）。
+  // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Shipherd 写出来的快照（<SHIPHERD_HOME>/checks/snapshot.json）。
   // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
   const checksService: ChecksService = new ChecksService({
     db, lessons: lessonsRepo, recorder: batchRecorder, now: Date.now, config: () => checksConfig(settings),
@@ -926,13 +946,13 @@ async function bootstrap(): Promise<void> {
       set: (v) => settings.set("admissionPolicyVersion", String(v)),
     },
   });
-  // 导入导出（契约 4.3）：备份放在 <BUTLER_HOME>/backups。
+  // 导入导出（契约 4.3）：备份放在 <SHIPHERD_HOME>/backups。
   const configBackupDir = join(paths.home, "backups");
   const configRegistry = defaultRegistry();
   /** 导入配置之后（PR 策略可能变了）：工作流 G 接好以后换成重算就绪和风险。 */
   let afterConfigApplied = (): void => undefined;
   const configIo = new ConfigIoService({
-    db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, butlerVersion: app.getVersion(),
+    db, repo: lessonsRepo, policies: admissionPolicies, recorder: batchRecorder, registry: configRegistry, shipherdVersion: app.getVersion(),
     backupDir: configBackupDir, now: Date.now, onExported: (at) => settings.set("configLastExportAt", String(at)), onApplied: () => (checkSnapshots.schedule(), routing.reloadConfig(), afterConfigApplied()), log: logger,
   });
   // 仓库现状（工作流 E2）：扫描在 worker 线程里跑；模型补全走路由的 repo_scan_infer（中档，撞限换下一个）。
@@ -1004,7 +1024,7 @@ async function bootstrap(): Promise<void> {
   });
   const openRelease = (): void => {
     const cached = updateChecker.latestUrl();
-    void shell.openExternal(cached && isButlerReleaseUrl(cached) ? cached : releasesLatestUrl());
+    void shell.openExternal(cached && isShipherdReleaseUrl(cached) ? cached : releasesLatestUrl());
   };
   // 应用菜单（BTL-253 / 254）：标准几项加「帮助」。「检查更新…」在主进程查，再让界面打开设置 › 关于看结果（不弹原生对话框）。
   const menuAction = (action: AppMenuAction): void => {
@@ -1023,7 +1043,7 @@ async function bootstrap(): Promise<void> {
   };
   installAppMenu();
   onLangChange(installAppMenu);
-  // 导出成 lint：写进 <BUTLER_HOME>/exports/<id> 的 worktree 就停；推送和开 PR 只经对外动作开关（契约 4.8），做没做都记进审计。
+  // 导出成 lint：写进 <SHIPHERD_HOME>/exports/<id> 的 worktree 就停；推送和开 PR 只经对外动作开关（契约 4.8），做没做都记进审计。
   const checkExporter = new CheckExporter({
     repo: baselinesRepo,
     check: (slug, key) => {
@@ -1088,7 +1108,7 @@ async function bootstrap(): Promise<void> {
     headless: { ...judgeDeps },
     scheduler: bgScheduler,
     ticketForBranch: (slug, branch) => tickets.reposByBranch(branch).find((r) => repoIdentity.slugOf(r.repoPath) === slug)?.ticketKey ?? null,
-    butlerContext: async (key, wantTranscripts) => {
+    shipherdContext: async (key, wantTranscripts) => {
       const ps = handoffs.listByTicket(key, 20).flatMap((h) => (h.payload ? [h.payload] : []));
       const seen = new Set<string>();
       const transcripts: string[][] = [];
@@ -1239,13 +1259,13 @@ async function bootstrap(): Promise<void> {
   });
   /** 休眠前最后一次看到的样子：休眠的 session 照样留在「需要你」里（活动监视只看开着的终端）。 */
   const needsYouFrozen = new Map<string, NeedsYouHead>();
-  /** 开着终端的 Butler session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
+  /** 开着终端的 Shipherd session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
     for (const termId of pty.openIds()) {
       const h = sessions.head(termId);
       // 复盘分析 session 只是用户来问问题的，不判断需要你。
-      if (!h || h.origin !== "butler" || h.lessonRunId !== null || heads.has(h.id)) continue;
+      if (!h || h.origin !== "shipherd" || h.lessonRunId !== null || heads.has(h.id)) continue;
       heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
     }
     const hibernated = new Set(hibernatedHeads().map((h) => h.id));
@@ -1319,7 +1339,7 @@ async function bootstrap(): Promise<void> {
   });
   /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
   const submitTask = (termId: string, message: string) => pty.deliver(termId, message, { singleLine: process.platform === "win32" });
-  /** 装着的 butler-hook 是当前版本：只有这时才挂 gate / check hook。 */
+  /** 装着的 shipherd-hook 是当前版本：只有这时才挂 gate / check hook。 */
   const hookInstalled = () => health.hookBinCurrent() && existsSync(paths.hookBin);
   /** 这次启动的 session 为什么跑不了检查（addendum 第 7 节）；没有打开的检查就不算缺。 */
   const checksAbsence = (): CheckAbsenceReason | null => {
@@ -1362,7 +1382,7 @@ async function bootstrap(): Promise<void> {
     platform: process.platform,
     baseEnv: process.env,
     mcpConfig: memoryMcpConfig,
-    // 装着的 butler-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
+    // 装着的 shipherd-hook 是旧版本（不认 gate）时不挂 gate hook：旧程序会把每条 Bash 命令当成普通 hook 事件写进收件箱。
     mcpSettings: (dirs, sessionId) => {
       const cc = checksConfig(settings);
       // 给这个 session 的档案规则记下来：省掉了几次确认只按这些、只从现在起算。
@@ -1394,8 +1414,8 @@ async function bootstrap(): Promise<void> {
       });
     },
     featureMcpConfig,
-    butlerWorkspace: paths.butlerWorkspace,
-    butlerMcpConfig,
+    shipherdWorkspace: paths.shipherdWorkspace,
+    shipherdMcpConfig,
     lessonsWorkspace: paths.lessonsWorkspace,
     features, featureHandoffs, handoffs,
     // 打开 session 时补同步这个 ticket（最终审查 6）：上次同步失败、或记忆刚打开过，claude 不会读到旧的记忆。走同步队列，失败只写日志。
@@ -1419,7 +1439,7 @@ async function bootstrap(): Promise<void> {
     kill: (termId) => pty.kill(termId),
     running: (termId) => pty.isOpen(termId),
     reopen: (h) => {
-      if (h.butler) return sessionService.openButler({ sessionId: h.id });
+      if (h.shipherd) return sessionService.openShipherd({ sessionId: h.id });
       if (h.ticketKey) return sessionService.open({ ticketKey: h.ticketKey, sessionId: h.id });
       if (h.featureId !== null) return sessionService.openFeature({ featureId: h.featureId, sessionId: h.id });
       return Promise.resolve({ ok: false, reason: "no_session" } as const);
@@ -1532,8 +1552,8 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /**
-   * 总控里的 /handoff 之后（后台）：存下了汇总就给子 ticket 跑 handoff；没存下（用户自己开的总控没有 Butler 的 MCP，
-   * 输出了 ticket 代码块或没有代码块）就由 Butler 从那个 session fork 出来自己生成汇总。见 featureCommandFollowup。
+   * 总控里的 /handoff 之后（后台）：存下了汇总就给子 ticket 跑 handoff；没存下（用户自己开的总控没有 Shipherd 的 MCP，
+   * 输出了 ticket 代码块或没有代码块）就由 Shipherd 从那个 session fork 出来自己生成汇总。见 featureCommandFollowup。
    */
   const featureFollowup = featureCommandFollowup(featureRunner, { notify, log: logger });
   /** 换新时 feature 总控的 /handoff 只收总控自己的汇总，不往下带动 ticket，也不 fork 总控（计划 16）。refresher 在后面才建好。 */
@@ -1585,14 +1605,14 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /**
-   * 退出开始后不再发起新的调度任务。Butler 总控的每日巡检（BTL-190 第 5 点）用同样的触发时机，但不排进 Scheduler 的链：
-   * 它可能要等 session 停下来，不能挡住晚间 handoff。butlerPatrol 在下面才建好：调用时才用到。
+   * 退出开始后不再发起新的调度任务。Shipherd 总控的每日巡检（BTL-190 第 5 点）用同样的触发时机，但不排进 Scheduler 的链：
+   * 它可能要等 session 停下来，不能挡住晚间 handoff。shipherdPatrol 在下面才建好：调用时才用到。
    */
   /** 度量的每日 gh 任务（ws-h）：要等 ticketPrs 建好，在下面赋值。 */
   let metricsGhJob: MetricsGhJob | null = null;
   const checkSchedule = (trigger: ScheduleTrigger) => {
     if (headlessAbort.signal.aborted) return Promise.resolve();
-    void butlerPatrol.check();
+    void shipherdPatrol.check();
     void lessonRunner.daily().catch((e: unknown) => logger("lessons: daily pull failed", e));
     void metricsGhJob?.daily().catch((e: unknown) => logger("metrics: daily gh job failed", e));
     // 栈（工作流 K）：每分钟看一遍要不要 fetch、rebase；每天一次清备份、对总览。
@@ -1641,7 +1661,7 @@ async function bootstrap(): Promise<void> {
   let discoverAgain = false;
   /** 同一时间只有一次扫描；扫描中又被触发（hook、定时器）就在结束后再扫一次。 */
   const runDiscovery = async (): Promise<void> => {
-    // 「显示 Butler 之外开的 session」关着（默认）：完全不扫 ~/.claude/projects（BTL-244）。
+    // 「显示 Shipherd 之外开的 session」关着（默认）：完全不扫 ~/.claude/projects（BTL-244）。
     if (!outsideSessionsOn(settings)) return;
     if (discovering) {
       discoverAgain = true;
@@ -1673,7 +1693,7 @@ async function bootstrap(): Promise<void> {
     }, HOOK_DISCOVERY_DEBOUNCE_MS);
   };
 
-  // 合并总控（设计文档 2026-11-04）。等待者记的是 BUTLER_SESSION（打开终端时的 id = termId）；Butler 重开过的终端用链上最新的 id，按 head 找回来。
+  // 合并总控（设计文档 2026-11-04）。等待者记的是 SHIPHERD_SESSION（打开终端时的 id = termId）；Shipherd 重开过的终端用链上最新的 id，按 head 找回来。
   const gateRepo = new MergeGateRepo(db);
   const whoOf = makeWhoOf({ tickets, features });
   const gateTerm = (sessionId: string): string | null => {
@@ -1689,8 +1709,8 @@ async function bootstrap(): Promise<void> {
     head: (id) => sessions.head(id),
     activity: (id) => activityMonitor.get(id),
     pty,
-    // BUTLER_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
-    typingQuietMs: Number(process.env.BUTLER_GATE_TYPING_QUIET_MS) || undefined,
+    // SHIPHERD_GATE_TYPING_QUIET_MS 只给 e2e 用（它刚在终端里打过字，不想多等 30 秒）。
+    typingQuietMs: Number(process.env.SHIPHERD_GATE_TYPING_QUIET_MS) || undefined,
     // 休眠着的：叫它醒，醒来以后 sessionStopped 再递（WS-M B）。
     wakeIfHibernated: (id) => {
       if (!hibernator || !isHibernated(id)) return false;
@@ -1722,7 +1742,7 @@ async function bootstrap(): Promise<void> {
   const costTitleOf = (h: Session): string => {
     if (h.ticketKey) return `${h.ticketKey} ${tickets.get(h.ticketKey)?.title ?? ""}`.trim();
     if (h.featureId !== null) return features.get(h.featureId)?.name ?? `feature ${h.featureId}`;
-    return "Butler";
+    return "Shipherd";
   };
   const costSession = (root: string): CostSessionInfo | null => {
     const h = sessions.head(root);
@@ -1761,7 +1781,7 @@ async function bootstrap(): Promise<void> {
       const keys = new Set<string>();
       for (const termId of pty.openIds()) {
         const h = sessions.head(termId);
-        if (!h || h.origin !== "butler") continue;
+        if (!h || h.origin !== "shipherd") continue;
         const root = sessions.rootOf(h.id);
         if (root) roots.add(root);
         if (h.ticketKey) keys.add(h.ticketKey);
@@ -1813,7 +1833,7 @@ async function bootstrap(): Promise<void> {
     const h = v.sessionId ? sessions.head(v.sessionId) : null;
     if (h?.ticketKey) return { page: "ticket", key: h.ticketKey, sessionId: h.id };
     if (h && h.featureId !== null) return { page: "feature", id: h.featureId, sessionId: h.id };
-    if (h?.butler) return { page: "butler", sessionId: h.id };
+    if (h?.shipherd) return { page: "shipherd", sessionId: h.id };
     return v.ticketKey ? { page: "ticket", key: v.ticketKey, sessionId: null } : null;
   };
   /** Stop 到的时候先重读这个 session 的活动（guard 看的是上一次刷新的）。活动按 head 的 id 跟踪；Stop 带来的可能是链上的旧 id。 */
@@ -1821,23 +1841,23 @@ async function bootstrap(): Promise<void> {
     const head = sessions.head(id)?.id;
     if (head) await activityMonitor.refreshSession(head);
   };
-  /** 开着终端的 Butler session 的 head（同一个 head 只算一次）。 */
-  const openButlerHeads = (): Session[] => {
+  /** 开着终端的 Shipherd session 的 head（同一个 head 只算一次）。 */
+  const openShipherdHeads = (): Session[] => {
     const heads = new Map<string, Session>();
     for (const termId of pty.openIds()) {
       const h = sessions.head(termId);
-      if (h && h.origin === "butler") heads.set(h.id, h);
+      if (h && h.origin === "shipherd") heads.set(h.id, h);
     }
     return [...heads.values()];
   };
-  /** 开着终端的加上休眠着的 Butler session 的 head：汇报找总控时休眠的总控也算（送的时候叫它醒）。 */
-  const liveButlerHeads = (): Session[] => {
-    const heads = new Map(openButlerHeads().map((h) => [h.id, h]));
-    for (const h of hibernatedHeads()) if (h.origin === "butler" && !heads.has(h.id)) heads.set(h.id, h);
+  /** 开着终端的加上休眠着的 Shipherd session 的 head：汇报找总控时休眠的总控也算（送的时候叫它醒）。 */
+  const liveShipherdHeads = (): Session[] => {
+    const heads = new Map(openShipherdHeads().map((h) => [h.id, h]));
+    for (const h of hibernatedHeads()) if (h.origin === "shipherd" && !heads.has(h.id)) heads.set(h.id, h);
     return [...heads.values()];
   };
   // 对话另存（UI 重做第 4 层）：只存双方说的话，按 replaced_by 链根存；问答规则判不了的交给低档模型（conv_qa）。
-  // 判断在 session 的目录里跑；worktree 已经清掉时用 Butler 自己的数据目录（headless 不能在不存在的 cwd 里启动）。
+  // 判断在 session 的目录里跑；worktree 已经清掉时用 Shipherd 自己的数据目录（headless 不能在不存在的 cwd 里启动）。
   const convRepo = new ConvRepo(db);
   const convAppended = (root: string): void => safeSend(IPC.convAppended, root);
   const conv = new ConversationStore({ repo: convRepo, sessions, onAppended: convAppended, now: Date.now });
@@ -1863,7 +1883,7 @@ async function bootstrap(): Promise<void> {
     kindOf: (s) => refreshKindOf(s, gateTerm(s.id) !== null),
     contextOf,
     threshold: () => refreshThreshold(settings),
-    // 和 HealthService 装命令的是同一个文件；Butler 的旧版本也算（C1）。读不了当作不是 Butler 的（不换新）。
+    // 和 HealthService 装命令的是同一个文件；Shipherd 的旧版本也算（C1）。读不了当作不是 Shipherd 的（不换新）。
     handoffCommandReady: () =>
       handoffCommandUsable(handoffCommandPath(paths.claudeCommands)).catch((e: unknown) => {
         logger("refresh: reading the /handoff command file failed", e);
@@ -1879,15 +1899,15 @@ async function bootstrap(): Promise<void> {
       const h = sessions.head(termId);
       if (h) void mailbox.flush(h.id);
     },
-    sessions: openButlerHeads,
+    sessions: openShipherdHeads,
     lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
     openedAt: (termId) => pty.openedAt(termId),
-    // BUTLER_REFRESH_OPEN_QUIET_MS 只给 e2e 用（后台窗口模式下才算数）：它刚打开终端就要看自动换新，不想多等 1 分钟。
-    openQuietMs: process.env.BUTLER_BACKGROUND_WINDOWS === "1" ? Number(process.env.BUTLER_REFRESH_OPEN_QUIET_MS) || undefined : undefined,
+    // SHIPHERD_REFRESH_OPEN_QUIET_MS 只给 e2e 用（后台窗口模式下才算数）：它刚打开终端就要看自动换新，不想多等 1 分钟。
+    openQuietMs: process.env.SHIPHERD_BACKGROUND_WINDOWS === "1" ? Number(process.env.SHIPHERD_REFRESH_OPEN_QUIET_MS) || undefined : undefined,
     // handoff 收进来时 ingest 已经把记忆同步排进队列（syncTicket / syncFeature）：/clear 之前等它写完（BTL-190 第 6 点）。
     memoryIdle: () => memory.idle(),
     // 换新前的对话尾巴：读旧 head 的 transcript，按终端的 id 存（同一个终端下一次换新覆盖它）。
-    // 后面再追加 Butler 存下的最近问答（UI 重做第 4 层）：换新前先把旧 session 读到最新，最多等 3 秒（不能让换新卡住）。
+    // 后面再追加 Shipherd 存下的最近问答（UI 重做第 4 层）：换新前先把旧 session 读到最新，最多等 3 秒（不能让换新卡住）。
     // 只有问答、没有尾巴时文件里就只有问答；refreshResume 的「再读一下这个文件」照样成立。
     writeTail: async (oldHeadId, termId) => {
       await Promise.race([convIngester.syncNow(oldHeadId), delay(3000, undefined, { ref: false })]).catch(() => undefined);
@@ -1947,9 +1967,9 @@ async function bootstrap(): Promise<void> {
       return h ? (h.featureId ?? (h.ticketKey === null ? null : (tickets.get(h.ticketKey)?.featureId ?? null))) : null;
     },
     nameOf: mailboxName,
-    typing: (h, phase) => inboxService.butlerTyping(h, phase),
+    typing: (h, phase) => inboxService.shipherdTyping(h, phase),
     // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；真关了的、总控管的在后台恢复（BTL-256）。熔断压着的不叫。
-    // 真关了的只为别的 session 发来的消息恢复（总控的指示、汇报……）：CI、合并这类 Butler 自己的通知排着等下次打开，
+    // 真关了的只为别的 session 发来的消息恢复（总控的指示、汇报……）：CI、合并这类 Shipherd 自己的通知排着等下次打开，
     // 免得总控刚 end_session 的 session 被下一条通知又拉起来。
     wake: (id) => {
       if (costBreaker?.sessionPaused(id) || quitState.quitting) return;
@@ -1967,7 +1987,7 @@ async function bootstrap(): Promise<void> {
     head: (id) => sessions.head(id),
     ticket: (key) => tickets.get(key),
     termOf: gateTerm,
-    openHeads: liveButlerHeads,
+    openHeads: liveShipherdHeads,
     mailbox,
     latestCoordinator: (where) => {
       for (const x of sessions.listFeatureCoordinators(where.feature)) {
@@ -2010,7 +2030,7 @@ async function bootstrap(): Promise<void> {
         return memoryMcpConfig(s.ticketKey, { featureId }, termId);
       }
       if (s.featureId !== null) return featureMcpConfig(s.featureId, termId);
-      if (s.butler) return butlerMcpConfig(termId);
+      if (s.shipherd) return shipherdMcpConfig(termId);
       return null;
     } catch (e) {
       logger(`fork: writing the MCP config for ${dev.sessionId} (run ${runId}) failed; the fork uses the dev session's`, e);
@@ -2032,7 +2052,7 @@ async function bootstrap(): Promise<void> {
     lastTurnAt: (id) => usageRepo.lastSessionTurnAt(id),
     recall: (scope, maxChars) => memory.recallText(scope, maxChars),
     files: {
-      // 只读 hook 和 gate hook 是同一个 butler-hook 命令（forkSettings 在后面加 readonly）；hook 没装好 → null → ForkService 报 no_claude。
+      // 只读 hook 和 gate hook 是同一个 shipherd-hook 命令（forkSettings 在后面加 readonly）；hook 没装好 → null → ForkService 报 no_claude。
       settings: (devSettingsPath) => {
         try {
           return writeForkSettings({ dir: paths.mcp, devSettingsPath, guardCommand: hookInstalled() ? hookCommand(paths.hookBin, process.platform) : null });
@@ -2069,7 +2089,7 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     logger("fork: recovering interrupted discussions failed", e);
   }
-  // 等人时间（ws-h）：开着终端的 Butler head（复盘分析 session 除外）此刻在等什么。休眠的没有终端，不算。
+  // 等人时间（ws-h）：开着终端的 Shipherd head（复盘分析 session 除外）此刻在等什么。休眠的没有终端，不算。
   const waitHeads = (): WaitHead[] => {
     const categories = needsYou.categories();
     const asksByHead = inboxService.unansweredAsksByHead();
@@ -2077,7 +2097,7 @@ async function bootstrap(): Promise<void> {
     const out = new Map<string, WaitHead>();
     for (const termId of pty.openIds()) {
       const h = sessions.head(termId);
-      if (!h || h.origin !== "butler" || h.lessonRunId !== null || out.has(h.id)) continue;
+      if (!h || h.origin !== "shipherd" || h.lessonRunId !== null || out.has(h.id)) continue;
       const asks = asksByHead.get(h.id) ?? [];
       const activity = activityMonitor.get(h.id) ?? null;
       out.set(h.id, {
@@ -2098,14 +2118,14 @@ async function bootstrap(): Promise<void> {
   });
   waitTracker.recover();
   const waitTimer = setInterval(() => waitTracker.sync(), WAIT_TOUCH_MS);
-  // 人在终端里的输入（ws-h）：UserPromptSubmit 和对话框按键。Butler 自己递的（回答、汇报、换新）不算。
-  // 只算 Butler 开着终端的 session：外部终端里认领的、复盘分析 session 不算。
+  // 人在终端里的输入（ws-h）：UserPromptSubmit 和对话框按键。Shipherd 自己递的（回答、汇报、换新）不算。
+  // 只算 Shipherd 开着终端的 session：外部终端里认领的、复盘分析 session 不算。
   const terminalMeter = new TerminalInputMeter({
     record: recordEvent, now: Date.now, log: logger,
     session: (termId) => {
       if (!pty.isOpen(termId)) return null;
       const h = sessions.head(termId);
-      return h && h.origin === "butler" && h.lessonRunId === null ? { id: h.id, ticketKey: h.ticketKey } : null;
+      return h && h.origin === "shipherd" && h.lessonRunId === null ? { id: h.id, ticketKey: h.ticketKey } : null;
     },
     autoInputInFlight: (termId) => pty.autoInputInFlight(termId) || refresher.isRefreshing(sessions.head(termId)?.id ?? termId),
     permissionShowing: (termId) => pty.permissionShowing(termId),
@@ -2118,18 +2138,18 @@ async function bootstrap(): Promise<void> {
     waitTracker.sync();
     if (terminalMeter.keys(termId, data)) setTimeout(() => waitTracker.sync(), 1500).unref?.();
   };
-  // Butler 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Butler 总控，发巡检消息。BTL-248 起排进它的信箱。
-  const butlerPatrol = new ButlerPatrol({
-    time: () => settings.get("butlerPatrolTime"),
+  // Shipherd 总控的每日巡检（BTL-190 第 5 点）：到点打开（或接着用）Shipherd 总控，发巡检消息。BTL-248 起排进它的信箱。
+  const shipherdPatrol = new ShipherdPatrol({
+    time: () => settings.get("shipherdPatrolTime"),
     jobs,
     now: Date.now,
-    running: () => sessionService.runningButler(),
-    latest: () => sessionService.latestButler(),
-    open: (req) => sessionService.openButler(req),
+    running: () => sessionService.runningShipherd(),
+    latest: () => sessionService.latestShipherd(),
+    open: (req) => sessionService.openShipherd(req),
     mailbox,
     headOf: (termId) => sessions.head(termId)?.id ?? termId,
     opened: (id, termId) => mailbox.opened(id, termId, submitTask),
-    message: () => M().butlerPatrolMessage,
+    message: () => M().shipherdPatrolMessage,
     onChange: notify,
     log: logger,
   });
@@ -2138,15 +2158,15 @@ async function bootstrap(): Promise<void> {
     idleMinutes: () => idleCloseMinutes(settings),
     terminals: () => pty.openIds().flatMap((termId) => {
       const head = sessions.head(termId);
-      return head && head.origin === "butler" ? [{ termId, head }] : [];
+      return head && head.origin === "shipherd" ? [{ termId, head }] : [];
     }),
     activity: (id) => activityMonitor.get(id),
     lastUserInputAt: (termId) => pty.lastUserInputAt(termId),
     openedAt: (termId) => pty.openedAt(termId),
     ticketsOfFeature: (id) => tickets.listByFeature(id).map((t) => t.key),
     askUserPending: (id) => inboxService.hasPendingDecision(id),
-    // 合并排队（等待者记的是 BUTLER_SESSION，换成 head 再对）、ticket 的 PR 的 CI 还在跑：通知只递给开着的终端。
-    waitingOnButler: (headId) => {
+    // 合并排队（等待者记的是 SHIPHERD_SESSION，换成 head 再对）、ticket 的 PR 的 CI 还在跑：通知只递给开着的终端。
+    waitingOnShipherd: (headId) => {
       if ([...gateRepo.waitingSessionIds()].some((id) => (sessions.head(id)?.id ?? id) === headId)) return true;
       const key = sessions.head(headId)?.ticketKey;
       // 合并、关闭了的 PR 留着最后一次读到的 CI：只算开着的 PR 和还没有 PR 的分支。
@@ -2380,11 +2400,11 @@ async function bootstrap(): Promise<void> {
     git: git.git,
     recipient: prRecipient,
     cwdOf: (pr, sessionId) => (sessionId ? (sessions.head(sessionId)?.cwd ?? null) : null) ?? (pr.repoId !== null ? (tickets.getRepo(pr.repoId)?.repoPath ?? null) : null),
-    // 和度量的 butler_made 同一个口径（分支的主人、合并占位、在这个分支上干活的 session 是 Butler 开的）；度量还没算到的现场看。
-    isButlerPr: (pr) => {
+    // 和度量的 shipherd_made 同一个口径（分支的主人、合并占位、在这个分支上干活的 session 是 Shipherd 开的）；度量还没算到的现场看。
+    isShipherdPr: (pr) => {
       const o = pr.repoId !== null && pr.headBranch ? branchOwners.get(pr.ticketKey, pr.repoId, pr.headBranch) : null;
-      if (o && sessions.get(o.sessionId)?.butler) return true;
-      return pr.headBranch !== null && sessions.listByTicket(pr.ticketKey).some((s) => s.butler && s.gitBranch === pr.headBranch);
+      if (o && sessions.get(o.sessionId)?.shipherd) return true;
+      return pr.headBranch !== null && sessions.listByTicket(pr.ticketKey).some((s) => s.shipherd && s.gitBranch === pr.headBranch);
     },
     openPrFor,
     profile: prProfile,
@@ -2623,7 +2643,7 @@ async function bootstrap(): Promise<void> {
     sessionModel: (tier) => routing.sessionModel(tier),
     createTicket: async (i) => {
       try {
-        // 有父 epic 的建进对应的 Butler epic（按 Jira epic key 去重，没有就新建，BTL-246 §7）。
+        // 有父 epic 的建进对应的 Shipherd epic（按 Jira epic key 去重，没有就新建，BTL-246 §7）。
         // ticket 建不出来时，这次新建的 epic 要是还空着就一起删掉，不留空壳（BTL-248）。
         const create = (featureId: number | null) =>
           ticketService.create({
@@ -2672,12 +2692,12 @@ async function bootstrap(): Promise<void> {
     },
     // 全局总控开着就排进它的信箱（BTL-248）；没开返回 false，退回成通知。
     toCoordinator: async (text) => {
-      const b = sessionService.runningButler();
+      const b = sessionService.runningShipherd();
       if (!b) return false;
-      mailbox.send({ kind: "butler", from: null, to: b.id, featureId: null, body: sanitizeTask(text) });
+      mailbox.send({ kind: "shipherd", from: null, to: b.id, featureId: null, body: sanitizeTask(text) });
       return true;
     },
-    // Jira epic 对应的 Butler epic 自己选了档位：它的 ticket 接进来以后整理还是开工按它（BTL-247 接 BTL-246 §7）。
+    // Jira epic 对应的 Shipherd epic 自己选了档位：它的 ticket 接进来以后整理还是开工按它（BTL-247 接 BTL-246 §7）。
     epicLevel: (epicKey) => {
       const f = features.byJiraEpic(epicKey);
       return f ? automation.overrideForFeature(f.id) : null;
@@ -2688,7 +2708,7 @@ async function bootstrap(): Promise<void> {
       // 排进 epic 总控的信箱（BTL-245）：在忙的下一次调用工具时读到，停着的直接输入，关着的下次打开时第一条读到。
       // hold：马上要打开它，不让信箱再去唤醒一次（免得两边同时 --resume 同一个 session）。
       const body = text.slice(0, MAILBOX_BODY_LIMIT);
-      const send = (to: string, hold = false) => mailbox.send({ kind: "butler", from: null, to, featureId, body, hold });
+      const send = (to: string, hold = false) => mailbox.send({ kind: "shipherd", from: null, to, featureId, body, hold });
       const running = sessionService.runningCoordinator(featureId);
       if (running) {
         send(running.id);
@@ -2771,8 +2791,8 @@ async function bootstrap(): Promise<void> {
         void inboxService.flush();
         // 信箱（BTL-245）：它收过等回复的消息就把这一轮的最后一条回复送回去，再把排着的消息直接输入（永不 reject）。
         void mailbox.stopped(stopped);
-        // 在等 Butler 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
-        if (!headlessAbort.signal.aborted) void butlerPatrol.check();
+        // 在等 Shipherd 总控停下来的巡检也趁现在送（BTL-190 第 5 点，永不 reject）。
+        if (!headlessAbort.signal.aborted) void shipherdPatrol.check();
         return flushCi();
       });
     // 这个 ticket 的 PR 都马上查一次；feature 总控查它所有 ticket 的；别的按仓库。
@@ -2812,7 +2832,7 @@ async function bootstrap(): Promise<void> {
       // 信箱 hook 送完了（BTL-245）：马上清扫这个终端的 .done，记成送达。
       const mp = env.payload && typeof env.payload === "object" ? (env.payload as { hook_event_name?: unknown }) : null;
       if (mp?.hook_event_name === MAILBOX_EVENT) {
-        if (env.butlerSession) mailbox.sweep(env.butlerSession);
+        if (env.shipherdSession) mailbox.sweep(env.shipherdSession);
         return;
       }
       // 约定广播（BTL-245）：存进 feature 记忆的 remember 推给同一个 feature 里开着的其他 session。
@@ -2840,7 +2860,7 @@ async function bootstrap(): Promise<void> {
             // feature 总控（设计文档 2026-10-28）：没存下时记一笔；子 ticket 的 handoff 照样在后台跑（afterFeatureCommand）。
             else if (r && "featureId" in r) {
               const where = `/handoff in feature ${r.featureId} coordinator session ${stop.sessionId}`;
-              if (r.reason === "wrong_block") logger(`${where}: printed a ticket butler-handoff block instead of a butler-feature-handoff block; not stored`);
+              if (r.reason === "wrong_block") logger(`${where}: printed a ticket shipherd-handoff block instead of a shipherd-feature-handoff block; not stored`);
               else if (r.reason === "no_block") logger(`${where}: no feature handoff block found in the transcript; not stored`);
               else if (r.reason === "no_feature") logger(`${where}: the feature no longer exists; not stored`);
             }
@@ -2858,31 +2878,31 @@ async function bootstrap(): Promise<void> {
       if (stageObs && prStages.add(stageObs.event, stageObs.dedupeKey)) notify();
       if (effect.kind === "ignored") return;
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
-      // 终端按 BUTLER_SESSION 记：--resume 有时换 session id，唤醒（WS-M B）和交任务等的都是终端的 id。
+      // 终端按 SHIPHERD_SESSION 记：--resume 有时换 session id，唤醒（WS-M B）和交任务等的都是终端的 id。
       if (effect.kind === "session_started") {
-        pty.markStarted(env.butlerSession ?? effect.sessionId);
+        pty.markStarted(env.shipherdSession ?? effect.sessionId);
         // 信箱：/clear、resume 之后 head 换了，投影按新的 head 对一遍。
-        mailbox.syncTerm(env.butlerSession ?? effect.sessionId);
+        mailbox.syncTerm(env.shipherdSession ?? effect.sessionId);
       }
-      // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 BUTLER_SESSION 记，
+      // claude 收下了一条输入（UserPromptSubmit）：deliver 回车以后等的就是它（BTL-190 第 9 点）。终端按 SHIPHERD_SESSION 记，
       // /clear 以后 hook 里的 session id 已经换了。
-      // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Butler 刚递回答时不算，BTL-190 第 2+3 点）。
+      // 同一个时机：用户在终端里回答了，这个 session 卡片上还没答的「待你决定」都算答过（换新、Shipherd 刚递回答时不算，BTL-190 第 2+3 点）。
       if (effect.kind === "waiting" && !effect.waiting) {
-        // 先记人介入（ws-h）：markSubmitted 之后就分不出这是不是 Butler 递进去的了。终端里嵌套的 claude 的输入不算（不抛）。
-        const termId = env.butlerSession ?? effect.sessionId;
+        // 先记人介入（ws-h）：markSubmitted 之后就分不出这是不是 Shipherd 递进去的了。终端里嵌套的 claude 的输入不算（不抛）。
+        const termId = env.shipherdSession ?? effect.sessionId;
         if (promptOnTerminalChain((id) => sessions.head(id)?.id ?? null, effect.sessionId, termId)) terminalMeter.promptSubmitted(termId);
-        pty.markSubmitted(env.butlerSession ?? effect.sessionId);
-        procs?.terminalActive(env.butlerSession ?? effect.sessionId);
-        inboxService.promptSubmitted(env.butlerSession ?? effect.sessionId);
+        pty.markSubmitted(env.shipherdSession ?? effect.sessionId);
+        procs?.terminalActive(env.shipherdSession ?? effect.sessionId);
+        inboxService.promptSubmitted(env.shipherdSession ?? effect.sessionId);
         // 马上重读活动：实况窗口里它立刻算在干活（BTL-190 第 7 点）。
-        void activityMonitor.promptSubmitted(env.butlerSession ?? effect.sessionId).catch((e: unknown) => logger("re-reading the activity on prompt submit failed", e));
+        void activityMonitor.promptSubmitted(env.shipherdSession ?? effect.sessionId).catch((e: unknown) => logger("re-reading the activity on prompt submit failed", e));
       }
       // claude 停下来等输入了：有“对方已经合完”的通知就趁现在发（设计文档 2026-11-04：不打断忙着的 session）。
       // 同一个时机也递还没递出去的 CI 结论（先重读活动），并且马上查一次这个仓库的 PR 和 CI（刚停下的 session 常常刚 push）。
       // 终端重新打开（--resume）的 session 停在输入框等着（hook-events 记成 waiting）：和停下来一样，马上递卡片上答好的回答等。
       // 全新启动的也一样（hook-events 记成 waiting）：没人打过字就不会有 Stop，不在这里送的话，等着的回答和汇报要等到用户先说一句话。
       if ((effect.kind === "waiting" && effect.waiting) || (effect.kind === "session_started" && (effect.resumed === true || effect.fresh === true))) {
-        sessionStopped(env.butlerSession ?? effect.sessionId);
+        sessionStopped(env.shipherdSession ?? effect.sessionId);
       }
       notify();
       // 还没归属 ticket、又缺 cwd / 分支 / 首条提示的 session：触发一次发现（每个 session 每次运行最多一次）。
@@ -2892,7 +2912,7 @@ async function bootstrap(): Promise<void> {
           discoveryPending.add(s.id);
           scheduleDiscovery();
         }
-        // 分支不再靠扫描补（扫描默认关）：Butler 自己的 session 从目录读一次（BTL-244）。
+        // 分支不再靠扫描补（扫描默认关）：Shipherd 自己的 session 从目录读一次（BTL-244）。
         if (s) {
           void fillBranchFromCwd(s, { tried: branchTried, currentBranch: git.currentBranch, fill: (id, branch) => sessions.fillDetails(id, { gitBranch: branch }) })
             .catch((e: unknown) => logger("reading a session's branch failed", e));
@@ -2917,12 +2937,12 @@ async function bootstrap(): Promise<void> {
     changed: () => notify("procs"),
   });
   const procServices = procs;
-  // e2e（后台窗口模式下才算数）：BUTLER_HIBERNATE_AFTER_MS 把四种等待的分钟数都换成这么多毫秒，安静期也一起缩短。
-  const hibernateAfterMs = BACKGROUND_WINDOWS ? Number(process.env.BUTLER_HIBERNATE_AFTER_MS) || 0 : 0;
-  const butlerTerminals = () =>
+  // e2e（后台窗口模式下才算数）：SHIPHERD_HIBERNATE_AFTER_MS 把四种等待的分钟数都换成这么多毫秒，安静期也一起缩短。
+  const hibernateAfterMs = BACKGROUND_WINDOWS ? Number(process.env.SHIPHERD_HIBERNATE_AFTER_MS) || 0 : 0;
+  const shipherdTerminals = () =>
     pty.openIds().flatMap((termId) => {
       const head = sessions.head(termId);
-      return head && head.origin === "butler" ? [{ termId, head }] : [];
+      return head && head.origin === "shipherd" ? [{ termId, head }] : [];
     });
   const scope = { ticketsOfFeature: (id: number) => tickets.listByFeature(id).map((t) => t.key) };
   const prPending = (key: string | null, ci: "pending" | "review"): boolean =>
@@ -2933,7 +2953,7 @@ async function bootstrap(): Promise<void> {
   // 开新 session 前按内存放行（工作流 W）：取代以前每 ticket、每 feature 写死的上限。
   // 只数开着终端的：休眠的 session 进程已经结束，不占内存，也不在 pty.openIds() 里。
   // 每个 session 的预估：有工作流 M 的实测就用开着的 session 的实测平均，没有就用设置里的值。
-  // BUTLER_E2E_AVAILABLE_MB 只在没打包时生效（e2e 用）。
+  // SHIPHERD_E2E_AVAILABLE_MB 只在没打包时生效（e2e 用）。
   const memoryReadDeps = defaultReadDeps((file, args) => execText(file, args, { timeoutMs: 2_000 }), app.isPackaged);
   // 启动时记一次读数（附录第 7 节）：看得出这台机器上 vm_stat 算出来的可用内存合不合理。
   void memorySnapshotLine(memoryReadDeps).then((line) => logger(`memory at startup: ${line}`), (e: unknown) => logger("memory at startup: reading failed", e));
@@ -2958,11 +2978,11 @@ async function bootstrap(): Promise<void> {
     endWatchers: () => hibernateEndWatchersOn(settings),
     pressureOn: () => memoryPressureOn(settings),
     pressureLine: () => memoryPressureFreePercent(settings),
-    terminals: butlerTerminals,
+    terminals: shipherdTerminals,
     candidate: (t) => {
       const a = activityMonitor.get(t.head.id);
       const typed = pty.lastUserInputAt(t.termId);
-      const terms = butlerTerminals();
+      const terms = shipherdTerminals();
       return {
         head: t.head, termId: t.termId, pinned: t.head.pinned === true,
         transcript: transcriptLocator.state(t.head.id),
@@ -3002,7 +3022,7 @@ async function bootstrap(): Promise<void> {
   });
   /** 按种类 --resume 一个 head（不 force：分支对不上就算打不开，交给用户）。 */
   const openByKind = async (head: Session): Promise<{ ok: true; termId: string; alreadyOpen: boolean } | { ok: false; reason: string }> => {
-    const r = head.butler && head.ticketKey === null ? await sessionService.openButler({ sessionId: head.id })
+    const r = head.shipherd && head.ticketKey === null ? await sessionService.openShipherd({ sessionId: head.id })
       : head.ticketKey !== null ? await sessionService.open({ ticketKey: head.ticketKey, sessionId: head.id })
       : head.featureId !== null ? await sessionService.openFeature({ featureId: head.featureId, sessionId: head.id })
       : ({ ok: false, reason: "kind" } as const);
@@ -3037,7 +3057,7 @@ async function bootstrap(): Promise<void> {
     isOpen: (termId) => pty.isOpen(termId),
     setWakeError: (id, error, at) => sessions.setWakeError(id, error, at),
     waitingSenders: (headId) => messagesRepo.queued().flatMap((m) =>
-      m.fromSession !== null && (m.kind === "instruction" || m.kind === "butler") && (sessions.head(m.toSession)?.id ?? m.toSession) === headId
+      m.fromSession !== null && (m.kind === "instruction" || m.kind === "shipherd") && (sessions.head(m.toSession)?.id ?? m.toSession) === headId
         ? [{ id: m.id, from: m.fromSession, featureId: m.featureId }] : []),
     receipt: (to, featureId, body) => void mailbox.send({ kind: "reply", from: null, to, featureId, body }),
     nameOf: mailboxName,
@@ -3099,7 +3119,7 @@ async function bootstrap(): Promise<void> {
     },
     log: logger,
   });
-  /** 「现在」页和「谁该动」看板共用的一份 Butler 提醒。 */
+  /** 「现在」页和「谁该动」看板共用的一份 Shipherd 提醒。 */
   const currentNotices = (): NowNotice[] => [
     ...buildNotices({
       availability: availability.view(),
@@ -3134,11 +3154,11 @@ async function bootstrap(): Promise<void> {
     tickets: viewCache.wrap("tickets", () => perfOp("views.tickets", () => sessionService.ticketViews())),
     features: viewCache.wrap("features", () => perfOp("views.features", () => sessionService.featureViews())),
   };
-  /** 总控 session（feature 总控和 Butler 总控）的 head：开着终端或休眠着的。 */
+  /** 总控 session（feature 总控和 Shipherd 总控）的 head：开着终端或休眠着的。 */
   const turnCoordinators = () =>
     turnCoordinatorsOf({
       featureViews: views.features,
-      runningButler: () => sessionService.runningButler(),
+      runningShipherd: () => sessionService.runningShipherd(),
       hibernatedHeads,
     });
   const turnService = new TurnService({
@@ -3157,7 +3177,7 @@ async function bootstrap(): Promise<void> {
     decisions: () => inboxRepo.pendingDecisions(),
     lastReport: (key) => inboxRepo.lastReport(key),
     refreshing: (id) => refresher.stepOf(id) !== null,
-    // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对。
+    // 合并排队的等待者记的是 SHIPHERD_SESSION：换成 head 再对。
     mergeQueued: (id) => [...gateRepo.waitingSessionIds()].some((w) => (sessions.head(w)?.id ?? w) === id),
     risk: (prId, headSha) => {
       const r = assessRepo.risk(prId);
@@ -3195,7 +3215,7 @@ async function bootstrap(): Promise<void> {
     }
     // 自动接活的来源和间隔（工作流 N）：改了马上按新的拉一次。
     if (key.startsWith("intake")) intakePollSoon();
-    // 打开「显示 Butler 之外开的 session」：马上扫一次，不等 5 分钟的定时（BTL-244）。
+    // 打开「显示 Shipherd 之外开的 session」：马上扫一次，不等 5 分钟的定时（BTL-244）。
     if (key === "showOutsideSessions") void runDiscovery();
   };
   automationHooks.settingChanged = onSettingChanged;
@@ -3231,7 +3251,7 @@ async function bootstrap(): Promise<void> {
   };
   automationHooks.policy = featurePolicyLayers({ loop: loopPolicyIo, stacks: stackPolicyIo, intake: intakePolicyIo });
   const keepAwakeSwitch = keepAwake;
-  // 「发送反馈」（BTL-254）：链接只开 github.com/yul761/butler；诊断脱敏后先给用户看，确认了再存进下载目录。
+  // 「发送反馈」（BTL-254）：链接只开 github.com/yul761/shipherd；诊断脱敏后先给用户看，确认了再存进下载目录。
   const feedback = new FeedbackService({
     env: () => {
       let sys: string | null;
@@ -3240,7 +3260,7 @@ async function bootstrap(): Promise<void> {
       } catch {
         sys = null;
       }
-      return { butler: app.getVersion(), os: osName(process.platform, sys), platform: process.platform, arch: process.arch, claude: health.claudeVersion() ?? "unknown" };
+      return { shipherd: app.getVersion(), os: osName(process.platform, sys), platform: process.platform, arch: process.arch, claude: health.claudeVersion() ?? "unknown" };
     },
     openExternal: (url) => shell.openExternal(url),
     copyText: (text) => clipboard.writeText(text),
@@ -3318,7 +3338,7 @@ async function bootstrap(): Promise<void> {
     memory,
     externalAudit,
     metrics: (days) => metricsView(days),
-    messages: (scope) => mailbox.views(scope, sessions.listButler().map((x) => x.id)),
+    messages: (scope) => mailbox.views(scope, sessions.listShipherd().map((x) => x.id)),
     usage: usageRepo, sessions,
     refreshSession: (id) => {
       const refused = startRefresh(refresher, id, "manual", logger);
@@ -3476,15 +3496,15 @@ async function bootstrap(): Promise<void> {
     turnSendToAgent: (item) => turnService.sendToAgent(item),
     turnHomeOpened: () => turnService.homeOpened(),
     nowView: (merges) => {
-      // 合并排队的等待者记的是 BUTLER_SESSION：换成 head 再对；「需要你」的理由一次取齐。
+      // 合并排队的等待者记的是 SHIPHERD_SESSION：换成 head 再对；「需要你」的理由一次取齐。
       const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
       const reasons = needsYou.reasons();
       const view = buildNowView({
         tickets: views.tickets(),
         features: views.features(),
-        // 休眠着的 Butler 总控照样算（WS-M B）。
-        butler: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
-          sessionService.runningButler() ?? hibernatedHeads().find((h) => h.butler && h.ticketKey === null) ?? null,
+        // 休眠着的 Shipherd 总控照样算（WS-M B）。
+        shipherd: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
+          sessionService.runningShipherd() ?? hibernatedHeads().find((h) => h.shipherd && h.ticketKey === null) ?? null,
         ),
         activity: (id) => activityMonitor.get(id),
         needsYouReason: (id) => reasons.get(id) ?? null,
@@ -3577,13 +3597,13 @@ async function bootstrap(): Promise<void> {
       lastReply: (id) => activityMonitor.lastReply(id),
       inbox: inboxService,
       mailbox,
-      // Butler 总控（BTL-190 第 5 点）的只读数据。
-      butler: {
-        butlerSessions: () => sessions.listButler().map((x) => x.id),
+      // Shipherd 总控（BTL-190 第 5 点）的只读数据。
+      shipherd: {
+        shipherdSessions: () => sessions.listShipherd().map((x) => x.id),
         featureRows: () => sessionService.featureRowsAll(),
         prs: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
         prTurns: () => turnService.prTurns(),
-        openHeads: openButlerHeads,
+        openHeads: openShipherdHeads,
         needsYou: (id) => needsYou.reasons().get(id) ?? null,
         inbox: inboxService,
         progress: progressView,
@@ -3636,13 +3656,13 @@ async function bootstrap(): Promise<void> {
   inbox.start();
   controlInbox.start();
   gateInbox.start();
-  // hook 看到 alive.json（并且 pid 还活着）才来问；写不了就当 Butler 没开着，hook 一律放行。
+  // hook 看到 alive.json（并且 pid 还活着）才来问；写不了就当 Shipherd 没开着，hook 一律放行。
   try {
     writeFileSync(paths.gateAlive, JSON.stringify({ pid: process.pid }), { mode: 0o600 });
   } catch (e) {
     logger("merge gate: could not write alive.json; merges are not checked", e);
   }
-  holdWatcher.start(Number(process.env.BUTLER_GATE_CHECK_MS) || HOLD_CHECK_MS);
+  holdWatcher.start(Number(process.env.SHIPHERD_GATE_CHECK_MS) || HOLD_CHECK_MS);
   // 等 git 和 gh 的路径按登录 shell 的 PATH 解析好再查：第一轮就可能看到合并、触发 worktree 清理。已经开始退出就不再启动。
   // 更新检查（BTL-253）等 gh 按登录 shell 的 PATH 探测完再开始。
   void healthReady.then(() => ghProbed).then(() => {
@@ -3743,8 +3763,8 @@ async function bootstrap(): Promise<void> {
   // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
   if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
   const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
-  // e2e 用：栈的 tick 另外按 BUTLER_STACKS_TICK_MS 跑（不用等整分钟的 schedule；没设时不跑）。
-  const stacksTickMs = Number(process.env.BUTLER_STACKS_TICK_MS) || 0;
+  // e2e 用：栈的 tick 另外按 SHIPHERD_STACKS_TICK_MS 跑（不用等整分钟的 schedule；没设时不跑）。
+  const stacksTickMs = Number(process.env.SHIPHERD_STACKS_TICK_MS) || 0;
   const stacksTimer = stacksTickMs > 0 ? setInterval(() => void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e)), stacksTickMs) : null;
   // 度量汇总（ws-h）：启动一分钟后一次，之后每小时一次；整窗重算，幂等。
   const metricsRollup = new MetricsRollup({
@@ -3754,7 +3774,7 @@ async function bootstrap(): Promise<void> {
   const rollupFirst = setTimeout(() => metricsRollup.run(), 60_000);
   const rollupTimer = setInterval(() => metricsRollup.run(), 60 * 60_000);
   const METRICS_VIEW_STALE_MS = 10 * 60_000;
-  const metricsCutoff = () => baselineCutoffOf(settings, () => sessions.firstButlerCreatedAt(), metricsSince(settings) ?? Date.now());
+  const metricsCutoff = () => baselineCutoffOf(settings, () => sessions.firstShipherdCreatedAt(), metricsSince(settings) ?? Date.now());
   /** 「效果」页和总控 metrics_overview 的数据：上次汇总超过 10 分钟就先汇总一次。 */
   const metricsView = (days: number | undefined): MetricsOverview => {
     metricsRollup.runIfStale(METRICS_VIEW_STALE_MS);
@@ -3815,7 +3835,7 @@ async function bootstrap(): Promise<void> {
     memory.stop();
     inbox.stop();
     controlInbox.stop();
-    // 先删 alive.json：之后的 hook 不再等一个要退出的 Butler。
+    // 先删 alive.json：之后的 hook 不再等一个要退出的 Shipherd。
     try {
       rmSync(paths.gateAlive, { force: true });
     } catch (e) {
@@ -3856,7 +3876,20 @@ if (process.argv.includes("--smoke")) {
     .then((code) => app.exit(code))
     .catch(() => app.exit(1));
 } else if (!app.requestSingleInstanceLock()) {
-  app.quit();
+  // 平常是第二次打开 Shipherd：已经开着的那个会把窗口拿到前面，这里悄悄退出。
+  // BTL-260：老用户的锁和旧版 Butler 共用，Butler 开着时这里也会退出，看上去像「打不开」：先说一声再退出。
+  if (!usingLegacyUserData) app.quit();
+  else
+    void readProcTable(process.platform)
+      .then((t) => legacyButlerHolder(t))
+      .catch(() => "unknown" as const)
+      .then(async (holder) => {
+        if (holder === "none") return;
+        await app.whenReady();
+        const m = holder === "butler" ? M().legacyButlerRunning : M().lockHeldUnknown;
+        dialog.showMessageBoxSync({ type: "info", message: m.title, detail: m.detail, buttons: ["OK"] });
+      })
+      .finally(() => app.quit());
 } else {
   app.on("second-instance", showWindow);
   app.on("activate", showWindow);

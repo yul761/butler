@@ -20,7 +20,7 @@ export const DEV_CSP = PROD_CSP.replace("script-src 'self'", "script-src 'self' 
   "connect-src 'self' ws://localhost:* http://localhost:*",
 );
 
-export const CSP_PLACEHOLDER = "%BUTLER_CSP%";
+export const CSP_PLACEHOLDER = "%SHIPHERD_CSP%";
 
 /** 构建（或开发服务器）处理 index.html 时填入 CSP。占位符不存在就报错：宁可构建失败，也不能发出一个没有 CSP 的界面。 */
 export function applyCsp(html: string, dev: boolean): string {

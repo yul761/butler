@@ -63,8 +63,8 @@ describe("runCommand", () => {
     expect(Date.now() - t0).toBeLessThan(5000);
   }, 15_000);
 
-  it("gives the file in BUTLER_CHECK_FILE too (for compound commands)", async () => {
-    expect(await run('printf "%s" "$BUTLER_CHECK_FILE"; exit 1', "src/a b.ts")).toEqual({ kind: "fail", code: 1, output: "src/a b.ts" });
+  it("gives the file in SHIPHERD_CHECK_FILE too (for compound commands)", async () => {
+    expect(await run('printf "%s" "$SHIPHERD_CHECK_FILE"; exit 1', "src/a b.ts")).toEqual({ kind: "fail", code: 1, output: "src/a b.ts" });
   });
 
   it("decides on the shell's exit, not on a background child still holding the pipe", async () => {
@@ -89,5 +89,14 @@ describe("runCommand", () => {
 
   it("is unavailable without a shell", async () => {
     expect(await runCommand({ command: "x", file: null, cwd, timeoutMs: 1000, env: {}, shell: null, platform: "win32" })).toEqual({ kind: "unavailable", reason: "Git Bash not found" });
+  });
+});
+
+// BTL-260：改名前写下的检查命令（数据库里、用户仓库的脚本里）用 $BUTLER_CHECK_FILE。
+describe("BUTLER_CHECK_FILE", () => {
+  const cwd = tempDir();
+  it("is still set next to SHIPHERD_CHECK_FILE", async () => {
+    const r = await runCommand({ command: 'test "$BUTLER_CHECK_FILE" = a.ts && test "$SHIPHERD_CHECK_FILE" = a.ts || exit 9', file: "a.ts", cwd, timeoutMs: 5000, env: process.env });
+    expect(r).toEqual({ kind: "pass" });
   });
 });

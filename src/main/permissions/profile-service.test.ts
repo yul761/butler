@@ -11,7 +11,7 @@ import { PermissionProfileService } from "./profile-service";
 const NOW = Date.now();
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "butler-profile-"));
+  dir = mkdtempSync(join(tmpdir(), "shipherd-profile-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 

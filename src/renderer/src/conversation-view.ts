@@ -124,7 +124,7 @@ export function rememberText(r: RememberResult, t: UiStrings): string {
   }
 }
 
-/** 总控页上分叉的结论有没有地方记：只有 feature 总控页有 feature；Butler 页没有 ticket 也没有 feature，不出「记进记忆」。 */
+/** 总控页上分叉的结论有没有地方记：只有 feature 总控页有 feature；Shipherd 页没有 ticket 也没有 feature，不出「记进记忆」。 */
 export function canRememberIn(scope: InboxScope): boolean {
   return "featureId" in scope;
 }
@@ -134,7 +134,7 @@ export function refusesMemory(r: RememberResult): boolean {
   return r === "disabled";
 }
 
-/** ButlerError.code → 句子；不认识的给通用的。 */
+/** ShipherdError.code → 句子；不认识的给通用的。 */
 export function refusalText(code: string, t: UiStrings): string {
   const m = t.conv.refusal as Record<string, string>;
   return Object.prototype.hasOwnProperty.call(m, code) ? m[code] : t.conv.refusal.other;

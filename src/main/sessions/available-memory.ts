@@ -5,7 +5,7 @@ export interface MemoryReading {
   totalKb: number;
   /** 不用换出就能拿到的量：空闲页加上能直接丢掉的文件缓存和 purgeable。 */
   availableKb: number;
-  /** 从哪里读的。fixed：e2e 用 BUTLER_E2E_AVAILABLE_MB 定死的读数，不看这台机器。 */
+  /** 从哪里读的。fixed：e2e 用 SHIPHERD_E2E_AVAILABLE_MB 定死的读数，不看这台机器。 */
   source: "vm_stat" | "memory_pressure" | "os" | "fixed";
   /** macOS 的内存压力（kern.memorystatus_vm_pressure_level）；读不到或别的平台为 null。 */
   pressure: "normal" | "warn" | "critical" | null;
@@ -81,7 +81,7 @@ export function parsePressureLevel(out: string): MemoryReading["pressure"] {
 
 export interface ReadDeps {
   platform: NodeJS.Platform;
-  /** e2e 用：BUTLER_E2E_AVAILABLE_MB 的值。设了就不读这台机器，可用量就是它（CI 机器的真实内存不能决定 e2e 过不过）。 */
+  /** e2e 用：SHIPHERD_E2E_AVAILABLE_MB 的值。设了就不读这台机器，可用量就是它（CI 机器的真实内存不能决定 e2e 过不过）。 */
   fixedAvailableMb?: string;
   run: RunText;
   totalmem(): number;
@@ -99,7 +99,7 @@ export async function readAvailableMemory(d: ReadDeps): Promise<MemoryReading> {
   const fixed = d.fixedAvailableMb?.trim();
   if (fixed && /^\d{1,7}$/.test(fixed)) {
     const availableKb = Number(fixed) * 1024;
-    return { totalKb: Math.max(totalKb, availableKb), availableKb, source: "fixed", pressure: null, detail: "BUTLER_E2E_AVAILABLE_MB" };
+    return { totalKb: Math.max(totalKb, availableKb), availableKb, source: "fixed", pressure: null, detail: "SHIPHERD_E2E_AVAILABLE_MB" };
   }
   const osReading = (pressure: MemoryReading["pressure"]): MemoryReading => ({ totalKb, availableKb: Math.round(d.freemem() / 1024), source: "os", pressure });
   if (d.platform !== "darwin") return osReading(null);
@@ -125,11 +125,11 @@ export async function readAvailableMemory(d: ReadDeps): Promise<MemoryReading> {
 }
 
 /**
- * e2e 定死的可用内存：只在没打包时读 BUTLER_E2E_AVAILABLE_MB（e2e 跑的是没打包的构建）。
+ * e2e 定死的可用内存：只在没打包时读 SHIPHERD_E2E_AVAILABLE_MB（e2e 跑的是没打包的构建）。
  * 打包好的正式版不理它：环境里碰巧有这个变量也不能让准入不看真实内存。
  */
 export function e2eFixedAvailableMb(env: NodeJS.ProcessEnv, packaged: boolean): string | undefined {
-  return packaged ? undefined : env.BUTLER_E2E_AVAILABLE_MB;
+  return packaged ? undefined : env.SHIPHERD_E2E_AVAILABLE_MB;
 }
 
 export const defaultReadDeps = (run: RunText, packaged: boolean): ReadDeps => ({
@@ -158,6 +158,6 @@ export async function memorySnapshotLine(d: ReadDeps): Promise<string> {
     }
   }
   const fixed = await readAvailableMemory(d);
-  const note = fixed.source === "fixed" ? `; admission uses a fixed ${mbOf(fixed.availableKb)} MB (BUTLER_E2E_AVAILABLE_MB)` : "";
+  const note = fixed.source === "fixed" ? `; admission uses a fixed ${mbOf(fixed.availableKb)} MB (SHIPHERD_E2E_AVAILABLE_MB)` : "";
   return `${readingLine(r)}${kernel}, os.freemem ${mbOf(d.freemem() / 1024)} MB${note}`;
 }

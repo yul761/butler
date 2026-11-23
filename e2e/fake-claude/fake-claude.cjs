@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// E2E 用的假 claude（计划 5 任务 8）。只实现 Butler 用到的部分，绝不联网：
-//   --version / --help（列出 Butler 检查的全部参数）；
+// E2E 用的假 claude（计划 5 任务 8）。只实现 Shipherd 用到的部分，绝不联网：
+//   --version / --help（列出 Shipherd 检查的全部参数）；
 //   交互模式（在 PTY 里）：打印就绪行和挂载的 MCP server 名；每读到一行输入就写 transcript、
 //     按 CLAUDE_CONFIG_DIR/settings.json 和 --settings 文件执行 hook（macOS 用 /bin/sh，Windows 用 Git Bash，和 Claude Code 一样）；
-//     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 butler-feature-handoff，
+//     输入 /handoff 时按 Claude Code 的格式写命令消息，回一个 handoff 代码块（feature 总控里是 shipherd-feature-handoff，
 //     /handoff <问题> 把它写进 open_questions；FAKE_HANDOFF_PRS（JSON 数组）设了就用它换掉 ticket handoff 默认报的 PR）；
 //     输入 /fake-bash <命令> 时像 Bash 工具在跑：写一条没有结果的 tool_use 和 tasks/<id>.output，这一轮不结束；
 //     输入 /fake-bg <命令> 时像后台命令：tool_result 带任务 id 和输出文件，这一轮结束；/fake-bg-done 写它的完成通知；
 //       和 Claude Code 一样，命令在跑的时候有一个后台 shell 子进程（不真的执行命令，等到完成通知或假 claude 退出）：
-//       Butler 进程树里找不到它的 shell 就当后台任务已经结束（BTL-190 第 1 点）；
+//       Shipherd 进程树里找不到它的 shell 就当后台任务已经结束（BTL-190 第 1 点）；
 //     输入 /fake-links 时打印三行链接（BTL-257）：一个 https 的 OSC 8 超链接、一个普通文本里的 https URL、一个 file: 的 OSC 8 超链接；
 //     输入 /fake-flood <行数> 时打印这么多行（每行约 100 字节，用来撑满回放缓冲）；
 //     输入 /fake-fullscreen 时像 claude 的全屏界面：打开备用屏幕和鼠标上报（只发这一次），之后收到滚轮就记日志；
@@ -22,8 +22,8 @@
 //     输入 /fake-work <秒> <毫秒> 时像一个在干活的 session（BTL-242 的性能场景）：这么多秒里每隔这么多毫秒写一条 tool_use 和结果、
 //       打印约 2KB 的终端输出，到点后结束这一轮；
 //     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
-//     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 butler-sessions，调用它，结果写进运行记录；
-//     启动时写一份 sessions/<pid>.json 登记文件，Butler 从这里查 session 的名字；
+//     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 shipherd-sessions，调用它，结果写进运行记录；
+//     启动时写一份 sessions/<pid>.json 登记文件，Shipherd 从这里查 session 的名字；
 //     输入 /fake-ask 时回一句以“？”结尾的问话（ASK_REPLY）并结束这一轮：需要你的判断认出它；
 //     输入 /fake-limit <文字> 时像 Claude Code 撞了额度：写一条它合成的 assistant 报错（isApiErrorMessage、model <synthetic>），
 //       再写 system / turn_duration 结束这一轮，不跑 Stop（真的 CLI 这时触发的是 StopFailure）；
@@ -37,7 +37,7 @@
 //     输入 /fake-recall 时把 transcript 里用户说过的话列出来（日志 fake-recall <JSON>）：--resume 以后看得出原来的对话还在；
 //     其余输入回“收到：<输入>”并结束这一轮；每条输入都在运行记录里记一行 prompt <JSON 字符串>；
 //   -p：从 stdin 读 prompt，按 --json-schema 回预设的 handoff、刷新结果、feature 汇总或卡住判断；stream-json 的 MCP 探测只回 init。
-//     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Butler 当作不需要你）；
+//     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Shipherd 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
 //     规矩补填（schema 里有 enriched）：每条规矩补上 globs ["src/**"]，正文提到 console 的算 checkable；运行记录记一行 lesson enrich <条数>；
 //     规矩准入（schema 里有 groups / conflicts / clarity / classified / reviews / principles）：没有重复和冲突、都清楚、
@@ -98,7 +98,7 @@ const HANDOFF = {
   open_questions: [],
 };
 const REFRESH = { status: "merged_pending_followup", prs: [PR], jira: null };
-/** ticket session 里键入 /handoff 时输出的 butler-handoff：PR 还开着、已 approve（不会触发 worktree 清理）。 */
+/** ticket session 里键入 /handoff 时输出的 shipherd-handoff：PR 还开着、已 approve（不会触发 worktree 清理）。 */
 const COMMAND_HANDOFF = {
   ...HANDOFF,
   status: "in_review",
@@ -112,7 +112,7 @@ const COMMAND_HANDOFF = {
 /** ticket session 的 /handoff：FAKE_HANDOFF_PRS 设了就替换（不是追加）默认的 prs。 */
 const commandHandoff = () =>
   process.env.FAKE_HANDOFF_PRS ? { ...COMMAND_HANDOFF, prs: JSON.parse(process.env.FAKE_HANDOFF_PRS) } : COMMAND_HANDOFF;
-/** feature 总控里键入 /handoff 时输出的 butler-feature-handoff。ticket 号故意写成小写，入库时规范成大写。 */
+/** feature 总控里键入 /handoff 时输出的 shipherd-feature-handoff。ticket 号故意写成小写，入库时规范成大写。 */
 const COMMAND_FEATURE_HANDOFF = {
   summary: "结账页前端（DMS-1）已提 PR 等合并；后端下单接口（DMS-2）还在写，两边还没联调。",
   blockers: ["DMS-2 等支付网关的测试账号"],
@@ -219,7 +219,7 @@ function lessonsAnalysis() {
     const none = { findings: [] };
     result({ subtype: "success", is_error: false, session_id: `lessons-${Date.now()}`, result: JSON.stringify(none), structured_output: none, permission_denials: [], total_cost_usd: 0.0123, duration_ms: 1500, modelUsage: { "claude-fake-lessons": { inputTokens: 1200, outputTokens: 80, costUSD: 0.0123 } } });
   } else if (mode === "fail") {
-    // 带 JSON 的失败：Butler 记成 claude_error，错误信息是 result，花费照记，stderr 也留下。
+    // 带 JSON 的失败：Shipherd 记成 claude_error，错误信息是 result，花费照记，stderr 也留下。
     result({ is_error: true, result: "boom", total_cost_usd: 0.0042 });
     process.stderr.write("fake lessons stderr: boom\n");
     process.exitCode = 1;
@@ -316,14 +316,14 @@ function headless() {
     }
     const props = schema.properties || {};
     if (props.needs_user && input.includes(ASK_REPLY)) {
-      // /fake-ask 的回复：说需要你，理由就是那句问话（判断失败时 Butler 不再看问号，BTL-190 第 2+3 点）。
+      // /fake-ask 的回复：说需要你，理由就是那句问话（判断失败时 Shipherd 不再看问号，BTL-190 第 2+3 点）。
       const verdict = { needs_user: true, reason: ASK_REPLY };
       log("needs-you judge: needed");
       process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `judge-${Date.now()}`, result: JSON.stringify(verdict), structured_output: verdict, permission_denials: [], total_cost_usd: 0 })}\n`);
       return;
     }
     if (props.needs_user) {
-      // 别的回复不假装 Haiku：判断失败，Butler 当作不需要你。FAKE_CLAUDE_JUDGE_DELAY_MS 让它像真的 Haiku 一样过一会儿才失败。
+      // 别的回复不假装 Haiku：判断失败，Shipherd 当作不需要你。FAKE_CLAUDE_JUDGE_DELAY_MS 让它像真的 Haiku 一样过一会儿才失败。
       setTimeout(() => {
         log("needs-you judge failed");
         process.stderr.write("fake claude does not judge needs-you\n");
@@ -410,10 +410,10 @@ function headless() {
       process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `infer-${Date.now()}`, result: JSON.stringify(answer), structured_output: answer, permission_denials: [], total_cost_usd: 0 })}\n`);
       return;
     }
-    // prompt 的第一行有中文就当中文，否则英文（Butler 按界面语言出 prompt）。
+    // prompt 的第一行有中文就当中文，否则英文（Shipherd 按界面语言出 prompt）。
     const lang = /[\u4e00-\u9fff]/.test(input.split("\n")[0]) ? "zh" : "en";
     const judge = !!props.stuck;
-    // 整个 prompt 记下来：e2e 用它确认 Butler 真的读到了输出和子进程 CPU。
+    // 整个 prompt 记下来：e2e 用它确认 Shipherd 真的读到了输出和子进程 CPU。
     if (judge) log(`judge prompt ${JSON.stringify(input)}`);
     const summary = !judge && !props.followups && !!props.open_questions && !!props.summary;
     const structured = judge ? STUCK_VERDICT[lang] : props.followups ? HANDOFF : summary ? FEATURE_SUMMARY[lang] : REFRESH;
@@ -449,11 +449,11 @@ function httpRpc(url, body) {
 }
 
 /**
- * 和 Claude Code 一样调用 butler-sessions 的一个工具。stdio：按配置启动 server，握手后调用；env 在继承的环境上叠加配置里的，BUTLER_SESSION 就是这样传下去的。
+ * 和 Claude Code 一样调用 shipherd-sessions 的一个工具。stdio：按配置启动 server，握手后调用；env 在继承的环境上叠加配置里的，SHIPHERD_SESSION 就是这样传下去的。
  * http（共享 MCP）：对配置里的 URL 握手、发 initialized、再调用。
  */
 function callMcpTool(configPath, tool, input) {
-  const server = JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers["butler-sessions"];
+  const server = JSON.parse(fs.readFileSync(configPath, "utf8")).mcpServers["shipherd-sessions"];
   if (server.type === "http") {
     const rpc = (id, method, params) => httpRpc(server.url, { jsonrpc: "2.0", id, method, params });
     return rpc(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-claude", version: "1" } })
@@ -487,7 +487,7 @@ function interactive() {
   const claudeTmp = process.platform === "win32" ? os.tmpdir() : path.join(process.platform === "darwin" ? "/private/tmp" : "/tmp", `claude-${process.getuid()}`);
   const tasksDirOf = (id) => path.join(claudeTmp, project, id, "tasks");
   let tasksDir = tasksDirOf(sessionId);
-  /** 这一段对话的上下文大小，写进每条 assistant 记录的 usage（Butler 的 UsageScanner 读它）。 */
+  /** 这一段对话的上下文大小，写进每条 assistant 记录的 usage（Shipherd 的 UsageScanner 读它）。 */
   let contextTokens = Number(process.env.FAKE_CLAUDE_CONTEXT_TOKENS) || CLEARED_CONTEXT;
   const usage = () => ({ input_tokens: contextTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 20 });
   const out = (s) => process.stdout.write(s.replace(/\n/g, "\r\n"));
@@ -497,14 +497,14 @@ function interactive() {
   };
   const mcp = flag("--mcp-config");
   let servers = [];
-  // butler-sessions 是 feature 模式（BUTLER_FEATURE）的才是 feature 总控：普通 ticket session 也挂 butler-sessions（只有 ask_user、report）。
+  // shipherd-sessions 是 feature 模式（SHIPHERD_FEATURE）的才是 feature 总控：普通 ticket session 也挂 shipherd-sessions（只有 ask_user、report）。
   let featureCoordinator = false;
   if (mcp) {
     try {
       const all = JSON.parse(fs.readFileSync(mcp, "utf8")).mcpServers || {};
       servers = Object.keys(all);
       // 共享 MCP 的配置里只有 URL，看不出是不是 feature 总控：按 ticket 的 handoff 回答（用共享 MCP 的 e2e 不需要 feature 的）。
-      featureCoordinator = Boolean(all["butler-sessions"]?.env?.BUTLER_FEATURE);
+      featureCoordinator = Boolean(all["shipherd-sessions"]?.env?.SHIPHERD_FEATURE);
       const types = [...new Set(Object.values(all).map((v) => v.type || "stdio"))];
       if (types.length) log(`mcp transport ${types.join(",")}`);
     } catch (e) {
@@ -554,7 +554,7 @@ function interactive() {
   };
   /** 正在跑的后台命令的任务 id。 */
   let backgroundTask = null;
-  /** 后台命令的 shell 子进程（Windows 上 Butler 不看进程树，不开）。 */
+  /** 后台命令的 shell 子进程（Windows 上 Shipherd 不看进程树，不开）。 */
   let backgroundShell = null;
   const stopBackgroundShell = () => {
     if (backgroundShell) backgroundShell.kill();
@@ -569,8 +569,8 @@ function interactive() {
     backgroundShell.on("error", (e) => log(`background shell error ${e.message}`));
   };
   const rl = readline.createInterface({ input: process.stdin });
-  // bracketed paste（总控交任务时 Butler 这样写入）：粘贴里的几行合成一条消息。PTY 按行交付，粘贴结束标记所在的那一行
-  // 只有等到 Butler 随后的回车才会到，所以读到结束标记就提交。
+  // bracketed paste（总控交任务时 Shipherd 这样写入）：粘贴里的几行合成一条消息。PTY 按行交付，粘贴结束标记所在的那一行
+  // 只有等到 Shipherd 随后的回车才会到，所以读到结束标记就提交。
   let pasting = null;
   let pasted = null;
   /** 剧本排进来的输入（行 → 这一步的 say）：不算用户说的话。 */
@@ -590,7 +590,7 @@ function interactive() {
       out("> ");
       return;
     }
-    // 每条收到的输入都记一笔（JSON 字符串）：e2e 按顺序核对 Butler 往终端里输入了什么，屏幕上的早已滚走。
+    // 每条收到的输入都记一笔（JSON 字符串）：e2e 按顺序核对 Shipherd 往终端里输入了什么，屏幕上的早已滚走。
     log(`prompt ${JSON.stringify(line)}`);
     const step = scripted.get(line);
     scripted.delete(line);
@@ -640,7 +640,7 @@ function interactive() {
       return;
     }
     if (line === "/clear") {
-      // Claude Code 的 /clear：新的 session id 和 transcript，SessionStart 的 source 是 clear；BUTLER_SESSION 不变，Butler 按它把新 id 接到这个终端上。
+      // Claude Code 的 /clear：新的 session id 和 transcript，SessionStart 的 source 是 clear；SHIPHERD_SESSION 不变，Shipherd 按它把新 id 接到这个终端上。
       // 不算一次提问（没有 UserPromptSubmit），之后停在空的输入框上，也没有 Stop。上下文从头算。
       sessionId = randomUUID();
       transcript = transcriptOf(sessionId);
@@ -793,7 +793,7 @@ function interactive() {
     }
     const skill = /^\/fake-skill (\S+)$/.exec(line);
     if (skill) {
-      // 像 Skill 工具：PostToolUse 带 tool_use_id（Butler 按它去重）。
+      // 像 Skill 工具：PostToolUse 带 tool_use_id（Shipherd 按它去重）。
       runHooks("PostToolUse", { session_id: sessionId, cwd, tool_name: "Skill", tool_input: { skill: skill[1] }, tool_use_id: `toolu_fake_${process.pid}_${++skillCalls}`, transcript_path: transcript });
       log(`fake-skill ${skill[1]}`);
       out(`skill ${skill[1]}\n`);
@@ -821,7 +821,7 @@ function interactive() {
       return;
     }
     if (tool) {
-      // 工具在等 Butler 回话，这一轮结束不了；结果记下来给 e2e 读，终端里的文字会被折行。
+      // 工具在等 Shipherd 回话，这一轮结束不了；结果记下来给 e2e 读，终端里的文字会被折行。
       callMcpTool(mcp, tool[1], tool[2] ? JSON.parse(tool[2]) : {}).then(
         (result) => {
           log(`mcp result ${JSON.stringify(result)}`);
@@ -853,8 +853,8 @@ function interactive() {
       : !command
         ? `收到：${line}`
         : coordinator
-          ? `handoff：\n\n\`\`\`butler-feature-handoff\n${JSON.stringify(featureHandoff, null, 2)}\n\`\`\``
-          : `handoff：\n\n\`\`\`butler-handoff\n${JSON.stringify(commandHandoff(), null, 2)}\n\`\`\``);
+          ? `handoff：\n\n\`\`\`shipherd-feature-handoff\n${JSON.stringify(featureHandoff, null, 2)}\n\`\`\``
+          : `handoff：\n\n\`\`\`shipherd-handoff\n${JSON.stringify(commandHandoff(), null, 2)}\n\`\`\``);
   });
   rl.on("close", () => process.exit(0));
 }

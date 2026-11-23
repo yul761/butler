@@ -46,7 +46,7 @@ const HOSTILE_RULES = [
   "mcp__fs__search_replace", "mcp__x__get_or_generate_token", "mcp__x__show_dialog", "mcp__x__get_access_to_url", "mcp__x__list_and_install",
   "Bash(git rev-list:*)", "Bash(git shortlog:*)", "Bash(git reflog show:*)", "Bash(git stash show:*)", "Bash(git ls-remote:*)", "Bash(kubectl get:*)",
   "Bash(git cat-file:*)", "Bash(git describe:*)",
-  "mcp__butler-sessions__open_session", "mcp__x__getAndDeleteThing", "mcp__x__fetchAndSendMail", "", " ", "bash(gh pr view:*)",
+  "mcp__shipherd-sessions__open_session", "mcp__x__getAndDeleteThing", "mcp__x__fetchAndSendMail", "", " ", "bash(gh pr view:*)",
 ];
 
 describe("permission classifier: the safety boundary", () => {
@@ -107,13 +107,13 @@ describe("permission classifier: read-only commands", () => {
     expect(isSafeRule("mcp__tracker__get_issue")).toBe(true);
   });
 
-  it("accepts read-only MCP tools and refuses Butler's own and write tools", () => {
+  it("accepts read-only MCP tools and refuses Shipherd's own and write tools", () => {
     expect(ruleForTool("mcp__tracker__get_issue")).toBe("mcp__tracker__get_issue");
     expect(ruleForTool("mcp__tracker__searchIssues")).toBe("mcp__tracker__searchIssues");
     expect(ruleForTool("mcp__wiki__list_pages")).toBe("mcp__wiki__list_pages");
     expect(ruleForTool("mcp__tracker__create_issue")).toBeNull();
     expect(ruleForTool("mcp__tracker__issue_get")).toBeNull();
-    expect(ruleForTool("mcp__butler-memory__recall")).toBeNull();
+    expect(ruleForTool("mcp__shipherd-memory__recall")).toBeNull();
     expect(ruleForTool("Bash")).toBeNull();
     expect(ruleForTool("Edit")).toBeNull();
   });

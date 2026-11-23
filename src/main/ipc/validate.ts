@@ -6,7 +6,7 @@ import { CONTEXT_LIMIT, TASK_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import { normTurnFilter, type TurnFilter } from "../../shared/turn";
 import type {
-  AddRepoInput, CiItemRef, CreateFeatureInput, CreateTicketInput, InboxScope, MessageScope, OpenButlerSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
+  AddRepoInput, CiItemRef, CreateFeatureInput, CreateTicketInput, InboxScope, MessageScope, OpenShipherdSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
 import type { PrStagesScope } from "../../shared/pr-stages";
 import { LESSON_BULK_VERBS, MAX_TARGET_IDS, type LessonAction, type LessonBulkVerb, type LessonTarget } from "../../shared/lessons";
@@ -104,7 +104,7 @@ export function clipboardTextArg(v: unknown): string {
   return v;
 }
 
-/** session id：claude 的 UUID（也接受 Butler 测试里的短 id），只允许安全字符。 */
+/** session id：claude 的 UUID（也接受 Shipherd 测试里的短 id），只允许安全字符。 */
 export function sessionIdArg(v: unknown): string {
   if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid session id");
   return v;
@@ -194,11 +194,11 @@ export function inboxScopeArg(v: unknown): InboxScope {
   throw new Error("invalid inbox scope");
 }
 
-/** 信箱消息列表（BTL-245）的范围：Butler 总控的，或者一个 feature 的。 */
+/** 信箱消息列表（BTL-245）的范围：Shipherd 总控的，或者一个 feature 的。 */
 export function messageScopeArg(v: unknown): MessageScope {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object") throw new Error("invalid message scope");
-  if (o.butler === true) return { butler: true };
+  if (o.shipherd === true) return { shipherd: true };
   if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
   throw new Error("invalid message scope");
 }
@@ -298,10 +298,10 @@ export function openFeatureArg(v: unknown): OpenFeatureSessionRequest {
   };
 }
 
-/** 打开 Butler 总控（BTL-190 第 5 点）。 */
-export function openButlerArg(v: unknown): OpenButlerSessionRequest {
+/** 打开 Shipherd 总控（BTL-190 第 5 点）。 */
+export function openShipherdArg(v: unknown): OpenShipherdSessionRequest {
   const o = v as Record<string, unknown> | null;
-  if (!o || typeof o !== "object") throw new Error("invalid butler session request");
+  if (!o || typeof o !== "object") throw new Error("invalid shipherd session request");
   if (!optString(o.prefill, 100_000)) throw new Error("invalid prefill");
   return {
     ...(o.sessionId !== undefined && { sessionId: sessionIdArg(o.sessionId) }),

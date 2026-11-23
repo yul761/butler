@@ -66,7 +66,7 @@ export interface ForkDeps {
 }
 
 /**
- * 分叉 claude 的环境变量：headlessEnv（BUTLER_SESSION 带 headless: 前缀，hook 上报会被忽略），再补上跟交互 session（sessionEnv）一样的默认值。
+ * 分叉 claude 的环境变量：headlessEnv（SHIPHERD_SESSION 带 headless: 前缀，hook 上报会被忽略），再补上跟交互 session（sessionEnv）一样的默认值。
  * 完整分叉要读到开发 session 的缓存，CLAUDE_EFFORT 之类的 CLAUDE_* 必须跟它一样：都从同一个 baseEnv 原样带过来。
  * 共享 MCP 的地址是本机回环，设了代理时同样要绕开（开发 session 那份 MCP 配置照样用）。
  */
@@ -80,7 +80,7 @@ export function forkEnv(base: NodeJS.ProcessEnv, x: { pathValue: string; runId: 
 
 /**
  * files.settings 的实现：开发那份 settings（读不到、不是对象当 null）经 forkSettings 换成只读的一份，写到 dir/fork-<sha1>.json。
- * guardCommand 是 gate hook 用的同一个 butler-hook 命令（hookCommand 的输出），forkSettings 在后面加 readonly；
+ * guardCommand 是 gate hook 用的同一个 shipherd-hook 命令（hookCommand 的输出），forkSettings 在后面加 readonly；
  * hook 不可用（没装、旧版本）时传 null，返回 null。内容一样就是同一个文件，已经有了不重写（可能有分叉正在读它）。
  */
 export function writeForkSettings(o: { dir: string; devSettingsPath: string | null; guardCommand: string | null }): string | null {
@@ -237,7 +237,7 @@ export class ForkService {
     }
   }
 
-  /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有（Butler 页面）就不记（no_scope），也不为它要结论。 */
+  /** 把结论（没有就先要）记进这个 ticket / feature 的记忆。都没有（Shipherd 页面）就不记（no_scope），也不为它要结论。 */
   async remember(forkId: number): Promise<RememberResult> {
     if (this.remembering.has(forkId)) return "busy";
     if (!this.d.memoryEnabled()) return "disabled";

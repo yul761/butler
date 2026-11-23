@@ -12,7 +12,7 @@ import { cleanupIfMerged, cleanupTicketWorktrees } from "./worktree-cleanup";
 async function setup(workMode: "worktree" | "branch" = "worktree") {
   const db = memDb();
   const tickets = new TicketsRepo(db);
-  const ticketService = new TicketService({ tickets, settings: new SettingsRepo(db), now: () => 1, workspacesDir: tempDir("butler-ws-") });
+  const ticketService = new TicketService({ tickets, settings: new SettingsRepo(db), now: () => 1, workspacesDir: tempDir("shipherd-ws-") });
   const repo = makeRepo();
   const t = await ticketService.create({ key: "DMS-1", repoPath: repo, workMode });
   const r = t.repos[0];

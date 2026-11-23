@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { setLang } from "../i18n";
 import { deliveryText } from "../prereview/delivery";
 import { M } from "../strings";
-import { capText, cleanUserText, CONV_TEXT_MAX, convEntriesOf, toolEffect, type ConvEntry } from "./conv-parse";
+import { capText, cleanUserText, CONV_TEXT_MAX, convEntriesOf, toolEffect, userOpenOf, type ConvEntry } from "./conv-parse";
 
 const lines = (file: string): string[] => readFileSync(file, "utf8").split("\n").filter((l) => l.length > 0);
+// conv.jsonl 录于改名前（BTL-260），里面有一条「Butler：」开头的通知，正好覆盖旧通知的识别。
 const convFixture = lines(join(__dirname, "__fixtures__", "conv.jsonl"));
+// 这份对话记录录于改名前（BTL-260），里面是旧的 butler-handoff 代码块，正好覆盖旧代码块的解析；JSONL 写不了注释，说明放在这里。
 const tailFixture = lines(join(__dirname, "..", "sessions", "__fixtures__", "refresh-tail.jsonl"));
 
 /** entry 的可比较部分（key、parent、at 另测）。 */
@@ -89,7 +91,7 @@ describe("convEntriesOf on the refresh-tail fixture", () => {
   });
 });
 
-describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
+describe.each(["zh", "en"] as const)("Shipherd's own messages (%s)", (lang) => {
   afterEach(() => setLang("zh"));
   const openOf = (text: string) => {
     setLang(lang);
@@ -97,6 +99,7 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     return e.kind === "user" ? e.open : e.kind;
   };
 
+  // 这些是改名前（BTL-260）的旧对话记录原文，保留 Butler 的写法：旧记录不会变，解析要一直认得。
   it("the old epic handoff requests in old transcripts (BTL-246 removed them from strings.ts)", () => {
     const old = lang === "zh"
       ? [
@@ -141,12 +144,12 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     expect(openOf(`${intro}\n\n---\n\n${m.mailboxInstruction("feature 总控", "先停下", true)}`)).toBe("silent");
   });
 
-  it("messages Butler types into the terminal are silent (PR #60 review 2)", () => {
+  it("messages Shipherd types into the terminal are silent (PR #60 review 2)", () => {
     setLang(lang);
     const m = M();
-    expect(openOf(`${m.butlerMessagePrefix}\n帮我看看 PR #60 为什么红了？`)).toBe("silent");
-    expect(openOf(m.butlerReplyLine("BTL-1", ["m1"], "要不要先合？"))).toBe("silent");
-    expect(openOf(m.butlerPatrolMessage)).toBe("silent");
+    expect(openOf(`${m.shipherdMessagePrefix}\n帮我看看 PR #60 为什么红了？`)).toBe("silent");
+    expect(openOf(m.shipherdReplyLine("BTL-1", ["m1"], "要不要先合？"))).toBe("silent");
+    expect(openOf(m.shipherdPatrolMessage)).toBe("silent");
     expect(openOf(m.cost.continueAfterDowngrade("haiku"))).toBe("silent");
     expect(openOf(m.cost.continueAfterRaise("$5"))).toBe("silent");
     const pre = { shortSha: "abc1234", violations: [], gaps: [], error: "boom", lang };
@@ -155,13 +158,13 @@ describe.each(["zh", "en"] as const)("Butler's own messages (%s)", (lang) => {
     expect(openOf(deliveryText({ ...pre, verdict: "violations", violations: [{ lessonId: null, checkKey: null, severity: "must", file: "a.ts", line: 1, what: "x", fix: "y" }] }))).toBe("silent");
   });
 
-  it("the user talking about Butler is still the user", () => {
-    expect(openOf("Butler 对话页为什么是空的？")).toBe("user");
-    expect(openOf("Butler is slow, why?")).toBe("user");
+  it("the user talking about Shipherd is still the user", () => {
+    expect(openOf("Shipherd 对话页为什么是空的？")).toBe("user");
+    expect(openOf("Shipherd is slow, why?")).toBe("user");
     expect(openOf("【回顾】这周做了什么？")).toBe("user");
     // PR #60 re-review I2 / M1：只像开头、后面的固定段对不上的，是用户的话。
-    expect(openOf("Butler 对 CI 的判断对吗？")).toBe("user");
-    expect(openOf("Butler pre-review of what exactly?")).toBe("user");
+    expect(openOf("Shipherd 对 CI 的判断对吗？")).toBe("user");
+    expect(openOf("Shipherd pre-review of what exactly?")).toBe("user");
     expect(openOf("【回复】一下 amy 的评论")).toBe("user");
     expect(openOf("[Reply] to amy")).toBe("user");
     expect(openOf("ticket BTL-1 为什么还没开工？")).toBe("user");
@@ -269,14 +272,14 @@ describe("toolEffect", () => {
     ["AskUserQuestion", {}, "read"],
     ["Task", {}, "other"],
     ["mcp__github__create_pull_request", {}, "mutate"],
-    ["mcp__butler-workspace__remember", {}, "mutate"],
-    ["mcp__butler-workspace__handoff", {}, "mutate"],
+    ["mcp__shipherd-workspace__remember", {}, "mutate"],
+    ["mcp__shipherd-workspace__handoff", {}, "mutate"],
     ["mcp__x__set_epic_plan", {}, "mutate"],
-    ["mcp__butler-workspace__recall", {}, "read"],
-    ["mcp__butler-workspace__facts", {}, "read"],
+    ["mcp__shipherd-workspace__recall", {}, "read"],
+    ["mcp__shipherd-workspace__facts", {}, "read"],
     ["mcp__github__get_pull_request", {}, "read"],
-    ["mcp__butler-sessions__session_activity", {}, "read"],
-    ["mcp__butler-sessions__report", {}, "other"],
+    ["mcp__shipherd-sessions__session_activity", {}, "read"],
+    ["mcp__shipherd-sessions__report", {}, "other"],
   ] as const)("%s → %s", (name, input, effect) => {
     expect(toolEffect(name, input)).toBe(effect);
   });
@@ -336,5 +339,13 @@ describe("capText", () => {
     const text = "😀".repeat(25_000);
     const out = capText(text);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(out)).toBe(false);
+  });
+});
+
+// BTL-260：改名前的 Butler 往终端里打的通知以「Butler：」开头，已经在对话记录里了。
+describe("notices typed by Butler before the rename", () => {
+  it("are silent like Shipherd's own, and a user who merely mentions Butler is not", () => {
+    for (const t of ["Butler：PR #12 的 CI 过了", "Butler: CI passed on PR #12", "Shipherd：PR #12 的 CI 过了"]) expect(userOpenOf(t, t)).toBe("silent");
+    for (const t of ["Butler 这个名字还在吗", "butler：小写不算"]) expect(userOpenOf(t, t)).toBe("user");
   });
 });

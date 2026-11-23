@@ -1,8 +1,8 @@
 # Workstream E1: deterministic checks engine (design addendum)
 
-Date: 2026-11-17. Master design: `2026-11-17-butler-3-design.md` (contract 4.5; uses 4.1, 4.2, 4.3, 4.4). Base: `main` after workstream C (lessons foundation).
+Date: 2026-11-17. Master design: `2026-11-17-shipherd-3-design.md` (contract 4.5; uses 4.1, 4.2, 4.3, 4.4). Base: `main` after workstream C (lessons foundation).
 
-Scope: the `checks` and `check_hits` tables, the four built-in check types, three-layer scoping, the read-only snapshot the hook reads, `butler-hook check` (PostToolUse `Edit|Write|MultiEdit`) and the push-time checks in the Bash PreToolUse gate, shadow mode and the hit log, "checks absent", the checks UI on the lessons page (classification, generate a check from a lesson, manual edit, raw hit numbers), and the `checks` section of export / import. Out of scope (other workstreams): the repo baseline scan and wizard stage 1 (E2), backtest and automatic promotion / demotion (F), pre-review (G). E1 records the data those need and leaves the interfaces.
+Scope: the `checks` and `check_hits` tables, the four built-in check types, three-layer scoping, the read-only snapshot the hook reads, `shipherd-hook check` (PostToolUse `Edit|Write|MultiEdit`) and the push-time checks in the Bash PreToolUse gate, shadow mode and the hit log, "checks absent", the checks UI on the lessons page (classification, generate a check from a lesson, manual edit, raw hit numbers), and the `checks` section of export / import. Out of scope (other workstreams): the repo baseline scan and wizard stage 1 (E2), backtest and automatic promotion / demotion (F), pre-review (G). E1 records the data those need and leaves the interfaces.
 
 ## 1. What was verified in the code and docs
 
@@ -12,7 +12,7 @@ Scope: the `checks` and `check_hits` tables, the four built-in check types, thre
 - **The settings file is shared by content hash**, so the hook entries are identical for every repo. Everything repo-specific is resolved inside the hook from `cwd` / the file path (as the source plan proposed).
 - **Repo identity:** `parseRemoteSlug` and `RepoIdentity.slugOf` in `lessons/repo-identity.ts` (origin remote → `owner/name`). The hook cannot import main-process modules that pull in Electron-only code, so `parseRemoteSlug` moves to `src/shared/repo-slug.ts` (pure) and `repo-identity.ts` re-exports it. The hook runs `git remote get-url origin` itself (2 s timeout) and caches the answer per repo root in its state directory.
 - **Push recognition:** `classifyGateCommand` (`shared/gate-command.ts`) returns `push` only when a refspec is written (it is about merges into protected branches). A plain `git push` / `git push -u origin HEAD` is not recognised. E1 adds a separate pure classifier `classifyPush(command)` that reuses the same tokenizer; the merge gate keeps calling `classifyGateCommand` unchanged.
-- **Session id:** `sessionEnv` sets `BUTLER_SESSION` to the terminal id, which is the `sessions.id` of the launched row. Hits carry it; `headless:` ids never get these hooks (headless runs have no approval settings).
+- **Session id:** `sessionEnv` sets `SHIPHERD_SESSION` to the terminal id, which is the `sessions.id` of the launched row. Hits carry it; `headless:` ids never get these hooks (headless runs have no approval settings).
 - **Batches (4.4):** `BatchRecorder` with `tableAdapter`. Deleting a product cascades through foreign keys; `LessonBatchService.deleteProduct` and the config-io products section track dependent rows first. Both now also track the product's checks. `LessonBatchService.undo` gets a hook so restoring checks rewrites the snapshot.
 - **Layered resolver (4.2):** `mergeLayers` merges plain objects recursively and replaces arrays / scalars. Check params are therefore carried as a JSON string inside the resolver value, so an override row replaces the params of the broader row instead of merging into them.
 - **Export / import (4.3):** `ConfigService` already handles `content: "checks"` and answers `no_checks` while no section with that content is registered. Products are referenced by name in the files (the lessons section does the same).
@@ -62,7 +62,7 @@ The migration seeds one disabled global check: key `builtin:comment_policy`, typ
 | `outcome` | `fail` (violation reported), `resolved` (a reported violation disappeared in a later edit = adopted), `timeout` (could not check, allowed), `unavailable` (command could not run, allowed), `error` (the hook failed on this check, allowed) |
 | `blocked` | 1 when the agent was actually blocked (enforce + block + fail) |
 | `detail` | violation text or command output tail (truncated to 2 000 chars) |
-| `session_id` | `BUTLER_SESSION` |
+| `session_id` | `SHIPHERD_SESSION` |
 | `verdict` | null / `false_positive` / `true_positive` (set by the user on the checks page; F reads it) |
 | `verdict_at` | |
 | `at` | when the hook ran |
@@ -76,7 +76,7 @@ A text column: null = checks were active (or there are no enabled checks at all)
 
 **Resolution.** `ChecksService` builds a `LayeredResolver<Record<key, CheckDef>>` (4.2). Each layer's value is `{ [key]: def }` for the rows in that layer; `def.params` is a JSON string (see 1). Global → products (ascending name) → repo; a narrower row with the same key replaces the broader one field by field, so "turn this global check off for this repo" is an override row with `enabled = 0`. Disabled checks are dropped after merging.
 
-**Snapshot file** `<BUTLER_HOME>/checks/snapshot.json`, written with tmp + rename (retrying rename on Windows like the inbox writer):
+**Snapshot file** `<SHIPHERD_HOME>/checks/snapshot.json`, written with tmp + rename (retrying rename on Windows like the inbox writer):
 
 ```json
 {
@@ -92,7 +92,7 @@ A text column: null = checks were active (or there are no enabled checks at all)
 }
 ```
 
-`ResolvedCheck = { id, key, type, name, params, globs, excludeGlobs, severity, mode, message }` with name and message already localised. `repos` has an entry for every slug Butler knows (registered lesson repos, product members, repo-layer checks); any other repo gets `global`. The hook never merges layers itself.
+`ResolvedCheck = { id, key, type, name, params, globs, excludeGlobs, severity, mode, message }` with name and message already localised. `repos` has an entry for every slug Shipherd knows (registered lesson repos, product members, repo-layer checks); any other repo gets `global`. The hook never merges layers itself.
 
 **When it is rewritten:** at startup; after every checks mutation, batch undo that restored checks, product membership change, import, and change of a check setting or the language; plus a 60 s backstop timer. The writer compares content (ignoring `generatedAt`) and skips identical writes.
 
@@ -113,23 +113,23 @@ All built-ins run in the hook process on the file content, line by line, in mill
 **Messages.** What the agent sees for a failure:
 
 ```
-Butler check "<name>" failed in <file>:<line>
+Shipherd check "<name>" failed in <file>:<line>
   <offending line or command output tail>
 <message>          ← default: "Fix the root cause. Do not work around this check (no disabling, no renaming, no moving the code to dodge it)."
 ```
 
 Severity `warn` and every shadow check use the warn header; shadow adds "(trial run: not enforced)".
 
-## 5. `butler-hook check` (PostToolUse `Edit|Write|MultiEdit`)
+## 5. `shipherd-hook check` (PostToolUse `Edit|Write|MultiEdit`)
 
 1. **Read** stdin (2 s), parse. Unknown tool / no `file_path` → exit.
 2. **Snapshot.** Missing / unreadable / wrong version → write an `absent` record (debounced per session) and exit. `enabled: false` → exit.
 3. **Repo.** Walk up from the file to the directory containing `.git` (a directory, or a file for worktrees). No repo → exit. Slug from the per-root cache or `git -C <root> remote get-url origin` → `parseRemoteSlug`. No origin → allow, no record (source plan: "no remote, let it pass").
 4. **Select.** `snapshot.repos[slug] ?? snapshot.global`, `stage` edit, then globs against the repo-relative path (section 5.5).
 5. **Evaluate** each built-in against the new content and the old content and keep only violations that are new: a violation is identified by `(check key, normalized line text)` and counted, so a line that already violated before the edit is not reported again (the agent did not introduce it; the legacy scan is E2's).
-6. **Debounce** (state file `<BUTLER_HOME>/checks/state/<session>.json`, tmp + rename): per `(check key, file)` the hook remembers the fingerprints it reported. It reports only fingerprints not reported before. A reported fingerprint that is no longer in the file is recorded as `resolved` (adoption). `run_command` remembers a hash of its failing output: the same failure on the next edit of the same file is not re-reported; a pass after a reported failure is `resolved`.
+6. **Debounce** (state file `<SHIPHERD_HOME>/checks/state/<session>.json`, tmp + rename): per `(check key, file)` the hook remembers the fingerprints it reported. It reports only fingerprints not reported before. A reported fingerprint that is no longer in the file is recorded as `resolved` (adoption). `run_command` remembers a hash of its failing output: the same failure on the next edit of the same file is not re-reported; a pass after a reported failure is `resolved`.
 7. **Answer.** Any new failure of an enforce + block check → `{ decision: "block", reason, hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext } }`. Otherwise, any warn / shadow failure → only `additionalContext`. Nothing → no output. Exit code is always 0.
-8. **Hit log.** One file per hook run, `<BUTLER_HOME>/checks/hits/<time>-<pid>-<rand>.jsonl`, written with tmp + rename (no concurrent appends, safe on Windows). Butler ingests the directory (watch + 3 s poll), inserts rows with `INSERT OR IGNORE` on `ingest_key`, then deletes the file.
+8. **Hit log.** One file per hook run, `<SHIPHERD_HOME>/checks/hits/<time>-<pid>-<rand>.jsonl`, written with tmp + rename (no concurrent appends, safe on Windows). Shipherd ingests the directory (watch + 3 s poll), inserts rows with `INSERT OR IGNORE` on `ingest_key`, then deletes the file.
 
 ### 5.3 Old content
 
@@ -142,7 +142,7 @@ Severity `warn` and every shadow check use the warn header; shadow adds "(trial 
 ### 5.6 Running commands on both platforms
 
 - Shell: macOS / Linux `/bin/sh -c`. Windows: Git Bash, located from `CLAUDE_CODE_GIT_BASH_PATH`, then next to the `git.exe` found on `PATH` (`…\Git\cmd\git.exe` → `…\Git\bin\bash.exe`), then `%ProgramFiles%\Git\bin\bash.exe`. No Git Bash → `unavailable`.
-- The command is passed as `sh -c '<command>' butler-check <path>` with `{file}` rewritten to `"$1"`, so the file name is never spliced into the shell text.
+- The command is passed as `sh -c '<command>' shipherd-check <path>` with `{file}` rewritten to `"$1"`, so the file name is never spliced into the shell text.
 - Kill on timeout: POSIX children are started `detached` (own process group) and killed with `kill(-pid, SIGKILL)`; Windows uses `taskkill /PID <pid> /T /F` (this is our own just-started tree, not the orphan scan where `/T` is avoided). Output is capped at 64 KB.
 
 ## 6. Push-time checks
@@ -151,7 +151,7 @@ A second hook in the `PreToolUse` Bash group: `<hook> check-push`, timeout `chec
 
 ## 7. "Checks absent"
 
-At each launch (ticket, feature, epic and Butler workspace sessions) `SessionService` calls `checksAbsence()` and stores the result in `sessions.checks_absent`:
+At each launch (ticket, feature, epic and Shipherd workspace sessions) `SessionService` calls `checksAbsence()` and stores the result in `sessions.checks_absent`:
 
 - no enabled check in any layer → null (nothing to miss; no noise);
 - the check setting is off → `disabled`;
@@ -195,14 +195,14 @@ All three are on the checks tab and documented in `docs/configuration.md` and it
 8. `check_draft` produces a draft for the form; nothing is saved without the user pressing save (E1 is the manual path; automatic generation is F's).
 9. Imported checks enter shadow mode when they are new or their behaviour changed; a name / message-only change keeps the local mode.
 10. When the old content is unknown (no `originalFile`, `Write` of an existing file), the hook cannot tell new violations from old ones. It keeps a per-session `seen` set per `(key, file)` and only reports fingerprints it has not seen in that file before, so the first unknown-before edit reports what is there and later ones only what is new.
-11. The check hooks are registered for a session only when `checksEnabled` is on and the installed `butler-hook` is the current build (the same condition as the merge gate). A session started while either is false shows "no checks" with the reason.
+11. The check hooks are registered for a session only when `checksEnabled` is on and the installed `shipherd-hook` is the current build (the same condition as the merge gate). A session started while either is false shows "no checks" with the reason.
 12. Snapshot `strings` are fixed to `failHeader` (with `{name}` and `{where}`), `shadowTag`, `warnTag`, `blockFooter` and `pushHeader`, localised at write time, so a language change rewrites the snapshot.
 13. A repo-layer scope must be a slug in the shape `parseRemoteSlug` produces (`owner/name` for GitHub, `host/group/…/name` elsewhere; two or more non-empty segments), lowercased at the IPC and import boundaries.
 14. Hits are kept for a year (`HIT_RETENTION_MS`), pruned at startup.
 15. The checks list in the hook is filtered after the layer merge; push-stage glob filtering uses the files changed between `@{upstream}` (then `origin/HEAD`) and `HEAD`, and runs the check when that cannot be computed.
 16. (Review) User regexes (forbidden patterns, ticket patterns) run in a `worker_threads` worker with eval'd self-contained source, terminated after `min(2 s, remaining edit budget)`. On timeout every regex-using check of that edit is recorded as `timeout` and the edit is let through. Rejecting nested quantifiers statically was rejected: too many false rejections, and the worker covers every case.
 17. (Review) The hook command carries its budget (`check --budget-ms N`, `check-push --budget-ms N`), and the hook uses `min(snapshot budget, argv budget)`. The hook timeout in a session's settings is fixed at spawn, so raising the setting mid-session cannot make Claude Code kill the hook. On SIGTERM / SIGINT / SIGHUP the hook kills the live command process groups before exiting 0.
-18. (Review) `run_command` is decided on the shell's `exit` (then up to 200 ms to drain the pipes), not on `close`, so a background child holding stdout cannot turn a failure into a timeout. Without `{file}`, the file is appended only to a single simple command (no `;`, `&`, `|`, `<`, `>`, parentheses, backticks, `$(` or newline); the file is always in `BUTLER_CHECK_FILE`.
+18. (Review) `run_command` is decided on the shell's `exit` (then up to 200 ms to drain the pipes), not on `close`, so a background child holding stdout cannot turn a failure into a timeout. Without `{file}`, the file is appended only to a single simple command (no `;`, `&`, `|`, `<`, `>`, parentheses, backticks, `$(` or newline); the file is always in `SHIPHERD_CHECK_FILE`.
 19. (Review) Only a definitive "no origin" (`git remote get-url` exit 2) is cached per session; a timeout or other git failure is retried on the next edit.
 20. (Review) The debounce state file is re-read just before the write and only the `(check, file)` keys this run touched are replaced (slugs are unioned), so parallel PostToolUse hooks in one session do not drop each other's entries.
 21. (Review) A session that recorded "checks absent" and later gets checked again writes a `present` record; ingest clears the session's mark.

@@ -202,7 +202,8 @@ const baseName = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?
 const exeName = (args: string): string => baseName(firstToken(args).exe).replace(/^-/, "").replace(/\.exe$/i, "").toLowerCase();
 
 /** 解释器：显示名用它跑的脚本。 */
-const RUNNERS = new Set(["node", "butler", "electron", "python", "python3", "bun", "deno", "npx", "ruby"]);
+// butler：改名前（BTL-260）的可执行文件名，升级时还没退出的旧进程。TODO(5.0) 删。
+const RUNNERS = new Set(["node", "shipherd", "butler", "electron", "python", "python3", "bun", "deno", "npx", "ruby"]);
 /** 脚本名是这些的，用上一级目录名（node …/chrome-devtools-mcp/index.js → chrome-devtools-mcp）。 */
 const GENERIC_SCRIPTS = /^(index|main|cli|server|bin|start)\.[cm]?[jt]s$/i;
 
@@ -228,8 +229,8 @@ export function shortName(args: string): string {
 }
 
 const SHELLS = new Set(["bash", "zsh", "sh", "dash", "fish", "ksh", "cmd", "powershell", "pwsh", "conhost", "openconsole"]);
-/** Butler 自己的 MCP（打包好的脚本名）。 */
-const BUTLER_MCP = /(statecore-mcp|butler-sessions-mcp|mcp-hub)\.cjs\b/;
+/** Shipherd 自己的 MCP（打包好的脚本名）。butler-sessions-mcp 是改名前（BTL-260）的名字，升级前起的还可能在跑（TODO(5.0) 删）。 */
+const SHIPHERD_MCP = /(statecore-mcp|(?:shipherd|butler)-sessions-mcp|mcp-hub)\.cjs\b/;
 /** 常驻的 watcher（设计 §1 第 5 条）。vitest 不带 run 才算（vitest run 跑完就退）。 */
 const WATCHER = [
   /(^|\s)--watch(All)?(\s|=|$)/,
@@ -272,7 +273,7 @@ function deepClass(args: string): ProcClass {
 
 /** claude 的直接子进程：Claude Code 把 MCP server 直接起成自己的子进程（proc-tree 也按这条认）。 */
 function directClass(args: string): ProcClass {
-  if (BUTLER_MCP.test(args)) return "mcp_butler";
+  if (SHIPHERD_MCP.test(args)) return "mcp_shipherd";
   const deep = deepClass(args);
   if (deep !== "other" && deep !== "claude") return deep;
   // Grep 工具起的 rg、临时的 git 不是 MCP。
@@ -289,7 +290,7 @@ export function classifyTree(root: number, t: ProcTable, children: Map<number, n
     let c: ProcClass;
     const parent = cls.get(p.ppid);
     if (p.pid === root) c = "claude";
-    else if (parent === "mcp_butler" || parent === "mcp_other") c = parent;
+    else if (parent === "mcp_shipherd" || parent === "mcp_other") c = parent;
     // Windows 上经 cmd.exe 起的 claude：根是 cmd，真正的 claude 是它的子进程，MCP 挂在那下面。
     else if (parent === "claude" && isClaude(p.args)) c = "claude";
     else if (parent === "claude") c = directClass(p.args);
@@ -317,8 +318,8 @@ export function summarize(procs: TreeProc[], topN = 8): TreeSummary {
   return { totalKb, count: procs.length, byClass, top };
 }
 
-/** Butler 主进程下面、不在任何 session 树里的进程算哪一份（设计 §2）：共享 MCP、无头 claude、Windows 的终端宿主，别的算 utility。 */
-export function butlerPartOf(args: string): "hub" | "headless" | "terminals" | "utility" {
+/** Shipherd 主进程下面、不在任何 session 树里的进程算哪一份（设计 §2）：共享 MCP、无头 claude、Windows 的终端宿主，别的算 utility。 */
+export function shipherdPartOf(args: string): "hub" | "headless" | "terminals" | "utility" {
   if (/\bmcp-hub\.cjs\b/.test(args)) return "hub";
   if (isClaude(args)) return "headless";
   const exe = exeName(args);

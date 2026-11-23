@@ -91,7 +91,7 @@ describe("verifyEvidenceByModel", () => {
 describe("briefSummaryByModel", () => {
   const bi = { cwd: "/w", ticketKey: "BTL-1", ticketTitle: "T", prTitle: "P", description: null, files, acceptance: [], lang: "en" as const };
   it("returns the summary without HTML comment markers; null on failure", async () => {
-    expect(await briefSummaryByModel(fake(() => ok({ summary: "Adds X. <!-- butler:brief --> Because Y." })).run, bi)).toBe("Adds X.  butler:brief  Because Y.");
+    expect(await briefSummaryByModel(fake(() => ok({ summary: "Adds X. <!-- shipherd:brief --> Because Y." })).run, bi)).toBe("Adds X.  shipherd:brief  Because Y.");
     expect(await briefSummaryByModel(fake(() => fail).run, bi)).toBeNull();
   });
 });

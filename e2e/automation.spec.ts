@@ -9,7 +9,7 @@ import { completeWizard, create, expect, makeGitRepo, newButton, openAllWork, op
  */
 
 function read<T>(s: Sandbox, sql: string): T | undefined {
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"), { readOnly: true });
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"), { readOnly: true });
   try {
     return db.prepare(sql).get() as T | undefined;
   } finally {

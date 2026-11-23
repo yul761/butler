@@ -9,7 +9,7 @@ import { completeWizard, create, expect, makeGitRepo, newButton, newTicket, open
  */
 test("the terminal works with the default renderer (WebGL, or the DOM fallback)", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_TERMINAL_RENDERER: "webgl" };
+  s.env = { SHIPHERD_TERMINAL_RENDERER: "webgl" };
   const fakeLog = () => (existsSync(s.fakeLog) ? readFileSync(s.fakeLog, "utf8") : "");
   const { page } = await launch(s);
   await completeWizard(page, s);

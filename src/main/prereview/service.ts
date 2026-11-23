@@ -1,4 +1,4 @@
-// 预审的入口（设计 §3.1、§4.1、§4.5）：session 交证据、Butler 看到 PR 的新提交、手动重跑；结果送回 session。
+// 预审的入口（设计 §3.1、§4.1、§4.5）：session 交证据、Shipherd 看到 PR 的新提交、手动重跑；结果送回 session。
 import type { Mailbox } from "../mailbox/mailbox";
 import type { PreReviewRepo, PreReviewRow } from "../db/prereview-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
@@ -33,8 +33,8 @@ export interface PreReviewServiceDeps {
   recipient(pr: TicketPr): string | null;
   /** 这个 PR 在本地哪个目录（session 的 worktree 或 ticket 仓库）；没有为 null。 */
   cwdOf(pr: TicketPr, sessionId: string | null): string | null;
-  /** Butler 开的 session 做的 PR（不是用户自己手开的）。 */
-  isButlerPr(pr: TicketPr): boolean;
+  /** Shipherd 开的 session 做的 PR（不是用户自己手开的）。 */
+  isShipherdPr(pr: TicketPr): boolean;
   /** 这份代码（仓库 + 分支）已经开着的 PR；交证据时据此补上 pr_id 和 base，没有为 null。 */
   openPrFor(ticketKey: string | null, target: ReviewTarget): TicketPr | null;
   profile(slug: string): RepoProfile | null;
@@ -51,20 +51,20 @@ export type SubmitResult = { ok: true; preReviewId: number; message: string } | 
 
 const MSG = {
   en: {
-    off: "Pre-review is off in Butler, so the evidence was not recorded. Carry on.",
+    off: "Pre-review is off in Shipherd, so the evidence was not recorded. Carry on.",
     bad: "No usable evidence: give at least one check (name, category, command, result, output), acceptance item or notRun entry.",
-    unknown: "Butler does not know this session's worktree.",
+    unknown: "Shipherd does not know this session's worktree.",
     noGit: "Could not read HEAD and branch in the worktree.",
     dirty: "The worktree has uncommitted changes. Commit first: evidence has to match a specific commit.",
-    queued: (sha: string) => `Evidence received for ${sha}. Butler is pre-reviewing it; the result will be sent here. Until then, do not change the worktree. End this turn now.`,
+    queued: (sha: string) => `Evidence received for ${sha}. Shipherd is pre-reviewing it; the result will be sent here. Until then, do not change the worktree. End this turn now.`,
   },
   zh: {
-    off: "Butler 没开预审，证据没有记录。继续就行。",
+    off: "Shipherd 没开预审，证据没有记录。继续就行。",
     bad: "没有能用的证据：至少给一条检查（name、category、command、result、output）、一条验收或一条 notRun。",
-    unknown: "Butler 不认识这个 session 的 worktree。",
+    unknown: "Shipherd 不认识这个 session 的 worktree。",
     noGit: "读不到 worktree 里的 HEAD 和分支。",
     dirty: "worktree 里有没提交的改动。先提交：证据要对应一个确定的提交。",
-    queued: (sha: string) => `已收到 ${sha} 的证据，Butler 正在预审，结果会送进来。在那之前不要改 worktree。现在结束这一轮。`,
+    queued: (sha: string) => `已收到 ${sha} 的证据，Shipherd 正在预审，结果会送进来。在那之前不要改 worktree。现在结束这一轮。`,
   },
 };
 
@@ -136,14 +136,14 @@ export class PreReviewService {
   }
 
   /**
-   * Butler 读到一个 PR（onPrRead / linkCreatedPr 之后）：把同一份代码的预审、证据、简报补上 pr_id；
-   * 预审开着、PR 开着且不是草稿、是 Butler 的 PR、这个提交还没预审过 → 排一次（trigger = pr）。返回排了的预审 id。
+   * Shipherd 读到一个 PR（onPrRead / linkCreatedPr 之后）：把同一份代码的预审、证据、简报补上 pr_id；
+   * 预审开着、PR 开着且不是草稿、是 Shipherd 的 PR、这个提交还没预审过 → 排一次（trigger = pr）。返回排了的预审 id。
    */
   onPrSeen(pr: TicketPr): number | null {
     if (!pr.headSha || !pr.headBranch) return null;
     const target: ReviewTarget = { repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha };
     if (this.d.repo.attachPr(pr.id, target) > 0) this.d.changed();
-    if (!this.d.enabled(pr.ticketKey) || pr.state !== "open" || pr.isDraft || !this.d.isButlerPr(pr)) return null;
+    if (!this.d.enabled(pr.ticketKey) || pr.state !== "open" || pr.isDraft || !this.d.isShipherdPr(pr)) return null;
     if (this.d.repo.latestFor(target)) return null;
     const sessionId = this.d.recipient(pr);
     const cwd = this.d.cwdOf(pr, sessionId);

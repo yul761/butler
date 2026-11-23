@@ -1,7 +1,7 @@
 // 确定性检查（契约 4.5）：类型、快照格式、命中记录、页面用的视图和输入校验。纯数据，不引 Node 模块。
 import type { BypassHow } from "./backtest";
 
-/** 快照格式的版本：hook 和 Butler 用同一个常量构建；hook 看到别的版本就当作「没有检查」放行并记录。 */
+/** 快照格式的版本：hook 和 Shipherd 用同一个常量构建；hook 看到别的版本就当作「没有检查」放行并记录。 */
 export const CHECKS_SNAPSHOT_VERSION = 1;
 
 export const CHECK_TYPES = ["forbidden_pattern", "import_boundary", "comment_policy", "run_command"] as const;
@@ -78,9 +78,9 @@ export interface ResolvedCheck {
   message: string;
 }
 
-/** hook 输出给 agent 的几句固定文字（按 Butler 的界面语言）。 */
+/** hook 输出给 agent 的几句固定文字（按 Shipherd 的界面语言）。 */
 export interface CheckSnapshotStrings {
-  /** 「Butler 检查「{name}」没通过：{where}」 */
+  /** 「Shipherd 检查「{name}」没通过：{where}」 */
   failHeader: string;
   /** 影子模式的标记。 */
   shadowTag: string;
@@ -132,7 +132,7 @@ export type CheckLogRecord =
   | { kind: "absent"; reason: CheckAbsenceReason; session: string | null; at: number }
   /** 记过「没有检查」的 session 后来又检查上了（快照恢复了）：清掉 session 上的标记。 */
   | { kind: "present"; session: string | null; at: number }
-  /** 绕过一条拦过的检查（工作流 F 第 7.1 节）：在拦下的地方加压制注释、--no-verify、关掉 git hook、改 Butler 的检查文件。 */
+  /** 绕过一条拦过的检查（工作流 F 第 7.1 节）：在拦下的地方加压制注释、--no-verify、关掉 git hook、改 Shipherd 的检查文件。 */
   | {
       kind: "bypass";
       checkId: number;

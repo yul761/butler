@@ -10,7 +10,7 @@ export type WaitState = "you" | "ci" | "review" | "idle";
 export interface WaitInput {
   /** 「需要你」有原因，或者有没回答的 ask_user。屏幕上的权限确认不算（那种不休眠，见 hibernateBlock）。 */
   needsYou: boolean;
-  /** 在等 CI：PR（或者还没开 PR 的分支）的 CI 在跑，或者排在合并总控里。和闲置关闭的 waitingOnButler 一样。 */
+  /** 在等 CI：PR（或者还没开 PR 的分支）的 CI 在跑，或者排在合并总控里。和闲置关闭的 waitingOnShipherd 一样。 */
   ciPending: boolean;
   /** PR 开着、CI 不在跑、review 还没批准。 */
   reviewPending: boolean;
@@ -48,7 +48,7 @@ export interface HibernateCandidate {
   draft: boolean;
   /** 用户在 typing quiet 窗口里打过字。 */
   typing: boolean;
-  /** Butler 正在往里递东西，或者占住了这个终端（pty.reserve）。 */
+  /** Shipherd 正在往里递东西，或者占住了这个终端（pty.reserve）。 */
   autoInput: boolean;
   /** 正在换新或者闲置关闭。 */
   refreshing: boolean;
@@ -68,10 +68,10 @@ export type HibernateBlock =
   | "pinned" | "kind" | "transcript" | "working" | "screen" | "draft" | "typing" | "auto_input" | "refreshing" | "visible" | "children"
   | "just_opened" | "just_woken";
 
-/** 能休眠的种类：Butler 开的 ticket session、feature 总控、Butler 总控。修复 session 和复盘分析的不行。 */
+/** 能休眠的种类：Shipherd 开的 ticket session、feature 总控、Shipherd 总控。修复 session 和复盘分析的不行。 */
 export function hibernatableKind(s: Session): boolean {
-  if (s.origin !== "butler" || s.fixesSession !== null || s.lessonRunId !== null) return false;
-  return s.butler || s.featureId !== null || s.ticketKey !== null;
+  if (s.origin !== "shipherd" || s.fixesSession !== null || s.lessonRunId !== null) return false;
+  return s.shipherd || s.featureId !== null || s.ticketKey !== null;
 }
 
 /** 刚打开、刚唤醒的安静期（e2e 调短）。 */

@@ -30,7 +30,7 @@ describe("parseCheckLogRecord", () => {
 
 describe("HitIngest", () => {
   it("ingests each file once, records absences and deletes the file", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "butler-hits-"));
+    const dir = mkdtempSync(join(tmpdir(), "shipherd-hits-"));
     dirs.push(dir);
     writeFileSync(join(dir, "1-1-a.jsonl"), [JSON.stringify(hit), "garbage", JSON.stringify({ kind: "absent", reason: "snapshot_version", session: "s1", at: 1 }), JSON.stringify({ kind: "present", session: "s1", at: 2 })].join("\n"));
     writeFileSync(join(dir, "ignored.tmp"), "x");
@@ -48,7 +48,7 @@ describe("HitIngest", () => {
   });
 
   it("keeps the file when the database write fails", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "butler-hits-"));
+    const dir = mkdtempSync(join(tmpdir(), "shipherd-hits-"));
     dirs.push(dir);
     writeFileSync(join(dir, "2.jsonl"), JSON.stringify(hit));
     const ing = new HitIngest({ dir, insertHits: () => { throw new Error("busy"); }, markAbsent: () => {} });
@@ -68,7 +68,7 @@ describe("bypass records (workstream F)", () => {
   });
 
   it("hands bypasses to insertBypasses with their own keys, separately from hits", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "butler-hits-"));
+    const dir = mkdtempSync(join(tmpdir(), "shipherd-hits-"));
     dirs.push(dir);
     writeFileSync(join(dir, "3.jsonl"), [JSON.stringify(hit), JSON.stringify(bypass)].join("\n"));
     const hits: string[] = [];

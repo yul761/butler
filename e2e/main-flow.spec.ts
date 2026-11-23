@@ -5,7 +5,7 @@ import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, terminalText, test, newButton, openAllWork, openTicketTab } from "./fixtures";
 
 /**
- * 设计文档 11 节的主流程（计划 5 任务 9）：真实的主进程、preload、React 界面、node-pty、butler-hook（经 shell 执行）、
+ * 设计文档 11 节的主流程（计划 5 任务 9）：真实的主进程、preload、React 界面、node-pty、shipherd-hook（经 shell 执行）、
  * HookInbox、HandoffRunner、StateCore 和「现在」页；只有 claude 是假的。
  * 定位都用精确匹配或 role（Ruling P5-PF4）：S.memoryHandoff 是 S.memoryHint 的子串，S.home、
  * S.runHandoff、S.newSession、S.newTicket 也都出现在别的提示文字里。
@@ -13,7 +13,7 @@ import { completeWizard, expect, terminalText, test, newButton, openAllWork, ope
 test("new ticket → session → hook → handoff → memory → Now page → back to the same terminal", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page, console: messages } = await launch(s);
-  const mainLog = join(s.butlerHome, "logs", "main.log");
+  const mainLog = join(s.shipherdHome, "logs", "main.log");
   try {
     await completeWizard(page, s);
 
@@ -30,9 +30,9 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     await openTicketTab(page, "terminal");
     await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
     await expect.poll(() => terminalText(page)).toContain("fake claude ready");
-    await expect.poll(() => terminalText(page)).toContain("mcp: butler-memory, butler-workspace");
+    await expect.poll(() => terminalText(page)).toContain("mcp: shipherd-memory, shipherd-workspace");
 
-    // 3. 输入一句话：UserPromptSubmit / Stop hook 经 shell 执行 butler-hook → inbox → 侧栏“等你输入”。
+    // 3. 输入一句话：UserPromptSubmit / Stop hook 经 shell 执行 shipherd-hook → inbox → 侧栏“等你输入”。
     await page.locator(".terminal-wrap:visible .xterm").click();
     await page.keyboard.type("hello");
     await page.keyboard.press("Enter");
@@ -93,7 +93,7 @@ test("new ticket → session → hook → handoff → memory → Now page → ba
     expect(messages.filter(isCspViolationMessage)).toEqual([]);
     expect(existsSync(mainLog) ? readFileSync(mainLog, "utf8") : "").not.toContain(CSP_VIOLATION_LOG_PREFIX);
   } catch (e) {
-    // 失败时把假 claude 的记录和 Butler 的日志打出来，CI 里直接能看（沙盒也会留下）。
+    // 失败时把假 claude 的记录和 Shipherd 的日志打出来，CI 里直接能看（沙盒也会留下）。
     for (const f of [s.fakeLog, mainLog]) {
       if (existsSync(f)) console.log(`--- ${f}\n${readFileSync(f, "utf8")}`);
     }

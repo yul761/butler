@@ -4,8 +4,8 @@ import type { Db } from "./database";
 export const JOB_NIGHTLY = "nightly_handoff";
 /** 早间任务（现在只刷新 tracker 状态）；名字是 jobs 表里已有的行，不改。 */
 export const JOB_MORNING = "morning_brief";
-/** Butler 总控的每日巡检（BTL-190 第 5 点）：lastRunAt 是巡检消息送到（或者放弃）的时刻。 */
-export const JOB_PATROL = "butler_patrol";
+/** Shipherd 总控的每日巡检（BTL-190 第 5 点）：lastRunAt 是巡检消息送到（或者放弃）的时刻。 */
+export const JOB_PATROL = "shipherd_patrol";
 /** 复盘规矩：每天拉一次各仓库新合并的 PR。 */
 export const JOB_LESSONS_DAILY = "lessons_daily";
 /** 一次性：给所有 ticket（含归档）补链接 PR。记成 ok 之后不再跑。 */

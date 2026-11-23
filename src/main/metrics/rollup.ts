@@ -42,19 +42,19 @@ export function usdOf(u: UsageFact, registry: readonly RegistryModel[]): { usd: 
   return { usd: (inTokens * m.priceIn + u.output * m.priceOut) / 1e6, partial: false };
 }
 
-/** 这个 PR 是不是 Butler 做的（设计第 6 节）。 */
-export function isButlerMade(pr: PrFact, f: Pick<Facts, "owners" | "holds" | "sessions">): boolean {
-  return butlerMadeOf(f)(pr);
+/** 这个 PR 是不是 Shipherd 做的（设计第 6 节）。 */
+export function isShipherdMade(pr: PrFact, f: Pick<Facts, "owners" | "holds" | "sessions">): boolean {
+  return shipherdMadeOf(f)(pr);
 }
 
 /** 先把 owners、占位、session 按 PR 能对上的键建好索引，再逐个 PR 判断（每小时整窗重算，PR 和 session 都可能上千）。 */
-export function butlerMadeOf(f: Pick<Facts, "owners" | "holds" | "sessions">): (pr: PrFact) => boolean {
+export function shipherdMadeOf(f: Pick<Facts, "owners" | "holds" | "sessions">): (pr: PrFact) => boolean {
   const byId = new Map(f.sessions.map((s) => [s.id, s]));
-  const butler = (id: string | null) => (id ? byId.get(id)?.butler === true : false);
+  const shipherd = (id: string | null) => (id ? byId.get(id)?.shipherd === true : false);
   const k = (...parts: (string | number | null)[]) => parts.join("\u0000");
-  const owned = new Set(f.owners.filter((o) => butler(o.sessionId)).map((o) => k(o.ticketKey, o.repoId, o.branch)));
-  const held = new Set(f.holds.filter((h) => h.kind === "pr" && h.prUrl !== null && butler(h.sessionId)).map((h) => prUrlKey(h.prUrl as string)));
-  const worked = new Set(f.sessions.filter((s) => s.butler && s.ticketKey && s.gitBranch).map((s) => k(s.ticketKey, s.gitBranch)));
+  const owned = new Set(f.owners.filter((o) => shipherd(o.sessionId)).map((o) => k(o.ticketKey, o.repoId, o.branch)));
+  const held = new Set(f.holds.filter((h) => h.kind === "pr" && h.prUrl !== null && shipherd(h.sessionId)).map((h) => prUrlKey(h.prUrl as string)));
+  const worked = new Set(f.sessions.filter((s) => s.shipherd && s.ticketKey && s.gitBranch).map((s) => k(s.ticketKey, s.gitBranch)));
   return (pr) =>
     (pr.headBranch !== null && owned.has(k(pr.ticketKey, pr.repoId, pr.headBranch))) ||
     held.has(prUrlKey(pr.url)) ||
@@ -70,7 +70,7 @@ function pushTo<K, V>(m: Map<K, V[]>, k: K, v: V): void {
 /** 一个 PR 身上的数。 */
 export interface PrMetrics {
   pr: PrFact;
-  butler: boolean;
+  shipherd: boolean;
   cycleOpenMs: number | null;
   cycleTicketMs: number | null;
   commentsHuman: number;
@@ -127,18 +127,18 @@ class Attribution {
   }
 }
 
-const blank = (pr: PrFact, butler: boolean): PrMetrics => ({
-  pr, butler, cycleOpenMs: null, cycleTicketMs: null, commentsHuman: 0, commentsCopilot: 0, commentsAvoidable: 0, commentsAutoHandled: 0,
+const blank = (pr: PrFact, shipherd: boolean): PrMetrics => ({
+  pr, shipherd, cycleOpenMs: null, cycleTicketMs: null, commentsHuman: 0, commentsCopilot: 0, commentsAvoidable: 0, commentsAutoHandled: 0,
   interventions: 0, waitHumanMs: 0, costWeighted: 0, costUsd: 0, costUsdPartial: false, costByModel: new Map(), costByTask: new Map(),
   ciFailures: 0, reopens: 0, reverts: 0,
 });
 
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
 
-/** 每个 PR 的数（所有 PR，不只是合并了的）。butlerMade：PR id → 是不是 Butler 做的。 */
-export function prMetrics(f: Facts, butlerMade: Map<number, boolean>, now: number): Map<number, PrMetrics> {
+/** 每个 PR 的数（所有 PR，不只是合并了的）。shipherdMade：PR id → 是不是 Shipherd 做的。 */
+export function prMetrics(f: Facts, shipherdMade: Map<number, boolean>, now: number): Map<number, PrMetrics> {
   const out = new Map<number, PrMetrics>();
-  for (const p of f.prs) out.set(p.id, blank(p, butlerMade.get(p.id) ?? false));
+  for (const p of f.prs) out.set(p.id, blank(p, shipherdMade.get(p.id) ?? false));
   const at = new Attribution(f);
 
   const firstSession = new Map<string, number>();
@@ -218,7 +218,7 @@ export function prMetrics(f: Facts, butlerMade: Map<number, boolean>, now: numbe
 export interface TicketMetrics {
   ticketKey: string;
   doneAt: number;
-  butler: boolean;
+  shipherd: boolean;
   costWeighted: number;
   costUsd: number;
   groups: Group[];
@@ -261,7 +261,7 @@ export function ticketMetrics(f: Facts, prs: Map<number, PrMetrics>): TicketMetr
     }
     // 分组按最后合并的那个 PR。
     const last = merged.reduce((a, b) => ((b.pr.mergedAt as number) > (a.pr.mergedAt as number) ? b : a));
-    out.push({ ticketKey: key, doneAt, butler: list.some((m) => m.butler), costWeighted, costUsd, groups: groupsOf(last.pr, f) });
+    out.push({ ticketKey: key, doneAt, shipherd: list.some((m) => m.shipherd), costWeighted, costUsd, groups: groupsOf(last.pr, f) });
   }
   return out;
 }
@@ -272,15 +272,15 @@ class DailyBuilder {
 
   constructor(private readonly fromDay: string) {}
 
-  add(day: string, groups: readonly Group[], butler: boolean, metric: string, n: number, total: number): void {
+  add(day: string, groups: readonly Group[], shipherd: boolean, metric: string, n: number, total: number): void {
     if (day < this.fromDay) return;
     for (const g of groups) {
-      const k = [day, g.kind, g.key, butler ? 1 : 0, metric].join("\u0000");
+      const k = [day, g.kind, g.key, shipherd ? 1 : 0, metric].join("\u0000");
       const cur = this.rows.get(k);
       if (cur) {
         cur.n += n;
         cur.total += total;
-      } else this.rows.set(k, { day, groupKind: g.kind, groupKey: g.key, butler, metric, n, total });
+      } else this.rows.set(k, { day, groupKind: g.kind, groupKey: g.key, shipherd, metric, n, total });
     }
   }
 
@@ -301,14 +301,14 @@ export function subtypeOf(e: Pick<MetricEvent, "data">): string | null {
 }
 
 /** 从事实算出 fromDay 之后的全部 metrics_daily 行（纯函数）。 */
-export function computeDaily(f: Facts, butlerMade: Map<number, boolean>, now: number, fromDay: string): DailyRow[] {
+export function computeDaily(f: Facts, shipherdMade: Map<number, boolean>, now: number, fromDay: string): DailyRow[] {
   const b = new DailyBuilder(fromDay);
-  const prs = prMetrics(f, butlerMade, now);
+  const prs = prMetrics(f, shipherdMade, now);
   for (const m of prs.values()) {
     if (m.pr.mergedAt === null) continue;
     const day = dayOf(m.pr.mergedAt);
     const g = groupsOf(m.pr, f);
-    const add = (metric: string, total: number) => b.add(day, g, m.butler, metric, 1, total);
+    const add = (metric: string, total: number) => b.add(day, g, m.shipherd, metric, 1, total);
     add("pr_merged", 1);
     if (m.cycleOpenMs !== null) add("cycle_open_ms", m.cycleOpenMs);
     if (m.cycleTicketMs !== null) add("cycle_ticket_ms", m.cycleTicketMs);
@@ -324,49 +324,49 @@ export function computeDaily(f: Facts, butlerMade: Map<number, boolean>, now: nu
     add("ci_failures", m.ciFailures);
     add("reopens", m.reopens);
     add("reverts", m.reverts);
-    for (const [model, v] of m.costByModel) b.add(day, ALL, m.butler, `cost_model:${model}`, 1, v);
-    for (const [task, v] of m.costByTask) b.add(day, ALL, m.butler, `cost_task:${task}`, 1, v);
+    for (const [model, v] of m.costByModel) b.add(day, ALL, m.shipherd, `cost_model:${model}`, 1, v);
+    for (const [task, v] of m.costByTask) b.add(day, ALL, m.shipherd, `cost_task:${task}`, 1, v);
   }
   for (const t of ticketMetrics(f, prs)) {
     const day = dayOf(t.doneAt);
-    b.add(day, t.groups, t.butler, "ticket_done", 1, 1);
-    b.add(day, t.groups, t.butler, "ticket_cost_weighted", 1, t.costWeighted);
-    b.add(day, t.groups, t.butler, "ticket_cost_usd", 1, t.costUsd);
+    b.add(day, t.groups, t.shipherd, "ticket_done", 1, 1);
+    b.add(day, t.groups, t.shipherd, "ticket_cost_weighted", 1, t.costWeighted);
+    b.add(day, t.groups, t.shipherd, "ticket_cost_usd", 1, t.costUsd);
   }
 
   const sessions = new Map(f.sessions.map((s) => [s.id, s]));
-  const butlerSession = (id: string | null) => (id ? sessions.get(id)?.butler === true : false);
-  const butlerTickets = new Set(f.sessions.filter((s) => s.butler && s.ticketKey).map((s) => s.ticketKey as string));
-  // 没有 session 的事件（manual_merge、按 ticket 的手动触发）：看 PR 是不是 Butler 做的，再看 ticket 有没有 Butler 的 session。
-  const butlerEvent = (e: MetricEvent): boolean => {
-    if (e.sessionId) return butlerSession(e.sessionId);
-    if (e.prId !== null) return butlerMade.get(e.prId) ?? false;
-    return e.ticketKey !== null && butlerTickets.has(e.ticketKey);
+  const shipherdSession = (id: string | null) => (id ? sessions.get(id)?.shipherd === true : false);
+  const shipherdTickets = new Set(f.sessions.filter((s) => s.shipherd && s.ticketKey).map((s) => s.ticketKey as string));
+  // 没有 session 的事件（manual_merge、按 ticket 的手动触发）：看 PR 是不是 Shipherd 做的，再看 ticket 有没有 Shipherd 的 session。
+  const shipherdEvent = (e: MetricEvent): boolean => {
+    if (e.sessionId) return shipherdSession(e.sessionId);
+    if (e.prId !== null) return shipherdMade.get(e.prId) ?? false;
+    return e.ticketKey !== null && shipherdTickets.has(e.ticketKey);
   };
   const eventGroups = (e: MetricEvent): Group[] => (e.repoSlug ? [...ALL, { kind: "repo", key: e.repoSlug }] : ALL);
   for (const e of f.events) {
     const day = dayOf(e.at);
     const g = eventGroups(e);
-    const butler = butlerEvent(e);
-    b.add(day, g, butler, `event:${e.kind}`, 1, 1);
-    if (e.kind === "interrupt" && typeof e.data.category === "string") b.add(day, g, butler, `interrupt:${e.data.category}`, 1, 1);
+    const shipherd = shipherdEvent(e);
+    b.add(day, g, shipherd, `event:${e.kind}`, 1, 1);
+    if (e.kind === "interrupt" && typeof e.data.category === "string") b.add(day, g, shipherd, `interrupt:${e.data.category}`, 1, 1);
     // 人介入构成按子类型：终端输入的 mode、卡片的 via、手动触发的 IPC 通道。
     const sub = subtypeOf(e);
-    if (sub !== null) b.add(day, ALL, butler, `event_sub:${e.kind}:${sub}`, 1, 1);
+    if (sub !== null) b.add(day, ALL, shipherd, `event_sub:${e.kind}:${sub}`, 1, 1);
   }
   for (const sp of f.spans) {
     const ms = Math.max(0, (sp.endedAt ?? now) - sp.startedAt);
     const metric = sp.kind === "human" ? `wait_human:${sp.category ?? "question"}` : "wait_idle";
-    b.add(dayOf(sp.startedAt), ALL, butlerSession(sp.sessionId), metric, 1, ms);
+    b.add(dayOf(sp.startedAt), ALL, shipherdSession(sp.sessionId), metric, 1, ms);
   }
   // 全部用量按花掉的那天（不分给 PR）：后台的 headless 任务（handoff、需要你判断、打断分类、复盘）没有 session，
-  // 分不到 PR 上，按任务 / 模型看花费只能从这里看。没有 session 的算 Butler 的。
+  // 分不到 PR 上，按任务 / 模型看花费只能从这里看。没有 session 的算 Shipherd 的。
   for (const u of f.usage) {
     const day = dayOf(u.at);
-    const butler = u.sessionId === null || butlerSession(u.sessionId);
+    const shipherd = u.sessionId === null || shipherdSession(u.sessionId);
     const w = weightedOf(u);
-    b.add(day, ALL, butler, `spend_task:${u.task ?? "(interactive)"}`, 1, w);
-    b.add(day, ALL, butler, `spend_model:${u.model ?? "(default)"}`, 1, w);
+    b.add(day, ALL, shipherd, `spend_task:${u.task ?? "(interactive)"}`, 1, w);
+    b.add(day, ALL, shipherd, `spend_model:${u.model ?? "(default)"}`, 1, w);
   }
   return b.list();
 }
@@ -384,7 +384,7 @@ export interface RollupDeps {
 }
 
 /**
- * 每小时一次：标 butler_made、补记合并方式，再把最近 ROLLUP_DAYS 天的 metrics_daily 整体重算（幂等）。
+ * 每小时一次：标 shipherd_made、补记合并方式，再把最近 ROLLUP_DAYS 天的 metrics_daily 整体重算（幂等）。
  */
 export class MetricsRollup {
   private lastRunAt = 0;
@@ -418,9 +418,9 @@ export class MetricsRollup {
         .map((p) => ({ id: p.id, ticketKey: p.ticketKey, url: p.url, slug: p.slug, mergedAt: p.mergedAt as number, headBranch: p.headBranch, repoPath: p.repoPath }));
       recordMerges(merged, holds, this.d.record);
       const facts: Facts = { ...base, events: this.d.repo.events(windowStart), spans: this.d.repo.spans(windowStart) };
-      const butlerMade = this.tagButlerMade(facts);
+      const shipherdMade = this.tagShipherdMade(facts);
       const fromDay = dayOf(windowStart);
-      this.d.repo.replaceDaily(fromDay, computeDaily(facts, butlerMade, now, fromDay));
+      this.d.repo.replaceDaily(fromDay, computeDaily(facts, shipherdMade, now, fromDay));
       this.d.repo.pruneDaily(fromDay);
       this.lastRunAt = now;
       return true;
@@ -430,16 +430,16 @@ export class MetricsRollup {
     }
   }
 
-  /** 算一遍 butler_made，和库里不一样的写回去（null 的也写），一个事务里写完。 */
-  private tagButlerMade(f: Facts): Map<number, boolean> {
-    const made = butlerMadeOf(f);
+  /** 算一遍 shipherd_made，和库里不一样的写回去（null 的也写），一个事务里写完。 */
+  private tagShipherdMade(f: Facts): Map<number, boolean> {
+    const made = shipherdMadeOf(f);
     const out = new Map<number, boolean>();
     const stored = new Map(
-      (this.d.db.prepare(`SELECT id, butler_made FROM ticket_prs`).all() as unknown as { id: number; butler_made: number | null }[]).map((r) => [
-        Number(r.id), r.butler_made === null ? null : Number(r.butler_made) === 1,
+      (this.d.db.prepare(`SELECT id, shipherd_made FROM ticket_prs`).all() as unknown as { id: number; shipherd_made: number | null }[]).map((r) => [
+        Number(r.id), r.shipherd_made === null ? null : Number(r.shipherd_made) === 1,
       ]),
     );
-    const upd = this.d.db.prepare(`UPDATE ticket_prs SET butler_made = ? WHERE id = ?`);
+    const upd = this.d.db.prepare(`UPDATE ticket_prs SET shipherd_made = ? WHERE id = ?`);
     withTransaction(this.d.db, () => {
       for (const p of f.prs) {
         const v = made(p);

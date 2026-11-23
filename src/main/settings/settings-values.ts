@@ -315,7 +315,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
       if (!REFRESH_THRESHOLD_RE.test(t)) throw new SettingError(M().refreshThreshold);
       return String(Number(t));
     }
-    case "butlerPatrolTime": {
+    case "shipherdPatrolTime": {
       if (!value.trim()) return "";
       const t = parseTime(value);
       if (!t) throw new SettingError(M().timeFormat);
@@ -576,9 +576,9 @@ export function refreshMemoryMb(s: Pick<SettingsRepo, "get">): number {
   return MEMORY_MB_RE.test(t) && (n === 0 || n >= MIN_REFRESH_MEMORY_MB) ? n : Number(SETTING_DEFAULTS.refreshMemoryMb);
 }
 
-/** Butler 总控每天巡检的时刻（butlerPatrolTime，BTL-190 第 5 点）：关着或者存的值不合法时为 null（不猜一个时间）。 */
-export function butlerPatrolTime(s: Pick<SettingsRepo, "get">): { h: number; m: number } | null {
-  return parseTime(s.get("butlerPatrolTime"));
+/** Shipherd 总控每天巡检的时刻（shipherdPatrolTime，BTL-190 第 5 点）：关着或者存的值不合法时为 null（不猜一个时间）。 */
+export function shipherdPatrolTime(s: Pick<SettingsRepo, "get">): { h: number; m: number } | null {
+  return parseTime(s.get("shipherdPatrolTime"));
 }
 
 export function trackerTools(s: SettingsRepo): string[] {

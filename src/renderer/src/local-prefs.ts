@@ -4,8 +4,8 @@ import { WIZARD_STEPS, type WizardStep } from "./wizard";
  * 只属于这台机器、这个窗口的小记忆（localStorage）：向导停在哪一步、是不是跳过了向导。
  * 读写都可能失败（存储被禁用），失败时当作没有记录。
  */
-const STEP_KEY = "butler.wizardStep";
-const SKIPPED_KEY = "butler.wizardSkipped";
+const STEP_KEY = "shipherd.wizardStep";
+const SKIPPED_KEY = "shipherd.wizardSkipped";
 
 function get(key: string): string | null {
   try {
@@ -24,6 +24,43 @@ function set(key: string, value: string | null): void {
   }
 }
 
+/**
+ * 改名前（BTL-260）这些键都以 butler. 开头（Shipherd 总控页的页面名也是 butler）。启动时搬一次：
+ * 新键还没有就把旧值拷过去，然后删掉旧键。userData 沿用旧目录（main 的 legacyUserDataDir），旧键才读得到。
+ * TODO(5.0)：保留一个大版本后删掉。
+ */
+export function migrateLegacyPrefs(store: Pick<Storage, "length" | "key" | "getItem" | "setItem" | "removeItem"> | null = safeStore()): number {
+  if (!store) return 0;
+  let moved = 0;
+  try {
+    const old: string[] = [];
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k?.startsWith("butler.")) old.push(k);
+    }
+    for (const k of old) {
+      const next = "shipherd." + k.slice("butler.".length).replace(/:butler$/, ":shipherd");
+      const v = store.getItem(k);
+      if (v !== null && store.getItem(next) === null) {
+        store.setItem(next, v);
+        moved++;
+      }
+      store.removeItem(k);
+    }
+  } catch {
+    // 存储不能用就算了。
+  }
+  return moved;
+}
+
+function safeStore(): Storage | null {
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
 export const savedWizardStep = (): WizardStep | null => {
   const v = get(STEP_KEY);
   // 停在已经去掉的 tracker、权限档案两步（BTL-249 以前）：前面两步都走过了，落到「完成」。
@@ -38,7 +75,7 @@ export const setWizardSkipped = (on: boolean) => set(SKIPPED_KEY, on ? "1" : nul
  * 收起的区块（侧栏 feature 下的 ticket、feature 页的 ticket 表），按 id 记一个列表。
  * 每次都从存储里读了再改，两个地方同时用也不会互相覆盖。
  */
-const COLLAPSED_KEY = "butler.collapsed";
+const COLLAPSED_KEY = "shipherd.collapsed";
 
 function collapsedIds(): string[] {
   try {
@@ -72,19 +109,19 @@ export function setCollapsed(id: string, on: boolean, defaultCollapsed = false):
 }
 
 /**
- * 页面上半部分的 tab（feature、Butler 总控页）：每个页面记着最近停在哪个 tab。
+ * 页面上半部分的 tab（feature、Shipherd 总控页）：每个页面记着最近停在哪个 tab。
  * 没有记录时返回 null，用页面自己的默认 tab。
  */
-const tabKey = (page: string) => `butler.tab:${page}`;
+const tabKey = (page: string) => `shipherd.tab:${page}`;
 export const savedTab = (page: string): string | null => get(tabKey(page));
 export const saveTab = (page: string, tab: string) => set(tabKey(page), tab);
 
 /** 对话 tab 输入框「发给」上次选的是哪个：开发 session 还是只问不改（分叉讨论）。没有记录时默认只问不改。 */
-const SEND_TARGET_KEY = "butler.sendTarget";
+const SEND_TARGET_KEY = "shipherd.sendTarget";
 export const savedSendTarget = (): "dev" | "fork" => (get(SEND_TARGET_KEY) === "dev" ? "dev" : "fork");
 export const saveSendTarget = (t: "dev" | "fork") => set(SEND_TARGET_KEY, t);
 
 /** 对话 tab 的「并排显示终端」，按页面记（比如 `ticket:BTL-7`）。 */
-const convSplitKey = (page: string) => `butler.convSplit:${page}`;
+const convSplitKey = (page: string) => `shipherd.convSplit:${page}`;
 export const savedConvSplit = (page: string): boolean => get(convSplitKey(page)) === "1";
 export const saveConvSplit = (page: string, on: boolean) => set(convSplitKey(page), on ? "1" : null);

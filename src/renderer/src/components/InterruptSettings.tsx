@@ -2,7 +2,7 @@ import { type ReactElement, useCallback, useEffect, useState } from "react";
 import { EXTERNAL_ACTION_SETTINGS } from "../../../shared/external";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS, type ChoiceDefault, type InterruptsAction, type InterruptsState } from "../../../shared/interrupts";
 import type { EditableSettings } from "../../../shared/settings";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { reportError } from "../errors";
 import { eventsOf, quietValid, toggleEvent } from "../interrupts-view";
 import { timeText } from "../lesson-runs-view";
@@ -33,7 +33,7 @@ export function InterruptSettings() {
   }, [load]);
 
   const fail = (e: unknown) => {
-    if (e instanceof ButlerError) setMsg({ text: e.message, error: true });
+    if (e instanceof ShipherdError) setMsg({ text: e.message, error: true });
     else reportError(e);
   };
   const act = async (a: InterruptsAction) => {

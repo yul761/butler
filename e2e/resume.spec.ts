@@ -8,8 +8,8 @@ import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, makeGitRepo, newButton, openSettingsTab, openTab, openTicketTab, terminalText, test, type Sandbox } from "./fixtures";
 
 /**
- * BTL-256：总控给关着的 session 发消息时，Butler 在后台接着原来的对话恢复它再送；内存不够时排着；用户点 × 结束的不恢复；
- * 打开「重启后自动恢复」时，Butler 重启后把上次开着终端的、总控管的 session 恢复回来。
+ * BTL-256：总控给关着的 session 发消息时，Shipherd 在后台接着原来的对话恢复它再送；内存不够时排着；用户点 × 结束的不恢复；
+ * 打开「重启后自动恢复」时，Shipherd 重启后把上次开着终端的、总控管的 session 恢复回来。
  */
 
 type McpServerConfig = { command: string; args: string[]; env: Record<string, string> };
@@ -32,10 +32,10 @@ function messagesIn(s: Sandbox, cwd: string): Record<string, string[]> {
   );
 }
 
-/** 按 mcp 配置启动 butler-sessions，像 claude 一样经 stdio 调用工具（from 是总控自己的 session id）。 */
+/** 按 mcp 配置启动 shipherd-sessions，像 claude 一样经 stdio 调用工具（from 是总控自己的 session id）。 */
 async function sessionsServer(server: McpServerConfig, from: string): Promise<{ call: (name: string, args?: object) => Promise<ToolReply>; close: () => void }> {
   const child = spawn(server.command, server.args, {
-    env: { ...server.env, BUTLER_SESSION: from, PATH: process.env.PATH ?? "" },
+    env: { ...server.env, SHIPHERD_SESSION: from, PATH: process.env.PATH ?? "" },
     stdio: ["pipe", "pipe", "inherit"],
   });
   const replies = createInterface({ input: child.stdout });
@@ -60,7 +60,7 @@ const json = <T,>(r: ToolReply): T => {
   return JSON.parse(r.content[0].text) as T;
 };
 
-/** 建 epic「payment」（shop/frontend、shop/backend），下面一个只用 frontend 的 ticket PAY-1，再开 epic 总控。返回总控的 session id 和它的 butler-sessions。 */
+/** 建 epic「payment」（shop/frontend、shop/backend），下面一个只用 frontend 的 ticket PAY-1，再开 epic 总控。返回总控的 session id 和它的 shipherd-sessions。 */
 async function epicWithCoordinator(page: Page, s: Sandbox) {
   const shop = join(s.dir, "shop");
   makeGitRepo(join(shop, "frontend"));
@@ -86,8 +86,8 @@ async function epicWithCoordinator(page: Page, s: Sandbox) {
   await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);
   const [coordinator] = sessionsIn(s, workspace);
   await expect.poll(() => terminalText(page)).toContain(`fake claude ready (${coordinator.slice(0, 8)})`);
-  const config = JSON.parse(readFileSync(join(s.butlerHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
-  const boss = await sessionsServer(config.mcpServers["butler-sessions"], coordinator);
+  const config = JSON.parse(readFileSync(join(s.shipherdHome, "mcp", "features", "1.json"), "utf8")) as { mcpServers: Record<string, McpServerConfig> };
+  const boss = await sessionsServer(config.mcpServers["shipherd-sessions"], coordinator);
   return { boss, coordinator, workspace, worktree: join(workspace, "frontend-pay-1") };
 }
 
@@ -106,7 +106,7 @@ const wakeOf = async (boss: Awaited<ReturnType<typeof epicWithCoordinator>>["bos
 test("a coordinator's message resumes a closed session in the background once, and waits when memory is short", async ({ makeSandbox, launch }) => {
   test.setTimeout(240_000);
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
   const { page } = await launch(s);
   await completeWizard(page, s);
   const { boss, coordinator, workspace, worktree } = await epicWithCoordinator(page, s);
@@ -133,7 +133,7 @@ test("a coordinator's message resumes a closed session in the background once, a
     await expect.poll(async () => (json<{ id: string; waitingForInput: boolean }[]>(await boss.call("list_sessions")).find((r) => r.id === child)?.waitingForInput), { timeout: 30_000 }).toBe(true);
     expect(json(await boss.call("end_session", { session: child, reason: "again" }))).toEqual({ ended: true });
     await expect.poll(() => wakeOf(boss, child)).toBe("resumes");
-    const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+    const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('sessionMemoryReserveMb', '1048576')").run();
     db.close();
     const short = json<{ wake: string; wakeError: string }>(await boss.call("send_message", { session: child, text: "等内存" }));
@@ -151,7 +151,7 @@ test("a coordinator's message resumes a closed session in the background once, a
 test("a session the user ended with × is not resumed by a coordinator's message", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
   const { page } = await launch(s);
   await completeWizard(page, s);
   const { boss, worktree } = await epicWithCoordinator(page, s);
@@ -177,7 +177,7 @@ test("a session the user ended with × is not resumed by a coordinator's message
 test("with the setting on, a restart resumes the managed sessions that were open", async ({ makeSandbox, launch }) => {
   test.setTimeout(240_000);
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
   const first = await launch(s);
   await completeWizard(first.page, s);
   await openSettingsTab(first.page, "basic");

@@ -31,11 +31,11 @@ const JUDGE_BATCH = 20;
 
 /**
  * 和 SessionsRepo.listConvTargets 的条件一致（不看活动时间）。那边还挡掉以前的 epic session（BTL-246），Session 上没有那一列：
- * 那些 session 迁移时已经隐藏，Butler 不会再把它们跑起来。
+ * 那些 session 迁移时已经隐藏，Shipherd 不会再把它们跑起来。
  */
 export function isConvTarget(s: Session | null): boolean {
   if (!s || s.replacedBy !== null || s.lessonRunId !== null) return false;
-  return s.origin === "butler" || s.ticketKey !== null || s.featureId !== null || s.butler;
+  return s.origin === "shipherd" || s.ticketKey !== null || s.featureId !== null || s.shipherd;
 }
 
 export interface ConvIngesterDeps {

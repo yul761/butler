@@ -60,7 +60,7 @@ function world() {
     interrupt: (t) => interrupts.push(t),
     interruptRecheck: () => () => true,
     lastReply: (id) => replies.get(head(id)?.id ?? id) ?? null,
-    nameOf: (id) => (id === null ? "Butler" : `S(${id})`),
+    nameOf: (id) => (id === null ? "Shipherd" : `S(${id})`),
     typing: (h, phase) => typed.push(`${h}:${phase}`),
     wake: (h) => woken.push(h),
     delivered: (m) => deliveredMsgs.push({ id: m.id, via: m.via }),
@@ -81,7 +81,7 @@ function world() {
     tick: (ms: number) => (now += ms),
     now: () => now,
     failDeliver: (r: DeliverResult) => (deliverResult = r),
-    hook: (term: string, tool = "Read") => runMailbox(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: tool }), { BUTLER_SESSION: term }, root),
+    hook: (term: string, tool = "Read") => runMailbox(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: tool }), { SHIPHERD_SESSION: term }, root),
   };
 }
 
@@ -100,7 +100,7 @@ describe("Mailbox", () => {
     expect(w.dirFiles("t1")).toHaveLength(1);
   });
 
-  it("types the user's own words in as they are, never batched with Butler's messages; through the hook they carry a note", async () => {
+  it("types the user's own words in as they are, never batched with Shipherd's messages; through the hook they carry a note", async () => {
     const w = world();
     w.add("t1", true);
     w.blocked.add("t1");
@@ -124,7 +124,7 @@ describe("Mailbox", () => {
     expect(ctx).toMatch(/对话 tab|conversation tab/);
   });
 
-  it("the user's own words, an answer and a refresh resume go in while the session needs you; Butler's other messages wait", async () => {
+  it("the user's own words, an answer and a refresh resume go in while the session needs you; Shipherd's other messages wait", async () => {
     const w = world();
     w.add("t1", true);
     w.needsYou.add("t1");
@@ -147,7 +147,7 @@ describe("Mailbox", () => {
     u.mb.send({ kind: "user", from: null, to: "t2", featureId: null, body: "yes, go with B" });
     await flushPromises();
     expect(u.delivered.map((d) => d.text)).toEqual(["yes, go with B"]);
-    // 用户自己的话不算 Butler 输入的：它的 UserPromptSubmit 照样算用户回答了。
+    // 用户自己的话不算 Shipherd 输入的：它的 UserPromptSubmit 照样算用户回答了。
     expect(u.typed).toEqual([]);
 
     const r = world();
@@ -206,7 +206,7 @@ describe("Mailbox", () => {
   it("a message being typed into a just-opened terminal is not projected for the hook meanwhile (no second delivery)", async () => {
     const w = world();
     w.add("t1", false, false);
-    w.mb.send({ ...msg("t1", "wake up"), kind: "butler", hold: true });
+    w.mb.send({ ...msg("t1", "wake up"), kind: "shipherd", hold: true });
     let release: (r: "sent") => void = () => {};
     // 终端刚开，还没登记到 session 上：这时没有投影。
     const typing = w.mb.opened("t1", "new-term", () => new Promise((res) => (release = res)));
@@ -246,7 +246,7 @@ describe("Mailbox", () => {
   it("opened types every queued message into a terminal just opened for it, without the guard", async () => {
     const w = world();
     w.add("t1", false);
-    w.mb.send({ ...msg("t1", "wake up"), kind: "butler" });
+    w.mb.send({ ...msg("t1", "wake up"), kind: "shipherd" });
     const typedIn: string[] = [];
     expect(await w.mb.opened("t1", "t1", async (_t, text) => (typedIn.push(text), "sent"))).toBe(true);
     expect(typedIn[0]).toContain("wake up");
@@ -464,13 +464,13 @@ describe("Mailbox", () => {
     expect(readdirSync(dir)).toEqual([n]);
   });
 
-  it("lists messages for a feature or for Butler's sessions with readable names", () => {
+  it("lists messages for a feature or for Shipherd's sessions with readable names", () => {
     const w = world();
     w.add("t1", false);
     w.mb.send(msg("t1", "x"));
-    w.mb.send({ ...msg("t1", "y"), from: "butler", featureId: null, kind: "butler" });
+    w.mb.send({ ...msg("t1", "y"), from: "shipherd", featureId: null, kind: "shipherd" });
     expect(w.mb.views({ featureId: 1 }, []).map((v) => [v.from, v.to, v.status, v.text])).toEqual([["S(boss)", "S(t1)", "queued", "x"]]);
-    expect(w.mb.views({ butler: true }, ["butler"]).map((v) => v.text)).toEqual(["y"]);
+    expect(w.mb.views({ shipherd: true }, ["shipherd"]).map((v) => v.text)).toEqual(["y"]);
   });
 
   it("asks a session without a terminal to wake for a message, but not for a convention alone", async () => {

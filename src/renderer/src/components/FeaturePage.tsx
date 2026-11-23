@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FeatureView, NowTarget } from "../../../shared/types";
 import type { Route } from "../App";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import { summaryOutcomeIsError, summaryOutcomeMessage } from "../feature-summary-view";
 import type { NameCtx } from "../home-view";
 import { blockGroups, scopeBoardView, scopeTotal, ticketRows, ticketsWithPr } from "../scope-view";
@@ -36,7 +36,7 @@ interface Props {
   onGo: (r: Route) => void;
 }
 
-const errorText = (e: unknown) => (e instanceof ButlerError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
+const errorText = (e: unknown) => (e instanceof ShipherdError ? (S.createErrors[e.code] ?? e.message) : (e as Error).message);
 
 /**
  * feature 页（UI 重做第 3 层，spec §5.2）：标题栏下五个页签——概况、进行中、全部 ticket、总控（终端和对话）、AI 总结。

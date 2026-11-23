@@ -1,5 +1,5 @@
-// 应用菜单（BTL-253 / BTL-254）。Butler 原来用 Electron 的默认菜单；现在是同样的标准几项（用 role，文字是 Electron 自带的，和原来一样），
-// 外加「帮助」里 Butler 自己的项：BTL-253 的「检查更新…」，BTL-254 的「发送反馈…」。
+// 应用菜单（BTL-253 / BTL-254）。Shipherd 原来用 Electron 的默认菜单；现在是同样的标准几项（用 role，文字是 Electron 自带的，和原来一样），
+// 外加「帮助」里 Shipherd 自己的项：BTL-253 的「检查更新…」，BTL-254 的「发送反馈…」。
 import type { MenuItemConstructorOptions } from "electron";
 import { M } from "./strings";
 

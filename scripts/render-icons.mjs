@@ -28,7 +28,7 @@ async function render(svg, size) {
   });
   win.webContents.setFrameRate(1);
   // 每次一个临时目录：SVG 和页面都是本地文件（连续加载 data: URL 会被 Chromium 中止）。
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "butler-icon-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shipherd-icon-"));
   fs.writeFileSync(path.join(dir, "icon.svg"), svg);
   fs.writeFileSync(
     path.join(dir, "index.html"),

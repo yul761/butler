@@ -73,7 +73,7 @@ test("clicking a link in the terminal opens it in the system browser, without a 
   await page.mouse.down();
   await page.mouse.up();
   // 主进程那边：直接发 file: / javascript: 也被拒绝。
-  const refuse = (url: string) => page.evaluate(([ch, u]) => (window as unknown as { butler: { invoke: (c: string, ...a: unknown[]) => Promise<unknown> } }).butler.invoke(ch, u), [IPC.linkOpen, url] as const);
+  const refuse = (url: string) => page.evaluate(([ch, u]) => (window as unknown as { shipherd: { invoke: (c: string, ...a: unknown[]) => Promise<unknown> } }).shipherd.invoke(ch, u), [IPC.linkOpen, url] as const);
   expect(await refuse("file:///etc/passwd")).toEqual({ ok: true, value: { ok: false, reason: "bad_url" } });
   expect(await refuse("javascript:alert(1)")).toEqual({ ok: true, value: { ok: false, reason: "bad_url" } });
   expect(await refuse("https://github.com@evil.example/")).toEqual({ ok: true, value: { ok: false, reason: "bad_url" } });

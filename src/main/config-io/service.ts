@@ -21,8 +21,8 @@ export interface ConfigIoDeps {
   policies: AdmissionPolicyService;
   recorder: BatchRecorder;
   registry: SectionRegistry;
-  butlerVersion: string;
-  /** 备份目录：<BUTLER_HOME>/backups。 */
+  shipherdVersion: string;
+  /** 备份目录：<SHIPHERD_HOME>/backups。 */
   backupDir: string;
   now: () => number;
   /** 导出 / 备份之后记一下时间（「定期导出」提醒用）。 */
@@ -88,7 +88,7 @@ export class ConfigIoService {
       ? { kind: "starter", name: req.starter!.name.trim() || "starter" }
       : sel.kind === "all" ? { kind: "all" } : sel.kind === "repo" ? { kind: "repo", slug: sel.slug } : { kind: "product", name: sel.name };
     return {
-      format: CONFIG_FORMAT, formatVersion: CURRENT_FORMAT_VERSION, exportedAt: env.now, butlerVersion: this.d.butlerVersion, scope,
+      format: CONFIG_FORMAT, formatVersion: CURRENT_FORMAT_VERSION, exportedAt: env.now, shipherdVersion: this.d.shipherdVersion, scope,
       options: starter ? { content: "lessons", includeSourceUrls: false } : req.options, sections,
     };
   }
@@ -289,7 +289,7 @@ export class ConfigIoService {
     const totals = countRows(sections.flatMap((s) => s.rows));
     return {
       token,
-      file: { exportedAt: p.doc.exportedAt, butlerVersion: p.doc.butlerVersion, formatVersion: p.doc.formatVersion, scope: p.doc.scope, includeSourceUrls: p.doc.options.includeSourceUrls },
+      file: { exportedAt: p.doc.exportedAt, shipherdVersion: p.doc.shipherdVersion, formatVersion: p.doc.formatVersion, scope: p.doc.scope, includeSourceUrls: p.doc.options.includeSourceUrls },
       starter: p.doc.scope.kind === "starter",
       sections,
       skippedSections: p.skipped,

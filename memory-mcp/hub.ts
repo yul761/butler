@@ -1,11 +1,11 @@
-// 共享 MCP 的路由表（WS-M H，设计文档 2026-11-17 §8）：每个 token 对应一个 server（某个作用域的记忆，或某个终端的 butler-sessions）。
-// 记忆后端按作用域共用一个，懒加载，30 分钟没人用就关掉；butler-sessions 每条路由一个 SessionsServer，和 stdio 时每个进程一个一样。
+// 共享 MCP 的路由表（WS-M H，设计文档 2026-11-17 §8）：每个 token 对应一个 server（某个作用域的记忆，或某个终端的 shipherd-sessions）。
+// 记忆后端按作用域共用一个，懒加载，30 分钟没人用就关掉；shipherd-sessions 每条路由一个 SessionsServer，和 stdio 时每个进程一个一样。
 import type { RpcHandler, RpcMessage } from "./loopback-http";
 import { type MemoryBackendLike, MemoryServer } from "./memory-tools";
 import { SessionsServer } from "./sessions-server";
 import { sessionsOptionsFromEnv } from "./sessions-options";
 
-/** 一条路由：Butler 经 hub 的 stdin 发来（一行一个 JSON）。 */
+/** 一条路由：Shipherd 经 hub 的 stdin 发来（一行一个 JSON）。 */
 export type HubRoute = { server: "memory"; scope: string } | { server: "sessions"; env: Record<string, string>; from: string | null };
 export type HubCommand = { op: "add"; token: string; route: HubRoute } | { op: "remove"; token: string };
 
@@ -24,7 +24,7 @@ interface SessionsLike {
 
 interface Route {
   handler: RpcHandler;
-  /** 路由撤掉时：butler-sessions 撤回没人再等的请求（和 stdio 时进程退出一样）。 */
+  /** 路由撤掉时：shipherd-sessions 撤回没人再等的请求（和 stdio 时进程退出一样）。 */
   dispose?: () => void;
 }
 
@@ -55,7 +55,7 @@ export class Hub {
       this.routes.delete(cmd.token);
       return;
     }
-    // 同一个 token 再发一次（hub 重启后 Butler 重发路由）：先撤掉旧的。
+    // 同一个 token 再发一次（hub 重启后 Shipherd 重发路由）：先撤掉旧的。
     this.routes.get(cmd.token)?.dispose?.();
     const route = cmd.route;
     if (route.server === "memory") {
@@ -82,7 +82,7 @@ export class Hub {
     }
   }
 
-  /** 退出前：撤回所有 butler-sessions 的请求，关掉所有记忆后端。 */
+  /** 退出前：撤回所有 shipherd-sessions 的请求，关掉所有记忆后端。 */
   async closeAll(): Promise<void> {
     for (const r of this.routes.values()) r.dispose?.();
     this.routes.clear();

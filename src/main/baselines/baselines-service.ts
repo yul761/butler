@@ -557,13 +557,13 @@ function carryInferred(out: ScanOutput, prev: RepoBaseline): ScanOutput {
   return { ...out, checks, profile: { ...out.profile, projects } };
 }
 
-/** 一条现有检查 → run_command 草稿（设计 §4.2）。子目录项目先 cd 过去，单个文件用 "$OLDPWD/$BUTLER_CHECK_FILE"（路径一直在引号里）。 */
+/** 一条现有检查 → run_command 草稿（设计 §4.2）。子目录项目先 cd 过去，单个文件用 "$OLDPWD/$SHIPHERD_CHECK_FILE"（路径一直在引号里）。 */
 export function draftInput(c: BaselineCheck): CheckInput {
-  const perFile = !!c.fileCommand && c.butlerStage === "edit";
+  const perFile = !!c.fileCommand && c.shipherdStage === "edit";
   let command: string;
   if (perFile) {
     const fc = c.fileCommand!;
-    command = c.dir ? `cd ${q(c.dir)} && ${fc.split("{file}").join('"$OLDPWD/$BUTLER_CHECK_FILE"')}` : fc;
+    command = c.dir ? `cd ${q(c.dir)} && ${fc.split("{file}").join('"$OLDPWD/$SHIPHERD_CHECK_FILE"')}` : fc;
   } else command = c.dir ? `cd ${q(c.dir)} && ${c.command}` : c.command;
   const prefix = c.dir ? `${c.dir}/` : "";
   const exts = c.exts ?? [];

@@ -155,9 +155,9 @@ export interface CostBreakerView {
   toModel: string | null;
   trippedAt: number | null;
   pausedAt: number | null;
-  /** 暂停后还在花钱，Butler 结束了它的终端。 */
+  /** 暂停后还在花钱，Shipherd 结束了它的终端。 */
   stoppedAt: number | null;
-  /** 用户自己往暂停的终端里打了字（自己接手了，Butler 不再结束它）。 */
+  /** 用户自己往暂停的终端里打了字（自己接手了，Shipherd 不再结束它）。 */
   takenOver: boolean;
 }
 

@@ -3,8 +3,8 @@ import path from "node:path";
 import { execText, type ExecText } from "../util/exec";
 import { pathKey } from "../util/env";
 
-const START = "__BUTLER_PATH_START__";
-const END = "__BUTLER_PATH_END__";
+const START = "__SHIPHERD_PATH_START__";
+const END = "__SHIPHERD_PATH_END__";
 
 /** 从 Finder/开始菜单启动的 GUI 应用拿不到用户 shell 配置里的 PATH，所以要问登录 shell。 */
 export async function readLoginShellPath(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, run: ExecText = execText): Promise<string> {

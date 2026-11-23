@@ -23,7 +23,7 @@ const merge: Turn = { owner: "you", kind: "merge", risk: null };
 const review: Turn = { owner: "you", kind: "review", author: "bob", title: "Fix", url: "https://gh.example/acme/app/pull/12" };
 const stuck = (sessionId: string | null): Turn => ({ owner: "you", kind: "stuck", source: "silent", detail: null, sessionId });
 const unattended = (canSend: boolean): Turn => ({ owner: "you", kind: "unattended", why: "ci_failing", canSend, sessionId: "s1" });
-const butler: Turn = { owner: "you", kind: "butler", notice: { kind: "lessons_paused" } as never };
+const shipherd: Turn = { owner: "you", kind: "shipherd", notice: { kind: "lessons_paused" } as never };
 const agent: Turn = { owner: "agent", kind: "working", sessionId: "s1" };
 const ci: Turn = { owner: "external", kind: "ci_running", names: [] };
 const pr = { repo: "acme/app", number: 12, title: "Fix", url: "https://gh.example/acme/app/pull/12" };
@@ -39,7 +39,7 @@ describe("turnTone", () => {
     expect(turnTone(merge)).toBe("merge");
     expect(turnTone(stuck("s"))).toBe("stuck");
     expect(turnTone(unattended(true))).toBe("stuck");
-    expect(turnTone(butler)).toBe("butler");
+    expect(turnTone(shipherd)).toBe("shipherd");
     expect(turnTone(agent)).toBe("agent");
     expect(turnTone(ci)).toBe("external");
     expect(turnTone({ owner: "done", kind: "merged" })).toBe("done");
@@ -51,12 +51,12 @@ describe("youCards", () => {
   it("keeps only your items, ordered by the layer-1 urgency and then oldest first", () => {
     const input = [
       item(merge, { since: 5 }), item(agent), item(review, { since: 3 }), item(answer(), { since: 9 }), item(ci),
-      item(answer(), { since: 2 }), item(butler, { since: 1 }), item(unattended(true), { since: 1 }), item(stuck("s"), { since: 4 }),
+      item(answer(), { since: 2 }), item(shipherd, { since: 1 }), item(unattended(true), { since: 1 }), item(stuck("s"), { since: 4 }),
     ];
     const copy = [...input];
     const out = youCards(input);
     expect(out.map((i) => [i.turn.kind, i.since])).toEqual([
-      ["answer", 2], ["answer", 9], ["stuck", 4], ["butler", 1], ["unattended", 1], ["review", 3], ["merge", 5],
+      ["answer", 2], ["answer", 9], ["stuck", 4], ["shipherd", 1], ["unattended", 1], ["review", 3], ["merge", 5],
     ]);
     expect(input).toEqual(copy);
     expect(YOU_KIND_ORDER[0]).toBe("answer");
@@ -93,7 +93,7 @@ describe("cardActions", () => {
     expect(ids(item(answer({ askId: null })))).toEqual(["look*"]);
     expect(ids(item(answer({ options: [] })))).toEqual(["look*"]);
   });
-  it("merge, review, stuck, unattended, butler", () => {
+  it("merge, review, stuck, unattended, shipherd", () => {
     expect(ids(item(merge, { pr }))).toEqual(["openPr*", "look"]);
     expect(ids(item(merge))).toEqual(["look*"]);
     expect(ids(item(review, { ticketKey: null, pr }))).toEqual(["openPr*"]);
@@ -108,7 +108,7 @@ describe("cardActions", () => {
     expect(ids(item(unattended(true), { pr }))).toEqual(["send*", "look"]);
     expect(ids(item(unattended(true)))).toEqual(["look*"]);
     expect(ids(item(unattended(false), { pr }))).toEqual(["look*"]);
-    expect(ids(item(butler))).toEqual([]);
+    expect(ids(item(shipherd))).toEqual([]);
   });
 });
 
@@ -124,7 +124,7 @@ describe("prUrl and lookTarget", () => {
     expect(lookTarget(item(merge, { pr }))).toEqual({ page: "ticket", key: "BTL-1", sessionId: null });
     // 没有 ticket 的提问：feature 的总控，或者全局总控
     expect(lookTarget(item(answer(), { ticketKey: null, featureId: 4 }))).toEqual({ page: "feature", id: 4, sessionId: "s1" });
-    expect(lookTarget(item(answer(), { ticketKey: null }))).toEqual({ page: "butler", sessionId: "s1" });
+    expect(lookTarget(item(answer(), { ticketKey: null }))).toEqual({ page: "shipherd", sessionId: "s1" });
   });
 });
 
@@ -156,7 +156,7 @@ describe("locationOf", () => {
     expect(l.age).toBe(S.hm.reviewAgo(S.durationMinutes(12)));
   });
   it("a question with no ticket names the overseer when it has no scope", () => {
-    expect(locationOf(item(answer(), { ticketKey: null }), ctx, now, S).path).toBe(S.butlerNav);
+    expect(locationOf(item(answer(), { ticketKey: null }), ctx, now, S).path).toBe(S.shipherdNav);
     expect(locationOf(item(answer(), { ticketKey: null, featureId: 2 }), ctx, now, S).path).toBe("Feature名");
   });
   it("an unknown start time has no age", () => {
@@ -245,7 +245,7 @@ describe("runningRows", () => {
 
   it("two coordinators working on one page get different keys", () => {
     const loose = (sessionId: string, featureId: number | null) => it0({ owner: "agent", kind: "working", sessionId }, { ticketKey: null, featureId });
-    const rows = runningRows([loose("butler-ctl", null), loose("feature-ctl", 10)], S, 2000);
+    const rows = runningRows([loose("shipherd-ctl", null), loose("feature-ctl", 10)], S, 2000);
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((r) => r.key)).size).toBe(2);
   });
@@ -266,8 +266,8 @@ describe("isNoWork", () => {
     expect(isNoWork(0, [])).toBe(true);
     expect(isNoWork(0, null)).toBe(true);
     expect(isNoWork(1, [])).toBe(false);
-    // Butler 自己的提醒（用量受限、复盘暂停）不属于任何 ticket：工作区空着也要能看到。
-    expect(isNoWork(0, [item(butler, { ticketKey: null })])).toBe(false);
+    // Shipherd 自己的提醒（用量受限、复盘暂停）不属于任何 ticket：工作区空着也要能看到。
+    expect(isNoWork(0, [item(shipherd, { ticketKey: null })])).toBe(false);
     // 只是告知的提醒（检查自动升级了，可以撤销）不在板上，在「运行情况」里：有它也不算空。
     expect(isNoWork(0, [], 1)).toBe(false);
   });
@@ -275,13 +275,13 @@ describe("isNoWork", () => {
 
 describe("cardKey", () => {
   it("tells apart cards that share ticket, PR and kind", () => {
-    // 同一个 session 接连问了两句（第二句在 moreAsks 里），总控的两句（ticketKey 是 null），同一类的两条 Butler 提醒。
+    // 同一个 session 接连问了两句（第二句在 moreAsks 里），总控的两句（ticketKey 是 null），同一类的两条 Shipherd 提醒。
     const keys = [
       item(answer({ askId: 7 })), item(answer({ askId: 8 })),
       item(answer({ askId: 9, sessionId: "c1" }), { ticketKey: null }), item(answer({ askId: 10, sessionId: "c1" }), { ticketKey: null }),
       item(answer({ askId: null, sessionId: "s2" })), item(answer({ askId: null, sessionId: "s3" })),
-      item({ owner: "you", kind: "butler", notice: { kind: "intake", item: { key: "a" } } as never }, { ticketKey: null }),
-      item({ owner: "you", kind: "butler", notice: { kind: "intake", item: { key: "b" } } as never }, { ticketKey: null }),
+      item({ owner: "you", kind: "shipherd", notice: { kind: "intake", item: { key: "a" } } as never }, { ticketKey: null }),
+      item({ owner: "you", kind: "shipherd", notice: { kind: "intake", item: { key: "b" } } as never }, { ticketKey: null }),
       item(stuck("s4")), item(stuck("s5")),
       item(merge, { pr }), item(merge, { pr: { ...pr, number: 13 } }),
     ].map(cardKey);

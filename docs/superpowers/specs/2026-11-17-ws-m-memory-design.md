@@ -7,20 +7,20 @@ Hard constraint from the maintainer: **do not solve this by limiting how many ta
 
 ## 0. What was measured before designing (H's input)
 
-A read-only `ps -A -o pid=,ppid=,rss=,args=` of the maintainer's machine while five real Butler sessions were running (none of them touched):
+A read-only `ps -A -o pid=,ppid=,rss=,args=` of the maintainer's machine while five real Shipherd sessions were running (none of them touched):
 
 | Part | RSS | Share of the session trees |
 |---|---|---|
 | `claude` processes | 2695 MB | 41.8% |
 | MCP children (all) | 3736 MB | 57.9% |
-| of which Butler's own MCP (3 × statecore-mcp at 79–83 MB, butler-sessions at 62 MB per session) | ~300 MB per session | ~23% |
-| of which the user's own MCP from their Claude config (e.g. a browser-devtools server at ~330 MB, a global statecore at ~97 MB) | — | not Butler's to share |
-| Butler main process | 412 MB | — |
+| of which Shipherd's own MCP (3 × statecore-mcp at 79–83 MB, shipherd-sessions at 62 MB per session) | ~300 MB per session | ~23% |
+| of which the user's own MCP from their Claude config (e.g. a browser-devtools server at ~330 MB, a global statecore at ~97 MB) | — | not Shipherd's to share |
+| Shipherd main process | 412 MB | — |
 | Electron helpers (renderer, GPU, utility) | 349 MB | — |
 
 Conclusions:
-- MCP is a material share, and Butler's own part (~300 MB per session, linear in sessions) can be shared. **H is implemented** (§8).
-- The user's own MCP servers come from their Claude Code config, which Butler must never change (CONTRIBUTING). Butler only shows them in the breakdown and lists them in the advice (§10).
+- MCP is a material share, and Shipherd's own part (~300 MB per session, linear in sessions) can be shared. **H is implemented** (§8).
+- The user's own MCP servers come from their Claude Code config, which Shipherd must never change (CONTRIBUTING). Shipherd only shows them in the breakdown and lists them in the advice (§10).
 - `claude` itself is ~540 MB per session. Only hibernation (B / C) gets that back.
 
 ## 1. Process tables on both platforms (A, F, E, I share this)
@@ -34,7 +34,7 @@ One module, `src/main/procs/proc-table.ts`, reads the whole process table once p
 
 Classification of a process inside a session tree (`classify(args)`), in order:
 1. `claude`: the tree root (the pty's pid), plus any `claude` executable.
-2. `mcp_butler`: our launcher's scripts (`statecore-mcp.cjs`, `butler-sessions-mcp.cjs`, `mcp-hub.cjs`).
+2. `mcp_shipherd`: our launcher's scripts (`statecore-mcp.cjs`, `shipherd-sessions-mcp.cjs`, `mcp-hub.cjs`).
 3. `mcp_other`: any other direct child of `claude` that isn't a shell. Claude Code starts MCP servers as direct children, and `proc-tree.ts` already uses that rule.
 4. `shell`: sh/bash/zsh/fish/pwsh/cmd/conhost/OpenConsole.
 5. `watcher`: args match `--watch`, `watch`, `nodemon`, `tsserver`, `vitest` without `run`, `jest --watch`, `chokidar`, `esbuild --watch`, `tsc -w`.
@@ -43,17 +43,17 @@ Classification of a process inside a session tree (`classify(args)`), in order:
 
 The rules are a list of plain regexes in one file with unit tests on both path styles.
 
-On Windows, ConPTY's `conhost.exe` / `OpenConsole.exe` are children of the Butler main process, not of `claude`, so they can't be attributed to one session reliably. They go into a "Butler terminals" bucket on the Butler line. This decision is recorded so the Windows numbers aren't read as missing.
+On Windows, ConPTY's `conhost.exe` / `OpenConsole.exe` are children of the Shipherd main process, not of `claude`, so they can't be attributed to one session reliably. They go into a "Shipherd terminals" bucket on the Shipherd line. This decision is recorded so the Windows numbers aren't read as missing.
 
 ## 2. A: measurement
 
 - **Sampler** (`src/main/procs/memory-monitor.ts`): every 60 s (and on demand when the Now page opens), take one process table and one `app.getAppMetrics()`.
-  - For each open Butler terminal, sum its tree (root = `pty.pid(termId)`) per class. Process count and the largest processes are kept (top 8, with class and short args) for the breakdown.
-  - Butler itself: main, renderer(s), GPU, utility processes from `getAppMetrics()` (`workingSetSize`, KB, both platforms). Butler-launched headless `claude -p` runs and the shared MCP hub are counted on the Butler line too.
+  - For each open Shipherd terminal, sum its tree (root = `pty.pid(termId)`) per class. Process count and the largest processes are kept (top 8, with class and short args) for the breakdown.
+  - Shipherd itself: main, renderer(s), GPU, utility processes from `getAppMetrics()` (`workingSetSize`, KB, both platforms). Shipherd-launched headless `claude -p` runs and the shared MCP hub are counted on the Shipherd line too.
   - System: total and free memory (§4).
-- **Live view:** the latest sample is kept in memory and pushed to the renderer with the Now view (the Now page builds from `NowInput`). Each session row shows a total (e.g. `1.2 GB`); clicking it opens a breakdown: claude / Butler MCP / other MCP / shells / watchers / dev servers / other, plus the top processes.
-- **History:** table `memory_samples` (append-only migration) gets one row per session plus one Butler row and one system row every 5 minutes (every 5th sample), and is pruned to 14 days on the hourly tick. Each session row also stores the latest total in `sessions.mem_kb` / `mem_at`, so closed and hibernated rows still show "last seen at 900 MB".
-- **Now page header:** a small card shows Butler + sessions total, system free memory, the Butler-MCP share, and a 24 h sparkline (inline SVG, no chart library) of the total from `memory_samples`.
+- **Live view:** the latest sample is kept in memory and pushed to the renderer with the Now view (the Now page builds from `NowInput`). Each session row shows a total (e.g. `1.2 GB`); clicking it opens a breakdown: claude / Shipherd MCP / other MCP / shells / watchers / dev servers / other, plus the top processes.
+- **History:** table `memory_samples` (append-only migration) gets one row per session plus one Shipherd row and one system row every 5 minutes (every 5th sample), and is pruned to 14 days on the hourly tick. Each session row also stores the latest total in `sessions.mem_kb` / `mem_at`, so closed and hibernated rows still show "last seen at 900 MB".
+- **Now page header:** a small card shows Shipherd + sessions total, system free memory, the Shipherd-MCP share, and a 24 h sparkline (inline SVG, no chart library) of the total from `memory_samples`.
 - **Setting:** `memoryMonitor` (default on). Sampling is read-only and cheap: one `ps` per minute on macOS, one PowerShell call per minute on Windows.
 
 ## 3. B: hibernate idle sessions
@@ -68,7 +68,7 @@ New columns on `sessions` (append-only migration): `hibernated_at INTEGER`, `hib
 
 Decided per head on each tick (`hibernation.ts`, pure function `waitState`):
 - `you`: "需要你" has a reason (`needsYou.reasonOf`), or the session has a pending ask_user (`inboxService.hasPendingDecision`). Permission dialogs and AskUserQuestion on screen are **excluded**, not `you` (below).
-- `ci`: the ticket has an open PR (or a branch without one) with `ci === "pending"` (same rule as `waitingOnButler` in cleanup), or the session is queued in the merge gate.
+- `ci`: the ticket has an open PR (or a branch without one) with `ci === "pending"` (same rule as `waitingOnShipherd` in cleanup), or the session is queued in the merge gate.
 - `review`: the ticket has an open PR, CI isn't pending, and review isn't approved.
 - `idle`: anything else that is stopped.
 
@@ -78,7 +78,7 @@ Each state has its own minutes setting: `hibernateYouMinutes` 30, `hibernateCiMi
 
 Each rule below is a unit test:
 - pinned (the "钉住" toggle on the Now row and the ticket page's session row);
-- not a Butler session, a fix session (cannot be resumed by id), or a lesson run;
+- not a Shipherd session, a fix session (cannot be resumed by id), or a lesson run;
 - no transcript on disk yet: `--resume` would fail, so it is precondition-checked with `transcriptState(id) === "present"`;
 - working (`isWorking`, including background shells through `proc-tree`), or `activity === null` (unknown counts as working, as in cleanup);
 - an approval or dialog on screen (`pty.screenNeedsUser`, `permissionShowing`): `--resume` drops a pending permission prompt;
@@ -102,12 +102,12 @@ The idle time is the same as cleanup's `idleSince`: the latest of head activity,
 ### Waking
 
 There is one entry point, `Hibernator.wake(headId, why)`. It is idempotent: a second call while a wake is in flight returns the same promise. It does this:
-1. Reopen through the session's own resume path: a ticket uses `open({ticketKey, sessionId})`, a feature coordinator `openFeature({featureId, sessionId})`, an epic `openEpic({epicId, sessionId})`, Butler `openButler({sessionId})`. All of them already use `--resume <head id>` when the transcript exists.
+1. Reopen through the session's own resume path: a ticket uses `open({ticketKey, sessionId})`, a feature coordinator `openFeature({featureId, sessionId})`, an epic `openEpic({epicId, sessionId})`, Shipherd `openShipherd({sessionId})`. All of them already use `--resume <head id>` when the transcript exists.
 2. `SessionService` gets a hook `onOpened(headId)`. Any successful open of a chain clears `hibernated_at`, so a user click, `openAndSend` or patrol also "wake" it.
 3. Wait for `SessionStart` (`pty.started`), then idle with no dialog. The timeout is the deliver start wait: 60 s.
-4. Refresh activity and call `sessionStopped(head)`. This is the same function the Stop hook runs. It flushes the hold watcher (merge gate), the inbox (answers and reports), the Butler patrol and CI results. So every delivery path redelivers what it had to hold back.
+4. Refresh activity and call `sessionStopped(head)`. This is the same function the Stop hook runs. It flushes the hold watcher (merge gate), the inbox (answers and reports), the Shipherd patrol and CI results. So every delivery path redelivers what it had to hold back.
 
-**Resume failure.** The terminal exits before `SessionStart`, or there is no `SessionStart` within 60 s. Then Butler:
+**Resume failure.** The terminal exits before `SessionStart`, or there is no `SessionStart` within 60 s. Then Shipherd:
 - clears `hibernated_at` and records `wake_error` and `wake_error_at`;
 - logs the failure;
 - shows a Now-page notice: "唤醒 X 失败：claude --resume 没有启动。点开重试，或新开一个 session".
@@ -124,7 +124,7 @@ The session then behaves exactly like a closed 2.1.0 session: CI results aren't 
 | Hold watcher (`isOpen`) | `gateTerm !== null` | Or hibernated. A hibernated waiter isn't treated as gone. |
 | Control `send_message` / `start_feature` hand-over | `runningCoordinator` / `runningEpicSession` | Hibernated counts as not running, so the existing `openAndSend` / resume path runs. Resuming a hibernated head is the same `--resume` path, and the open hook clears hibernation. No change in the control files beyond that. |
 | `pty.deliver` | — | Only ever called with a termId the guard returned, so the guard covers it. |
-| Butler patrol | `runningButler` | When the Butler session is hibernated, patrol's `open` resumes it (existing behaviour). |
+| Shipherd patrol | `runningShipherd` | When the Shipherd session is hibernated, patrol's `open` resumes it (existing behaviour). |
 | User opens it | — | The renderer's existing resume (`open({ticketKey, sessionId})`). TerminalPane shows "已休眠" with a wake button, and wakes automatically when the user switches to a hibernated pane. |
 
 Task-count limits (`openTerminalCount`, `featureTerminalCount`, the coordinator's `MAX_RUNNING_*`) count hibernated sessions as running, so hibernating never lets a coordinator start more work than before. *(Superseded by workstream W: the fixed limits are gone and new sessions are admitted by available memory. A hibernated session holds no memory and is not counted; waking one is never refused but counts as just opened. See `2026-11-18-ws-w-memory-admission-design.md`, section 4. `openTerminalCount` still counts hibernated sessions for the merge gate.)*
@@ -147,7 +147,7 @@ Task-count limits (`openTerminalCount`, `featureTerminalCount`, the coordinator'
 
 ## 6. E: background priority
 
-- Applies to the trees of terminals that are not visible and not pinned. It is re-applied each sample to the tree's current pids, and reverted when the terminal becomes visible, gets pinned, or starts working. Butler tracks which pids it changed, and doesn't touch processes it didn't change.
+- Applies to the trees of terminals that are not visible and not pinned. It is re-applied each sample to the tree's current pids, and reverted when the terminal becomes visible, gets pinned, or starts working. Shipherd tracks which pids it changed, and doesn't touch processes it didn't change.
 - **macOS:** `taskpolicy -b -p <pid>` for invisible and idle trees, and `taskpolicy -B -p <pid>` to revert. Verified on this machine: reversible without root (pri 4 → 31 → 4). `os.setPriority`/nice is **not** used on macOS. Raising nice back needs root (verified: `ERR_SYSTEM_ERROR`), so a session the user comes back to would stay slow forever. Invisible but **working** trees are left at normal priority on macOS: `PRIO_DARWIN_BG` throttles CPU and disk hard and would slow the user's background builds and tests; there is no milder reversible knob.
 - **Windows:** invisible trees get `os.setPriority(pid, PRIORITY_BELOW_NORMAL)`. Invisible and idle trees also get EcoQoS (`SetProcessInformation(ProcessPowerThrottling, EXECUTION_SPEED)`), via one PowerShell P/Invoke call per change batch. Reverting means `PRIORITY_NORMAL` plus EcoQoS off. An EcoQoS failure (old Windows) is logged once and BelowNormal still applies.
 - **After review:**
@@ -160,43 +160,43 @@ Task-count limits (`openTerminalCount`, `featureTerminalCount`, the coordinator'
 
 ## 7. F: orphan cleanup
 
-- Butler-owned means a process that was recorded as a descendant of a Butler terminal's tree in some sample (pid + start time + args). Also the shared MCP hub and headless runs, which have their own handles.
+- Shipherd-owned means a process that was recorded as a descendant of a Shipherd terminal's tree in some sample (pid + start time + args). Also the shared MCP hub and headless runs, which have their own handles.
 - Records accumulate across samples: each process stays recorded until it exits (matched by pid, start time and args), not just while it is in the latest tree.
 - Adopted processes are found again: a process whose parent is a recorded live process, or (macOS) whose process group leader is a recorded process, is recorded too. A `nohup … &` job keeps its shell's process group after launchd adopts it, and a group id isn't reused while the group exists. A group whose leader pid now belongs to a different process is not taken. Children of a recorded parent that has exited are **not** adopted by ppid: Windows reuses pids quickly, and the parent can't be told apart from a newer process that had the same pid.
 - Known gaps: on macOS, a job whose launching shell exited before any sample saw it (Claude's Bash tool runs commands in their own session with no controlling tty, and its environment isn't readable with `ps -E`, so neither can stand in). On Windows, a process whose parent exited before any sample saw it.
-- When a terminal exits (closed, ended, hibernated, Butler quit), Butler waits 5 seconds, adopts once more against a fresh table, and ends each recorded process that is still alive, still matches (pid, start time, args), and is not under a live Butler tree: SIGTERM, then SIGKILL after 5 seconds; on Windows `taskkill`, then `taskkill /F`. `/T` is not used, because taskkill follows stale ppids; every descendant is a checked candidate of its own. Each one is logged.
+- When a terminal exits (closed, ended, hibernated, Shipherd quit), Shipherd waits 5 seconds, adopts once more against a fresh table, and ends each recorded process that is still alive, still matches (pid, start time, args), and is not under a live Shipherd tree: SIGTERM, then SIGKILL after 5 seconds; on Windows `taskkill`, then `taskkill /F`. `/T` is not used, because taskkill follows stale ppids; every descendant is a checked candidate of its own. Each one is logged.
 - Exceptions: watchers and dev servers spared by a hibernation (I), while that session stays hibernated. When it is woken, ended or deleted, they become ordinary orphans and are cleaned up.
-- At startup the previous run's records (persisted as JSON under `~/.butler/procs/owned.json`, rewritten each sample) are swept once. This covers Butler crashes.
-- Setting `orphanCleanup` (on). It only ever kills processes Butler itself saw under its own sessions, so it can't hit the user's other work.
+- At startup the previous run's records (persisted as JSON under `~/.shipherd/procs/owned.json`, rewritten each sample) are swept once. This covers Shipherd crashes.
+- Setting `orphanCleanup` (on). It only ever kills processes Shipherd itself saw under its own sessions, so it can't hit the user's other work.
 
 ## 8. H: shared MCP
 
 ### Shape
 
-One **MCP hub** child process (`memory-mcp/hub-entry.ts` → `mcp-hub.cjs`, run with Butler's Electron as Node like today's servers) serves Butler's MCP servers to every session over **loopback HTTP** (MCP Streamable HTTP, JSON responses only, stateless):
-- `--mcp-config` entries become `{"type":"http","url":"http://127.0.0.1:<port>/mcp/<token>"}`. The proxy per session is just a route token. **No per-session processes remain** for Butler's servers. A stdio proxy per session was rejected: each proxy is a Node/Electron process with a 35–60 MB baseline, which gives back too little.
-- **Routes:** Butler generates a random 32-byte token per (terminal, server) and sends the route table to the hub over the hub's stdin as JSON lines. A route is `{server:"memory", scope}` or `{server:"sessions", env, from}`. The per-terminal config file holds the tokens (0600, under `mcp/terms/`). The sessions server's caller identity (`from`), which today comes from `BUTLER_SESSION` in the child's env, is carried by the route.
+One **MCP hub** child process (`memory-mcp/hub-entry.ts` → `mcp-hub.cjs`, run with Shipherd's Electron as Node like today's servers) serves Shipherd's MCP servers to every session over **loopback HTTP** (MCP Streamable HTTP, JSON responses only, stateless):
+- `--mcp-config` entries become `{"type":"http","url":"http://127.0.0.1:<port>/mcp/<token>"}`. The proxy per session is just a route token. **No per-session processes remain** for Shipherd's servers. A stdio proxy per session was rejected: each proxy is a Node/Electron process with a 35–60 MB baseline, which gives back too little.
+- **Routes:** Shipherd generates a random 32-byte token per (terminal, server) and sends the route table to the hub over the hub's stdin as JSON lines. A route is `{server:"memory", scope}` or `{server:"sessions", env, from}`. The per-terminal config file holds the tokens (0600, under `mcp/terms/`). The sessions server's caller identity (`from`), which today comes from `SHIPHERD_SESSION` in the child's env, is carried by the route.
 - **Memory servers:** the hub keeps one StateCore embedded backend per scope (lazy, closed after 30 min unused) via `statecore-mcp/lib`'s `createEmbeddedBackend`. The six tools (remember, recall, facts, why, forget, handoff), their descriptions, input schemas, instructions and result shapes are reproduced from statecore-mcp 1.1.0. A **contract test** starts the real `statecore-mcp` over stdio and compares its `initialize` and `tools/list` with the hub's; it also runs remember / recall / handoff on both against temp data dirs. An upgrade of statecore-mcp that changes the tool layer fails the test. The env is cleaned exactly as `memory-mcp/entry.ts` does (no model keys, R1), and the lint allow-list for StateCore gets this one entry file.
 - **Sessions server:** one `SessionsServer` instance per route (scope + from), the same class as today. `withdrawAll()` runs when a route is removed (terminal exit), the same as today's process exit.
 - **Network:** the listener lives in `src/main/gateway/loopback-mcp.ts`, the only place network builtins are allowed. It binds `127.0.0.1` only and rejects requests whose `Host` isn't `127.0.0.1:<port>` or that carry an `Origin` header (DNS-rebinding and browser defence). It returns 404 for unknown tokens (never 401, so the client doesn't start OAuth discovery), 405 for GET/DELETE (allowed by the spec for servers without streams) and 202 for notifications. It is added to the gateway's public modules.
-- **Lifecycle:** Butler starts the hub lazily on the first session open with the setting on. It restarts it with back-off if it dies, on the same port when free, and re-sends all routes. Because the server is stateless (no `Mcp-Session-Id`), clients continue with their next request. If the hub can't start, sessions opened meanwhile get today's stdio config, and the failure is logged and shown as a notice.
+- **Lifecycle:** Shipherd starts the hub lazily on the first session open with the setting on. It restarts it with back-off if it dies, on the same port when free, and re-sends all routes. Because the server is stateless (no `Mcp-Session-Id`), clients continue with their next request. If the hub can't start, sessions opened meanwhile get today's stdio config, and the failure is logged and shown as a notice.
 
 ### Default
 
-`sharedMcp` defaults **off** in 3.0.0. Reason: the HTTP transport path in the real Claude Code can't be exercised by tests (tests never run a real `claude`). A silent transport change for every session isn't acceptable before the maintainer has run it. The Now page's memory card shows the measured Butler-MCP total with "开启共享 MCP 约可省 X" when it's off. Turning it on affects sessions opened afterwards.
+`sharedMcp` defaults **off** in 3.0.0. Reason: the HTTP transport path in the real Claude Code can't be exercised by tests (tests never run a real `claude`). A silent transport change for every session isn't acceptable before the maintainer has run it. The Now page's memory card shows the measured Shipherd-MCP total with "开启共享 MCP 约可省 X" when it's off. Turning it on affects sessions opened afterwards.
 
 ## 9. G: refresh by memory
 
-- Setting `refreshMemoryMb` (default 2048; 0 = off). When a sample shows a session's `claude` process (not the whole tree) above the line, Butler calls `refresher.refresh(id, "auto")` with a log reason `memory`. The refresher's own guard, cooldown and "next stop" rules decide the moment, so it waits for the next idle point.
+- Setting `refreshMemoryMb` (default 2048; 0 = off). When a sample shows a session's `claude` process (not the whole tree) above the line, Shipherd calls `refresher.refresh(id, "auto")` with a log reason `memory`. The refresher's own guard, cooldown and "next stop" rules decide the moment, so it waits for the next idle point.
 - If the next sample after a finished memory refresh still shows the process above 80% of the line, the process itself is restarted (`Hibernator.restart`: hibernate, then wake immediately, with the same exclusions and the same `--resume`). `/clear` drops context, but V8 doesn't always return the memory; a restart does. Each chain gets at most one memory restart per 6 hours.
 
 ## 10. I and J
 
 - **I:** the breakdown (§2) lists watchers and dev servers per session with their size. `hibernateEndWatchers` (on) decides whether hibernation ends them (§3). A hook for workstream E2's repo profile: `src/main/procs/watcher-policy.ts` exports `setWatcherPolicy(fn: (repoPath) => "end" | "keep" | null)` (default: null, meaning use the setting). It also exports `watcherGuideLine(repoPath)`, which the session guide appends when the profile says "don't keep watchers running". E2 only has to register the function.
 - **J:** a "内存与性能建议 / Memory and performance tips" section in General settings and in `docs/configuration*.md`, with platform-specific text:
-  - **Windows:** Defender exclusions for the worktree root, `node_modules`, `.git` and `~/.butler`; page file size ("system managed", or at least 1.5× RAM).
+  - **Windows:** Defender exclusions for the worktree root, `node_modules`, `.git` and `~/.shipherd`; page file size ("system managed", or at least 1.5× RAM).
   - **macOS:** add the worktree root to Spotlight privacy; avoid third-party antivirus real-time scanning of those folders. Swap is managed by macOS, so keep 15–20% of the disk free.
-  - **Both:** the user's own heavy MCP servers (named from the measurement when present) load in every session. Remove them from the user's Claude config if they aren't needed. Butler only says this and never changes that config.
+  - **Both:** the user's own heavy MCP servers (named from the measurement when present) load in every session. Remove them from the user's Claude config if they aren't needed. Shipherd only says this and never changes that config.
 
 ## 11. Settings (all documented in both config docs; strings in both languages)
 
@@ -232,16 +232,16 @@ These are global (machine-level) settings. They don't go through 4.2's layered s
 Differences from the design above, and edge cases left as they are:
 
 - **Killing.** Every process of the tree is checked (pid + start time + command line) and signalled on its own, on Windows too: `taskkill /PID <pid>` and then `taskkill /PID <pid> /F` for survivors. `/T` is never used, because taskkill finds children by ppid and can reach processes that are no longer related.
-- **Spared watchers** (`hibernateEndWatchers` off) are kept in orphan cleanup's `owned.json` with their owner. Waking, opening, hiding or a failed wake releases them, which ends them like ordinary orphans. A Butler restart ends them in the startup sweep, because their session is no longer running.
+- **Spared watchers** (`hibernateEndWatchers` off) are kept in orphan cleanup's `owned.json` with their owner. Waking, opening, hiding or a failed wake releases them, which ends them like ordinary orphans. A Shipherd restart ends them in the startup sweep, because their session is no longer running.
 - **Wake failure** sets `wake_error`, marks the session button with **!** (the reason is in its tooltip) and keeps the session on the Now page as a danger row until it is opened or hidden. Failures that can pass (`ticket_busy`, `claude_missing`, `branch_mismatch`, or `open` throwing) keep `hibernated_at`, so deliveries still wait for the session and automatic wakes retry after 10 minutes. Every other failure clears `hibernated_at`: the resumed claude exits or does not start within 60 s, the ticket or session is gone, or `open` returns a different session. A user open always retries.
-- **One Butler control.** `openButler` returns the running Butler control whatever session was asked for. A wake therefore checks that the terminal it got belongs to the chain it wanted; if it does not, the wake has failed. Opening another Butler conversation also retires any hibernated one, so deliveries stop trying to wake it.
+- **One Shipherd control.** `openShipherd` returns the running Shipherd control whatever session was asked for. A wake therefore checks that the terminal it got belongs to the chain it wanted; if it does not, the wake has failed. Opening another Shipherd conversation also retires any hibernated one, so deliveries stop trying to wake it.
 - **Hiding** a hibernated session, or a coordinator's `end_session` on it, clears its hibernation, so nothing wakes it afterwards. `end_session` also clears its waiting mark. `list_sessions` shows `hibernated: true` for these sessions. The limit errors say that hibernated sessions count and can be ended. Without this, a coordinator whose children all hibernated could not open more sessions.
 - **Counting.** The session limits count hibernated heads. A wake through `send_message` or `start_feature` is exempt, because the coordinator is already counted. The archive check (`hasFeatureTerminal`, `hasEpicTerminal`) counts only open terminals, because a hibernated session has no visible terminal to close.
-- **Exit bookkeeping.** `SessionEnd` from a hibernated session keeps its waiting mark, the same as `handleExit`. `markStarted` is keyed by the terminal (`BUTLER_SESSION`), so a `--resume` that changes the session id still counts as started. If the terminal is still open after the kill wait, the root gets one more forced kill. If it still has not exited, the hibernation is rolled back, so a live terminal is never treated as hibernated when it exits.
+- **Exit bookkeeping.** `SessionEnd` from a hibernated session keeps its waiting mark, the same as `handleExit`. `markStarted` is keyed by the terminal (`SHIPHERD_SESSION`), so a `--resume` that changes the session id still counts as started. If the terminal is still open after the kill wait, the root gets one more forced kill. If it still has not exited, the hibernation is rolled back, so a live terminal is never treated as hibernated when it exits.
 - **Panes.** A visible pane auto-wakes once per hibernation and resets when the session wakes. Its banner shows the reason the session was hibernated.
 - **Needs-you** keeps the last value for a hibernated head (the judge cannot run without a terminal), so it still counts as waiting for you.
 - **G's restart** is `hibernate(head, "memory")` followed at once by `wake(head, "memory")`, with every exclusion rule applied. A session that cannot be hibernated is not restarted.
-- **e2e.** There is no test-only IPC. `BUTLER_HIBERNATE_AFTER_MS` (honoured only with background windows) replaces all four minute settings and both quiet windows, and the hibernate typing check follows `BUTLER_GATE_TYPING_QUIET_MS`. The e2e wakes the session with a child session's `report`, not a CI result. Fake gh does not run on Windows, and a report goes through the same `DeliveryGuard` → wake → `sessionStopped` → flush path. `/fake-recall` lists the user messages in the resumed transcript.
+- **e2e.** There is no test-only IPC. `SHIPHERD_HIBERNATE_AFTER_MS` (honoured only with background windows) replaces all four minute settings and both quiet windows, and the hibernate typing check follows `SHIPHERD_GATE_TYPING_QUIET_MS`. The e2e wakes the session with a child session's `report`, not a CI result. Fake gh does not run on Windows, and a report goes through the same `DeliveryGuard` → wake → `sessionStopped` → flush path. `/fake-recall` lists the user messages in the resumed transcript.
 - **Known edge cases**, not handled:
   - A ticket or feature archived while a session is hibernated: a later wake fails, and the failure path clears the hibernation.
   - A pane whose id no longer matches the head after `/clear` is not auto-woken. A hibernated session never sees `/clear`, so this only affects stale panes.
@@ -256,29 +256,29 @@ Differences from §8, and edge cases left as they are:
   - `memory-mcp/memory-tools.ts` holds the memory tool layer reproduced from statecore-mcp 1.1.0.
   - `memory-mcp/hub.ts` handles routing and backend lifetime.
   - `memory-mcp/hub-entry.ts` is the process.
-  - `src/main/memory/mcp-hub.ts` is Butler's side: start, restart and routes.
+  - `src/main/memory/mcp-hub.ts` is Shipherd's side: start, restart and routes.
   - `memory-mcp/sessions-options.ts` is shared by the stdio sessions server and the hub, so both read a scope the same way.
 - **Bundle.** esbuild would pick `statecore-mcp/lib`'s ESM build, which needs `import.meta.url`, and that is empty in CJS. The build script resolves that one import with the `require` condition instead. The bundle test starts the built `mcp-hub.cjs`, writes a fact over HTTP and reads it back with StateCore.
 - **Contract test** (`memory-mcp/hub-contract.test.ts`) compares the in-process memory server with the real `statecore-mcp` over stdio. It covers `initialize` for three protocol versions, `tools/list`, eleven tool calls (with ids and timestamps normalised), and the errors for methods it does not have.
 - **Per-terminal config.**
   - The session service now chooses the terminal id before it writes the config, and passes it to every `mcpConfig` callback.
-  - With the setting on and the hub running, the config is `mcp/terms/<terminal>.json`. Otherwise it is the usual per-ticket, feature, epic or Butler file.
+  - With the setting on and the hub running, the config is `mcp/terms/<terminal>.json`. Otherwise it is the usual per-ticket, feature, epic or Shipherd file.
   - Old `terms/` files are deleted at startup, because their tokens belonged to the previous hub. A terminal's file and routes are removed when it exits.
 - **Start.** The hub starts at launch, or when the setting is turned on, rather than on the first session open. This way the first sessions don't fall back to stdio while it starts.
-- **Restart.** The hub is restarted after 1 s, then 2 s, 4 s and so on up to 60 s; the delay resets once it has run for a minute. Each restart asks for the last port. If that port is taken, the hub listens on another one and Butler logs that sessions opened before cannot reach Butler's MCP until they are reopened. A hub that does not print its ready line within 15 s is killed and counts as a failure.
+- **Restart.** The hub is restarted after 1 s, then 2 s, 4 s and so on up to 60 s; the delay resets once it has run for a minute. Each restart asks for the last port. If that port is taken, the hub listens on another one and Shipherd logs that sessions opened before cannot reach Shipherd's MCP until they are reopened. A hub that does not print its ready line within 15 s is killed and counts as a failure.
 - **Port change.** When the hub comes back on a different port, the old tokens are dropped and not sent to the new hub. During the gap, another local program could have taken the old port and seen them. If the setting was off and no terminal is left, the hub stops.
 - **Stop.** `stop()` closes the hub's stdin. If the hub has not exited 5 s later, it is killed, so a stuck hub can't stay behind holding the port and the data directory.
 - **Proxy.** When a proxy variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, in any case) is set, session environments get `127.0.0.1` added to `NO_PROXY`. Otherwise the loopback URLs, tokens included, could go to the proxy. The variable already present is extended in place, because Windows has no case-distinct duplicates.
 - **Packaging.** `mcp-hub.cjs` is in `electron-builder.yml`'s `extraResources`, and `after-pack.cjs` checks all three MCP bundles. A missing bundle is logged once, and sessions use stdio.
 - **Write failure.** If writing a terminal's config fails, its routes are removed and the session falls back to stdio.
-- **Turning it off** does not cut off sessions that are already using the hub. New sessions get stdio, and the hub stops after the last routed terminal exits. Quitting Butler stops it at once: closing its stdin makes it close its backends and exit.
+- **Turning it off** does not cut off sessions that are already using the hub. New sessions get stdio, and the hub stops after the last routed terminal exits. Quitting Shipherd stops it at once: closing its stdin makes it close its backends and exit.
 - **Notice.** `shared_mcp_failed` shows on the Now page while the setting is on and the hub's last start failed. It carries the reason, and the retry is automatic, so it has no button.
-- **Saving hint.** The hint is Butler's MCP total minus an estimated 100 MB for the hub. It is shown only with two or more sessions and at least 50 MB to save.
-- **Fake claude** speaks MCP Streamable HTTP (initialize, initialized, tools/call) when the config entry is `type: "http"`. The e2e turns the setting on, opens Butler control, checks that its config holds only loopback URLs, calls `list_sessions` and `list_features` through the hub, and checks that the config file is gone after exit. A real `claude` over HTTP is still untested, which is why the default stays off.
+- **Saving hint.** The hint is Shipherd's MCP total minus an estimated 100 MB for the hub. It is shown only with two or more sessions and at least 50 MB to save.
+- **Fake claude** speaks MCP Streamable HTTP (initialize, initialized, tools/call) when the config entry is `type: "http"`. The e2e turns the setting on, opens Shipherd control, checks that its config holds only loopback URLs, calls `list_sessions` and `list_features` through the hub, and checks that the config file is gone after exit. A real `claude` over HTTP is still untested, which is why the default stays off.
 - **Known edge cases**, not handled:
   - A feature coordinator in the fake claude can't be detected from an HTTP config, so the fake answers as a ticket session. No shared-MCP e2e needs a feature coordinator.
-  - A hub restart that loses its port leaves earlier sessions without Butler's MCP until they are reopened (it is logged).
+  - A hub restart that loses its port leaves earlier sessions without Shipherd's MCP until they are reopened (it is logged).
   - It is untested whether real Claude Code keeps retrying an HTTP server after a connection error during a hub restart, or gives up on it for that session.
-  - All sessions' butler-sessions traffic shares one event loop. A synchronous file write stuck on a Windows lock stalls every session's tools, not only one.
-  - If `pty.open` throws after the routes are registered, they stay in the hub until Butler quits.
+  - All sessions' shipherd-sessions traffic shares one event loop. A synchronous file write stuck on a Windows lock stalls every session's tools, not only one.
+  - If `pty.open` throws after the routes are registered, they stay in the hub until Shipherd quits.
   - The idle sweep removes a backend before its `close()` finishes, so a call in that window opens a second one on the same scope.

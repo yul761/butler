@@ -200,6 +200,7 @@ describe("upgrade from schema v1", () => {
     db.exec(MIGRATIONS[0]);
     db.exec("PRAGMA user_version = 1");
     db.exec(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('OLD-1', '/r', 'branch', 'b', 1)`);
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
     db.exec(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('s1', 'OLD-1', '/r', 'butler', 1)`);
     expect(migrate(db)).toBe(MIGRATIONS.length);
     expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(MIGRATIONS.length);

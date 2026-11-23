@@ -1,29 +1,29 @@
 # BTL-246: hierarchy A′ (epic → feature → ticket) and Jira import by epic
 
-Addendum to the Butler 4 simplification work. This change flattens the hierarchy, removes two kinds of coordinator, and makes Jira import follow the new shape.
+Addendum to the Shipherd 4 simplification work. This change flattens the hierarchy, removes two kinds of coordinator, and makes Jira import follow the new shape.
 
 ## 1. The new hierarchy
 
 | UI word | What it is | Has a coordinator? | Workspace? | Memory |
 |---|---|---|---|---|
-| **Global control** (「全局总控」) | The one Butler-wide coordinator (was "Butler control") | itself | `~/.butler/workspaces/_butler` | `butler-workspace` |
-| **Epic** | One body of work: one coordinator, one workspace, one shared memory. Was "feature". One Jira epic maps to one Butler epic. | yes, the epic coordinator | yes | `feature:<id>` scope |
+| **Global control** (「全局总控」) | The one Shipherd-wide coordinator (was "Shipherd control") | itself | `~/.shipherd/workspaces/_shipherd` | `shipherd-workspace` |
+| **Epic** | One body of work: one coordinator, one workspace, one shared memory. Was "feature". One Jira epic maps to one Shipherd epic. | yes, the epic coordinator | yes | `feature:<id>` scope |
 | **Feature** | A light block inside an epic: a name, an optional description, a position, and a set of tickets. Blocks are usually pushed forward one at a time, in order. | no | no | none of its own |
 | **Ticket** | Unchanged | no (the ticket coordinator is removed) | worktree(s) | `ticket:<key>` scope |
 
 What is removed:
 
-- The old **epic** layer: the epic page, the "new epic" dialog, the epic session, the epic's memory server (`butler-epic`), the epic history and digest, the epic summary tab, and the MCP tools `list_features` (the old one), `create_feature` (the old one), `start_feature`, `set_epic_plan` and `epic_context`. The sidebar's epic group and the feature page's "move to epic" picker go too.
+- The old **epic** layer: the epic page, the "new epic" dialog, the epic session, the epic's memory server (`shipherd-epic`), the epic history and digest, the epic summary tab, and the MCP tools `list_features` (the old one), `create_feature` (the old one), `start_feature`, `set_epic_plan` and `epic_context`. The sidebar's epic group and the feature page's "move to epic" picker go too.
 - The **ticket coordinator**: the "+ coordinator" button on the ticket's terminal tab, `OpenSessionRequest.coordinator`, the ticket-coordinator MCP tool set and its request handler, and the `ticket_coordinator` and `epic` inbox roles.
 
 ## 2. Internal names stay
 
-Internally the epic is still the `features` table, its memory is still the `feature:<id>` StateCore scope, and its MCP servers are still `butler-feature` and `butler-sessions` with `BUTLER_FEATURE=<id>`. The new block is a new `blocks` table, and a ticket points at it with `tickets.block_id`.
+Internally the epic is still the `features` table, its memory is still the `feature:<id>` StateCore scope, and its MCP servers are still `shipherd-feature` and `shipherd-sessions` with `SHIPHERD_FEATURE=<id>`. The new block is a new `blocks` table, and a ticket points at it with `tickets.block_id`.
 
 Why the internal names are not renamed:
 
 - **The StateCore scopes live in StateCore's own database.** Renaming `feature:<id>` to `epic:<id>` would mean copying every scope's notes, handoff versions and why-chains with no public API for it. A rename would also collide with the old epic's `epic:<id>` scopes, which still exist on disk.
-- **The MCP server names are in the users' approval settings.** Butler writes `enabledMcpjsonServers`-style approvals per server name. A renamed server would trigger a fresh approval prompt in every open session after the upgrade.
+- **The MCP server names are in the users' approval settings.** Shipherd writes `enabledMcpjsonServers`-style approvals per server name. A renamed server would trigger a fresh approval prompt in every open session after the upgrade.
 - **Migrations are append-only.** Renaming the tables would touch every query in the repo layer, and the gain would be zero: no user ever sees a table name.
 
 Everything Claude or the user reads uses the new words: UI strings, docs, session guides, MCP tool names and descriptions, and prompts. Internal identifiers keep the old ones. A comment at the top of `features-repo.ts` and `blocks-repo.ts` says which is which.
@@ -83,7 +83,7 @@ What the migration does:
   - The tab ids are unchanged. BTL-244 renames the label of the `summary` tab to "Status" and keeps the id.
 - **The coordinator's guide:**
   - Push the features forward in order, one at a time. Features that do not depend on each other may run at the same time.
-  - Put cross-ticket conventions in epic memory (`butler-feature`). Ticket progress belongs in ticket memory, and the ticket sessions write it.
+  - Put cross-ticket conventions in epic memory (`shipherd-feature`). Ticket progress belongs in ticket memory, and the ticket sessions write it.
 
 ## 5. Epic memory, about 60 notes
 
@@ -95,29 +95,29 @@ Other approaches were considered and ruled out:
 - Writing to StateCore's tables directly would bypass its audit chain.
 - A composite backend that spreads one scope over two scopes would be visible to Claude as two memories.
 
-So Butler gets the extra room itself, in two parts:
+So Shipherd gets the extra room itself, in two parts:
 
-1. **Butler stops using note slots in the epic scope.** The decisions from the epic summary used to be written as Butler notes, and they shared the 30 slots with Claude. They now go into the Butler-rendered handoff of that scope instead, under "Conventions". Old Butler decision notes in the scope are forgotten on the next sync, which frees all 30 note slots for the coordinator and the ticket sessions.
-2. **Overflow archive.** When a Claude-written note is about to be pushed out, Butler moves it to the archive first.
+1. **Shipherd stops using note slots in the epic scope.** The decisions from the epic summary used to be written as Shipherd notes, and they shared the 30 slots with Claude. They now go into the Shipherd-rendered handoff of that scope instead, under "Conventions". Old Shipherd decision notes in the scope are forgotten on the next sync, which frees all 30 note slots for the coordinator and the ticket sessions.
+2. **Overflow archive.** When a Claude-written note is about to be pushed out, Shipherd moves it to the archive first.
    - **When it runs:**
      - after every Stop of a session in the epic (the coordinator, a ticket session or a fix session);
      - during the start-up sync.
-   - **What it does:** when the scope holds `EPIC_ARCHIVE_AT = 26` or more notes, Butler moves the oldest Claude-written ones into `epic_memory_archive` until `EPIC_ARCHIVE_KEEP = 20` are left. Each moved note is forgotten in StateCore, which keeps it in StateCore's audit trail.
+   - **What it does:** when the scope holds `EPIC_ARCHIVE_AT = 26` or more notes, Shipherd moves the oldest Claude-written ones into `epic_memory_archive` until `EPIC_ARCHIVE_KEEP = 20` are left. Each moved note is forgotten in StateCore, which keeps it in StateCore's audit trail.
    - **What happens to the archive:** it keeps the newest `EPIC_ARCHIVE_MAX = 40` entries and logs the ones it drops. It is rendered into the handoff under "Earlier conventions". Each entry carries its date and a line saying that to change one, Claude should remember the new version.
-   - That gives 30 live notes plus 30–40 archived, about 60–70 conventions per epic. A burst of more than 4 notes between two Stops can still push out the oldest note, because StateCore evicts before Butler sees it. That is the same failure mode as today, only rarer.
+   - That gives 30 live notes plus 30–40 archived, about 60–70 conventions per epic. A burst of more than 4 notes between two Stops can still push out the oldest note, because StateCore evicts before Shipherd sees it. That is the same failure mode as today, only rarer.
 
-The handoff Butler writes into an epic scope:
+The handoff Shipherd writes into an epic scope:
 
 - the summary (as before);
 - then "Plan" (the brief), "Conventions" (the decisions from the summary) and "Earlier conventions" (the archive);
 - next steps and open questions (as before).
 
-Ticket scopes are unchanged: `BUTLER_NOTE_LIMIT` stays 24.
+Ticket scopes are unchanged: `SHIPHERD_NOTE_LIMIT` stays 24.
 
 ## 6. Global control
 
-- "Butler control" becomes **Global control** / 「全局总控」 in the UI and the guide. Internally it stays `butler` everywhere.
-- `BUTLER_TOOLS` changes:
+- "Shipherd control" becomes **Global control** / 「全局总控」 in the UI and the guide. Internally it stays `shipherd` everywhere.
+- `SHIPHERD_TOOLS` changes:
   - `list_epics` lists the epics (the `features` table) with their block progress.
   - `list_features { epic? }` lists the blocks.
   - `list_tickets` shows each ticket's epic and block.
@@ -128,7 +128,7 @@ Ticket scopes are unchanged: `BUTLER_NOTE_LIMIT` stays 24.
   - A ticket session's `done` or `blocked` report goes to its epic coordinator.
   - An epic coordinator's own `done` or `blocked` report is only stored. The global control reads it with `list_inbox`.
   - Typing every epic's report into the one global terminal would interrupt it all day. The global control already patrols the inbox.
-- **The message prefixes stay as they are.** For example, 「Butler 总控发来的消息」 / "Message from Butler control" stays.
+- **The message prefixes stay as they are.** For example, 「Shipherd 总控发来的消息」 / "Message from Shipherd control" stays.
   - `conv-parse` and the reply matching recognise sessions' past transcripts by those exact prefixes.
   - Renaming them would make every old conversation unreadable.
   - Only labels the user reads change, such as the sidebar, page titles, settings and role names.
@@ -141,24 +141,24 @@ Ticket scopes are unchanged: `BUTLER_NOTE_LIMIT` stays 24.
 
 - **The tracker fetch prompt** asks for each ticket's parent epic as `epic: { key, title } | null`. The file source accepts `epic: { key, title }` or a bare key string. `IncomingTicket.epic` is optional, so payloads stored before the upgrade still parse.
 - **Grouping:**
-  - When a ticket has an epic, intake finds the open Butler epic with that `jira_epic_key`. If there is none, it creates one:
+  - When a ticket has an epic, intake finds the open Shipherd epic with that `jira_epic_key`. If there is none, it creates one:
     - the name is `<KEY> <title>`;
     - the workspace is the default one;
     - the ticket's repo is added as one of the epic's repos.
   - If that epic was archived, a new one is created, because the user put the old one away on purpose.
   - Tickets without an epic stay standalone, exactly as today.
 - **Manual mode** (the repo's intake policy has `autoStart` off, which W7 will call automation level "manual"):
-  - Tickets with an epic are created in Butler inside their epic, so they are pulled in and organized, but no session is started.
+  - Tickets with an epic are created in Shipherd inside their epic, so they are pulled in and organized, but no session is started.
   - The intake row stays held (`auto_off`) as before, so the user can still start it from the queue, and the existing "ticket already exists" path in `openFor` reuses it.
   - Standalone tickets behave as today.
 - **Semi mode** (`autoStart` on):
   - Tickets start as today, inside their epic.
-  - After a poll that brought new tickets into an epic, Butler hands that epic's coordinator one message listing them and asking it to organize them into features and push them forward. If the coordinator is not running, Butler opens it first, with the same memory check as any coordinator open.
+  - After a poll that brought new tickets into an epic, Shipherd hands that epic's coordinator one message listing them and asking it to organize them into features and push them forward. If the coordinator is not running, Shipherd opens it first, with the same memory check as any coordinator open.
   - The message goes through the coordinator's mailbox (BTL-245), so it is never refused because the coordinator is busy: a working coordinator gets it at its next tool call, a stopped one has it typed in.
   - If memory is short and the epic has an earlier coordinator, the message stays queued in that coordinator's mailbox and is typed in the next time it opens. If the epic never had a coordinator, the message is skipped and logged, and the next poll that adds tickets tries again.
   - The global control's `send_message` works the same way: it only targets epic coordinators and goes through the mailbox. The old epic layer's `start_feature` and its delivery-guard path are gone.
   - Only tickets that are going to start are listed (queued, waiting or started). Tickets held for size, risk or pre-review are not created yet, so they are left out.
-  - A ticket that starts on its own is only created in Butler when its session starts, so a queued or waiting one may not exist yet when the message goes out. The list marks those as queued, and the coordinator is told to group them once they show up in `list_tickets`.
+  - A ticket that starts on its own is only created in Shipherd when its session starts, so a queued or waiting one may not exist yet when the message goes out. The list marks those as queued, and the coordinator is told to group them once they show up in `list_tickets`.
 - **Not organized:** stacked layers split from a large ticket are created when their layer starts, inside the parent's epic, because they need their start point. A ticket the user later skips in the queue stays in its epic; it can be archived like any other ticket.
 
 ## 8. Not in this change

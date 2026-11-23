@@ -80,7 +80,7 @@ describe("OrphanSweeper (WS-M F)", () => {
     const left = table(L.vite.replace("  112   111", "  112     1"));
     const { s, kills, file } = setup([left, table()]);
     s.spare("h1", [vite]);
-    // 留着的也写进记录：Butler 重启时启动扫描结束它们。
+    // 留着的也写进记录：Shipherd 重启时启动扫描结束它们。
     await vi.waitFor(() => expect(JSON.parse(readFileSync(file, "utf8")).procs).toEqual([vite]));
     expect(await s.release("other")).toBe(0);
     expect(kills).toEqual([]);

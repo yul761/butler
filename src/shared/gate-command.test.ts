@@ -157,15 +157,15 @@ describe("classifyBypass", () => {
     expect(hows("HUSKY=1 git commit -m x")).toEqual([]);
   });
 
-  it("recognises tampering with Butler's checks or Claude's hook settings, not reading them", () => {
-    expect(hows("rm ~/.butler/checks/snapshot.json")).toEqual(["tamper"]);
-    expect(hows("echo '{}' > ~/.butler/checks/snapshot.json")).toEqual(["tamper"]);
-    expect(hows("sed -i '' 's/enforce/warn/' ~/.butler/checks/snapshot.json")).toEqual(["tamper"]);
+  it("recognises tampering with Shipherd's checks or Claude's hook settings, not reading them", () => {
+    expect(hows("rm ~/.shipherd/checks/snapshot.json")).toEqual(["tamper"]);
+    expect(hows("echo '{}' > ~/.shipherd/checks/snapshot.json")).toEqual(["tamper"]);
+    expect(hows("sed -i '' 's/enforce/warn/' ~/.shipherd/checks/snapshot.json")).toEqual(["tamper"]);
     expect(hows("cp /tmp/s.json .claude/settings.local.json".replace(".claude", "/x/.claude"))).toEqual(["tamper"]);
-    expect(hows("BUTLER_HOME=/tmp/elsewhere git commit -m x")).toEqual(["tamper"]);
-    expect(hows("unset BUTLER_SESSION")).toEqual(["tamper"]);
-    expect(hows("cat ~/.butler/checks/snapshot.json")).toEqual([]);
-    expect(hows("grep enforce ~/.butler/checks/snapshot.json 2>/dev/null")).toEqual([]);
+    expect(hows("SHIPHERD_HOME=/tmp/elsewhere git commit -m x")).toEqual(["tamper"]);
+    expect(hows("unset SHIPHERD_SESSION")).toEqual(["tamper"]);
+    expect(hows("cat ~/.shipherd/checks/snapshot.json")).toEqual([]);
+    expect(hows("grep enforce ~/.shipherd/checks/snapshot.json 2>/dev/null")).toEqual([]);
     expect(hows("rm -rf node_modules")).toEqual([]);
   });
 

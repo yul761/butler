@@ -107,14 +107,14 @@ describe("MemoryService.syncFeature (design 2026-10-28, 记忆)", () => {
     expect((await handoffOf(t))?.content).toBe(
       "接口联调完了，前端在等错误码\n\n约定：\n- 错误码统一用 E 开头的四位数\n- 接口走 REST\nOpen questions:\n- 要不要拆成两个 PR？\nNext steps:\n- 补后端的错误码\n- 约前端联调",
     );
-    // Butler 不再占 epic 记忆的笔记位。
+    // Shipherd 不再占 epic 记忆的笔记位。
     expect(await t.texts(scope)).toEqual([]);
     // 不碰 ticket scope 和 workspace。
     expect(await t.texts("workspace")).toEqual([]);
     expect(t.synced).toEqual([scope]);
   });
 
-  it("forgets the decision notes Butler wrote before, and leaves Claude's notes alone", async () => {
+  it("forgets the decision notes Shipherd wrote before, and leaves Claude's notes alone", async () => {
     const t = setup();
     await withScope({ dataDir: t.dataDir, scope }, async (s) => {
       await s.remember("[decision:errors] 错误码用四位数");
@@ -250,7 +250,7 @@ describe("MemoryService epic memory: Plan, Conventions and the overflow archive 
     t.db.prepare("UPDATE features SET epic_id = 7 WHERE id IN (2, 3)").run();
     await withScope({ dataDir: t.dataDir, scope: epicScope(7) }, async (s) => {
       await s.remember("所有接口都走 /api/v2");
-      await s.remember("[decision:old] Butler 写的旧决策");
+      await s.remember("[decision:old] Shipherd 写的旧决策");
     });
     await t.memory.syncAll();
     for (const f of [2, 3]) expect(t.epicArchive.list(f).map((e) => [e.text, e.source])).toEqual([["所有接口都走 /api/v2", "epic:7"]]);
@@ -495,7 +495,7 @@ describe("MemoryService.syncTicket (design 8.3)", () => {
     const t = setup({ dataDir: first });
     t.addHandoff(payload({ done_today: ["a"] }));
     await t.memory.syncTicket("PROJ-1");
-    // 换一个空的数据目录，相当于用户删掉了 ~/.butler/statecore。
+    // 换一个空的数据目录，相当于用户删掉了 ~/.shipherd/statecore。
     const t2 = setup({ dataDir: tempDir() });
     t2.addHandoff(payload({ done_today: ["a"] }));
     t2.sync.setCursor("PROJ-1", 999, 1);
@@ -605,8 +605,8 @@ describe("MemoryService notes cap guard (PF2)", () => {
     t.addFollowup("f_new", { description: distinct(101) });
     t.addHandoff(payload({ decisions: [{ key: "db", statement: "用 PostgreSQL" }] }));
     await t.memory.syncTicket("PROJ-1");
-    const butler = (await t.texts()).filter((x) => x.startsWith("["));
-    expect(butler).toEqual([`[followup:f_new] ${distinct(101)}（配置，合并后）`]);
+    const shipherd = (await t.texts()).filter((x) => x.startsWith("["));
+    expect(shipherd).toEqual([`[followup:f_new] ${distinct(101)}（配置，合并后）`]);
     expect(await t.texts()).toHaveLength(NOTES_CAP);
     expect(t.logs).toContain("memory PROJ-1: no free note slot (30/30), skipped 1 followup(s), 1 decision(s)");
   });
@@ -623,8 +623,8 @@ describe("MemoryService notes cap guard (PF2)", () => {
     // f_2 最新、先写；它和 f_1 只差 id，StateCore 把它当成 f_1 的修订原地替换（不占位置），f_1 要马上用变体写回去。
     t.addFollowup("f_2");
     await t.memory.syncTicket("PROJ-1");
-    const butler = (await t.texts()).filter((x) => x.startsWith("[followup:"));
-    expect(butler.map((x) => /^\[followup:(f_\d)/.exec(x)?.[1]).sort()).toEqual(["f_1", "f_2"]);
+    const shipherd = (await t.texts()).filter((x) => x.startsWith("[followup:"));
+    expect(shipherd.map((x) => /^\[followup:(f_\d)/.exec(x)?.[1]).sort()).toEqual(["f_1", "f_2"]);
     expect(t.logs).toContain("memory PROJ-1: no free note slot (30/30), skipped 1 followup(s), 0 decision(s)");
     const before = await t.items();
     await t.memory.syncTicket("PROJ-1");
@@ -672,14 +672,14 @@ describe("MemoryService fix round 1 (task 4 review)", () => {
     const x = `[followup:f_1] ${distinct(1)}（配置，合并后）`;
     const da = `[decision:a] ${distinct(2)}`;
     const db = `[decision:b] ${distinct(3)}`;
-    // claude 里的 MCP（不受 Butler 的保护）写满并多写一条：挤掉最旧的 f_1；它又一字不差地写回 f_1，挤掉 decision:a。
+    // claude 里的 MCP（不受 Shipherd 的保护）写满并多写一条：挤掉最旧的 f_1；它又一字不差地写回 f_1，挤掉 decision:a。
     await raw(t.dataDir, async (s) => {
       for (let i = 0; i < NOTES_CAP - 2; i++) await s.remember(`Claude 自己记的 ${distinct(10 + i)}`);
       await s.remember(x);
     });
     expect((await t.items()).find((i) => i.text === x)?.factId).not.toBeNull();
     expect(await t.slots()).toEqual({ used: NOTES_CAP, cap: NOTES_CAP });
-    // f_1 完成：Butler forget 它，腾出的位置正好把被挤掉的 decision:a 写回去。
+    // f_1 完成：Shipherd forget 它，腾出的位置正好把被挤掉的 decision:a 写回去。
     t.setFollowup("f_1", "done");
     await t.memory.syncTicket("PROJ-1");
     const texts = await t.texts();
@@ -698,7 +698,7 @@ describe("MemoryService fix round 1 (task 4 review)", () => {
     });
     t.addFollowup("f_a", { description: distinct(2) });
     t.addFollowup("f_b", { description: distinct(3) });
-    // Butler 写第一条之后，claude 里的 MCP 同时写了一条：位置刚好满了。
+    // Shipherd 写第一条之后，claude 里的 MCP 同时写了一条：位置刚好满了。
     let external = false;
     wrapScopes((sc) => sc === scope, (s) => ({
       ...s,

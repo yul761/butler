@@ -45,12 +45,12 @@ import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  OpenButlerSessionRequest, ButlerView, MessageScope, MessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView, InboxItemView,
+  OpenShipherdSessionRequest, ShipherdView, MessageScope, MessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView, InboxItemView,
 } from "../../shared/types";
 
 declare global {
   interface Window {
-    butler: {
+    shipherd: {
       platform: string;
       /** 旧的 preload 没有这一项：当 webgl。 */
       terminalRenderer?: "webgl" | "dom";
@@ -63,22 +63,22 @@ declare global {
   }
 }
 
-export class ButlerError extends Error {
+export class ShipherdError extends Error {
   constructor(readonly code: string, message: string) {
     super(message);
   }
 }
 
 async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
-  const r = (await window.butler.invoke(channel, ...args)) as IpcResult<T>;
-  if (!r.ok) throw new ButlerError(r.code, r.message);
+  const r = (await window.shipherd.invoke(channel, ...args)) as IpcResult<T>;
+  if (!r.ok) throw new ShipherdError(r.code, r.message);
   return r.value;
 }
 
-export const platform = (): string => window.butler.platform;
-export const terminalRendererPref = (): "webgl" | "dom" => window.butler.terminalRenderer ?? "webgl";
-export const terminalCacheMaxPref = (): number | null => window.butler.terminalCacheMax ?? null;
-export const pathForFile = (file: File): string => window.butler.pathForFile(file);
+export const platform = (): string => window.shipherd.platform;
+export const terminalRendererPref = (): "webgl" | "dom" => window.shipherd.terminalRenderer ?? "webgl";
+export const terminalCacheMaxPref = (): number | null => window.shipherd.terminalCacheMax ?? null;
+export const pathForFile = (file: File): string => window.shipherd.pathForFile(file);
 
 // 整个渲染进程只挂一个 state:changed 监听（BTL-242）。
 const stateBus = createStateBus();
@@ -86,7 +86,7 @@ let stateBusOn = false;
 function ensureStateBus(): void {
   if (stateBusOn) return;
   stateBusOn = true;
-  window.butler.on(IPC.stateChanged, (payload) => stateBus.dispatch(payload));
+  window.shipherd.on(IPC.stateChanged, (payload) => stateBus.dispatch(payload));
 }
 
 /** 终端快照和它对应的输出位置（BTL-242，见主进程的 PtyManager.snapshotAt / since）。 */
@@ -125,10 +125,10 @@ export const api = {
   /** epic 自己选的自动化档位（BTL-247）；null = 跟随全局。 */
   setFeatureAutomationLevel: (id: number, level: AutomationLevel | null) => call<void>(IPC.featuresSetAutomationLevel, id, level),
   automationState: () => call<AutomationState>(IPC.automationState),
-  butlerView: () => call<ButlerView>(IPC.butlerView),
+  shipherdView: () => call<ShipherdView>(IPC.shipherdView),
   messages: (scope: MessageScope) => call<MessageView[]>(IPC.messagesList, scope),
   metrics: (days?: number) => call<MetricsOverview>(IPC.metricsView, days),
-  openButlerSession: (req: OpenButlerSessionRequest) => call<OpenSessionResult>(IPC.butlerOpenSession, req),
+  openShipherdSession: (req: OpenShipherdSessionRequest) => call<OpenSessionResult>(IPC.shipherdOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),
@@ -144,13 +144,13 @@ export const api = {
   ptySnapshot: (termId: string) => call<PtyMarked>(IPC.ptySnapshot, termId),
   ptySince: (termId: string, mark: PtyMarked["mark"]) => call<PtyMarked & { reset: boolean }>(IPC.ptySince, termId, mark),
   ptyKill: (termId: string) => call<void>(IPC.ptyKill, termId),
-  ptyWrite: (termId: string, data: string) => window.butler.send(IPC.ptyWrite, termId, data),
-  ptyResize: (termId: string, cols: number, rows: number) => window.butler.send(IPC.ptyResize, termId, cols, rows),
-  ptyVisible: (termId: string, visible: boolean) => window.butler.send(IPC.ptyVisible, termId, visible),
+  ptyWrite: (termId: string, data: string) => window.shipherd.send(IPC.ptyWrite, termId, data),
+  ptyResize: (termId: string, cols: number, rows: number) => window.shipherd.send(IPC.ptyResize, termId, cols, rows),
+  ptyVisible: (termId: string, visible: boolean) => window.shipherd.send(IPC.ptyVisible, termId, visible),
   /** 这个终端的 xterm 实例销毁了：主进程不再给它推 pty:data（BTL-242）。 */
-  ptyDetach: (termId: string) => window.butler.send(IPC.ptyDetach, termId),
+  ptyDetach: (termId: string) => window.shipherd.send(IPC.ptyDetach, termId),
   /** 性能诊断（BTL-242）。 */
-  diagReport: (totals: LongTaskTotals) => window.butler.send(IPC.diagRenderer, totals),
+  diagReport: (totals: LongTaskTotals) => window.shipherd.send(IPC.diagRenderer, totals),
   diagSnapshot: (resetMeasure = false) => call<DiagSnapshot | null>(IPC.diagSnapshot, resetMeasure),
   /** 弹保存对话框写一份诊断文件；返回写到的路径，取消为 null。 */
   diagExport: () => call<string | null>(IPC.diagExport),
@@ -299,27 +299,27 @@ export const api = {
   dismissUpdate: (version: string) => call<void>(IPC.updateDismiss, version),
   openRelease: () => call<void>(IPC.updateOpenRelease),
   /** 应用菜单点了要界面做的事（BTL-253 / 254）。 */
-  onAppMenu: (cb: (action: AppMenuAction) => void) => window.butler.on(IPC.appMenu, cb),
+  onAppMenu: (cb: (action: AppMenuAction) => void) => window.shipherd.on(IPC.appMenu, cb),
   memoryWhy: (ticketKey: string, factId: string) => call<WhyEntry[] | null>(IPC.memoryWhy, ticketKey, factId),
   usageSummary: () => call<UsageSummary>(IPC.usageSummary),
   dismissActivity: (sessionId: string) => call<void>(IPC.activityDismiss, sessionId),
-  onPtyData: (cb: (termId: string, data: string) => void) => window.butler.on(IPC.ptyData, cb),
-  onPtyExit: (cb: (termId: string, code: number) => void) => window.butler.on(IPC.ptyExit, cb),
+  onPtyData: (cb: (termId: string, data: string) => void) => window.shipherd.on(IPC.ptyData, cb),
+  onPtyExit: (cb: (termId: string, code: number) => void) => window.shipherd.on(IPC.ptyExit, cb),
   /** 不给 scopes 只听 data；跟着 session 活动变的视图传 LIVE_SCOPES（BTL-242）。 */
   onStateChanged: (cb: (scopes: StateScope[]) => void, scopes?: readonly StateScope[]) => {
     ensureStateBus();
     return stateBus.subscribe(cb, scopes);
   },
-  onTurnChanged: (cb: () => void) => window.butler.on(IPC.turnChanged, cb),
-  onKeepAwakeChanged: (cb: (on: boolean) => void) => window.butler.on(IPC.appKeepAwakeChanged, cb),
+  onTurnChanged: (cb: () => void) => window.shipherd.on(IPC.turnChanged, cb),
+  onKeepAwakeChanged: (cb: (on: boolean) => void) => window.shipherd.on(IPC.appKeepAwakeChanged, cb),
   /** 实况窗口（BTL-190 第 7 点）：开着的 session 新的一次工具调用、记忆读写、回合开始 / 结束。 */
-  onActivityEvent: (cb: (e: ActivityEvent) => void) => window.butler.on(IPC.activityEvent, cb),
+  onActivityEvent: (cb: (e: ActivityEvent) => void) => window.shipherd.on(IPC.activityEvent, cb),
   /** 记忆写进了 StateCore（ticketKey），或记忆开关变了（null：所有 ticket）。 */
-  onMemoryChanged: (cb: (ticketKey: string | null) => void) => window.butler.on(IPC.memoryChanged, cb),
+  onMemoryChanged: (cb: (ticketKey: string | null) => void) => window.shipherd.on(IPC.memoryChanged, cb),
   /** 对话另存（UI 重做第 4 层）：sessionId 可以是链上任意一段；推送的永远是链根（拿 SessionView.rootId 比对）。 */
   convList: (sessionId: string, opts: ConvListOpts) => call<ConvPage>(IPC.convList, sessionId, opts),
   convSearch: (sessionId: string | null, query: string) => call<ConvMessage[]>(IPC.convSearch, sessionId, query),
-  onConvAppended: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.convAppended, cb),
+  onConvAppended: (cb: (rootSessionId: string) => void) => window.shipherd.on(IPC.convAppended, cb),
   /** 对话 tab（UI 重做第 5 层）：forkId 为 null 开一个新的分叉讨论，数字接着问那个分叉。 */
   forkAsk: (rootSessionId: string, forkId: number | null, question: string) => call<{ forkId: number }>(IPC.forkAsk, rootSessionId, forkId, question),
   forkSendConclusion: (forkId: number) => call<DevSendResult>(IPC.forkSendConclusion, forkId),
@@ -329,5 +329,5 @@ export const api = {
   convSend: (anyId: string, text: string) => call<DevSendResult>(IPC.convSend, anyId, text),
   /** 总控对话区的汇报分页：before 是上一页最早一条汇报的 id（不是时间），不给是最新一页。 */
   inboxReports: (scope: InboxScope, o: { before?: number; limit: number }) => call<{ reports: InboxItemView[]; hasMore: boolean }>(IPC.inboxReports, scope, o),
-  onForkChanged: (cb: (rootSessionId: string) => void) => window.butler.on(IPC.forkChanged, cb),
+  onForkChanged: (cb: (rootSessionId: string) => void) => window.shipherd.on(IPC.forkChanged, cb),
 };

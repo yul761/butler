@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CONV_QUERY_MAX, type ConvMessage } from "../../../shared/conversation";
 import type { ForkView } from "../../../shared/fork";
 import type { InboxScope } from "../../../shared/types";
-import { api, ButlerError } from "../api";
+import { api, ShipherdError } from "../api";
 import {
   buildTimeline, draftCheck, keepSelection, lastQuestion, latestOnly, mergeConvPage, mergeReportPage, queuedText, refusalText, refusesMemory, rememberText, sendBlockText, turnBlocks,
   type ConvFilter, type ConvLoaded, type ReportsLoaded, type TimelineItem,
@@ -141,9 +141,9 @@ function useMemoryOn(): boolean {
   return on;
 }
 
-/** IPC 被拒的原因 → 一句话；不是 ButlerError 的照常报到顶上的错误条。 */
+/** IPC 被拒的原因 → 一句话；不是 ShipherdError 的照常报到顶上的错误条。 */
 function refusal(e: unknown): string {
-  if (e instanceof ButlerError) return refusalText(e.code, S);
+  if (e instanceof ShipherdError) return refusalText(e.code, S);
   reportError(e);
   return refusalText("other", S);
 }
@@ -163,9 +163,9 @@ export function ConversationTab(p: {
   page?: string;
   /** 落点要求换到 rootSessionId 时加一（ticket 页从卡片进来）；其余时候 rootSessionId 变了也不跟着跳。 */
   focusKey?: number;
-  /** 放在输入框上面（总控页的 ButlerReplies）。 */
+  /** 放在输入框上面（总控页的 ShipherdReplies）。 */
   footer?: ReactNode;
-  /** 分叉的结论有没有 ticket 或 feature 可记；不给当有（ticket 页）。Butler 页传 false，不出「记进记忆」。 */
+  /** 分叉的结论有没有 ticket 或 feature 可记；不给当有（ticket 页）。Shipherd 页传 false，不出「记进记忆」。 */
   canRemember?: boolean;
 }) {
   // 选中的 session 只在两种时候变：用户点了切换条；或者它从列表里没了（回到默认）。

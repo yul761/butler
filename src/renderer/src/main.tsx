@@ -3,8 +3,12 @@ import { startActivityLog } from "./activity-log";
 import { api } from "./api";
 import { App } from "./App";
 import { browserLongTaskObserver, startLongTaskReporter } from "./diag";
+import { migrateLegacyPrefs } from "./local-prefs";
 import { setUiLang } from "./strings";
 import "./styles.css";
+
+// 改名前（BTL-260）的 butler.* 本地偏好搬到 shipherd.*：在任何组件读它们之前。
+migrateLegacyPrefs();
 
 // 拖文件进窗口时浏览器默认会导航到该文件，整个界面被替换；全局禁止。
 for (const type of ["dragover", "drop"]) document.addEventListener(type, (e) => e.preventDefault());

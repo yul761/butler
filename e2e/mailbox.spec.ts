@@ -47,13 +47,13 @@ async function create(page: Page, open: Locator, label: string, name: string, di
 }
 
 /**
- * 信箱（BTL-245）：Butler 总控给一个正在干活的 epic 总控发消息，不再被「对方在忙，稍后再试」挡回来；
+ * 信箱（BTL-245）：Shipherd 总控给一个正在干活的 epic 总控发消息，不再被「对方在忙，稍后再试」挡回来；
  * 消息排进它的信箱，它下一次调用工具时由 PostToolUse hook 作为 additionalContext 带进去，两条合成一次。界面上的消息列表记成已送达。
  */
 test("a busy coordinator gets queued messages at its next tool call, merged into one", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
   const shop = join(s.dir, "shop");
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -72,8 +72,8 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   await expect.poll(() => terminalText(page)).toContain("tool Read");
   expect(contexts(s)).toEqual([]);
 
-  await side.getByRole("button", { name: S.butlerNav, exact: true }).click();
-  await page.locator(".butler-page").getByRole("button", { name: `+ ${S.newButlerSession}`, exact: true }).click();
+  await side.getByRole("button", { name: S.shipherdNav, exact: true }).click();
+  await page.locator(".shipherd-page").getByRole("button", { name: `+ ${S.newShipherdSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
   await page.waitForTimeout(1500);
   for (const text of ["接口改成 v2 了", "先别合 PR"]) {
@@ -94,7 +94,7 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   const [ctx] = contexts(s);
   expect(ctx).toContain("接口改成 v2 了");
   expect(ctx).toContain("先别合 PR");
-  expect(ctx).toContain("Butler 信箱送来 2 条消息");
+  expect(ctx).toContain("Shipherd 信箱送来 2 条消息");
   // 再调一次工具：信箱空了，不再带。
   await typeLine(page, '/fake-tool Read {"file_path":"b.ts"}');
   await expect.poll(() => terminalText(page)).toContain("tool Read");
@@ -115,7 +115,7 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
 test("a coordinator messages its ticket session, and its convention reaches the session but not itself", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200", BUTLER_GATE_TYPING_QUIET_MS: "1000" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
   const shop = join(s.dir, "shop");
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -145,7 +145,7 @@ test("a coordinator messages its ticket session, and its convention reaches the 
   const childGot = () => (messagesIn(s, worktree)[child] ?? []).join("\n");
   await expect.poll(childGot, { timeout: 30_000 }).toContain("build-the-form");
 
-  // 不是自己管的：Butler 总控的 session 不行。
+  // 不是自己管的：Shipherd 总控的 session 不行。
   const refused = await callTool(page, s, "send_message", { session: coordinator, text: "x" });
   expect(refused.error).toBe(true);
   const sent = await callTool(page, s, "send_message", { session: child, text: "表单用 v2 接口" });
@@ -154,7 +154,7 @@ test("a coordinator messages its ticket session, and its convention reaches the 
   await expect.poll(childGot, { timeout: 30_000 }).toContain("表单用 v2 接口");
 
   // 总控存一条约定：推给子 session，自己的下一次工具调用不带。
-  await typeLine(page, '/fake-tool mcp__butler-feature__remember {"text":"金额一律用分"}');
+  await typeLine(page, '/fake-tool mcp__shipherd-feature__remember {"text":"金额一律用分"}');
   await expect.poll(childGot, { timeout: 30_000 }).toContain("金额一律用分");
   expect(childGot()).toContain("【约定 · epic payment 的总控】");
   await typeLine(page, '/fake-tool Read {"file_path":"a.ts"}');

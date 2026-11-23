@@ -110,8 +110,8 @@ export function makePreReviewHandler(d: RunnerDeps): BgHandler {
   };
 }
 
-/** 没有 worktree 时给模型的目录：空的临时目录，免得它带着 Read/Grep 在 Butler 自己的工作目录里看。 */
-const emptyCwd = (): string => mkdtempSync(join(tmpdir(), "butler-prereview-"));
+/** 没有 worktree 时给模型的目录：空的临时目录，免得它带着 Read/Grep 在 Shipherd 自己的工作目录里看。 */
+const emptyCwd = (): string => mkdtempSync(join(tmpdir(), "shipherd-prereview-"));
 
 async function runOnce(d: RunnerDeps, ctx: BgJobContext, row: PreReviewRow): Promise<BgJobResult> {
   const cp: Checkpoint = (ctx.checkpoint as Checkpoint | null) ?? {};

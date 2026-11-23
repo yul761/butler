@@ -31,7 +31,7 @@ async function setup(opts: {
   const features = new FeaturesRepo(db);
   const settings = new SettingsRepo(db);
   const blocks = new BlocksRepo(db);
-  const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("butler-ws-") });
+  const ticketService = new TicketService({ tickets, features, settings, now: () => 1, workspacesDir: tempDir("shipherd-ws-") });
   const featureService = new FeatureService({ features, tickets, now: () => 1 });
   const { factory, spawned } = fakePtyFactory();
   const pty = new PtyManager(factory, { data: () => undefined, exit: () => undefined });
@@ -78,7 +78,7 @@ async function setup(opts: {
     ...(opts.wakeState && { wakeState: opts.wakeState }),
     log: (m) => void logs.push(m),
   });
-  const parent = join(tempDir("butler-code-"), "shop");
+  const parent = join(tempDir("shipherd-code-"), "shop");
   mkdirSync(parent);
   const frontend = join(parent, "frontend");
   const backend = join(parent, "backend");
@@ -281,8 +281,8 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
     if (!child.ok) throw new Error(child.error);
     const stuck = (child.value as { sessionId: string }).sessionId;
-    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: stuck });
-    sessions.insertIfAbsent({ id: "their-fix", ticketKey: null, cwd: other.workspaceDir, origin: "butler", createdAt: 1, featureId: other.id, fixesSession: "stuck-2" });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, fixesSession: stuck });
+    sessions.insertIfAbsent({ id: "their-fix", ticketKey: null, cwd: other.workspaceDir, origin: "shipherd", createdAt: 1, featureId: other.id, fixesSession: "stuck-2" });
     activities.set("fix", { sessionId: "fix", kind: "command", detail: null, background: false, startedAt: 1, lastOutputAt: 2, stuck: null, reason: null, action: null, lastOutput: [] });
     const rows = async () => {
       const r = await handle({ ...base, op: "list_sessions" });
@@ -294,7 +294,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(await rows()).toEqual(expect.arrayContaining([coordinatorRow, fixRow(stuck), [stuck, "DMS-1", "frontend", null]]));
     expect(await rows()).toHaveLength(3);
     // 卡住的 session /clear 之后，fixes 还能对上列表里的 id
-    sessions.insertIfAbsent({ id: "stuck-new", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "stuck-new", ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy(stuck, "stuck-new");
     expect(await rows()).toEqual(expect.arrayContaining([fixRow("stuck-new"), ["stuck-new", "DMS-1", "frontend", null]]));
     expect(await handle({ ...base, op: "session_activity", session: "fix" })).toMatchObject({ ok: true, value: { sessionId: "fix", kind: "command", output: "out" } });
@@ -303,7 +303,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
 
   it("does not record a fix session as the spawner of a child session", async () => {
     const { handle, base, sessions, feature } = await setup();
-    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "stuck-1" });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, fixesSession: "stuck-1" });
     const r = await handle({ ...base, from: "fix", op: "start_session", ticket: "DMS-1", task: "a" });
     if (!r.ok) throw new Error("did not open");
     expect(sessions.get((r.value as { sessionId: string }).sessionId)?.spawnedBy).toBeNull();
@@ -316,7 +316,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
     if (!child.ok) throw new Error(child.error);
     const kid = (child.value as { sessionId: string }).sessionId;
-    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: kid });
+    sessions.insertIfAbsent({ id: "fix", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, fixesSession: kid });
     const from = { ...base, from: c.termId };
     const r = await handle({ ...from, op: "send_message", session: kid, text: "接口改了", interrupt: true });
     expect(r).toMatchObject({ ok: true, value: { queued: true, sessionId: kid, requestId: "m1", state: "busy" } });
@@ -326,12 +326,12 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(await handle({ ...from, op: "send_message", session: "fix", text: "x" })).toMatchObject({ ok: true, value: { sessionId: "fix" } });
     expect(mailed[1]).toMatchObject({ to: "fix", interrupt: false });
     // /clear 之后旧 id 也能用：发给链上最新的那个。
-    sessions.insertIfAbsent({ id: "kid-new", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "kid-new", ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy(kid, "kid-new");
     expect(await handle({ ...from, op: "send_message", session: kid, text: "y" })).toMatchObject({ ok: true, value: { sessionId: "kid-new" } });
   });
 
-  it("send_message to a closed session says whether Butler is resuming it, waiting for memory, or the user ended it (BTL-256)", async () => {
+  it("send_message to a closed session says whether Shipherd is resuming it, waiting for memory, or the user ended it (BTL-256)", async () => {
     const answers: Record<string, Awaited<ReturnType<NonNullable<ControlHandlerDeps["resume"]>>>> = {};
     const asked: string[] = [];
     const { handle, base, sessionService, feature, sessions } = await setup({
@@ -343,7 +343,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     if (!c.ok) throw new Error("no coordinator");
     const from = { ...base, from: c.termId };
     for (const id of ["a", "b", "fix", "d"]) {
-      sessions.insertIfAbsent({ id, ticketKey: null, cwd: feature.workspaceDir, origin: "butler", createdAt: 1, featureId: feature.id, fixesSession: "x" });
+      sessions.insertIfAbsent({ id, ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, fixesSession: "x" });
     }
     answers.a = { state: "resuming" };
     answers.b = { state: "waiting_memory", error: "only 1 GB free" };
@@ -458,7 +458,7 @@ describe("end_session from a feature coordinator (task 11)", () => {
 
   it("refuses a session whose terminal is not open", async () => {
     const { end, killed, sessions } = await withChild();
-    sessions.insertIfAbsent({ id: "old", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 1 });
+    sessions.insertIfAbsent({ id: "old", ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 1 });
     sessions.setWaiting("old", true, 5);
     expect(await end("old")).toEqual({ v: 1, ok: false, error: "session old 已经结束了" });
     expect(killed).toEqual([]);
@@ -492,7 +492,7 @@ describe("end_session from a feature coordinator (task 11)", () => {
 
   it("ends a session by an id from before /clear, killing the terminal that runs it", async () => {
     const { end, child, killed, sessions, activities } = await withChild();
-    sessions.insertIfAbsent({ id: "after-clear", ticketKey: "DMS-1", cwd: "/w", origin: "butler", createdAt: 2 });
+    sessions.insertIfAbsent({ id: "after-clear", ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy(child, "after-clear");
     sessions.setWaiting("after-clear", true, 5);
     activities.set("after-clear", idle("after-clear"));

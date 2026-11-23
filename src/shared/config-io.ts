@@ -61,10 +61,10 @@ export interface SectionPreview {
 
 export interface ImportPreview {
   token: string;
-  file: { exportedAt: number; butlerVersion: string; formatVersion: number; scope: FileScope; includeSourceUrls: boolean };
+  file: { exportedAt: number; shipherdVersion: string; formatVersion: number; scope: FileScope; includeSourceUrls: boolean };
   starter: boolean;
   sections: SectionPreview[];
-  /** 文件里有、这个 Butler 不认识的部分：跳过。 */
+  /** 文件里有、这个 Shipherd 不认识的部分：跳过。 */
   skippedSections: string[];
   /** 规矩的语义冲突检测（模型）没查全：没显示出来的冲突可能还有。 */
   semanticFailed?: boolean;
@@ -97,7 +97,7 @@ export type ImportApplyResult =
 
 export type ImportPreviewResult =
   | { ok: true; preview: ImportPreview }
-  | { ok: false; reason: "cancelled" | "not_json" | "not_butler" | "too_new" | "bad_section" | "too_large" | "read_failed" | "expired" | "bad_target"; section?: string };
+  | { ok: false; reason: "cancelled" | "not_json" | "not_shipherd" | "too_new" | "bad_section" | "too_large" | "read_failed" | "expired" | "bad_target"; section?: string };
 
 export type ExportResult = { ok: true; file: string; counts: Record<string, number> } | { ok: false; reason: "cancelled" | "write_failed" | "not_found" | "no_checks" };
 

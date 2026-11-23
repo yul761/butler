@@ -15,7 +15,7 @@ import { SessionCost } from "./SessionCost";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
 
-/** feature 页的标题栏，以及页面下半部分的仓库条、session 条和终端（session 条和终端 Butler 总控页也用）。 */
+/** feature 页的标题栏，以及页面下半部分的仓库条、session 条和终端（session 条和终端 Shipherd 总控页也用）。 */
 
 interface SessionPanesOptions {
   /** 打开 sessionId 这个 session；不给就新开一个。 */
@@ -154,7 +154,7 @@ export function WorkspaceHeader({ name, nameLabel, workspaceDir, onRename, archi
 }
 
 interface AreaProps {
-  /** 仓库条；Butler 总控没有仓库，不给就不显示。 */
+  /** 仓库条；Shipherd 总控没有仓库，不给就不显示。 */
   repos?: { id: number; repoPath: string }[];
   reposHint?: string;
   onAddRepo?: (path: string) => Promise<unknown>;
@@ -169,7 +169,7 @@ interface AreaProps {
   newSessionHint: string;
   error: string | null;
   onError: (e: unknown) => void;
-  /** session 条下面、终端上面再放的东西（Butler 总控页的复盘分析 session）。 */
+  /** session 条下面、终端上面再放的东西（Shipherd 总控页的复盘分析 session）。 */
   children?: ReactNode;
 }
 

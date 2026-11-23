@@ -1,7 +1,7 @@
 import type { GateAction } from "./gate-command";
 
 /**
- * 合并总控的闸门（设计文档 2026-11-04）：PreToolUse hook ↔ Butler 主进程，走文件。
+ * 合并总控的闸门（设计文档 2026-11-04）：PreToolUse hook ↔ Shipherd 主进程，走文件。
  * 请求：<gate>/requests/<id>.json；结果：<gate>/results/<id>.json（同一个 id）。
  * 不引 Node 模块（渲染进程也会打包 shared）。
  */

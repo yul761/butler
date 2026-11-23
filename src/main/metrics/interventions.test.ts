@@ -46,7 +46,7 @@ describe("terminal_input: prompt (UserPromptSubmit)", () => {
     expect(repo.events(0)[0]).toMatchObject({ kind: "terminal_input", sessionId: "head-t1", ticketKey: "T-1", data: { mode: "prompt" } });
   });
 
-  it("does not count what Butler delivers (answers, reports, tasks, /handoff)", () => {
+  it("does not count what Shipherd delivers (answers, reports, tasks, /handoff)", () => {
     const { repo, meter, state } = setup();
     state.inFlight = true;
     expect(meter.promptSubmitted("t1")).toBe(false);
@@ -62,7 +62,7 @@ describe("terminal_input: prompt (UserPromptSubmit)", () => {
     expect(repo.events(0).map((e) => e.data.answered)).toEqual(["ask_user", "needs_you"]);
   });
 
-  it("ignores terminals that are not Butler sessions", () => {
+  it("ignores terminals that are not Shipherd sessions", () => {
     const { repo, meter, state } = setup();
     state.known = false;
     expect(meter.promptSubmitted("t1")).toBe(false);
@@ -125,7 +125,7 @@ describe("terminal_input: dialog keys (pty:write)", () => {
     expect(repo.events(0)).toHaveLength(0);
   });
 
-  it("does not count keys while Butler is delivering into the terminal", () => {
+  it("does not count keys while Shipherd is delivering into the terminal", () => {
     const { repo, meter, state } = setup();
     state.permission = true;
     state.inFlight = true;

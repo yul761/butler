@@ -33,8 +33,8 @@ describe("inferred fallback", () => {
     expect(m.added).toBe(2);
     expect(m.dropped).toBe(4);
     expect(m.out.checks).toEqual([
-      expect.objectContaining({ category: "test", tool: "check-sh", command: "./tools/check.sh", source: "inferred", confidence: "low", butlerStage: "push", evidence: [".gitlab-ci.yml"] }),
-      expect.objectContaining({ category: "lint", tool: "acme", fileCommand: "./bin/acme-verify {file}", stages: ["ci"], butlerStage: "edit", changedFiles: true, evidence: ["inferred"] }),
+      expect.objectContaining({ category: "test", tool: "check-sh", command: "./tools/check.sh", source: "inferred", confidence: "low", shipherdStage: "push", evidence: [".gitlab-ci.yml"] }),
+      expect.objectContaining({ category: "lint", tool: "acme", fileCommand: "./bin/acme-verify {file}", stages: ["ci"], shipherdStage: "edit", changedFiles: true, evidence: ["inferred"] }),
     ]);
     expect(m.out.profile.projects).toEqual([expect.objectContaining({ dir: "", testAll: "./tools/check.sh", lint: "make verify", install: null, inferred: ["testAll", "lint"] })]);
   });

@@ -17,7 +17,7 @@ test("export diagnostics writes a JSON file with perf counters and the log tail"
   await page.getByTestId("diag-export").click();
   await expect(page.getByTestId("diag-export-result")).toHaveText(S.set.health.diagExported(file));
   const d = JSON.parse(readFileSync(file, "utf8"));
-  expect(d.kind).toBe("butler-diagnostics");
+  expect(d.kind).toBe("shipherd-diagnostics");
   expect(d.app.mode).toBe("on");
   expect(d.perf.current.invokes["health:get"].n).toBeGreaterThan(0);
   expect(Array.isArray(d.logTail)).toBe(true);

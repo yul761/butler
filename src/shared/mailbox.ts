@@ -1,5 +1,5 @@
-// 信箱（BTL-245）的磁盘投影：主进程和 butler-hook 共用的约定。
-// <mailbox>/<BUTLER_SESSION>/<queuedAt>-<id>.json 是一条在排队的消息；目录不在就是信箱为空，hook 不启动 butler-hook。
+// 信箱（BTL-245）的磁盘投影：主进程和 shipherd-hook 共用的约定。
+// <mailbox>/<SHIPHERD_SESSION>/<queuedAt>-<id>.json 是一条在排队的消息；目录不在就是信箱为空，hook 不启动 shipherd-hook。
 
 /** hook 认领了、还没写出去：`<name>.taken-<pid>`。 */
 export const TAKEN_SUFFIX = ".taken-";
@@ -22,7 +22,7 @@ export interface MailboxFile {
 }
 
 /** hook 送完以后写进 hook 收件箱的信封里的 hook_event_name：主进程收到就去清扫这个终端的 .done。 */
-export const MAILBOX_EVENT = "ButlerMailbox";
+export const MAILBOX_EVENT = "ShipherdMailbox";
 
 export const messageFileName = (queuedAt: number, id: string): string => `${String(queuedAt).padStart(15, "0")}-${id}${MSG_SUFFIX}`;
 
@@ -36,10 +36,10 @@ export function messageIdOf(name: string): string | null {
 const dq = (s: string): string => s.replace(/[\\"$`]/g, (c) => `\\${c}`);
 
 /**
- * PostToolUse 的信箱 hook 命令（macOS 的 sh、Windows 的 Git Bash 都能跑）：目录不在就只是一次 test，退出 0；在才 exec butler-hook。
- * hook 是 hookCommand 生成的带引号的路径；dir 是信箱根目录（Windows 上换成正斜杠）。没有 BUTLER_SESSION 的（外部终端）看的是 `_`，不存在。
+ * PostToolUse 的信箱 hook 命令（macOS 的 sh、Windows 的 Git Bash 都能跑）：目录不在就只是一次 test，退出 0；在才 exec shipherd-hook。
+ * hook 是 hookCommand 生成的带引号的路径；dir 是信箱根目录（Windows 上换成正斜杠）。没有 SHIPHERD_SESSION 的（外部终端）看的是 `_`，不存在。
  */
 export function mailboxHookCommand(hook: string, dir: string, platform: NodeJS.Platform): string {
   const d = dq(platform === "win32" ? dir.replace(/\\/g, "/") : dir);
-  return `[ ! -d "${d}/\${BUTLER_SESSION:-_}" ] || exec ${hook} mailbox "${d}"`;
+  return `[ ! -d "${d}/\${SHIPHERD_SESSION:-_}" ] || exec ${hook} mailbox "${d}"`;
 }

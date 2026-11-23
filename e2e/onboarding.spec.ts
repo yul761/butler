@@ -15,7 +15,7 @@ import { completeWizard, expect, openAutomationAdvanced, openSettingsGroup, open
 const row = (page: Page, id: string) => page.getByTestId(`feature-row-${id}`);
 
 function settingValues(s: Sandbox, keys: string[]): Record<string, string | null> {
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   try {
     const out: Record<string, string | null> = {};
     for (const k of keys) out[k] = (db.prepare("SELECT value FROM settings WHERE key = ?").get(k) as { value: string } | undefined)?.value ?? null;
@@ -55,7 +55,7 @@ test("turning on a feature writes the setting, leaves outward actions off, and s
   const block = page.getByTestId("external-actions");
   for (const kind of EXTERNAL_ACTIONS) await expect(block.getByTestId(`external-${kind}`)).not.toBeChecked();
 
-  // 切到英文（同 language.spec：不设 BUTLER_LANG 重启，在「基本」里选 English，整窗重新加载）：同一行还是开着，标题是英文。
+  // 切到英文（同 language.spec：不设 SHIPHERD_LANG 重启，在「基本」里选 English，整窗重新加载）：同一行还是开着，标题是英文。
   await app.close();
   s.lang = null;
   const en = (await launch(s)).page;
@@ -75,7 +75,7 @@ test("a half-enabled row is shown as partial", async ({ makeSandbox, launch }) =
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
-  const db = new DatabaseSync(join(s.butlerHome, "app.db"));
+  const db = new DatabaseSync(join(s.shipherdHome, "app.db"));
   db.prepare("INSERT INTO settings (key, value) VALUES ('lessonsAutoAdmit', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
   db.close();
   await page.reload();

@@ -17,7 +17,7 @@ export interface ControlInboxOptions<Req = ControlRequest, Res = ControlResult> 
   intervalMs?: number;
   /** 没人取走的结果文件（总控等超时了）、写了一半的临时文件保留多久。 */
   staleMs?: number;
-  /** 请求文件超过这个年纪就不再执行（比如 Butler 没开着时留下的）：总控早就等超时了。 */
+  /** 请求文件超过这个年纪就不再执行（比如 Shipherd 没开着时留下的）：总控早就等超时了。 */
   maxRequestAgeMs?: number;
   now?: () => number;
   log?: (msg: string, err?: unknown) => void;

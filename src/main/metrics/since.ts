@@ -10,14 +10,14 @@ export function metricsSince(settings: Pick<SettingsRepo, "get">): number | null
 }
 
 /**
- * 基线截止点（ws-h）：第一次有 Butler session 时存下来，之后不再变（最早的 session 被删、或者
- * 旧的发现 session 改成 Butler 的，都不会把截止点挪动、把 Butler 期间的 PR 当成基线）。
- * 还没有 Butler session 时用度量开始的时间，不存。
+ * 基线截止点（ws-h）：第一次有 Shipherd session 时存下来，之后不再变（最早的 session 被删、或者
+ * 旧的发现 session 改成 Shipherd 的，都不会把截止点挪动、把 Shipherd 期间的 PR 当成基线）。
+ * 还没有 Shipherd session 时用度量开始的时间，不存。
  */
-export function baselineCutoffOf(settings: Pick<SettingsRepo, "get" | "set">, firstButlerSessionAt: () => number | null, since: number): number {
+export function baselineCutoffOf(settings: Pick<SettingsRepo, "get" | "set">, firstShipherdSessionAt: () => number | null, since: number): number {
   const v = Number(settings.get("metricsBaselineCutoff") ?? "");
   if (Number.isFinite(v) && v > 0) return v;
-  const first = firstButlerSessionAt();
+  const first = firstShipherdSessionAt();
   if (first === null) return since;
   settings.set("metricsBaselineCutoff", String(first));
   return first;

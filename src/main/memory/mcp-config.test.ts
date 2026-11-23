@@ -2,21 +2,21 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { butlerMcpFile, featureMcpFile, hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, FORK_MCP_SUBDIR, removeTerminalMcpConfig, terminalMcpFile, writeTerminalMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeButlerMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
+import { shipherdMcpFile, featureMcpFile, hubRoutes, memoryServers, pruneTerminalMcpConfigs, writeForkMcpConfig, FORK_MCP_SUBDIR, removeTerminalMcpConfig, terminalMcpFile, writeTerminalMcpConfig, removeFeatureMcpConfig, removeTicketMcpConfigs, SESSIONS_AUTO_ALLOW, sessionsServer, TICKET_MCP_SUBDIR, ticketMcpFile, writeShipherdMcpConfig, writeFeatureMcpConfig, writeTicketMcpConfig } from "./mcp-config";
 
-const launcher = { command: "/Applications/Butler.app/Contents/MacOS/Butler", script: "/Applications/Butler.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
+const launcher = { command: "/Applications/Shipherd.app/Contents/MacOS/Shipherd", script: "/Applications/Shipherd.app/Contents/Resources/memory-mcp/statecore-mcp.cjs" };
 
 describe("ticket MCP config (design 4.2, 8.4)", () => {
-  it("mounts the ticket scope and the workspace scope under Butler's own server names", () => {
+  it("mounts the ticket scope and the workspace scope under Shipherd's own server names", () => {
     const server = (scope: string) => ({
       type: "stdio",
       command: launcher.command,
-      args: [launcher.script, "--data", "/h/.butler/statecore"],
+      args: [launcher.script, "--data", "/h/.shipherd/statecore"],
       env: { ELECTRON_RUN_AS_NODE: "1", STATECORE_SCOPE: scope, LOG_LEVEL: "warn" },
     });
-    expect(memoryServers({ launcher, statecoreDir: "/h/.butler/statecore", ticketKey: "PROJ-1" })).toEqual({
-      "butler-memory": server("ticket:PROJ-1"),
-      "butler-workspace": server("workspace"),
+    expect(memoryServers({ launcher, statecoreDir: "/h/.shipherd/statecore", ticketKey: "PROJ-1" })).toEqual({
+      "shipherd-memory": server("ticket:PROJ-1"),
+      "shipherd-workspace": server("workspace"),
     });
   });
 
@@ -34,13 +34,13 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
     expect(readdirSync(join(mcpDir, "tickets"))).toEqual(["PROJ-1.json"]);
   });
 
-  it("keeps the coordinator's config (with the coordinator's butler-sessions) in its own file", () => {
+  it("keeps the coordinator's config (with the coordinator's shipherd-sessions) in its own file", () => {
     const mcpDir = join(tempDir(), "mcp");
     const sessions = sessionsServer({ launcher, scope: { ticketKey: "PROJ-1" }, requestsDir: "/b/control/requests", resultsDir: "/b/control/results" });
     expect(sessions).toEqual({
-      "butler-sessions": {
+      "shipherd-sessions": {
         type: "stdio", command: launcher.command, args: [launcher.script],
-        env: { ELECTRON_RUN_AS_NODE: "1", BUTLER_TICKET: "PROJ-1", BUTLER_LANG: "zh", BUTLER_CONTROL_REQUESTS: "/b/control/requests", BUTLER_CONTROL_RESULTS: "/b/control/results" },
+        env: { ELECTRON_RUN_AS_NODE: "1", SHIPHERD_TICKET: "PROJ-1", SHIPHERD_LANG: "zh", SHIPHERD_CONTROL_REQUESTS: "/b/control/requests", SHIPHERD_CONTROL_RESULTS: "/b/control/results" },
       },
     });
     const plain = writeTicketMcpConfig({ mcpDir, ticketKey: "PROJ-1", servers: memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1" }) });
@@ -48,7 +48,7 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
     const boss = join(mcpDir, "tickets", "coordinator", "PROJ-1.json");
     mkdirSync(dirname(boss), { recursive: true });
     writeFileSync(boss, "{}");
-    expect(readFileSync(plain, "utf8")).not.toContain("butler-sessions");
+    expect(readFileSync(plain, "utf8")).not.toContain("shipherd-sessions");
     removeTicketMcpConfigs(mcpDir, "PROJ-1");
     expect(existsSync(plain) || existsSync(boss)).toBe(false);
     removeTicketMcpConfigs(mcpDir, "PROJ-1");
@@ -103,26 +103,26 @@ describe("ticket MCP config (design 4.2, 8.4)", () => {
 });
 
 describe("feature memory and coordinator config (design 2026-10-26)", () => {
-  it("adds butler-feature to a feature ticket's servers, and gives the feature coordinator no ticket memory", () => {
+  it("adds shipherd-feature to a feature ticket's servers, and gives the feature coordinator no ticket memory", () => {
     const ticket = memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "DMS-1", featureId: 7 });
-    expect(Object.keys(ticket)).toEqual(["butler-memory", "butler-workspace", "butler-feature"]);
-    expect(ticket["butler-feature"].env.STATECORE_SCOPE).toBe("feature:7");
+    expect(Object.keys(ticket)).toEqual(["shipherd-memory", "shipherd-workspace", "shipherd-feature"]);
+    expect(ticket["shipherd-feature"].env.STATECORE_SCOPE).toBe("feature:7");
     const coord = memoryServers({ launcher, statecoreDir: "/sc", featureId: 7 });
-    expect(Object.keys(coord)).toEqual(["butler-workspace", "butler-feature"]);
+    expect(Object.keys(coord)).toEqual(["shipherd-workspace", "shipherd-feature"]);
   });
 
   it("points the feature coordinator's sessions server at the feature, not a ticket", () => {
-    const s = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(s.env.BUTLER_FEATURE).toBe("7");
-    expect(s.env.BUTLER_TICKET).toBeUndefined();
-    const t = sessionsServer({ launcher, scope: { ticketKey: "A-1" }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(t.env.BUTLER_TICKET).toBe("A-1");
-    expect(t.env.BUTLER_MEMBER).toBeUndefined();
+    const s = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["shipherd-sessions"];
+    expect(s.env.SHIPHERD_FEATURE).toBe("7");
+    expect(s.env.SHIPHERD_TICKET).toBeUndefined();
+    const t = sessionsServer({ launcher, scope: { ticketKey: "A-1" }, requestsDir: "/req", resultsDir: "/res" })["shipherd-sessions"];
+    expect(t.env.SHIPHERD_TICKET).toBe("A-1");
+    expect(t.env.SHIPHERD_MEMBER).toBeUndefined();
   });
 
   it("gives a ticket session a sessions server scoped to its ticket (BTL-190 2+3)", () => {
-    const m = sessionsServer({ launcher, scope: { ticketKey: "A-1" }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(m.env).toMatchObject({ BUTLER_TICKET: "A-1", BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" });
+    const m = sessionsServer({ launcher, scope: { ticketKey: "A-1" }, requestsDir: "/req", resultsDir: "/res" })["shipherd-sessions"];
+    expect(m.env).toMatchObject({ SHIPHERD_TICKET: "A-1", SHIPHERD_CONTROL_REQUESTS: "/req", SHIPHERD_CONTROL_RESULTS: "/res" });
   });
 
   it("writes and removes the feature's config under mcp/features", () => {
@@ -139,71 +139,71 @@ describe("feature memory and coordinator config (design 2026-10-26)", () => {
 describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
   it("are only ask_user and report of the sessions server", () => {
     expect(SESSIONS_AUTO_ALLOW).toEqual([
-      "mcp__butler-sessions__ask_user", "mcp__butler-sessions__report",
-      "mcp__butler-sessions__list_epics", "mcp__butler-sessions__list_features", "mcp__butler-sessions__list_tickets",
-      "mcp__butler-sessions__list_prs", "mcp__butler-sessions__list_sessions", "mcp__butler-sessions__session_activity",
-      "mcp__butler-sessions__list_inbox", "mcp__butler-sessions__progress_overview", "mcp__butler-sessions__metrics_overview",
-      "mcp__butler-sessions__list_stacks",
-      "mcp__butler-sessions__reorder_features", "mcp__butler-sessions__set_ticket_feature",
-      "mcp__butler-sessions__submit_evidence", "mcp__butler-sessions__pre_review_result", "mcp__butler-sessions__pr_assessment",
+      "mcp__shipherd-sessions__ask_user", "mcp__shipherd-sessions__report",
+      "mcp__shipherd-sessions__list_epics", "mcp__shipherd-sessions__list_features", "mcp__shipherd-sessions__list_tickets",
+      "mcp__shipherd-sessions__list_prs", "mcp__shipherd-sessions__list_sessions", "mcp__shipherd-sessions__session_activity",
+      "mcp__shipherd-sessions__list_inbox", "mcp__shipherd-sessions__progress_overview", "mcp__shipherd-sessions__metrics_overview",
+      "mcp__shipherd-sessions__list_stacks",
+      "mcp__shipherd-sessions__reorder_features", "mcp__shipherd-sessions__set_ticket_feature",
+      "mcp__shipherd-sessions__submit_evidence", "mcp__shipherd-sessions__pre_review_result", "mcp__shipherd-sessions__pr_assessment",
     ]);
     // 会动别的终端或建东西的不在里面。
     for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_epic_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode"]) {
-      expect(SESSIONS_AUTO_ALLOW).not.toContain(`mcp__butler-sessions__${t}`);
+      expect(SESSIONS_AUTO_ALLOW).not.toContain(`mcp__shipherd-sessions__${t}`);
     }
   });
 });
 
 describe("feature coordinator sessions server", () => {
   it("points it at the feature and nothing else", () => {
-    const s = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(s.env.BUTLER_FEATURE).toBe("7");
-    for (const k of ["BUTLER_TICKET", "BUTLER_SCOPE"]) expect(s.env[k]).toBeUndefined();
+    const s = sessionsServer({ launcher, scope: { featureId: 7 }, requestsDir: "/req", resultsDir: "/res" })["shipherd-sessions"];
+    expect(s.env.SHIPHERD_FEATURE).toBe("7");
+    for (const k of ["SHIPHERD_TICKET", "SHIPHERD_SCOPE"]) expect(s.env[k]).toBeUndefined();
   });
 
   it("no longer writes the old epic variables (BTL-246)", () => {
-    for (const scope of [{ featureId: 7 }, { ticketKey: "A-1" }, { butler: true as const }]) {
-      const env = sessionsServer({ launcher, scope, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"].env;
-      expect(env.BUTLER_EPIC).toBeUndefined();
-      expect(env.BUTLER_FEATURE_EPIC).toBeUndefined();
+    for (const scope of [{ featureId: 7 }, { ticketKey: "A-1" }, { shipherd: true as const }]) {
+      const env = sessionsServer({ launcher, scope, requestsDir: "/req", resultsDir: "/res" })["shipherd-sessions"].env;
+      expect(env.SHIPHERD_EPIC).toBeUndefined();
+      expect(env.SHIPHERD_FEATURE_EPIC).toBeUndefined();
     }
   });
 });
 
-describe("Butler 总控 config (BTL-190 5)", () => {
-  it("gives it only butler-workspace for memory, and a sessions server with the butler scope", () => {
-    expect(Object.keys(memoryServers({ launcher, statecoreDir: "/sc" }))).toEqual(["butler-workspace"]);
-    const s = sessionsServer({ launcher, scope: { butler: true }, requestsDir: "/req", resultsDir: "/res" })["butler-sessions"];
-    expect(s.env.BUTLER_SCOPE).toBe("butler");
-    for (const k of ["BUTLER_FEATURE", "BUTLER_TICKET", "BUTLER_MEMBER"]) expect(s.env[k]).toBeUndefined();
-    expect(s.env).toMatchObject({ BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" });
+describe("Shipherd 总控 config (BTL-190 5)", () => {
+  it("gives it only shipherd-workspace for memory, and a sessions server with the shipherd scope", () => {
+    expect(Object.keys(memoryServers({ launcher, statecoreDir: "/sc" }))).toEqual(["shipherd-workspace"]);
+    const s = sessionsServer({ launcher, scope: { shipherd: true }, requestsDir: "/req", resultsDir: "/res" })["shipherd-sessions"];
+    expect(s.env.SHIPHERD_SCOPE).toBe("shipherd");
+    for (const k of ["SHIPHERD_FEATURE", "SHIPHERD_TICKET", "SHIPHERD_MEMBER"]) expect(s.env[k]).toBeUndefined();
+    expect(s.env).toMatchObject({ SHIPHERD_CONTROL_REQUESTS: "/req", SHIPHERD_CONTROL_RESULTS: "/res" });
   });
 
-  it("writes its config to mcp/butler.json", () => {
+  it("writes its config to mcp/shipherd.json", () => {
     const mcpDir = tempDir();
     const servers = memoryServers({ launcher, statecoreDir: "/sc" });
-    const file = writeButlerMcpConfig({ mcpDir, servers });
-    expect(file).toBe(butlerMcpFile(mcpDir));
-    expect(file).toBe(join(mcpDir, "butler.json"));
+    const file = writeShipherdMcpConfig({ mcpDir, servers });
+    expect(file).toBe(shipherdMcpFile(mcpDir));
+    expect(file).toBe(join(mcpDir, "shipherd.json"));
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers });
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });
 
 describe("shared MCP config (WS-M H)", () => {
-  it("turns the stdio servers into hub routes: memory by scope, butler-sessions with its variables and the terminal as caller", () => {
+  it("turns the stdio servers into hub routes: memory by scope, shipherd-sessions with its variables and the terminal as caller", () => {
     const servers = {
       ...memoryServers({ launcher, statecoreDir: "/sc", ticketKey: "PROJ-1", featureId: 3 }),
       ...sessionsServer({ launcher, scope: { ticketKey: "PROJ-1" }, requestsDir: "/req", resultsDir: "/res" }),
     };
     expect(hubRoutes(servers, "term-1")).toEqual({
-      "butler-memory": { server: "memory", scope: "ticket:PROJ-1" },
-      "butler-workspace": { server: "memory", scope: "workspace" },
-      "butler-feature": { server: "memory", scope: "feature:3" },
-      "butler-sessions": {
+      "shipherd-memory": { server: "memory", scope: "ticket:PROJ-1" },
+      "shipherd-workspace": { server: "memory", scope: "workspace" },
+      "shipherd-feature": { server: "memory", scope: "feature:3" },
+      "shipherd-sessions": {
         server: "sessions",
         from: "term-1",
-        env: { BUTLER_TICKET: "PROJ-1", BUTLER_LANG: expect.any(String), BUTLER_CONTROL_REQUESTS: "/req", BUTLER_CONTROL_RESULTS: "/res" },
+        env: { SHIPHERD_TICKET: "PROJ-1", SHIPHERD_LANG: expect.any(String), SHIPHERD_CONTROL_REQUESTS: "/req", SHIPHERD_CONTROL_RESULTS: "/res" },
       },
     });
   });
@@ -214,7 +214,7 @@ describe("shared MCP config (WS-M H)", () => {
 
   it("writes one private config per terminal under mcp/terms and removes it again", () => {
     const mcpDir = tempDir();
-    const servers = { "butler-workspace": { type: "http" as const, url: "http://127.0.0.1:4100/mcp/abc" } };
+    const servers = { "shipherd-workspace": { type: "http" as const, url: "http://127.0.0.1:4100/mcp/abc" } };
     const file = writeTerminalMcpConfig({ mcpDir, termId: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", servers });
     expect(file).toBe(join(mcpDir, "terms", "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed.json"));
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpServers: servers });

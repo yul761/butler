@@ -16,7 +16,7 @@ export const EDITABLE_SETTINGS = [
   "sessionMemoryReserveMb",
   "sessionMemoryEstimateMb",
   "sessionMaxRunning",
-  "butlerPatrolTime",
+  "shipherdPatrolTime",
   "onboardingDone",
   "language",
   "reviewRequestScope",
@@ -91,13 +91,13 @@ export const EDITABLE_SETTINGS = [
   "intakeFilePath",
   "intakePollMinutes",
   "intakeRepoMap",
-  // 4.0 界面减法（BTL-244）：显示 Butler 之外开的 session；关着时不扫描 ~/.claude/projects。
+  // 4.0 界面减法（BTL-244）：显示 Shipherd 之外开的 session；关着时不扫描 ~/.claude/projects。
   "showOutsideSessions",
   // 4.0 自动化档位（BTL-247）：manual | semi。写它会把受管开关写成那一档的预设（src/shared/automation.ts）。
   "automationLevel",
   // 更新提示（BTL-253）：每天经你的 gh 查一次 GitHub 上有没有新版本。默认开。
   "updateCheckEnabled",
-  // BTL-256：Butler 重启后把上次退出时在工作、在等回复的、总控管的 session 自动恢复。
+  // BTL-256：Shipherd 重启后把上次退出时在工作、在等回复的、总控管的 session 自动恢复。
   "autoResumeAfterRestart",
 ] as const;
 

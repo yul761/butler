@@ -11,7 +11,7 @@ export interface FeatureTicketContext {
   prs: Pr[];
   /** 最新一条完整的 ticket handoff；还没有就是 null。 */
   latest: Handoff | null;
-  /** Butler 实时读到的 PR（ticket_prs，ws-b）；给了就优先用它，handoff 里提到、没在这里的 PR 照旧列出。 */
+  /** Shipherd 实时读到的 PR（ticket_prs，ws-b）；给了就优先用它，handoff 里提到、没在这里的 PR 照旧列出。 */
   live?: WatchedPr[];
   /** 实时 PR 轮到谁（TurnService.prTurns，和看板同一套算法）；没有为 null。 */
   turnOf?: (url: string, ticketKey?: string) => Turn | null;
@@ -66,7 +66,7 @@ export const featureHandoffSchemaDoc = (l: Lang): string => (l === "en" ? SCHEMA
 export const featureHandoffExample = (l: Lang): string => JSON.stringify(l === "en" ? EXAMPLE_VALUE_EN : EXAMPLE_VALUE, null, 2);
 
 /** 晚间批量和"立即更新"用的 prompt。占位符 {{feature}}、{{previous}}、{{tickets}} 由 FeatureSummaryRunner 填充。 */
-const PROMPT = `你在为 Butler 写 epic「{{feature}}」的汇总，显示在 epic 页的"整体进度"里，让人明天早上一打开就知道整体到哪了。
+const PROMPT = `你在为 Shipherd 写 epic「{{feature}}」的汇总，显示在 epic 页的"整体进度"里，让人明天早上一打开就知道整体到哪了。
 
 要求：
 1. 依据这个 session 的对话（如果有）和下面列出的每个 ticket 的最新 handoff 来写；可以用 \`gh pr view\` 确认 PR 状态。
@@ -88,7 +88,7 @@ ${SCHEMA_DOC}
 ${featureHandoffExample("zh")}
 `;
 
-const PROMPT_EN = `You are writing Butler's summary of the epic "{{feature}}". It is shown as the overall progress on the epic page, so that tomorrow morning one look tells where the epic stands.
+const PROMPT_EN = `You are writing Shipherd's summary of the epic "{{feature}}". It is shown as the overall progress on the epic page, so that tomorrow morning one look tells where the epic stands.
 
 Requirements:
 1. Base it on this session's conversation (if there is one) and on the latest handoff of each ticket listed below; you may confirm PR states with \`gh pr view\`.
@@ -128,7 +128,7 @@ const FILL = {
     none: "无",
     noHandoff: "  （还没有 handoff）",
     sep: "；",
-    asOf: (at: string) => `PR 状态截至 ${at}（Butler 实时读的 GitHub 状态；标"handoff 里记的"的是 ticket handoff 当时写下的）。`,
+    asOf: (at: string) => `PR 状态截至 ${at}（Shipherd 实时读的 GitHub 状态；标"handoff 里记的"的是 ticket handoff 当时写下的）。`,
     fromHandoff: "（handoff 里记的）",
     draft: " draft",
     ci: (c: string) => `，CI ${c}`,
@@ -148,7 +148,7 @@ const FILL = {
     none: "nothing",
     noHandoff: "  (no handoff yet)",
     sep: "; ",
-    asOf: (at: string) => `PR status as of ${at} (read live from GitHub by Butler; PRs marked "from handoff" are as the ticket handoff recorded them).`,
+    asOf: (at: string) => `PR status as of ${at} (read live from GitHub by Shipherd; PRs marked "from handoff" are as the ticket handoff recorded them).`,
     fromHandoff: " (from handoff)",
     draft: " draft",
     ci: (c: string) => `, CI ${c}`,

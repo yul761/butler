@@ -19,7 +19,7 @@ export interface CostSessionInfo {
   title: string;
   /** 链上所有 id：用量按它们汇总。 */
   chainIds: string[];
-  /** 解析上限用的仓库（ticket 的仓库；feature / Butler 总控为空，按全局）。 */
+  /** 解析上限用的仓库（ticket 的仓库；feature / Shipherd 总控为空，按全局）。 */
   repos: string[];
   model: string | null;
   /** 终端开着。 */
@@ -122,7 +122,7 @@ export class CostBreaker {
     }
   }
 
-  /** 这个 session（链上任何一个 id）被熔断暂停了，Butler 不要往里自动输入（DeliveryGuard 的 cost_paused）。 */
+  /** 这个 session（链上任何一个 id）被熔断暂停了，Shipherd 不要往里自动输入（DeliveryGuard 的 cost_paused）。 */
   sessionPaused(sessionId: string): boolean {
     const root = this.d.rootOf(sessionId);
     if (!root) return false;

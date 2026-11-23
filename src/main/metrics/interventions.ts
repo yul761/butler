@@ -19,9 +19,9 @@ export type AnsweredWhat = "ask_user" | "needs_you" | "permission" | "choice";
 export interface TerminalInputDeps {
   record: RecordEvent;
   now(): number;
-  /** 终端 id（BUTLER_SESSION）→ 现在的 head；不是 Butler 开着的终端（外部终端、复盘分析 session）为 null。 */
+  /** 终端 id（SHIPHERD_SESSION）→ 现在的 head；不是 Shipherd 开着的终端（外部终端、复盘分析 session）为 null。 */
   session(termId: string): MeteredSession | null;
-  /** Butler 正在往这个终端里递东西（回答、汇报、交任务、换新）。 */
+  /** Shipherd 正在往这个终端里递东西（回答、汇报、交任务、换新）。 */
   autoInputInFlight(termId: string): boolean;
   /** 终端停在权限确认上。 */
   permissionShowing(termId: string): boolean;
@@ -45,7 +45,7 @@ export const questionToolShowing = (a: { kind: ActivityKind; startedAt: number |
 
 /**
  * 人往 session 终端里的输入（契约 4.7 的第一类人介入）：
- * - prompt：UserPromptSubmit 时这个终端没有 Butler 在递东西；
+ * - prompt：UserPromptSubmit 时这个终端没有 Shipherd 在递东西；
  * - dialog：停在权限确认 / AskUserQuestion / ExitPlanMode 上时按下确定类的键；
  * - interrupt：session 在干活时单独按 Esc。
  */
@@ -112,7 +112,7 @@ export class TerminalInputMeter {
 
 /**
  * 这个 UserPromptSubmit 是不是这个终端自己的 claude 的：终端里 agent 用 Bash 跑的 `claude -p`（嵌套的）继承了
- * BUTLER_SESSION，它的输入不是人打的。hook 的 session 要和终端在同一条 head 链上。
+ * SHIPHERD_SESSION，它的输入不是人打的。hook 的 session 要和终端在同一条 head 链上。
  */
 export function promptOnTerminalChain(headOf: (id: string) => string | null, hookSessionId: string, termId: string): boolean {
   const term = headOf(termId);
@@ -127,7 +127,7 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.ticketsSetStatus, IPC.ticketsSwitchBranch, IPC.ticketsRecheckCleanup,
   IPC.sessionsOpen, IPC.sessionOpenFix, IPC.sessionsRefresh, IPC.sessionsWake, IPC.sessionsSwitchModel, IPC.sessionsCloseIdle,
   IPC.activityDismiss, IPC.ptyKill, IPC.handoffsRun, IPC.featuresSummaryRun, IPC.featuresOpenSession,
-  IPC.butlerOpenSession, IPC.jobsRunNightly, IPC.ciResend, IPC.followupsSetStatus, IPC.lessonsRun, IPC.availabilityAct,
+  IPC.shipherdOpenSession, IPC.jobsRunNightly, IPC.ciResend, IPC.followupsSetStatus, IPC.lessonsRun, IPC.availabilityAct,
   // 熔断停下的「继续并提高上限」（工作流 L）
   IPC.costResume,
   // 评论：「送进 session」「再回复」推动工作；改分类、忽略不算（recordInvoke 里按 op 分）。
@@ -150,7 +150,7 @@ export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer])
 /** 不算人介入：只读的、配置和整理（搭环境，不是推动一次工作）。 */
 export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   // 只读
-  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.butlerView,
+  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.shipherdView,
   IPC.messagesList, IPC.metricsView, IPC.sessionsUnclaimed, IPC.usageSummary, IPC.ptySnapshot, IPC.ptySince, IPC.healthGet, IPC.dialogPickDir, IPC.diagSnapshot, IPC.diagExport,
   // 发送反馈（BTL-254）：开浏览器、存诊断，不推动工作
   IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,

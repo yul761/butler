@@ -3,20 +3,20 @@ import type { Session } from "../../shared/types";
 import { turnCoordinators } from "./coordinators";
 
 const db = (id: string, over: Partial<Session> = {}): Session =>
-  ({ id, ticketKey: null, featureId: null, butler: false, replacedBy: null, hibernatedAt: null, wakeError: null, fixesSession: null, ...over }) as Session;
-const base = { featureViews: () => [], runningButler: () => null, hibernatedHeads: () => [] };
+  ({ id, ticketKey: null, featureId: null, shipherd: false, replacedBy: null, hibernatedAt: null, wakeError: null, fixesSession: null, ...over }) as Session;
+const base = { featureViews: () => [], runningShipherd: () => null, hibernatedHeads: () => [] };
 
 describe("turnCoordinators", () => {
-  it("the running Butler session counts though the db row carries no termId", () => {
-    const b = db("b1", { butler: true });
-    const out = turnCoordinators({ ...base, runningButler: () => b });
-    expect(out).toEqual([{ session: b, featureId: null, target: { page: "butler", sessionId: "b1" }, title: null }]);
+  it("the running Shipherd session counts though the db row carries no termId", () => {
+    const b = db("b1", { shipherd: true });
+    const out = turnCoordinators({ ...base, runningShipherd: () => b });
+    expect(out).toEqual([{ session: b, featureId: null, target: { page: "shipherd", sessionId: "b1" }, title: null }]);
   });
 
-  it("a hibernated Butler counts when none is running; a replaced one does not", () => {
-    const hib = db("b2", { butler: true, hibernatedAt: 5 });
+  it("a hibernated Shipherd counts when none is running; a replaced one does not", () => {
+    const hib = db("b2", { shipherd: true, hibernatedAt: 5 });
     expect(turnCoordinators({ ...base, hibernatedHeads: () => [hib] }).map((c) => c.session.id)).toEqual(["b2"]);
-    const gone = db("b3", { butler: true, hibernatedAt: 5, replacedBy: "b4" });
+    const gone = db("b3", { shipherd: true, hibernatedAt: 5, replacedBy: "b4" });
     expect(turnCoordinators({ ...base, hibernatedHeads: () => [gone] })).toEqual([]);
   });
 

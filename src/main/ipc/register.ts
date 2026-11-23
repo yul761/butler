@@ -86,7 +86,7 @@ import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
   addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
-  openButlerArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
+  openShipherdArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
@@ -248,8 +248,8 @@ export interface IpcDeps {
   externalAudit: Pick<ExternalAuditRepo, "list">;
   /** 「效果」页（ws-h）：和总控 metrics_overview 同一份。 */
   metrics: (days: number | undefined) => MetricsOverview;
-  /** Butler 页"回复"tab（ws-b）。 */
-  /** 信箱（BTL-245）的消息：Butler 总控的或一个 feature 的。 */
+  /** Shipherd 页"回复"tab（ws-b）。 */
+  /** 信箱（BTL-245）的消息：Shipherd 总控的或一个 feature 的。 */
   messages: (scope: MessageScope) => MessageView[];
   memory: Pick<MemoryService, "view" | "why">;
   /** 对话另存（UI 重做第 4 层）：只读。 */
@@ -258,7 +258,7 @@ export interface IpcDeps {
   fork: Pick<ForkService, "ask" | "reaskFull" | "list" | "sendConclusion" | "remember">;
   /** 对话 tab 的输入框选「开发 session」时发进去（和送结论同一个 DevSender）。 */
   devSend: Pick<DevSender, "send">;
-  /** 启动健康检查（healthReady）：分叉要用的 claude 路径和 butler-hook 在它之后才知道。 */
+  /** 启动健康检查（healthReady）：分叉要用的 claude 路径和 shipherd-hook 在它之后才知道。 */
   forkReady: () => Promise<void>;
   autostart: { get(): AutostartState; set(on: boolean): AutostartState };
   /** 防休眠开关（只在内存里，启动时是关的）。 */
@@ -427,11 +427,11 @@ export function registerIpc(d: IpcDeps): void {
     d.automation.setFeatureLevel(featureIdArg(id), automationLevelArg(level));
     d.notify();
   });
-  handle(IPC.butlerView, () => d.sessionService.butlerView());
+  handle(IPC.shipherdView, () => d.sessionService.shipherdView());
   handle(IPC.messagesList, (raw: unknown): MessageView[] => d.messages(messageScopeArg(raw)));
   handle(IPC.metricsView, (raw: unknown): MetricsOverview => d.metrics(typeof raw === "number" ? raw : undefined));
-  handle(IPC.butlerOpenSession, async (raw: unknown) => {
-    const r = await d.sessionService.openButler(openButlerArg(raw));
+  handle(IPC.shipherdOpenSession, async (raw: unknown) => {
+    const r = await d.sessionService.openShipherd(openShipherdArg(raw));
     d.notify();
     return r;
   });

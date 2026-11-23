@@ -56,7 +56,7 @@ const boxOf = (el: Element, origin: DOMRect): Box => {
 };
 
 /**
- * 「现在」页最上面的实况（BTL-190 第 7 点）：中间是 Butler 核心卡片（在干活的 session 数、最近的记忆读写），
+ * 「现在」页最上面的实况（BTL-190 第 7 点）：中间是 Shipherd 核心卡片（在干活的 session 数、最近的记忆读写），
  * 两边是在干活、在等你的 session 的小终端卡片，虚线连到核心；写记忆时蓝色光点从卡片流向核心，读记忆时绿色光点从核心流向卡片。
  * 虚线的形状按卡片和核心的实际位置算（ResizeObserver）；窄窗口里卡片排成网格、核心在最上面，不画线。动画都在样式里。
  */
@@ -124,7 +124,7 @@ export function LiveWindow({ view, onOpen }: { view: NowView; onOpen: (t: NowTar
           </svg>
           <div className="live-core" ref={core} style={{ "--rows": gridRows } as CSSProperties}>
             {pulse > 0 && <span key={pulse} className="live-core-pulse" aria-hidden="true" />}
-            <div className="live-core-name">Butler</div>
+            <div className="live-core-name">Shipherd</div>
             <div className="live-core-count">
               <strong>{view.running}</strong>
               <span>{S.liveWorking}</span>

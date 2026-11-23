@@ -4,9 +4,9 @@ import type { MemoryHandoff, MemoryItem, WhyEntry } from "../../shared/memory";
 import { statecoreEnv } from "./statecore-env";
 
 /**
- * Butler 里唯一 import statecore-mcp/lib 的生产代码（ESLint 强制，计划 4 R1）。
+ * Shipherd 里唯一 import statecore-mcp/lib 的生产代码（ESLint 强制，计划 4 R1）。
  * 每次操作都是“打开 → 做事 → 关闭”：同一个 statecore.db 还会被 claude 里挂的 MCP 进程同时打开（WAL + busy timeout），
- * 主进程不长期占着连接。StateCore 的返回值类型是 unknown，这里用 zod 校验成 Butler 自己的类型。
+ * 主进程不长期占着连接。StateCore 的返回值类型是 unknown，这里用 zod 校验成 Shipherd 自己的类型。
  */
 
 /**
@@ -24,7 +24,7 @@ export interface ScopeHandle {
   why(factId: string): Promise<WhyEntry[] | null>;
   /**
    * 记一次交接（设计文档 8.3：每次 handoff 都写一个版本）。返回是否写了。
-   * 给了 retryAfter（这次交接在 Butler 里的 createdAt，毫秒）时：当前生效的交接一字不差、并且是在 retryAfter 当时或之后写的，
+   * 给了 retryAfter（这次交接在 Shipherd 里的 createdAt，毫秒）时：当前生效的交接一字不差、并且是在 retryAfter 当时或之后写的，
    * 说明它就是同一次同步上一次没做完时写进去的，这次不再写，重试不会给 why 链多加一个一样的版本。
    * 内容一样、但写在这次交接之前的（另一次 handoff 正好内容相同）照常写。
    */
@@ -37,7 +37,7 @@ export interface ScopeHandle {
    */
   noteSlots(): Promise<{ used: number; cap: number }>;
   /**
-   * consolidate 进来、还没被蒸馏的事件数。Butler 从不蒸馏（BTL-243），这些事件原样留着，recall 时作为最近事件返回。
+   * consolidate 进来、还没被蒸馏的事件数。Shipherd 从不蒸馏（BTL-243），这些事件原样留着，recall 时作为最近事件返回。
    */
   pendingEvents(): Promise<number>;
 }
@@ -141,7 +141,7 @@ function handle(b: Backend): ScopeHandle {
 
 /**
  * 打开一个 scope，执行 fn，然后一定关闭。环境变量一律经 statecoreEnv() 去掉模型相关的变量（R1）；
- * 后台蒸馏关闭、不给模型（backgroundDigest: false，没有 digestLlm）：Butler 不调用任何模型（BTL-243），写入都是确定性的。
+ * 后台蒸馏关闭、不给模型（backgroundDigest: false，没有 digestLlm）：Shipherd 不调用任何模型（BTL-243），写入都是确定性的。
  */
 export async function withScope<T>(
   o: { dataDir: string; scope: string },

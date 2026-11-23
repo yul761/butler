@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="-12.136 -12.136 124.272 124.272">
-  <!-- Butler 应用图标（方向 E1：卡片叠）。macOS 版：按 Apple 的网格，图标主体占 1024 画布里的 824，四周留白放阴影。
+  <!-- Shipherd 应用图标（方向 E1：卡片叠）。macOS 版：按 Apple 的网格，图标主体占 1024 画布里的 824，四周留白放阴影。
        图形和 Windows 版（app-win.svg）一样：蓝底白卡片，深色、浅色的 Dock 和任务栏上都看得清。 -->
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">

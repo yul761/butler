@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 function setup(saveTo: string | null, openFrom: string | null) {
-  const dir = mkdtempSync(join(tmpdir(), "butler-facade-"));
+  const dir = mkdtempSync(join(tmpdir(), "shipherd-facade-"));
   dirs.push(dir);
   const db = memDb();
   const repo = new LessonsRepo(db);
@@ -28,7 +28,7 @@ function setup(saveTo: string | null, openFrom: string | null) {
   const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => v, set: (x) => (v = x) }, now });
   const registry = defaultRegistry();
   const backupDir = join(dir, "backups");
-  const io = new ConfigIoService({ db, repo, policies, recorder, registry, butlerVersion: "3.0.0", backupDir, now });
+  const io = new ConfigIoService({ db, repo, policies, recorder, registry, shipherdVersion: "3.0.0", backupDir, now });
   const backups = new ConfigBackups({ io, registry, jobs: new JobsRepo(db), repo, backupDir, now, intervalDays: () => 0, keep: () => 3, reminderDays: () => 0, lastExportAt: () => null });
   const opened: string[] = [];
   const names: string[] = [];
@@ -60,11 +60,11 @@ describe("configIoFacade", () => {
     const { facade, dir, names, notified } = setup("out.json", "out.json");
     const r = await facade.exportTo(req);
     expect(r.ok).toBe(true);
-    expect(names[0]).toMatch(/^butler-export-.+\.json$/);
-    expect(JSON.parse(readFileSync(join(dir, "out.json"), "utf8")).format).toBe("butler-config");
+    expect(names[0]).toMatch(/^shipherd-export-.+\.json$/);
+    expect(JSON.parse(readFileSync(join(dir, "out.json"), "utf8")).format).toBe("shipherd-config");
     expect(notified()).toBe(1);
     await facade.exportTo({ ...req, starter: { name: "Web / rules!" } });
-    expect(names[1]).toMatch(/^butler-starter-Web-rules-.+\.json$/);
+    expect(names[1]).toMatch(/^shipherd-starter-Web-rules-.+\.json$/);
     const p = await facade.importPreview();
     expect(p.ok).toBe(true);
   });

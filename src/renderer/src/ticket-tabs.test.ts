@@ -21,7 +21,7 @@ describe("landingTab", () => {
   it("everything else lands on the overview", () => {
     expect(landingTab({ owner: "you", kind: "merge", risk: null })).toBe("overview");
     expect(landingTab({ owner: "you", kind: "review", author: "a", title: "t", url: "u" })).toBe("overview");
-    expect(landingTab({ owner: "you", kind: "butler", notice: {} as never })).toBe("overview");
+    expect(landingTab({ owner: "you", kind: "shipherd", notice: {} as never })).toBe("overview");
     expect(landingTab({ owner: "agent", kind: "working", sessionId: "s" })).toBe("overview");
     expect(landingTab({ owner: "done", kind: "merged" })).toBe("overview");
     expect(landingTab({ owner: "idle", kind: "not_started" })).toBe("overview");

@@ -41,7 +41,7 @@ export interface FeatureRunnerDeps extends HeadlessExecDeps {
   transcriptMtime: (sessionId: string) => number | null;
   /** 设置 headlessProjectMcp 打开时调用：这个目录要额外挂的 --mcp-config 文件。 */
   projectMcp?: (cwd: string) => string[];
-  /** Butler 实时读到的这个 ticket 的 PR（PrWatcher.statusOf，ws-b）：汇总的 prompt 用它，PR 状态变化也算新活动。 */
+  /** Shipherd 实时读到的这个 ticket 的 PR（PrWatcher.statusOf，ws-b）：汇总的 prompt 用它，PR 状态变化也算新活动。 */
   livePrs?: (ticketKey: string) => WatchedPr[];
   /** 实时 PR 轮到谁（TurnService.prTurns：一次算好，按链接查），写进汇总 prompt；不给就不写。 */
   prTurns?: () => (url: string, ticketKey?: string) => Turn | null;
@@ -125,8 +125,8 @@ export class FeatureSummaryRunner {
   }
 
   /**
-   * 总控里的 /handoff 没存下汇总（wrong_block / no_block，多半是用户自己开的总控、没有 Butler 的 MCP）时的退路：
-   * Butler 自己 fork 跑 /handoff 的那个 session 生成汇总（trigger=command，sessionId 记成它），再走 afterCommand
+   * 总控里的 /handoff 没存下汇总（wrong_block / no_block，多半是用户自己开的总控、没有 Shipherd 的 MCP）时的退路：
+   * Shipherd 自己 fork 跑 /handoff 的那个 session 生成汇总（trigger=command，sessionId 记成它），再走 afterCommand
    * （先子 ticket，再 coversUntil）。和 runManual、晚间批量共用 once：同一个 feature 正在跑时共用那次的结果，不重复跑。
    */
   runFromCommand(featureId: number, sessionId: string): Promise<FeatureHandoffOutcome> {
@@ -256,7 +256,7 @@ export class FeatureSummaryRunner {
 
 /**
  * index.ts 交给 capture 的 afterFeatureCommand：总控里的 /handoff 存下了汇总时，后台给子 ticket 跑 handoff；
- * 没存下（handoffId 为 null）时记一笔，然后后台由 Butler 从那个 session 自己生成汇总（runFromCommand，里面也会跑子 ticket）。
+ * 没存下（handoffId 为 null）时记一笔，然后后台由 Shipherd 从那个 session 自己生成汇总（runFromCommand，里面也会跑子 ticket）。
  * capture 不等它；结束后刷新界面。同步抛错也只记日志，不能打断 captureCommandHandoff（否则已经存下的汇总收不到 notify）。
  */
 export function featureCommandFollowup(

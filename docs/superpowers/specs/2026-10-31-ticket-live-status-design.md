@@ -6,7 +6,7 @@
 
 1. feature 页的 ticket 列表只显示 ticket 状态和 PR 状态（等 review、已合并），看不出 session 此刻在干什么：写代码、跑 pre-push hook、监控 CI，还是卡住了。
 2. 打开 session 也不一定看得到。pre-push hook 这类命令在 shell 里跑，Claude Code 的界面只显示运行时间，看不到进行到哪了。
-3. 用户怀疑卡住时会问总控，再让总控解决。但总控从 Butler 拿到的只有 `firstPrompt`、`running`、`waitingForInput`、`lastActivityAt`，而且 Claude Code 的跨 session 消息要等对方下一轮工具调用才读到，所以子 session 跑长命令时问不到答案。
+3. 用户怀疑卡住时会问总控，再让总控解决。但总控从 Shipherd 拿到的只有 `firstPrompt`、`running`、`waitingForInput`、`lastActivityAt`，而且 Claude Code 的跨 session 消息要等对方下一轮工具调用才读到，所以子 session 跑长命令时问不到答案。
 
 ## 用户确认的决定
 
@@ -22,13 +22,13 @@
 ## 我的决定（用户没有逐条确认）
 
 - **实时信息也给总控**：用户的动作是先问总控，所以总控要能直接查到，不用等子 session 回话。
-- **卡住检测分两步**：Butler 先做不花钱的本地检查，可疑时才调用一次 headless Claude。只有 Claude 判断真卡住，才标红点、发通知。这个方案用户同意了，具体参数是我定的：每 3 分钟检查一次，连续两次没有变化算可疑。
+- **卡住检测分两步**：Shipherd 先做不花钱的本地检查，可疑时才调用一次 headless Claude。只有 Claude 判断真卡住，才标红点、发通知。这个方案用户同意了，具体参数是我定的：每 3 分钟检查一次，连续两次没有变化算可疑。
 - **先发消息，再动手**：消息要等下一轮工具调用才读到，先发的话，命令一被杀，原 session 拿回控制权时就能看到是谁停的、为什么停。
 - 面板上的“看终端”和“没事，忽略”两个按钮是我加的。
 - 状态列的规则：ticket 有运行中的 session 时显示此刻在干什么；没有时显示原来的 ticket 状态。PR 列不变。
 - 一个 ticket 有多个运行中的 session（多仓库）时，这一行显示最需要注意的那个：卡住 > 等你批准 > 等你回话 > 最近有活动。
 - 侧边栏的 feature 行也显示红点，用户在别的页面时也能看到。这一版不改其他页面的状态显示。
-- 卡住状态只存内存，Butler 重启后重新判断。
+- 卡住状态只存内存，Shipherd 重启后重新判断。
 - 只做 feature 下的 ticket。单独的 ticket 这一版没有状态列和红点。
 - **卡住检测的范围**：只检查 feature 下 ticket 的 session。单独 ticket 的 session、feature 总控、修复 session 不检查，因为它们没有能放红点的行。这些 session 的活动照常读取，`stuck` 返回 `null`（表示“没检查”，不是“没卡住”）。
 - **后台命令优先于“等你回话”**：这一轮结束但后台命令还在跑时，session 在等命令，不是等用户，所以显示命令，并且进入卡住检测。`waitingForInput` 本身和其他页面的等待标记不变。
@@ -38,17 +38,17 @@
 
 - epic 层级、中文输入法问题，这两项是单独的工作。
 - 其他 UI 调整。用户说其他页面暂时没有想法。
-- 自动解决：Butler 不会不经用户点击就开新 session。
+- 自动解决：Shipherd 不会不经用户点击就开新 session。
 - 给子 session 发消息的新工具：Claude Code 的 `SendMessage` 已经能做到。
 - 新 session 的 worktree 隔离。它和原 session 用同一个 worktree，靠上面的消息规则避免互相踩到。
 
 ## 数据从哪来
 
-Butler 现在只监听 `SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`，下面这些都是新增的读取。
+Shipherd 现在只监听 `SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEnd`，下面这些都是新增的读取。
 
 - **session 在干什么**：读 session transcript 的尾部（`~/.claude/projects/<项目>/<session id>.jsonl`），找最后一个还没有 `tool_result` 的 `tool_use`。2.1.316 实测：运行中的命令开始后 3 到 6 秒内就出现在 transcript 里。`src/main/handoff/transcript.ts` 已经有只读尾部的写法。
 - **shell 跑到哪了**：读 Claude Code 写的命令输出文件 `<临时目录>/claude-<uid>/<项目>/<session id>/tasks/<id>.output`。实测后台命令跑到一半能读到已经打印的内容，前台命令观察到一次同样的情况。
-- **后台命令**：长命令常常是后台跑的。Bash 工具前台上限 10 分钟，用户二三十分钟的 pre-push hook 只能放后台，而且用户说打开 shell 只能看到运行时间，也符合后台 shell 的表现。这时 `tool_result` 马上返回，Claude 可能结束这一轮，`Stop` 把 session 标成等待输入。所以光看“最后一个没结果的 `tool_use`”不够，Butler 要跟踪每个 session 的后台命令：从 `run_in_background` 的 `tool_use` 和它的返回里拿到任务 id 和输出文件，看到这个任务的完成通知才算结束。
+- **后台命令**：长命令常常是后台跑的。Bash 工具前台上限 10 分钟，用户二三十分钟的 pre-push hook 只能放后台，而且用户说打开 shell 只能看到运行时间，也符合后台 shell 的表现。这时 `tool_result` 马上返回，Claude 可能结束这一轮，`Stop` 把 session 标成等待输入。所以光看“最后一个没结果的 `tool_use`”不够，Shipherd 要跟踪每个 session 的后台命令：从 `run_in_background` 的 `tool_use` 和它的返回里拿到任务 id 和输出文件，看到这个任务的完成通知才算结束。
 - **终端输出不能当活动信号**：`pty-manager` 的 `lastOutputAt` 会被 Claude Code 的动画刷新，不代表命令有进展。
 
 已知限制：命令后面接 `| tail` 时跑完才有输出；hook 打印得少，这里能看到的也少；transcript 和 tasks 目录都是 Claude Code 的内部细节，版本升级可能会变。读不到输出文件时退回只显示命令和时长，功能不能因此报错。
@@ -72,7 +72,7 @@ Butler 现在只监听 `SessionStart`、`Stop`、`UserPromptSubmit`、`SessionEn
 | `waitingForInput`，也没有后台命令 | 等你回话 |
 | 判定卡住 | 显示原来的活动，加“已 N 分钟没有新输出” |
 
-Butler 运行时，每 10 秒更新一次有运行中终端的 session。列表的活动文字最多一行，长了截断。
+Shipherd 运行时，每 10 秒更新一次有运行中终端的 session。列表的活动文字最多一行，长了截断。
 
 ## 卡住检测
 
@@ -123,7 +123,7 @@ Butler 运行时，每 10 秒更新一次有运行中终端的 session。列表�
 
 这个 session 不是总控：feature 汇总、晚间 handoff、`/handoff` 判断总控 session 时都不能选到它。
 
-**名字问题**：`SendMessage` 用 session 名字寻址。Claude Code 为每个运行中的 session 写一份登记文件 `~/.claude/sessions/<pid>.json`，里面有 `sessionId`、`name`、`status`，实测 `name` 和 `ListAgents` 显示的一致。Butler 开任务时按 `sessionId` 查出名字写进任务；查不到时让新 session 自己用 `ListAgents` 按目录找。
+**名字问题**：`SendMessage` 用 session 名字寻址。Claude Code 为每个运行中的 session 写一份登记文件 `~/.claude/sessions/<pid>.json`，里面有 `sessionId`、`name`、`status`，实测 `name` 和 `ListAgents` 显示的一致。Shipherd 开任务时按 `sessionId` 查出名字写进任务；查不到时让新 session 自己用 `ListAgents` 按目录找。
 
 ## 给总控的接口
 
@@ -151,7 +151,7 @@ Butler 运行时，每 10 秒更新一次有运行中终端的 session。列表�
 
 - 单测：transcript 尾部解析成活动（各种工具、未完成的调用、半行 JSON）；这一轮结束但后台命令还在跑时显示命令、进入检测，后台命令结束后回到等你回话；命令分类；本地检查的计数（有变化清零、连续两次、等用户时不算）；`stuck: false` 的 10 分钟静默；忽略后不再提醒；恢复活动后红点消失；一次卡住只通知一次；输出文件不存在时不报错；修复 session 不被选成总控；`session_activity` 的权限范围。
 - E2E：假 claude 写一段 transcript 和输出文件 → feature 页显示活动 → 模拟可疑和 `stuck: true` → 红点出现 → 展开、缩回、再打开内容还在 → 终端区仍然至少 50vh → 点“开新 session 解决” → 新 session 收到任务。
-- e2e 窗口在后台打开，不能抢焦点（`BUTLER_BACKGROUND_WINDOWS`）。
+- e2e 窗口在后台打开，不能抢焦点（`SHIPHERD_BACKGROUND_WINDOWS`）。
 
 ## 发布
 

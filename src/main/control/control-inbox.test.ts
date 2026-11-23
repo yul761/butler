@@ -6,7 +6,7 @@ import { tempDir } from "../test-utils";
 import { ControlInbox } from "./control-inbox";
 
 function setup() {
-  const dir = tempDir("butler-inbox-");
+  const dir = tempDir("shipherd-inbox-");
   const requestsDir = join(dir, "requests");
   const resultsDir = join(dir, "results");
   mkdirSync(requestsDir, { recursive: true });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MAX_NOTE_VARIANT, NOTE_BODY_LIMIT, NOTE_ID_LIMIT, noteBody, noteId, noteText, parseNote, sameBody, ticketScope } from "./memory";
 
-describe("Butler memory note format", () => {
+describe("Shipherd memory note format", () => {
   it("writes and parses the stable prefix", () => {
     expect(noteText({ kind: "decision", id: "db", body: "用 PostgreSQL" })).toBe("[decision:db] 用 PostgreSQL");
     expect(parseNote("[decision:db] 用 PostgreSQL")).toEqual({ kind: "decision", id: "db", variant: 1, body: "用 PostgreSQL" });
@@ -19,7 +19,7 @@ describe("Butler memory note format", () => {
     expect(parseNote(v3)).toEqual({ kind: "followup", id: "f_1", variant: 3, body: "改配置" });
   });
 
-  it("does not take other notes for Butler's", () => {
+  it("does not take other notes for Shipherd's", () => {
     for (const t of ["用户喜欢 tabs", "[learning:PROJ-1] 经验", "[decision:] 空 id", "[decision:x]没有空格", "[note:x] 别的前缀", " [decision:x] 前面有空格", "[decision:x#2 ABCD] 大写的区分词"]) {
       expect(parseNote(t), t).toBeNull();
     }

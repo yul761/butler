@@ -17,10 +17,10 @@ beforeAll(async () => {
   await build({ entryPoints: [join(root, "hook", "entry.ts")], bundle: true, platform: "node", format: "cjs", target: "node22", outfile: bundle, logLevel: "silent" });
 }, 60_000);
 
-describe("butler-hook entry (design 4.3: never block Claude Code)", () => {
+describe("shipherd-hook entry (design 4.3: never block Claude Code)", () => {
   it("writes the envelope and exits 0", () => {
     const home = tempDir();
-    const r = spawnSync(process.execPath, [bundle], { input: '{"hook_event_name":"Stop","session_id":"s1"}', env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000 });
+    const r = spawnSync(process.execPath, [bundle], { input: '{"hook_event_name":"Stop","session_id":"s1"}', env: { ...process.env, SHIPHERD_HOME: home }, timeout: 10_000 });
     expect(r.status).toBe(0);
     expect(readdirSync(join(home, "inbox")).filter((n) => n.endsWith(".json"))).toHaveLength(1);
   });
@@ -30,46 +30,46 @@ describe("butler-hook entry (design 4.3: never block Claude Code)", () => {
     mkdirSync(join(home, "inbox"));
     chmodSync(join(home, "inbox"), 0o500);
     try {
-      const r = spawnSync(process.execPath, [bundle], { input: "{}", env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000 });
+      const r = spawnSync(process.execPath, [bundle], { input: "{}", env: { ...process.env, SHIPHERD_HOME: home }, timeout: 10_000 });
       expect(r.status).toBe(0);
     } finally {
       chmodSync(join(home, "inbox"), 0o700);
     }
   });
 
-  it("exits 0 when BUTLER_HOME points at a file", () => {
+  it("exits 0 when SHIPHERD_HOME points at a file", () => {
     const home = join(tempDir(), "not-a-dir");
     writeFileSync(home, "x");
-    const r = spawnSync(process.execPath, [bundle], { input: "{}", env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000 });
+    const r = spawnSync(process.execPath, [bundle], { input: "{}", env: { ...process.env, SHIPHERD_HOME: home }, timeout: 10_000 });
     expect(r.status).toBe(0);
   });
 });
 
-describe("butler-hook entry gate mode", () => {
+describe("shipherd-hook entry gate mode", () => {
   it("exits 0 with empty stdout for an unreviewable command", () => {
     const home = tempDir();
     const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" }, cwd: "/tmp" });
-    const r = spawnSync(process.execPath, [bundle, "gate"], { input, env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000, encoding: "utf8" });
+    const r = spawnSync(process.execPath, [bundle, "gate"], { input, env: { ...process.env, SHIPHERD_HOME: home }, timeout: 10_000, encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
     expect(existsSync(join(home, "inbox"))).toBe(false);
   });
 
-  it("exits 0 with empty stdout when Butler is not running", () => {
+  it("exits 0 with empty stdout when Shipherd is not running", () => {
     const home = tempDir();
     const input = JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git merge feat" }, cwd: "/tmp" });
-    const r = spawnSync(process.execPath, [bundle, "gate"], { input, env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000, encoding: "utf8" });
+    const r = spawnSync(process.execPath, [bundle, "gate"], { input, env: { ...process.env, SHIPHERD_HOME: home }, timeout: 10_000, encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
   });
 });
 
-describe("butler-hook entry check modes", () => {
+describe("shipherd-hook entry check modes", () => {
   it("exits 0 silently without a snapshot and records the absence once", () => {
     const home = tempDir();
     const input = JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: join(home, "a.ts"), content: "x" }, cwd: home });
     for (let i = 0; i < 2; i++) {
-      const r = spawnSync(process.execPath, [bundle, "check"], { input, env: { ...process.env, BUTLER_HOME: home, BUTLER_SESSION: "s1" }, timeout: 10_000, encoding: "utf8" });
+      const r = spawnSync(process.execPath, [bundle, "check"], { input, env: { ...process.env, SHIPHERD_HOME: home, SHIPHERD_SESSION: "s1" }, timeout: 10_000, encoding: "utf8" });
       expect(r.status).toBe(0);
       expect(r.stdout).toBe("");
     }
@@ -79,14 +79,14 @@ describe("butler-hook entry check modes", () => {
   });
 
   it("exits 0 for check-push on garbage input", () => {
-    const r = spawnSync(process.execPath, [bundle, "check-push"], { input: "not json", env: { ...process.env, BUTLER_HOME: tempDir() }, timeout: 10_000, encoding: "utf8" });
+    const r = spawnSync(process.execPath, [bundle, "check-push"], { input: "not json", env: { ...process.env, SHIPHERD_HOME: tempDir() }, timeout: 10_000, encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
   });
 });
 
-describe("butler-hook entry readonly mode", () => {
-  const run = (input: string, home = tempDir()) => ({ home, r: spawnSync(process.execPath, [bundle, "readonly"], { input, env: { ...process.env, BUTLER_HOME: home }, timeout: 10_000, encoding: "utf8" }) });
+describe("shipherd-hook entry readonly mode", () => {
+  const run = (input: string, home = tempDir()) => ({ home, r: spawnSync(process.execPath, [bundle, "readonly"], { input, env: { ...process.env, SHIPHERD_HOME: home }, timeout: 10_000, encoding: "utf8" }) });
 
   it("denies a write tool and exits 0", () => {
     const { r } = run('{"hook_event_name":"PreToolUse","tool_name":"Edit"}');

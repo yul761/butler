@@ -134,7 +134,7 @@ describe("StateCore adapter (design 8, 11: write and why integration)", () => {
     });
   });
 
-  it("keeps a consolidate event pending: Butler never digests (BTL-243)", async () => {
+  it("keeps a consolidate event pending: Shipherd never digests (BTL-243)", async () => {
     const dir = tempDir();
     await seedEvent(dir, "ticket:PROJ-5", "claude 里记下的一段原始对话");
     await withScope({ dataDir: dir, scope: "ticket:PROJ-5" }, async (s) => {

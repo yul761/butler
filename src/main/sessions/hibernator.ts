@@ -24,7 +24,7 @@ const TRANSIENT_OPEN = new Set(["ticket_busy", "claude_missing", "branch_mismatc
 export const HIBERNATE_KILL_WAIT_MS = 5_000;
 const POLL_MS = 250;
 
-/** 开着终端的 Butler session。 */
+/** 开着终端的 Shipherd session。 */
 export interface HibernateTerminal {
   termId: string;
   head: Session;
@@ -67,7 +67,7 @@ export interface HibernatorDeps {
   /** 休眠时留下的 watcher：孤儿清理先别动，唤醒或结束时放开（release 以后它们按普通孤儿清理）。 */
   spare(owner: string, procs: OwnedProc[]): void;
   release(owner: string): void;
-  /** 按 session 自己的种类恢复（ticket、feature 总控、Butler 总控），都是 --resume。 */
+  /** 按 session 自己的种类恢复（ticket、feature 总控、Shipherd 总控），都是 --resume。 */
   open(head: Session): Promise<{ ok: true; termId: string } | { ok: false; reason: string }>;
   notify(): void;
   now(): number;
@@ -239,7 +239,7 @@ export class Hibernator {
     }
     if (!opened.ok) return this.wakeFailed(headId, `open failed: ${opened.reason}`, TRANSIENT_OPEN.has(opened.reason));
     const termId = opened.termId;
-    // 打开的必须是这条链：Butler 总控已经有另一个对话开着时，openButler 返回的是那个终端。
+    // 打开的必须是这条链：Shipherd 总控已经有另一个对话开着时，openShipherd 返回的是那个终端。
     const got = this.d.sessions.head(termId)?.id ?? termId;
     if (got !== headId) return this.wakeFailed(headId, `another session (${got}) was opened instead`);
     const deadline = this.d.now() + (this.d.startTimeoutMs ?? WAKE_START_TIMEOUT_MS);
@@ -282,7 +282,7 @@ export class Hibernator {
   }
 
   /**
-   * 休眠着的 session 不要了（用户隐藏、总控 end_session、另开了 Butler 总控）：不再算休眠（之后不自动唤醒），留下的 watcher 也清掉。
+   * 休眠着的 session 不要了（用户隐藏、总控 end_session、另开了 Shipherd 总控）：不再算休眠（之后不自动唤醒），留下的 watcher 也清掉。
    */
   forget(headId: string, why = "hidden"): void {
     const head = this.d.sessions.head(headId);

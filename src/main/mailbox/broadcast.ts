@@ -23,7 +23,7 @@ export function conventionFromEnvelope(env: HookEnvelope): { author: string; tex
   if (!p || p.hook_event_name !== "PostToolUse" || p.tool_name !== REMEMBER_TOOL) return null;
   const input = p.tool_input && typeof p.tool_input === "object" ? (p.tool_input as Record<string, unknown>) : {};
   if (input.consolidate === true || typeof input.text !== "string" || !input.text.trim()) return null;
-  const author = env.butlerSession ?? (typeof p.session_id === "string" ? p.session_id : null);
+  const author = env.shipherdSession ?? (typeof p.session_id === "string" ? p.session_id : null);
   return author ? { author, text: input.text.trim() } : null;
 }
 

@@ -348,7 +348,7 @@ export function makeAddTarget(text: string, target: string, recipe: string[]): s
   return withEol(`${body}${body ? "\n\n" : ""}${block}\n`, eol);
 }
 
-/** 给已有目标加一个前置目标（`lint: a` → `lint: a butler-x`）。没有这个目标返回 null。 */
+/** 给已有目标加一个前置目标（`lint: a` → `lint: a shipherd-x`）。没有这个目标返回 null。 */
 export function makeAddPrereq(text: string, target: string, prereq: string): string | null {
   const re = new RegExp(`^(${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:(?![=:]))([^#\\r\\n;]*?)([ \\t]*)(?=[#;\\r\\n]|$)`, "m");
   const m = re.exec(text);

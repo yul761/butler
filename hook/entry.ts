@@ -1,4 +1,4 @@
-import { inboxDir, main, readStdin, writeEnvelope } from "./butler-hook";
+import { inboxDir, main, readStdin, writeEnvelope } from "./shipherd-hook";
 import { parseCheckArgs, realCheckDeps, runCheck, runPushCheck } from "./check";
 import { killLiveCommands } from "./check-run";
 import { realGateDeps, runGate } from "./gate";

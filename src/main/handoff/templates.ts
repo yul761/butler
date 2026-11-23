@@ -101,7 +101,7 @@ export const handoffSchemaDoc = (l: Lang): string => (l === "en" ? HANDOFF_SCHEM
 export const handoffExample = (l: Lang): string => (l === "en" ? HANDOFF_EXAMPLE_EN : HANDOFF_EXAMPLE);
 
 /** 晚间批量和“立即 handoff”用的默认 prompt（设置里可改）。占位符由 src/main/handoff/prompt.ts 填充。 */
-export const DEFAULT_HANDOFF_PROMPT = `你在为 Butler 生成 ticket {{ticket}}（{{title}}，分支 {{branch}}）的 handoff：总结这个 session 到目前为止的进度，供之后的 session 和记忆使用。
+export const DEFAULT_HANDOFF_PROMPT = `你在为 Shipherd 生成 ticket {{ticket}}（{{title}}，分支 {{branch}}）的 handoff：总结这个 session 到目前为止的进度，供之后的 session 和记忆使用。
 
 要求：
 1. 用 tracker MCP 工具读取 ticket {{ticket}} 的描述、评论和子任务。可用的工具：{{tracker_tools}}。工具不可用或读取失败时 jira 填 null，不要编造。
@@ -134,7 +134,7 @@ export const DEFAULT_REFRESH_PROMPT = `只查询 ticket {{ticket}}（分支 {{br
 {{schema}}
 `;
 
-export const DEFAULT_HANDOFF_PROMPT_EN = `You are writing Butler's handoff for ticket {{ticket}} ({{title}}, branch {{branch}}): summarize this session's progress so far for later sessions and memory.
+export const DEFAULT_HANDOFF_PROMPT_EN = `You are writing Shipherd's handoff for ticket {{ticket}} ({{title}}, branch {{branch}}): summarize this session's progress so far for later sessions and memory.
 
 Requirements:
 1. Read ticket {{ticket}}'s description, comments and subtasks with the tracker MCP tools. Available tools: {{tracker_tools}}. If the tools are unavailable or fail, set jira to null; never make it up.
@@ -188,10 +188,10 @@ export const PREVIOUS_REFRESH_PROMPTS: readonly string[] = [
 ];
 
 /**
- * handoff.md 里的标记行紧跟在 front matter 之后：`<!-- butler:handoff-command v1 sha256:<hex> -->`。
- * hex 是“去掉标记行之后的全文”的 sha256；用户改过内容 hash 就对不上，Butler 不再认它是自己的文件。
+ * handoff.md 里的标记行紧跟在 front matter 之后：`<!-- shipherd:handoff-command v1 sha256:<hex> -->`。
+ * hex 是“去掉标记行之后的全文”的 sha256；用户改过内容 hash 就对不上，Shipherd 不再认它是自己的文件。
  */
-export const HANDOFF_COMMAND_MARKER = "<!-- butler:handoff-command v1";
+export const HANDOFF_COMMAND_MARKER = "<!-- shipherd:handoff-command v1";
 
 export function commandBodyHash(body: string): string {
   return createHash("sha256").update(body, "utf8").digest("hex");
@@ -204,9 +204,11 @@ export function renderHandoffCommand(body: string): string {
   return `${body.slice(0, at)}${HANDOFF_COMMAND_MARKER} sha256:${commandBodyHash(body)} -->\n${body.slice(at)}`;
 }
 
-const MARKER_RE = /^(---\n[\s\S]*?\n---\n)<!-- butler:handoff-command v1 sha256:([0-9a-f]{64}) -->\n/;
+// 改名前（BTL-260）的 Butler 写的文件标记是 butler:handoff-command：认得它，升级时才会当成旧版本（stale）换掉，
+// 而不是当成用户自己的命令（conflict）一直留着、继续输出旧的 butler-handoff 代码块。TODO(5.0)：保留一个大版本后去掉 butler。
+const MARKER_RE = /^(---\n[\s\S]*?\n---\n)<!-- (?:shipherd|butler):handoff-command v1 sha256:([0-9a-f]{64}) -->\n/;
 
-/** 解析 Butler 写的文件：标记行必须紧跟 front matter、hash 必须和其余内容一致，否则返回 null（不是 Butler 的，或被用户改过）。 */
+/** 解析 Shipherd 写的文件：标记行必须紧跟 front matter、hash 必须和其余内容一致，否则返回 null（不是 Shipherd 的，或被用户改过）。 */
 export function parseHandoffCommand(text: string): { body: string } | null {
   const m = MARKER_RE.exec(text);
   if (!m) return null;
@@ -215,20 +217,20 @@ export function parseHandoffCommand(text: string): { body: string } | null {
 }
 
 /**
- * /handoff 正文开头给 feature 总控的一段（设计文档 2026-10-28）：只有总控 session 挂了 butler-sessions MCP，
- * 能调用它的 list_tickets 就说明是总控，改写 butler-feature-handoff 代码块；采集端仍以 Butler 的记录为准。
+ * /handoff 正文开头给 feature 总控的一段（设计文档 2026-10-28）：只有总控 session 挂了 shipherd-sessions MCP，
+ * 能调用它的 list_tickets 就说明是总控，改写 shipherd-feature-handoff 代码块；采集端仍以 Shipherd 的记录为准。
  */
-const FEATURE_COORDINATOR_SECTION = `先看你能不能调用 butler-sessions 的 \`list_tickets\` 工具（mcp__butler-sessions__list_tickets）。能调用的话，这个 session 是 epic 总控，不属于某个 ticket，要写的是 epic 汇总：
+const FEATURE_COORDINATOR_SECTION = `先看你能不能调用 shipherd-sessions 的 \`list_tickets\` 工具（mcp__shipherd-sessions__list_tickets）。能调用的话，这个 session 是 epic 总控，不属于某个 ticket，要写的是 epic 汇总：
 - 先用 \`list_tickets\` 看这个 epic 下各 ticket 的情况，再结合这个 session 的完整对话来写。
 - 只写跨 ticket 的整体情况：整体进展、卡在哪、接下来先做什么、ticket 之间的约定（接口、错误码等）。提到 ticket 时只写 ticket 号；不要写完成百分比。
 - 只读：不要修改文件，不要提交或推送。
-- 最后输出一个 ${FENCE}butler-feature-handoff 代码块，里面只有一个 JSON 对象；代码块之后不要再写任何内容。不要输出 butler-handoff 代码块，后面 ticket handoff 的说明也不用管。
+- 最后输出一个 ${FENCE}shipherd-feature-handoff 代码块，里面只有一个 JSON 对象；代码块之后不要再写任何内容。不要输出 shipherd-handoff 代码块，后面 ticket handoff 的说明也不用管。
 
 epic 汇总的字段如下：
 ${featureHandoffSchemaDoc("zh")}
 
 示例：
-${FENCE}butler-feature-handoff
+${FENCE}shipherd-feature-handoff
 ${featureHandoffExample("zh")}
 ${FENCE}
 
@@ -236,18 +238,18 @@ ${FENCE}
 
 `;
 
-const FEATURE_COORDINATOR_SECTION_EN = `First check whether you can call the \`list_tickets\` tool of butler-sessions (mcp__butler-sessions__list_tickets). If you can, this session is an epic coordinator, it belongs to no single ticket, and what you write is an epic summary:
+const FEATURE_COORDINATOR_SECTION_EN = `First check whether you can call the \`list_tickets\` tool of shipherd-sessions (mcp__shipherd-sessions__list_tickets). If you can, this session is an epic coordinator, it belongs to no single ticket, and what you write is an epic summary:
 - First look at the tickets of this epic with \`list_tickets\`, then write the summary from them and from this session's whole conversation.
 - Only write about the picture across tickets: overall progress, what is in the way, what to do first, and agreements between tickets (APIs, error codes and so on). Refer to a ticket only by its id; don't write a completion percentage.
 - Read only: don't change files, don't commit or push.
 - Write every text field in English.
-- Finish with one ${FENCE}butler-feature-handoff code block that contains a single JSON object; write nothing after the code block. Don't output a butler-handoff code block, and ignore the ticket handoff instructions below.
+- Finish with one ${FENCE}shipherd-feature-handoff code block that contains a single JSON object; write nothing after the code block. Don't output a shipherd-handoff code block, and ignore the ticket handoff instructions below.
 
 Fields of the epic summary:
 ${featureHandoffSchemaDoc("en")}
 
 Example:
-${FENCE}butler-feature-handoff
+${FENCE}shipherd-feature-handoff
 ${featureHandoffExample("en")}
 ${FENCE}
 
@@ -259,7 +261,7 @@ export const featureCoordinatorSection = (l: Lang): string => (l === "en" ? FEAT
 
 /** 当前版本的命令正文（不含标记行）。 */
 export const HANDOFF_COMMAND_BODY = `---
-description: 生成 Butler handoff（当前 ticket 的进度摘要；在 epic 总控里是 epic 汇总）
+description: 生成 Shipherd handoff（当前 ticket 的进度摘要；在 epic 总控里是 epic 汇总）
 ---
 ${FEATURE_COORDINATOR_SECTION}请为当前 session 对应的 ticket 生成一份 handoff，供之后的 session 和记忆使用。
 
@@ -268,13 +270,13 @@ ${FEATURE_COORDINATOR_SECTION}请为当前 session 对应的 ticket 生成一份
 - 只读：不要修改文件，不要提交或推送。
 - ticket 填当前的 ticket 号（通常在分支名里，例如 PROJ-123）。
 - 已有的 followup 如果知道 id 就填 id，否则 id 填 null。
-- 最后输出一个 ${FENCE}butler-handoff 代码块，里面只有一个 JSON 对象；代码块之后不要再写任何内容。
+- 最后输出一个 ${FENCE}shipherd-handoff 代码块，里面只有一个 JSON 对象；代码块之后不要再写任何内容。
 
 字段如下：
 ${HANDOFF_SCHEMA_DOC}
 
 示例：
-${FENCE}butler-handoff
+${FENCE}shipherd-handoff
 ${HANDOFF_EXAMPLE}
 ${FENCE}
 
@@ -285,7 +287,7 @@ $ARGUMENTS
 export const HANDOFF_COMMAND_MD = renderHandoffCommand(HANDOFF_COMMAND_BODY);
 
 export const HANDOFF_COMMAND_BODY_EN = `---
-description: Write a Butler handoff (a progress summary of the current ticket; in an epic coordinator, of the epic)
+description: Write a Shipherd handoff (a progress summary of the current ticket; in an epic coordinator, of the epic)
 ---
 ${FEATURE_COORDINATOR_SECTION_EN}Write a handoff for the ticket of this session, for later sessions and memory.
 
@@ -295,13 +297,13 @@ ${FEATURE_COORDINATOR_SECTION_EN}Write a handoff for the ticket of this session,
 - Set ticket to the current ticket id (usually in the branch name, for example PROJ-123).
 - For an existing followup, use its id if you know it; otherwise use null.
 - Write every text field in English.
-- Finish with one ${FENCE}butler-handoff code block that contains a single JSON object; write nothing after the code block.
+- Finish with one ${FENCE}shipherd-handoff code block that contains a single JSON object; write nothing after the code block.
 
 Fields:
 ${HANDOFF_SCHEMA_DOC_EN}
 
 Example:
-${FENCE}butler-handoff
+${FENCE}shipherd-handoff
 ${HANDOFF_EXAMPLE_EN}
 ${FENCE}
 

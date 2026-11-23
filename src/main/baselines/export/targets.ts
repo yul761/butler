@@ -188,7 +188,7 @@ function ciRunsMakeLint(b: RepoBaseline | null): boolean {
 /** run_command 的命令是不是 CI 已经在跑的（按仓库现状里的 CI 命令比）。 */
 function alreadyInCi(command: string, b: RepoBaseline | null): boolean {
   if (!b) return false;
-  const cmd = squash(command.split("{file}").join("").replace(/"\$OLDPWD\/\$BUTLER_CHECK_FILE"|"?\$BUTLER_CHECK_FILE"?/g, ""));
+  const cmd = squash(command.split("{file}").join("").replace(/"\$OLDPWD\/\$(?:SHIPHERD|BUTLER)_CHECK_FILE"|"?\$(?:SHIPHERD|BUTLER)_CHECK_FILE"?/g, ""));
   const same = (x: string) => squash(x.split("{file}").join("")) === cmd;
   for (const c of b.checks) {
     if (!c.stages.includes("ci")) continue;
@@ -319,7 +319,7 @@ export function buildExport(i: ExportInput): ExportBuild {
   const b: Builder = { files: new Map(), read: i.read };
   const wired: Wired[] = [];
   const notes: string[] = [];
-  const id = `butler-${name}`;
+  const id = `shipherd-${name}`;
   const data = checkData(check, i.ticketPattern);
   const done = (target: ExportTarget, runtime: ScriptRuntime | null, script: string | null, runAll: string | null): ExportBuild => {
     if (lfForShellFiles(b)) notes.push("sh_windows");
@@ -333,7 +333,7 @@ export function buildExport(i: ExportInput): ExportBuild {
     const e = pygrepEntry(check.params);
     if (e.ok) {
       const item = preCommitItem({
-        id, name: `Butler: ${check.name}`, entry: e.entry, language: "pygrep", args: e.args.length ? e.args : undefined,
+        id, name: `Shipherd: ${check.name}`, entry: e.entry, language: "pygrep", args: e.args.length ? e.args : undefined,
         files: filesRegex(check.globs) ?? undefined, exclude: filesRegex(check.excludeGlobs) ?? undefined,
       });
       if (addPreCommit(b, repo.preCommit, item)) {
@@ -357,7 +357,7 @@ export function buildExport(i: ExportInput): ExportBuild {
   // script 目标
   const runtime: ScriptRuntime | null = repo.pkg ? "node" : repo.python ? "python" : check.type === "forbidden_pattern" ? "sh" : null;
   if (!runtime) return { ok: false, reason: "no_runtime" };
-  const script = runtime === "node" ? `scripts/butler-checks/${name}.mjs` : runtime === "python" ? `scripts/butler_checks/${name}.py` : `scripts/butler-checks/${name}.sh`;
+  const script = runtime === "node" ? `scripts/shipherd-checks/${name}.mjs` : runtime === "python" ? `scripts/shipherd_checks/${name}.py` : `scripts/shipherd-checks/${name}.sh`;
   const gen = runtime === "node" ? { ok: true as const, content: nodeScript(data, script) } : runtime === "python" ? pythonScript(data, script) : shScript(data, script);
   if (!gen.ok) return { ok: false, reason: "regex", detail: gen.reason };
   if (i.read(script) !== null) notes.push("script_replaced");
@@ -374,7 +374,7 @@ function wireScript(
   let commit = false;
   if (repo.preCommit) {
     const item = preCommitItem({
-      id, name: `Butler: ${check.name}`, entry: runtime === "python" ? `python ${script}` : run, language: runtime === "python" ? "python" : "system",
+      id, name: `Shipherd: ${check.name}`, entry: runtime === "python" ? `python ${script}` : run, language: runtime === "python" ? "python" : "system",
       pass_filenames: true, files: filesRegex(check.globs) ?? undefined, exclude: filesRegex(check.excludeGlobs) ?? undefined,
     });
     if (addPreCommit(b, repo.preCommit, item)) {
@@ -390,14 +390,14 @@ function wireScript(
     addHusky(b, layout, "pre-commit", run);
     wired.push({ kind: "husky", hook: "pre-commit" });
   }
-  const scriptName = `butler:${name}`;
+  const scriptName = `shipherd:${name}`;
   if (repo.pkg && addPkgScript(b, scriptName, `${run} --all`)) {
     wired.push({ kind: "pkg_script", name: scriptName, run: `${repo.pm} run ${scriptName}` });
     if (ciRunsPkgLint(i.baseline) && appendPkgLint(b, `${repo.pm} run ${scriptName}`)) wired.push({ kind: "ci_pkg_lint", script: "lint" });
   }
   if (repo.makefile) {
     const text = current(b, repo.makefile) ?? "";
-    const target = `butler-${name}`;
+    const target = `shipherd-${name}`;
     if (!makeTargets(text).includes(target)) {
       let next = makeAddTarget(text, target, [`${run} --all`]);
       wired.push({ kind: "make_target", name: target });
@@ -440,16 +440,16 @@ function eslintExport(repo: Repo, b: Builder, check: ResolvedCheck, layout: Repo
   if (e.kind === "flat") {
     const eol = eolOf(text);
     const block: Record<string, unknown> = { files, ...(ignores.length ? { ignores } : {}), rules: { [ESLINT_BLOCK_KEY]: rule } };
-    const literal = `// Butler check "${check.name.replace(/[\r\n]+/g, " ")}" as a repo rule.\n${JSON.stringify(block, null, 2)}`;
+    const literal = `// Shipherd check "${check.name.replace(/[\r\n]+/g, " ")}" as a repo rule.\n${JSON.stringify(block, null, 2)}`;
     const esm = text.match(/^export default\s/gm);
     const cjs = text.match(/^module\.exports\s*=\s*/gm);
     let next: string;
     if (esm?.length === 1 && !cjs) {
-      next = text.replace(/^export default\s/m, "const butlerBaseConfig = ");
-      next = `${ensureTrailingEol(next)}${withEol(`\n${literal.replace(/^\{/m, "const butlerCheckConfig = {")};\n\nexport default [butlerBaseConfig, butlerCheckConfig];\n`, eol)}`;
+      next = text.replace(/^export default\s/m, "const shipherdBaseConfig = ");
+      next = `${ensureTrailingEol(next)}${withEol(`\n${literal.replace(/^\{/m, "const shipherdCheckConfig = {")};\n\nexport default [shipherdBaseConfig, shipherdCheckConfig];\n`, eol)}`;
     } else if (cjs?.length === 1 && !esm) {
-      next = text.replace(/^module\.exports\s*=\s*/m, "const butlerBaseConfig = ");
-      next = `${ensureTrailingEol(next)}${withEol(`\n${literal.replace(/^\{/m, "const butlerCheckConfig = {")};\n\nmodule.exports = [butlerBaseConfig, butlerCheckConfig];\n`, eol)}`;
+      next = text.replace(/^module\.exports\s*=\s*/m, "const shipherdBaseConfig = ");
+      next = `${ensureTrailingEol(next)}${withEol(`\n${literal.replace(/^\{/m, "const shipherdCheckConfig = {")};\n\nmodule.exports = [shipherdBaseConfig, shipherdCheckConfig];\n`, eol)}`;
     } else return "eslint_flat_shape";
     put(b, e.file, next);
     return true;
@@ -480,7 +480,8 @@ function eslintExport(repo: Repo, b: Builder, check: ResolvedCheck, layout: Repo
   return true;
 }
 
-const COMPOUND = /[;&|<>`()\n]|\$\(|\$\{?BUTLER_CHECK_FILE|\$OLDPWD/;
+// BUTLER_CHECK_FILE：改名前（BTL-260）写下的命令里的旧名字，同样算。
+const COMPOUND = /[;&|<>`()\n]|\$\(|\$\{?(?:SHIPHERD|BUTLER)_CHECK_FILE|\$OLDPWD/;
 
 /** run_command 检查（设计 §8 表最后一行）。 */
 function runCommandExport(
@@ -500,7 +501,7 @@ function runCommandExport(
     }
     if (repo.preCommit) {
       const entry = COMPOUND.test(cmd) ? `sh -c ${shQuote(cmd)}` : cmd;
-      const item = preCommitItem({ id, name: `Butler: ${i.check.name}`, entry, language: "system", pass_filenames: false, always_run: true, stages: ["pre-push"] });
+      const item = preCommitItem({ id, name: `Shipherd: ${i.check.name}`, entry, language: "system", pass_filenames: false, always_run: true, stages: ["pre-push"] });
       if (addPreCommit(b, repo.preCommit, item)) {
         wired.push({ kind: "pre_commit", id, stage: "push" });
         notes.push("pre_push_install");
@@ -515,7 +516,7 @@ function runCommandExport(
   const simple = !COMPOUND.test(command) && !trimmed.includes("{file}");
   if (simple && repo.preCommit) {
     const item = preCommitItem({
-      id, name: `Butler: ${i.check.name}`, entry: trimmed, language: "system", pass_filenames: true,
+      id, name: `Shipherd: ${i.check.name}`, entry: trimmed, language: "system", pass_filenames: true,
       files: filesRegex(i.check.globs) ?? undefined, exclude: filesRegex(i.check.excludeGlobs) ?? undefined,
     });
     if (addPreCommit(b, repo.preCommit, item)) {
@@ -528,14 +529,14 @@ function runCommandExport(
     return done("lint_staged", null, null, null);
   }
   // 其余：写一个逐文件运行的脚本（和 hook 一样每个文件跑一次），再接到 pre-commit / lint-staged / husky。
-  const script = `scripts/butler-checks/${name}.sh`;
+  const script = `scripts/shipherd-checks/${name}.sh`;
   const data = checkData(i.check, i.ticketPattern);
   put(b, script, runnerScript(data, command, script), true);
   const run = `sh ${script}`;
   let target: ExportTarget = "husky";
   if (repo.preCommit) {
     const item = preCommitItem({
-      id, name: `Butler: ${i.check.name}`, entry: run, language: "system", pass_filenames: true,
+      id, name: `Shipherd: ${i.check.name}`, entry: run, language: "system", pass_filenames: true,
       files: filesRegex(i.check.globs) ?? undefined, exclude: filesRegex(i.check.excludeGlobs) ?? undefined,
     });
     if (addPreCommit(b, repo.preCommit, item)) {

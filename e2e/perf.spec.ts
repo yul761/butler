@@ -8,9 +8,9 @@ import { completeWizard, expect, makeGitRepo, ROOT, terminalText, test, newButto
 /**
  * 性能场景（BTL-242）：3 个 session 在干活（假 claude 的 /fake-work：每 300ms 一次工具调用、约 2KB 终端输出），
  * 停在首页 30 秒、再停在一个 ticket 页（终端开着）30 秒，记下事件循环 p99、state:changed 次数和界面 long task 总时长。
- * 只在 BUTLER_E2E_PERF=1 时跑（要两分多钟，数字写进 test-results/perf/perf-<label>.json）。
+ * 只在 SHIPHERD_E2E_PERF=1 时跑（要两分多钟，数字写进 test-results/perf/perf-<label>.json）。
  */
-test.skip(process.env.BUTLER_E2E_PERF !== "1", "perf scenario runs only with BUTLER_E2E_PERF=1");
+test.skip(process.env.SHIPHERD_E2E_PERF !== "1", "perf scenario runs only with SHIPHERD_E2E_PERF=1");
 
 const MEASURE_MS = 30_000;
 const KEYS = ["PERF-1", "PERF-2", "PERF-3"];
@@ -84,9 +84,9 @@ async function measure(page: Page): Promise<Measured> {
     w.__perf = { n: 0, ms: 0, obs };
     obs.observe({ type: "longtask", buffered: false });
   });
-  await page.evaluate(() => (window as unknown as { butler: { invoke(c: string, ...a: unknown[]): Promise<unknown> } }).butler.invoke("diag:snapshot", true));
+  await page.evaluate(() => (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<unknown> } }).shipherd.invoke("diag:snapshot", true));
   await page.waitForTimeout(MEASURE_MS);
-  const snap = (await page.evaluate(() => (window as unknown as { butler: { invoke(c: string, ...a: unknown[]): Promise<unknown> } }).butler.invoke("diag:snapshot", false))) as { ok: true; value: DiagSnapshot };
+  const snap = (await page.evaluate(() => (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<unknown> } }).shipherd.invoke("diag:snapshot", false))) as { ok: true; value: DiagSnapshot };
   const lt = await page.evaluate(() => {
     const w = window as unknown as { __perf: { n: number; ms: number; obs: PerformanceObserver } };
     w.__perf.obs.disconnect();
@@ -126,7 +126,7 @@ test("perf: three working sessions on the home page and a ticket page", async ({
   await page.waitForTimeout(2_000);
   const ticket = await measure(page);
 
-  const label = process.env.BUTLER_E2E_PERF_LABEL ?? "run";
+  const label = process.env.SHIPHERD_E2E_PERF_LABEL ?? "run";
   const result = { label, platform: process.platform, home, ticket };
   const dir = join(ROOT, "test-results", "perf");
   mkdirSync(dir, { recursive: true });

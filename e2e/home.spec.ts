@@ -73,7 +73,7 @@ const title = (page: Page) => page.locator(".home-top h2");
 
 test("a question for you is a card that opens its conversation and takes an answer", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);
   await completeWizard(page, s);
   await newTicket(page, s, "HOME-1");
@@ -112,7 +112,7 @@ test("a question for you is a card that opens its conversation and takes an answ
 
 test("a question answered on the ticket page stays answered after switching tabs", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
   const { page } = await launch(s);
   await completeWizard(page, s);
   await newTicket(page, s, "HOME-4");
@@ -175,7 +175,7 @@ test("the All work page has the create buttons, the entries and every piece of w
   for (const name of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, S.archived]) {
     await expect(all.getByRole("button", { name, exact: true })).toBeVisible();
   }
-  // 「显示 Butler 之外开的 session」默认关：没有未认领入口（BTL-244）。
+  // 「显示 Shipherd 之外开的 session」默认关：没有未认领入口（BTL-244）。
   await expect(all.getByRole("button", { name: S.hm.all.unclaimedBtn(0), exact: true })).toHaveCount(0);
   await expect(all).toContainText(S.hm.all.empty);
 
@@ -223,12 +223,12 @@ async function contrastOf(el: Locator): Promise<{ ratio: number; color: string; 
 
 /**
  * 浅色和深色主题都看得清：标题、卡片的标签、一句话、位置、小表、进行中的一行、侧栏的数字，对比度都至少 4.5。
- * 截图存到 test-results/home-page（设了 BUTLER_E2E_SHOTS_DIR 就存到那里）。
+ * 截图存到 test-results/home-page（设了 SHIPHERD_E2E_SHOTS_DIR 就存到那里）。
  */
 test("the home page is readable in light and dark", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
-  s.env = { BUTLER_ACTIVITY_TICK_MS: "200" };
-  const shots = process.env.BUTLER_E2E_SHOTS_DIR ?? join(ROOT, "test-results", "home-page");
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200" };
+  const shots = process.env.SHIPHERD_E2E_SHOTS_DIR ?? join(ROOT, "test-results", "home-page");
   mkdirSync(shots, { recursive: true });
   const { page } = await launch(s);
   await completeWizard(page, s);

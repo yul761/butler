@@ -6,8 +6,8 @@ import type { PtyManager } from "./pty-manager";
 export const USER_TYPING_QUIET_MS = 30_000;
 
 /** 现在不能往这个终端里自动输入的原因。 */
-/** hibernated：终端是 Butler 为了省内存结束的（WS-M B），check 已经叫它醒了，醒来以后 sessionStopped 会再递一次。 */
-/** cost_paused：成本熔断暂停了这个 session（工作流 L），用户点「继续并提高上限」之前 Butler 不往里输入，休眠的也不叫醒。 */
+/** hibernated：终端是 Shipherd 为了省内存结束的（WS-M B），check 已经叫它醒了，醒来以后 sessionStopped 会再递一次。 */
+/** cost_paused：成本熔断暂停了这个 session（工作流 L），用户点「继续并提高上限」之前 Shipherd 不往里输入，休眠的也不叫醒。 */
 export type DeliveryBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused";
 
 export interface DeliveryGuardDeps {
@@ -20,7 +20,7 @@ export interface DeliveryGuardDeps {
   /** 计划 14 接上「需要你」；没接时恒为 false。 */
   needsYou?: (headId: string) => boolean;
   /**
-   * Butler 正在给这个 session 换新（计划 16）：当作忙，什么都不递。只给递 CI 结果、合并通知用的 guard；
+   * Shipherd 正在给这个 session 换新（计划 16）：当作忙，什么都不递。只给递 CI 结果、合并通知用的 guard；
    * 换新自己用的 guard 不带它（R25），否则换新会挡住自己的下一步。
    */
   refreshing?: (headId: string) => boolean;

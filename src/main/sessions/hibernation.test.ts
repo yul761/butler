@@ -8,8 +8,8 @@ import {
 const NOW = 10_000_000;
 
 const session = (over: Partial<Session> = {}): Session => ({
-  id: "h", ticketKey: "T-1", cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: "hi", lastActivityAt: 0, waitingForInput: true, replacedBy: null,
-  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, butler: false,
+  id: "h", ticketKey: "T-1", cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: "hi", lastActivityAt: 0, waitingForInput: true, replacedBy: null,
+  dismissed: false, createdAt: 0, repoId: 1, coordinator: false, spawnedBy: null, featureId: null, fixesSession: null, model: null, shipherd: false,
   lessonRunId: null, ...over,
 });
 
@@ -35,7 +35,7 @@ describe("hibernateBlock", () => {
 
   const cases: [string, Partial<HibernateCandidate>, string][] = [
     ["pinned", { pinned: true }, "pinned"],
-    ["not a Butler session", { head: session({ origin: "discovered" }) }, "kind"],
+    ["not a Shipherd session", { head: session({ origin: "discovered" }) }, "kind"],
     ["a fix session", { head: session({ ticketKey: null, featureId: 1, fixesSession: "x" }) }, "kind"],
     ["a lesson run", { head: session({ ticketKey: null, lessonRunId: 3 }) }, "kind"],
     ["no transcript yet", { transcript: "absent" }, "transcript"],
@@ -62,11 +62,11 @@ describe("hibernateBlock", () => {
 });
 
 describe("hibernatableKind", () => {
-  it("ticket, ticket coordinator, feature coordinator and Butler sessions", () => {
+  it("ticket, ticket coordinator, feature coordinator and Shipherd sessions", () => {
     expect(hibernatableKind(session())).toBe(true);
     expect(hibernatableKind(session({ coordinator: true }))).toBe(true);
     expect(hibernatableKind(session({ ticketKey: null, featureId: 2 }))).toBe(true);
-    expect(hibernatableKind(session({ ticketKey: null, butler: true }))).toBe(true);
+    expect(hibernatableKind(session({ ticketKey: null, shipherd: true }))).toBe(true);
     expect(hibernatableKind(session({ ticketKey: null }))).toBe(false);
   });
 });

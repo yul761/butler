@@ -58,17 +58,20 @@ export const CAT = {
   zh: { test: "测试输出", lint: "lint 输出", typecheck: "类型检查输出", build: "构建输出", acceptance: "验收条件对照" },
 } as const;
 
-/** 去掉 Butler 自己写进描述的块（`<!-- butler:x -->…<!-- /butler:x -->`，以及单独的 butler 注释）。 */
-export function stripButlerBlocks(body: string): string {
+/**
+ * 去掉 Shipherd 自己写进描述的块（`<!-- shipherd:x -->…<!-- /shipherd:x -->`，以及单独的 shipherd 注释）。
+ * 改名前（BTL-260）写的是 butler:x，已经在 GitHub 上的 PR 描述里，一样去掉。
+ */
+export function stripShipherdBlocks(body: string): string {
   return body
-    .replace(/<!--\s*butler:([\w-]+)\s*-->[\s\S]*?<!--\s*\/butler:\1\s*-->/g, "")
-    .replace(/<!--\s*\/?butler:[^>]*-->/g, "")
+    .replace(/<!--\s*(shipherd|butler):([\w-]+)\s*-->[\s\S]*?<!--\s*\/\1:\2\s*-->/g, "")
+    .replace(/<!--\s*\/?(?:shipherd|butler):[^>]*-->/g, "")
     .trim();
 }
 
 /** 描述检查（第 6 条）：长度够、三组关键词每组至少一个。返回缺的组。 */
 export function checkDescription(body: string | null, p: ResolvedPrPolicy["readiness"]): { ok: boolean; length: number; missing: ("what" | "why" | "verify")[] } {
-  const text = stripButlerBlocks(body ?? "");
+  const text = stripShipherdBlocks(body ?? "");
   const lower = text.toLowerCase();
   const missing = (["what", "why", "verify"] as const).filter((g) => !p.words[g].some((w) => w && lower.includes(w.toLowerCase())));
   const length = [...text].length;

@@ -3,7 +3,7 @@ import { appMenuTemplate } from "./app-menu";
 import { setLang } from "./i18n";
 
 describe("appMenuTemplate", () => {
-  it("keeps Electron's standard menus and ends with Butler's Help items", () => {
+  it("keeps Electron's standard menus and ends with Shipherd's Help items", () => {
     setLang("en");
     const click = () => undefined;
     const mac = appMenuTemplate({ platform: "darwin", help: [{ label: "Check for Updates…", click }] });

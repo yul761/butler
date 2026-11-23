@@ -8,7 +8,7 @@ const line = (o: unknown) => `${JSON.stringify(o)}\n`;
 const user = (content: unknown, extra: Record<string, unknown> = {}) => ({ type: "user", message: { role: "user", content }, ...extra });
 const assistant = (uuid: string, content: unknown) => ({ type: "assistant", uuid, message: { role: "assistant", content } });
 const text = (t: string) => [{ type: "text", text: t }];
-const BLOCK = '```butler-handoff\n{"ticket":"PROJ-1"}\n```';
+const BLOCK = '```shipherd-handoff\n{"ticket":"PROJ-1"}\n```';
 
 /** 验证记录 V4 的形状：更早的一轮，然后“命令消息 + isMeta 的展开文本”，然后这一轮的 assistant 条目。 */
 function writeTurn(file: string, entries: unknown[]) {
@@ -16,9 +16,9 @@ function writeTurn(file: string, entries: unknown[]) {
     file,
     [
       line(user("更早的问题")),
-      line(assistant("old", text('```butler-handoff\n{"ticket":"OLD"}\n```'))),
+      line(assistant("old", text('```shipherd-handoff\n{"ticket":"OLD"}\n```'))),
       line(user("<command-message>handoff</command-message>\n<command-name>/handoff</command-name>")),
-      line(user(text("请生成 handoff……示例：\n```butler-handoff\n{}\n```"), { isMeta: true })),
+      line(user(text("请生成 handoff……示例：\n```shipherd-handoff\n{}\n```"), { isMeta: true })),
       ...entries.map(line),
     ].join(""),
   );

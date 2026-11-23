@@ -436,11 +436,11 @@ describe("events (BTL-190 7: the live window)", () => {
     const s = newTranscriptState();
     applyEntry(s, reply("tool_use", [
       { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a/b.ts" } },
-      { type: "tool_use", id: "t2", name: "mcp__butler-memory__remember", input: { text: "接口改成 v2" } },
+      { type: "tool_use", id: "t2", name: "mcp__shipherd-memory__remember", input: { text: "接口改成 v2" } },
     ], "2026-11-12T10:00:05.000Z"));
     expect(s.events.filter((e) => e.type === "tool")).toEqual([
       { type: "tool", at: at("2026-11-12T10:00:05.000Z"), name: "Read", input: { file_path: "/a/b.ts" } },
-      { type: "tool", at: at("2026-11-12T10:00:05.000Z"), name: "mcp__butler-memory__remember", input: { text: "接口改成 v2" } },
+      { type: "tool", at: at("2026-11-12T10:00:05.000Z"), name: "mcp__shipherd-memory__remember", input: { text: "接口改成 v2" } },
     ]);
   });
 

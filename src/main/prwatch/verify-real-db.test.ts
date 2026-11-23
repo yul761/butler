@@ -1,7 +1,7 @@
 // 手动跑一次的核对（计划 2026-11-16 任务 19）：在真实数据库的副本上迁移、补链接、跑三轮 watcher（真的 gh，只读），看 PR 进度。
-// 只在设了 BUTLER_VERIFY_DB 时运行，指向 ~/.butler/app.db 的副本（连同 -wal / -shm），绝不指向正在用的文件：迁移和补链接都会写库。
+// 只在设了 SHIPHERD_VERIFY_DB 时运行，指向 ~/.shipherd/app.db 的副本（连同 -wal / -shm），绝不指向正在用的文件：迁移和补链接都会写库。
 // 不发通知、不递 CI、不排复盘、不写 refresh handoff：这些回调都是空的。gh 只用到 pr list / pr view / run list / run view / api 的 GET。
-// BUTLER_VERIFY_DB=<副本> pnpm vitest run src/main/prwatch/verify-real-db.test.ts
+// SHIPHERD_VERIFY_DB=<副本> pnpm vitest run src/main/prwatch/verify-real-db.test.ts
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -27,17 +27,17 @@ import { PrStagesService } from "./pr-stages-service";
 import { PrWatcher } from "./pr-watcher";
 import { skillTrackingSince } from "./skill-tracking";
 
-const file = process.env.BUTLER_VERIFY_DB;
+const file = process.env.SHIPHERD_VERIFY_DB;
 const log = (msg: string, e?: unknown) => console.log(`[verify] ${msg}`, e ?? "");
-const live = join(homedir(), ".butler", "app.db");
+const live = join(homedir(), ".shipherd", "app.db");
 
 /** 正在用的库（连同 -wal / -shm）一律不开：迁移和补链接都会写库。 */
 function assertNotLive(path: string): void {
   const p = resolve(path);
-  if ([live, `${live}-wal`, `${live}-shm`].includes(p)) throw new Error(`BUTLER_VERIFY_DB points at the live database (${p}): use a copy`);
+  if ([live, `${live}-wal`, `${live}-shm`].includes(p)) throw new Error(`SHIPHERD_VERIFY_DB points at the live database (${p}): use a copy`);
 }
 
-describe.skipIf(!file)("real database copy (BUTLER_VERIFY_DB)", () => {
+describe.skipIf(!file)("real database copy (SHIPHERD_VERIFY_DB)", () => {
   it("backfills feature 1 and BTL-190 into one row per PR", async () => {
     assertNotLive(file!);
     const db = openDatabase(file!);

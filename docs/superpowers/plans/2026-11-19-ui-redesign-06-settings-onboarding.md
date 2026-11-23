@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 3.0 的功能默认全部关闭，这一点不变；Butler 默认不替用户对外做任何事（spec §3）。`src/main/db/settings-defaults-3.test.ts` 必须一直通过，本层不改任何默认值。
+- 3.0 的功能默认全部关闭，这一点不变；Shipherd 默认不替用户对外做任何事（spec §3）。`src/main/db/settings-defaults-3.test.ts` 必须一直通过，本层不改任何默认值。
 - 不新加总开关，也不做迁移：功能页每一行直接对应现有的全局开关；一行对应几个开关时一起开、一起关（spec §5.3）。
 - 打开「review 评论自动送回」（`comments.enabled`）不连带打开任何对外动作开关（`external*`，共 14 个）；这一行的一句话说明里写清「不对外发任何东西」（spec §5.3）。
 - 仓库或产品另有覆盖设置时，这一行下面注明「N 个仓库另有设置」，可点进「高级」查看（spec §5.3）。
@@ -44,7 +44,7 @@
 |---|---|
 | `GeneralSettings`：语言 `language`、`claudePath`、`branchTemplate`、`ticketPattern`、开机启动（`api.autostart`）、`memoryEnabled`（+记忆目录/MCP 状态/statecore 警告）、`refreshThresholdTokens`、「重新运行向导」（`onboardingDone`） | **基本** |
 | `GeneralSettings`：`sessionMemoryReserveMb`、`sessionMemoryEstimateMb`、`sessionMaxRunning`、`idleCloseMinutes`、`memoryMonitor`、`backgroundPriority`、`orphanCleanup`、`refreshMemoryMb`、`hibernateEnabled`、`hibernateYouMinutes`、`hibernateCiMinutes`、`hibernateReviewMinutes`、`hibernateIdleMinutes`、`hibernateEndWatchers`、`memoryPressureEnabled`、`memoryPressureFreePercent`、`sharedMcp`、性能提示 | **高级 › Session 与内存**（`sessions`） |
-| `ScheduleSettings`：`nightlyTime`、`workingDays`、`butlerPatrolTime`、`handoffPrompt`、`refreshPrompt`、`trackerTools`、`headlessProjectMcp` | 高级 › 定时与 handoff（`schedule`） |
+| `ScheduleSettings`：`nightlyTime`、`workingDays`、`shipherdPatrolTime`、`handoffPrompt`、`refreshPrompt`、`trackerTools`、`headlessProjectMcp` | 高级 › 定时与 handoff（`schedule`） |
 | `RoutingSettings`：`routingQuotas`、`routingThresholds`、`routingPeriodStartDay`、`routingEffort`、`routingMaxConcurrent`、`routingAutoSwitch`、模型登记表 | 高级 › 模型路由（`routing`） |
 | `CostBackgroundSettings`：费用熔断三层策略（`cost_caps`）、`bgWindow`、`bgHours`、`bgIdleMinutes`、`bgYield`、`bgQuotaOrder`、`bgPlentifulPercent`、`bgKinds` | 高级 › 花费与后台（`cost`）。熔断没有布尔开关（设了上限就生效、上限为 null 不限），所以不进功能页 |
 | `LoopSettings`：`loop_policies` 三层（`comments.*`、`ci.*`）、flaky 名单、效果、评论/CI 用到的对外开关 | 高级 › 评论与 CI（`loop`）；`ci.enabled`、`comments.enabled` 两个全局值同时是功能页两行 |
@@ -54,8 +54,8 @@
 | `InterruptSettings`：`permissionProfiles`、`interruptChoiceRule`、`interruptChoiceDefaults`、`interruptSelfServe`、`notifyFormat`、`notifyEvents`、`notifyDetails`、`notifyQuietHours`、权限档案、选择题默认答案 | 高级 › 打断与通知（`interrupts`） |
 | `LessonsSettings`：`lessonsAutoAdmit`、`lessonsPrinciples`、`lessonsCoreGuide`、`configBackupIntervalDays`、`configBackupKeep`、`configExportReminderDays`、准入策略三层 | 高级 › 规矩与备份（`lessons`） |
 | `PrivacySettings`：`llmLevel`、`llmBaseUrl`、`llmModel`、`llmMonthlyBudgetUsd`、`llmPrices`、`llmConfirm`、`auditRetentionDays`、API key | 高级 › 隐私与个人 API（`privacy`） |
-| `ExternalActionSettings`：14 个 `external*`（`EXTERNAL_ACTION_SETTINGS`） | 高级 › 对外动作（`external`）。不进功能页：它们不是「功能」，而是 Butler 对外做事的许可 |
-| `SettingsPage` 顶部健康块（`HealthReport`：claude 路径/版本/缺的参数、hook、/handoff 命令、Butler home、claude settings）、`ClaudeAvailability`、安装/卸载 hook 按钮 | **健康检查**；新增 gh 一行（`lessonsState().ghAvailable`）、用量一行（`usageSummary`） |
+| `ExternalActionSettings`：14 个 `external*`（`EXTERNAL_ACTION_SETTINGS`） | 高级 › 对外动作（`external`）。不进功能页：它们不是「功能」，而是 Shipherd 对外做事的许可 |
+| `SettingsPage` 顶部健康块（`HealthReport`：claude 路径/版本/缺的参数、hook、/handoff 命令、Shipherd home、claude settings）、`ClaudeAvailability`、安装/卸载 hook 按钮 | **健康检查**；新增 gh 一行（`lessonsState().ghAvailable`）、用量一行（`usageSummary`） |
 | 没有任何设置 UI、由别处写的内部状态：`skillTrackingSince`、`metricsSince`、`metricsBaselineCutoff`、`admissionPolicyVersion`、`configLastExportAt`、`admissionCalibratedAt`、`lessonsPrinciplesRegroupedAt`、`backtestThresholdReviewAt`、`interruptReductionSince`；以及在「复盘与规矩」页自己的区块里编辑的 `checksEnabled`、`checksEditTimeoutSec`、`checksPushTimeoutSec`、`baselineInfer`、`baselineAutoRescan`、`baselineGuideChars`、`legacyScanMaxFiles` | 不动（登记为 `elsewhere`） |
 
 ### 功能页的 11 行（真实键名）
@@ -74,7 +74,7 @@
 | `hibernate` | 没事做的 session 先关掉省内存，需要时原样接上 | 设置 `hibernateEnabled` | 无 |
 | `routing_switch` | 撞到用量上限时换一个档位的模型接着干 | 设置 `routingAutoSwitch` | 无 |
 | `mem_relief` | 内存紧张时让看不见的 session 让路（降优先级、休眠最闲的） | 设置 `backgroundPriority` + `memoryPressureEnabled`（2 个） | 无 |
-| `shared_mcp` | 所有 session 共用一组记忆和 Butler MCP 进程，省内存 | 设置 `sharedMcp` | 无 |
+| `shared_mcp` | 所有 session 共用一组记忆和 Shipherd MCP 进程，省内存 | 设置 `sharedMcp` | 无 |
 
 不进功能页的 3.0 能力和原因：费用熔断、后台任务时段、配置自动备份、每日巡检（都是数字或时间，空/0 = 关，没有布尔开关）；`permissionProfiles`（默认就是开，不是「默认全关」的 3.0 功能）；`notifyDetails`、各 `external*`（对外的许可，留在高级）。
 
@@ -112,7 +112,7 @@
   }
   ```
   组件自己不判断「有没有工作」，也不认识路由、不自己开对话框；第 2 层决定什么时候渲染。按索引「实际开工的顺序」：本层（BTL-236）只做组件本身，不碰首页接线；第 2 层开工时若分支里已有该文件就直接渲染它，否则先用 `NoWorkLine`，由第 3 层换掉。第 2 层不建占位文件，所以本层的 Task 6 是新建该文件。
-- **路由**：`{ page: "settings"; section?: SettingsSection }`（`SettingsSection` 从 `src/shared/settings-layout.ts` 引）。旧值 `"health"`、`"routing"`、`"cost"` 仍然有效（分别落到健康检查 tab、高级的 routing 分组、cost 分组），新增 `"basic"`、`"features"` 和其余高级分组 id。第 2、3 层里指向设置的链接（比如首页「Butler 要你点一下」的限额/模型不可用提醒）继续写 `section: "health"` / `"routing"` 即可。
+- **路由**：`{ page: "settings"; section?: SettingsSection }`（`SettingsSection` 从 `src/shared/settings-layout.ts` 引）。旧值 `"health"`、`"routing"`、`"cost"` 仍然有效（分别落到健康检查 tab、高级的 routing 分组、cost 分组），新增 `"basic"`、`"features"` 和其余高级分组 id。第 2、3 层里指向设置的链接（比如首页「Shipherd 要你点一下」的限额/模型不可用提醒）继续写 `section: "health"` / `"routing"` 即可。
 
 ---
 
@@ -447,7 +447,7 @@ git commit -m "feat(settings): features tab with one row per 3.0 feature"
 **Interfaces:**
 - Produces: `FirstRunHomeProps` 和 `FirstRunHome`（见上面「与别的层的接口」）。testid：`first-run-home`、`first-run-new-ticket`、`first-run-new-feature`、`first-run-new-epic`、`first-run-flow`、`first-run-settings-link`。文案：`S.firstRun = { title, lede, empty, stepTicket: { title, desc, button }, stepFeature, stepEpic, flow: [string, string, string, string], flowNote, defaultsOff, openFeatureSettings }`。
 
-文案要点（照草图 `#homeFresh`）：标题「欢迎用 Butler」；一句话「Butler 替你看着一堆 Claude Code session：谁在干活、谁卡住了、哪个 PR 能合了。需要你的时候，就会出现在这一页。」；三种开工方式（①一个小活 → 新建 ticket：一个分支、一个 Claude session，做完开 PR；②一组相关的活 → 新建 feature：一个总控 session 帮你拆成几个 ticket 并行做；③一个大项目 → 新建 epic：先和总控规划，它会建 feature 和 ticket）；流程图四个节点「ticket 开工」→「agent 写代码、开 PR」→「CI / review」（旁注「失败自动送回 agent」；注意这句话要和功能页一致：`ci_triage` 关着时 CI 失败也会送回 session，那是 2.1 就有的行为，所以旁注不能说成要先开某个功能）→「可以合并 → 轮到你」；最后一句「Butler 默认什么都不替你对外做（不发评论、不合并）。想让它多做点，去 设置 › 功能 里一个个打开。」，其中「设置 › 功能」是按钮，点了调 `onOpenSettings`。
+文案要点（照草图 `#homeFresh`）：标题「欢迎用 Shipherd」；一句话「Shipherd 替你看着一堆 Claude Code session：谁在干活、谁卡住了、哪个 PR 能合了。需要你的时候，就会出现在这一页。」；三种开工方式（①一个小活 → 新建 ticket：一个分支、一个 Claude session，做完开 PR；②一组相关的活 → 新建 feature：一个总控 session 帮你拆成几个 ticket 并行做；③一个大项目 → 新建 epic：先和总控规划，它会建 feature 和 ticket）；流程图四个节点「ticket 开工」→「agent 写代码、开 PR」→「CI / review」（旁注「失败自动送回 agent」；注意这句话要和功能页一致：`ci_triage` 关着时 CI 失败也会送回 session，那是 2.1 就有的行为，所以旁注不能说成要先开某个功能）→「可以合并 → 轮到你」；最后一句「Shipherd 默认什么都不替你对外做（不发评论、不合并）。想让它多做点，去 设置 › 功能 里一个个打开。」，其中「设置 › 功能」是按钮，点了调 `onOpenSettings`。
 
 - [ ] **Step 1: 写失败的测试 `first-run-home-render.test.ts`**：
   - `it("offers the three ways to start, each with its own button")`：渲染含 `first-run-new-ticket`、`first-run-new-feature`、`first-run-new-epic`，按钮文字是 `S.newTicket`、`S.newFeature`、`S.newEpic`（用现有的按钮文案，确认这三个键名后再写断言）。
@@ -460,7 +460,7 @@ git commit -m "feat(settings): features tab with one row per 3.0 feature"
 
 - [ ] **Step 3: 实现 `FirstRunHome.tsx`**（`FirstRunHome` 就是 `FirstRunHomeView` 的薄封装，无自己的数据请求）；文案和样式。
 
-- [ ] **Step 4: 向导完成页**：`Wizard.tsx` 的 `done` 步骤只改 `S.wizardDoneHelp`（zh/en）：去掉「点左侧“新建 ticket”开始」，改成「点完成进入首页，从那里选一种方式开始第一件事；3.0 的各个功能在 设置 › 功能 里，默认都关着。每晚 Butler 会为有活动的 ticket 生成 handoff……」（保留后半句原意）。`finish()` 和 `App.tsx` 的 `onDone → setRoute({ page: "home" })` 已经是「跳到首页」，不改；`wizard.ts` 不改。
+- [ ] **Step 4: 向导完成页**：`Wizard.tsx` 的 `done` 步骤只改 `S.wizardDoneHelp`（zh/en）：去掉「点左侧“新建 ticket”开始」，改成「点完成进入首页，从那里选一种方式开始第一件事；3.0 的各个功能在 设置 › 功能 里，默认都关着。每晚 Shipherd 会为有活动的 ticket 生成 handoff……」（保留后半句原意）。`finish()` 和 `App.tsx` 的 `onDone → setRoute({ page: "home" })` 已经是「跳到首页」，不改；`wizard.ts` 不改。
 
 - [ ] **Step 5: 写 e2e `e2e/onboarding.spec.ts`**（沿用 `wizard.spec.ts` 的写法：`makeSandbox`、`launch`、`completeWizard`）：
   - `test("a fresh install has every feature off")`：走完向导 → 侧栏进设置 → 点 `settings-tab-features`（`aria-selected="true"`）；11 个 `feature-row-*` 的 `data-state` 全是 `off`。首页空状态的 e2e（落到 `first-run-home`、三个按钮开对话框、`first-run-settings-link` 进功能 tab）依赖首页接线，由接线的那一层（第 2/3 层）补，本层用 render 测试覆盖组件。

@@ -35,10 +35,10 @@ export type RefreshResult = "done" | RefreshRefusal;
 
 /**
  * 能换新的 session 是哪一种（SessionRefresherDeps.kindOf）：ticket session 是 ticket，feature 总控是 feature。
- * 修复 session、不是 Butler 开的、没开着终端的、什么都不属于的返回 null。
+ * 修复 session、不是 Shipherd 开的、没开着终端的、什么都不属于的返回 null。
  */
 export function refreshKindOf(s: Session, terminalOpen: boolean): RefreshKind | null {
-  if (!terminalOpen || s.origin !== "butler" || s.fixesSession !== null) return null;
+  if (!terminalOpen || s.origin !== "shipherd" || s.fixesSession !== null) return null;
   if (s.ticketKey) return "ticket";
   return s.featureId !== null ? "feature" : null;
 }
@@ -72,12 +72,12 @@ export interface SessionRefresherDeps {
   head(sessionId: string): Session | null;
   /** 按 head 的 id 查。自动换新要求没有后台任务在跑（guard 把只剩后台任务的 session 当作停着，见计划 13 R9）。 */
   activity(sessionId: string): SessionActivity | null;
-  /** 修复 session、headless、非 Butler 的返回 null。 */
+  /** 修复 session、headless、非 Shipherd 的返回 null。 */
   kindOf(s: Session): RefreshKind | null;
   contextOf(sessionId: string): number | null;
   /** 设置 refreshThresholdTokens，0 = 关。 */
   threshold(): number;
-  /** ticket session 和 feature 总控的 /handoff 是 Butler 自己的命令（handoffCommandUsable：当前版本或旧版本都算）。 */
+  /** ticket session 和 feature 总控的 /handoff 是 Shipherd 自己的命令（handoffCommandUsable：当前版本或旧版本都算）。 */
   handoffCommandReady(): Promise<boolean>;
   /** 设置里的记忆开关（memoryEnabled）：关着时 session 换新以后没有 handoff 可以 recall。 */
   memoryEnabled(): boolean;
@@ -93,9 +93,9 @@ export interface SessionRefresherDeps {
    * 否则 /handoff 那一轮被 hook 带进去的消息会被 /clear 清掉）；结束时重新投影、能送就直接输入。不给就不管。
    */
   mailboxSync?(termId: string): void;
-  /** 开着终端的 Butler session 的 head，自动检查用。 */
+  /** 开着终端的 Shipherd session 的 head，自动检查用。 */
   sessions(): Session[];
-  /** 用户上一次往这个终端里输入的时间（PtyManager.lastUserInputAt）：Butler 输入 /handoff 之后用户动过，就不再清空（I3）。 */
+  /** 用户上一次往这个终端里输入的时间（PtyManager.lastUserInputAt）：Shipherd 输入 /handoff 之后用户动过，就不再清空（I3）。 */
   lastUserInputAt(termId: string): number;
   /** 终端打开的时间（PtyManager.openedAt），0 = 不知道。刚打开的终端不自动换新（R36）。不给就不看。 */
   openedAt?: (termId: string) => number;
@@ -107,7 +107,7 @@ export interface SessionRefresherDeps {
    */
   memoryIdle?: () => Promise<void>;
   /**
-   * /clear 之前：Butler 自己读旧 transcript（oldHeadId 的），把 handoff 请求之前的最近对话写进这个 session 的尾巴文件（BTL-190 第 6 点），
+   * /clear 之前：Shipherd 自己读旧 transcript（oldHeadId 的），把 handoff 请求之前的最近对话写进这个 session 的尾巴文件（BTL-190 第 6 点），
    * 返回文件路径；没写成返回 null（接着做的话就不提它）。termId 决定文件名：同一个终端下一次换新覆盖它。不给就不写。
    */
   writeTail?: (oldHeadId: string, termId: string) => Promise<string | null>;
@@ -151,9 +151,9 @@ interface Run {
   mode: RefreshMode;
   step: RefreshStep;
   ticket: string;
-  /** ticket / feature：Butler 输入 /handoff 的时间；之前收进来的 handoff（用户自己的 /handoff）不算。 */
+  /** ticket / feature：Shipherd 输入 /handoff 的时间；之前收进来的 handoff（用户自己的 /handoff）不算。 */
   handoffTypedAt: number | null;
-  /** ticket / feature：Butler 输入 /handoff 之后，capture 存下了这个 session 的 /handoff。 */
+  /** ticket / feature：Shipherd 输入 /handoff 之后，capture 存下了这个 session 的 /handoff。 */
   stored: boolean;
   /** /clear 接上了新 id：换新结束时排进信箱的「接着做」。 */
   resume: string | null;
@@ -169,7 +169,7 @@ export class SessionRefresher {
   /** 失败过的 session（按链认）和失败的时间。 */
   private readonly failedAt = new Map<string, number>();
   private readonly sleep: (ms: number) => Promise<void>;
-  /** Butler 要退出了（stop）：不再开始换新，正在进行的在下一个检查点停下，不再输入、不再读库。 */
+  /** Shipherd 要退出了（stop）：不再开始换新，正在进行的在下一个检查点停下，不再输入、不再读库。 */
   private stopped = false;
 
   constructor(private readonly d: SessionRefresherDeps) {
@@ -201,7 +201,7 @@ export class SessionRefresher {
 
   /**
    * 闲置关闭（BTL-190 第 8 点）：先走换新的 handoff 那一步（/handoff），等收进来、等记忆写完，再等 session 停下来、
-   * 确认用户没动过，然后结束终端。记忆关着时照样写 /handoff（存在 Butler 自己的库里，每日简报要用），只是不等记忆。
+   * 确认用户没动过，然后结束终端。记忆关着时照样写 /handoff（存在 Shipherd 自己的库里，每日简报要用），只是不等记忆。
    * 两种触发都看「需要你」、后台任务和刚打开的终端；手动（「清理闲置」）不看 30 分钟的冷却。闲置多久、总控的子 session
    * 是不是在干活由调用方（IdleCloser）看。正在换新或关闭的算 already。
    */
@@ -219,7 +219,7 @@ export class SessionRefresher {
   /**
    * 同步回答现在能不能开始换新（R31：总控的 refresh_session 要马上回答）：null 表示可以。
    * 看 session 种类、记忆开关、是否正在换新、冷却（手动不看）和 guard（按触发方式选）。
-   * /handoff 命令文件是不是 Butler 的要读文件，留在 refresh() 里异步看。
+   * /handoff 命令文件是不是 Shipherd 的要读文件，留在 refresh() 里异步看。
    */
   precheck(sessionId: string, trigger: RefreshTrigger): RefreshRefusal | null {
     const r = this.check(sessionId, trigger, "refresh");
@@ -245,7 +245,7 @@ export class SessionRefresher {
     return run ? (run.mode === "close" ? "close" : run.step) : null;
   }
 
-  /** capture 存下了这个 session 的 /handoff。Butler 还没输入 /handoff 时收进来的（用户自己的）不算。 */
+  /** capture 存下了这个 session 的 /handoff。Shipherd 还没输入 /handoff 时收进来的（用户自己的）不算。 */
   handoffStored(sessionId: string): void {
     for (const run of this.runs) {
       if (run.step === "handoff" && run.handoffTypedAt !== null && this.sameChain(sessionId, run.headId)) run.stored = true;
@@ -291,7 +291,7 @@ export class SessionRefresher {
   private begin(sessionId: string, trigger: RefreshTrigger, mode: RefreshMode): RefreshResult | Run {
     const r = this.check(sessionId, trigger, mode);
     if ("result" in r) {
-      if (r.result === "failed" && trigger !== "auto") this.d.log(`${mode} ${sessionId}: not a session Butler can ${mode} now`);
+      if (r.result === "failed" && trigger !== "auto") this.d.log(`${mode} ${sessionId}: not a session Shipherd can ${mode} now`);
       return r.result;
     }
     const run = r.run;
@@ -402,7 +402,7 @@ export class SessionRefresher {
     if (!(await this.d.handoffCommandReady())) {
       this.alive();
       // 用户改过 /handoff 的命令文件：不知道它会输出什么，收不进来就只会白等 10 分钟。冷却期间不再试，也不再记日志。
-      return this.fail(run, `/handoff is not Butler's own command (the command file was changed), so the session was not ${run.mode === "close" ? "closed" : "refreshed"}`);
+      return this.fail(run, `/handoff is not Shipherd's own command (the command file was changed), so the session was not ${run.mode === "close" ? "closed" : "refreshed"}`);
     }
     // 中间等过异步：重新看一眼。这时还什么都没输入，不通过就当作忙（记忆刚关掉就是 memory_off），不冷却。
     this.alive();
@@ -456,7 +456,7 @@ export class SessionRefresher {
 
   /**
    * 等到能往里输入：session 又停下来了（写 handoff、/clear 时它本来就会忙一阵）就返回粘贴前的复查（I2），最多等 REFRESH_CLEAR_MS。
-   * 用户在打字、留了草稿、屏幕上有要用户回答的东西、终端关了或换了、记忆被关掉了、Butler 输入 /handoff 之后用户往终端里输入过（I3），
+   * 用户在打字、留了草稿、屏幕上有要用户回答的东西、终端关了或换了、记忆被关掉了、Shipherd 输入 /handoff 之后用户往终端里输入过（I3），
    * 马上返回原因，不等。
    */
   private async untilQuiet(run: Run): Promise<string | (() => boolean)> {
@@ -465,7 +465,7 @@ export class SessionRefresher {
       this.alive();
       // 关闭不靠记忆接上：中途关掉记忆照样关。
       if (run.mode === "refresh" && !this.d.memoryEnabled()) return "memory_off";
-      // 用户在 Butler 输入 /handoff 之后动过这个终端（哪怕早过了 30 秒的打字安静期）：他可能在接着用它，不能替他清空。
+      // 用户在 Shipherd 输入 /handoff 之后动过这个终端（哪怕早过了 30 秒的打字安静期）：他可能在接着用它，不能替他清空。
       if (this.d.lastUserInputAt(run.termId) > (run.handoffTypedAt ?? Infinity)) return "the user typed in the terminal after /handoff";
       await this.rereadActivity(run);
       this.alive();

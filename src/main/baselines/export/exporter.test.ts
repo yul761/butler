@@ -39,13 +39,13 @@ function setup(files: Record<string, string>, o: { outward?: OutwardGate; git?: 
   git(root, "config", "user.name", "t");
   git(root, "config", "user.email", "t@example.com");
   git(root, "config", "commit.gpgsign", "false");
-  const remote = mkdtempSync(join(tmpdir(), "butler-remote-"));
+  const remote = mkdtempSync(join(tmpdir(), "shipherd-remote-"));
   dirs.push(remote);
   git(remote, "init", "-q", "--bare", "-b", "main");
   git(root, "remote", "add", "origin", remote);
   git(root, "push", "-q", "origin", "main");
   git(root, "remote", "set-head", "origin", "main");
-  const home = mkdtempSync(join(tmpdir(), "butler-home-"));
+  const home = mkdtempSync(join(tmpdir(), "shipherd-home-"));
   dirs.push(home);
   const db = memDb();
   const repo = new BaselinesRepo(db);
@@ -67,7 +67,7 @@ function setup(files: Record<string, string>, o: { outward?: OutwardGate; git?: 
 
 const allowAll: OutwardGate = { allowed: () => true, attempt: async (_k, _d, run) => ({ ran: true, value: await run(), auditId: 1 }) };
 
-describe("check export into a Butler worktree", () => {
+describe("check export into a Shipherd worktree", () => {
   it("writes a branch off origin/HEAD, commits locally, keeps the exec bit, and leaves the checkout alone", async () => {
     const { root, home, ex } = setup({ "go.mod": "module x\n", "src/a.go": "package a\n" });
     // 本地 checkout 有没提交的改动和别的分支：都不该被碰
@@ -76,18 +76,18 @@ describe("check export into a Butler worktree", () => {
     const r = await ex.run(CHECK.key, "acme/app");
     expect(r.ok).toBe(true);
     const e = (r as { export: { id: number; branch: string; worktree: string; base: string; committed: boolean; status: string; diff: string; files: string[]; target: string } }).export;
-    expect(e).toMatchObject({ branch: "butler/check-no-debugger-a1b2c3", base: "origin/main", committed: true, status: "ready", target: "script", files: ["scripts/butler-checks/no-debugger.sh", ".gitattributes"] });
-    expect(readFileSync(join(e.worktree, ".gitattributes"), "utf8")).toBe("/scripts/butler-checks/no-debugger.sh text eol=lf\n");
+    expect(e).toMatchObject({ branch: "shipherd/check-no-debugger-a1b2c3", base: "origin/main", committed: true, status: "ready", target: "script", files: ["scripts/shipherd-checks/no-debugger.sh", ".gitattributes"] });
+    expect(readFileSync(join(e.worktree, ".gitattributes"), "utf8")).toBe("/scripts/shipherd-checks/no-debugger.sh text eol=lf\n");
     expect(e.worktree).toBe(join(home, "exports", String(e.id)));
-    expect(git(e.worktree, "log", "-1", "--format=%s")).toBe('chore: add Butler check "No debugger" as a repo rule');
-    expect(git(e.worktree, "ls-files", "-s", "scripts/butler-checks/no-debugger.sh")).toMatch(/^100755 /);
-    expect(e.diff).toContain("scripts/butler-checks/no-debugger.sh");
+    expect(git(e.worktree, "log", "-1", "--format=%s")).toBe('chore: add Shipherd check "No debugger" as a repo rule');
+    expect(git(e.worktree, "ls-files", "-s", "scripts/shipherd-checks/no-debugger.sh")).toMatch(/^100755 /);
+    expect(e.diff).toContain("scripts/shipherd-checks/no-debugger.sh");
     expect(git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("wip");
     expect(readFileSync(join(root, "go.mod"), "utf8")).toContain("dirty");
-    expect(r.ok && r.message).toContain("butler/check-no-debugger-a1b2c3");
+    expect(r.ok && r.message).toContain("shipherd/check-no-debugger-a1b2c3");
     // 再导出一次：分支名不冲突
     const again = await ex.run(CHECK.key, "acme/app");
-    expect(again.ok && again.export?.branch).toBe("butler/check-no-debugger-a1b2c3-2");
+    expect(again.ok && again.export?.branch).toBe("shipherd/check-no-debugger-a1b2c3-2");
   });
 
   it("edits existing files from the base commit, not the local working copy", async () => {
@@ -96,7 +96,7 @@ describe("check export into a Butler worktree", () => {
     const r = await ex.run(CHECK.key, "acme/app");
     if (!r.ok) throw new Error(r.message);
     const pkg = readFileSync(join(r.export!.worktree, "package.json"), "utf8");
-    expect(pkg).toBe(`{\r\n  "name": "x",\r\n  "scripts": {\r\n    "butler:no-debugger": "node scripts/butler-checks/no-debugger.mjs --all"\r\n  }\r\n}\r\n`);
+    expect(pkg).toBe(`{\r\n  "name": "x",\r\n  "scripts": {\r\n    "shipherd:no-debugger": "node scripts/shipherd-checks/no-debugger.mjs --all"\r\n  }\r\n}\r\n`);
   });
 
   it("leaves the files staged when git has no identity", async () => {
@@ -105,7 +105,7 @@ describe("check export into a Butler worktree", () => {
     const r = await ex.run(CHECK.key, "acme/app");
     if (!r.ok) throw new Error(r.message);
     expect(r.export).toMatchObject({ committed: false, status: "ready" });
-    expect(git(r.export!.worktree, "diff", "--cached", "--name-only")).toBe(".gitattributes\nscripts/butler-checks/no-debugger.sh");
+    expect(git(r.export!.worktree, "diff", "--cached", "--name-only")).toBe(".gitattributes\nscripts/shipherd-checks/no-debugger.sh");
     expect(r.message).toContain("user.name");
   });
 
@@ -115,7 +115,7 @@ describe("check export into a Butler worktree", () => {
     const r = await ex.run(CHECK.key, "acme/app");
     expect(r).toEqual({ ok: false, message: expect.stringContaining("Node") });
     expect(repo.exports()).toEqual([]);
-    expect(git(root, "branch", "--list", "butler/*")).toBe("");
+    expect(git(root, "branch", "--list", "shipherd/*")).toBe("");
     expect(await ex.run("ck_missing", "acme/app")).toMatchObject({ ok: false });
     expect(await ex.run(CHECK.key, "other/repo")).toMatchObject({ ok: false });
     const nb = setup({ "go.mod": "" }, { noBaseline: true });
@@ -130,10 +130,10 @@ describe("check export into a Butler worktree", () => {
     const push = await ex.act({ kind: "push", id });
     expect(push.ok).toBe(false);
     expect(repo.getExport(id)!.status).toBe("ready");
-    expect(git(remote, "branch", "--list")).not.toContain("butler/");
+    expect(git(remote, "branch", "--list")).not.toContain("shipherd/");
     expect(await ex.act({ kind: "pr", id })).toMatchObject({ ok: false });
     const rows = audit.list();
-    expect(rows.find((r) => r.kind === "branch_push")).toMatchObject({ outcome: "skipped", repoSlug: "acme/app", target: "butler/check-no-debugger-a1b2c3" });
+    expect(rows.find((r) => r.kind === "branch_push")).toMatchObject({ outcome: "skipped", repoSlug: "acme/app", target: "shipherd/check-no-debugger-a1b2c3" });
     // 没推送就开不了 PR：不算一次对外尝试。
     expect(rows.filter((r) => r.kind === "pr_open")).toEqual([]);
   });
@@ -144,9 +144,9 @@ describe("check export into a Butler worktree", () => {
     if (!r.ok) throw new Error(r.message);
     const id = r.export!.id;
     expect(await ex.act({ kind: "push", id })).toMatchObject({ ok: true });
-    expect(git(remote, "branch", "--list")).toContain("butler/check-no-debugger-a1b2c3");
+    expect(git(remote, "branch", "--list")).toContain("shipherd/check-no-debugger-a1b2c3");
     expect(await ex.act({ kind: "pr", id })).toMatchObject({ ok: true });
-    expect(prs[0]).toMatchObject({ branch: "butler/check-no-debugger-a1b2c3", base: "main", title: 'Add Butler check "No debugger" as a repo rule' });
+    expect(prs[0]).toMatchObject({ branch: "shipherd/check-no-debugger-a1b2c3", base: "main", title: 'Add Shipherd check "No debugger" as a repo rule' });
     expect(repo.getExport(id)).toMatchObject({ status: "pr_opened", prUrl: "https://example.invalid/pr/1" });
   });
 
@@ -171,7 +171,7 @@ describe("check export into a Butler worktree", () => {
     const e = repo.exports()[0];
     expect(e.status).toBe("failed");
     expect(existsSync(join(home, "exports", String(e.id)))).toBe(false);
-    expect(git(root, "branch", "--list", "butler/*")).toBe("");
+    expect(git(root, "branch", "--list", "shipherd/*")).toBe("");
     expect(git(root, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
   });
 
@@ -197,14 +197,14 @@ describe("check export into a Butler worktree", () => {
     if (!live.ok) throw new Error(live.message);
     // 上次跑到一半退出了：行还是「中断」，worktree 和分支已经建了
     const id = repo.insertExport(
-      { checkId: null, checkKey: CHECK.key, slug: "acme/app", target: "script", branch: "butler/half-done", base: "main", worktree: "", files: [], diff: "", committed: false, status: "failed", detail: "interrupted", createdAt: 1 },
+      { checkId: null, checkKey: CHECK.key, slug: "acme/app", target: "script", branch: "shipherd/half-done", base: "main", worktree: "", files: [], diff: "", committed: false, status: "failed", detail: "interrupted", createdAt: 1 },
       1,
     );
     const dir = join(home, "exports", String(id));
-    git(root, "worktree", "add", "-q", "-b", "butler/half-done", dir, "main");
+    git(root, "worktree", "add", "-q", "-b", "shipherd/half-done", dir, "main");
     await ex.recover();
     expect(existsSync(dir)).toBe(false);
-    expect(git(root, "branch", "--list", "butler/half-done")).toBe("");
+    expect(git(root, "branch", "--list", "shipherd/half-done")).toBe("");
     expect(existsSync(live.export!.worktree)).toBe(true);
     expect(git(root, "branch", "--list", live.export!.branch)).not.toBe("");
   });

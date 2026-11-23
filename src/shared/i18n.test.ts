@@ -17,7 +17,7 @@ describe("resolveLang", () => {
     expect(resolveLang("garbage", ["zh-CN"])).toBe("zh");
   });
 
-  it("lets BUTLER_LANG override everything, ignoring values it doesn't know", () => {
+  it("lets SHIPHERD_LANG override everything, ignoring values it doesn't know", () => {
     expect(resolveLang("zh", ["zh-CN"], "en")).toBe("en");
     expect(resolveLang("en", ["en-US"], "zh")).toBe("zh");
     expect(resolveLang("zh", ["en-US"], "fr")).toBe("zh");

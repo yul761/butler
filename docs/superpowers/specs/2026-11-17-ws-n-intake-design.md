@@ -8,7 +8,7 @@
 
 | 问题 | 现状 |
 |---|---|
-| 从 Jira 自动拉取 ticket | **没有**。Butler 里没有 Jira 客户端，也不能有（网络只能走 `src/main/gateway`）。ticket 全靠人建：界面上的「+ 新 ticket」（IPC `tickets:create` → `TicketService.create`），或 feature 总控的 `create_ticket`（只能建在 feature 下，可带 K 的 `stack_on`）。 |
+| 从 Jira 自动拉取 ticket | **没有**。Shipherd 里没有 Jira 客户端，也不能有（网络只能走 `src/main/gateway`）。ticket 全靠人建：界面上的「+ 新 ticket」（IPC `tickets:create` → `TicketService.create`），或 feature 总控的 `create_ticket`（只能建在 feature 下，可带 K 的 `stack_on`）。 |
 | Jira 走什么方式 | **用户自己在 Claude Code 里配的项目级 tracker MCP**。设置 `trackerTools` 列出只读的查询工具（`TRACKER_TOOL_RE` 过滤掉写操作），handoff、刷新、早间刷新这几个后台 `claude -p` 在 ticket 第一个仓库的工作目录里跑（项目级 MCP 在那里能找到），用 `--allowedTools` 只放这些工具，读 ticket 的描述、状态、子任务，读不到就填 `jira: null`。session 的说明文件（J）让 session 遇到问题先查 tracker。没有任何写 Jira 的路径。 |
 | 自动开工 | **没有**。session 只在人点「+ 新 session」或总控调 `start_session`（task + 档位）时开。开之前过 W 的内存准入（`admitOrRefuse`），档位经 A 的 `routing.sessionModel` 变成 `--model`。 |
 | 已经预留给 N 的 | A 登记了路由任务 `intake_classify`（mid、fallback）；L 登记了后台任务种类 `intake`（high、不看时段、不可打断、开 session、路由任务 `intake_classify`），界面文案「新需求分拣 / Intake triage」已有，但没有处理函数。 |
@@ -28,12 +28,12 @@
 | `intakeSource` | 做法 |
 |---|---|
 | `none`（默认） | 不拉。 |
-| `tracker` | 真实 Jira（以及 Linear、GitLab 等任何有 MCP 的 tracker）：沿用第 0 节的现有方式。后台 `claude -p` 经路由器（新任务 id `intake_fetch`，low、fallback，见第 9 节）在 `intakeTrackerDir`（不填就用仓库映射里第一个仓库）里跑，`--allowedTools` 只放 `trackerTools` 里的只读工具，按用户写的 `intakeTrackerQuery`（可以是 JQL，也可以是一句话，比如「分给我的、状态是待办的」）列出 ticket，按 JSON schema 输出。工具不可用或失败就当这次没拉到，下次再拉。Butler 自己不连 Jira。 |
+| `tracker` | 真实 Jira（以及 Linear、GitLab 等任何有 MCP 的 tracker）：沿用第 0 节的现有方式。后台 `claude -p` 经路由器（新任务 id `intake_fetch`，low、fallback，见第 9 节）在 `intakeTrackerDir`（不填就用仓库映射里第一个仓库）里跑，`--allowedTools` 只放 `trackerTools` 里的只读工具，按用户写的 `intakeTrackerQuery`（可以是 JQL，也可以是一句话，比如「分给我的、状态是待办的」）列出 ticket，按 JSON schema 输出。工具不可用或失败就当这次没拉到，下次再拉。Shipherd 自己不连 Jira。 |
 | `file` | 读一个 JSON 文件（`intakeFilePath`，`{"tickets":[...]}` 或数组）。这是 e2e 用的 fake 来源，也能给用户自己的脚本（比如定时导出）用。 |
 
 - 拉取的时机：每 `intakePollMinutes`（默认 15）一次，加上界面上的「现在拉取」。拉之前问 L 的 `scheduler.gate("intake")`，被手动停了、额度 hard、熔断时不拉。
 - ticket 号不符合 `ticketPattern`：记成 `skipped`（原因「ticket 号格式不对」），不提醒。
-- 已经是 Butler ticket 的号（包括归档的）：记成 `exists`，不动，人已经在管它。
+- 已经是 Shipherd ticket 的号（包括归档的）：记成 `exists`，不动，人已经在管它。
 - 同一个号再拉到时：内容（标题、描述、类型、标签、故事点、子任务）的 hash 没变就什么都不做；变了且还没开工（`needs_clarification`、`needs_decision`、`held`、`needs_repo`）就重新分类。用户手改过的维度保留用户的值。
 - 测试里只用 `PROJ-1` 这类假号、`acme/app` 这类假仓库，不出现真实地址、项目和人名。
 
@@ -113,7 +113,7 @@
 
 - `notify`（默认）：只提醒你。
 - `session`：建 ticket、开一个 session（档位按 `tierSmall`），任务是「用 tracker 工具把这些问题回到 ticket 上，然后停下，不要开始实现」。
-- `coordinator`：Butler 总控 session 开着时把问题递给它，让它去回；没开着就退回 `notify`。
+- `coordinator`：Shipherd 总控 session 开着时把问题递给它，让它去回；没开着就退回 `notify`。
 
 `session` 和 `coordinator` 都是对外动作 `intake_tracker_comment`（B 的开关，默认关）：开关关着时退回 `notify` 并记 `skipped`；开着时记审计（问题文本截断进 payload）。之后再拉到内容变了就重新分类；你也可以在队列里点「已补全」或「仍然开工」。
 
@@ -132,7 +132,7 @@
 ## 9. 其他决定
 
 - **新路由任务 `intake_fetch`**（low、fallback）：总设计表里只有 `intake_classify`；拉取和分类是两种调用，分开记用量和档位更清楚。契约允许 addendum 扩展。
-- **B 的两个新动作种类**：`intake_tracker_comment`（`externalIntakeTrackerComment`）、`intake_tracker_status`（`externalIntakeTrackerStatus`），默认关。真正写 tracker 的是 session 或总控（用户自己的 MCP），Butler 只决定要不要让它去做，并记审计。
+- **B 的两个新动作种类**：`intake_tracker_comment`（`externalIntakeTrackerComment`）、`intake_tracker_status`（`externalIntakeTrackerStatus`），默认关。真正写 tracker 的是 session 或总控（用户自己的 MCP），Shipherd 只决定要不要让它去做，并记审计。
 - **设置**：普通设置 `intakeSource`、`intakeTrackerQuery`、`intakeTrackerDir`、`intakeFilePath`、`intakePollMinutes`、`intakeRepoMap`（来源是全局的）；三层策略 `enabled`、`autoStart`、`maxSize`、`maxRisk`、`maxParallel`、`conflictAction`、`clarifyMode`、`uncertainBelow`、`stackSubtasks`、五个档位映射。都写进 `docs/configuration.md` 和 `.zh-CN.md` 的「自动接活」一节。
 - **界面**：设置页新标签「自动接活」（来源、仓库映射、分层策略编辑器，预审没开时给警告）；「进度」页加「接活队列」区块（号、标题、仓库、大小 / 风险 / 澄清、理由、状态和原因、档位、PR 的风险和就绪；可改分类、选仓库、开工、允许并行、已补全、跳过、重试）；「现在」页加 `intake` 提醒和「自动接活」记录；「效果」页加卡片。
 - **IPC**：`intake:view`、`intake:effect`、`intake:policyView` 只读（`NOT_TRIGGERS`）；`intake:poll`、`intake:act`（开工、跳过等）是人推动的工作（`MANUAL_TRIGGERS`）；`intake:classify`（改分类）、`intake:policySet` 是配置（`NOT_TRIGGERS`，改分类另由 `intake.overridden` 计数）。
@@ -169,7 +169,7 @@
 
 - **你选的仓库不会被下一次拉取冲掉**：重新分类时，来源和映射都给不出仓库就沿用项上记的；选仓库不再清空内容 hash，内容没变的拉取不碰它。
 - **「仍然开工」对没分出大小 / 风险的项也有效**：缺的维度按中等算（和开工时选档位的默认一致），不再报「没分类」。
-- **拆栈前先验子任务**：至少两个、号都合法、不重复、Butler 里没有、也还没作为接活项记下来，才拆；否则整个当一个开工。层号因此连续。拆出来的层归大 ticket 管，来源里单独列出的同一个号不再按原样重新分类。
+- **拆栈前先验子任务**：至少两个、号都合法、不重复、Shipherd 里没有、也还没作为接活项记下来，才拆；否则整个当一个开工。层号因此连续。拆出来的层归大 ticket 管，来源里单独列出的同一个号不再按原样重新分类。
 - **栈的下面那层死了**（不做、已存在、开不成、搁着、要你决定）：上面那层进 `needs_decision`（原因 `stack`）提醒你；你手动开工就从默认分支开，不叠。
 - **策略没开、来源关了**：`decide` 一开头就判，直接 `held`/`auto_off`，排在澄清、拿不准之前，所以不会提醒、不会开澄清 session。后台任务轮到时同样判一次。
 - **搁着的项会被重新决定**：改策略、改 `intake*` 设置、改预审开关后先对所有 `held` 项跑一遍 `decide`，再拉一次。

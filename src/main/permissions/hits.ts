@@ -8,7 +8,7 @@ const READ_MAX = 4 * 1024 * 1024;
 export interface ProfileHitDeps {
   /** session 的 transcript 文件；没有为 null。 */
   transcriptOf(sessionId: string): string | null;
-  /** Butler 自己就放行的工具（--settings 里本来就有的）：这些不算档案的功劳。 */
+  /** Shipherd 自己就放行的工具（--settings 里本来就有的）：这些不算档案的功劳。 */
   builtIn?: readonly string[];
   recordEvent: RecordEvent;
 }
@@ -18,7 +18,7 @@ export interface ProfileHitDeps {
  * interrupt_auto_resolved（category permission，via profile）。按 tool_use id 去重。只记次数，不记命令。
  * 这是上限：用户自己的 Claude Code 设置可能本来也放行了同一条命令（见设计附录）。
  * 只按启动时真正写进这个 session 的 --settings 的规则算，只算启动以后的调用：启动之后才确认的规则、
- * Butler 重启前就开着的 session、重启后重读的旧记录，都不算。
+ * Shipherd 重启前就开着的 session、重启后重读的旧记录，都不算。
  */
 export class ProfileHitCounter {
   /** 每个文件读到了哪个字节（只在内存里：重启后从头读，dedupeKey 保证不重复记）。 */
@@ -29,7 +29,7 @@ export class ProfileHitCounter {
 
   constructor(private readonly d: ProfileHitDeps) {}
 
-  /** Butler 启动（或恢复）这个 session 时：记下给了它哪些档案规则。 */
+  /** Shipherd 启动（或恢复）这个 session 时：记下给了它哪些档案规则。 */
   spawned(sessionId: string, rules: readonly string[], at: number): void {
     if (rules.length === 0) this.spawns.delete(sessionId);
     else this.spawns.set(sessionId, { rules: [...rules], since: at });

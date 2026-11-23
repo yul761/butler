@@ -60,7 +60,7 @@ export interface PrWatcherDeps {
   stages: Pick<PrStageRepo, "has" | "add" | "lastCi">;
   /** 哪些分支是哪个 session 推的（工作流 W）：不是 ticket 分支的也去列 PR。没有时不列。 */
   owners?: Pick<BranchOwnersRepo, "since">;
-  /** Butler 跟踪的 PR 合并了：复盘规矩的分析排队用。抛错下一轮再来，成功后不再调用。repoPath 是 PR 所在的 ticket 仓库。 */
+  /** Shipherd 跟踪的 PR 合并了：复盘规矩的分析排队用。抛错下一轮再来，成功后不再调用。repoPath 是 PR 所在的 ticket 仓库。 */
   onMerged(pr: TicketPr, repoPath: string | null): void;
   /** PR 的状态或 review 变了：把这个 ticket 所有 PR 写成一条 refresh handoff。 */
   onPrChanged(ticketKey: string): void;
@@ -116,7 +116,7 @@ export class PrWatcher {
     this.stop();
     this.timer = setInterval(() => void this.check(), tickMs);
     this.timer.unref?.();
-    // 启动时先查一轮：Butler 没开着的时候 PR 和 CI 可能都变了。
+    // 启动时先查一轮：Shipherd 没开着的时候 PR 和 CI 可能都变了。
     void this.check();
   }
 

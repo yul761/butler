@@ -15,7 +15,7 @@ import { S } from "../strings";
 export function TerminalPane({ termId, visible, hibernated = null, onClose, onResume }: {
   termId: string;
   visible: boolean;
-  /** 这个终端是 Butler 为了省内存结束的（WS-M B），值是原因：切到它就自动唤醒（--resume）。 */
+  /** 这个终端是 Shipherd 为了省内存结束的（WS-M B），值是原因：切到它就自动唤醒（--resume）。 */
   hibernated?: HibernateReason | null;
   onClose: () => void;
   onResume: () => void;

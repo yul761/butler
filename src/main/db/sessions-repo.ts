@@ -23,7 +23,7 @@ interface SessionRow {
   /** 以前的 epic session（BTL-246 去掉了）才有；新代码不写，只用来把这些老行挡在外面。 */
   epic_id: number | null;
   model: string | null;
-  butler: number;
+  shipherd: number;
   lesson_run_id: number | null;
   checks_absent: string | null;
   mem_kb?: number | null;
@@ -36,12 +36,20 @@ interface SessionRow {
   user_ended_at?: number | null;
 }
 
+/**
+ * sessions.origin 在库里的旧值（BTL-260 改名前的产品名）。CHECK (origin IN ('butler','discovered')) 要改只能重建 sessions 表，
+ * 风险大，所以库里继续存这个旧值，读写时和 SessionOrigin 的 "shipherd" 互换。SQL 里比较 origin 也要用它。
+ */
+export const LEGACY_ORIGIN = "butler";
+const originToDb = (o: SessionOrigin): string => (o === "shipherd" ? LEGACY_ORIGIN : o);
+const originFromDb = (v: string): SessionOrigin => (v === LEGACY_ORIGIN || v === "shipherd" ? "shipherd" : "discovered");
+
 function toSession(r: SessionRow): Session {
   return {
     id: r.id,
     ticketKey: r.ticket_key,
     cwd: r.cwd,
-    origin: r.origin as SessionOrigin,
+    origin: originFromDb(r.origin),
     gitBranch: r.git_branch,
     firstPrompt: r.first_prompt,
     lastActivityAt: r.last_activity_at,
@@ -55,7 +63,7 @@ function toSession(r: SessionRow): Session {
     featureId: r.feature_id === null ? null : Number(r.feature_id),
     fixesSession: r.fixes_session,
     model: r.model,
-    butler: r.butler === 1,
+    shipherd: r.shipherd === 1,
     lessonRunId: r.lesson_run_id === null ? null : Number(r.lesson_run_id),
     checksAbsent: (r.checks_absent ?? null) as CheckAbsenceReason | null,
     memKb: r.mem_kb == null ? null : Number(r.mem_kb),
@@ -84,8 +92,8 @@ export interface NewSession {
   featureId?: number | null;
   fixesSession?: string | null;
   model?: string | null;
-  /** Butler 总控（BTL-190 第 5 点）。 */
-  butler?: boolean;
+  /** Shipherd 总控（BTL-190 第 5 点）。 */
+  shipherd?: boolean;
   /** 复盘分析 session 看的是哪一次运行。 */
   lessonRunId?: number | null;
 }
@@ -114,12 +122,12 @@ export class SessionsRepo {
   insertIfAbsent(s: NewSession): boolean {
     const r = this.db
       .prepare(
-        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, model, butler, lesson_run_id)
+        `INSERT OR IGNORE INTO sessions (id, ticket_key, cwd, origin, git_branch, first_prompt, last_activity_at, created_at, repo_id, coordinator, spawned_by, feature_id, fixes_session, model, shipherd, lesson_run_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
-        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.model ?? null, s.butler ? 1 : 0,
+        s.id, s.ticketKey, s.cwd, originToDb(s.origin), s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
+        s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.model ?? null, s.shipherd ? 1 : 0,
         s.lessonRunId ?? null,
       );
     if (Number(r.changes) > 0) {
@@ -196,10 +204,10 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET feature_id = ?, coordinator = 1 WHERE id = ?`).run(featureId, id);
   }
 
-  /** Butler 总控的 session（BTL-190 第 5 点），最近活动的在前。 */
-  listButler(): Session[] {
+  /** Shipherd 总控的 session（BTL-190 第 5 点），最近活动的在前。 */
+  listShipherd(): Session[] {
     const rows = this.db
-      .prepare(`SELECT * FROM sessions WHERE butler = 1 AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)
+      .prepare(`SELECT * FROM sessions WHERE shipherd = 1 AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)
       .all() as unknown as SessionRow[];
     return rows.map(toSession);
   }
@@ -236,17 +244,17 @@ export class SessionsRepo {
     const rows = this.db
       .prepare(
         `SELECT * FROM sessions
-         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND butler = 0 AND lesson_run_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
+         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND shipherd = 0 AND lesson_run_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
          ORDER BY ${RECENCY} DESC, id`,
       )
       .all(sinceMs) as unknown as SessionRow[];
     return rows.map(toSession);
   }
 
-  /** Butler 新建、还没有第一句话、也没被 /clear 替换的 session：handleExit 和启动时清理空 session 的候选。 */
-  listEmptyButler(): Session[] {
+  /** Shipherd 新建、还没有第一句话、也没被 /clear 替换的 session：handleExit 和启动时清理空 session 的候选。 */
+  listEmptyShipherd(): Session[] {
     const rows = this.db
-      .prepare(`SELECT * FROM sessions WHERE origin = 'butler' AND (first_prompt IS NULL OR first_prompt = '') AND replaced_by IS NULL ORDER BY id`)
+      .prepare(`SELECT * FROM sessions WHERE origin = '${LEGACY_ORIGIN}' AND (first_prompt IS NULL OR first_prompt = '') AND replaced_by IS NULL ORDER BY id`)
       .all() as unknown as SessionRow[];
     return rows.map(toSession);
   }
@@ -283,7 +291,7 @@ export class SessionsRepo {
     this.db.prepare(`UPDATE sessions SET user_ended_at = ? WHERE id = ?`).run(at, id);
   }
 
-  /** 终端开着（BTL-256）：打开时写上，Butler 运行时终端退出清掉，退出 Butler 时不清。 */
+  /** 终端开着（BTL-256）：打开时写上，Shipherd 运行时终端退出清掉，退出 Shipherd 时不清。 */
   markTermOpen(id: string, at: number): void {
     this.db.prepare(`UPDATE sessions SET term_open_at = ? WHERE id = ?`).run(at, id);
   }
@@ -318,7 +326,7 @@ export class SessionsRepo {
    * /clear、compact 产生的新 session 接替旧的：同一个终端，仓库、总控、开启者、feature 和修复目标也照旧。
    * 模型和复盘运行（复盘分析 session）不管怎么接上的都照旧：/resume 也一样，终端还是那个复盘分析的终端。
    * 修复 session 的新段不是总控：磁盘扫描可能先按目录把它记成了总控，这里清掉。
-   * 以前的 epic session（BTL-246 去掉了）在 Butler 外面被 /clear 时，新段照旧记成它的 epic_id，不当总控、不归 feature：
+   * 以前的 epic session（BTL-246 去掉了）在 Shipherd 外面被 /clear 时，新段照旧记成它的 epic_id，不当总控、不归 feature：
    * 这样它和旧段一样不会作为没认领的 session 冒出来。新代码不写 epic_id，别的 session 的新段 epic_id 一直是 NULL。
    * /resume（source 是 "resume"）接上的是已有的 session，不是新段：总控、feature、修复目标都留它自己的。resume 出来的新 id 由 hook 插入时继承。
    */
@@ -329,7 +337,7 @@ export class SessionsRepo {
       feature_id = CASE WHEN ${old("epic_id")} IS NULL THEN COALESCE(feature_id, ${old("feature_id")}) END,
       epic_id = CASE WHEN ${old("feature_id")} IS NULL THEN COALESCE(epic_id, ${old("epic_id")}) END,
       fixes_session = COALESCE(fixes_session, ${old("fixes_session")}),
-      butler = MAX(butler, ${old("butler")})`;
+      shipherd = MAX(shipherd, ${old("shipherd")})`;
     withTransaction(this.db, () => {
       this.db.prepare(`UPDATE sessions SET replaced_by = ?2 WHERE id = ?1`).run(id, newId);
       this.db
@@ -388,7 +396,7 @@ export class SessionsRepo {
   }
 
   /**
-   * 对话另存要读的 head（UI 重做第 4 层）：没被替换、Butler 开的或已认领到 ticket / feature / Butler 总控、
+   * 对话另存要读的 head（UI 重做第 4 层）：没被替换、Shipherd 开的或已认领到 ticket / feature / Shipherd 总控、
    * 不是复盘分析、不是以前的 epic session（BTL-246 去掉了，没有页面能看）、since 之后有活动。recordHeadless 记的行是 discovered 且没有归属，不会被选中。
    */
   listConvTargets(sinceMs: number): Session[] {
@@ -396,7 +404,7 @@ export class SessionsRepo {
       .prepare(
         `SELECT * FROM sessions
          WHERE replaced_by IS NULL AND lesson_run_id IS NULL AND epic_id IS NULL
-           AND (origin = 'butler' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR butler = 1)
+           AND (origin = '${LEGACY_ORIGIN}' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR shipherd = 1)
            AND ${RECENCY} >= ?
          ORDER BY id`,
       )
@@ -437,14 +445,14 @@ export class SessionsRepo {
     return ids;
   }
 
-  /** 最早的 Butler session（复盘分析的除外）的创建时间；没有为 null。度量的基线截止点（ws-h）。 */
-  firstButlerCreatedAt(): number | null {
-    const r = this.db.prepare(`SELECT MIN(created_at) AS at FROM sessions WHERE origin = 'butler' AND lesson_run_id IS NULL`).get() as { at: number | null } | undefined;
+  /** 最早的 Shipherd session（复盘分析的除外）的创建时间；没有为 null。度量的基线截止点（ws-h）。 */
+  firstShipherdCreatedAt(): number | null {
+    const r = this.db.prepare(`SELECT MIN(created_at) AS at FROM sessions WHERE origin = '${LEGACY_ORIGIN}' AND lesson_run_id IS NULL`).get() as { at: number | null } | undefined;
     return r?.at ?? null;
   }
 
   setOrigin(id: string, origin: SessionOrigin): void {
-    this.db.prepare(`UPDATE sessions SET origin = ? WHERE id = ?`).run(origin, id);
+    this.db.prepare(`UPDATE sessions SET origin = ? WHERE id = ?`).run(originToDb(origin), id);
   }
 
   /** 删除一行；指向它的 replaced_by 一并清掉，免得前一个 session 被当成“已替换”而从列表里消失。 */
@@ -457,7 +465,7 @@ export class SessionsRepo {
     if (this.forgotten.size > FORGOTTEN_LIMIT) this.forgotten.delete(this.forgotten.values().next().value as string);
   }
 
-  /** Butler 自己的 headless 运行产生的 session：记成已忽略，磁盘扫描永远不会把它列进“未认领”。 */
+  /** Shipherd 自己的 headless 运行产生的 session：记成已忽略，磁盘扫描永远不会把它列进“未认领”。 */
   recordHeadless(id: string, cwd: string, at: number): void {
     // 只有这次调用新插入的行才忽略；已有的行（真实 session）绝不动。
     if (this.insertIfAbsent({ id, ticketKey: null, cwd, origin: "discovered", lastActivityAt: at, createdAt: at })) this.dismiss(id);

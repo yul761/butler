@@ -153,18 +153,18 @@ jobs:
       - name: Verify the package contents (hook, memory MCP, node-pty prebuilds)
         run: node scripts/verify-package.mjs dist
       # Signatures of every Mach-O inside, the zip and the dmg, Gatekeeper and the stapled tickets (Developer ID), and a
-      # smoke run of the packaged app, the ELECTRON_RUN_AS_NODE memory MCP runtime and butler-hook.
+      # smoke run of the packaged app, the ELECTRON_RUN_AS_NODE memory MCP runtime and shipherd-hook.
       - name: Verify the macOS signature and run the packaged app
         if: runner.os == 'macOS'
         run: node scripts/verify-mac-signing.mjs dist --mode ${{ steps.signing.outputs.mode }}
-      # Installers only: dist/Butler-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
+      # Installers only: dist/Shipherd-Setup-*.exe, never electron-builder's __uninstaller-nsis-*.exe stub.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: butler-${{ matrix.os }}
+          name: shipherd-${{ matrix.os }}
           path: |
             dist/*.dmg
             dist/*.zip
-            dist/Butler-Setup-*.exe
+            dist/Shipherd-Setup-*.exe
           if-no-files-found: error
 
   release:
@@ -193,4 +193,4 @@ jobs:
           else
             notes="The macOS build is only ad-hoc signed (no signing secrets), so Gatekeeper blocks it until it is allowed in System Settings → Privacy & Security. The Windows installer is unsigned: see the README for SmartScreen."
           fi
-          gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --draft --title "Butler $GITHUB_REF_NAME" --notes "$notes"
+          gh release create "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --draft --title "Shipherd $GITHUB_REF_NAME" --notes "$notes"

@@ -51,7 +51,7 @@ export function FirstRunHomeView({ onNewTicket, onNewFeature, onOpenSettings }: 
   );
 }
 
-/** 首页空状态（UI 重做 spec §5.5）：一句话说 Butler 做什么、两种开工方式、主流程、默认不对外。 */
+/** 首页空状态（UI 重做 spec §5.5）：一句话说 Shipherd 做什么、两种开工方式、主流程、默认不对外。 */
 export function FirstRunHome(props: FirstRunHomeProps): ReactElement {
   return <FirstRunHomeView {...props} />;
 }

@@ -119,7 +119,7 @@ export interface FoundHandoff {
   block: string;
 }
 
-/** 这一轮里最后一个 butler-handoff 代码块；没有的话，最后一个看起来是 handoff 的 ```json 代码块。 */
+/** 这一轮里最后一个 shipherd-handoff 代码块；没有的话，最后一个看起来是 handoff 的 ```json 代码块。 */
 export function findHandoffBlock(turn: AssistantText[]): FoundHandoff | null {
   for (const extract of [extractHandoffBlock, extractJsonHandoffBlock]) {
     for (let i = turn.length - 1; i >= 0; i--) {
@@ -131,8 +131,8 @@ export function findHandoffBlock(turn: AssistantText[]): FoundHandoff | null {
 }
 
 /**
- * 这一轮里最后一个 butler-feature-handoff 代码块（feature 总控的 /handoff）；没有的话，最后一个看起来是 feature 汇总的 ```json 代码块。
- * 真正的 ```butler-handoff 代码块两种提取都不认（capture 那边记成 wrong_block）。
+ * 这一轮里最后一个 shipherd-feature-handoff 代码块（feature 总控的 /handoff）；没有的话，最后一个看起来是 feature 汇总的 ```json 代码块。
+ * 真正的 ```shipherd-handoff 代码块两种提取都不认（capture 那边记成 wrong_block）。
  */
 export function findFeatureHandoffBlock(turn: AssistantText[]): FoundHandoff | null {
   for (const extract of [extractFeatureHandoffBlock, extractJsonFeatureHandoffBlock]) {

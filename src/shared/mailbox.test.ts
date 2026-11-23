@@ -21,10 +21,10 @@ describe("mailbox names", () => {
 
 describe("mailboxHookCommand", () => {
   it("uses forward slashes on Windows and escapes shell metacharacters", () => {
-    expect(mailboxHookCommand('"C:/b/butler-hook.exe"', "C:\\Users\\a b\\.butler\\mailbox", "win32")).toBe(
-      '[ ! -d "C:/Users/a b/.butler/mailbox/${BUTLER_SESSION:-_}" ] || exec "C:/b/butler-hook.exe" mailbox "C:/Users/a b/.butler/mailbox"',
+    expect(mailboxHookCommand('"C:/b/shipherd-hook.exe"', "C:\\Users\\a b\\.shipherd\\mailbox", "win32")).toBe(
+      '[ ! -d "C:/Users/a b/.shipherd/mailbox/${SHIPHERD_SESSION:-_}" ] || exec "C:/b/shipherd-hook.exe" mailbox "C:/Users/a b/.shipherd/mailbox"',
     );
-    expect(mailboxHookCommand('"/h"', '/x/$y"`z', "darwin")).toContain('"/x/\\$y\\"\\`z/${BUTLER_SESSION:-_}"');
+    expect(mailboxHookCommand('"/h"', '/x/$y"`z', "darwin")).toContain('"/x/\\$y\\"\\`z/${SHIPHERD_SESSION:-_}"');
   });
 
   it.skipIf(process.platform === "win32")("runs the hook only when the session's folder exists, and exits 0 either way", () => {
@@ -33,7 +33,7 @@ describe("mailboxHookCommand", () => {
     writeFileSync(hook, '#!/bin/sh\necho "ran $1 $2"\n');
     chmodSync(hook, 0o755);
     const cmd = mailboxHookCommand(`"${hook}"`, join(root, "mb"), process.platform);
-    const run = (sid?: string) => execFileSync("/bin/sh", ["-c", cmd], { env: { PATH: process.env.PATH, ...(sid ? { BUTLER_SESSION: sid } : {}) }, encoding: "utf8" });
+    const run = (sid?: string) => execFileSync("/bin/sh", ["-c", cmd], { env: { PATH: process.env.PATH, ...(sid ? { SHIPHERD_SESSION: sid } : {}) }, encoding: "utf8" });
     expect(run("t1")).toBe("");
     expect(run()).toBe("");
     mkdirSync(join(root, "mb", "t1"), { recursive: true });

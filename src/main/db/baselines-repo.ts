@@ -202,7 +202,7 @@ export class BaselinesRepo {
     }[]).map((r) => ({ file: r.file, line: r.line === null ? null : Number(r.line), snippet: r.snippet }));
   }
 
-  /** 上次 Butler 退出时还在跑的扫描：标成失败。 */
+  /** 上次 Shipherd 退出时还在跑的扫描：标成失败。 */
   failRunning(at: number, error: string): number {
     return Number(this.db.prepare("UPDATE legacy_scans SET status = 'failed', finished_at = ?, error = ? WHERE status = 'running'").run(at, error).changes);
   }

@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 function setup() {
-  const dir = mkdtempSync(join(tmpdir(), "butler-bk-"));
+  const dir = mkdtempSync(join(tmpdir(), "shipherd-bk-"));
   dirs.push(dir);
   const db = memDb();
   const repo = new LessonsRepo(db);
@@ -33,7 +33,7 @@ function setup() {
   const policies = new AdmissionPolicyService({ db, repo, recorder, version: { get: () => v, set: (x) => (v = x) }, now });
   const registry = defaultRegistry();
   const backupDir = join(dir, "backups");
-  const io = new ConfigIoService({ db, repo, policies, recorder, registry, butlerVersion: "3.0.0", backupDir, now, onExported: (at) => settings.set("configLastExportAt", String(at)) });
+  const io = new ConfigIoService({ db, repo, policies, recorder, registry, shipherdVersion: "3.0.0", backupDir, now, onExported: (at) => settings.set("configLastExportAt", String(at)) });
   const backups = new ConfigBackups({
     io, registry, jobs, repo, backupDir, now,
     intervalDays: () => configBackupIntervalDays(settings), keep: () => configBackupKeep(settings), reminderDays: () => configExportReminderDays(settings),

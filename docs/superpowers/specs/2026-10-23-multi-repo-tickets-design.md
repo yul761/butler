@@ -26,7 +26,7 @@
 - **编辑仓库**：1.0.1 的“编辑”按钮拆成两部分：标题在 ticket 上编辑；工作方式和分支按仓库编辑（规则不变：终端在跑、有未提交改动、会丢提交时拒绝）。“终端在跑”只看这个仓库的 session 和总控 session。
 - **移除仓库**：只解除关联，磁盘上的 worktree 和分支不动；这个仓库有终端在跑时拒绝。已有的 session 保留，仍在原来的目录里恢复。
 - **新 session**：按钮旁边选仓库。ticket 只有一个仓库时和以前完全一样；没有仓库时只能开总控。
-- **总控 session**：工作目录是 `~/.butler/workspaces/<ticket>`（Butler 建的空目录），启动参数为 ticket 的每个仓库加一个 `--add-dir <工作目录>`。恢复时按当时的仓库列表重新加。`--add-dir` 加进 `REQUIRED_FLAGS`。
+- **总控 session**：工作目录是 `~/.shipherd/workspaces/<ticket>`（Shipherd 建的空目录），启动参数为 ticket 的每个仓库加一个 `--add-dir <工作目录>`。恢复时按当时的仓库列表重新加。`--add-dir` 加进 `REQUIRED_FLAGS`。
 - **分支检查**：按 session 的仓库检查；总控不检查。旧 session 的目录不在仓库当前分支上时，提示规则和 1.0.1 一样。
 - **认领**：按 session 的目录匹配 ticket 的仓库（在某个仓库的工作目录里面），匹配到就记 `repo_id`。
 - **handoff / 刷新**：仍然 fork 最近的一个 session。prompt 的 `{{branch}}` 换成全部仓库的 `仓库名@分支`（单仓库 ticket 的结果不变）。刷新在第一个仓库的目录里跑，其余仓库用 `--add-dir`；没有仓库就在工作区目录里跑。
@@ -36,10 +36,10 @@
 
 ### 工具
 
-给总控 session 多挂一个 MCP server `butler-sessions`（只挂给总控，普通 session 不挂），它提供三个工具：
+给总控 session 多挂一个 MCP server `shipherd-sessions`（只挂给总控，普通 session 不挂），它提供三个工具：
 
 - `list_repos()`：这个 ticket 的仓库：名字、工作目录、分支。
-- `start_session({ repo, task })`：在这个仓库里为本 ticket 开一个新 session，Butler 把 `task` 输进去并回车，返回 session id。`repo` 可以是仓库名或工作目录。
+- `start_session({ repo, task })`：在这个仓库里为本 ticket 开一个新 session，Shipherd 把 `task` 输进去并回车，返回 session id。`repo` 可以是仓库名或工作目录。
 - `list_sessions()`：这个 ticket 的 session：id、仓库、第一句话、是否在运行、是否在等用户输入、最近活动时间、是否由总控开启。
 
 不提供“给子 session 发消息”：子 session 可能停在权限确认上，总控往里打字等于替用户批准权限。子 session 之间靠共享的 ticket 记忆交流。
@@ -48,8 +48,8 @@
 
 和 hook 一样走文件，不开端口：
 
-- MCP server 把请求写到 `~/.butler/control/requests/<uuid>.json`（临时文件 + rename）。ticket 号来自 mcp 配置里写死的环境变量，不来自模型。
-- Butler 用 `fs.watch` + 轮询处理请求，结果写到 `~/.butler/control/results/<uuid>.json`。MCP server 最多等 60 秒。
+- MCP server 把请求写到 `~/.shipherd/control/requests/<uuid>.json`（临时文件 + rename）。ticket 号来自 mcp 配置里写死的环境变量，不来自模型。
+- Shipherd 用 `fs.watch` + 轮询处理请求，结果写到 `~/.shipherd/control/results/<uuid>.json`。MCP server 最多等 60 秒。
 - 请求和结果都按 schema 严格校验；ticket 不存在或已归档、仓库不属于这个 ticket 时返回错误。
 
 ### 限制
@@ -61,7 +61,7 @@
 
 ### 打包
 
-`butler-sessions-mcp.cjs` 由 `build-memory-mcp.mjs` 一起打包，放在 `memory-mcp/` 资源目录下，`verify-package` 检查它存在。和记忆 MCP 一样用 Butler 自己的 Electron（`ELECTRON_RUN_AS_NODE=1`）运行；它也清掉环境变量里的模型 key。
+`shipherd-sessions-mcp.cjs` 由 `build-memory-mcp.mjs` 一起打包，放在 `memory-mcp/` 资源目录下，`verify-package` 检查它存在。和记忆 MCP 一样用 Shipherd 自己的 Electron（`ELECTRON_RUN_AS_NODE=1`）运行；它也清掉环境变量里的模型 key。
 
 ## 测试
 

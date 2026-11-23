@@ -1,8 +1,8 @@
 {
-  "name": "butler",
+  "name": "shipherd",
   "version": "4.1.2",
   "private": true,
-  "description": "A work butler for Claude Code ticket sessions",
+  "description": "One coordinator for all your Claude Code sessions",
   "author": "Yuchen Lin",
   "license": "MIT",
   "engines": {

@@ -8,17 +8,17 @@ import { applyHookEnvelope } from "./hook-events";
 import { stageEventFromHook } from "./stage-hook";
 
 const sess = (o: Partial<Session> = {}): Session => ({
-  id: "s1", ticketKey: null, cwd: "/w", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
+  id: "s1", ticketKey: null, cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: false, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
+  featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, ...o,
 });
 const repo = (...ss: Session[]) => ({ get: (id: string) => ss.find((s) => s.id === id) ?? null });
 const skill = (name: string, o: Partial<HookEnvelope> = {}): HookEnvelope => ({
-  v: 1, receivedAt: 500, ticket: null, butlerSession: "t1",
+  v: 1, receivedAt: 500, ticket: null, shipherdSession: "t1",
   payload: { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Skill", tool_input: { skill: name } }, ...o,
 });
 const prompt = (text: string): HookEnvelope => ({
-  v: 1, receivedAt: 500, ticket: null, butlerSession: "t1",
+  v: 1, receivedAt: 500, ticket: null, shipherdSession: "t1",
   payload: { hook_event_name: "UserPromptSubmit", session_id: "s1", prompt: text },
 });
 
@@ -54,18 +54,18 @@ describe("stageEventFromHook", () => {
     expect(stageEventFromHook(prompt("/handoff"), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
     expect(stageEventFromHook(prompt("please review"), repo(sess({ ticketKey: "BTL-1" })))).toBeNull();
   });
-  it("ignores other tools, uncategorised skills, headless envelopes, unknown and Butler control sessions", () => {
+  it("ignores other tools, uncategorised skills, headless envelopes, unknown and Shipherd control sessions", () => {
     const s = repo(sess({ ticketKey: "BTL-1" }));
     const bash = skill("code-review");
     (bash.payload as Record<string, unknown>).tool_name = "Bash";
     expect(stageEventFromHook(bash, s)).toBeNull();
     expect(stageEventFromHook(skill("handoff"), s)).toBeNull();
-    expect(stageEventFromHook(skill("code-review", { butlerSession: "headless:x" }), s)).toBeNull();
+    expect(stageEventFromHook(skill("code-review", { shipherdSession: "headless:x" }), s)).toBeNull();
     expect(stageEventFromHook(skill("code-review"), repo())).toBeNull();
-    expect(stageEventFromHook(skill("code-review"), repo(sess({ butler: true })))).toBeNull();
+    expect(stageEventFromHook(skill("code-review"), repo(sess({ shipherd: true })))).toBeNull();
   });
   const agent = (description: string | undefined, subagentType?: string): HookEnvelope => ({
-    v: 1, receivedAt: 500, ticket: null, butlerSession: "t1",
+    v: 1, receivedAt: 500, ticket: null, shipherdSession: "t1",
     payload: { hook_event_name: "PostToolUse", session_id: "s1", tool_name: "Agent", tool_use_id: "tu9", tool_input: { description, subagent_type: subagentType } },
   });
   it('an Agent dispatch described "Review task 3" records agent:Review task 3 as review', () => {
@@ -110,7 +110,7 @@ describe("stageEventFromHook", () => {
     expect(withId(500, undefined)?.dedupeKey).toBe("skill:s1:500:code-review");
   });
   it("a payload-null envelope gives null", () => {
-    expect(stageEventFromHook({ v: 1, receivedAt: 1, ticket: null, butlerSession: null, payload: null }, repo())).toBeNull();
+    expect(stageEventFromHook({ v: 1, receivedAt: 1, ticket: null, shipherdSession: null, payload: null }, repo())).toBeNull();
   });
   it("ordering pin: applyHookEnvelope ignores a PostToolUse Skill envelope, yet stageEventFromHook still records it", () => {
     const db = memDb();

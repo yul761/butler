@@ -10,9 +10,9 @@ const MIN = 60_000;
 const NOW = 10_000_000_000;
 
 const base = (o: Partial<Session> = {}): Session => ({
-  id: "x", ticketKey: null, cwd: "/r", origin: "butler", gitBranch: null, firstPrompt: null, lastActivityAt: null,
+  id: "x", ticketKey: null, cwd: "/r", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null,
   waitingForInput: true, replacedBy: null, dismissed: false, createdAt: 0, repoId: null, coordinator: false, spawnedBy: null,
-  featureId: null, fixesSession: null, model: null, butler: false, lessonRunId: null, ...o,
+  featureId: null, fixesSession: null, model: null, shipherd: false, lessonRunId: null, ...o,
 });
 
 const act = (o: Partial<SessionActivity> = {}): SessionActivity => ({
@@ -35,7 +35,7 @@ function setup(o: { minutes?: number } = {}) {
     /** precheckClose 的回答（按 head id；不在里面的是 null）。 */
     refusals: {} as Record<string, RefreshRefusal>,
     askUser: new Set<string>(),
-    /** 在等 Butler 递合并或 CI 通知的 head。 */
+    /** 在等 Shipherd 递合并或 CI 通知的 head。 */
     waiting: new Set<string>(),
     hidden: [] as Session[],
     /** 其他链上的 id → head。 */
@@ -60,7 +60,7 @@ function setup(o: { minutes?: number } = {}) {
     openedAt: (termId) => terms.find((t) => t.termId === termId)?.openedAt ?? 0,
     ticketsOfFeature: (f) => state.tickets[f] ?? [],
     askUserPending: (id) => state.askUser.has(id),
-    waitingOnButler: (id) => state.waiting.has(id),
+    waitingOnShipherd: (id) => state.waiting.has(id),
     refresher: {
       precheckClose: (id, trigger) => {
         prechecks.push({ id, trigger });
@@ -297,7 +297,7 @@ describe("SessionCleanup deleting hidden sessions (BTL-190 item 8)", () => {
 describe("SessionCleanup with the real repository (BTL-190 item 8)", () => {
   it("purges a hidden chain from the database so no older segment comes back", () => {
     const repo = new SessionsRepo(memDb());
-    const add = (id: string, lastActivityAt: number) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "butler", createdAt: 1, lastActivityAt });
+    const add = (id: string, lastActivityAt: number) => repo.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "shipherd", createdAt: 1, lastActivityAt });
     add("a", 1);
     add("b", 2);
     repo.setReplacedBy("a", "b", "clear");

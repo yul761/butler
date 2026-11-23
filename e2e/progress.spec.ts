@@ -8,7 +8,7 @@ import { type BranchPrFixture, completeWizard, create, expect, FAKE_GH_ORIGIN, m
  * 进度页在 UI 重做第 2 层拆掉了：原来这里对它每一块的断言一起删掉（PR 表、feature 分组由第 3 层并进 feature 页）。
  * 不用 gh，Windows 上也跑。
  */
-test("outward actions are off by default; the audit page and Butler replies are there", async ({ makeSandbox, launch }) => {
+test("outward actions are off by default; the audit page and Shipherd replies are there", async ({ makeSandbox, launch }) => {
   const s = makeSandbox();
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -24,10 +24,10 @@ test("outward actions are off by default; the audit page and Butler replies are 
   await openSettingsGroup(page, "external");
   await expect(page.getByTestId("external-ci_rerun")).toBeChecked();
 
-  // 审计页的「对外动作」一节；Butler 页右栏折起的「消息」。
+  // 审计页的「对外动作」一节；Shipherd 页右栏折起的「消息」。
   await page.locator(".sidebar").getByRole("button", { name: S.audit, exact: true }).click();
   await expect(page.getByTestId("external-audit")).toContainText(S.externalAuditNone);
-  await page.locator(".sidebar").getByRole("button", { name: S.butlerNav, exact: true }).click();
+  await page.locator(".sidebar").getByRole("button", { name: S.shipherdNav, exact: true }).click();
   await page.locator(".messages-box > summary").click();
   await expect(page.getByText(S.messagesNone, { exact: true })).toBeVisible();
 });

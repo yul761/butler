@@ -325,7 +325,7 @@ export class PtyManager {
   }
 
   /**
-   * Butler 自己按 Esc 打断正在跑的这一轮（成本熔断暂停，工作流 L）。不算用户输入：
+   * Shipherd 自己按 Esc 打断正在跑的这一轮（成本熔断暂停，工作流 L）。不算用户输入：
    * 不然熔断会把自己的 Esc 当成「用户接手了」，之后再也不结束还在花钱的终端。草稿也不动。
    */
   interrupt(termId: string): void {
@@ -334,7 +334,7 @@ export class PtyManager {
     this.guard(termId, "write", () => t.proc.write("\x1b"));
   }
 
-  /** 用户最后一次回车之后有没有打过可见字符（还没发出去）。Butler 的 prefill 也算草稿；deliver 不算。终端不在了返回 false。 */
+  /** 用户最后一次回车之后有没有打过可见字符（还没发出去）。Shipherd 的 prefill 也算草稿；deliver 不算。终端不在了返回 false。 */
   hasDraft(termId: string): boolean {
     return (this.terms.get(termId)?.draftLen ?? 0) > 0;
   }
@@ -349,7 +349,7 @@ export class PtyManager {
     return this.terms.get(termId)?.openedAt ?? 0;
   }
 
-  /** 这个终端里有 Butler 的 deliver 正在进行（在等输入框就绪、在粘贴、在等回车）。 */
+  /** 这个终端里有 Shipherd 的 deliver 正在进行（在等输入框就绪、在粘贴、在等回车）。 */
   autoInputInFlight(termId: string): boolean {
     return (this.inFlight.get(termId) ?? 0) > 0;
   }

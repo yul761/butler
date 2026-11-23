@@ -56,7 +56,7 @@ export interface Feature {
 
 export type FeatureStatus = "stuck" | "waiting" | "not_started" | "active" | "archived";
 
-/** 一个 feature 的状态和最新汇总里的进度（Butler 总控的 list_features 用）。 */
+/** 一个 feature 的状态和最新汇总里的进度（Shipherd 总控的 list_features 用）。 */
 export interface FeatureStatusRow {
   id: number;
   name: string;
@@ -103,7 +103,7 @@ export interface Block {
   createdAt: number;
 }
 
-export type SessionOrigin = "butler" | "discovered";
+export type SessionOrigin = "shipherd" | "discovered";
 
 export interface Session {
   id: string;
@@ -129,9 +129,9 @@ export interface Session {
   fixesSession: string | null;
   /** 开出来时用的模型（别名或模型路由里的名字；换模型后是新的那个）；null：没指定，恢复时也不传 --model。 */
   model: string | null;
-  /** Butler 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature 都是 null。 */
-  butler: boolean;
-  /** 复盘分析 session：为了看哪一次复盘运行开的（null：不是）。没有 Butler 的工具，不判断卡住、不换新。 */
+  /** Shipherd 总控（BTL-190 第 5 点）：全局只有一个，ticket、feature 都是 null。 */
+  shipherd: boolean;
+  /** 复盘分析 session：为了看哪一次复盘运行开的（null：不是）。没有 Shipherd 的工具，不判断卡住、不换新。 */
   lessonRunId: number | null;
   /** 这个 session 启动时为什么没有检查（契约 4.5）；null = 有检查，或者根本没有启用的检查。 */
   checksAbsent?: CheckAbsenceReason | null;
@@ -139,7 +139,7 @@ export interface Session {
   memKb?: number | null;
   /** 那次采样的时间。 */
   memAt?: number | null;
-  /** 休眠的时间（WS-M B）：进程被 Butler 结束了，等着 --resume；null 或缺省：没休眠。 */
+  /** 休眠的时间（WS-M B）：进程被 Shipherd 结束了，等着 --resume；null 或缺省：没休眠。 */
   hibernatedAt?: number | null;
   /** 休眠时在等什么。 */
   hibernateReason?: HibernateReason | null;
@@ -187,8 +187,8 @@ export interface FeatureView extends Feature {
   activity: Record<string, SessionActivity>;
 }
 
-/** Butler 总控页（BTL-190 第 5 点）：它的 session 和工作目录，以及复盘分析 session。 */
-export interface ButlerView {
+/** Shipherd 总控页（BTL-190 第 5 点）：它的 session 和工作目录，以及复盘分析 session。 */
+export interface ShipherdView {
   workspaceDir: string;
   sessions: SessionView[];
   hiddenSessions: SessionView[];
@@ -263,8 +263,8 @@ export interface OpenFeatureSessionRequest {
   prefill?: string;
 }
 
-/** 打开 Butler 总控（BTL-190 第 5 点）：新开，或者恢复 sessionId；已经有一个在跑时都返回那一个。 */
-export interface OpenButlerSessionRequest {
+/** 打开 Shipherd 总控（BTL-190 第 5 点）：新开，或者恢复 sessionId；已经有一个在跑时都返回那一个。 */
+export interface OpenShipherdSessionRequest {
   sessionId?: string;
   prefill?: string;
 }
@@ -306,7 +306,7 @@ export interface HealthReport {
   hooks: HookStatus;
   hookBinInstalled: boolean;
   handoffCommand: HandoffCommandStatus;
-  butlerHome: string;
+  shipherdHome: string;
   claudeSettingsPath: string;
   /** StateCore 记忆（设计文档第 8 节）。 */
   memory: {
@@ -490,11 +490,11 @@ export interface PrDetail {
   slug: string;
 }
 
-/** 「现在」页一行点开去哪：ticket 页、feature 页或 Butler 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
+/** 「现在」页一行点开去哪：ticket 页、feature 页或 Shipherd 总控页，sessionId 是要切到的终端（null：页面自己选）。 */
 export type NowTarget =
   | { page: "ticket"; key: string; sessionId: string | null }
   | { page: "feature"; id: number; sessionId: string | null }
-  | { page: "butler"; sessionId: string | null };
+  | { page: "shipherd"; sessionId: string | null };
 
 /** 换新（计划 16）正在做的那一步：写 handoff、/clear、发接着做的话。close：闲置关闭（BTL-190 第 8 点），写 handoff 之后结束终端。 */
 export type RefreshStep = "handoff" | "clear" | "resume" | "close";
@@ -506,7 +506,7 @@ export type RefreshRefusal = "busy" | "already" | "cooldown" | "memory_off" | "f
 /** 界面上的“换新”按钮（IPC sessions:refresh）：开始了，或者为什么开始不了。 */
 export type RefreshSessionResult = { ok: true } | { ok: false; reason: RefreshRefusal };
 
-/** 「现在」页的一行：一个开着终端的 Butler session，或者一个没有开着的 session、但有开着的 PR 的 ticket。 */
+/** 「现在」页的一行：一个开着终端的 Shipherd session，或者一个没有开着的 session、但有开着的 PR 的 ticket。 */
 export interface NowRow {
   /** 没有开着的 session、只有 PR 的行为 null。 */
   sessionId: string | null;
@@ -526,7 +526,7 @@ export interface NowRow {
   mergeQueued: boolean;
   /** 需要你的理由：卡住时是卡住的 reason；停在确认上时是固定文案；不需要为 null。正在换新时为 null。 */
   needsYou: string | null;
-  /** Butler 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
+  /** Shipherd 正在给这个 session 换新（计划 16）：做到哪一步；不在换新为 null。 */
   refreshing: RefreshStep | null;
   /** 这个 session 还没答的「待你决定」有几条（BTL-190 第 2+3 点；卡片上答了、等着送的不算）。有未决的条目时 needsYou 为 null（卡片由 TurnService 从 inbox 出）。 */
   decisions: number;
@@ -561,8 +561,8 @@ export interface NowFeature {
 
 /** 「待你决定」一条的状态（BTL-190 第 2+3 点）。 */
 export type InboxStatus = "pending" | "answered" | "dismissed" | "superseded";
-/** 提问 / 汇报的是哪种 session：ticket 的 session、feature 总控、修复 session、Butler 总控（BTL-190 第 5 点）。 */
-export type InboxRole = "ticket" | "feature_coordinator" | "fix" | "butler";
+/** 提问 / 汇报的是哪种 session：ticket 的 session、feature 总控、修复 session、Shipherd 总控（BTL-190 第 5 点）。 */
+export type InboxRole = "ticket" | "feature_coordinator" | "fix" | "shipherd";
 
 /** 界面上的一条「待你决定」或汇报。 */
 export interface InboxItemView {
@@ -624,10 +624,10 @@ export type NowNotice =
   | { kind: "model_unavailable"; hit: AvailabilityHit; retryAt: number | null }
   | { kind: "lessons_paused" }
   | { kind: "lessons_failing"; count: number }
-  /** 共享 MCP（WS-M H）开着但 hub 起不来：新开的 session 退回各自的 MCP 进程，Butler 按退避在重试。 */
+  /** 共享 MCP（WS-M H）开着但 hub 起不来：新开的 session 退回各自的 MCP 进程，Shipherd 按退避在重试。 */
   | { kind: "shared_mcp_failed"; error: string }
   | { kind: "session_limited"; target: NowTarget; title: string | null; limit: LimitHit }
-  /** 终端停在权限确认上（第 1 层的 you/butler 用）。 */
+  /** 终端停在权限确认上（第 1 层的 you/shipherd 用）。 */
   | { kind: "approval"; target: NowTarget; title: string | null }
   /** 模型路由（3.0）：有模型撞限或不可用，或最近一小时有任务降级。只在配置了路由时出现。 */
   | { kind: "routing"; limited: string[]; fallbacks: number }
@@ -651,8 +651,8 @@ export interface NowView {
   notices: NowNotice[];
   /** 按 feature 分组；最后一组 id 为 null，是不属于任何 feature 的 ticket。 */
   features: NowFeature[];
-  /** 开着终端的 Butler 总控（BTL-190 第 5 点）的一行；没开为 null。在干活也算进 running。 */
-  butler: NowRow | null;
+  /** 开着终端的 Shipherd 总控（BTL-190 第 5 点）的一行；没开为 null。在干活也算进 running。 */
+  shipherd: NowRow | null;
   /** 正在干活的 session 数（NowRow.working）。 */
   running: number;
   /** 最近的记忆读写（实况窗口的核心卡片，BTL-190 第 7 点），从早到晚。 */
@@ -671,7 +671,7 @@ export interface NowView {
  * ci：CI 结论；merge：合并占位放开了；stack：栈 rebase 冲突；patrol：每日巡检；cost：花费上限后的「接着做」；
  * refresh：换新后的「接着做」；user：用户在对话 tab 里发给开发 session 的话、分叉的结论（BTL-248）。
  */
-export type MessageKind = "instruction" | "report" | "answer" | "butler" | "reply" | "review" | "comments" | "convention"
+export type MessageKind = "instruction" | "report" | "answer" | "shipherd" | "reply" | "review" | "comments" | "convention"
   | "ci" | "merge" | "stack" | "patrol" | "cost" | "refresh" | "user";
 /** 信箱消息的状态：已排队、已送达、已回复。 */
 export type MessageStatus = "queued" | "delivered" | "replied";
@@ -680,7 +680,7 @@ export type MessageStatus = "queued" | "delivered" | "replied";
 export interface MessageView {
   id: string;
   kind: MessageKind;
-  /** 给人看的发送方："feature 登录改版的总控"、"ABC-1"、"Butler"之类。 */
+  /** 给人看的发送方："feature 登录改版的总控"、"ABC-1"、"Shipherd"之类。 */
   from: string;
   /** 给人看的接收方。 */
   to: string;
@@ -696,5 +696,5 @@ export interface MessageView {
   repliedAt: string | null;
 }
 
-/** messages:list 的范围：Butler 总控的，或者一个 feature 的。 */
-export type MessageScope = { butler: true } | { featureId: number };
+/** messages:list 的范围：Shipherd 总控的，或者一个 feature 的。 */
+export type MessageScope = { shipherd: true } | { featureId: number };
