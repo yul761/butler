@@ -943,4 +943,19 @@ test("new ticket dialog: fills in the epic's next number, explains the format an
   await (await newButton(page, "newTicket")).click();
   await expect(page.getByTestId("new-ticket-key")).toHaveValue("DMS-9");
   await expect(page.getByTestId("new-ticket-key-hint")).toHaveText(S.ticketKeyHint("DMS-9", "all", null));
+
+  // 建议晚到：号已经选中、马上要打字的时候别处建了 DMS-9，建议挪到 DMS-10。换号的同时要还是全选着，
+  // 不然接着输入的字会接在新建议后面（Windows CI 上的「DMS-2DMS-2」）。在页面里一换号就看选区，不给下一帧机会。
+  const after = await page.evaluate(async () => {
+    const el = document.querySelector<HTMLInputElement>('[data-testid="new-ticket-key"]')!;
+    el.focus();
+    el.select();
+    const shipherd = (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<{ ok: boolean }> } }).shipherd;
+    if (!(await shipherd.invoke("tickets:create", { key: "DMS-9", workMode: "worktree" })).ok) return null;
+    for (let i = 0; i < 2000 && el.value === "DMS-9"; i++) await new Promise((r) => setTimeout(r, 0));
+    return { value: el.value, start: el.selectionStart, end: el.selectionEnd };
+  });
+  expect(after).toEqual({ value: "DMS-10", start: 0, end: "DMS-10".length });
+  await page.keyboard.insertText("DMS-11");
+  await expect(page.getByTestId("new-ticket-key")).toHaveValue("DMS-11");
 });

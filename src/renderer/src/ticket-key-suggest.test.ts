@@ -54,4 +54,15 @@ describe("ticket id hint and format error copy", () => {
     expect(S.ticketKeyFormatError("btl265", "BTL-265", null)).toMatch(/“btl265”.*PREFIX-NUMBER.*BTL-265/);
     setUiLang("zh");
   });
+
+  it("gives no example for a custom format with no suggestion, instead of a PROJ-123 that may not match it", () => {
+    for (const lang of ["zh", "en"] as const) {
+      setUiLang(lang);
+      for (const text of [S.ticketKeyFormatError("x", null, "T\\d+"), S.ticketKeyHint(null, null, "T\\d+")]) {
+        expect(text).toContain("T\\d+");
+        expect(text).not.toMatch(/PROJ|比如|e\.g\./);
+      }
+    }
+    setUiLang("zh");
+  });
 });

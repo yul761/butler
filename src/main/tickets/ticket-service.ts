@@ -9,7 +9,7 @@ import {
   addWorktree, branchExists, checkout, createBranch, currentBranch, detachHead, GitError, gitErrorSummary, hasCommits, isDirty,
   isValidBranchName, isWorktreeOf, newBranchBase, pruneWorktrees, repoRoot, switchTo, unbranchedCommits,
 } from "./git";
-import { repoLockKey, repoLocks } from "./repo-lock";
+import { LockWaitTimeoutError, repoLockKey, repoLocks } from "./repo-lock";
 import { isValidTicketKey, renderBranch } from "./ticket-key";
 import { M } from "../strings";
 
@@ -144,16 +144,20 @@ export class TicketService {
   async create(input: CreateTicketInput): Promise<Ticket> {
     const key = input.key.trim().toUpperCase();
     if (!isValidTicketKey(key, this.d.settings.get("ticketPattern"))) throw new TicketError("invalid_key", M().invalidKey(input.key));
-    // 同一个号正在建（拿着锁、还没存进库）：当作已存在，免得两边在同一个目录上建 worktree（BTL-264）。
-    // 库里已有的 ticket 在忙（加仓库、收尾）交给 exclusive 报 busy。
-    if (this.updatingKeys.has(key) && !this.d.tickets.get(key)) throw new TicketError("exists", M().ticketExists(key));
+    // 先看库里有没有：已存在 / 已归档照原样报（对话框按 archived 给恢复选项），哪怕它这会儿正在加仓库或收尾。
+    this.refuseExisting(key);
+    // 同一个号正在建（还没存进库）：exclusive 报 busy，可以重试；不能报 exists，那边要是建失败了这个号就根本不存在（BTL-264）。
     return this.exclusive(key, () => this.createLocked(key, input));
   }
 
-  private async createLocked(key: string, input: CreateTicketInput): Promise<Ticket> {
+  private refuseExisting(key: string): void {
     const existing = this.d.tickets.get(key);
     if (existing?.archivedAt != null) throw new TicketError("archived", M().ticketArchived(key));
     if (existing) throw new TicketError("exists", M().ticketExists(key));
+  }
+
+  private async createLocked(key: string, input: CreateTicketInput): Promise<Ticket> {
+    this.refuseExisting(key);
     const featureId = input.featureId ?? null;
     if (featureId !== null) {
       const f = this.d.features?.get(featureId);
@@ -200,11 +204,17 @@ export class TicketService {
 
   /**
    * 拿着 dir 所在仓库的锁跑 fn（BTL-264）：同一个仓库里建 worktree / 分支、fetch 起点一次只做一个，不同仓库照旧并行。
-   * fn 拿到锁的 key（也是 bases 的 key）。不可重入：fn 里不能再调 locked。
+   * fn 拿到锁的 key（也是 bases 的 key）。不可重入：fn 里再调 locked 会抛错。what 写进等锁日志。
+   * 等锁等过了上限（同一个仓库里另一个 git 操作一直没结束）报 busy。
    */
-  private async locked<T>(dir: string, fn: (lockKey: string) => Promise<T>): Promise<T> {
+  private async locked<T>(dir: string, what: string, fn: (lockKey: string) => Promise<T>): Promise<T> {
     const k = await repoLockKey(dir);
-    return repoLocks.run(k, () => fn(k));
+    try {
+      return await repoLocks.run(k, () => fn(k), what);
+    } catch (e) {
+      if (e instanceof LockWaitTimeoutError) throw new TicketError("busy", M().repoGitBusy(dir, e.holder));
+      throw e;
+    }
   }
 
   /** 校验仓库并建好 worktree / 分支，返回要存的字段。git 部分在仓库锁里做。 */
@@ -221,7 +231,7 @@ export class TicketService {
       throw new TicketError("not_git_repo", M().notGitRepo(input.repoPath));
     }
     if (existing.some((r) => samePath(r.repoPath, root))) throw new TicketError("repo_exists", M().ticketHasRepo(root));
-    return this.locked(root, (lockKey) => this.prepareLocked(key, root, lockKey, input, featureId));
+    return this.locked(root, `set up ${key} in ${root}`, (lockKey) => this.prepareLocked(key, root, lockKey, input, featureId));
   }
 
   private async prepareLocked(
@@ -292,7 +302,7 @@ export class TicketService {
    * 新分支从仓库原来的分支开始，原来的分支不在了就从远端默认分支。
    */
   private moveWork(t: TicketRepo, workMode: WorkMode, branch: string): Promise<string | null> {
-    return this.locked(t.repoPath, (lockKey) => this.moveWorkLocked(t, workMode, branch, lockKey));
+    return this.locked(t.repoPath, `change how ${t.ticketKey} works in ${t.repoPath}`, (lockKey) => this.moveWorkLocked(t, workMode, branch, lockKey));
   }
 
   private async moveWorkLocked(t: TicketRepo, workMode: WorkMode, branch: string, lockKey: string): Promise<string | null> {
@@ -406,7 +416,7 @@ export class TicketService {
     const path = r.worktreePath;
     return this.exclusive(r.ticketKey, async () => {
       try {
-        await this.locked(r.repoPath, async (lockKey) => {
+        await this.locked(r.repoPath, `recreate ${r.ticketKey}'s worktree ${path}`, async (lockKey) => {
           if (!existsSync(path)) {
             await pruneWorktrees(r.repoPath);
             const exists = await branchExists(r.repoPath, r.branch);
@@ -487,12 +497,14 @@ export class TicketService {
 
   async switchBranch(r: TicketRepo): Promise<void> {
     if (this.updatingKeys.has(r.ticketKey)) throw new TicketError("busy", M().ticketBusy);
-    await this.locked(r.repoPath, async () => {
-      // 排队等仓库锁的时候这个 ticket 可能开始改了：拿到锁再看一次。
-      if (this.updatingKeys.has(r.ticketKey)) throw new TicketError("busy", M().ticketBusy);
-      if (await isDirty(r.repoPath)) throw new TicketError("dirty", M().repoDirtyNoSwitch);
+    await this.locked(r.repoPath, `switch ${r.ticketKey} to ${r.branch} in ${r.repoPath}`, async () => {
+      // 排队等仓库锁的时候这个 ticket 可能开始改了、分支可能被改了、仓库可能被移出 ticket：拿到锁按库里现在的样子再来一遍。
+      const cur = this.repo(r.id);
+      if (this.updatingKeys.has(cur.ticketKey)) throw new TicketError("busy", M().ticketBusy);
+      if (cur.workMode === "worktree") return;
+      if (await isDirty(cur.repoPath)) throw new TicketError("dirty", M().repoDirtyNoSwitch);
       try {
-        await checkout(r.repoPath, r.branch);
+        await checkout(cur.repoPath, cur.branch);
       } catch (e) {
         throw asTicketError(e);
       }

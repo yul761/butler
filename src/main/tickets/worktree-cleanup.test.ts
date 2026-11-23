@@ -132,6 +132,25 @@ describe("cleanup safety (final review)", () => {
     expect(existsSync(dir)).toBe(false);
   });
 
+  it("checks for local changes and terminals after it gets the repo lock, not before (BTL-264)", async () => {
+    const { clean, dir, repo, setBusy } = await setup();
+    for (const late of ["file", "terminal"] as const) {
+      let release!: () => void;
+      const held = repoLocks.run(await repoLockKey(repo), () => new Promise<void>((r) => (release = r)));
+      while (!release) await new Promise((r) => setImmediate(r));
+      const pass = clean();
+      for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 10));
+      // 排着队等锁的时候：写了个文件 / 开了终端。
+      if (late === "file") writeFileSync(join(dir, "late.txt"), "x");
+      else setBusy(true);
+      release();
+      await held;
+      expect((await pass).map((o) => o.result)).toEqual(["blocked"]);
+      expect(existsSync(dir)).toBe(true);
+      execFileSync("git", ["clean", "-fq"], { cwd: dir });
+    }
+  });
+
   it("checks the repo's terminals again right before removing", async () => {
     const { tickets, ticketService, r, dir } = await setup();
     let calls = 0;

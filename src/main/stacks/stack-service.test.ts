@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { repoLockKey, repoLocks } from "../tickets/repo-lock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalActionKind } from "../../shared/external";
 import type { StackRunMode } from "../../shared/stacks";
@@ -546,6 +547,24 @@ describe("StackService triggers", () => {
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "rebased" });
     expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
+  });
+
+  it("fetches and adds its temporary worktree only while holding the repo lock (BTL-264)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("m.txt", "m\n");
+    let release: (() => void) | undefined;
+    const held = repoLocks.run(await repoLockKey(w.repo), () => new Promise<void>((r) => (release = r)), "test holder");
+    while (!release) await new Promise((r) => setImmediate(r));
+    let finished = false;
+    const t = w.svc.tick().then(() => (finished = true));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(finished).toBe(false);
+    expect(w.repoT.lastRun(id)?.trigger).not.toBe("main_updated");
+    release();
+    await held;
+    await t;
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "rebased" });
   });
 
   it("defers when a layer is checked out somewhere Shipherd does not manage and collapses repeats", async () => {

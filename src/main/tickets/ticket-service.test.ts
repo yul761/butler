@@ -1,14 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FeaturesRepo } from "../db/features-repo";
 import { SettingsRepo } from "../db/settings-repo";
 import type { Ticket } from "../../shared/types";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, type LegacyTicket, makeRepo, makeStaleClone, memDb, tempDir } from "../test-utils";
 import { branchExists, currentBranch, git } from "./git";
-import { repoLockKey, repoLocks } from "./repo-lock";
+import { REPO_LOCK_MAX_WAIT_MS, repoLockKey, repoLocks } from "./repo-lock";
 import { TicketError, TicketService } from "./ticket-service";
 
 function setup() {
@@ -631,23 +631,36 @@ describe("TicketService serializes git work per repo (BTL-264)", () => {
     expect(out(repo, "rev-parse", "feature/PROJ-304")).toBe(remoteSha);
   }, 30_000);
 
-  it("refuses a second create of the same key while the first is still running, without touching its worktree", async () => {
+  it("says busy (retry later) to a second create of the same key while the first is still running, without touching its worktree", async () => {
     const { service } = setup();
     const repo = makeRepo();
     const first = service.create({ key: "PROJ-305", repoPath: repo, workMode: "worktree" });
-    expect(await code(service.create({ key: "proj-305", repoPath: repo, workMode: "worktree" }))).toBe("exists");
+    expect(await code(service.create({ key: "proj-305", repoPath: repo, workMode: "worktree" }))).toBe("busy");
     expect(await currentBranch(only(await first).worktreePath!)).toBe("feature/PROJ-305");
+    expect(await code(service.create({ key: "PROJ-305", repoPath: repo, workMode: "worktree" }))).toBe("exists");
   });
 
-  it("a busy ticket that already exists says busy, not exists", async () => {
-    const { service } = setup();
+  it("a create that was told busy can retry and succeed when the first create fails", async () => {
+    const { service, tickets } = setup();
+    const first = code(service.create({ key: "PROJ-310", repoPath: tempDir("shipherd-plain-"), workMode: "worktree" }));
+    expect(await code(service.create({ key: "PROJ-310", repoPath: makeRepo(), workMode: "worktree" }))).toBe("busy");
+    expect(await first).toBe("not_git_repo");
+    expect(tickets.get("PROJ-310")).toBeNull();
+    const repo = makeRepo();
+    expect(only(await service.create({ key: "PROJ-310", repoPath: repo, workMode: "worktree" })).branch).toBe("feature/PROJ-310");
+  });
+
+  it("an existing or archived ticket says exists / archived even while it is busy (adding a repo, cleaning up)", async () => {
+    const { service, tickets } = setup();
     await service.create({ key: "PROJ-306" });
-    let release!: () => void;
-    const held = service.exclusive("PROJ-306", () => new Promise<void>((r) => (release = r)));
-    expect(await code(service.create({ key: "PROJ-306" }))).toBe("busy");
-    release();
-    await held;
+    await service.create({ key: "PROJ-308" });
+    tickets.archive("PROJ-308", 2000);
+    const release: (() => void)[] = [];
+    const held = ["PROJ-306", "PROJ-308"].map((k) => service.exclusive(k, () => new Promise<void>((r) => release.push(r))));
     expect(await code(service.create({ key: "PROJ-306" }))).toBe("exists");
+    expect(await code(service.create({ key: "PROJ-308" }))).toBe("archived");
+    for (const r of release) r();
+    await Promise.all(held);
   });
 
   it("switching branches checks again for a ticket change once it has the repo lock", async () => {
@@ -668,6 +681,64 @@ describe("TicketService serializes git work per repo (BTL-264)", () => {
     expect(out(repo, "branch", "--show-current")).toBe("main");
     releaseTicket();
     await ticketHeld;
+  });
+
+  /** 拿着 repo 的仓库锁，返回放开的函数（等真的拿到了才返回）。 */
+  async function holdRepo(repo: string): Promise<{ release: () => void; done: Promise<void> }> {
+    let release: (() => void) | undefined;
+    const done = repoLocks.run(await repoLockKey(repo), () => new Promise<void>((r) => (release = r)), "test holder");
+    while (!release) await new Promise((r) => setImmediate(r));
+    return { release, done };
+  }
+
+  it("switching branches uses the repo row as it is once it has the lock: a changed branch, or a removed repo", async () => {
+    const { service, tickets } = setup();
+    const repo = makeRepo();
+    const t = await service.create({ key: "PROJ-309", repoPath: repo, workMode: "branch" });
+    execFileSync("git", ["branch", "feature/PROJ-309-b"], { cwd: repo, stdio: "ignore" });
+    execFileSync("git", ["checkout", "-q", "main"], { cwd: repo, stdio: "ignore" });
+    const stale = only(t);
+
+    let h = await holdRepo(repo);
+    const sw = code(service.switchBranch(stale));
+    tickets.updateRepo({ ...stale, branch: "feature/PROJ-309-b" });
+    h.release();
+    await h.done;
+    expect(await sw).toBe("no-error");
+    expect(out(repo, "branch", "--show-current")).toBe("feature/PROJ-309-b");
+
+    execFileSync("git", ["checkout", "-q", "main"], { cwd: repo, stdio: "ignore" });
+    h = await holdRepo(repo);
+    const sw2 = code(service.switchBranch(stale));
+    service.removeRepo(stale.id, { terminalsOpen: false });
+    h.release();
+    await h.done;
+    expect(await sw2).toBe("not_found");
+    expect(out(repo, "branch", "--show-current")).toBe("main");
+  });
+
+  it("gives up with busy, naming the holder, when the repo lock is held past the wait limit", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { service } = setup();
+      const repo = makeRepo();
+      const t = await service.create({ key: "PROJ-311", repoPath: repo, workMode: "branch" });
+      execFileSync("git", ["checkout", "-q", "main"], { cwd: repo, stdio: "ignore" });
+      const h = await holdRepo(repo);
+      const sw = service.switchBranch(only(t)).catch((e: unknown) => e);
+      // 等它排上队（等锁的计时器建好了）再拨钟。
+      while (vi.getTimerCount() < 2) await new Promise((r) => setImmediate(r));
+      await vi.advanceTimersByTimeAsync(REPO_LOCK_MAX_WAIT_MS + 1);
+      const e = (await sw) as TicketError;
+      expect(e).toBeInstanceOf(TicketError);
+      expect(e.code).toBe("busy");
+      expect(e.message).toContain("test holder");
+      expect(out(repo, "branch", "--show-current")).toBe("main");
+      h.release();
+      await h.done;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

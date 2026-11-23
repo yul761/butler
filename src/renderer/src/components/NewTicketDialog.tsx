@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { renderBranch } from "../../../shared/branch";
 import { DEFAULT_TICKET_PATTERN } from "../../../shared/ticket-pattern";
 import type { Feature, WorkMode } from "../../../shared/types";
@@ -58,12 +58,16 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature, conte
   useEffect(() => {
     if (!suggestion || keyTouched.current) return;
     setKey(suggestion);
-    // 光标还在号的输入框里：选中填好的号，直接打字就换掉。
-    const el = keyInput.current;
-    if (el && document.activeElement === el) requestAnimationFrame(() => el.select());
   }, [suggestion]);
+  // 光标还在号的输入框里：选中填好的号，直接打字就换掉。在填进去的同一次提交里同步选中：建议晚到（列表刷新后改了号）
+  // 正赶上用户开始输入时，React 改 value 会把光标挪到末尾，接着输入的字就接在建议后面（DMS-2DMS-2）。
+  useLayoutEffect(() => {
+    const el = keyInput.current;
+    if (el && !keyTouched.current && key && key === suggestion && document.activeElement === el) el.select();
+  }, [key, suggestion]);
   const customPattern = pattern && pattern !== DEFAULT_TICKET_PATTERN ? pattern : null;
-  const example = suggestion ?? "PROJ-123";
+  // 自定义格式又给不出建议：不知道合格的号长什么样，不举例（PROJ-123 不一定符合）。
+  const example = suggestion ?? (customPattern ? null : "PROJ-123");
   /** 号的格式不对时的提示；格式对或者还没填返回 null。 */
   const formatError = (k: string) =>
     k.trim() && pattern && !isValidTicketKey(k.trim().toUpperCase(), pattern) ? S.ticketKeyFormatError(k.trim(), example, customPattern) : null;
@@ -126,7 +130,7 @@ export function NewTicketDialog({ onClose, onCreated, onRestored, feature, conte
               if (keyError) setKeyError(formatError(e.target.value));
             }}
             onBlur={() => setKeyError(formatError(key))}
-            placeholder={example}
+            placeholder={example ?? undefined}
             aria-invalid={keyError ? true : undefined}
             aria-describedby="new-ticket-key-hint"
             data-testid="new-ticket-key"

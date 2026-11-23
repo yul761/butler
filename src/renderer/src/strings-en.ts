@@ -610,13 +610,13 @@ export const EN: UiStrings = {
   keepAwakeOn: "Keeping awake",
   keepAwakeHint: "While on, the computer won't sleep when idle and the screen stays on, so sessions can keep running with the lid open. Turns off when you close the lid or quit Shipherd.",
   ticketKey: "Ticket id",
-  ticketKeyHint: (example: string, suggested: "feature" | "all" | null, custom: string | null) =>
-    `Format: ${custom ? `matches the ticket id format in Settings, ${custom}` : "PREFIX-NUMBER, where the prefix is two or more capital letters or digits starting with a letter"}, e.g. ${example}.` +
+  ticketKeyHint: (example: string | null, suggested: "feature" | "all" | null, custom: string | null) =>
+    `Format: ${custom ? `matches the ticket id format in Settings, ${custom}` : "PREFIX-NUMBER, where the prefix is two or more capital letters or digits starting with a letter"}${example ? `, e.g. ${example}` : ""}.` +
     (suggested === "feature" ? " The next number after this epic's tickets is filled in; you can change it." : suggested === "all" ? " The next number after your existing tickets is filled in; you can change it." : ""),
-  ticketKeyFormatError: (input: string, example: string, custom: string | null) =>
+  ticketKeyFormatError: (input: string, example: string | null, custom: string | null) =>
     custom
-      ? `“${input}” is not a valid ticket id: it must match the ticket id format in Settings, ${custom}, e.g. ${example}.`
-      : `“${input}” is not a valid ticket id. Use PREFIX-NUMBER: a prefix of two or more capital letters or digits that starts with a letter, then a hyphen and a number, e.g. ${example}.`,
+      ? `“${input}” is not a valid ticket id: it must match the ticket id format in Settings, ${custom}${example ? `, e.g. ${example}` : ""}.`
+      : `“${input}” is not a valid ticket id. Use PREFIX-NUMBER: a prefix of two or more capital letters or digits that starts with a letter, then a hyphen and a number${example ? `, e.g. ${example}` : ""}.`,
   title: "Title (optional)",
   repo: "Repo folder",
   pick: "Choose…",

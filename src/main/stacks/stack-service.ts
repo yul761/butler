@@ -8,6 +8,7 @@ import type {
 import { JOB_STACKS_DAILY, type JobsRepo } from "../db/jobs-repo";
 import type { LayerRow, NewLayer, RunDetail, RunRow, StackRow, StacksRepo } from "../db/stacks-repo";
 import type { AttemptResult, ExternalDetail } from "../external/actions";
+import { withRepoLock } from "../tickets/repo-lock";
 import { applyTips, deferText, deleteBackups, type ApplyLayer } from "./apply";
 import {
   behind, fetchRemote, gitVersion, hasFixups, isAncestor, pushBranch, remoteFor, remoteTip, revParse, runGit, subjects, supportsUpdateRefs, worktreeBranches,
@@ -932,7 +933,8 @@ export class StackService {
     }
     const p = (async () => {
       this.lastFetch.set(repoPath, now);
-      const r = await fetchRemote(repoPath, remote).catch((e: Error) => ({ code: 1, stdout: "", stderr: e.message }));
+      // 仓库锁（BTL-264）：fetch --prune 会和建 ticket 时 fetch 新分支起点抢 refs/remotes/<remote>/<默认分支>（cannot lock ref）。
+      const r = await withRepoLock(repoPath, () => fetchRemote(repoPath, remote), `fetch ${remote} for stacks`).catch((e: Error) => ({ code: 1, stdout: "", stderr: e.message }));
       if (r.code !== 0) this.d.log(`stacks: fetch ${remote} in ${repoPath} failed: ${r.stderr.trim()}`);
     })();
     this.fetching.set(repoPath, p);
@@ -1008,11 +1010,13 @@ export class StackService {
     const repos = new Set(this.d.repo.list().map((s) => s.repoPath));
     for (const r of repos) {
       if (existsSync(r)) {
-        void runGit(r, ["worktree", "prune"]).catch(() => undefined);
-        // refs/heads/butler-stack/：改名前（BTL-260）的临时分支前缀，留下的也一起清掉（TODO(5.0) 删）。
-        void runGit(r, ["for-each-ref", "--format=%(refname)", "refs/heads/shipherd-stack/", "refs/heads/butler-stack/"]).then(async (o) => {
+        // 仓库锁（BTL-264）：只锁这几条改 worktree 登记和 refs 的 git 命令。
+        void withRepoLock(r, async () => {
+          await runGit(r, ["worktree", "prune"]).catch(() => undefined);
+          // refs/heads/butler-stack/：改名前（BTL-260）的临时分支前缀，留下的也一起清掉（TODO(5.0) 删）。
+          const o = await runGit(r, ["for-each-ref", "--format=%(refname)", "refs/heads/shipherd-stack/", "refs/heads/butler-stack/"]);
           for (const ref of o.stdout.split(/\r?\n/).filter(Boolean)) await runGit(r, ["update-ref", "-d", ref]);
-        }).catch(() => undefined);
+        }, "clean up leftover stack worktrees and branches").catch(() => undefined);
       }
     }
   }
