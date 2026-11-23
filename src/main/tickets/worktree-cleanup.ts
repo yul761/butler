@@ -3,6 +3,7 @@ import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { combinedPr } from "../handoff/prs";
 import { GitError, gitErrorSummary, hasLocalChanges, removeWorktree, unbranchedCommits } from "./git";
+import { withRepoLock } from "./repo-lock";
 import { TicketError, type TicketService } from "./ticket-service";
 import { M } from "../strings";
 
@@ -51,7 +52,8 @@ export async function cleanupTicketWorktrees(d: CleanupDeps, ticketKey: string):
           reason = await blocker(d, ticketKey, r.id, dir);
           // 上面等 git 的时候可能刚开了终端（开 session 在锁外先占了终端的情况）：删之前再看一眼。
           if (!reason && d.repoBusy(ticketKey, r.id)) reason = M().cleanupTerminalRunning;
-          if (!reason) await removeWorktree(r.repoPath, dir);
+          // 仓库锁（BTL-264）：别的 ticket 正在同一个仓库里建 worktree 时等它建完再删。
+          if (!reason) await withRepoLock(r.repoPath, () => removeWorktree(r.repoPath, dir));
         } catch (e) {
           reason = e instanceof GitError ? M().gitFailed(gitErrorSummary(e)) : (e as Error).message;
         }

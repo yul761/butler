@@ -7,6 +7,7 @@ import { TicketsRepo } from "../db/tickets-repo";
 import { makeRepo, memDb, tempDir } from "../test-utils";
 import { branchExists, currentBranch } from "./git";
 import { TicketError, TicketService } from "./ticket-service";
+import { repoLockKey, repoLocks } from "./repo-lock";
 import { cleanupIfMerged, cleanupTicketWorktrees } from "./worktree-cleanup";
 
 async function setup(workMode: "worktree" | "branch" = "worktree") {
@@ -116,6 +117,19 @@ describe("cleanup safety (final review)", () => {
     expect((await first)[0].result).toBe("removed");
     expect(ticketService.updating("DMS-1")).toBe(false);
     expect(tickets.getRepo(r.id)?.cleanupBlocked).toBeNull();
+  });
+
+  it("waits for the repo's lock before removing, so it never runs alongside another ticket's worktree add (BTL-264)", async () => {
+    const { clean, dir, repo } = await setup();
+    let release!: () => void;
+    const held = repoLocks.run(await repoLockKey(repo), () => new Promise<void>((r) => (release = r)));
+    const pass = clean();
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(existsSync(dir)).toBe(true);
+    release();
+    await held;
+    expect((await pass).map((o) => o.result)).toEqual(["removed"]);
+    expect(existsSync(dir)).toBe(false);
   });
 
   it("checks the repo's terminals again right before removing", async () => {

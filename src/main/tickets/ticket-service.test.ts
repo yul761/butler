@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FeaturesRepo } from "../db/features-repo";
@@ -565,3 +565,78 @@ describe("TicketService new branches start from the remote's default branch (BTL
     expect(await currentBranch(repo)).toBe("feature/OLD");
   });
 });
+
+describe("TicketService serializes git work per repo (BTL-264)", () => {
+  /**
+   * 让同一个仓库里两次 git 改 ref 的操作（建分支、worktree add、fetch）一重叠就失败：reference-transaction 钩子在 prepared 时
+   * 占一个目录、停 0.4 秒，占不到（另一个 git 还在里面）就记一笔并让这次 git 失败。真实的 git 在这种重叠下会偶发
+   * 「cannot lock ref」「failed to read .git/worktrees/<名>/commondir」，钩子把这个窗口拉宽到每次都撞上。
+   * 没有仓库锁时两个 create 必然重叠，有锁时一个接一个、都成功。
+   */
+  function probe(repo: string): { overlaps: () => string[] } {
+    const dir = tempDir("shipherd-probe-").replace(/\\/g, "/");
+    const hook = join(repo, ".git", "hooks", "reference-transaction");
+    mkdirSync(dirname(hook), { recursive: true });
+    writeFileSync(
+      hook,
+      [
+        "#!/bin/sh",
+        "cat >/dev/null",
+        `P='${dir}/held'`,
+        'case "$1" in',
+        `  prepared) if mkdir "$P" 2>/dev/null; then echo "$PPID" > "$P/owner"; sleep 0.4; else echo "overlap" >> '${dir}/overlaps'; exit 1; fi ;;`,
+        '  committed|aborted) if [ "$(cat "$P/owner" 2>/dev/null)" = "$PPID" ]; then rm -rf "$P"; fi ;;',
+        "esac",
+        "exit 0",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    return { overlaps: () => (existsSync(join(dir, "overlaps")) ? readFileSync(join(dir, "overlaps"), "utf8").split("\n").filter(Boolean) : []) };
+  }
+  const worktrees = (repo: string) =>
+    execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" })
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith("branch "))
+      .map((l) => l.slice("branch refs/heads/".length))
+      .sort();
+
+  it("two tickets created at once in the same repo both succeed, each on its own branch and worktree", async () => {
+    const { service } = setup();
+    const repo = makeRepo();
+    const p = probe(repo);
+    const [a, b] = await Promise.all([
+      service.create({ key: "PROJ-301", repoPath: repo, workMode: "worktree" }),
+      service.create({ key: "PROJ-302", repoPath: repo, workMode: "worktree" }),
+    ]);
+    expect(p.overlaps()).toEqual([]);
+    expect(await currentBranch(only(a).worktreePath!)).toBe("feature/PROJ-301");
+    expect(await currentBranch(only(b).worktreePath!)).toBe("feature/PROJ-302");
+    expect(worktrees(repo)).toEqual(["feature/PROJ-301", "feature/PROJ-302", "main"]);
+  }, 30_000);
+
+  it("counts a worktree of the repo as the same repo, and also serializes branch mode and the fetch of the start point", async () => {
+    const { service } = setup();
+    const { repo, remoteSha } = makeStaleClone();
+    const wt = join(tempDir("shipherd-wt-"), "wt");
+    execFileSync("git", ["worktree", "add", "-q", "--detach", wt], { cwd: repo, stdio: "ignore" });
+    const p = probe(repo);
+    await Promise.all([
+      service.create({ key: "PROJ-303", repoPath: repo, workMode: "branch" }),
+      service.create({ key: "PROJ-304", repoPath: wt, workMode: "branch" }),
+    ]);
+    expect(p.overlaps()).toEqual([]);
+    expect(out(repo, "rev-parse", "feature/PROJ-303")).toBe(remoteSha);
+    expect(out(repo, "rev-parse", "feature/PROJ-304")).toBe(remoteSha);
+  }, 30_000);
+
+  it("refuses a second create of the same key while the first is still running, without touching its worktree", async () => {
+    const { service } = setup();
+    const repo = makeRepo();
+    const first = service.create({ key: "PROJ-305", repoPath: repo, workMode: "worktree" });
+    expect(await code(service.create({ key: "proj-305", repoPath: repo, workMode: "worktree" }))).toBe("exists");
+    expect(await currentBranch(only(await first).worktreePath!)).toBe("feature/PROJ-305");
+  });
+});
+
+const out = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
