@@ -46,7 +46,7 @@ import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { MAILBOX_EVENT, mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
-import { NewerDatabaseError, openDatabase } from "./db/database";
+import { DatabaseBackupError, NewerDatabaseError, openDatabase } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
@@ -606,7 +606,17 @@ async function bootstrap(): Promise<void> {
   applyGitResolution(resolveGit(ownPath, process.platform), process.platform, (m) => logger(m));
   applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
   void probeGh(5000);
-  const db = openDatabase(paths.db);
+  // 要迁移时先备份（BTL-262）；备份失败就问用户：默认退出（先腾空间），用户也可以选不备份继续。
+  const db = openDatabase(paths.db, {
+    log: (m) => logger(m),
+    onBackupFailed: (f) => {
+      const A = M().databaseBackupAsk;
+      return dialog.showMessageBoxSync({
+        type: "warning", title: A.title, message: A.title, detail: M().databaseBackupFailed(f.backup, f.reason, f.diskFull),
+        buttons: [A.quit, A.continue], defaultId: 0, cancelId: 0, noLink: true,
+      }) === 1;
+    },
+  });
   await finishLegacyHome(legacyHome, paths, db, (m) => logger(m));
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -3953,8 +3963,15 @@ if (process.argv.includes("--smoke")) {
     })
     .then(bootstrap)
     .catch((e: unknown) => {
-      // 数据比程序新：给一句能看懂的话，不贴调用栈。
-      const text = e instanceof NewerDatabaseError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
+      // 迁移前的备份失败、用户在对话框里选了退出（BTL-262）：已经告诉过原因了，不再弹第二个。
+      if (e instanceof DatabaseBackupError && e.declined) {
+        logger(`startup: quit after the database backup failed (${e.failure.reason})`);
+        flushLogSync();
+        app.exit(1);
+        return;
+      }
+      // 数据比程序新、备份失败：给一句能看懂的话，不贴调用栈。
+      const text = e instanceof NewerDatabaseError || e instanceof DatabaseBackupError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
       dialog.showErrorBox(M().startupFailed, text);
       app.exit(1);
     });
