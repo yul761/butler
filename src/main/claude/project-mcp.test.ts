@@ -434,10 +434,10 @@ describe("projectMcpConfigs: git invocation", () => {
   });
 });
 
-describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json picker", () => {
-  const read = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { enableAllProjectMcpServers: boolean; disabledMcpjsonServers: string[] };
+describe("projectMcpApprovalSettings: interactive sessions use the same approval rule as headless runs (BTL-262)", () => {
+  const read = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { enableAllProjectMcpServers?: boolean; enabledMcpjsonServers: string[]; disabledMcpjsonServers: string[] };
 
-  it("enables every project server, keeping what the user disabled in any of the given directories", () => {
+  it("enables only what the user approved, keeping what the user disabled in any of the given directories", () => {
     const s = setup();
     const worktree = join(s.root, "worktree");
     mkdirSync(worktree);
@@ -446,8 +446,67 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     const file = projectMcpApprovalSettings([worktree, s.repo, s.repo], s.p);
     expect(file).not.toBeNull();
     expect(file!.startsWith(s.mcpDir)).toBe(true);
-    expect(read(file!)).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: ["evil", "global-off", "noisy"] });
+    expect(read(file!)).toEqual({ enabledMcpjsonServers: ["jira"], disabledMcpjsonServers: ["evil", "global-off", "noisy"] });
     if (process.platform !== "win32") expect(mode(file!)).toBe(0o600);
+  });
+
+  it("a cloned repo's .mcp.json is not switched on: unapproved servers are left to Claude Code's own prompt", () => {
+    const s = setup();
+    s.writeMcp(["evil", "jira"]);
+    const file = projectMcpApprovalSettings([s.repo], s.p);
+    const c = read(file!);
+    expect(c.enableAllProjectMcpServers).toBeUndefined();
+    expect(c.enabledMcpjsonServers).toEqual([]);
+    expect(readFileSync(file!, "utf8")).not.toContain("evil");
+  });
+
+  it("approvals from a worktree and the main checkout are merged; a disabled server never ends up enabled", () => {
+    const s = setup();
+    const worktree = join(s.root, "worktree");
+    mkdirSync(worktree);
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { enabledMcpjsonServers: ["jira", "both"] }, [worktree]: { enabledMcpjsonServers: ["wt"], disabledMcpjsonServers: ["both"] } } }));
+    expect(read(projectMcpApprovalSettings([worktree, s.repo], s.p)!)).toEqual({ enabledMcpjsonServers: ["jira", "wt"], disabledMcpjsonServers: ["both"] });
+  });
+
+  it("enableAllProjectMcpServers is written only when the user set it in a trusted place (~/.claude.json, user settings)", () => {
+    const s = setup();
+    s.writeClaudeJson({ enableAllProjectMcpServers: true, disabledMcpjsonServers: ["x"] });
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!)).toEqual({ enableAllProjectMcpServers: true, enabledMcpjsonServers: [], disabledMcpjsonServers: ["x"] });
+    rmSync(s.paths.claudeJson);
+    writeFileSync(s.paths.claudeSettings, JSON.stringify({ enableAllProjectMcpServers: true }));
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enableAllProjectMcpServers).toBe(true);
+  });
+
+  it("approval written in the repo's own .claude/settings.json or a tracked settings.local.json does not count", () => {
+    const s = setup();
+    s.gitInit();
+    mkdirSync(join(s.repo, ".claude"));
+    writeFileSync(join(s.repo, ".claude", "settings.json"), JSON.stringify({ enableAllProjectMcpServers: true, enabledMcpjsonServers: ["evil"] }));
+    writeFileSync(join(s.repo, ".claude", "settings.local.json"), JSON.stringify({ enableAllProjectMcpServers: true, enabledMcpjsonServers: ["evil2"] }));
+    s.git("add", "-f", ".claude");
+    s.git("commit", "-q", "-m", "ship approvals");
+    const c = read(projectMcpApprovalSettings([s.repo], s.p)!);
+    expect(c.enableAllProjectMcpServers).toBeUndefined();
+    expect(c.enabledMcpjsonServers).toEqual([]);
+  });
+
+  it("an untracked settings.local.json (the user's own Claude Code answers) counts", () => {
+    const s = setup();
+    s.gitInit();
+    mkdirSync(join(s.repo, ".claude"));
+    writeFileSync(join(s.repo, ".claude", "settings.local.json"), JSON.stringify({ enabledMcpjsonServers: ["jira"] }));
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enabledMcpjsonServers).toEqual(["jira"]);
+  });
+
+  it("the interactive and headless paths agree on every server", () => {
+    const s = setup();
+    s.writeMcp(["a", "b", "c", "d"]);
+    s.writeClaudeJson({ enabledMcpjsonServers: ["a", "c"], disabledMcpjsonServers: ["c", "d"] });
+    const headless = servers(projectMcpConfigs(s.repo, s.p)[0]);
+    const c = read(projectMcpApprovalSettings([s.repo], s.p)!);
+    const interactive = ["a", "b", "c", "d"].filter((n) => !c.disabledMcpjsonServers.includes(n) && (c.enableAllProjectMcpServers || c.enabledMcpjsonServers.includes(n)));
+    expect(interactive).toEqual(headless);
+    expect(headless).toEqual(["a"]);
   });
 
   it("reuses one file for the same content and never writes into the repo", () => {
@@ -455,7 +514,7 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     const a = projectMcpApprovalSettings([s.repo], s.p);
     const b = projectMcpApprovalSettings([s.repo], s.p);
     expect(a).toBe(b);
-    expect(read(a!)).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [] });
+    expect(read(a!)).toEqual({ enabledMcpjsonServers: [], disabledMcpjsonServers: [] });
     expect(readdirSync(s.repo)).toEqual([]);
     expect(readdirSync(s.mcpDir)).toHaveLength(1);
   });
@@ -472,7 +531,7 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     // 推送、开 PR 记下分支是谁的（工作流 W）：同样走写信封的那条路，hook 只为 git push / gh pr create 写。
     const ship = { matcher: "Bash", hooks: [{ type: "command", command: '"/b/shipherd-hook"', timeout: 10 }] };
     expect(file).not.toBe(plain);
-    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: [...group, skill, agent, ship], PostToolUseFailure: [...group, ship] } });
+    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enabledMcpjsonServers: [], disabledMcpjsonServers: [], hooks: { PreToolUse: group, PostToolUse: [...group, skill, agent, ship], PostToolUseFailure: [...group, ship] } });
   });
 
   it("adds the Agent|Task matcher next to Skill only with a gate command", () => {
@@ -509,7 +568,7 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     const s = setup();
     expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, allowTools: [] })!))).not.toContain("permissions");
     const file = projectMcpApprovalSettings([s.repo], { ...s.p, allowTools: ["mcp__x__a", "mcp__x__b"] });
-    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enableAllProjectMcpServers: true, disabledMcpjsonServers: [], permissions: { allow: ["mcp__x__a", "mcp__x__b"] } });
+    expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual({ enabledMcpjsonServers: [], disabledMcpjsonServers: [], permissions: { allow: ["mcp__x__a", "mcp__x__b"] } });
   });
 
   it("appends permission-profile rules after the given tools, re-checking each one so a write rule never gets in (ws-j)", () => {
@@ -522,7 +581,7 @@ describe("projectMcpApprovalSettings: interactive sessions skip the .mcp.json pi
     expect(JSON.parse(readFileSync(only!, "utf8")).permissions).toEqual({ allow: ["Bash(gh pr list:*)"] });
   });
 
-  it("missing or corrupt ~/.claude.json still enables the servers; an unwritable mcp dir gives null and a log line", () => {
+  it("missing or corrupt ~/.claude.json still writes the settings file (nothing approved); an unwritable mcp dir gives null and a log line", () => {
     const s = setup();
     expect(projectMcpApprovalSettings([s.repo], s.p)).not.toBeNull();
     writeFileSync(s.paths.claudeJson, "{ broken");

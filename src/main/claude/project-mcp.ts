@@ -159,6 +159,26 @@ function approvals(cwd: string, claudeJson: Json | undefined, p: ProjectMcpPaths
   return a;
 }
 
+/** 几个目录（session 的目录、仓库主目录）的审批合在一起：任何一处批准算批准，任何一处禁用算禁用。 */
+function mergedApprovals(dirs: readonly string[], claudeJson: Json | undefined, p: ProjectMcpPaths): Approval {
+  const a: Approval = { enabled: new Set(), disabled: new Set(), enableAll: false };
+  for (const dir of new Set(dirs)) {
+    const one = approvals(dir, claudeJson, p);
+    for (const n of one.enabled) a.enabled.add(n);
+    for (const n of one.disabled) a.disabled.add(n);
+    if (one.enableAll) a.enableAll = true;
+  }
+  return a;
+}
+
+/**
+ * 仓库 .mcp.json 里的一个 server 能不能启用：交互和后台用的是同一条规则（BTL-262）。
+ * 禁用优先；否则要用户在可信来源里批准过它（enabledMcpjsonServers），或者自己设了 enableAllProjectMcpServers。
+ */
+function mcpjsonServerApproved(name: string, a: Approval): boolean {
+  return !a.disabled.has(name) && (a.enableAll || a.enabled.has(name));
+}
+
 const STALE_TMP_MS = 60 * 60 * 1000;
 const swept = new Set<string>();
 
@@ -222,7 +242,7 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
       const a = approvals(cwd, claudeJson, p);
       // 同名时本地级（用户自己写的）优先，丢掉仓库的那一项。
       const allowed = Object.fromEntries(
-        Object.entries(declared).filter(([name]) => !a.disabled.has(name) && (a.enableAll || a.enabled.has(name)) && !(local && name in local)),
+        Object.entries(declared).filter(([name]) => mcpjsonServerApproved(name, a) && !(local && name in local)),
       );
       if (isServerMap(allowed)) {
         const file = join(p.mcpDir, fileKey(cwd, "project"));
@@ -246,10 +266,12 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
 }
 
 /**
- * Shipherd 打开的交互 session 用的 --settings 文件：仓库 .mcp.json 里的 server 直接启用，不再停在
- * “发现新的 MCP server，选择要启用哪些”的对话框上（worktree 是新目录，Claude Code 每次都会问；总控交给子 session 的任务会一直等着）。
- * 用户在这些目录（session 的目录、仓库主目录）里禁用过的 server 一并写进 disabledMcpjsonServers：禁用优先于全部启用。
- * 文件名按内容取 hash，内容一样就是同一个文件。写不了记日志返回 null（照旧弹出对话框）。
+ * Shipherd 打开的交互 session 用的 --settings 文件。仓库 .mcp.json 的审批和后台运行（projectMcpConfigs）同一条规则（BTL-262）：
+ * 用户在这些目录（session 的目录、仓库主目录）的可信来源里批准过的 server 写进 enabledMcpjsonServers，worktree 是新目录也不用再问；
+ * 用户自己设了 enableAllProjectMcpServers 才写它；禁用过的写进 disabledMcpjsonServers（禁用优先）。
+ * 谁都没批准过的不写，交给 Claude Code 自己逐个询问：clone 来的仓库过了文件夹信任，也不能不经用户同意就跑 .mcp.json 里的命令。
+ * Shipherd 自己的 MCP（shipherd-*、statecore）走 --mcp-config，不受这里影响。
+ * 文件名按内容取 hash，内容一样就是同一个文件。写不了记日志返回 null（Claude Code 照常询问）。
  */
 /**
  * allowTools：不用确认就能调用的工具（写进 permissions.allow），空的或者不给就不写。
@@ -270,9 +292,11 @@ export function projectMcpApprovalSettings(
   try {
     sweepStaleTmp(p.mcpDir);
     const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
-    const disabled = new Set<string>();
-    for (const dir of new Set(dirs)) for (const n of approvals(dir, claudeJson, p).disabled) disabled.add(n);
-    const content: Record<string, unknown> = { enableAllProjectMcpServers: true, disabledMcpjsonServers: [...disabled].sort() };
+    const a = mergedApprovals(dirs, claudeJson, p);
+    const content: Record<string, unknown> = {};
+    if (a.enableAll) content.enableAllProjectMcpServers = true;
+    content.enabledMcpjsonServers = [...a.enabled].filter((n) => mcpjsonServerApproved(n, a)).sort();
+    content.disabledMcpjsonServers = [...a.disabled].sort();
     const allow = [...new Set([...(p.allowTools ?? []), ...(p.profileRules ?? []).filter((r) => isSafeRule(r))])];
     if (allow.length > 0) content.permissions = { allow };
     // 合并总控的 gate hook 只写进这份 session 专用的 settings，不碰用户全局的 settings.json
