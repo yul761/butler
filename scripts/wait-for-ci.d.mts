@@ -13,4 +13,5 @@ export interface WorkflowRun {
 export const APPEAR_TIMEOUT_MS: number;
 export const MAX_WAIT_MS: number;
 export const POLL_MS: number;
-export function ciVerdict(input: { sha: string; runs: WorkflowRun[]; waitedMs: number; appearTimeoutMs?: number; maxWaitMs?: number }): { state: "pass" | "fail" | "wait"; message: string };
+export const NOT_ON_MAIN_GRACE_MS: number;
+export function ciVerdict(input: { sha: string; runs: WorkflowRun[]; waitedMs: number; onMain?: boolean | null; appearTimeoutMs?: number; maxWaitMs?: number; notOnMainGraceMs?: number }): { state: "pass" | "fail" | "wait"; message: string };

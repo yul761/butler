@@ -61,9 +61,12 @@ describe("openDatabase: backup before migrating (BTL-262)", () => {
   it(`keeps only the latest ${KEEP_BACKUPS} backups by version, and leaves other files alone`, () => {
     const dir = tempDir("shipherd-backup-");
     const file = dbAt(dir, LATEST - 1);
-    for (const n of ["app.db.pre-v3", "app.db.pre-v12", "app.db.pre-v9", "app.db.pre-vx", "other.db.pre-v1", "app.db.pre-v2.keep"]) writeFileSync(join(dir, n), "");
+    const mine = ["app.db.pre-v3", "app.db.pre-v12", "app.db.pre-v9", "app.db.pre-v4.tmp"];
+    const theirs = ["app.db.pre-vx", "other.db.pre-v1", "app.db.pre-v2.keep", "app.db.pre-v2.tmp.keep", "my app.db.pre-v1", "app.db.pre-v.tmp"];
+    for (const n of [...mine, ...theirs]) writeFileSync(join(dir, n), "");
     openDatabase(file).close();
-    expect(backups(dir)).toEqual(["app.db.pre-v12", `app.db.pre-v${LATEST - 1}`, "app.db.pre-v2.keep", "app.db.pre-vx", "other.db.pre-v1"].sort());
+    // 留下版本最大的两份；中断留下的 .tmp 删掉；不是自己命名的文件原样留着。
+    expect(backups(dir)).toEqual(["app.db.pre-v12", `app.db.pre-v${LATEST - 1}`, ...theirs].sort());
   });
 
   it("an existing backup of the same version is replaced, and no temporary file is left", () => {

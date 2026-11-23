@@ -43,20 +43,25 @@ export function describeBackupError(e: unknown): { reason: string; diskFull: boo
   return { reason, diskFull };
 }
 
-/** 版本号最大的 keep 份留下，其余的删掉。删不掉的记日志，不影响启动。 */
+/**
+ * 版本号最大的 keep 份留下，其余的删掉；上次备份中途被打断留下的 app.db.pre-v<N>.tmp 也删掉。
+ * 只认自己的命名（app.db.pre-v 后面只有数字，或者数字加 .tmp），同一目录里用户自己放的文件不碰。删不掉的记日志，不影响启动。
+ */
 export function pruneBackups(file: string, keep: number, log: (m: string) => void): void {
   const dir = dirname(file);
   const prefix = `${basename(file)}.pre-v`;
-  let found: { name: string; v: number }[];
+  let names: string[];
   try {
-    found = readdirSync(dir)
-      .filter((n) => n.startsWith(prefix) && /^\d+$/.test(n.slice(prefix.length)))
-      .map((n) => ({ name: n, v: Number(n.slice(prefix.length)) }))
-      .sort((a, b) => b.v - a.v);
+    names = readdirSync(dir).filter((n) => n.startsWith(prefix));
   } catch {
     return;
   }
-  for (const old of found.slice(keep)) {
+  const found = names
+    .filter((n) => /^\d+$/.test(n.slice(prefix.length)))
+    .map((n) => ({ name: n, v: Number(n.slice(prefix.length)) }))
+    .sort((a, b) => b.v - a.v);
+  const stale = names.filter((n) => /^\d+\.tmp$/.test(n.slice(prefix.length))).map((name) => ({ name }));
+  for (const old of [...found.slice(keep), ...stale]) {
     try {
       rmSync(join(dir, old.name), { force: true });
       log(`database: removed old backup ${old.name}`);

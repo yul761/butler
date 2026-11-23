@@ -390,10 +390,13 @@ async function rendererGaveUp(info: { reason: string; exitCode: number; reloads:
     try {
       ({ response: choice } = await dialog.showMessageBox({
         type: "error", title: S.title, message: S.message(info.reloads, Math.round(RELOAD_WINDOW_MS / 60_000)), detail: S.detail(info.reason, info.exitCode),
-        buttons: [S.reload, S.exportDiag, S.quit], defaultId: 0, cancelId: 0, noLink: true,
+        // Esc / 关掉对话框算退出，不算重新加载：否则一个一加载就崩的界面，按一次 Esc 就又白给三次自动重新加载。
+        buttons: [S.reload, S.exportDiag, S.quit], defaultId: 0, cancelId: 2, noLink: true,
       }));
     } catch (e) {
-      logger("renderer: could not show the crash dialog", e);
+      // 连对话框都弹不出来：窗口已经没了，也问不了用户，退出（数据都在数据库里），不留一个空白窗口。
+      logger("renderer: could not show the crash dialog; quitting", e);
+      app.quit();
       return;
     }
     if (quitState.quitting) return;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { APPEAR_TIMEOUT_MS, ciVerdict, MAX_WAIT_MS, type WorkflowRun } from "../../scripts/wait-for-ci.mjs";
+import { APPEAR_TIMEOUT_MS, ciVerdict, MAX_WAIT_MS, NOT_ON_MAIN_GRACE_MS, type WorkflowRun } from "../../scripts/wait-for-ci.mjs";
 
 // BTL-262：发版要等 tag 指向的 commit 在 main 上的 CI 全绿（scripts/wait-for-ci.mjs，release.yml 的 ci-gate job）。
 const SHA = "a".repeat(40);
@@ -35,6 +35,19 @@ describe("ciVerdict", () => {
     expect(v.state).toBe("fail");
     expect(v.message).toContain("Push the version commit to main");
     expect(v.message).toContain("skip_ci_check");
+  });
+
+  it("fails fast, with what to do, when the tagged commit is not on main (a tag on a release branch)", () => {
+    expect(ciVerdict({ sha: SHA, runs: [], waitedMs: 0, onMain: false }).state).toBe("wait");
+    const v = ciVerdict({ sha: SHA, runs: [run({ head_branch: "release/4.2" })], waitedMs: NOT_ON_MAIN_GRACE_MS, onMain: false });
+    expect(v.state).toBe("fail");
+    expect(v.message).toContain("is not on main");
+    expect(v.message).toContain("skip_ci_check");
+    expect(NOT_ON_MAIN_GRACE_MS).toBeLessThan(APPEAR_TIMEOUT_MS);
+    // On main (or unknown, when the compare call failed): keep waiting for the run as before.
+    for (const onMain of [true, null]) expect(ciVerdict({ sha: SHA, runs: [], waitedMs: NOT_ON_MAIN_GRACE_MS, onMain }).state).toBe("wait");
+    // A main push run settles it whatever the compare said.
+    expect(ciVerdict({ sha: SHA, runs: [run()], waitedMs: NOT_ON_MAIN_GRACE_MS, onMain: false }).state).toBe("pass");
   });
 
   it("only counts push runs on main for exactly this commit", () => {
