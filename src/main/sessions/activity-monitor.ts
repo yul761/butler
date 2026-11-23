@@ -98,6 +98,8 @@ export interface ActivityDeps {
     openedAt(termId: string): number;
     /** 当前屏幕上有权限确认（PtyManager.permissionShowing，看屏幕而不是输出流的末尾）。 */
     permissionShowing(termId: string): boolean;
+    /** 当前屏幕上有启动对话框（PtyManager.startupDialogShowing：信任文件夹、新的 MCP server）。 */
+    startupDialogShowing(termId: string): boolean;
   };
   /** session 的 transcript 文件；还没有时返回 null。 */
   transcriptFile: (sessionId: string) => string | null;
@@ -141,7 +143,7 @@ export interface ActivityDeps {
 /** 限额记录晚于这么久就不当作现场发生的。 */
 export const LIVE_LIMIT_WINDOW_MS = 10 * 60_000;
 
-export interface DerivedActivity extends Pick<SessionActivity, "kind" | "detail" | "background" | "startedAt"> {
+export interface DerivedActivity extends Pick<SessionActivity, "kind" | "detail" | "background" | "startedAt" | "prompt"> {
   /** 这一轮没结束或者有后台命令在跑，也没在等人确认或回答：才参与卡住检测。 */
   eligible: boolean;
 }
@@ -161,12 +163,14 @@ function sortedBackground(s: TranscriptState): BackgroundTask[] {
 }
 
 /** transcript 状态加上终端有没有停在权限确认上，得出 session 此刻在做什么。 */
-export function deriveActivity(s: TranscriptState, atPermissionPrompt: boolean): DerivedActivity {
+export function deriveActivity(s: TranscriptState, atPermissionPrompt: boolean, atStartupDialog = false): DerivedActivity {
   const task = sortedBackground(s).at(-1);
   const tool = currentTool(s);
   const running = tool && { ...toolActivity(tool), background: false, startedAt: tool.startedAt };
-  const eligible = !atPermissionPrompt && running?.kind !== "approval" && (s.turnOpen || !!task);
+  const eligible = !atPermissionPrompt && !atStartupDialog && running?.kind !== "approval" && (s.turnOpen || !!task);
   const noTool = { detail: null, background: false, startedAt: null, eligible };
+  // 启动对话框不要求有一轮在进行：claude 还没开始，transcript 可能还没有（BTL-262 审查）。
+  if (atStartupDialog) return { kind: "approval", ...noTool, prompt: "startup" };
   if (atPermissionPrompt) return { kind: "approval", ...noTool };
   if (running) return { ...running, eligible };
   if (task) return { ...classifyCommand(task.command), background: true, startedAt: task.startedAt, eligible };
@@ -179,7 +183,7 @@ const fileSize = (file: string): Promise<number | null> => stat(file).then((s) =
 /** 给 Claude 看的一句话：现在在做什么。 */
 export function describeActivity(a: SessionActivity): string {
   const m = M();
-  return `${[m.activityKinds[a.kind], a.detail].filter(Boolean).join(" ")}${a.background ? m.activityBackground : ""}`;
+  return `${[m.activityKinds[a.kind], a.detail].filter(Boolean).join(" ")}${a.background ? m.activityBackground : ""}${a.prompt === "startup" ? m.activityStartupDialog : ""}`;
 }
 
 /** 卡住检测的范围：Shipherd 开的、不是修复 session 的所有 session（ticket、总控），已归档的 ticket 和 feature 除外。 */
@@ -438,7 +442,7 @@ export class ActivityMonitor {
     const hookless = t.hooklessEndAt;
     const probe = this.probe(t, now);
     const state = await this.liveBackground(t, full, now, probe);
-    const { eligible, ...found } = deriveActivity(state, this.d.pty.permissionShowing(termId));
+    const { eligible, ...found } = deriveActivity(state, this.d.pty.permissionShowing(termId), this.d.pty.startupDialogShowing(termId));
     const derived = this.holdPrompt(t, found, size, now);
     if (hookless !== null && !full.turnOpen && t.promptAt === null && !this.stopped) this.d.onTurnEnd?.(head.id, hookless);
     const output = await this.readOutput(t, state);

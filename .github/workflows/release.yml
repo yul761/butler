@@ -179,8 +179,10 @@ jobs:
   # workflow start together: this job waits for that CI run to finish (in parallel with the build) instead of failing
   # because there is no result yet. A red CI fails this job and the release job does not run; after fixing (or
   # re-running a flaky CI), re-run this workflow's failed jobs.
+  # Only when a release can follow: a pushed tag, or the manual skip_ci_check override. A manual run on a tag without it
+  # only builds (the release job is skipped), so waiting up to 150 minutes for CI there would be pointless.
   ci-gate:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.skip_ci_check)
     runs-on: ubuntu-latest
     timeout-minutes: 160
     permissions:

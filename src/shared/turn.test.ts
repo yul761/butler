@@ -155,6 +155,11 @@ describe("sessionTurn", () => {
       owner: "you", kind: "shipherd", notice: { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" },
     });
   });
+  it("a startup prompt (trust folder, new MCP server) → the approval notice marked startup (BTL-262 review)", () => {
+    expect(sessionTurn(ses({ activity: act({ kind: "approval", prompt: "startup" }) })).turn).toEqual({
+      owner: "you", kind: "shipherd", notice: { kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录", startup: true },
+    });
+  });
   it("only the four sources are stuck", () => {
     expect(sessionTurn(ses({ needsYou: { reason: "缺 API key", category: "missing_info" } })).turn).toMatchObject({ kind: "stuck", source: "needs_you", detail: "缺 API key" });
     expect(sessionTurn(ses({ activity: act({ kind: "command", stuck: true, reason: "20 分钟没输出" }) })).turn).toMatchObject({ kind: "stuck", source: "silent" });

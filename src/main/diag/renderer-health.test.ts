@@ -78,6 +78,21 @@ describe("RendererHealth: crashes", () => {
     expect(s.h.events().flatMap((e) => (e.kind === "reloaded" ? [e.by] : []))).toEqual(["auto", "user", "auto"]);
   });
 
+  it("a window reopened after the crashed one was closed starts the count again, without reloading anything (BTL-262 review)", () => {
+    const s = setup({ maxReloads: 1 });
+    s.h.gone({ reason: "crashed", exitCode: 1 });
+    s.fire();
+    s.h.gone({ reason: "crashed", exitCode: 1 });
+    expect(s.gaveUp).toHaveLength(1);
+    s.h.windowReopened();
+    expect(s.reloads()).toBe(1);
+    s.h.gone({ reason: "crashed", exitCode: 1 });
+    s.fire();
+    expect(s.reloads()).toBe(2);
+    expect(s.gaveUp).toHaveLength(1);
+    expect(s.logs).toContain("renderer: opening a new window at the user's request");
+  });
+
   it("does not reload on a clean exit or while quitting", () => {
     const s = setup();
     s.h.gone({ reason: "clean-exit", exitCode: 0 });

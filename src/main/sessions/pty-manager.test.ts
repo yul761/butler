@@ -347,6 +347,32 @@ describe("PtyManager", () => {
     expect(spawned[1].pty.written).toEqual([]);
   });
 
+  it("with waitOutDialogs a startup dialog never times the task out: it is sent once the user answers, and given up only on exit (BTL-262 review)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const p = mgr.deliver("t1", "task", { startWaitMs: 100, timeoutMs: 5000, waitOutDialogs: true });
+    spawned[0].pty.emit("New MCP server found in .mcp.json: jira\r\n ❯ 1. Use this and all future MCP servers in this project");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mgr.startupDialogShowing("t1")).toBe(true);
+    expect(spawned[0].pty.written).toEqual([]);
+    // 用户回答了：对话框没了，任务照常送进去。
+    spawned[0].pty.emit(`\x1b[2J${"─".repeat(1200)}\r\n> `);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mgr.startupDialogShowing("t1")).toBe(false);
+    expect(spawned[0].pty.written[0]).toBe("\x1b[200~task\x1b[201~");
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await p).toBe("sent");
+
+    mgr.open("t2", spec, opts);
+    const q = mgr.deliver("t2", "x", { startWaitMs: 100, timeoutMs: 5000, waitOutDialogs: true });
+    spawned[1].pty.emit("New MCP server found in .mcp.json");
+    await vi.advanceTimersByTimeAsync(60_000);
+    spawned[1].pty.emitExit(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await q).toBe("exited");
+    expect(spawned[1].pty.written).toEqual([]);
+  });
+
   it("marks a terminal as having an automatic input in flight only while one deliver runs (I2)", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);

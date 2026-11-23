@@ -18,6 +18,11 @@ export interface SessionActivity {
   lastOutput: string[];
   /** 最近一条合成报错是限额（用量、频率、过载、模型不可用）；没有时为 null 或缺省。 */
   limit?: LimitHit | null;
+  /**
+   * kind 为 approval 时在等的是什么：startup = 启动对话框（信任文件夹、新的 MCP server），claude 还没开始，
+   * 总控交的任务等用户回答完才送进去（BTL-262 审查）。其余（权限确认、AskUserQuestion）为 null 或缺省。
+   */
+  prompt?: "startup" | null;
 }
 
 /** 实况窗口（BTL-190 第 7 点）的一条信号：一次工具调用、一次记忆写入或读取、一轮开始或结束。 */

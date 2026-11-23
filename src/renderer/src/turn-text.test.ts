@@ -58,6 +58,7 @@ describe("turnSentence", () => {
 
   it("shipherd sentences come from the notice kind", () => {
     expect(say(shipherd({ kind: "approval", target: T, title: null }))).toBe("在终端里等你确认权限");
+    expect(say(shipherd({ kind: "approval", target: T, title: null, startup: true }))).toBe("在终端里等你回答启动询问（信任文件夹或新的 MCP server）");
     const waiting = (reason: "review" | "undelivered") => shipherd({ kind: "comments_waiting", waiting: { reason, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 0 }, target: T, title: null });
     expect(say(waiting("review"))).toBe("有 2 条评论等你分类");
     expect(say(waiting("undelivered"))).toBe("有 2 条评论没送到 session");

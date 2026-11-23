@@ -67,6 +67,7 @@ const ZH = {
     agent: "子 agent 在跑", thinking: "思考中", approval: "等你批准", waiting: "等你回话", idle: "空闲",
   },
   activityBackground: "（后台）",
+  activityStartupDialog: "（启动询问：信任文件夹或新的 MCP server，要用户在这个 session 的终端里回答）",
   /** 「现在」页：停在确认（权限、AskUserQuestion、ExitPlanMode）上的 session 需要你的理由。 */
   nowApproval: "在终端里确认",
   trayOpen: "打开 Shipherd",
@@ -83,9 +84,10 @@ const ZH = {
   rendererGone: {
     title: "Shipherd 界面崩溃",
     message: (n: number, min: number) => `Shipherd 的界面在 ${min} 分钟里崩溃了 ${n + 1} 次，已停止自动重新加载。`,
-    detail: (reason: string, code: number) => `最后一次的原因：${reason}（退出码 ${code}）。后台的 session 和终端照常在跑。可以再重新加载一次；如果一直崩，请导出诊断附在反馈里。`,
+    detail: (reason: string, code: number) => `最后一次的原因：${reason}（退出码 ${code}）。后台的 session 和终端照常在跑；关掉窗口以后，从托盘图标可以再打开。可以再重新加载一次；如果一直崩，请导出诊断附在反馈里。`,
     reload: "重新加载",
     exportDiag: "导出诊断…",
+    closeWindow: "关掉窗口（session 在后台继续跑）",
     quit: "退出 Shipherd",
   },
   /** 更新检查（BTL-253）记进审计的摘要。 */
@@ -735,6 +737,7 @@ const EN: MainStrings = {
     agent: "running a subagent", thinking: "thinking", approval: "waiting for approval", waiting: "waiting for a reply", idle: "idle",
   },
   activityBackground: " (background)",
+  activityStartupDialog: " (a startup prompt: trusting the folder or a new MCP server; the user has to answer it in this session's terminal)",
   nowApproval: "confirm in the terminal",
   trayOpen: "Open Shipherd",
   trayKeepAwake: "Keep awake",
@@ -748,9 +751,10 @@ const EN: MainStrings = {
   rendererGone: {
     title: "Shipherd's window crashed",
     message: (n: number, min: number) => `Shipherd's window crashed ${n + 1} times in ${min} minutes, so it is no longer reloading by itself.`,
-    detail: (reason: string, code: number) => `Last reason: ${reason} (exit code ${code}). Sessions and terminals keep running in the background. You can reload once more; if it keeps crashing, export diagnostics and attach them to your feedback.`,
+    detail: (reason: string, code: number) => `Last reason: ${reason} (exit code ${code}). Sessions and terminals keep running in the background; if you close the window, open it again from the tray icon. You can reload once more; if it keeps crashing, export diagnostics and attach them to your feedback.`,
     reload: "Reload",
     exportDiag: "Export Diagnostics…",
+    closeWindow: "Close the Window (Sessions Keep Running)",
     quit: "Quit Shipherd",
   },
   update: {

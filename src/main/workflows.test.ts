@@ -148,7 +148,8 @@ describe("CI workflows (design 1.3, 11)", () => {
 
   it("drafts a release only after CI on the tagged commit is green, waiting for it rather than failing early (BTL-262)", () => {
     const gate = release.jobs["ci-gate"];
-    expect(gate.if).toBe("startsWith(github.ref, 'refs/tags/v')");
+    // A manual run on a tag without skip_ci_check only builds, so the gate does not wait there (BTL-262 review).
+    expect(gate.if).toBe("startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.skip_ci_check)");
     // Runs next to the build, not after it: CI and Release start together when the tag is pushed.
     expect(gate.needs).toBeUndefined();
     expect(gate.permissions).toEqual({ actions: "read", contents: "read" });

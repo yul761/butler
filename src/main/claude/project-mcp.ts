@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { isSafeRule } from "../permissions/classify";
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { renameWithRetrySync } from "../util/fs-retry";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
 
@@ -159,7 +159,29 @@ function approvals(cwd: string, claudeJson: Json | undefined, p: ProjectMcpPaths
   return a;
 }
 
-/** 几个目录（session 的目录、仓库主目录）的审批合在一起：任何一处批准算批准，任何一处禁用算禁用。 */
+/** cwd 所在仓库的主目录（主 worktree）：--git-common-dir 的上一级。不在 git 仓库里、bare 仓库、git 失败时返回 undefined。 */
+function mainCheckout(cwd: string): string | undefined {
+  const r = git(cwd, ["rev-parse", "--git-common-dir"]);
+  const out = r.stdout.trim();
+  if (r.status !== 0 || !out) return undefined;
+  const common = resolve(cwd, out);
+  return basename(common) === ".git" ? dirname(common) : undefined;
+}
+
+/**
+ * 审批只看 session 的目录和它所在仓库的主目录（BTL-262 审查）：一个 ticket 跨好几个仓库时，
+ * 仓库 B 里批准过的（哪怕是 enableAll）不能带到仓库 A 的 worktree 里去。
+ * candidates 是调用方知道的仓库路径，只有和 cwd 的主目录是同一个目录的那个才算（保留调用方的写法，~/.claude.json 按它记）。
+ */
+function approvalDirs(cwd: string, candidates: readonly string[]): string[] {
+  const main = mainCheckout(cwd);
+  if (!main) return [cwd];
+  const real = realpathOr(main);
+  const known = candidates.filter((c) => realpathOr(c) === real);
+  return [...new Set([cwd, ...(known.length > 0 ? known : [main])])];
+}
+
+/** 几个目录（session 的目录、它所在仓库的主目录）的审批合在一起：任何一处批准算批准，任何一处禁用算禁用。 */
 function mergedApprovals(dirs: readonly string[], claudeJson: Json | undefined, p: ProjectMcpPaths): Approval {
   const a: Approval = { enabled: new Set(), disabled: new Set(), enableAll: false };
   for (const dir of new Set(dirs)) {
@@ -280,6 +302,7 @@ export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
  * 快照里的预算变了，但这份 settings 里的超时不会变，hook 按两者里小的那个跑。
  */
 export function projectMcpApprovalSettings(
+  /** 第一个是 session 的目录（cwd），后面是这个 session 涉及的仓库路径；审批只取 cwd 和 cwd 所在仓库的主目录（approvalDirs）。 */
   dirs: string[],
   p: ProjectMcpPaths & {
     gateCommand?: string; allowTools?: readonly string[]; checks?: { editTimeoutSec: number; pushTimeoutSec: number };
@@ -292,7 +315,8 @@ export function projectMcpApprovalSettings(
   try {
     sweepStaleTmp(p.mcpDir);
     const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
-    const a = mergedApprovals(dirs, claudeJson, p);
+    const [cwd, ...repos] = dirs;
+    const a = cwd ? mergedApprovals(approvalDirs(cwd, repos), claudeJson, p) : { enabled: new Set<string>(), disabled: new Set<string>(), enableAll: false };
     const content: Record<string, unknown> = {};
     if (a.enableAll) content.enableAllProjectMcpServers = true;
     content.enabledMcpjsonServers = [...a.enabled].filter((n) => mcpjsonServerApproved(n, a)).sort();

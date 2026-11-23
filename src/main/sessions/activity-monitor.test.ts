@@ -5,11 +5,11 @@ import type { ActivityEvent } from "../../shared/activity";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import { setLang } from "../i18n";
 import { tempDir } from "../test-utils";
-import { ACTIVITY_TICK_MS, ActivityMonitor, activityChange, activityIntervals, type ActivityDeps, deriveActivity } from "./activity-monitor";
+import { ACTIVITY_TICK_MS, ActivityMonitor, activityChange, activityIntervals, type ActivityDeps, deriveActivity, describeActivity } from "./activity-monitor";
 import type { WatchFn } from "./transcript-watch";
 import { applyEntry, newTranscriptState } from "./activity-parse";
 import { stripAnsi } from "./pty-manager";
-import { permissionOnScreen } from "./screen";
+import { dialogOnScreen, permissionOnScreen } from "./screen";
 import type { StuckInput } from "./stuck-judge";
 import { STUCK_CHECK_MS, type StuckVerdict } from "./stuck-tracker";
 
@@ -80,6 +80,7 @@ function harness(over: Partial<ActivityDeps> = {}) {
       pid: (id) => (open.has(id) ? 4000 : null),
       openedAt: () => openedAt,
       permissionShowing: (id) => permissionOnScreen(stripAnsi(screens.get(id) ?? "").split("\n")),
+      startupDialogShowing: (id) => dialogOnScreen(stripAnsi(screens.get(id) ?? "").split("\n")),
     },
     transcriptFile: (id) => join(dir, `${id}.jsonl`),
     tasksDir: () => join(dir, "tasks"),
@@ -249,6 +250,19 @@ describe("ActivityMonitor activity", () => {
     await h.checks(1);
     expect(h.monitor.get("s1")).toMatchObject({ sessionId: "s1", kind: "edit", detail: "foo.ts", background: false, startedAt: AT_MS, stuck: false, reason: null, action: null, lastOutput: [] });
     expect(h.monitor.get("closed")).toBeNull();
+  });
+
+  it("a startup dialog shows as approval (startup) before any turn or transcript exists (BTL-262 review)", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.screens.set("s1", "New MCP server found in .mcp.json: jira\n❯ 1. Use this and all future MCP servers in this project");
+    await h.beat();
+    expect(h.monitor.get("s1")).toMatchObject({ kind: "approval", prompt: "startup" });
+    expect(describeActivity(h.monitor.get("s1")!)).toContain("MCP");
+    h.screens.set("s1", "> ");
+    await h.beat();
+    expect(h.monitor.get("s1")?.kind).toBe("waiting");
+    expect(h.monitor.get("s1")?.prompt).toBeUndefined();
   });
 
   it("shows approval from the terminal text, and the transcript state again afterwards", async () => {

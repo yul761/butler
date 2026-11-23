@@ -114,8 +114,13 @@ export interface DeliverOptions {
   idleMs?: number;
   /** 等 SessionStart 最多多久（没装 hook 时之后只靠安静 + 对话框检查）。 */
   startWaitMs?: number;
-  /** 总共最多等多久（包括用户自己处理启动对话框的时间）。 */
+  /** 总共最多等多久（包括用户自己处理启动对话框的时间，除非 waitOutDialogs）。 */
   timeoutMs?: number;
+  /**
+   * 启动对话框（信任文件夹、新的 MCP server）还在屏幕上时不算超时：一直等到用户回答完再送，只有终端退出才放弃（BTL-262 审查）。
+   * 总控交给新 session 的任务用它：超时了任务就丢了，总控却以为送到了。对话框消失以后才重新开始算 timeoutMs。
+   */
+  waitOutDialogs?: boolean;
   /** 粘贴之后，回显安静多久再回车；最多等 settleCapMs。 */
   settleMs?: number;
   settleCapMs?: number;
@@ -285,6 +290,11 @@ export class PtyManager {
   screenNeedsUser(termId: string): boolean {
     const lines = this.screenLines(termId);
     return permissionOnScreen(lines) || dialogOnScreen(lines);
+  }
+
+  /** 屏幕上有启动对话框（信任文件夹、新的 MCP server）：claude 还没开始，在等用户回答。终端不在了返回 false。 */
+  startupDialogShowing(termId: string): boolean {
+    return dialogOnScreen(this.screenLines(termId));
   }
 
   /** 屏幕上有权限确认（或退出计划模式的提示）：session 在等人点，不算卡住。终端不在了返回 false。 */
@@ -483,13 +493,16 @@ export class PtyManager {
   private async deliverOnce(termId: string, text: string, o: DeliverOptions): Promise<DeliverResult> {
     const idleMs = o.idleMs ?? 800;
     const start = this.now();
+    let budgetFrom = start;
     for (;;) {
       const t = this.terms.get(termId);
       if (!t || t.exited) return "exited";
       const now = this.now();
       const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
       const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
-      if (started && idle && !dialogOnScreen(this.screenLines(termId))) {
+      const dialog = (started && idle) || o.waitOutDialogs ? dialogOnScreen(this.screenLines(termId)) : false;
+      if (dialog && o.waitOutDialogs) budgetFrom = now;
+      if (started && idle && !dialog) {
         if (o.recheck && !this.recheckPasses(termId, o.recheck)) return "blocked";
         // 粘贴里的换行按终端的惯例写成 \r（xterm 的粘贴也是这样）：Windows 的 ConPTY 会吞掉输入里的 \n。
         const body = o.singleLine ? text.replace(/\s*\r?\n\s*/g, " ") : text.replace(/\r?\n/g, "\r");
@@ -497,7 +510,7 @@ export class PtyManager {
         t.held = [];
         break;
       }
-      if (now - start >= (o.timeoutMs ?? 300_000)) return "timeout";
+      if (now - budgetFrom >= (o.timeoutMs ?? 300_000)) return "timeout";
       await new Promise((r) => setTimeout(r, 100));
     }
     // 长文本的回显（Windows 的 ConPTY 尤其慢）停下来之后再回车，免得提交半截。

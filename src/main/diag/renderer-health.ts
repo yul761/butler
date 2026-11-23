@@ -95,6 +95,14 @@ export class RendererHealth {
     }
   }
 
+  /** 崩掉的窗口被关掉以后，用户从托盘 / Dock 又打开了一个新窗口：重新开始计数。 */
+  windowReopened(): void {
+    this.stopped = false;
+    this.reloads = [];
+    this.push({ at: this.d.now(), kind: "reloaded", by: "user" });
+    this.d.log("renderer: opening a new window at the user's request");
+  }
+
   unresponsive(): void {
     const now = this.d.now();
     if (this.unresponsiveSince === null) this.unresponsiveSince = now;

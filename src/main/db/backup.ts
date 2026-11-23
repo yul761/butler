@@ -1,9 +1,19 @@
 // 迁移前的备份（BTL-262）：数据库要升级表结构时，先 VACUUM INTO 一份 app.db.pre-v<N>（N 是备份里的数据版本），只留最近两份。
 // 迁移本身每一步都在事务里，失败会回滚；备份是给两种情况用的：迁移逻辑有错（成功了但丢了数据），和用户要装回旧版本。
-import { chmodSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { renameWithRetrySync } from "../util/fs-retry";
+
+/** 打开就 fsync 再关上。文件用 r+：Windows 上 FlushFileBuffers 要写权限。 */
+function fsyncPath(path: string, flags: "r" | "r+"): void {
+  const fd = openSync(path, flags);
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** 最多留这么多份迁移前的备份（版本号最大的几份）。 */
 export const KEEP_BACKUPS = 2;
@@ -90,7 +100,17 @@ export function backupBeforeMigrate(
     rmSync(tmp, { force: true });
     db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
     if (process.platform !== "win32") chmodSync(tmp, 0o600);
+    // VACUUM INTO 不 fsync 输出文件（BTL-262 审查）：先落盘再改名，免得断电后 app.db.pre-v<N> 名字对、内容却不完整。
+    fsyncPath(tmp, "r+");
     renameWithRetrySync(tmp, target);
+    // 改名本身也落盘（POSIX 上 fsync 目录；Windows 不支持，跳过）。失败不算备份失败：文件内容已经落盘了。
+    if (process.platform !== "win32") {
+      try {
+        fsyncPath(dirname(target), "r");
+      } catch (e) {
+        log(`database: could not fsync the backup's directory (${(e as NodeJS.ErrnoException)?.code ?? "error"})`);
+      }
+    }
   } catch (e) {
     try {
       if (existsSync(tmp)) rmSync(tmp, { force: true, recursive: false });

@@ -437,10 +437,19 @@ describe("projectMcpConfigs: git invocation", () => {
 describe("projectMcpApprovalSettings: interactive sessions use the same approval rule as headless runs (BTL-262)", () => {
   const read = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { enableAllProjectMcpServers?: boolean; enabledMcpjsonServers: string[]; disabledMcpjsonServers: string[] };
 
-  it("enables only what the user approved, keeping what the user disabled in any of the given directories", () => {
-    const s = setup();
+  /** s.repo 建成一个有提交的仓库，再加一个真的 worktree（审批按 git 找 worktree 的主目录）。 */
+  const withWorktree = (s: ReturnType<typeof setup>): string => {
+    mkdirSync(s.repo, { recursive: true });
+    s.gitInit();
+    s.git("commit", "-q", "--allow-empty", "-m", "init");
     const worktree = join(s.root, "worktree");
-    mkdirSync(worktree);
+    s.git("worktree", "add", "-q", "-b", "wt", worktree);
+    return worktree;
+  };
+
+  it("enables only what the user approved, keeping what the user disabled in the worktree and its main checkout", () => {
+    const s = setup();
+    const worktree = withWorktree(s);
     writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { disabledMcpjsonServers: ["evil"], enabledMcpjsonServers: ["jira"] }, [worktree]: { disabledMcpjsonServers: ["noisy"] } } }));
     writeFileSync(s.paths.claudeSettings, JSON.stringify({ disabledMcpjsonServers: ["global-off"] }));
     const file = projectMcpApprovalSettings([worktree, s.repo, s.repo], s.p);
@@ -448,6 +457,8 @@ describe("projectMcpApprovalSettings: interactive sessions use the same approval
     expect(file!.startsWith(s.mcpDir)).toBe(true);
     expect(read(file!)).toEqual({ enabledMcpjsonServers: ["jira"], disabledMcpjsonServers: ["evil", "global-off", "noisy"] });
     if (process.platform !== "win32") expect(mode(file!)).toBe(0o600);
+    // 调用方没给仓库路径时，主目录按 git 找。
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["jira"]);
   });
 
   it("a cloned repo's .mcp.json is not switched on: unapproved servers are left to Claude Code's own prompt", () => {
@@ -462,10 +473,38 @@ describe("projectMcpApprovalSettings: interactive sessions use the same approval
 
   it("approvals from a worktree and the main checkout are merged; a disabled server never ends up enabled", () => {
     const s = setup();
-    const worktree = join(s.root, "worktree");
-    mkdirSync(worktree);
+    const worktree = withWorktree(s);
     writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { enabledMcpjsonServers: ["jira", "both"] }, [worktree]: { enabledMcpjsonServers: ["wt"], disabledMcpjsonServers: ["both"] } } }));
     expect(read(projectMcpApprovalSettings([worktree, s.repo], s.p)!)).toEqual({ enabledMcpjsonServers: ["jira", "wt"], disabledMcpjsonServers: ["both"] });
+  });
+
+  it("a multi-repo ticket does not carry one repo's approvals into another repo's worktree (BTL-262 review)", () => {
+    const s = setup();
+    const worktree = withWorktree(s);
+    // 用户自己的仓库 B：未跟踪的 settings.local.json 里选过「以后都启用」，~/.claude.json 里也按名字批准过 jira。
+    const other = join(s.root, "other");
+    mkdirSync(join(other, ".claude"), { recursive: true });
+    execFileSync("git", ["init", "-q"], { cwd: other, stdio: "pipe" });
+    writeFileSync(join(other, ".claude", "settings.local.json"), JSON.stringify({ enableAllProjectMcpServers: true }));
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [other]: { enabledMcpjsonServers: ["jira"] } } }));
+    // B 自己的 session 照常拿到。
+    expect(read(projectMcpApprovalSettings([other, s.repo, other], s.p)!)).toEqual({ enableAllProjectMcpServers: true, enabledMcpjsonServers: ["jira"], disabledMcpjsonServers: [] });
+    // 第三方仓库 A 的 worktree 里开的 session：ticket 同时挂着 B，也拿不到 B 的 enableAll 和按名字的批准。
+    for (const cwd of [worktree, s.repo]) {
+      const c = read(projectMcpApprovalSettings([cwd, s.repo, other], s.p)!);
+      expect(c.enableAllProjectMcpServers).toBeUndefined();
+      expect(c.enabledMcpjsonServers).toEqual([]);
+    }
+  });
+
+  it("a directory outside any git repo uses only its own approvals, not the repo paths it was given", () => {
+    const s = setup();
+    const ws = join(s.root, "workspace");
+    mkdirSync(ws);
+    mkdirSync(s.repo, { recursive: true });
+    s.gitInit();
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { enableAllProjectMcpServers: true }, [ws]: { enabledMcpjsonServers: ["mine"] } } }));
+    expect(read(projectMcpApprovalSettings([ws, s.repo], s.p)!)).toEqual({ enabledMcpjsonServers: ["mine"], disabledMcpjsonServers: [] });
   });
 
   it("enableAllProjectMcpServers is written only when the user set it in a trusted place (~/.claude.json, user settings)", () => {

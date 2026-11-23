@@ -7,6 +7,7 @@ import type { UiStrings } from "./strings";
 function shipherdSentence(n: NowNotice, t: UiStrings["turn"]["shipherd"]): string {
   switch (n.kind) {
     case "approval":
+      return n.startup ? t.approvalStartup : t.approval;
     case "claude_limited":
     case "model_unavailable":
     case "session_limited":

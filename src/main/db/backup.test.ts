@@ -1,13 +1,32 @@
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { tempDir } from "../test-utils";
 import { describeBackupError, KEEP_BACKUPS } from "./backup";
 import { DatabaseBackupError, NewerDatabaseError, openDatabase } from "./database";
 import { MIGRATIONS } from "./migrations";
 
 const LATEST = MIGRATIONS.length;
+
+/** 记下 backup.ts 里 fsync 了哪些路径（openSync 的路径和 flags，跟着 fsyncSync 的 fd 对上）。 */
+const fsLog = vi.hoisted(() => ({ opened: new Map<number, [string, string]>(), synced: [] as Array<[string, string]> }));
+vi.mock("node:fs", async (orig) => {
+  const actual = await orig<typeof import("node:fs")>();
+  return {
+    ...actual,
+    openSync: (...a: Parameters<typeof actual.openSync>) => {
+      const fd = actual.openSync(...a);
+      fsLog.opened.set(fd, [String(a[0]), String(a[1])]);
+      return fd;
+    },
+    fsyncSync: (fd: number) => {
+      const o = fsLog.opened.get(fd);
+      if (o) fsLog.synced.push(o);
+      return actual.fsyncSync(fd);
+    },
+  };
+});
 
 /** 一个停在 version 的库（真实地跑到那一步的迁移），带一张探针表，看备份里的数据对不对。 */
 function dbAt(dir: string, version: number, name = "app.db"): string {
@@ -47,6 +66,16 @@ describe("openDatabase: backup before migrating (BTL-262)", () => {
     b.close();
     if (process.platform !== "win32") expect(statSync(backup).mode & 0o777).toBe(0o600);
     expect(logs.some((l) => l.includes(`backed up version ${LATEST - 1}`))).toBe(true);
+  });
+
+  it("the backup is fsynced under its temporary name before the rename, and so is its folder (BTL-262 review)", () => {
+    const dir = tempDir("shipherd-backup-");
+    const file = dbAt(dir, LATEST - 1);
+    fsLog.synced.length = 0;
+    openDatabase(file).close();
+    const target = join(dir, `app.db.pre-v${LATEST - 1}`);
+    expect(fsLog.synced).toContainEqual([`${target}.tmp`, "r+"]);
+    if (process.platform !== "win32") expect(fsLog.synced).toContainEqual([dir, "r"]);
   });
 
   it("a new database (version 0), one already at the latest version, and :memory: are not backed up", () => {

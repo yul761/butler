@@ -327,6 +327,8 @@ let win: BrowserWindow | null = null;
 /** 窗口 show / restore 时调（bootstrap 里接到 WS-M 的优先级上）。 */
 let windowShownHook: () => void = () => undefined;
 let tray: Tray | null = null;
+/** 启动时的第一个窗口建好以后为 true：之后窗口被关掉（崩溃对话框里选了关掉），showWindow 可以再建一个。 */
+let windowReopenable = false;
 /** e2e 设 SHIPHERD_BACKGROUND_WINDOWS=1：窗口不激活、macOS 上不进 Dock，测试跑起来不把焦点从别的程序抢过来。 */
 const BACKGROUND_WINDOWS = process.env.SHIPHERD_BACKGROUND_WINDOWS === "1";
 /** 防休眠开关（托盘菜单和侧边栏都能开关）；bootstrap 里建好。 */
@@ -382,7 +384,19 @@ const rendererHealth = new RendererHealth({
   gaveUp: (info) => void rendererGaveUp(info),
 });
 
-/** 自动重新加载的次数用完了：界面已经没了，只能用主进程的对话框告诉用户，让用户选重新加载、导出诊断或退出。 */
+/**
+ * 崩掉的窗口关掉（BTL-262 审查）：只销毁这个窗口，app 留在托盘里，session 和终端（PTY 在主进程里）照常跑。
+ * 从托盘或 Dock 再打开时 showWindow 新建一个窗口。
+ */
+function closeBrokenWindow(why: string): void {
+  logger(`renderer: closing the crashed window (${why}); Shipherd keeps running in the tray`);
+  if (win && !win.isDestroyed()) win.destroy();
+}
+
+/**
+ * 自动重新加载的次数用完了：界面已经没了，只能用主进程的对话框告诉用户，让用户选重新加载、导出诊断、关掉窗口或退出。
+ * 只有明确点「退出」才退出：退出会结束所有在跑的 session，它们本来没受渲染进程崩溃的影响。
+ */
 async function rendererGaveUp(info: { reason: string; exitCode: number; reloads: number }): Promise<void> {
   const S = M().rendererGone;
   for (;;) {
@@ -390,13 +404,13 @@ async function rendererGaveUp(info: { reason: string; exitCode: number; reloads:
     try {
       ({ response: choice } = await dialog.showMessageBox({
         type: "error", title: S.title, message: S.message(info.reloads, Math.round(RELOAD_WINDOW_MS / 60_000)), detail: S.detail(info.reason, info.exitCode),
-        // Esc / 关掉对话框算退出，不算重新加载：否则一个一加载就崩的界面，按一次 Esc 就又白给三次自动重新加载。
-        buttons: [S.reload, S.exportDiag, S.quit], defaultId: 0, cancelId: 2, noLink: true,
+        // Esc / 关掉对话框算「关掉窗口」：不重新加载（一加载就崩的界面，按一次 Esc 不该又白给三次自动重新加载），也不退出。
+        buttons: [S.reload, S.exportDiag, S.closeWindow, S.quit], defaultId: 0, cancelId: 2, noLink: true,
       }));
     } catch (e) {
-      // 连对话框都弹不出来：窗口已经没了，也问不了用户，退出（数据都在数据库里），不留一个空白窗口。
-      logger("renderer: could not show the crash dialog; quitting", e);
-      app.quit();
+      // 连对话框都弹不出来：问不了用户，只关掉这个窗口，不留一个空白窗口，也不结束 session。
+      logger("renderer: could not show the crash dialog", e);
+      closeBrokenWindow("the crash dialog could not be shown");
       return;
     }
     if (quitState.quitting) return;
@@ -404,7 +418,8 @@ async function rendererGaveUp(info: { reason: string; exitCode: number; reloads:
       await diag?.export().catch((e: unknown) => logger("renderer: diagnostics export failed", e));
       continue;
     }
-    if (choice === 2) app.quit();
+    if (choice === 3) app.quit();
+    else if (choice === 2) closeBrokenWindow("chosen in the crash dialog");
     else rendererHealth.userReload();
     return;
   }
@@ -515,6 +530,12 @@ function createWindow(): BrowserWindow {
 }
 
 function showWindow(): void {
+  // 崩掉的窗口被关掉了（closeBrokenWindow）：新建一个，自动重新加载重新计数。启动完成之前（win 还没建）什么也不做。
+  if (!win && windowReopenable) {
+    rendererHealth.windowReopened();
+    win = createWindow();
+    return;
+  }
   if (!win) return;
   if (BACKGROUND_WINDOWS) {
     win.showInactive();
@@ -1396,8 +1417,12 @@ async function bootstrap(): Promise<void> {
     },
     log: logger,
   });
-  /** 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。 */
-  const submitTask = (termId: string, message: string) => pty.deliver(termId, message, { singleLine: process.platform === "win32" });
+  /**
+   * 把任务作为第一条消息交给新 session：总控开的子 session 和修复 session 都走这里。
+   * 启动对话框（比如新 worktree 里的「New MCP server found」）没人回答时一直等（waitOutDialogs），任务不丢；
+   * 这期间「轮到你」页面上有这个 session 的「等你回答启动询问」（activity 的 prompt: "startup"）。
+   */
+  const submitTask = (termId: string, message: string) => pty.deliver(termId, message, { singleLine: process.platform === "win32", waitOutDialogs: true });
   /** 装着的 shipherd-hook 是当前版本：只有这时才挂 gate / check hook。 */
   const hookInstalled = () => health.hookBinCurrent() && existsSync(paths.hookBin);
   /** 这次启动的 session 为什么跑不了检查（addendum 第 7 节）；没有打开的检查就不算缺。 */
@@ -3711,6 +3736,7 @@ async function bootstrap(): Promise<void> {
   });
 
   win = createWindow();
+  windowReopenable = true;
   tray = createTray();
   inbox.start();
   controlInbox.start();
