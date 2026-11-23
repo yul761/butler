@@ -12,6 +12,11 @@ export interface StatusContext {
   linkedOpen: boolean;
   /** Shipherd 放弃读的 PR（prUrlKey 形式）：一直读不到，记着的“开着”不再当真，h.prs 和 remembered 里都去掉。 */
   givenUp?: ReadonlySet<string>;
+  /**
+   * 不在 ticket 任何一个仓库里的 PR（BTL-261）：Shipherd 不跟踪它（PrLinker 不收录），读不到也就永远不会放弃，
+   * 模型写的「开着」不能把 ticket 一直钉在 in_review。h.prs 和 remembered 里都去掉。
+   */
+  foreign?: (url: string) => boolean;
 }
 
 /**
@@ -26,7 +31,8 @@ export interface StatusContext {
  * 几个 PR（多仓库 ticket）合起来看，见 combinedPr：还有一个开着就还在 review，全部合并（关掉的不算）才算合并。
  */
 export function deriveStatus(h: StatusInput, openFollowups: number, ctx: StatusContext = { remembered: [], linkedOpen: false }): TicketStatus {
-  const kept = (prs: Pr[]): Pr[] => (ctx.givenUp?.size ? prs.filter((p) => !ctx.givenUp?.has(prUrlKey(p.url))) : prs);
+  const kept = (prs: Pr[]): Pr[] =>
+    ctx.givenUp?.size || ctx.foreign ? prs.filter((p) => !ctx.givenUp?.has(prUrlKey(p.url)) && !ctx.foreign?.(p.url)) : prs;
   const pr = combinedPr(kept(h.prs));
   const anyOpen = pr?.state === "open" || ctx.linkedOpen || kept(ctx.remembered).some((p) => p.state === "open");
   if (anyOpen) return h.status === "blocked" ? "blocked" : "in_review";

@@ -1606,4 +1606,20 @@ export const MIGRATIONS: string[] = [
   UPDATE repo_baselines SET checks = replace(checks, '"butlerStage"', '"shipherdStage"'), infer_detail = replace(infer_detail, '"butlerStage"', '"shipherdStage"')
     WHERE checks LIKE '%"butlerStage"%' OR infer_detail LIKE '%"butlerStage"%';
   `,
+  // 58（BTL-261）：仓库改名。repo_renames 记下 GitHub 确认过的改名（old_slug 现在叫 new_slug），启动时把库里存的旧名字改写成新的。
+  // ticket_prs 加三列：read_not_found 是读到「不存在」（404、仓库或 PR 解析不到）的次数，read_not_found_since 是这一串里第一次的时间，
+  // read_gone_at 是认定 PR 不存在的时间：之后强制读也不读，隔 PR_GONE_RETRY_MS 才再试一次。最后删掉 handoff 里解析出来、不在 ticket 的仓库里、从没读成功过、而且已经失败到放弃的 PR 行：
+  // 这些链接多半写错了（BTL-190 的 yuchenlin/butler/pull/25…29），新规则下也不会再收录。review_effect_prs 等子表随外键级联删除。
+  `
+  CREATE TABLE repo_renames (
+    old_slug TEXT PRIMARY KEY,
+    new_slug TEXT NOT NULL,
+    source TEXT NOT NULL,
+    detected_at INTEGER NOT NULL,
+    applied_at INTEGER);
+  ALTER TABLE ticket_prs ADD COLUMN read_not_found INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE ticket_prs ADD COLUMN read_not_found_since INTEGER;
+  ALTER TABLE ticket_prs ADD COLUMN read_gone_at INTEGER;
+  DELETE FROM ticket_prs WHERE source = 'handoff' AND repo_id IS NULL AND checked_at = 0 AND read_failures >= 10 AND read_retry_at IS NOT NULL;
+  `,
 ];

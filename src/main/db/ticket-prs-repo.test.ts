@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
 import type { Db } from "./database";
 import { PrStageRepo } from "./pr-stage-repo";
-import { linkedOpen, PR_READ_GIVE_UP, PR_READ_RETRY_MS, prGivenUp, TicketPrsRepo, type NewPrLink } from "./ticket-prs-repo";
+import { MIGRATIONS } from "./migrations";
+import { migrate } from "./database";
+import { DatabaseSync } from "node:sqlite";
+import {
+  linkedOpen, PR_GONE_RETRY_MS, PR_NOT_FOUND_GIVE_UP, PR_NOT_FOUND_MIN_MS, PR_READ_GIVE_UP, PR_READ_RETRY_MS, prGivenUp, TicketPrsRepo, type NewPrLink,
+} from "./ticket-prs-repo";
 import { TicketsRepo } from "./tickets-repo";
 
 function setup(): { db: Db; prs: TicketPrsRepo; tickets: TicketsRepo; repoId: number } {
@@ -103,7 +108,7 @@ describe("TicketPrsRepo", () => {
     expect(prGivenUp(prs.get(p.id)!)).toBe(false);
     // 从第一次失败起满 24 小时还在失败：放弃，停一天。
     const at = 100 + PR_READ_RETRY_MS;
-    expect(prs.noteReadFailure(p.id, at)).toEqual({ failures: PR_READ_GIVE_UP + 3, gaveUp: true });
+    expect(prs.noteReadFailure(p.id, at)).toEqual({ failures: PR_READ_GIVE_UP + 3, gaveUp: true, gone: false });
     expect(prs.get(p.id)).toMatchObject({ readRetryAt: at + PR_READ_RETRY_MS, readFailingSince: 100 });
     expect(prGivenUp(prs.get(p.id)!)).toBe(true);
     // needingRead 不过滤：停着的由调用方决定（强制读要能读到）。
@@ -115,11 +120,75 @@ describe("TicketPrsRepo", () => {
     expect(prs.get(p.id)).toMatchObject({ readFailures: 0, readRetryAt: null, readFailingSince: null });
   });
 
+  it("noteReadFailure notFound: always counts; marks the row gone after a few answers over 10 minutes; needingRead then drops it (BTL-261)", () => {
+    const { prs } = setup();
+    const p = prs.link(link()).pr;
+    // count: false 不管用：GitHub 回答了不存在，就不是离线。
+    expect(prs.noteReadFailure(p.id, 100, { count: false, notFound: true })).toEqual({ failures: 1, gaveUp: false, gone: false });
+    // 次数够了但还不到 10 分钟：不认定。
+    for (let i = 1; i < PR_NOT_FOUND_GIVE_UP; i++) expect(prs.noteReadFailure(p.id, 100 + i, { notFound: true }).gone).toBe(false);
+    expect(prs.get(p.id)).toMatchObject({ readNotFound: PR_NOT_FOUND_GIVE_UP, readNotFoundSince: 100, readGoneAt: null, readFailingSince: 100 });
+    // 别的失败不清零。
+    prs.noteReadFailure(p.id, 200);
+    expect(prs.get(p.id)?.readNotFound).toBe(PR_NOT_FOUND_GIVE_UP);
+    const at = 100 + PR_NOT_FOUND_MIN_MS;
+    expect(prs.noteReadFailure(p.id, at, { notFound: true })).toEqual({ failures: PR_NOT_FOUND_GIVE_UP + 2, gaveUp: true, gone: true });
+    expect(prs.get(p.id)).toMatchObject({ readGoneAt: at, readRetryAt: null });
+    expect(prGivenUp(prs.get(p.id)!)).toBe(true);
+    expect(linkedOpen([prs.get(p.id)!])).toBe(false);
+    expect(prs.needingRead(at + 1)).toEqual([]);
+    // 不到一周的强制读（用户刷新、session 停下）又是不存在：不往后推每周那一次。
+    prs.noteReadFailure(p.id, at + 1000, { notFound: true });
+    expect(prs.get(p.id)?.readGoneAt).toBe(at);
+    // 一周以后再给一次；又是不存在：从那时起再等一周，不算“刚放弃”。
+    const week = at + PR_GONE_RETRY_MS;
+    expect(prs.needingRead(week - 1)).toEqual([]);
+    expect(prs.needingRead(week).map((x) => x.id)).toEqual([p.id]);
+    expect(prs.noteReadFailure(p.id, week, { notFound: true }).gaveUp).toBe(false);
+    expect(prs.get(p.id)?.readGoneAt).toBe(week);
+    expect(prs.needingRead(week + 1)).toEqual([]);
+    // 读成功（watcher 写回）：都清掉，又能读了。
+    prs.update(p.id, { readError: false, readFailures: 0, readRetryAt: null, readFailingSince: null, readNotFound: 0, readNotFoundSince: null, readGoneAt: null, checkedAt: 300 });
+    expect(prs.needingRead(week + 1).map((x) => x.id)).toEqual([p.id]);
+  });
+
+  it("noteReadFailure notFound: the 10 minutes count from the first not-found, not from older failures of another kind (BTL-261)", () => {
+    const { prs } = setup();
+    const p = prs.link(link()).pr;
+    // gh 超时了一天：read_failing_since 早就有了。
+    prs.noteReadFailure(p.id, 0);
+    const t = 24 * 60 * 60_000;
+    // 然后一分钟里三次“不存在”（例如几次强制读）：不认定。
+    for (let i = 0; i < PR_NOT_FOUND_GIVE_UP; i++) expect(prs.noteReadFailure(p.id, t + i * 20_000, { notFound: true }).gone).toBe(false);
+    expect(prs.get(p.id)).toMatchObject({ readFailingSince: 0, readNotFoundSince: t, readGoneAt: null });
+    expect(prs.noteReadFailure(p.id, t + PR_NOT_FOUND_MIN_MS, { notFound: true }).gone).toBe(true);
+  });
+
+  it("migration 58 drops handoff rows that never read and were given up, and only those (BTL-261)", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    for (const sql of MIGRATIONS.slice(0, 57)) db.exec(sql);
+    db.exec("PRAGMA user_version = 57");
+    db.exec(`INSERT INTO tickets (key, repo_path, work_mode, branch, created_at) VALUES ('T-1', '/r', 'branch', 'b', 1)`);
+    const add = (id: number, source: string, repoId: string, checkedAt: number, failures: number, retryAt: string) =>
+      db.exec(`INSERT INTO ticket_prs (id, ticket_key, url, slug, repo_id, number, state, source, linked_at, checked_at, read_failures, read_retry_at)
+               VALUES (${id}, 'T-1', 'https://github.com/a/b/pull/${id}', 'a/b', ${repoId}, ${id}, 'merged', '${source}', 1, ${checkedAt}, ${failures}, ${retryAt})`);
+    add(13, "handoff", "NULL", 0, 224, "5");
+    add(14, "handoff", "NULL", 0, 3, "NULL"); // 还没放弃
+    add(15, "handoff", "NULL", 7, 224, "5"); // 读成功过
+    add(16, "branch", "NULL", 0, 224, "5"); // 不是 handoff 来的
+    db.exec(`INSERT INTO review_effect_prs (pr_id, repo_slug, number, computed_at) VALUES (13, 'a/b', 13, 1)`);
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect((db.prepare(`SELECT id FROM ticket_prs ORDER BY id`).all() as { id: number }[]).map((r) => r.id)).toEqual([14, 15, 16]);
+    expect(db.prepare(`SELECT count(*) AS c FROM review_effect_prs`).get()).toEqual({ c: 0 });
+    expect(new TicketPrsRepo(db).get(14)).toMatchObject({ readNotFound: 0, readGoneAt: null });
+  });
+
   it("noteReadFailure with count: false only flags read_error (an outage round)", () => {
     const { prs } = setup();
     const p = prs.link(link()).pr;
     prs.update(p.id, { checkedAt: 5 });
-    expect(prs.noteReadFailure(p.id, 50, { count: false })).toEqual({ failures: 0, gaveUp: false });
+    expect(prs.noteReadFailure(p.id, 50, { count: false })).toEqual({ failures: 0, gaveUp: false, gone: false });
     expect(prs.get(p.id)).toMatchObject({ readError: true, checkedAt: 50, readFailures: 0, readFailingSince: null, readRetryAt: null });
   });
 

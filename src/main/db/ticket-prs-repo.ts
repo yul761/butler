@@ -11,6 +11,17 @@ import type { Db } from "./database";
 export const PR_READ_GIVE_UP = 10;
 /** 失败要持续这么久才放弃；放弃以后也隔这么久再试一次。 */
 export const PR_READ_RETRY_MS = 24 * 60 * 60_000;
+/**
+ * GitHub 这么多次说 PR 不存在（仓库或 PR 解析不到、404），而且离这一串里第一次「不存在」过了 PR_NOT_FOUND_MIN_MS：认定它不存在，
+ * 强制读也不再读。刚开的 PR 偶尔会短暂查不到，所以要几次、隔一会儿。
+ */
+export const PR_NOT_FOUND_GIVE_UP = 3;
+export const PR_NOT_FOUND_MIN_MS = 10 * 60_000;
+/**
+ * 认定不存在以后隔这么久再读一次：GitHub 对当前账号看不到的私有仓库也回答「不存在」，换了账号、补了权限以后能自己恢复。
+ * 又是「不存在」就再等这么久；读成功就全部清掉。
+ */
+export const PR_GONE_RETRY_MS = 7 * 24 * 60 * 60_000;
 
 export type PrLinkSource = "branch" | "handoff" | "merge_gate" | "backfill";
 
@@ -49,6 +60,12 @@ export interface TicketPr {
   readFailingSince: number | null;
   /** 放弃读以后下次再试的时间；null = 没放弃。 */
   readRetryAt: number | null;
+  /** 读到「不存在」的次数；读成功、仓库改名改写链接时清零。 */
+  readNotFound: number;
+  /** 这一串「不存在」里第一次的时间；null = 没有。 */
+  readNotFoundSince: number | null;
+  /** 认定 PR 不存在的时间（PR_NOT_FOUND_GIVE_UP）：不再读；null = 没有。 */
+  readGoneAt: number | null;
   /** 以下是 ws-b 加的（叠放树、轮到谁）；没读过时是空值。 */
   baseBranch: string | null;
   isDraft: boolean;
@@ -63,11 +80,12 @@ export interface TicketPr {
   statusChangedAt: number | null;
 }
 
-/** 放弃读了（失败了 PR_READ_GIVE_UP 次、持续一天）：状态只是最后一次读到的，不再当真。 */
-export const prGivenUp = (p: Pick<TicketPr, "readRetryAt">): boolean => p.readRetryAt !== null;
+/** 放弃读了（失败了 PR_READ_GIVE_UP 次、持续一天，或者认定不存在）：状态只是最后一次读到的，不再当真。 */
+export const prGivenUp = (p: Pick<TicketPr, "readRetryAt"> & Partial<Pick<TicketPr, "readGoneAt">>): boolean =>
+  p.readRetryAt !== null || (p.readGoneAt ?? null) !== null;
 
 /** ticket 是不是还有链接的 PR 开着：只算读过的、没放弃的。 */
-export const linkedOpen = (prs: Pick<TicketPr, "state" | "checkedAt" | "readRetryAt">[]): boolean =>
+export const linkedOpen = (prs: (Pick<TicketPr, "state" | "checkedAt" | "readRetryAt"> & Partial<Pick<TicketPr, "readGoneAt">>)[]): boolean =>
   prs.some((p) => p.state === "open" && p.checkedAt > 0 && !prGivenUp(p));
 
 export interface NewPrLink {
@@ -88,6 +106,7 @@ export interface NewPrLink {
 
 export type TicketPrPatch = Partial<
   Pick<TicketPr, "state" | "review" | "ci" | "readError" | "headSha" | "failed" | "headBranch" | "openedAt" | "mergedAt" | "closedAt" | "checkedAt" | "readFailures" | "readFailingSince" | "readRetryAt"
+    | "readNotFound" | "readNotFoundSince" | "readGoneAt"
     | "baseBranch" | "isDraft" | "title" | "author" | "labels" | "reviewRequests" | "reviewers" | "mergeable" | "mergeState" | "statusChangedAt">
 >;
 
@@ -118,6 +137,9 @@ interface Row {
   read_failures: number;
   read_failing_since: number | null;
   read_retry_at: number | null;
+  read_not_found: number;
+  read_not_found_since: number | null;
+  read_gone_at: number | null;
   base_branch: string | null;
   is_draft: number;
   title: string | null;
@@ -149,6 +171,7 @@ const toPr = (r: Row): TicketPr => ({
   failed: JSON.parse(r.failed) as CiCheck[], openedAt: num(r.opened_at), mergedAt: num(r.merged_at), closedAt: num(r.closed_at),
   source: r.source, linkedAt: Number(r.linked_at), checkedAt: Number(r.checked_at), deliveredKey: r.delivered_key, deliveredAt: num(r.delivered_at), deliveredTo: r.delivered_to ?? null,
   mergedHandledAt: num(r.merged_handled_at), readFailures: Number(r.read_failures), readFailingSince: num(r.read_failing_since), readRetryAt: num(r.read_retry_at),
+  readNotFound: Number(r.read_not_found ?? 0), readNotFoundSince: num(r.read_not_found_since ?? null), readGoneAt: num(r.read_gone_at ?? null),
   baseBranch: r.base_branch, isDraft: Number(r.is_draft) !== 0, title: r.title, author: r.author, labels: jsonList<string>(r.labels),
   reviewRequests: jsonList<PrReviewRequest>(r.review_requests), reviewers: jsonList<PrReviewer>(r.reviewers),
   mergeable: r.mergeable, mergeState: r.merge_state, statusChangedAt: num(r.status_changed_at),
@@ -203,9 +226,16 @@ export class TicketPrsRepo {
     return (this.db.prepare(`SELECT * FROM ticket_prs WHERE url = ? ORDER BY id`).all(prUrlKey(url)) as unknown as Row[]).map(toPr);
   }
 
-  /** 要读的：还开着的，和从没读过的。包括放弃了的（read_retry_at）：停到什么时候由调用方看，强制读不管它。 */
-  needingRead(): TicketPr[] {
-    return (this.db.prepare(`SELECT * FROM ticket_prs WHERE state = 'open' OR checked_at = 0 ORDER BY id`).all() as unknown as Row[]).map(toPr);
+  /**
+   * 要读的：还开着的，和从没读过的。包括放弃了的（read_retry_at）：停到什么时候由调用方看，强制读不管它。
+   * 认定不存在的（read_gone_at）不给，除非已经过了 PR_GONE_RETRY_MS（每隔这么久再试一次），或者 includeGone（调用方自己挑：用户点了刷新的照读）。
+   */
+  needingRead(now: number = Date.now(), o: { includeGone?: boolean } = {}): TicketPr[] {
+    return (
+      this.db
+        .prepare(`SELECT * FROM ticket_prs WHERE (state = 'open' OR checked_at = 0) AND (? OR read_gone_at IS NULL OR read_gone_at <= ?) ORDER BY id`)
+        .all(o.includeGone ? 1 : 0, now - PR_GONE_RETRY_MS) as unknown as Row[]
+    ).map(toPr);
   }
 
   /** 已合并但 onMerged 还没处理完的。只算读过的：链接时说已合并、还没读过的，等读到 GitHub 的合并时间再判断是不是早就合并了。 */
@@ -236,6 +266,9 @@ export class TicketPrsRepo {
     if (p.readFailures !== undefined) set("read_failures", p.readFailures);
     if (p.readFailingSince !== undefined) set("read_failing_since", p.readFailingSince);
     if (p.readRetryAt !== undefined) set("read_retry_at", p.readRetryAt);
+    if (p.readNotFound !== undefined) set("read_not_found", p.readNotFound);
+    if (p.readNotFoundSince !== undefined) set("read_not_found_since", p.readNotFoundSince);
+    if (p.readGoneAt !== undefined) set("read_gone_at", p.readGoneAt);
     if (p.baseBranch !== undefined) set("base_branch", p.baseBranch);
     if (p.isDraft !== undefined) set("is_draft", p.isDraft ? 1 : 0);
     if (p.title !== undefined) set("title", p.title);
@@ -254,12 +287,24 @@ export class TicketPrsRepo {
    * 一次读失败：记 read_error；从没读成功过的 checked_at 留 0（还算第一次读），读过的记成 now。
    * count（默认）时失败次数加一、记下这一串失败的开始；失败到 PR_READ_GIVE_UP 次而且已经失败了 PR_READ_RETRY_MS，
    * 停 PR_READ_RETRY_MS（之后每次失败再停一次）。count: false（整轮都读失败，像是 gh 离线）只记 read_error。
-   * 返回新的失败次数，和这一次是不是刚放弃（之前没停着）。
+   * notFound（GitHub 说没有这个 PR）一定计数，另外 read_not_found 加一（第一次记下 read_not_found_since）；到 PR_NOT_FOUND_GIVE_UP 次、
+   * 离第一次「不存在」已经 PR_NOT_FOUND_MIN_MS，记 read_gone_at。已经认定了的：到了每周再试的时候（隔了 PR_GONE_RETRY_MS）又是「不存在」，
+   * read_gone_at 记成 now，再等一周；不到一周的强制读（用户刷新、session 停下）不往后推，不然常有人碰的 ticket 永远等不到每周那一次。
+   * 别的失败不清 read_not_found（gh 离线一会儿不说明 PR 回来了），读成功才清。
+   * 返回新的失败次数，和这一次是不是刚放弃（之前没停着；认定不存在也算）。
    */
-  noteReadFailure(id: number, now: number, o: { count?: boolean } = {}): { failures: number; gaveUp: boolean } {
+  noteReadFailure(id: number, now: number, o: { count?: boolean; notFound?: boolean } = {}): { failures: number; gaveUp: boolean; gone: boolean } {
     const before = this.get(id);
-    if (!before) return { failures: 0, gaveUp: false };
-    const count = o.count ?? true;
+    if (!before) return { failures: 0, gaveUp: false, gone: false };
+    if (o.notFound) {
+      const nf = before.readNotFound + 1;
+      const since = before.readNotFoundSince ?? now;
+      const gone = before.readGoneAt !== null || (nf >= PR_NOT_FOUND_GIVE_UP && now - since >= PR_NOT_FOUND_MIN_MS);
+      this.db
+        .prepare(`UPDATE ticket_prs SET read_not_found = ?, read_not_found_since = ?, read_gone_at = ? WHERE id = ?`)
+        .run(nf, since, !gone ? null : before.readGoneAt !== null && now - before.readGoneAt < PR_GONE_RETRY_MS ? before.readGoneAt : now, id);
+    }
+    const count = o.notFound ? true : (o.count ?? true);
     const r = this.db
       .prepare(
         `UPDATE ticket_prs SET read_error = 1,
@@ -271,7 +316,8 @@ export class TicketPrsRepo {
          WHERE id = :id RETURNING read_failures, read_retry_at`,
       )
       .get({ now, inc: count ? 1 : 0, limit: PR_READ_GIVE_UP, span: PR_READ_RETRY_MS, id }) as { read_failures: number; read_retry_at: number | null };
-    return { failures: Number(r.read_failures), gaveUp: before.readRetryAt === null && r.read_retry_at !== null };
+    const gone = before.readGoneAt === null && this.get(id)?.readGoneAt != null;
+    return { failures: Number(r.read_failures), gaveUp: (before.readRetryAt === null && r.read_retry_at !== null) || gone, gone };
   }
 
   /** key 为 null 或没给 to 时，delivered_at 和 delivered_to 写 null。 */

@@ -30,12 +30,12 @@ const scopePr = (p: TicketPr): ScopePr => ({
  * 一直读不到、放弃了的（prGivenUp）开着的 PR 不挡。从没读成功过的行（checkedAt 0）只是链接时的说法（例如模型在 handoff 里编的 URL），不算。
  */
 export function ticketMerged(
-  t: Pick<Ticket, "status" | "statusManual">, prs: (Pick<TicketPr, "state"> & Partial<Pick<TicketPr, "readRetryAt" | "checkedAt">>)[],
+  t: Pick<Ticket, "status" | "statusManual">, prs: (Pick<TicketPr, "state"> & Partial<Pick<TicketPr, "readRetryAt" | "readGoneAt" | "checkedAt">>)[],
 ): boolean {
   const status = effectiveStatus(t);
   if (status === "merged_pending_followup" || status === "done") return true;
   const read = prs.filter((p) => p.checkedAt !== 0);
-  return read.length > 0 && read.every((p) => p.state !== "open" || prGivenUp({ readRetryAt: p.readRetryAt ?? null })) && read.some((p) => p.state === "merged");
+  return read.length > 0 && read.every((p) => p.state !== "open" || prGivenUp({ readRetryAt: p.readRetryAt ?? null, readGoneAt: p.readGoneAt ?? null })) && read.some((p) => p.state === "merged");
 }
 
 export class PrStagesService {

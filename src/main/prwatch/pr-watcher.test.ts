@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BranchWatchRepo } from "../db/branch-watch-repo";
 import { PrStageRepo, type StageEvent } from "../db/pr-stage-repo";
-import { PR_READ_GIVE_UP, PR_READ_RETRY_MS, TicketPrsRepo, type NewPrLink } from "../db/ticket-prs-repo";
+import { PR_NOT_FOUND_GIVE_UP, PR_NOT_FOUND_MIN_MS, PR_READ_GIVE_UP, PR_READ_RETRY_MS, TicketPrsRepo, type NewPrLink } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { memDb } from "../test-utils";
 import type { BranchPr, BranchRuns, CiCheck, PrComment, PrStatus } from "../tickets/gh";
@@ -39,7 +39,7 @@ function setup(o: Opts = {}) {
   const stages = new PrStageRepo(db);
   const owners = new BranchOwnersRepo(db);
   const gh = {
-    prStatus: vi.fn<typeof Gh.prStatus>(async () => null),
+    prStatus: vi.fn<typeof Gh.prRead>(async () => null),
     prsForBranch: vi.fn<typeof Gh.prsForBranch>(async () => []),
     branchRuns: vi.fn<typeof Gh.branchRuns>(async () => null),
     failedLog: vi.fn<typeof Gh.failedLog>(async (_cwd, runId) => `log of ${runId}`),
@@ -285,6 +285,119 @@ describe("PrWatcher: reading PRs", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(s.gh.prStatus).toHaveBeenCalledTimes(2);
     expect(s.prs.get(row.id)).toMatchObject({ readFailures: 0, readRetryAt: null, readError: false });
+  });
+
+  it("a PR GitHub says does not exist is counted even when every read fails, and is never read again after a few tries (BTL-261)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    // 两个从没读成功过的坏链接（像 handoff 里写错的仓库）：整轮都失败，但 GitHub 回答了「不存在」，不是离线。
+    const a = s.link({ url: url(25, "gone"), slug: "o/gone", number: 25, repoId: null, source: "handoff" });
+    const b = s.link({ url: url(26, "gone"), slug: "o/gone", number: 26, repoId: null, source: "handoff" });
+    s.gh.prStatus.mockResolvedValue("not_found");
+    await s.w.check();
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readFailures: 1, readNotFound: 1, readFailingSince: s.now(), readGoneAt: null });
+    expect(s.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("gh offline"));
+    // 再失败两次、过了 PR_NOT_FOUND_MIN_MS：认定不存在。
+    for (let i = 1; i < PR_NOT_FOUND_GIVE_UP; i++) {
+      s.advance(PR_NOT_FOUND_MIN_MS);
+      await s.w.check();
+    }
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readNotFound: PR_NOT_FOUND_GIVE_UP, readGoneAt: s.now() });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining(`${url(25, "gone")} does not exist`));
+    expect(s.w.statusOf("BTL-1").find((p) => p.url === url(25, "gone"))).toMatchObject({ gaveUp: true });
+    // 之后定时的不读它，总控停下来扫 epic 也不读。
+    const calls = s.gh.prStatus.mock.calls.length;
+    s.advance(PR_READ_RETRY_MS * 2);
+    await s.w.check();
+    s.w.soonTicket("BTL-1", { retryGivenUp: false });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus.mock.calls.length).toBe(calls);
+    // 用户点了刷新：照读。读到了（比如认定错了），全部清掉，又照常跟踪。
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(25, "gone") ? 25 : 26, url: u }));
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus.mock.calls.length).toBe(calls + 2);
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readGoneAt: null, readNotFound: 0, readFailures: 0, readError: false });
+    expect(s.w.statusOf("BTL-1").find((p) => p.url === url(25, "gone"))?.gaveUp).toBeUndefined();
+  });
+
+  it("a round where every read fails because the repo cannot be resolved (gh switched to an account that cannot see it) is an outage: nothing counted, nothing gone", async () => {
+    const s = setup();
+    const a = s.link();
+    const b = s.link({ url: url(8), number: 8 });
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(7) ? 7 : 8, url: u }));
+    await s.w.check();
+    // prRead 把「Could not resolve to a Repository」当 gh 失败（null）。
+    s.gh.prStatus.mockResolvedValue(null);
+    for (let i = 0; i < PR_READ_GIVE_UP + 2; i++) {
+      s.advance(PR_SLOW_MS);
+      await s.w.check();
+    }
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readFailures: 0, readNotFound: 0, readGoneAt: null, readRetryAt: null, state: "open" });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("gh offline"));
+  });
+
+  it("one not-found among failed reads still makes it no outage; a gh failure does not reset the not-found count", async () => {
+    const s = setup();
+    const a = s.link();
+    const b = s.link({ url: url(8), number: 8 });
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(7) ? 7 : 8, url: u }));
+    await s.w.check();
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => (u === url(7) ? "not_found" : null));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    // 有一个 GitHub 回答了：gh 在线，另一个也照常计数。
+    expect(s.prs.get(a.id)).toMatchObject({ readFailures: 1, readNotFound: 1 });
+    expect(s.prs.get(b.id)).toMatchObject({ readFailures: 1, readNotFound: 0 });
+    s.gh.prStatus.mockResolvedValue(null);
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.prs.get(a.id)).toMatchObject({ readNotFound: 1 });
+    // 读成功清零。
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(7) ? 7 : 8, url: u }));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.prs.get(a.id)).toMatchObject({ readFailures: 0, readNotFound: 0, readGoneAt: null, readFailingSince: null });
+  });
+
+  it("a coordinator sweep (retryGivenUp: false) neither reads a given-up PR nor skips the backoff of a never-read one (BTL-261)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr());
+    await s.w.check();
+    s.prs.update(row.id, { readFailures: PR_READ_GIVE_UP + 1, readFailingSince: 1, readRetryAt: s.now() + PR_READ_RETRY_MS, readError: true });
+    // 一条从没读成功过、正在退避的行。
+    const fresh = s.link({ url: url(9), number: 9 });
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => (u === url(9) ? null : pr()));
+    await s.w.check();
+    const calls = s.gh.prStatus.mock.calls.length;
+    for (let i = 0; i < 5; i++) {
+      s.advance(1000);
+      s.w.soonTicket("BTL-1", { retryGivenUp: false });
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(s.gh.prStatus.mock.calls.length).toBe(calls);
+    expect(s.prs.get(fresh.id)?.checkedAt).toBe(0);
+    // 用户点了刷新（默认 retryGivenUp）：两个都读。
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus.mock.calls.length).toBe(calls + 2);
+  });
+
+  it("reports a PR whose URL from GitHub names another repo (the repo was renamed)", async () => {
+    const s = setup();
+    const onSlugMoved = vi.fn<(from: string, to: string) => void>();
+    const w = new PrWatcher({ ...s.deps, onSlugMoved });
+    s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ url: url(7, "app2") }));
+    await w.check();
+    expect(onSlugMoved).toHaveBeenCalledWith("o/app", "o/app2");
+    onSlugMoved.mockClear();
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr());
+    await w.check();
+    expect(onSlugMoved).not.toHaveBeenCalled();
   });
 
   it("forgets the backoff of a PR whose rows are gone, so a later link reads it at once", async () => {

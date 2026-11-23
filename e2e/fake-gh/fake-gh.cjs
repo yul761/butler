@@ -28,6 +28,8 @@
 //   更新提示（BTL-253）：
 //     api repos/<owner>/<repo>/releases/latest：fixture 的 release（GitHub releases API 的字段：tag_name、html_url、body、draft、prerelease、published_at），
 //       没有就和真 gh 一样打 HTTP 404 退出 1（还没发布过 release）；
+//   仓库改名（BTL-261）：
+//     repo view <owner/repo> --json nameWithOwner：fixture 的 renames[小写 slug]（改名后的名字），没有就是它自己（没改过名）；
 //   其余一律退出 1，并往 FAKE_GH_LOG 追加一行 {"unsupported": 参数}：测试结束时 unsupportedGhCalls 会把它们找出来，
 //   免得产品调了假 gh 不认的命令却被当成"gh 出错"悄悄吞掉。
 "use strict";
@@ -44,7 +46,7 @@ const flag = (name) => {
 };
 const fixture = () => {
   const f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
-  return { loggedOut: f.loggedOut === true, branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], release: f.release ?? null, reviewRequested: f.reviewRequested ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
+  return { loggedOut: f.loggedOut === true, branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], release: f.release ?? null, renames: f.renames ?? {}, reviewRequested: f.reviewRequested ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
 /** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
@@ -100,6 +102,8 @@ if (cmd === "--version") {
   process.stdout.write(`${fixture().issueCreated}\n`);
 } else if (cmd === "issue" && sub === "edit" && /^\d+$/.test(ref ?? "")) {
   process.stdout.write(`https://github.com/acme/app/issues/${ref}\n`);
+} else if (cmd === "repo" && sub === "view" && /^[^/\s-][^/\s]*\/[^/\s]+$/.test(ref ?? "") && flag("--json") === "nameWithOwner") {
+  out({ nameWithOwner: fixture().renames[ref.toLowerCase()] ?? ref });
 } else if (cmd === "run" && sub === "list" && flag("--branch") !== undefined) {
   out([]);
 } else if (cmd === "api" && API_RELEASE_LATEST.test(sub ?? "") && args.length === 2) {

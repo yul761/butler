@@ -30,6 +30,28 @@ describe("RepoIdentity", () => {
     expect(nullCalls).toBe(1);
   });
 
+  it("remoteSlugsOf gives origin and upstream, deduplicated, each cached on its own (fork workflow, BTL-261)", () => {
+    let up = 0;
+    const id = new RepoIdentity({ git: () => "git@github.com:me/web.git", upstreamGit: () => (up++, "https://github.com/acme/web.git"), exists: () => true });
+    expect(id.remoteSlugsOf("/a")).toEqual(["me/web", "acme/web"]);
+    expect(id.remoteSlugsOf("/a")).toEqual(["me/web", "acme/web"]);
+    expect(up).toBe(1);
+    expect(id.slugOf("/a")).toBe("me/web");
+    const same = new RepoIdentity({ git: () => "https://github.com/acme/web", upstreamGit: () => "git@github.com:acme/web.git", exists: () => true });
+    expect(same.remoteSlugsOf("/a")).toEqual(["acme/web"]);
+    const noUpstream = new RepoIdentity({ git: () => "https://github.com/acme/web", upstreamGit: () => null, exists: () => true });
+    expect(noUpstream.remoteSlugsOf("/a")).toEqual(["acme/web"]);
+  });
+
+  it("gives the renamed name once the rename service is attached; rawSlugOf keeps what the remote says (BTL-261)", () => {
+    const id = new RepoIdentity({ git: () => "git@github.com:o/old.git", upstreamGit: () => "https://github.com/up/old", exists: () => true });
+    expect(id.slugOf("/a")).toBe("o/old");
+    id.useCanonical((s) => ({ "o/old": "o/new", "up/old": "up/new" })[s] ?? s);
+    expect(id.slugOf("/a")).toBe("o/new");
+    expect(id.rawSlugOf("/a")).toBe("o/old");
+    expect(id.remoteSlugsOf("/a")).toEqual(["o/new", "up/new"]);
+  });
+
   it("does not cache a lookup that threw (timeout or error)", () => {
     let calls = 0;
     const id = new RepoIdentity({

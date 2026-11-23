@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prStatus, prsForBranch, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, ghBinary, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -535,5 +535,50 @@ describe.skipIf(process.platform === "win32")("reviewRequestedPrs", () => {
   it("returns null when gh fails", async () => {
     fakeGh("exit 1");
     expect(await reviewRequestedPrs(5000)).toBeNull();
+  });
+});
+
+describe("ghNotFound (BTL-261)", () => {
+  it("tells GitHub's not-found answers from network failures", () => {
+    expect(ghNotFound("GraphQL: Could not resolve to a Repository with the name 'yuchenlin/butler'. (repository)")).toBe(true);
+    expect(ghNotFound("GraphQL: Could not resolve to a PullRequest with the number of 99999. (repository.pullRequest)")).toBe(true);
+    expect(ghNotFound("HTTP 404: Not Found (https://api.github.com/repos/a/b)")).toBe(true);
+    expect(ghNotFound("error connecting to api.github.com\ncheck your internet connection")).toBe(false);
+    expect(ghNotFound("Could not resolve host: api.github.com")).toBe(false);
+    expect(ghNotFound("HTTP 502: Bad Gateway")).toBe(false);
+    expect(ghNotFound("")).toBe(false);
+  });
+
+  it("only a PR GitHub cannot resolve in a visible repo is a strong not-found (a hidden private repo looks like a missing one)", () => {
+    expect(ghPrNotFound("GraphQL: Could not resolve to a PullRequest with the number of 99999. (repository.pullRequest)")).toBe(true);
+    expect(ghPrNotFound("GraphQL: Could not resolve to a Repository with the name 'o/private'. (repository)")).toBe(false);
+    expect(ghPrNotFound("HTTP 404: Not Found (https://api.github.com/repos/a/b)")).toBe(false);
+    expect(ghPrNotFound("error connecting to api.github.com")).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("prRead and repoCurrentSlug (BTL-261)", () => {
+  it("prRead returns not_found when GitHub cannot resolve the PR, null on other failures; prStatus turns both into null", async () => {
+    const dir = fakeGh(`echo "GraphQL: Could not resolve to a PullRequest with the number of 1. (repository.pullRequest)" >&2\nexit 1`);
+    expect(await prRead(dir, "https://github.com/o/a/pull/1", 5000)).toBe("not_found");
+    expect(await prStatus(dir, "https://github.com/o/a/pull/1", 5000)).toBeNull();
+    // 仓库解析不到：可能只是当前账号看不到这个私有仓库，按 gh 失败处理。
+    fakeGh(`echo "GraphQL: Could not resolve to a Repository with the name 'o/gone'. (repository)" >&2\nexit 1`);
+    expect(await prRead(dir, "https://github.com/o/gone/pull/1", 5000)).toBeNull();
+    fakeGh(`echo "error connecting to api.github.com" >&2\nexit 1`);
+    expect(await prRead(dir, "https://github.com/o/a/pull/1", 5000)).toBeNull();
+  });
+
+  it("repoCurrentSlug gives GitHub's current name (lower case), keeps the host of non-github slugs, and not_found for a missing repo", async () => {
+    const dir = fakeGh(`echo "$@ GH_HOST=$GH_HOST" > "$(dirname "$0")/args.txt"\necho '{"nameWithOwner":"Yul761/Shipherd"}'`);
+    expect(await repoCurrentSlug(dir, "yul761/butler", 5000)).toBe("yul761/shipherd");
+    // 主机跟着 slug 走，不看环境里的 GH_HOST。
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("repo view yul761/butler --json nameWithOwner GH_HOST=github.com");
+    expect(await repoCurrentSlug(dir, "ghe.acme.io/team/old", 5000)).toBe("ghe.acme.io/yul761/shipherd");
+    expect(readFileSync(join(dir, "args.txt"), "utf8").trim()).toBe("repo view ghe.acme.io/team/old --json nameWithOwner GH_HOST=ghe.acme.io");
+    fakeGh(`echo "GraphQL: Could not resolve to a Repository with the name 'x/y'. (repository)" >&2\nexit 1`);
+    expect(await repoCurrentSlug(dir, "x/y", 5000)).toBe("not_found");
+    fakeGh(`echo '{"nameWithOwner":""}'`);
+    expect(await repoCurrentSlug(dir, "x/y", 5000)).toBeNull();
   });
 });
