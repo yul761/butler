@@ -44,6 +44,7 @@ const DOC_PAIRS = [
   ["docs/demo-media.md", "docs/demo-media.zh-CN.md"],
   ["docs/how-it-works.md", "docs/how-it-works.zh-CN.md"],
   ["docs/compare.md", "docs/compare.zh-CN.md"],
+  ["docs/upgrading-from-butler.md", "docs/upgrading-from-butler.zh-CN.md"],
 ] as const;
 
 describe("open-source docs (design 12)", () => {
@@ -54,12 +55,11 @@ describe("open-source docs (design 12)", () => {
     }
   });
 
-  it("explains how to open the unsigned Windows build and what not to install alongside, in both READMEs", () => {
+  it("explains how to open the unsigned Windows build, in both READMEs", () => {
     const required = (zh: boolean) => [
       "SmartScreen",
       zh ? "macOS 版用 Developer ID 签名并通过 Apple 公证，双击即可打开" : "The macOS build is signed with Developer ID and notarized by Apple, so it opens with a double-click",
       "~/.shipherd",
-      "StateCore",
       zh ? "docs/configuration.zh-CN.md" : "docs/configuration.md",
       zh ? "CONTRIBUTING.zh-CN.md" : "CONTRIBUTING.md",
     ];
@@ -69,6 +69,19 @@ describe("open-source docs (design 12)", () => {
       // BTL-259: since 4.1.2 the macOS build is signed and notarized, so the READMEs no longer teach getting past Gatekeeper.
       for (const s of ["Gatekeeper", "xattr", "com.apple.quarantine"]) expect(readme, `${doc}: ${s}`).not.toContain(s);
     }
+  });
+
+  it("warns against StateCore's own capture plugin in How it works, not in the READMEs", () => {
+    for (const [doc, s] of [["docs/how-it-works.md", "Do not also install StateCore's own Claude Code capture plugin"], ["docs/how-it-works.zh-CN.md", "不要再另外安装 StateCore 自己的 Claude Code 采集插件"]] as const) {
+      expect(read(doc), doc).toContain(s);
+    }
+    for (const doc of ["README.md", "README.zh-CN.md"]) expect(read(doc), doc).not.toMatch(/capture plugin|采集插件/);
+  });
+
+  it("keeps the Butler upgrade steps in their own doc, linked from both READMEs", () => {
+    expect(read("README.md")).toContain("](docs/upgrading-from-butler.md)");
+    expect(read("README.zh-CN.md")).toContain("](docs/upgrading-from-butler.zh-CN.md)");
+    for (const doc of ["README.md", "README.zh-CN.md"]) expect(read(doc), doc).not.toContain("BUTLER_HOME");
   });
 
   it("says what Shipherd is on the README's first screen, above everything but the quick start", () => {

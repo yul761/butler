@@ -6,15 +6,15 @@
 
 **Download:** [macOS (Apple silicon)](https://github.com/yul761/shipherd/releases/latest) · [Windows](https://github.com/yul761/shipherd/releases/latest) · MIT · [shipherd.statecore.io](https://shipherd.statecore.io) · **English** | [简体中文](README.zh-CN.md)
 
-- **Hand over a body of work, not a prompt.** Describe an epic to its coordinator. It splits the work into tickets and gives each ticket its own session and git worktree. The coordinator works through them in order, and Shipherd checks every merge before it happens: when two branches conflict, the first to merge goes ahead and the other ticket is told to rebase.
+- **Hand over a body of work, not a prompt.** Describe an epic to its coordinator. It splits the work into tickets and gives each ticket its own session and git worktree. The coordinator works through them in order. When one of these sessions is about to merge (`gh pr merge`, `git merge` or a push to the target branch), Shipherd first checks it with git: when two branches conflict, the first to merge goes ahead and the other ticket is told to rebase. Merges you click on GitHub or run in a terminal you opened yourself aren't checked.
 - **Answer in one place.** Whenever a session needs you, a card shows up on the **Your turn** page: a question, a permission prompt, a PR ready to merge. A session that has stopped moving gets a card too, with its likely cause.
 - **Sessions share memory.** A convention one session saves to the epic's memory, such as an API contract, is sent to the epic's other running sessions. A long session is handed off, cleared and picks up from memory where it left off.
 
-**Local-first.** Shipherd has no model or API key of its own: its background work runs through your own `claude`, and it sends no telemetry. Your data leaves your machine only through your own `claude`, `git` and `gh`, plus a notification webhook if you set one up. Even the once-a-day update check goes through `gh` and only tells you; it never downloads or installs anything.
+**Local-first.** Shipherd has no model or API key of its own: its background work runs through your own `claude`, and it sends no telemetry. That background work (handoffs, summaries, stuck checks) counts against your own Claude usage, and **Settings → Advanced → Spend & background** can [cap the spend](docs/configuration.md#spend-caps) per session and per ticket, background calls included. Your data leaves your machine only through your own `claude`, `git` and `gh`, plus a notification webhook if you set one up. Even the once-a-day update check goes through `gh` and only tells you; it never downloads or installs anything.
 
 ## Quick start
 
-1. Install Claude Code and log in once: run `claude` in a terminal. Then download Shipherd, install it and open it (the first launch needs one extra click, see [Install](#install)). The **Welcome to Shipherd** wizard checks Claude Code and installs Shipherd's hooks.
+1. Install Claude Code and log in once: run `claude` in a terminal. Then download Shipherd, install it and open it (on Windows the installer needs one extra click, see [Install](#install)). The **Welcome to Shipherd** wizard checks Claude Code and installs Shipherd's hooks.
 2. On the **All work** page, click **+ New epic**, give it a name and pick its repos.
 3. On the epic's **Control** tab, click **+ Coordinator session** and describe the work. The coordinator creates the tickets and starts a session in each one. You answer on **Your turn** and merge the PRs it says are ready.
 
@@ -51,17 +51,7 @@ If Windows 11 **Smart App Control** is on, it blocks unsigned apps with no way a
 
 To upgrade, download the new version and install it over the old one. Your data in `~/.shipherd` is kept. What changed in each version is in the [release notes](https://github.com/yul761/shipherd/releases).
 
-### Upgrading from Butler
-
-<!-- Butler is Shipherd's former name; this section is for people upgrading from it. -->
-Shipherd used to be called Butler. Quit Butler, install Shipherd, and before you open it for the first time also quit every running `claude` (on first launch Shipherd updates Claude Code's settings and `~/.claude.json`, which a running `claude` may overwrite). Nothing is lost:
-
-- On first launch Shipherd moves `~/.butler` to `~/.shipherd` and leaves a link at the old place (a directory junction on Windows; a note file if no link can be made). The database, memory, logs and settings come along, and the Claude Code transcripts of sessions whose worktrees were under `~/.butler` are moved with them. If you set `BUTLER_HOME`, it is still honoured until you set `SHIPHERD_HOME`.
-- Butler's hooks in `~/.claude/settings.json` are replaced by Shipherd's (your own hooks are kept), and the `/handoff` command is updated. Sessions that were running during the upgrade keep reporting.
-- Files exported from Butler (configuration, backups) import as they are.
-- If Butler is still running, Shipherd says so and quits: the two can't run at the same time.
-- **macOS:** drag Butler out of Applications. macOS treats Shipherd as a new app, so grant it again any permission you gave Butler (notifications and the like). A saved notification webhook address can't be read under the new name; Settings asks you to enter it again.
-- **Windows:** Shipherd installs next to Butler, not over it. The installer detects Butler and offers to uninstall it; if you skip that, uninstall it later in Settings → Apps → Butler → Uninstall. Uninstalling Butler keeps your data.
+Upgrading from Butler, Shipherd's former name? See [Upgrading from Butler](docs/upgrading-from-butler.md).
 
 ## First run
 
@@ -75,8 +65,6 @@ The **Welcome to Shipherd** wizard has two steps:
 Then **All set** and **Get started** take you to the home page. Start with an epic as in [Quick start](#quick-start), or with a single ticket: create a ticket, add a repository to it (Claude works there) and click **Start the first session** on its overview. When the session stops to wait for you, it shows up on **Your turn**.
 
 Two things are set up later in Settings, not in the wizard: your tracker's read-only MCP tools (Jira, Linear, GitLab, …) under **Settings → Advanced → Schedule & status**, and the [permission profile](docs/configuration.md#permission-profile) under **Settings → Advanced → Interruptions & notifications**. You can run the wizard again from **Settings → Basics**.
-
-Don't also install StateCore's own Claude Code capture plugin: Shipherd already gives its sessions StateCore memory, and with both, memory is recorded twice.
 
 Every setting is described in [docs/configuration.md](docs/configuration.md), including how to adapt Shipherd to your tracker and conventions.
 
