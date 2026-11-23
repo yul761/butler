@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { cpus, freemem, homedir, release as osRelease, tmpdir, totalmem, userInfo } from "node:os";
 import { writeFile as writeFileAsync } from "node:fs/promises";
 import { DiagService } from "./diag/diag-service";
+import { RELOAD_WINDOW_MS, RendererHealth } from "./diag/renderer-health";
 import { collectRedactTerms } from "./diag/redact";
 import { FeedbackService, osName } from "./feedback/feedback-service";
 import { Invalidator } from "./diag/invalidator";
@@ -367,6 +368,44 @@ if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
 /** 性能诊断（BTL-242）：bootstrap 里装上。 */
 let diag: DiagService | null = null;
+/**
+ * 渲染进程的健康（BTL-262）：崩了记原因和退出码、限频自动重新加载（5 分钟最多 3 次，超过就停下弹框）；
+ * 卡住和恢复也记下来。这些都进导出诊断（BTL-242）。整个进程一份，换了窗口记录也还在。
+ */
+const rendererHealth = new RendererHealth({
+  now: Date.now,
+  log: (line) => logger(line),
+  reload: () => {
+    if (win && !win.isDestroyed()) win.webContents.reload();
+  },
+  quitting: () => quitState.quitting,
+  gaveUp: (info) => void rendererGaveUp(info),
+});
+
+/** 自动重新加载的次数用完了：界面已经没了，只能用主进程的对话框告诉用户，让用户选重新加载、导出诊断或退出。 */
+async function rendererGaveUp(info: { reason: string; exitCode: number; reloads: number }): Promise<void> {
+  const S = M().rendererGone;
+  for (;;) {
+    let choice: number;
+    try {
+      ({ response: choice } = await dialog.showMessageBox({
+        type: "error", title: S.title, message: S.message(info.reloads, Math.round(RELOAD_WINDOW_MS / 60_000)), detail: S.detail(info.reason, info.exitCode),
+        buttons: [S.reload, S.exportDiag, S.quit], defaultId: 0, cancelId: 0, noLink: true,
+      }));
+    } catch (e) {
+      logger("renderer: could not show the crash dialog", e);
+      return;
+    }
+    if (quitState.quitting) return;
+    if (choice === 1) {
+      await diag?.export().catch((e: unknown) => logger("renderer: diagnostics export failed", e));
+      continue;
+    }
+    if (choice === 2) app.quit();
+    else rendererHealth.userReload();
+    return;
+  }
+}
 /** 渲染进程挂着的终端（BTL-242）：pty:data 只发给它们。 */
 const ptySubs = new PtySubscriptions();
 
@@ -455,7 +494,13 @@ function createWindow(): BrowserWindow {
   w.webContents.on("did-start-navigation", (e) => {
     if (e.isMainFrame && !e.isSameDocument) ptySubs.clear();
   });
-  w.webContents.on("render-process-gone", () => ptySubs.clear());
+  // 崩了：记下原因和退出码，限频自动重新加载（BTL-262）。卡住和恢复也记，Windows 卡顿（BTL-242）要看。
+  w.webContents.on("render-process-gone", (_e, details) => {
+    ptySubs.clear();
+    rendererHealth.gone({ reason: details.reason, exitCode: details.exitCode });
+  });
+  w.on("unresponsive", () => rendererHealth.unresponsive());
+  w.on("responsive", () => rendererHealth.responsive());
   // CSP 拦下了什么就记一笔（任务 6）：界面某处空白时先看这里。
   w.webContents.on("console-message", (e) => {
     if (isCspViolationMessage(e.message)) logger(`${CSP_VIOLATION_LOG_PREFIX} ${e.message}`);
@@ -547,6 +592,7 @@ async function bootstrap(): Promise<void> {
       return r.canceled || !r.filePath ? null : r.filePath;
     },
     writeFile: (path, text) => writeFileAsync(path, text, "utf8"),
+    rendererEvents: () => rendererHealth.events(),
     cpuTimes: () => {
       const t: Record<string, number> = {};
       for (const m of app.getAppMetrics()) t[m.type] = (t[m.type] ?? 0) + (m.cpu.cumulativeCPUUsage ?? 0);

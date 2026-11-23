@@ -44,6 +44,7 @@ describe("buildDiagnostics", () => {
     expect(d.logTail).toHaveLength(1000);
     expect(d.logTail[999]).toBe("l1499");
     expect(d.perf.history[0].sends["state:changed"].n).toBe(1);
-    expect(Object.keys(d).sort()).toEqual(["app", "generatedAt", "kind", "logTail", "mainMemory", "perf", "processes", "schema", "system"]);
+    expect(Object.keys(d).sort()).toEqual(["app", "generatedAt", "kind", "logTail", "mainMemory", "perf", "processes", "renderer", "schema", "system"]);
+    expect(d.renderer).toEqual({ events: [] });
   });
 });

@@ -1,5 +1,5 @@
 // 「导出诊断」（BTL-242）：一份 JSON，有版本、平台、内存、进程指标、最近一小时的 perf 窗口和 main.log 的最后几行。
-// 不含任何 transcript、对话内容。
+// 还有渲染进程最近的崩溃、卡住、恢复记录（BTL-262）。不含任何 transcript、对话内容。
 import { open } from "node:fs/promises";
 import type { PerfWindow } from "./perf-stats";
 
@@ -25,6 +25,8 @@ export interface DiagInput {
   current: PerfWindow;
   history: PerfWindow[];
   logTail: string[];
+  /** 渲染进程的崩溃、卡住、恢复（RendererHealth.events()）。 */
+  rendererEvents?: unknown[];
 }
 
 export interface DiagnosticsFile {
@@ -36,6 +38,7 @@ export interface DiagnosticsFile {
   processes: unknown;
   mainMemory: Record<string, number>;
   perf: { current: PerfWindow; history: PerfWindow[] };
+  renderer: { events: unknown[] };
   logTail: string[];
 }
 
@@ -49,6 +52,7 @@ export function buildDiagnostics(i: DiagInput): DiagnosticsFile {
     processes: i.appMetrics,
     mainMemory: i.mainMemory,
     perf: { current: i.current, history: i.history },
+    renderer: { events: i.rendererEvents ?? [] },
     logTail: i.logTail.slice(-LOG_TAIL_LINES),
   };
 }

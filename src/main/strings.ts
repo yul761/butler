@@ -79,6 +79,15 @@ const ZH = {
     checkUpdates: "检查更新…",
     sendFeedback: "发送反馈…",
   },
+  /** 界面连续崩溃、自动重新加载的次数用完了（BTL-262）：主进程弹的对话框，界面已经没了。 */
+  rendererGone: {
+    title: "Shipherd 界面崩溃",
+    message: (n: number, min: number) => `Shipherd 的界面在 ${min} 分钟里崩溃了 ${n + 1} 次，已停止自动重新加载。`,
+    detail: (reason: string, code: number) => `最后一次的原因：${reason}（退出码 ${code}）。后台的 session 和终端照常在跑。可以再重新加载一次；如果一直崩，请导出诊断附在反馈里。`,
+    reload: "重新加载",
+    exportDiag: "导出诊断…",
+    quit: "退出 Shipherd",
+  },
   /** 更新检查（BTL-253）记进审计的摘要。 */
   update: {
     auditFound: (latest: string, newer: boolean) => (newer ? `GitHub 上的最新版本是 ${latest}，比当前新` : `GitHub 上的最新版本是 ${latest}，已是最新`),
@@ -726,6 +735,14 @@ const EN: MainStrings = {
     help: "Help",
     checkUpdates: "Check for Updates…",
     sendFeedback: "Send Feedback…",
+  },
+  rendererGone: {
+    title: "Shipherd's window crashed",
+    message: (n: number, min: number) => `Shipherd's window crashed ${n + 1} times in ${min} minutes, so it is no longer reloading by itself.`,
+    detail: (reason: string, code: number) => `Last reason: ${reason} (exit code ${code}). Sessions and terminals keep running in the background. You can reload once more; if it keeps crashing, export diagnostics and attach them to your feedback.`,
+    reload: "Reload",
+    exportDiag: "Export Diagnostics…",
+    quit: "Quit Shipherd",
   },
   update: {
     auditFound: (latest: string, newer: boolean) => (newer ? `The latest version on GitHub is ${latest}, newer than this one` : `The latest version on GitHub is ${latest}; this one is up to date`),

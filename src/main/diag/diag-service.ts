@@ -18,12 +18,14 @@ export interface DiagServiceDeps {
   /** 读日志尾巴之前把还攒着的行写进去（BTL-242 起日志是攒一会儿再写的）。 */
   flushLog?: () => Promise<void>;
   /** 导出时要的其他信息（版本、进程指标……）。 */
-  info: () => Omit<Parameters<typeof buildDiagnostics>[0], "now" | "mode" | "current" | "history" | "logTail">;
+  info: () => Omit<Parameters<typeof buildDiagnostics>[0], "now" | "mode" | "current" | "history" | "logTail" | "rendererEvents">;
   /** 弹保存对话框，返回选的路径（取消为 null）。 */
   pickSavePath: (defaultName: string) => Promise<string | null>;
   writeFile: (path: string, text: string) => Promise<void>;
   /** 每类进程累计用过的 CPU 秒数（app.getAppMetrics 的 cumulativeCPUUsage 按 type 加起来）。 */
   cpuTimes?: () => Record<string, number>;
+  /** 渲染进程最近的崩溃、卡住、恢复（BTL-262）。 */
+  rendererEvents?: () => unknown[];
 }
 
 /** 直方图量的是定时器实际的间隔，里面包含采样间隔本身：减掉它，剩下的才是事件循环被占住的时间。 */
@@ -148,6 +150,7 @@ export class DiagService {
       now, mode: this.d.mode,
       current: this.stats?.current() ?? { start: now, end: now, eld: null, sends: {}, invokes: {}, ops: {}, renderer: { longTasks: 0, totalMs: 0, maxMs: 0, xterm: null } },
       history: this.stats?.history() ?? [],
+      rendererEvents: this.d.rendererEvents?.() ?? [],
       logTail: await readLogTail(this.d.logFile),
     });
   }
