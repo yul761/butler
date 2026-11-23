@@ -17,6 +17,7 @@ Thanks for helping. Shipherd is a personal productivity tool that handles other 
 
 ```sh
 pnpm install          # also rebuilds node-pty for Electron
+pnpm exec install-electron   # downloads the Electron binary (Electron 44 has no postinstall; the memory MCP test runs under it)
 pnpm build:hook       # builds build/hook/shipherd-hook (needed to install hooks)
 pnpm dev              # runs Shipherd with hot reload (also builds the StateCore MCP bundle)
 ```
