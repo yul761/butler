@@ -25,6 +25,8 @@ export async function finishLegacyHome(
   log: (msg: string) => void,
 ): Promise<void> {
   if (result.kind === "moved") log(`legacy data dir moved: ${result.marker.from} -> ${result.marker.to} (${result.marker.how}, old location: ${result.leftover})`);
+  if (result.kind === "moved" && result.strayKept) log(`legacy data dir: ${result.marker.to} was in the way and has been set aside; what could not be merged is still in ${result.strayKept}`);
+  if (result.kind === "skipped" && result.reason === "already" && result.repaired) log(`legacy data dir: old location restored (${result.repaired})`);
   if (result.kind === "failed") log(`legacy data dir migration failed, using ${result.legacy} for now and trying again at the next start: ${result.error}`);
   const marker = readMigrationMarker(paths.home);
   if (!marker || marker.to !== paths.home) return;

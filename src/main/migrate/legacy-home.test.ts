@@ -111,11 +111,13 @@ describe("migrateLegacyHome", () => {
     expect(migrateLegacyHome({ env: {}, home: fresh })).toEqual({ kind: "skipped", reason: "no_legacy" });
     expect(existsSync(join(fresh, ".shipherd"))).toBe(false);
 
+    // 两个都有库（用户自己两边都用过）：不动。
     const { home, from, to } = oldHome();
     mkdirSync(to);
+    writeFileSync(join(to, "app.db"), "new");
     expect(migrateLegacyHome({ env: {}, home })).toEqual({ kind: "skipped", reason: "already" });
     expect(readFileSync(join(from, "app.db"), "utf8")).toBe("db");
-    expect(readdirSync(to)).toEqual([]);
+    expect(readFileSync(join(to, "app.db"), "utf8")).toBe("new");
   });
 
   posixOnly("is a no-op on the next launch after a migration", () => {
@@ -184,7 +186,7 @@ describe("migrateLegacyHome when something goes wrong half way", () => {
     const { home, from, to } = oldHome();
     writeFileSync(join(from, MIGRATED_MARKER), JSON.stringify({ from, to, how: "rename", at: 1 }));
     renameSync(from, to);
-    expect(migrateLegacyHome({ env: {}, home })).toEqual({ kind: "skipped", reason: "already" });
+    expect(migrateLegacyHome({ env: {}, home, platform: "darwin" })).toMatchObject({ kind: "skipped", reason: "already" });
     const logs: string[] = [];
     await finishLegacyHome({ kind: "skipped", reason: "already" }, { home: to, claudeProjects: join(home, "p"), claudeJson: join(home, "c.json") }, memDb(), (l) => logs.push(l));
     expect(readFileSync(join(to, "workspaces", "_shipherd", "CLAUDE.md"), "utf8")).toBe("controller");
@@ -208,6 +210,108 @@ describe("migrateLegacyHome when something goes wrong half way", () => {
     } });
     expect(readFileSync(join(other.to, "workspaces", "_shipherd", "mine.md"), "utf8")).toBe("x");
     expect(readFileSync(join(other.to, "workspaces", "_butler", "CLAUDE.md"), "utf8")).toBe("controller");
+  });
+});
+
+describe("migrateLegacyHome with a ~/.shipherd that is only a shell", () => {
+  /** 迁移失败那次启动时，Shipherd 外面的 claude 调 hook 建出来的：只有 inbox 里的事件。 */
+  const shell = (to: string, name = "1-1-a.json") => {
+    mkdirSync(join(to, "inbox", "bad"), { recursive: true });
+    writeFileSync(join(to, "inbox", name), "event");
+  };
+
+  it("still migrates instead of opening an empty database, and merges the hook events into the new folder", () => {
+    const { home, from, to } = oldHome();
+    shell(to);
+    const r = migrateLegacyHome({ env: {}, home, platform: "darwin", now: () => 9 });
+    expect(r).toMatchObject({ kind: "moved", marker: { from, to, how: "rename" } });
+    expect(r).not.toHaveProperty("strayKept");
+    expect(readFileSync(join(to, "app.db"), "utf8")).toBe("db");
+    expect(readFileSync(join(to, "inbox", "1-1-a.json"), "utf8")).toBe("event");
+    expect(readFileSync(join(to, "workspaces", "_shipherd", "CLAUDE.md"), "utf8")).toBe("controller");
+    expect(readdirSync(home).filter((n) => n.includes("stray"))).toEqual([]);
+  });
+
+  it("keeps what cannot be merged (same name already in the new folder) next to it, and says so", () => {
+    const { home, from, to } = oldHome();
+    mkdirSync(join(from, "inbox"));
+    writeFileSync(join(from, "inbox", "1-1-a.json"), "old event");
+    shell(to);
+    const r = migrateLegacyHome({ env: {}, home, platform: "darwin", now: () => 9 });
+    expect(r).toMatchObject({ kind: "moved", strayKept: `${to}.stray-9` });
+    expect(readFileSync(join(to, "inbox", "1-1-a.json"), "utf8")).toBe("old event");
+    expect(readFileSync(join(`${to}.stray-9`, "inbox", "1-1-a.json"), "utf8")).toBe("event");
+  });
+
+  it("puts the shell back when the migration fails, so the next start tries again", () => {
+    const { home, from, to } = oldHome();
+    shell(to);
+    const fail = () => { throw new Error("EXDEV"); };
+    const r = migrateLegacyHome({ env: {}, home, now: () => 9, rename: fail, copy: () => { throw new Error("ENOSPC"); } });
+    expect(r).toMatchObject({ kind: "failed", legacy: from });
+    expect(readFileSync(join(to, "inbox", "1-1-a.json"), "utf8")).toBe("event");
+    expect(readFileSync(join(from, "app.db"), "utf8")).toBe("db");
+    expect(migrateLegacyHome({ env: {}, home, platform: "darwin", now: () => 10 })).toMatchObject({ kind: "moved" });
+    expect(readFileSync(join(to, "app.db"), "utf8")).toBe("db");
+  });
+
+  it("leaves a ~/.shipherd without a database alone when ~/.butler has none either", () => {
+    const home = tempDir("shipherd-legacy-");
+    mkdirSync(join(home, ".butler"));
+    shell(join(home, ".shipherd"));
+    expect(migrateLegacyHome({ env: {}, home })).toEqual({ kind: "skipped", reason: "already" });
+    expect(readdirSync(join(home, ".butler"))).toEqual([]);
+  });
+});
+
+describe("repairing the old location at later starts", () => {
+  /** 已经 rename 迁移过的家目录：标记在新目录里，旧位置交给各个用例去摆。 */
+  const migrated = () => {
+    const { home, from, to } = oldHome();
+    writeFileSync(join(from, MIGRATED_MARKER), JSON.stringify({ from, to, how: "rename", at: 1 }));
+    renameSync(from, to);
+    return { home, from, to };
+  };
+
+  posixOnly("links the old location when it is missing (crashed between the move and the link)", () => {
+    const { home, from, to } = migrated();
+    expect(migrateLegacyHome({ env: {}, home, platform: "darwin" })).toEqual({ kind: "skipped", reason: "already", repaired: "symlink" });
+    expect(readlinkSync(from)).toBe(to);
+    // 再启动一次：链接在了，什么都不做。
+    expect(migrateLegacyHome({ env: {}, home, platform: "darwin" })).toEqual({ kind: "skipped", reason: "already" });
+  });
+
+  posixOnly("moves events an old hook wrote into a recreated ~/.butler over, then links it", () => {
+    const { home, from, to } = migrated();
+    mkdirSync(join(from, "inbox"), { recursive: true });
+    writeFileSync(join(from, "inbox", "2-2-b.json"), "late event");
+    expect(migrateLegacyHome({ env: {}, home, platform: "darwin" })).toMatchObject({ repaired: "symlink" });
+    expect(readFileSync(join(to, "inbox", "2-2-b.json"), "utf8")).toBe("late event");
+    expect(lstatSync(from).isSymbolicLink()).toBe(true);
+  });
+
+  it("does not touch a ~/.butler that still has a database, or one kept on purpose by a copy migration", () => {
+    const { home, from, to } = migrated();
+    mkdirSync(from);
+    writeFileSync(join(from, "app.db"), "someone's");
+    expect(migrateLegacyHome({ env: {}, home })).toEqual({ kind: "skipped", reason: "already" });
+    expect(readFileSync(join(from, "app.db"), "utf8")).toBe("someone's");
+
+    const c = oldHome();
+    migrateLegacyHome({ env: {}, home: c.home, rename: () => { throw new Error("EXDEV"); } });
+    writeFileSync(join(c.from, "inbox-like"), "x");
+    expect(migrateLegacyHome({ env: {}, home: c.home })).toEqual({ kind: "skipped", reason: "already" });
+    expect(readFileSync(join(c.from, "app.db"), "utf8")).toBe("db");
+    void to;
+  });
+
+  it("stays quiet when the link still cannot be made and only the note is there", () => {
+    const { home, from } = migrated();
+    mkdirSync(from);
+    writeFileSync(join(from, LEGACY_NOTE), "note");
+    const fail = () => { throw new Error("EPERM"); };
+    expect(migrateLegacyHome({ env: {}, home, platform: "win32", symlink: fail })).toEqual({ kind: "skipped", reason: "already" });
+    expect(readdirSync(from)).toEqual([LEGACY_NOTE]);
   });
 });
 

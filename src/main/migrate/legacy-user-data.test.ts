@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { legacyUserDataDir } from "./legacy-user-data";
+import { legacyButlerHolder, legacyUserDataDir } from "./legacy-user-data";
 
 describe("legacyUserDataDir", () => {
   it("keeps using the old userData of a Butler install (the Windows safeStorage key lives in its Local State)", () => {
@@ -24,5 +24,20 @@ describe("legacyUserDataDir", () => {
     mkdirSync(join(both, "shipherd"));
     writeFileSync(join(both, "shipherd", "Local State"), "{}");
     expect(legacyUserDataDir(both, existsSync)).toBeNull();
+  });
+});
+
+describe("legacyButlerHolder", () => {
+  const table = (...args: string[]) => new Map(args.map((a, i) => [i + 1, { args: a }]));
+  it("finds the old Butler holding the shared single-instance lock on macOS and Windows", () => {
+    expect(legacyButlerHolder(table("/sbin/launchd", "/Applications/Butler.app/Contents/MacOS/Butler"))).toBe("butler");
+    expect(legacyButlerHolder(table("/Applications/Butler.app/Contents/MacOS/Butler -psn_0_1"))).toBe("butler");
+    expect(legacyButlerHolder(table('"C:\\Users\\u\\AppData\\Local\\Programs\\Butler\\Butler.exe" --type=renderer'))).toBe("butler");
+    expect(legacyButlerHolder(table("Butler.exe"))).toBe("butler");
+  });
+
+  it("is none for Shipherd itself or programs that only mention butler, and unknown without a process table", () => {
+    expect(legacyButlerHolder(table("/Applications/Shipherd.app/Contents/MacOS/Shipherd", "/Applications/Butler.app/Contents/Frameworks/Butler Helper.app/Contents/MacOS/Butler Helper", "vim notes/Butler.md", "C:\\x\\NotButler.exe"))).toBe("none");
+    expect(legacyButlerHolder(null)).toBe("unknown");
   });
 });

@@ -17,3 +17,16 @@ export function legacyUserDataDir(appData: string, exists: (p: string) => boolea
   const legacy = join(appData, LEGACY_USER_DATA_NAME);
   return exists(legacy) ? legacy : null;
 }
+
+/**
+ * 拿不到单实例锁时，占着锁的是不是旧版 Butler：用的是旧 userData 才可能是它（共用一把锁）。
+ * 进程表读不到为 unknown（调用方给一句泛泛的提示）。macOS 只认主进程（Helper 是另外的 .app），Windows 认 Butler.exe。
+ */
+export function legacyButlerHolder(table: ReadonlyMap<number, { args: string }> | null): "butler" | "none" | "unknown" {
+  if (!table) return "unknown";
+  for (const p of table.values()) {
+    if (/[\\/]Butler\.app[\\/]Contents[\\/]MacOS[\\/]Butler(?:\s|$)/.test(p.args)) return "butler";
+    if (/(?:^|[\\/"])Butler\.exe(?:"|\s|$)/i.test(p.args)) return "butler";
+  }
+  return "none";
+}

@@ -86,6 +86,9 @@ const ZH = {
     reasons: { no_gh: "没找到 gh", not_logged_in: "gh 没登录", offline: "连不上 GitHub", rate_limited: "被 GitHub 限流", no_release: "还没有发布过 release", bad_response: "GitHub 的回复看不懂", failed: "gh 出错" } as Record<UpdateFailReason, string>,
   },
   startupFailed: "Shipherd 启动失败",
+  // BTL-260：旧版 Butler 和 Shipherd 共用一把单实例锁（同一个 userData），Butler 开着时 Shipherd 只能退出。Butler 是旧名字。
+  legacyButlerRunning: { title: "旧版 Butler 还开着", detail: "Shipherd 是 Butler 改名后的新版本，两个不能同时运行。请先退出 Butler（托盘或菜单栏图标 → 退出），再打开 Shipherd。" },
+  lockHeldUnknown: { title: "Shipherd 已经在运行", detail: "如果开着的是旧版 Butler（Shipherd 改名前的名字），请先退出它，再打开 Shipherd。" },
   claudeMissingCheck: "找不到 claude 命令，请先在“环境检查”里确认 claude 路径",
   claudeMissing: "找不到 claude 命令",
   costPausedHeadless: "这个 ticket 的花费到了上限，后台调用暂停了；在首页「轮到你」的花费提醒上点「继续并提高上限」恢复",
@@ -730,6 +733,8 @@ const EN: MainStrings = {
     reasons: { no_gh: "gh not found", not_logged_in: "gh not logged in", offline: "couldn't reach GitHub", rate_limited: "rate-limited by GitHub", no_release: "no release yet", bad_response: "unreadable reply from GitHub", failed: "gh failed" } as Record<UpdateFailReason, string>,
   },
   startupFailed: "Shipherd could not start",
+  legacyButlerRunning: { title: "The old Butler is still running", detail: "Shipherd is the renamed Butler, and the two cannot run at the same time. Quit Butler (its tray or menu bar icon → Quit), then open Shipherd again." },
+  lockHeldUnknown: { title: "Shipherd is already running", detail: "If what is running is the old Butler (Shipherd's former name), quit it first, then open Shipherd again." },
   claudeMissingCheck: "The claude command was not found. Check the claude path under “Environment check” first",
   claudeMissing: "The claude command was not found",
   costPausedHeadless: "This ticket reached its spend cap, so background calls are paused. Use “Continue and raise the cap” on the spend notice on the Your turn home page to resume",

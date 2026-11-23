@@ -1,8 +1,9 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "./test-utils";
 import { ensureDirs, homeFromEnv, refreshTailPath, resolvePaths } from "./paths";
+import { inboxDir, writeEnvelope } from "../../hook/shipherd-hook";
 
 describe("resolvePaths", () => {
   it("defaults to ~/.shipherd and ~/.claude", () => {
@@ -61,6 +62,23 @@ describe("resolvePaths", () => {
     expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: "/data/new" }, "darwin", "/home/u").home).toBe("/data/new");
     expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: " " }, "darwin", "/home/u").home).toBe("/data/old");
     expect(homeFromEnv({ BUTLER_HOME: "~/bh" }, "/home/u")).toBe(join("/home/u", "bh"));
+  });
+
+  // BTL-260：还没迁移（或者这次迁移失败、Shipherd 用着旧目录）时，Shipherd 外面起的 claude 调 hook 没有 SHIPHERD_HOME：
+  // 写到 ~/.butler，不建出一个只有 inbox 的 ~/.shipherd（下次启动会被当成已经迁移过，打开空库）。
+  it("uses ~/.butler while ~/.shipherd does not exist yet, so a hook outside Shipherd does not create a shell ~/.shipherd", () => {
+    const has = (...dirs: string[]) => (p: string) => dirs.includes(p);
+    const u = (n: string) => join("/home/u", n);
+    expect(homeFromEnv({}, "/home/u", has(u(".butler")))).toBe(u(".butler"));
+    expect(homeFromEnv({}, "/home/u", has(u(".butler"), u(".shipherd")))).toBe(u(".shipherd"));
+    expect(homeFromEnv({}, "/home/u", has())).toBe(u(".shipherd"));
+    expect(homeFromEnv({ SHIPHERD_HOME: "/x" }, "/home/u", has(u(".butler")))).toBe("/x");
+    const real = tempDir("shipherd-hook-home-");
+    mkdirSync(join(real, ".butler"));
+    expect(inboxDir({}, real)).toBe(join(real, ".butler", "inbox"));
+    writeEnvelope(inboxDir({}, real), { v: 1, receivedAt: 1, ticket: null, shipherdSession: null, payload: {} });
+    expect(existsSync(join(real, ".shipherd"))).toBe(false);
+    expect(readdirSync(join(real, ".butler", "inbox"))).toHaveLength(1);
     expect(homeFromEnv({}, "/home/u")).toBe(join("/home/u", ".shipherd"));
   });
 

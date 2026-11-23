@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -60,9 +61,16 @@ export function dirFromEnv(v: string | undefined, home: string = homedir()): str
 /**
  * 数据目录：SHIPHERD_HOME > BUTLER_HOME（改名前的变量，TODO(5.0) 删）> ~/.shipherd。
  * Shipherd 和 hook（hook/*.ts）都用它，两边算出来的目录才一致。
+ * BTL-260：~/.shipherd 还不存在而 ~/.butler 在（还没迁移，或者这次迁移失败、Shipherd 正用着旧目录）时用 ~/.butler：
+ * Shipherd 外面起的 claude 调 hook 时没有 SHIPHERD_HOME，不能替它建出一个只有 inbox 的 ~/.shipherd。
+ * 迁移（migrateLegacyHome）不经过这里，按家目录直接找两个目录。TODO(5.0)：和迁移一起删。
  */
-export function homeFromEnv(env: Record<string, string | undefined>, home: string = homedir()): string {
-  return dirFromEnv(envValue(env, "HOME"), home) ?? join(home, ".shipherd");
+export function homeFromEnv(env: Record<string, string | undefined>, home: string = homedir(), exists: (p: string) => boolean = existsSync): string {
+  const fromEnv = dirFromEnv(envValue(env, "HOME"), home);
+  if (fromEnv) return fromEnv;
+  const current = join(home, ".shipherd");
+  const legacy = join(home, ".butler");
+  return !exists(current) && exists(legacy) ? legacy : current;
 }
 
 export function resolvePaths(

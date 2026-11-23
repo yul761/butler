@@ -1,6 +1,6 @@
 // BTL-260：产品从 Butler 改名为 Shipherd，默认数据目录从 ~/.butler 改成 ~/.shipherd。这个文件把老用户的数据搬过去。
 // 这里的 butler 都是旧名字，必须认得才能迁移。TODO(5.0)：保留一个大版本后整个文件可以删掉。
-import { closeSync, cpSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { envValue } from "../../shared/legacy-env";
@@ -25,8 +25,11 @@ export interface MigrationMarker {
 }
 
 export type LegacyHomeResult =
-  | { kind: "skipped"; reason: "env" | "no_legacy" | "already" }
-  | { kind: "moved"; marker: MigrationMarker; leftover: "symlink" | "note" | "none" }
+  | { kind: "skipped"; reason: "env" | "no_legacy" }
+  /** repaired：上次搬完没留下链接（崩在中间，或旧 hook 又建出了 ~/.butler），这次补上了。 */
+  | { kind: "skipped"; reason: "already"; repaired?: "symlink" | "note" }
+  /** strayKept：~/.shipherd 原来是别的东西建出来的空壳，挪开后有合并不进去的（新目录里有同名的），留在这里。 */
+  | { kind: "moved"; marker: MigrationMarker; leftover: "symlink" | "note" | "none"; strayKept?: string }
   /** 没搬成，数据原样在 legacy：调用方这次就用 legacy 启动（SHIPHERD_HOME 指过去），下次启动再试。 */
   | { kind: "failed"; error: string; legacy: string };
 
@@ -79,7 +82,11 @@ const noteText = (to: string): string =>
 
 /**
  * 启动时（拿到单实例锁之后、打开数据库之前）调用。只有这几种情况才搬：
- * SHIPHERD_HOME、BUTLER_HOME 都没设；~/.shipherd 不存在；~/.butler 存在。
+ * SHIPHERD_HOME、BUTLER_HOME 都没设；~/.butler 存在；~/.shipherd 不存在，或者只是个空壳（没有库也没有迁移标记，
+ * 比如迁移失败那次启动时 Shipherd 外面的 claude 调 hook 建出来的 inbox）而 ~/.butler 里有库。
+ * 空壳先挪开再搬，搬完把里面零散的东西（hook 事件等）合并进新目录，不覆盖同名的。不能只看 ~/.shipherd 在不在：
+ * 那样会跳过迁移、打开一个空库，用户看到的是 session、ticket 全没了。
+ * ~/.shipherd 已经是迁移过的（有标记）：看旧位置的链接还在不在，不在就补上（repairLeftover）。
  * - 迁移标记先写进旧目录，再整个搬：标记和数据一起到新目录，搬到一半崩了也不会有「数据到了、标记没到」。
  * - 同一个卷上直接 rename；失败（跨卷、文件被占用）就复制到临时目录再改名成 ~/.shipherd，旧目录保留、里面留说明文件。
  * - rename 成功后在旧位置留一个指向新目录的链接（macOS / Linux 是符号链接，Windows 是不要权限的目录联接 junction）：
@@ -94,9 +101,110 @@ export function migrateLegacyHome(d: LegacyHomeDeps): LegacyHomeResult {
   if (envValue(d.env, "HOME")?.trim()) return { kind: "skipped", reason: "env" };
   const from = join(home, LEGACY_HOME_NAME);
   const to = join(home, ".shipherd");
-  if (exists(to)) return { kind: "skipped", reason: "already" };
-  if (!isDir(from) && !isLink(from)) return { kind: "skipped", reason: "no_legacy" };
   const link = d.symlink ?? ((target: string, path: string, type: "dir" | "junction") => symlinkSync(target, path, type));
+  let stray: string | null = null;
+  if (exists(to)) {
+    if (isMigratedHome(to) || !existsSync(join(from, DB_FILE))) {
+      const repaired = repairLeftover(to, platform, link);
+      return repaired ? { kind: "skipped", reason: "already", repaired } : { kind: "skipped", reason: "already" };
+    }
+    stray = `${to}.stray-${now()}`;
+    try {
+      renameSync(to, stray);
+    } catch (e) {
+      return { kind: "failed", error: `${to} is in the way: ${e instanceof Error ? e.message : String(e)}`, legacy: from };
+    }
+  }
+  const result = migrateInto(d, from, to, platform, now, link);
+  if (!stray) return result;
+  if (result.kind === "failed") {
+    // 放回原处：下次启动还是「空壳 + 旧目录有库」，再试一次。
+    try {
+      if (!exists(to)) renameSync(stray, to);
+    } catch {
+      // 放不回去也不要紧：这次用旧目录启动，空壳里只有 hook 事件。
+    }
+    return result;
+  }
+  if (result.kind !== "moved") return result;
+  mergeInto(stray, to);
+  if (readdirSync(stray).length === 0) rmQuiet(stray);
+  return exists(stray) ? { ...result, strayKept: stray } : result;
+}
+
+/** 数据库文件名（paths.db）。 */
+const DB_FILE = "app.db";
+
+/** 真正的数据目录：有迁移标记，或者有库。只有 inbox 之类的不算。 */
+function isMigratedHome(dir: string): boolean {
+  return existsSync(join(dir, MIGRATED_MARKER)) || existsSync(join(dir, DB_FILE));
+}
+
+/**
+ * src 里的东西挪进 dst：dst 没有的直接 rename 过去；两边都是目录的往下合并；同名文件留在 src，不覆盖。
+ * skip 里的名字（只看第一层）不动。返回挪过去的条目数。
+ */
+function mergeInto(src: string, dst: string, skip: readonly string[] = []): number {
+  let n = 0;
+  for (const name of readdirSync(src)) {
+    if (skip.includes(name)) continue;
+    const a = join(src, name);
+    const b = join(dst, name);
+    try {
+      if (!exists(b)) {
+        renameSync(a, b);
+        n++;
+      } else if (isDir(a) && isDir(b)) {
+        n += mergeInto(a, b);
+        if (readdirSync(a).length === 0) rmSync(a, { recursive: true });
+      }
+    } catch {
+      // 挪不动的留在原处。
+    }
+  }
+  return n;
+}
+
+/**
+ * 迁移（rename）过的数据目录，旧位置应该是指向它的链接。没有链接时补上：
+ * - 旧位置不存在（rename 之后、建链接之前崩了）：直接建；
+ * - 旧位置是个目录但里面没有库（旧 hook 又建出了 ~/.butler/inbox，或者上次建不了链接留的说明文件）：
+ *   把里面的东西合并进新目录，删掉空目录再建；还有合并不进去的就不动。
+ * 复制（copy）搬的、本来就是链接搬的不管：旧目录是有意留着的。返回补了什么，没补为 null。
+ */
+export function repairLeftover(to: string, platform: NodeJS.Platform, link: (target: string, path: string, type: "dir" | "junction") => void): "symlink" | "note" | null {
+  const m = readMigrationMarker(to);
+  if (!m || m.to !== to || m.how !== "rename") return null;
+  const from = m.from;
+  if (isLink(from)) return null;
+  let noteOnly = false;
+  try {
+    if (exists(from)) {
+      if (!isDir(from) || existsSync(join(from, DB_FILE))) return null;
+      noteOnly = readdirSync(from).every((n) => n === LEGACY_NOTE);
+      mergeInto(from, to, [LEGACY_NOTE]);
+      if (readdirSync(from).some((n) => n !== LEGACY_NOTE)) return null;
+      rmSync(from, { recursive: true });
+    }
+    try {
+      link(to, from, platform === "win32" ? "junction" : "dir");
+      return "symlink";
+    } catch {
+      mkdirSync(from, { recursive: true });
+      writeFileSync(join(from, LEGACY_NOTE), noteText(to));
+      // 本来就只剩说明文件、这次还是建不了链接：什么都没变。
+      return noteOnly ? null : "note";
+    }
+  } catch {
+    return null;
+  }
+}
+
+function migrateInto(
+  d: LegacyHomeDeps, from: string, to: string, platform: NodeJS.Platform, now: () => number,
+  link: (target: string, path: string, type: "dir" | "junction") => void,
+): LegacyHomeResult {
+  if (!isDir(from) && !isLink(from)) return { kind: "skipped", reason: "no_legacy" };
   let markerAt: string | null = null;
   let tmp: string | null = null;
   try {

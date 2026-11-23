@@ -147,7 +147,7 @@ import type { IntakePolicySetResult } from "../shared/intake";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
 import { finishLegacyHome } from "./migrate/legacy-finish";
 import { migrateLegacyHome } from "./migrate/legacy-home";
-import { legacyUserDataDir } from "./migrate/legacy-user-data";
+import { legacyButlerHolder, legacyUserDataDir } from "./migrate/legacy-user-data";
 import { envValue } from "../shared/legacy-env";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
@@ -351,6 +351,8 @@ let shutdownSessions: () => void = () => undefined;
 /** 所有 headless claude 运行（handoff、刷新、MCP 探测）共用：退出时一起取消，调度器也不再发起新任务。 */
 const headlessAbort = new AbortController();
 
+/** BTL-260：用的是改名前的 userData，单实例锁和旧版 Butler 共用。 */
+let usingLegacyUserData = false;
 // 隔离运行（SHIPHERD_HOME 指向别的目录）时也换一个 Electron 用户目录，否则单实例锁会和正在用的 Shipherd 冲突。
 // 用 resolvePaths 解析：相对路径会变成绝对路径（setPath 只接受绝对路径）。
 if (envValue(process.env, "HOME")?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
@@ -358,6 +360,7 @@ else {
   // BTL-260：改名前的老用户接着用旧的 userData（<appData>/butler），见 legacyUserDataDir。必须在 ready、单实例锁之前。
   const legacy = legacyUserDataDir(app.getPath("appData"), existsSync);
   if (legacy) app.setPath("userData", legacy);
+  usingLegacyUserData = legacy !== null;
 }
 // Windows 的通知要有 AppUserModelID，否则点击通知没有反应（计划 2 Task 13）。
 if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
@@ -3873,7 +3876,20 @@ if (process.argv.includes("--smoke")) {
     .then((code) => app.exit(code))
     .catch(() => app.exit(1));
 } else if (!app.requestSingleInstanceLock()) {
-  app.quit();
+  // 平常是第二次打开 Shipherd：已经开着的那个会把窗口拿到前面，这里悄悄退出。
+  // BTL-260：老用户的锁和旧版 Butler 共用，Butler 开着时这里也会退出，看上去像「打不开」：先说一声再退出。
+  if (!usingLegacyUserData) app.quit();
+  else
+    void readProcTable(process.platform)
+      .then((t) => legacyButlerHolder(t))
+      .catch(() => "unknown" as const)
+      .then(async (holder) => {
+        if (holder === "none") return;
+        await app.whenReady();
+        const m = holder === "butler" ? M().legacyButlerRunning : M().lockHeldUnknown;
+        dialog.showMessageBoxSync({ type: "info", message: m.title, detail: m.detail, buttons: ["OK"] });
+      })
+      .finally(() => app.quit());
 } else {
   app.on("second-instance", showWindow);
   app.on("activate", showWindow);
