@@ -234,6 +234,15 @@ describe("CI workflows (design 1.3, 11)", () => {
     }
   });
 
+  it("tells contributors to download the Electron binary right after pnpm install, as CI does (BTL-262)", () => {
+    for (const file of ["CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md"]) {
+      const setup = read(file).split("\n").map((l) => l.split("#")[0].trim()).filter((l) => l.startsWith("pnpm "));
+      const install = setup.indexOf("pnpm install");
+      expect(install, file).toBeGreaterThan(-1);
+      expect(setup[install + 1], file).toBe("pnpm exec install-electron");
+    }
+  });
+
   it("only cancels superseded pull request runs", () => {
     expect(ci.concurrency?.["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' }}");
   });
@@ -271,6 +280,31 @@ describe("CI workflows (design 1.3, 11)", () => {
   it("keeps GitHub Actions updated weekly", () => {
     const d = parse(read(".github/dependabot.yml")) as { updates: { "package-ecosystem": string; schedule: { interval: string } }[] };
     expect(d.updates).toContainEqual(expect.objectContaining({ "package-ecosystem": "github-actions", schedule: { interval: "weekly" } }));
+  });
+
+  it("keeps npm dependencies updated weekly, minor and patch in one group (BTL-262)", () => {
+    const d = parse(read(".github/dependabot.yml")) as { updates: Record<string, unknown>[] };
+    const npm = d.updates.find((u) => u["package-ecosystem"] === "npm");
+    expect(npm).toMatchObject({ directory: "/", schedule: { interval: "weekly" } });
+    const groups = Object.values((npm?.groups ?? {}) as Record<string, { "update-types"?: string[] }>);
+    expect(groups.map((g) => [...(g["update-types"] ?? [])].sort())).toContainEqual(["minor", "patch"]);
+  });
+
+  it("overrides the vulnerable packages statecore-mcp pulls in to fixed versions (BTL-262: pnpm audit --prod had 3 high)", () => {
+    const pkg = JSON.parse(read("package.json")) as { dependencies: Record<string, string>; pnpm: { overrides?: Record<string, string> } };
+    const o = pkg.pnpm.overrides ?? {};
+    const atLeast = (v: string | undefined, min: string) => {
+      const n = (s: string) => s.replace(/^[^\d]*/, "").split(".").map(Number);
+      const [a, b] = [n(v ?? "0"), n(min)];
+      for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+      return true;
+    };
+    // GHSA advisories: the patched versions pnpm audit named.
+    for (const [name, min] of [["hono", "4.13.16"], ["@hono/node-server", "2.1.6"], ["body-parser", "2.4.0"], ["zod", "4.6.6"]] as const) {
+      expect(atLeast(o[name], min), `${name} ${o[name]}`).toBe(true);
+    }
+    // One zod for Shipherd and for statecore-mcp / the MCP SDK (memory-mcp/hub-contract.test.ts checks the tools still match).
+    expect(pkg.dependencies.zod).toBe(o.zod);
   });
 
   it("keeps LF line endings on Windows checkouts", () => {
