@@ -456,23 +456,26 @@ describe("MergeGate: deadline", () => {
 
   it("counts the time spent in the queue toward the deadline", async () => {
     let clock = 1000;
-    // 每次裁决的第一次 merge-tree 在假时钟上用掉 30 秒。
+    // 每次裁决的第一次 merge-tree 在假时钟上用掉一步（STEP）。
+    const STEP = 30 * 60_000;
     let first = true;
-    const step = { git: { mergeConflicts: async (r: string, a: string, b: string) => { if (first) clock += 30_000; first = false; return git.mergeConflicts(r, a, b); } } };
-    // 真实计时器的时长是 deadline - ageMs，下面两种排队时间都给它留了至少 20 秒，
-    // 慢的 Windows runner 上真实的 git 也跑不到，结果只由假时钟决定。
-    const deadlineMs = TEST_DEADLINE_MS;
+    const step = { git: { mergeConflicts: async (r: string, a: string, b: string) => { if (first) clock += STEP; first = false; return git.mergeConflicts(r, a, b); } } };
+    // 真实计时器的时长是 deadline - ageMs。"晚了"那次必须让排队时间加一步超过期限，所以它的真实计时器一定短于一步。
+    // 一步只有 30 秒时，两次的真实计时器是 20 秒和 40 秒：真实的 git 在负载高的 Windows runner 上慢到 20 秒，计时器就先
+    // 触发、断言失败；"在期限内"那次的 40 秒又长过 Windows 上 30 秒的用例上限。一步放到 30 分钟，真实计时器至少 15 分钟，
+    // 结果只由假时钟决定，用例只等真实的 git（计时器 unref，结束时清掉）。
+    const deadlineMs = 4 * STEP;
     const timedOut = (t: ReturnType<typeof setup>) => t.logs.some((l) => l.includes("took too long"));
-    // 排队 deadline-20s + 一步 30s > deadline：算晚了，放行、不记。
+    // 排队 deadline - 半步 + 一步 > deadline：算晚了，放行、不记。
     const late = setup({ now: () => clock, deadlineMs, ...step });
-    expect(await late.merge("dms-3", {}, { ageMs: deadlineMs - 20_000 })).toEqual({ v: 1, decision: "allow" });
+    expect(await late.merge("dms-3", {}, { ageMs: deadlineMs - STEP / 2 })).toEqual({ v: 1, decision: "allow" });
     expect(rows(late)).toEqual(none);
     expect(late.logs.some((l) => l.includes("decided after the deadline"))).toBe(true);
     expect(timedOut(late)).toBe(false);
-    // 排队 deadline-40s + 一步 30s 还在期限内：照常占位。
+    // 排队 deadline - 两步 + 一步还在期限内：照常占位。
     const inTime = setup({ now: () => clock, deadlineMs, ...step });
     first = true;
-    await inTime.merge("dms-3", {}, { ageMs: deadlineMs - 40_000 });
+    await inTime.merge("dms-3", {}, { ageMs: deadlineMs - 2 * STEP });
     expect(rows(inTime).holds).toEqual({ n: 1 });
     expect(timedOut(inTime)).toBe(false);
   });
