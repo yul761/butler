@@ -150,3 +150,22 @@ describe("loopback stays off the proxy (WS-M H)", () => {
     expect(all.NO_PROXY).toBe("*");
   });
 });
+
+// BTL-260：外层环境里漏进来的旧 BUTLER_TICKET 等（比如从旧 Butler 的终端里启动 Shipherd）不能传给子 claude：
+// hook 在新名字没设时会退回旧名字，会被当成这个 session 的 ticket。BUTLER_HOME 换成 SHIPHERD_HOME 传下去。
+describe("pre-rename variables in the parent environment", () => {
+  it("drops BUTLER_TICKET, BUTLER_SESSION and BUTLER_HOME, keeps other BUTLER_ variables, and passes the data folder as SHIPHERD_HOME", () => {
+    const base = { BUTLER_TICKET: "OLD-1", BUTLER_SESSION: "old", BUTLER_HOME: "/data/old", BUTLER_COLOR: "blue" };
+    const e = sessionEnv(base, { pathValue: "", sessionId: "s" });
+    expect(e.BUTLER_TICKET).toBeUndefined();
+    expect(e.BUTLER_SESSION).toBeUndefined();
+    expect(e.BUTLER_HOME).toBeUndefined();
+    expect(e.SHIPHERD_TICKET).toBeUndefined();
+    expect(e.SHIPHERD_SESSION).toBe("s");
+    expect(e.SHIPHERD_HOME).toBe(resolve("/data/old"));
+    expect(e.BUTLER_COLOR).toBe("blue");
+    const h = headlessEnv(base, { pathValue: "", runId: "r" });
+    expect(h.BUTLER_TICKET).toBeUndefined();
+    expect(h.SHIPHERD_HOME).toBe(resolve("/data/old"));
+  });
+});

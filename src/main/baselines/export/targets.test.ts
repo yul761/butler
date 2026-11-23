@@ -178,6 +178,13 @@ describe("run_command", () => {
     expect(file(p, ".husky/pre-commit")).toBeDefined();
   });
 
+  // BTL-260：改名前写下的命令用 $BUTLER_CHECK_FILE，也要走逐文件脚本（脚本里两个名字都设）。
+  it("treats a command using the pre-rename BUTLER_CHECK_FILE like one using SHIPHERD_CHECK_FILE", () => {
+    const p = plan(rc('ruff check "$BUTLER_CHECK_FILE"'), { "package.json": "{}" }, baseline(), ["pre-commit"]);
+    expect(p.target).toBe("husky");
+    expect(file(p, "scripts/shipherd-checks/no-console.sh")).toMatchObject({ exec: true });
+  });
+
   it("push-stage commands go into husky pre-push, else pre-commit's pre-push stage", () => {
     expect(file(plan(rc("make test", "push"), {}, baseline(), ["pre-commit"]), ".husky/pre-push")!.content).toBe("#!/usr/bin/env sh\nmake test\n");
     const p = plan(rc("cd api && pytest", "push"), { ".pre-commit-config.yaml": "repos:\n" });

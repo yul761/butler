@@ -81,3 +81,5 @@ nsis:
   deleteAppDataOnUninstall: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  # BTL-260：安装时检测改名前的旧 Butler（appId 不同，Windows 当成另一个程序），提示先卸载。
+  include: build-resources/installer.nsh

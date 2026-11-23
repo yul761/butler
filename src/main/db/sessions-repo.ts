@@ -36,12 +36,20 @@ interface SessionRow {
   user_ended_at?: number | null;
 }
 
+/**
+ * sessions.origin 在库里的旧值（BTL-260 改名前的产品名）。CHECK (origin IN ('butler','discovered')) 要改只能重建 sessions 表，
+ * 风险大，所以库里继续存这个旧值，读写时和 SessionOrigin 的 "shipherd" 互换。SQL 里比较 origin 也要用它。
+ */
+export const LEGACY_ORIGIN = "butler";
+const originToDb = (o: SessionOrigin): string => (o === "shipherd" ? LEGACY_ORIGIN : o);
+const originFromDb = (v: string): SessionOrigin => (v === LEGACY_ORIGIN || v === "shipherd" ? "shipherd" : "discovered");
+
 function toSession(r: SessionRow): Session {
   return {
     id: r.id,
     ticketKey: r.ticket_key,
     cwd: r.cwd,
-    origin: r.origin as SessionOrigin,
+    origin: originFromDb(r.origin),
     gitBranch: r.git_branch,
     firstPrompt: r.first_prompt,
     lastActivityAt: r.last_activity_at,
@@ -118,7 +126,7 @@ export class SessionsRepo {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        s.id, s.ticketKey, s.cwd, s.origin, s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
+        s.id, s.ticketKey, s.cwd, originToDb(s.origin), s.gitBranch ?? null, s.firstPrompt ?? null, s.lastActivityAt ?? null, s.createdAt,
         s.repoId ?? null, s.coordinator ? 1 : 0, s.spawnedBy ?? null, s.featureId ?? null, s.fixesSession ?? null, s.model ?? null, s.shipherd ? 1 : 0,
         s.lessonRunId ?? null,
       );
@@ -246,7 +254,7 @@ export class SessionsRepo {
   /** Shipherd 新建、还没有第一句话、也没被 /clear 替换的 session：handleExit 和启动时清理空 session 的候选。 */
   listEmptyShipherd(): Session[] {
     const rows = this.db
-      .prepare(`SELECT * FROM sessions WHERE origin = 'shipherd' AND (first_prompt IS NULL OR first_prompt = '') AND replaced_by IS NULL ORDER BY id`)
+      .prepare(`SELECT * FROM sessions WHERE origin = '${LEGACY_ORIGIN}' AND (first_prompt IS NULL OR first_prompt = '') AND replaced_by IS NULL ORDER BY id`)
       .all() as unknown as SessionRow[];
     return rows.map(toSession);
   }
@@ -396,7 +404,7 @@ export class SessionsRepo {
       .prepare(
         `SELECT * FROM sessions
          WHERE replaced_by IS NULL AND lesson_run_id IS NULL AND epic_id IS NULL
-           AND (origin = 'shipherd' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR shipherd = 1)
+           AND (origin = '${LEGACY_ORIGIN}' OR ticket_key IS NOT NULL OR feature_id IS NOT NULL OR shipherd = 1)
            AND ${RECENCY} >= ?
          ORDER BY id`,
       )
@@ -439,12 +447,12 @@ export class SessionsRepo {
 
   /** 最早的 Shipherd session（复盘分析的除外）的创建时间；没有为 null。度量的基线截止点（ws-h）。 */
   firstShipherdCreatedAt(): number | null {
-    const r = this.db.prepare(`SELECT MIN(created_at) AS at FROM sessions WHERE origin = 'shipherd' AND lesson_run_id IS NULL`).get() as { at: number | null } | undefined;
+    const r = this.db.prepare(`SELECT MIN(created_at) AS at FROM sessions WHERE origin = '${LEGACY_ORIGIN}' AND lesson_run_id IS NULL`).get() as { at: number | null } | undefined;
     return r?.at ?? null;
   }
 
   setOrigin(id: string, origin: SessionOrigin): void {
-    this.db.prepare(`UPDATE sessions SET origin = ? WHERE id = ?`).run(origin, id);
+    this.db.prepare(`UPDATE sessions SET origin = ? WHERE id = ?`).run(originToDb(origin), id);
   }
 
   /** 删除一行；指向它的 replaced_by 一并清掉，免得前一个 session 被当成“已替换”而从列表里消失。 */

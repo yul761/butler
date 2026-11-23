@@ -238,6 +238,17 @@ describe.runIf(HAS_SH)("run_command runner", () => {
   });
 });
 
+// BTL-260：改名前写下的检查命令用 $BUTLER_CHECK_FILE，导出的脚本两个名字都设。
+describe.runIf(HAS_SH)("run_command runner with the pre-rename variable", () => {
+  it("sets BUTLER_CHECK_FILE to the same file", () => {
+    const root = repo();
+    const data: ExportedCheckData = { ...checkData(check("run_command", {}, ["src/**/*.ts"], ["src/main/**"]), ""), name: "runner" };
+    write(root, "scripts/r.sh", runnerScript(data, 'test "$BUTLER_CHECK_FILE" = "$SHIPHERD_CHECK_FILE" && grep -q console "$BUTLER_CHECK_FILE" && echo "bad $BUTLER_CHECK_FILE" && exit 1; exit 0', "scripts/r.sh"));
+    const r = run(root, "sh", ["scripts/r.sh", "--all"]);
+    expect(r.stdout.split("\n").filter(Boolean).sort()).toEqual(["bad src/a.ts", "bad src/b c/ü.ts"]);
+  });
+});
+
 describe("regex translation", () => {
   it("translates named groups and back references for Python", () => {
     expect(jsRegexToPython("(?<n>a)\\k<n>\\/x")).toEqual({ ok: true, source: "(?P<n>a)(?P=n)/x" });

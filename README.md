@@ -51,6 +51,17 @@ If Windows 11 **Smart App Control** is on, it blocks unsigned apps with no way a
 
 To upgrade, download the new version and install it over the old one. Your data in `~/.shipherd` is kept. What changed in each version is in the [release notes](https://github.com/yul761/shipherd/releases).
 
+### Upgrading from Butler
+
+<!-- Butler is Shipherd's former name; this section is for people upgrading from it. -->
+Shipherd used to be called Butler. Quit Butler, install Shipherd and open it; nothing is lost:
+
+- On first launch Shipherd moves `~/.butler` to `~/.shipherd` and leaves a link (macOS) or a note file (Windows) at the old place. The database, memory, logs and settings come along, and the Claude Code transcripts of sessions whose worktrees were under `~/.butler` are moved with them. If you set `BUTLER_HOME`, it is still honoured until you set `SHIPHERD_HOME`.
+- Butler's hooks in `~/.claude/settings.json` are replaced by Shipherd's (your own hooks are kept), and the `/handoff` command is updated. Sessions that were running during the upgrade keep reporting.
+- Files exported from Butler (configuration, backups) import as they are.
+- **macOS:** drag Butler out of Applications. macOS treats Shipherd as a new app, so grant it again any permission you gave Butler (notifications and the like). A saved notification webhook address can't be read under the new name; Settings asks you to enter it again.
+- **Windows:** Shipherd installs next to Butler, not over it. The installer detects Butler and offers to uninstall it; if you skip that, uninstall it later in Settings → Apps → Butler → Uninstall. Uninstalling Butler keeps your data.
+
 ## First run
 
 Before you open Shipherd, install Claude Code and log in once: run `claude` in a terminal and follow the login steps. The GitHub CLI (`gh`) is optional; see [Requirements](#requirements).
@@ -72,7 +83,7 @@ Every setting is described in [docs/configuration.md](docs/configuration.md), in
 
 1. **Settings → Health check → Uninstall** removes Shipherd's hooks and `/handoff` command from Claude Code.
 2. Delete the app: drag it out of Applications on macOS, or use Settings → Apps → Shipherd → Uninstall on Windows.
-3. To remove your data too, delete `~/.shipherd` and Electron's profile folder (`~/Library/Application Support/shipherd` on macOS, `%APPDATA%\shipherd` on Windows). On macOS, if you saved a webhook address, also delete the "shipherd Safe Storage" item in Keychain Access.
+3. To remove your data too, delete `~/.shipherd` and Electron's profile folder (`~/Library/Application Support/shipherd` on macOS, `%APPDATA%\shipherd` on Windows). On macOS, if you saved a webhook address, also delete the "shipherd Safe Storage" item in Keychain Access. If you upgraded from Butler, the profile folder keeps its old name `butler`, and you can also delete the `~/.butler` link or note.
 
 ## Feedback
 

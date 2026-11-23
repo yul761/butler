@@ -61,6 +61,25 @@ export function migrateDoc(raw: Record<string, unknown>, migrations = FORMAT_MIG
   return doc;
 }
 
+/**
+ * 改名前（BTL-260）Butler 导出的文件、以及 <数据目录>/backups 里的自动备份：format 是 butler-config，
+ * 版本字段叫 butlerVersion，仓库现状里每条检查的 butlerStage 也改了名。换成新名字再按新格式解析。
+ * 旧文件一直会在，这段不能删。
+ */
+export const LEGACY_CONFIG_FORMAT = "butler-config";
+function fromLegacyName(raw: Record<string, unknown>): Record<string, unknown> {
+  if (raw.format !== LEGACY_CONFIG_FORMAT) return raw;
+  const { butlerVersion, ...rest } = raw;
+  const renameStage = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(renameStage);
+    if (!v || typeof v !== "object") return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k === "butlerStage" ? "shipherdStage" : k] = renameStage(x);
+    return out;
+  };
+  return { ...rest, format: CONFIG_FORMAT, shipherdVersion: rest.shipherdVersion ?? butlerVersion, sections: renameStage(rest.sections) };
+}
+
 /** 解析一个导出文件：不是 JSON、不是 Shipherd 的、版本太新都拒绝；各部分的内容由各自的 schema 再查。 */
 export function parseDoc(text: string, migrations = FORMAT_MIGRATIONS, current = CURRENT_FORMAT_VERSION): ConfigDoc {
   if (Buffer.byteLength(text, "utf8") > MAX_IMPORT_BYTES) throw new ConfigFormatError("too_large");
@@ -70,8 +89,10 @@ export function parseDoc(text: string, migrations = FORMAT_MIGRATIONS, current =
   } catch {
     throw new ConfigFormatError("not_json");
   }
-  if (!raw || typeof raw !== "object" || Array.isArray(raw) || (raw as Record<string, unknown>).format !== CONFIG_FORMAT) throw new ConfigFormatError("not_shipherd");
-  const migrated = migrateDoc(raw as Record<string, unknown>, migrations, current);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ConfigFormatError("not_shipherd");
+  const doc = fromLegacyName(raw as Record<string, unknown>);
+  if (doc.format !== CONFIG_FORMAT) throw new ConfigFormatError("not_shipherd");
+  const migrated = migrateDoc(doc, migrations, current);
   const p = HeaderSchema.safeParse(migrated);
   if (!p.success) throw new ConfigFormatError("not_shipherd", undefined, p.error.issues[0]?.message);
   return p.data as ConfigDoc;

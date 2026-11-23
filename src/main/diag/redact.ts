@@ -33,8 +33,8 @@ const ASCII_WORD = /^[a-z0-9_]$/i;
 const NOT_BEFORE = "(?<![A-Za-z0-9_])";
 const NOT_AFTER = "(?![A-Za-z0-9_])";
 
-/** 太常见、换掉只会让文件没法读的词（分支名 main、Shipherd 自己的名字……）。 */
-const STOP_WORDS = new Set(["main", "master", "develop", "dev", "trunk", "head", "origin", "upstream", "shipherd", "claude", "src", "test", "tests", "docs", "app", "null", "undefined", "true", "false"]);
+/** 太常见、换掉只会让文件没法读的词（分支名 main、Shipherd 自己的名字和改名前的 butler……）。 */
+const STOP_WORDS = new Set(["main", "master", "develop", "dev", "trunk", "head", "origin", "upstream", "shipherd", "butler", "claude", "src", "test", "tests", "docs", "app", "null", "undefined", "true", "false"]);
 
 const isWindowsPath = (p: string): boolean => /^[a-z]:[\\/]/i.test(p) || p.startsWith("\\\\") || p.includes("\\");
 

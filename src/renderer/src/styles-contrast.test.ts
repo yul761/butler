@@ -101,7 +101,7 @@ const turnTags = rules.filter((r) => /^\.turn-tag\.turn-\w+$/.test(r.selector))
 
 describe("turn colours (UI redesign §5.1)", () => {
   it("finds the turn tokens", () => {
-    expect([...light.keys()].filter((k) => k.startsWith("--turn-")).sort()).toEqual(TURN_TOKENS);
+    expect([...light.keys()].filter((k) => k.startsWith("--turn-")).sort()).toEqual([...TURN_TOKENS].sort());
     expect(turnTags).toHaveLength(8);
   });
 

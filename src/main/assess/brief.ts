@@ -2,7 +2,7 @@
 // 只有「改了什么、为什么」那一段是模型写的；其余全是确定的数据。证据只列核实过的，session 的自述不原样进来。
 import { matchAny } from "../../shared/glob";
 import type { ResolvedPrPolicy } from "../../shared/pr-policy";
-import { BRIEF_END, BRIEF_START, type DiffFile, type EvidenceGap, type EvidenceItem, type Risk, type RiskRule, type Violation } from "../../shared/prereview";
+import { BRIEF_END, BRIEF_START, LEGACY_BRIEF_END, LEGACY_BRIEF_START, type DiffFile, type EvidenceGap, type EvidenceItem, type Risk, type RiskRule, type Violation } from "../../shared/prereview";
 import { gapLine } from "../prereview/delivery";
 import { CAT, type Lang } from "./readiness";
 
@@ -133,11 +133,13 @@ export function renderBrief(i: BriefInput): string {
   return `${BRIEF_START}\n${body.trim()}\n${BRIEF_END}`;
 }
 
-/** 把简报块写进 PR 描述：已有块就整块替换，没有就追加在末尾；块以外的内容原样不动。 */
+/** 把简报块写进 PR 描述：已有块（含改名前的 butler:brief 块）就整块替换，没有就追加在末尾；块以外的内容原样不动。 */
 export function upsertBriefBlock(body: string, block: string): string {
-  const start = body.indexOf(BRIEF_START);
-  const end = start >= 0 ? body.indexOf(BRIEF_END, start) : -1;
-  if (start >= 0 && end >= 0) return body.slice(0, start) + block + body.slice(end + BRIEF_END.length);
+  for (const [open, close] of [[BRIEF_START, BRIEF_END], [LEGACY_BRIEF_START, LEGACY_BRIEF_END]]) {
+    const start = body.indexOf(open);
+    const end = start >= 0 ? body.indexOf(close, start) : -1;
+    if (start >= 0 && end >= 0) return body.slice(0, start) + block + body.slice(end + close.length);
+  }
   const base = body.replace(/\s+$/, "");
   return base ? `${base}\n\n${block}\n` : `${block}\n`;
 }

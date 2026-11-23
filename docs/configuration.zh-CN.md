@@ -838,4 +838,6 @@ Shipherd 在本机读最近 30 天的 Claude Code transcript（不会传出本�
 
 用不同的 `SHIPHERD_HOME` 启动 Shipherd。如果每家公司有自己的 Claude Code 登录，再设一个不同的 `CLAUDE_CONFIG_DIR`。每个 `SHIPHERD_HOME` 都是一个独立的 Shipherd，有自己的数据库、记忆、hook 程序、日志和设置，以及自己的 Electron 配置文件夹（`$SHIPHERD_HOME/electron`）。Shipherd 会把这两个变量传给它启动的 `claude` session，让它们的 hook 报告到正确的收件箱。
 
+用 `BUTLER_HOME`（改名为 Shipherd 之前的变量名）启动的配置照常能用：没设 `SHIPHERD_HOME` 时 Shipherd 读 `BUTLER_HOME`，原样使用那个文件夹，不会搬动。请改用 `SHIPHERD_HOME`，旧名字会在以后的大版本里去掉。
+
 共用同一个 Claude Code 配置文件夹的两个 Shipherd 配置会互相覆盖对方的 hook。给每个配置一个单独的 `CLAUDE_CONFIG_DIR`。

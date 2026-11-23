@@ -78,7 +78,8 @@ async function completeWizard(page: Page, s: Sandbox, T: UiStrings): Promise<voi
   const next = page.getByRole("button", { name: T.wizardNext, exact: true });
   await expect(next).toBeEnabled();
   await next.click();
-  await page.getByRole("button", { name: T.installHooks, exact: true }).click();
+  // hook 还没装时主按钮是「安装并继续」（BTL-249 改的）。
+  await page.getByRole("button", { name: T.wizardHooksInstallNext, exact: true }).click();
   const finish = page.getByRole("button", { name: T.wizardFinish, exact: true });
   await expect(next.or(finish).first()).toBeVisible();
   while (!(await finish.isVisible())) {

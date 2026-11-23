@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "./test-utils";
-import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
+import { ensureDirs, homeFromEnv, refreshTailPath, resolvePaths } from "./paths";
 
 describe("resolvePaths", () => {
   it("defaults to ~/.shipherd and ~/.claude", () => {
@@ -53,6 +53,15 @@ describe("resolvePaths", () => {
     expect(resolvePaths({ SHIPHERD_HOME: "~/bh" }, "darwin", "/home/u").home).toBe(join("/home/u", "bh"));
     expect(resolvePaths({ SHIPHERD_HOME: "~" }, "darwin", "/home/u").home).toBe("/home/u");
     expect(resolvePaths({ CLAUDE_CONFIG_DIR: "~\\cc" }, "win32", "/home/u").claudeConfigDir).toBe(join("/home/u", "cc"));
+  });
+
+  // BTL-260：改名前的 BUTLER_HOME 还认（SHIPHERD_HOME 没设或是空的时候），主进程、hook、MCP 都走 homeFromEnv。
+  it("falls back to the pre-rename BUTLER_HOME, with SHIPHERD_HOME taking priority", () => {
+    expect(resolvePaths({ BUTLER_HOME: "/data/old" }, "darwin", "/home/u").home).toBe(resolve("/data/old"));
+    expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: "/data/new" }, "darwin", "/home/u").home).toBe(resolve("/data/new"));
+    expect(resolvePaths({ BUTLER_HOME: "/data/old", SHIPHERD_HOME: " " }, "darwin", "/home/u").home).toBe(resolve("/data/old"));
+    expect(homeFromEnv({ BUTLER_HOME: "~/bh" }, "/home/u")).toBe(join("/home/u", "bh"));
+    expect(homeFromEnv({}, "/home/u")).toBe(join("/home/u", ".shipherd"));
   });
 
   it("puts the merge gate's requests, results and alive file under gate/", () => {

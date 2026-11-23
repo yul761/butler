@@ -24,6 +24,43 @@ function set(key: string, value: string | null): void {
   }
 }
 
+/**
+ * 改名前（BTL-260）这些键都以 butler. 开头（Shipherd 总控页的页面名也是 butler）。启动时搬一次：
+ * 新键还没有就把旧值拷过去，然后删掉旧键。userData 沿用旧目录（main 的 legacyUserDataDir），旧键才读得到。
+ * TODO(5.0)：保留一个大版本后删掉。
+ */
+export function migrateLegacyPrefs(store: Pick<Storage, "length" | "key" | "getItem" | "setItem" | "removeItem"> | null = safeStore()): number {
+  if (!store) return 0;
+  let moved = 0;
+  try {
+    const old: string[] = [];
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k?.startsWith("butler.")) old.push(k);
+    }
+    for (const k of old) {
+      const next = "shipherd." + k.slice("butler.".length).replace(/:butler$/, ":shipherd");
+      const v = store.getItem(k);
+      if (v !== null && store.getItem(next) === null) {
+        store.setItem(next, v);
+        moved++;
+      }
+      store.removeItem(k);
+    }
+  } catch {
+    // 存储不能用就算了。
+  }
+  return moved;
+}
+
+function safeStore(): Storage | null {
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
 export const savedWizardStep = (): WizardStep | null => {
   const v = get(STEP_KEY);
   // 停在已经去掉的 tracker、权限档案两步（BTL-249 以前）：前面两步都走过了，落到「完成」。

@@ -58,11 +58,14 @@ export const CAT = {
   zh: { test: "测试输出", lint: "lint 输出", typecheck: "类型检查输出", build: "构建输出", acceptance: "验收条件对照" },
 } as const;
 
-/** 去掉 Shipherd 自己写进描述的块（`<!-- shipherd:x -->…<!-- /shipherd:x -->`，以及单独的 shipherd 注释）。 */
+/**
+ * 去掉 Shipherd 自己写进描述的块（`<!-- shipherd:x -->…<!-- /shipherd:x -->`，以及单独的 shipherd 注释）。
+ * 改名前（BTL-260）写的是 butler:x，已经在 GitHub 上的 PR 描述里，一样去掉。
+ */
 export function stripShipherdBlocks(body: string): string {
   return body
-    .replace(/<!--\s*shipherd:([\w-]+)\s*-->[\s\S]*?<!--\s*\/shipherd:\1\s*-->/g, "")
-    .replace(/<!--\s*\/?shipherd:[^>]*-->/g, "")
+    .replace(/<!--\s*(shipherd|butler):([\w-]+)\s*-->[\s\S]*?<!--\s*\/\1:\2\s*-->/g, "")
+    .replace(/<!--\s*\/?(?:shipherd|butler):[^>]*-->/g, "")
     .trim();
 }
 

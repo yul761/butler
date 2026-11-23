@@ -12,6 +12,7 @@ import {
 import type { ConvQaVerdict } from "./conv-qa";
 
 const FIXTURE = join(__dirname, "__fixtures__", "conv.jsonl");
+// 录于改名前（BTL-260），里面的 butler-handoff 代码块是旧名字，见 conv-parse.test.ts。
 const REFRESH_TAIL = join(__dirname, "..", "sessions", "__fixtures__", "refresh-tail.jsonl");
 
 const ts = (n: number): string => new Date(Date.UTC(2026, 10, 19, 11, 0, 0) + n * 1000).toISOString();

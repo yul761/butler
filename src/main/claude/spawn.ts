@@ -2,6 +2,7 @@ import { HEADLESS_SESSION_PREFIX } from "../../shared/hook-envelope";
 import { dirFromEnv } from "../paths";
 import { pathKey } from "../util/env";
 import { isCmdShim } from "./launch";
+import { envValue, LEGACY_SESSION_VARS } from "../../shared/legacy-env";
 
 export interface SpawnSpec {
   file: string;
@@ -71,14 +72,15 @@ const PARENT_SESSION_VARS = new Set([
 function cleanEnv(base: NodeJS.ProcessEnv, pathValue: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {
-    if (v === undefined || k.startsWith("ELECTRON_") || PARENT_SESSION_VARS.has(k) || k === "SHIPHERD_TICKET" || k === "SHIPHERD_SESSION") continue;
+    if (v === undefined || k.startsWith("ELECTRON_") || PARENT_SESSION_VARS.has(k) || k === "SHIPHERD_TICKET" || k === "SHIPHERD_SESSION" || LEGACY_SESSION_VARS.includes(k)) continue;
     out[k] = v;
   }
   // 相对路径按 Shipherd 自己的当前目录解析成绝对路径：子进程的 cwd 不同，hook 才会写到同一个 inbox。
-  for (const k of ["SHIPHERD_HOME", "CLAUDE_CONFIG_DIR"]) {
-    const dir = dirFromEnv(out[k]);
-    if (dir) out[k] = dir;
-  }
+  // 数据目录按 Shipherd 自己的规则算（SHIPHERD_HOME > 旧的 BUTLER_HOME），只用新名字传下去：hook 和 Shipherd 一定落在同一个目录。
+  const home = dirFromEnv(envValue(base, "HOME"));
+  if (home) out.SHIPHERD_HOME = home;
+  const config = dirFromEnv(out.CLAUDE_CONFIG_DIR);
+  if (config) out.CLAUDE_CONFIG_DIR = config;
   if (pathValue) out[pathKey(out)] = pathValue;
   return out;
 }

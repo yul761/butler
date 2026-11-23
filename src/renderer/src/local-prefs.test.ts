@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isCollapsed, onCollapsedChange, saveConvSplit, savedConvSplit, saveSendTarget, savedSendTarget, savedWizardStep, saveWizardStep, setCollapsed, setWizardSkipped, wizardSkipped } from "./local-prefs";
+import { isCollapsed, migrateLegacyPrefs, onCollapsedChange, saveConvSplit, savedConvSplit, saveSendTarget, savedSendTarget, savedWizardStep, saveWizardStep, setCollapsed, setWizardSkipped, wizardSkipped } from "./local-prefs";
 
 function fakeStorage(): Storage {
   const m = new Map<string, string>();
@@ -168,5 +168,28 @@ describe("saved wizard step", () => {
     expect(savedWizardStep()).toBe("done");
     localStorage.setItem("shipherd.wizardStep", "bogus");
     expect(savedWizardStep()).toBeNull();
+  });
+});
+
+// BTL-260：改名前的偏好键以 butler. 开头，总控页的页面名也是 butler。
+describe("migrateLegacyPrefs", () => {
+  it("moves butler.* keys to shipherd.*, renames the controller page suffix, never overwrites a newer value, and runs once", () => {
+    const s = fakeStorage();
+    s.setItem("butler.collapsed.now", "1");
+    s.setItem("butler.sendTarget.tab:butler", "s-1");
+    s.setItem("butler.convSplit", "0.3");
+    s.setItem("shipherd.convSplit", "0.6");
+    s.setItem("other.butler.key", "x");
+    expect(migrateLegacyPrefs(s)).toBe(2);
+    expect(s.getItem("shipherd.collapsed.now")).toBe("1");
+    expect(s.getItem("shipherd.sendTarget.tab:shipherd")).toBe("s-1");
+    expect(s.getItem("shipherd.convSplit")).toBe("0.6");
+    expect(s.getItem("other.butler.key")).toBe("x");
+    for (let i = 0; i < s.length; i++) expect(s.key(i)).not.toMatch(/^butler\./);
+    expect(migrateLegacyPrefs(s)).toBe(0);
+  });
+
+  it("does nothing without storage", () => {
+    expect(migrateLegacyPrefs(null)).toBe(0);
   });
 });

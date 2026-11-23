@@ -834,4 +834,6 @@ The tier used is the higher of the size tier and the risk tier. The **Effect** p
 
 Start Shipherd with a different `SHIPHERD_HOME`. If each company has its own Claude Code login, also set a different `CLAUDE_CONFIG_DIR`. Each `SHIPHERD_HOME` is a separate Shipherd with its own database, memory, hook binary, logs and settings, and its own Electron profile (`$SHIPHERD_HOME/electron`). Shipherd passes both variables on to the `claude` sessions it starts, so their hooks report to the right inbox.
 
+A profile started with `BUTLER_HOME` (the variable's name before the rename to Shipherd) keeps working: when `SHIPHERD_HOME` isn't set, Shipherd reads `BUTLER_HOME` and uses that folder as it is, without moving it. Switch to `SHIPHERD_HOME`; the old name will be dropped in a later major version.
+
 Two Shipherd profiles that share one Claude Code configuration folder would install their hooks over each other. Give each profile its own `CLAUDE_CONFIG_DIR`.

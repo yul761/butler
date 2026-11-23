@@ -206,7 +206,8 @@ export function runnerScript(data: ExportedCheckData, command: string, path: str
     "status=0",
     "while IFS= read -r f; do",
     '  [ -n "$f" ] || continue',
-    '  if ! SHIPHERD_CHECK_FILE="$f" sh -c "$SCRIPT" sh "$f" </dev/null; then',
+    // BUTLER_CHECK_FILE：改名前（BTL-260）写下的检查命令用的是旧名字。
+    '  if ! SHIPHERD_CHECK_FILE="$f" BUTLER_CHECK_FILE="$f" sh -c "$SCRIPT" sh "$f" </dev/null; then',
     '    echo "$f: $NAME failed" >&2',
     "    status=1",
     "  fi",

@@ -202,7 +202,8 @@ const baseName = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?
 const exeName = (args: string): string => baseName(firstToken(args).exe).replace(/^-/, "").replace(/\.exe$/i, "").toLowerCase();
 
 /** 解释器：显示名用它跑的脚本。 */
-const RUNNERS = new Set(["node", "shipherd", "electron", "python", "python3", "bun", "deno", "npx", "ruby"]);
+// butler：改名前（BTL-260）的可执行文件名，升级时还没退出的旧进程。TODO(5.0) 删。
+const RUNNERS = new Set(["node", "shipherd", "butler", "electron", "python", "python3", "bun", "deno", "npx", "ruby"]);
 /** 脚本名是这些的，用上一级目录名（node …/chrome-devtools-mcp/index.js → chrome-devtools-mcp）。 */
 const GENERIC_SCRIPTS = /^(index|main|cli|server|bin|start)\.[cm]?[jt]s$/i;
 
@@ -228,8 +229,8 @@ export function shortName(args: string): string {
 }
 
 const SHELLS = new Set(["bash", "zsh", "sh", "dash", "fish", "ksh", "cmd", "powershell", "pwsh", "conhost", "openconsole"]);
-/** Shipherd 自己的 MCP（打包好的脚本名）。 */
-const SHIPHERD_MCP = /(statecore-mcp|shipherd-sessions-mcp|mcp-hub)\.cjs\b/;
+/** Shipherd 自己的 MCP（打包好的脚本名）。butler-sessions-mcp 是改名前（BTL-260）的名字，升级前起的还可能在跑（TODO(5.0) 删）。 */
+const SHIPHERD_MCP = /(statecore-mcp|(?:shipherd|butler)-sessions-mcp|mcp-hub)\.cjs\b/;
 /** 常驻的 watcher（设计 §1 第 5 条）。vitest 不带 run 才算（vitest run 跑完就退）。 */
 const WATCHER = [
   /(^|\s)--watch(All)?(\s|=|$)/,

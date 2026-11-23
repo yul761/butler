@@ -198,7 +198,7 @@ describe("SessionsRepo.listConvTargets (UI redesign layer 4)", () => {
     add("new-segment", { ticketKey: "PROJ-2" });
     repo.setReplacedBy("old-segment", "new-segment");
     add("stale", { ticketKey: "PROJ-3", createdAt: 10, lastActivityAt: 10 });
-    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["shipherd-origin", "controller", "feature", "new-segment", "ticket"]);
+    expect(repo.listConvTargets(50).map((s) => s.id).sort()).toEqual(["controller", "feature", "new-segment", "shipherd-origin", "ticket"]);
   });
 });
 

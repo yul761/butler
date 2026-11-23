@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, procTableReader, readProcTable, summarize, treeOf, type ProcTable } from "./proc-table";
+import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, procTableReader, readProcTable, shortName, summarize, treeOf, type ProcTable } from "./proc-table";
 
 const PS = [
   "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Shipherd.app/Contents/MacOS/Shipherd",
@@ -211,4 +211,17 @@ describe("readProcTable", () => {
     const t = await readProcTable(process.platform);
     expect(t?.get(process.pid)).toBeDefined();
   }, 20_000);
+});
+
+// BTL-260：升级时还没退出的旧 sessions MCP server（butler-sessions-mcp.cjs）也算 Shipherd 自己的。
+describe("pre-rename process names", () => {
+  it("classes the old butler-sessions-mcp as Shipherd's own MCP and names the old Butler runner by its script", () => {
+    const t: ProcTable = new Map([
+      [10, { pid: 10, ppid: 1, rssKb: 1, start: "1", args: "/Users/me/.local/bin/claude --resume x" }],
+      [11, { pid: 11, ppid: 10, rssKb: 1, start: "1", args: "/Applications/Butler.app/Contents/MacOS/Butler /x/memory-mcp/butler-sessions-mcp.cjs" }],
+    ]);
+    expect(Object.fromEntries(classifyTree(10, t).map((p) => [p.pid, p.cls]))).toEqual({ 10: "claude", 11: "mcp_shipherd" });
+    // Windows 上没有 .app 名字，按解释器跑的脚本起名：旧的 Butler.exe 也是解释器。
+    expect(shortName("\"C:\\Users\\me\\AppData\\Local\\Programs\\Butler\\Butler.exe\" C:\\x\\memory-mcp\\butler-sessions-mcp.cjs")).toBe("butler-sessions-mcp");
+  });
 });

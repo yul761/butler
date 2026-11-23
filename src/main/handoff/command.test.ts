@@ -153,10 +153,15 @@ describe("/handoff command for feature coordinators", () => {
       expect(current).toContain(featureCoordinatorSection(l));
       const [purposeNow, purposeBefore] = PREVIOUS[l].purpose;
       // 后来加的那句“PR 的 url 照原样复制”也去掉，才是那个版本的正文。
-      const previous = current.replace(featureCoordinatorSection(l), "").replace(now, before).replace(purposeNow, purposeBefore).replace(PREVIOUS[l].urlRule, "");
+      const previous = current.replace(featureCoordinatorSection(l), "").replace(now, before).replace(purposeNow, purposeBefore).replace(PREVIOUS[l].urlRule, "")
+        // 那个版本是改名（BTL-260）前装的，正文里是 Butler。
+        .replaceAll("Shipherd", "Butler").replaceAll("shipherd", "butler");
       expect(commandBodyHash(previous)).toBe(PREVIOUS[l].hash);
       const file = handoffCommandPath(tempDir());
-      writeFileSync(file, renderHandoffCommand(previous));
+      // 改名前装的文件，标记也是旧名字 butler:handoff-command。
+      const installed = renderHandoffCommand(previous).replace("<!-- shipherd:handoff-command", "<!-- butler:handoff-command");
+      expect(installed).toContain("<!-- butler:handoff-command v1 sha256:");
+      writeFileSync(file, installed);
       expect(await handoffCommandStatus(file)).toBe("stale");
       expect(await installHandoffCommand(file)).toBe("installed");
       expect(readFileSync(file, "utf8")).toContain("shipherd-feature-handoff");

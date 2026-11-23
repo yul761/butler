@@ -65,21 +65,31 @@ const blocksOf = (content: unknown): Block[] => (Array.isArray(content) ? conten
 const STRIP = /<(system-reminder|ide_selection|ide_opened_file|ide_diagnostics)>[\s\S]*?<\/\1>/g;
 const NOISE_HEAD = /^(<(local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr|task-notification)>|\[Request interrupted by user)/;
 const COMMAND_NAME = /<command-name>/;
-const SHIPHERD_NOTICE = /^Shipherd(：|: )/;
+// 改名前（BTL-260）的通知以「Butler：」开头，老 transcript 里还有。TODO(5.0) 之后也要留着：老 transcript 不会变。
+const SHIPHERD_NOTICE = /^(?:Shipherd|Butler)(：|: )/;
 
-const heads = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string, n: number): string[] => Object.values(MAIN_STRINGS).map((s) => pick(s).slice(0, n));
+/**
+ * 改名前（BTL-260）Shipherd 叫 Butler：老 transcript 里这些固定文案写的是 Butler。每条文案同时认新旧两种写法。
+ * 这不是能删的兼容代码：老 transcript 一直在。
+ */
+const LEGACY_PRODUCT_NAME = "Butler";
+const withLegacyName = (t: string): string[] => (t.includes("Shipherd") ? [t, t.replaceAll("Shipherd", LEGACY_PRODUCT_NAME)] : [t]);
+const heads = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string, n: number): string[] =>
+  Object.values(MAIN_STRINGS).flatMap((s) => withLegacyName(pick(s)).map((t) => t.slice(0, n)));
 /**
  * 以前 Shipherd 让 epic session 写进度的两句话（换新、闲置关闭；中英）的前 24 个字符。epic session BTL-246 去掉了，
  * 这两句文案也从 strings.ts 删了；老 transcript 里还有，照旧认成 handoff，写死在这里。
  */
-const LEGACY_EPIC_HANDOFF_HEADS = ["Shipherd 要清空这个 session 的上下", "这个 session 闲置很久了，Shipherd ", "Shipherd is about to clear", "This session has been id"];
+const LEGACY_EPIC_HANDOFF_HEADS = ["Butler 要清空这个 session 的上下", "这个 session 闲置很久了，Butler ", "Butler is about to clear", "This session has been id"];
 const HANDOFF_HEADS = LEGACY_EPIC_HANDOFF_HEADS;
 const RELAY_HEADS = heads((s) => s.inboxAnswersIntro, Number.MAX_SAFE_INTEGER);
 /** 只转一条回答时没有 intro，整条就是 inboxAnswer(问题, 回答)：认开头和中间「用户的回答」那一段。 */
-const RELAY_SINGLE = Object.values(MAIN_STRINGS).map((s) => {
-  const [pre, rest = ""] = s.inboxAnswer("\u0000", "\u0001").split("\u0000");
-  return { pre, mid: rest.split("\u0001")[0] };
-});
+const RELAY_SINGLE = Object.values(MAIN_STRINGS).flatMap((s) =>
+  withLegacyName(s.inboxAnswer("\u0000", "\u0001")).map((t) => {
+    const [pre, rest = ""] = t.split("\u0000");
+    return { pre, mid: rest.split("\u0001")[0] };
+  }),
+);
 const isSingleRelay = (t: string): boolean => RELAY_SINGLE.some(({ pre, mid }) => t.startsWith(pre) && t.indexOf(mid, pre.length) > 0);
 /** 模板里第一个占位符之前的那段（占位符用 \u0000 代入）。 */
 const before0 = (t: string): string => t.split("\u0000")[0];
@@ -103,7 +113,7 @@ const fits = (shape: Shape, text: string): boolean => {
   }
   return true;
 };
-const shapes = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string): Shape[] => Object.values(MAIN_STRINGS).map((s) => shapeOf(pick(s)));
+const shapes = (pick: (s: (typeof MAIN_STRINGS)["zh"]) => string): Shape[] => Object.values(MAIN_STRINGS).flatMap((s) => withLegacyName(pick(s)).map(shapeOf));
 /**
  * Shipherd 往终端里打的其它固定格式（「Shipherd：」开头的通知另由 SHIPHERD_NOTICE 认）：别的 session 的回复、预审结果、
  * 进件缺信息时让总控去问。开头加上占位符之间的固定段一起认。
@@ -115,7 +125,7 @@ const SILENT_SHAPES: Shape[] = [
   ...shapes((s) => s.intakeEpicTickets("\u0000", "\u0001", "")),
   ...shapes((s) => s.intakeEpicTickets("\u0000", null, "")),
   ...(["zh", "en"] as const).flatMap((lang) =>
-    (["error", "clean", "violations"] as const).map((verdict) => shapeOf(deliveryText({ shortSha: "\u0000", verdict, violations: [], gaps: [], error: "\u0001", lang }))),
+    (["error", "clean", "violations"] as const).flatMap((verdict) => withLegacyName(deliveryText({ shortSha: "\u0000", verdict, violations: [], gaps: [], error: "\u0001", lang })).map(shapeOf)),
   ),
 ];
 /** 总控发来的消息、每日巡检、花费上限后的「接着做」：固定开头本身就够长。 */

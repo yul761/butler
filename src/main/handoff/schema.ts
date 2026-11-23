@@ -50,8 +50,11 @@ export function parseJsonLoose(text: string): unknown {
   return undefined;
 }
 
-/** 信息串必须正好是 shipherd-handoff，后面只能跟空白再接别的（```shipherd-handoffX 不算）。 */
-const HANDOFF_BLOCK_RE = /```shipherd-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
+/**
+ * 信息串必须正好是 shipherd-handoff，后面只能跟空白再接别的（```shipherd-handoffX 不算）。
+ * 也认改名前（BTL-260）的 butler-handoff：升级前装的 /handoff 命令、升级时正在跑的 session 还会输出它。TODO(5.0) 去掉 butler。
+ */
+const HANDOFF_BLOCK_RE = /```(?:shipherd|butler)-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
 
 /** 最后一个非空的 ```shipherd-handoff 代码块的内容；没有就是 null。 */
 export function extractHandoffBlock(text: string): string | null {
@@ -60,7 +63,8 @@ export function extractHandoffBlock(text: string): string | null {
 }
 
 /** feature 总控的 /handoff 输出（设计文档 2026-10-28）：信息串必须正好是 shipherd-feature-handoff，规则同上；两种代码块互不匹配。 */
-const FEATURE_HANDOFF_BLOCK_RE = /```shipherd-feature-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
+// 同上，也认改名前的 butler-feature-handoff（TODO(5.0) 去掉）。
+const FEATURE_HANDOFF_BLOCK_RE = /```(?:shipherd|butler)-feature-handoff(?:[ \t][^\r\n]*)?\r?\n([\s\S]*?)\r?\n?```/g;
 
 /** 最后一个非空的 ```shipherd-feature-handoff 代码块的内容；没有就是 null。 */
 export function extractFeatureHandoffBlock(text: string): string | null {

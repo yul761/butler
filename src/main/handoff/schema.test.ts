@@ -73,6 +73,14 @@ describe("loose parsing", () => {
     expect(extractHandoffBlock('```json\n{}\n```')).toBeNull();
   });
 
+  // BTL-260：升级前装的 /handoff 命令、升级时还在跑的 session 输出的是改名前的代码块名。
+  it("reads the pre-rename butler-handoff and butler-feature-handoff blocks", () => {
+    expect(extractHandoffBlock('```butler-handoff\n{"n":1}\n```')).toBe('{"n":1}');
+    expect(extractHandoffBlock('```butler-handoff\n{"n":1}\n```\n```shipherd-handoff\n{"n":2}\n```')).toBe('{"n":2}');
+    expect(extractFeatureHandoffBlock('```butler-feature-handoff\n{"f":1}\n```')).toBe('{"f":1}');
+    expect(extractHandoffBlock('```butler-feature-handoff\n{"f":1}\n```')).toBeNull();
+  });
+
   it("accepts CRLF line endings", () => {
     expect(extractHandoffBlock('```shipherd-handoff\r\n{"n":1}\r\n```')).toBe('{"n":1}');
     expect(extractHandoffBlock('```shipherd-handoff json\r\n{"n":2}\r\n```')).toBe('{"n":2}');

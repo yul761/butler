@@ -1,4 +1,8 @@
-/** 按顺序追加，永远不要修改已发布的条目。下标 i 对应 user_version i+1。 */
+/**
+ * 按顺序追加，永远不要修改已发布的条目。下标 i 对应 user_version i+1。
+ * 产品改名（BTL-260）以前的条目里还是旧名字 butler（列名、表名、取值）：它们已经在用户的库上跑过，只能原样保留，
+ * 最后一条迁移再把它们改成 shipherd。
+ */
 export const MIGRATIONS: string[] = [
   `
   CREATE TABLE tickets (
@@ -1540,5 +1544,66 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN user_ended_at INTEGER;
   ALTER TABLE sessions ADD COLUMN term_open_at INTEGER;
+  `,
+  // BTL-260：产品改名 Shipherd。上面已发布的迁移不能改，里面的 butler 列名、表名、取值都原样留着；这里把它们改成新名字。
+  // - 普通列直接 RENAME COLUMN；butler_messages（BTL-245 起不用了，数据留着）改表名，索引重建。
+  // - session_messages.kind、memory_samples.kind 的 CHECK 里有 'butler'：SQLite 改不了 CHECK，照 BTL-248 的做法建新表、拷数据（顺手把值改成 'shipherd'）、换名、重建索引。
+  //   memory_samples.detail 里按进程类别记的 JSON 键 mcp_butler 也改成 mcp_shipherd。
+  // - sessions.origin 的 CHECK 也是 ('butler','discovered')，但 sessions 表列多、被到处读，重建风险大：库里保留旧值，
+  //   sessions-repo 读写时换成 "shipherd"（见 LEGACY_ORIGIN）。
+  // - 设置键 butlerPatrolTime、任务名 butler_patrol 改名（没改的话巡检时间丢了、上次巡检时间也丢了）。
+  // - 仓库现状里每条检查的 JSON 字段 butlerStage 改成 shipherdStage（不改的话「编辑时检查」全退成推送时）。
+  `
+  ALTER TABLE sessions RENAME COLUMN butler TO shipherd;
+  ALTER TABLE metrics_daily RENAME COLUMN butler TO shipherd;
+  ALTER TABLE ticket_prs RENAME COLUMN butler_made TO shipherd_made;
+  ALTER TABLE review_effect_prs RENAME COLUMN butler TO shipherd;
+  DROP INDEX idx_butler_messages_status;
+  ALTER TABLE butler_messages RENAME TO shipherd_messages;
+  CREATE INDEX idx_shipherd_messages_status ON shipherd_messages (status);
+  CREATE TABLE session_messages_new (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('instruction','report','answer','shipherd','reply','review','comments','convention','ci','merge','stack','patrol','cost','refresh','user')),
+    from_session TEXT,
+    to_session TEXT NOT NULL,
+    feature_id INTEGER,
+    body TEXT NOT NULL,
+    interrupt INTEGER NOT NULL DEFAULT 0,
+    ref TEXT,
+    meta TEXT,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','delivered','replied')),
+    via TEXT CHECK (via IN ('hook','input')),
+    expects_reply INTEGER NOT NULL DEFAULT 0,
+    base_reply_id TEXT,
+    reply_text TEXT,
+    queued_at INTEGER NOT NULL,
+    delivered_at INTEGER,
+    replied_at INTEGER
+  );
+  INSERT INTO session_messages_new SELECT id, CASE kind WHEN 'butler' THEN 'shipherd' ELSE kind END, from_session, to_session, feature_id, body,
+    interrupt, ref, meta, status, via, expects_reply, base_reply_id, reply_text, queued_at, delivered_at, replied_at FROM session_messages ORDER BY rowid;
+  DROP TABLE session_messages;
+  ALTER TABLE session_messages_new RENAME TO session_messages;
+  CREATE INDEX session_messages_status ON session_messages (status, to_session);
+  CREATE INDEX session_messages_queued_at ON session_messages (queued_at);
+  CREATE UNIQUE INDEX session_messages_queued_ref ON session_messages (ref) WHERE ref IS NOT NULL AND status = 'queued';
+  CREATE TABLE memory_samples_new (
+    id INTEGER PRIMARY KEY,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('session','shipherd','system')),
+    session_id TEXT,
+    total_kb INTEGER NOT NULL,
+    detail TEXT);
+  INSERT INTO memory_samples_new SELECT id, at, CASE kind WHEN 'butler' THEN 'shipherd' ELSE kind END, session_id, total_kb,
+    replace(detail, '"mcp_butler"', '"mcp_shipherd"') FROM memory_samples ORDER BY id;
+  DROP TABLE memory_samples;
+  ALTER TABLE memory_samples_new RENAME TO memory_samples;
+  CREATE INDEX memory_samples_at ON memory_samples (at);
+  UPDATE settings SET key = 'shipherdPatrolTime' WHERE key = 'butlerPatrolTime' AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'shipherdPatrolTime');
+  DELETE FROM settings WHERE key = 'butlerPatrolTime';
+  UPDATE jobs SET name = 'shipherd_patrol' WHERE name = 'butler_patrol' AND NOT EXISTS (SELECT 1 FROM jobs WHERE name = 'shipherd_patrol');
+  DELETE FROM jobs WHERE name = 'butler_patrol';
+  UPDATE repo_baselines SET checks = replace(checks, '"butlerStage"', '"shipherdStage"'), infer_detail = replace(infer_detail, '"butlerStage"', '"shipherdStage"')
+    WHERE checks LIKE '%"butlerStage"%' OR infer_detail LIKE '%"butlerStage"%';
   `,
 ];

@@ -188,7 +188,7 @@ function ciRunsMakeLint(b: RepoBaseline | null): boolean {
 /** run_command 的命令是不是 CI 已经在跑的（按仓库现状里的 CI 命令比）。 */
 function alreadyInCi(command: string, b: RepoBaseline | null): boolean {
   if (!b) return false;
-  const cmd = squash(command.split("{file}").join("").replace(/"\$OLDPWD\/\$SHIPHERD_CHECK_FILE"|"?\$SHIPHERD_CHECK_FILE"?/g, ""));
+  const cmd = squash(command.split("{file}").join("").replace(/"\$OLDPWD\/\$(?:SHIPHERD|BUTLER)_CHECK_FILE"|"?\$(?:SHIPHERD|BUTLER)_CHECK_FILE"?/g, ""));
   const same = (x: string) => squash(x.split("{file}").join("")) === cmd;
   for (const c of b.checks) {
     if (!c.stages.includes("ci")) continue;
@@ -480,7 +480,8 @@ function eslintExport(repo: Repo, b: Builder, check: ResolvedCheck, layout: Repo
   return true;
 }
 
-const COMPOUND = /[;&|<>`()\n]|\$\(|\$\{?SHIPHERD_CHECK_FILE|\$OLDPWD/;
+// BUTLER_CHECK_FILE：改名前（BTL-260）写下的命令里的旧名字，同样算。
+const COMPOUND = /[;&|<>`()\n]|\$\(|\$\{?(?:SHIPHERD|BUTLER)_CHECK_FILE|\$OLDPWD/;
 
 /** run_command 检查（设计 §8 表最后一行）。 */
 function runCommandExport(

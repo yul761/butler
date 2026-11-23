@@ -204,7 +204,9 @@ export function renderHandoffCommand(body: string): string {
   return `${body.slice(0, at)}${HANDOFF_COMMAND_MARKER} sha256:${commandBodyHash(body)} -->\n${body.slice(at)}`;
 }
 
-const MARKER_RE = /^(---\n[\s\S]*?\n---\n)<!-- shipherd:handoff-command v1 sha256:([0-9a-f]{64}) -->\n/;
+// 改名前（BTL-260）的 Butler 写的文件标记是 butler:handoff-command：认得它，升级时才会当成旧版本（stale）换掉，
+// 而不是当成用户自己的命令（conflict）一直留着、继续输出旧的 butler-handoff 代码块。TODO(5.0)：保留一个大版本后去掉 butler。
+const MARKER_RE = /^(---\n[\s\S]*?\n---\n)<!-- (?:shipherd|butler):handoff-command v1 sha256:([0-9a-f]{64}) -->\n/;
 
 /** 解析 Shipherd 写的文件：标记行必须紧跟 front matter、hash 必须和其余内容一致，否则返回 null（不是 Shipherd 的，或被用户改过）。 */
 export function parseHandoffCommand(text: string): { body: string } | null {

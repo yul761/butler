@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { checksLayout, dirFromEnv } from "../src/main/paths";
+import { checksLayout, homeFromEnv } from "../src/main/paths";
+import { envValue } from "../src/shared/legacy-env";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import { pathKey } from "../src/main/util/env";
 import { GIT_SAFE_ARGS, resolveGit } from "../src/main/util/git-path";
@@ -92,13 +93,13 @@ interface Layout {
 }
 
 function layoutOf(env: NodeJS.ProcessEnv): Layout {
-  const home = dirFromEnv(env.SHIPHERD_HOME, homedir()) ?? path.join(homedir(), ".shipherd");
+  const home = homeFromEnv(env, homedir());
   const l = checksLayout(home);
   return { snapshot: l.checksSnapshot, hits: l.checksHits, state: l.checksState };
 }
 
 const sessionOf = (env: NodeJS.ProcessEnv): string | null => {
-  const s = env.SHIPHERD_SESSION?.trim();
+  const s = envValue(env, "SESSION")?.trim();
   return s && /^[A-Za-z0-9_.-]{1,200}$/.test(s) ? s : null;
 };
 

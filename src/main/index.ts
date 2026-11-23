@@ -145,6 +145,10 @@ import type { PolicyScope } from "../shared/admission-policy";
 import type { StackPolicySetResult } from "../shared/stacks";
 import type { IntakePolicySetResult } from "../shared/intake";
 import { ensureDirs, refreshTailPath, resolvePaths } from "./paths";
+import { finishLegacyHome } from "./migrate/legacy-finish";
+import { migrateLegacyHome } from "./migrate/legacy-home";
+import { legacyUserDataDir } from "./migrate/legacy-user-data";
+import { envValue } from "../shared/legacy-env";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
 import { ShipherdPatrol } from "./schedule/shipherd-patrol";
@@ -349,7 +353,12 @@ const headlessAbort = new AbortController();
 
 // 隔离运行（SHIPHERD_HOME 指向别的目录）时也换一个 Electron 用户目录，否则单实例锁会和正在用的 Shipherd 冲突。
 // 用 resolvePaths 解析：相对路径会变成绝对路径（setPath 只接受绝对路径）。
-if (process.env.SHIPHERD_HOME?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
+if (envValue(process.env, "HOME")?.trim()) app.setPath("userData", join(resolvePaths().home, "electron"));
+else {
+  // BTL-260：改名前的老用户接着用旧的 userData（<appData>/butler），见 legacyUserDataDir。必须在 ready、单实例锁之前。
+  const legacy = legacyUserDataDir(app.getPath("appData"), existsSync);
+  if (legacy) app.setPath("userData", legacy);
+}
 // Windows 的通知要有 AppUserModelID，否则点击通知没有反应（计划 2 Task 13）。
 if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
@@ -503,6 +512,10 @@ function trayTooltip(): string {
 }
 
 async function bootstrap(): Promise<void> {
+  // BTL-260：老用户的 ~/.butler 搬到 ~/.shipherd。在建目录、打开数据库之前（结果等日志建好再记）。
+  const legacyHome = migrateLegacyHome({ env: process.env });
+  // 没搬成：数据原样在旧目录，这次就用它（传给子进程的也是它），下次启动再搬。不能拿空的新目录启动，那样下次就当成已经搬过了。
+  if (legacyHome.kind === "failed") process.env.SHIPHERD_HOME = legacyHome.legacy;
   const paths = resolvePaths();
   await ensureDirs(paths);
   const fileLog = createFileLogger(join(paths.logs, "main.log"), undefined, app.isPackaged ? undefined : teeToConsole);
@@ -545,6 +558,7 @@ async function bootstrap(): Promise<void> {
   applyGhResolution(resolveGh(ownPath, process.platform), process.platform, (m) => logger(m));
   void probeGh(5000);
   const db = openDatabase(paths.db);
+  await finishLegacyHome(legacyHome, paths, db, (m) => logger(m));
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
   const features = new FeaturesRepo(db);
@@ -552,7 +566,7 @@ async function bootstrap(): Promise<void> {
   const featureForCwd = (cwd: string): number | null => features.byWorkspace(cwd)?.id ?? null;
   const settings = new SettingsRepo(db);
   /** 当前语言：SHIPHERD_LANG > 设置 > 系统首选语言（设计文档 2026-10-26）。 */
-  const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), process.env.SHIPHERD_LANG));
+  const applyLanguage = () => setLang(resolveLang(settings.get("language"), app.getPreferredSystemLanguages(), envValue(process.env, "LANG")));
   applyLanguage();
   const handoffs = new HandoffsRepo(db);
   const followups = new FollowupsRepo(db);
@@ -616,7 +630,10 @@ async function bootstrap(): Promise<void> {
   // Shipherd 旧版本装的 /handoff 也先换成当前版本再探测（C1），健康页报告的是换完的状态。syncHandoffCommand 不抛错。
   /** 登录 shell 的 PATH 下 gh 探测完（BTL-253 的更新检查等它，免得 gh 明明装了却被当成没装）。 */
   let ghProbed: Promise<void> = Promise.resolve();
-  const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()]).then(
+  const healthReady: Promise<void> = Promise.all([health.syncHandoffCommand().then(() => health.refresh()), health.syncHookBinary()])
+    // BTL-260：syncHookBinary 替用户换掉了改名前的 butler-hook 条目，上面那次 refresh 可能是换之前读的。
+    .then(() => (health.takeLegacyHookMigrated() ? health.refresh().then(() => undefined) : undefined))
+    .then(
     () => {
       if (health.hookBinCurrent() && existsSync(paths.hookBin)) seedSkillTracking();
       applyGitResolution(resolveGit(health.claude().pathValue, process.platform), process.platform, (m) => logger(m));

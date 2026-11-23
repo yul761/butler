@@ -51,6 +51,17 @@ Windows 安装包还没有代码签名（见[代码签名](docs/how-it-works.zh-
 
 升级时下载新版本，直接覆盖安装。你在 `~/.shipherd` 里的数据会保留。每个版本改了什么见 [release notes](https://github.com/yul761/shipherd/releases)。
 
+### 从 Butler 升级
+
+<!-- Butler 是 Shipherd 改名前的名字，这一节写给从它升级的人。 -->
+Shipherd 以前叫 Butler。退出 Butler，装上 Shipherd 再打开，什么都不会丢：
+
+- 第一次启动时，Shipherd 把 `~/.butler` 搬到 `~/.shipherd`，旧位置留一个链接（macOS）或一个说明文件（Windows）。数据库、记忆、日志和设置都跟着过来；worktree 在 `~/.butler` 下的 session，它们的 Claude Code 对话记录也一起搬。如果你设过 `BUTLER_HOME`，在你设 `SHIPHERD_HOME` 之前它仍然有效。
+- `~/.claude/settings.json` 里 Butler 的 hook 换成 Shipherd 的（你自己的 hook 不动），`/handoff` 命令也会更新。升级时正在跑的 session 照常上报。
+- 从 Butler 导出的文件（配置、备份）可以直接导入。
+- **macOS：**把 Butler 从"应用程序"里拖出去。macOS 把 Shipherd 当成一个新 app，你给过 Butler 的权限（通知等）要重新授予一次。保存过的通知 webhook 地址换名后读不出来，设置里会提示你重新填写。
+- **Windows：**Shipherd 装在 Butler 旁边，不会覆盖它。安装程序检测到 Butler 时会提示你卸载；当时跳过的话，之后在 设置 → 应用 → Butler → 卸载。卸载 Butler 不会删你的数据。
+
 ## 首次运行
 
 打开 Shipherd 之前，先装好 Claude Code 并登录一次：在终端里运行 `claude`，按提示登录。GitHub CLI（`gh`）可装可不装，见[系统要求](#系统要求)。
@@ -72,7 +83,7 @@ Windows 安装包还没有代码签名（见[代码签名](docs/how-it-works.zh-
 
 1. **设置 → 健康检查 → 卸载** 会从 Claude Code 里移除 Shipherd 的 hook 和 `/handoff` 命令。
 2. 删除 app：macOS 上把它从"应用程序"里拖出去；Windows 上在 设置 → 应用 → Shipherd → 卸载。
-3. 如果也要删除数据，删掉 `~/.shipherd` 和 Electron 的配置文件夹（macOS 上是 `~/Library/Application Support/shipherd`，Windows 上是 `%APPDATA%\shipherd`）。在 macOS 上，如果你保存过 webhook 地址，还要在"钥匙串访问"里删掉"shipherd Safe Storage"这一项。
+3. 如果也要删除数据，删掉 `~/.shipherd` 和 Electron 的配置文件夹（macOS 上是 `~/Library/Application Support/shipherd`，Windows 上是 `%APPDATA%\shipherd`）。在 macOS 上，如果你保存过 webhook 地址，还要在"钥匙串访问"里删掉"shipherd Safe Storage"这一项。从 Butler 升级的，Electron 配置文件夹还是旧名字 `butler`，`~/.butler` 那个链接或说明文件也可以删掉。
 
 ## 反馈
 

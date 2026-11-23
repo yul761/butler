@@ -91,3 +91,12 @@ describe("runCommand", () => {
     expect(await runCommand({ command: "x", file: null, cwd, timeoutMs: 1000, env: {}, shell: null, platform: "win32" })).toEqual({ kind: "unavailable", reason: "Git Bash not found" });
   });
 });
+
+// BTL-260：改名前写下的检查命令（数据库里、用户仓库的脚本里）用 $BUTLER_CHECK_FILE。
+describe("BUTLER_CHECK_FILE", () => {
+  const cwd = tempDir();
+  it("is still set next to SHIPHERD_CHECK_FILE", async () => {
+    const r = await runCommand({ command: 'test "$BUTLER_CHECK_FILE" = a.ts && test "$SHIPHERD_CHECK_FILE" = a.ts || exit 9', file: "a.ts", cwd, timeoutMs: 5000, env: process.env });
+    expect(r).toEqual({ kind: "pass" });
+  });
+});

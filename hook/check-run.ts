@@ -117,7 +117,8 @@ export function runCommand(o: {
     try {
       child = spawn(shell, ["-c", commandScript(o.command, o.file), "shipherd-check", ...(o.file === null ? [] : [o.file])], {
         cwd: o.cwd,
-        env: o.file === null ? o.env : { ...o.env, SHIPHERD_CHECK_FILE: o.file },
+        // BUTLER_CHECK_FILE：改名前（BTL-260）写下的检查命令里用的是旧名字，存在数据库和用户仓库里，一直要给。
+        env: o.file === null ? o.env : { ...o.env, SHIPHERD_CHECK_FILE: o.file, BUTLER_CHECK_FILE: o.file },
         stdio: ["ignore", "pipe", "pipe"],
         detached: platform !== "win32",
         windowsHide: true,

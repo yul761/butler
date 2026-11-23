@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -122,7 +123,26 @@ describe("packaging config (design 2.1, 12)", () => {
       deleteAppDataOnUninstall: false,
       createDesktopShortcut: true,
       createStartMenuShortcut: true,
+      include: "build-resources/installer.nsh",
     });
+  });
+
+  // BTL-260：appId 改了，NSIS 的卸载注册表项 GUID 也跟着变；installer.nsh 要按旧 appId 的 GUID 找旧 Butler。
+  it("detects the pre-rename Butler install by the uninstall key electron-builder derived from the old appId", () => {
+    const uuidV5 = (name: string, ns: string): string => {
+      const h = createHash("sha1").update(Buffer.concat([Buffer.from(ns.replace(/-/g, ""), "hex"), Buffer.from(name)])).digest();
+      h[6] = (h[6] & 0x0f) | 0x50;
+      h[8] = (h[8] & 0x3f) | 0x80;
+      const x = h.subarray(0, 16).toString("hex");
+      return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+    };
+    // electron-builder（app-builder-lib NsisTarget）的命名空间。
+    const NS = "50e065bc-3134-11e6-9bab-38c9862bdaf3";
+    const nsh = read("build-resources/installer.nsh");
+    expect(nsh).toContain(`!define LEGACY_BUTLER_GUID "${uuidV5("io.statecore.butler", NS)}"`);
+    expect(uuidV5("io.statecore.butler", NS)).not.toBe(uuidV5(cfg.appId, NS));
+    expect(nsh).toMatch(/!macro customInit[\s\S]*MessageBox MB_YESNO[^\n]*\/SD IDNO[\s\S]*!macroend/);
+    expect(existsSync(`${root}${cfg.nsis.include as string}`)).toBe(true);
   });
 
   it("names the installers without spaces, as the README and the CI upload globs expect", () => {

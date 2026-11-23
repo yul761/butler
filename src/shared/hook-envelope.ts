@@ -23,7 +23,8 @@ export function parseEnvelope(text: string): HookEnvelope | null {
     v: 1,
     receivedAt: v.receivedAt,
     ticket: typeof v.ticket === "string" ? v.ticket : null,
-    shipherdSession: typeof v.shipherdSession === "string" ? v.shipherdSession : null,
+    // butlerSession：改名前（BTL-260）的 hook 写的字段名。升级前起的 claude 还在用旧 hook 时会写进来。TODO(5.0) 删。
+    shipherdSession: typeof v.shipherdSession === "string" ? v.shipherdSession : typeof v.butlerSession === "string" ? v.butlerSession : null,
     payload: v.payload ?? null,
     ...(typeof v.parseError === "string" ? { parseError: v.parseError } : {}),
     ...(typeof v.raw === "string" ? { raw: v.raw } : {}),

@@ -1009,7 +1009,8 @@ export class StackService {
     for (const r of repos) {
       if (existsSync(r)) {
         void runGit(r, ["worktree", "prune"]).catch(() => undefined);
-        void runGit(r, ["for-each-ref", "--format=%(refname)", "refs/heads/shipherd-stack/"]).then(async (o) => {
+        // refs/heads/butler-stack/：改名前（BTL-260）的临时分支前缀，留下的也一起清掉（TODO(5.0) 删）。
+        void runGit(r, ["for-each-ref", "--format=%(refname)", "refs/heads/shipherd-stack/", "refs/heads/butler-stack/"]).then(async (o) => {
           for (const ref of o.stdout.split(/\r?\n/).filter(Boolean)) await runGit(r, ["update-ref", "-d", ref]);
         }).catch(() => undefined);
       }

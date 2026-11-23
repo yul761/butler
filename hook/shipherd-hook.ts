@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { classifyShip } from "../src/shared/gate-command";
 import type { HookEnvelope } from "../src/shared/hook-envelope";
-import { dirFromEnv } from "../src/main/paths";
+import { homeFromEnv } from "../src/main/paths";
+import { envValue } from "../src/shared/legacy-env";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 
 const RAW_LIMIT = 10_000;
@@ -94,8 +95,8 @@ export function wanted(envelope: HookEnvelope): boolean {
 }
 
 export function buildEnvelope(raw: string, env: NodeJS.ProcessEnv, now: number): HookEnvelope {
-  const ticket = env.SHIPHERD_TICKET?.trim() || null;
-  const shipherdSession = env.SHIPHERD_SESSION?.trim() || null;
+  const ticket = envValue(env, "TICKET")?.trim() || null;
+  const shipherdSession = envValue(env, "SESSION")?.trim() || null;
   try {
     return { v: 1, receivedAt: now, ticket, shipherdSession, payload: trimRememberPayload(trimBashPayload(trimAgentPayload(JSON.parse(raw)))) };
   } catch (e) {
@@ -104,7 +105,7 @@ export function buildEnvelope(raw: string, env: NodeJS.ProcessEnv, now: number):
 }
 
 export function inboxDir(env: NodeJS.ProcessEnv, home: string = homedir()): string {
-  return join(dirFromEnv(env.SHIPHERD_HOME, home) ?? join(home, ".shipherd"), "inbox");
+  return join(homeFromEnv(env, home), "inbox");
 }
 
 /** 先写 .tmp 再 rename，读取方永远看不到写了一半的文件。文件名以时间戳开头，按名字排序即按时间排序。rename 失败时删掉 .tmp。 */

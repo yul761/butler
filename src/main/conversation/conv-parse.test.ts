@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { setLang } from "../i18n";
 import { deliveryText } from "../prereview/delivery";
 import { M } from "../strings";
-import { capText, cleanUserText, CONV_TEXT_MAX, convEntriesOf, toolEffect, type ConvEntry } from "./conv-parse";
+import { capText, cleanUserText, CONV_TEXT_MAX, convEntriesOf, toolEffect, userOpenOf, type ConvEntry } from "./conv-parse";
 
 const lines = (file: string): string[] => readFileSync(file, "utf8").split("\n").filter((l) => l.length > 0);
+// conv.jsonl 录于改名前（BTL-260），里面有一条「Butler：」开头的通知，正好覆盖旧通知的识别。
 const convFixture = lines(join(__dirname, "__fixtures__", "conv.jsonl"));
+// 这份对话记录录于改名前（BTL-260），里面是旧的 butler-handoff 代码块，正好覆盖旧代码块的解析；JSONL 写不了注释，说明放在这里。
 const tailFixture = lines(join(__dirname, "..", "sessions", "__fixtures__", "refresh-tail.jsonl"));
 
 /** entry 的可比较部分（key、parent、at 另测）。 */
@@ -97,15 +99,16 @@ describe.each(["zh", "en"] as const)("Shipherd's own messages (%s)", (lang) => {
     return e.kind === "user" ? e.open : e.kind;
   };
 
+  // 这些是改名前（BTL-260）的旧对话记录原文，保留 Butler 的写法：旧记录不会变，解析要一直认得。
   it("the old epic handoff requests in old transcripts (BTL-246 removed them from strings.ts)", () => {
     const old = lang === "zh"
       ? [
-        "Shipherd 要清空这个 session 的上下文。请先用 shipherd-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
-        "这个 session 闲置很久了，Shipherd 要把它关掉（以后可以恢复）。请先用 shipherd-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+        "Butler 要清空这个 session 的上下文。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
+        "这个 session 闲置很久了，Butler 要把它关掉（以后可以恢复）。请先用 butler-epic 的 handoff 写下现在的进度和没解决的问题；规划有改动的话先用 set_epic_plan 更新。写完就停下。",
       ]
       : [
-        "Shipherd is about to clear this session's context. First use shipherd-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
-        "This session has been idle for a long time, so Shipherd is about to close it (it can be resumed later). First use shipherd-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+        "Butler is about to clear this session's context. First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
+        "This session has been idle for a long time, so Butler is about to close it (it can be resumed later). First use butler-epic's handoff to write down the current progress and the open questions; if the plan has changed, update it with set_epic_plan first. Stop once you're done.",
       ];
     for (const text of old) expect(openOf(text)).toBe("handoff");
   });
@@ -336,5 +339,13 @@ describe("capText", () => {
     const text = "😀".repeat(25_000);
     const out = capText(text);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(out)).toBe(false);
+  });
+});
+
+// BTL-260：改名前的 Butler 往终端里打的通知以「Butler：」开头，已经在对话记录里了。
+describe("notices typed by Butler before the rename", () => {
+  it("are silent like Shipherd's own, and a user who merely mentions Butler is not", () => {
+    for (const t of ["Butler：PR #12 的 CI 过了", "Butler: CI passed on PR #12", "Shipherd：PR #12 的 CI 过了"]) expect(userOpenOf(t, t)).toBe("silent");
+    for (const t of ["Butler 这个名字还在吗", "butler：小写不算"]) expect(userOpenOf(t, t)).toBe("user");
   });
 });

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { envValue } from "../shared/legacy-env";
 
 export interface ShipherdPaths {
   home: string;
@@ -56,12 +57,20 @@ export function dirFromEnv(v: string | undefined, home: string = homedir()): str
   return isAbsolute(t) ? t : resolve(t);
 }
 
+/**
+ * 数据目录：SHIPHERD_HOME > BUTLER_HOME（改名前的变量，TODO(5.0) 删）> ~/.shipherd。
+ * Shipherd 和 hook（hook/*.ts）都用它，两边算出来的目录才一致。
+ */
+export function homeFromEnv(env: Record<string, string | undefined>, home: string = homedir()): string {
+  return dirFromEnv(envValue(env, "HOME"), home) ?? join(home, ".shipherd");
+}
+
 export function resolvePaths(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   home: string = homedir(),
 ): ShipherdPaths {
-  const shipherdHome = dirFromEnv(env.SHIPHERD_HOME, home) ?? join(home, ".shipherd");
+  const shipherdHome = homeFromEnv(env, home);
   const configOverride = dirFromEnv(env.CLAUDE_CONFIG_DIR, home);
   const claudeConfigDir = configOverride ?? join(home, ".claude");
   const inbox = join(shipherdHome, "inbox");

@@ -250,8 +250,13 @@ const isSessionOp = (op: unknown) => op === "session_activity" || op === "end_se
 
 /** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。ticketKey 和 featureId 必须正好有一个。 */
 export function parseControlRequest(raw: unknown): ControlRequest | null {
-  const o = raw as Record<string, unknown> | null;
+  let o = raw as Record<string, unknown> | null;
   if (!o || typeof o !== "object" || o.v !== CONTROL_VERSION) return null;
+  // 改名前（BTL-260）的 sessions MCP server 写的是 butler: true（升级前起的总控还在跑时）。TODO(5.0) 删。
+  if ("butler" in o && !("shipherd" in o)) {
+    const { butler, ...rest } = o;
+    o = { ...rest, shipherd: butler };
+  }
   const from = typeof o.from === "string" && o.from.length > 0 && o.from.length <= 100 ? o.from : null;
   if ("shipherd" in o) return parseShipherdRequest(o, from);
   // 以前的 epic session（BTL-246 去掉了）：它的 MCP server 可能还在跑，请求一律不认。

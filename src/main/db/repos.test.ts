@@ -184,7 +184,8 @@ describe("migration 5 (several repos per ticket)", () => {
     db.exec("PRAGMA user_version = 4");
     db.exec(`INSERT INTO tickets (key, title, repo_path, work_mode, worktree_path, branch, created_at)
              VALUES ('OLD-1', 't', '/code/web', 'worktree', '/code/web-worktrees/OLD-1', 'feature/OLD-1', 5)`);
-    db.exec(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('s1', 'OLD-1', '/code/web-worktrees/OLD-1', 'shipherd', 6)`);
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
+    db.exec(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('s1', 'OLD-1', '/code/web-worktrees/OLD-1', 'butler', 6)`);
     db.exec(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('s2', NULL, '/elsewhere', 'discovered', 6)`);
     expect(migrate(db)).toBe(MIGRATIONS.length);
 
@@ -281,7 +282,8 @@ describe("migration 9: fix sessions", () => {
 
   it("gives existing sessions no fixesSession", () => {
     const db = upTo8();
-    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'shipherd', 1)`).run();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
     expect(migrate(db)).toBe(MIGRATIONS.length);
     expect(new SessionsRepo(db).get("old")?.fixesSession).toBeNull();
   });
@@ -366,8 +368,9 @@ describe("hidden-session cleanup (BTL-190 item 8)", () => {
 
   it("upgrades an existing database: sessions already hidden count from the upgrade, not from the epoch", () => {
     const db = previous();
-    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-hidden', NULL, '/w', 'shipherd', 1, 1)`).run();
-    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-shown', NULL, '/w', 'shipherd', 1, 0)`).run();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-hidden', NULL, '/w', 'butler', 1, 1)`).run();
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at, dismissed) VALUES ('old-shown', NULL, '/w', 'butler', 1, 0)`).run();
     const before = Date.now();
     expect(migrate(db)).toBe(MIGRATIONS.length);
     const at = (id: string) => (db.prepare(`SELECT dismissed_at FROM sessions WHERE id = ?`).get(id) as { dismissed_at: number | null }).dismissed_at;
@@ -484,7 +487,8 @@ describe("Shipherd 总控 sessions (BTL-190 item 5)", () => {
     const db = new DatabaseSync(":memory:");
     for (const sql of MIGRATIONS.slice(0, MIGRATIONS.length - 1)) db.exec(sql);
     db.exec(`PRAGMA user_version = ${MIGRATIONS.length - 1}`);
-    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'shipherd', 1)`).run();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
+    db.prepare(`INSERT INTO sessions (id, ticket_key, cwd, origin, created_at) VALUES ('old', NULL, '/w', 'butler', 1)`).run();
     expect(migrate(db)).toBe(MIGRATIONS.length);
     expect(new SessionsRepo(db).get("old")?.shipherd).toBe(false);
   });
@@ -612,7 +616,8 @@ describe("migration 24: lesson runs", () => {
 
   it("sessions gain lesson_run_id; claude_availability allows one row", () => {
     const db = memDb();
-    db.prepare(`INSERT INTO sessions (id, cwd, origin, created_at) VALUES ('s', '/w', 'shipherd', 1)`).run();
+    // 'butler'：sessions.origin 在库里的值沿用改名前的（改 CHECK 要重建 sessions 表，没改），见 LEGACY_ORIGIN。
+    db.prepare(`INSERT INTO sessions (id, cwd, origin, created_at) VALUES ('s', '/w', 'butler', 1)`).run();
     expect(db.prepare(`SELECT lesson_run_id FROM sessions WHERE id = 's'`).get()).toEqual({ lesson_run_id: null });
     db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (1, '{}', 1)`).run();
     expect(() => db.prepare(`INSERT INTO claude_availability (id, state, updated_at) VALUES (2, '{}', 1)`).run()).toThrow();

@@ -26,9 +26,30 @@ export function hookCommand(hookBin: string, platform: NodeJS.Platform): string 
   return `"${p.replace(/"/g, '\\"')}"`;
 }
 
-/** 只识别 hookCommand 生成的精确形式：双引号包裹的路径，末段恰好是 shipherd-hook 或 shipherd-hook.exe。 */
+/**
+ * 改名前（BTL-260）的 Butler 装的 hook：.../butler-hook 或 butler-hook.exe，同样是 hookCommand 生成的精确形式。
+ * 认得它，安装时才会把旧条目换掉（而不是新旧各一份），卸载时也一起删。TODO(5.0)：保留一个大版本后删掉。
+ */
+export function isLegacyHook(command: unknown): boolean {
+  return typeof command === "string" && /^"[^"]*[/\\]butler-hook(\.exe)?"$/.test(command);
+}
+
+/** 只识别 hookCommand 生成的精确形式：双引号包裹的路径，末段恰好是 shipherd-hook 或 shipherd-hook.exe（以及改名前的 butler-hook）。 */
 export function isShipherdHook(command: unknown): boolean {
-  return typeof command === "string" && /^"[^"]*[/\\]shipherd-hook(\.exe)?"$/.test(command);
+  return (typeof command === "string" && /^"[^"]*[/\\]shipherd-hook(\.exe)?"$/.test(command)) || isLegacyHook(command);
+}
+
+/** settings 里还有改名前的 butler-hook 条目（BTL-260，TODO(5.0) 删）。 */
+export function hasLegacyHook(settings: Json): boolean {
+  return HOOK_EVENTS.some((e) => shipherdCommands(settings, e).some(isLegacyHook));
+}
+
+/** settings 里 Shipherd 的 hook 条目（含改名前的 butler-hook）各指向哪个程序：hookCommand 的引号去掉、\" 还原。 */
+export function hookBins(settings: Json): { bin: string; legacy: boolean }[] {
+  return HOOK_EVENTS.flatMap((e) => shipherdCommands(settings, e)).map((c) => ({
+    bin: (c as string).slice(1, -1).replace(/\\"/g, '"'),
+    legacy: isLegacyHook(c),
+  }));
 }
 
 function hookObject(settings: Json): Record<string, unknown> | null {

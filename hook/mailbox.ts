@@ -6,6 +6,7 @@ import {
   DONE_SUFFIX, MAILBOX_CONTEXT_LIMIT, MAILBOX_EVENT, MSG_SUFFIX, TAKEN_SUFFIX, type MailboxFile,
 } from "../src/shared/mailbox";
 import type { HookEnvelope } from "../src/shared/hook-envelope";
+import { envValue } from "../src/shared/legacy-env";
 
 export interface MailboxDeps {
   readdir(dir: string): string[];
@@ -52,7 +53,7 @@ function parse(text: string): MailboxFile | null {
 
 /** 认领、拼正文。任何一步出错都只少送，不抛。 */
 export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, d: MailboxDeps = realMailboxDeps): MailboxRun {
-  const sid = env.SHIPHERD_SESSION?.trim();
+  const sid = envValue(env, "SESSION")?.trim();
   if (!sid || !root) return NOTHING;
   let event = "PostToolUse";
   try {
@@ -137,6 +138,6 @@ export function runMailbox(stdin: string, env: NodeJS.ProcessEnv, root: string, 
 
 /** 送完以后给主进程的信封：让它马上清扫这个终端的 .done（不等定时清扫）。 */
 export function mailboxEnvelope(env: NodeJS.ProcessEnv, now: number): HookEnvelope {
-  const sid = env.SHIPHERD_SESSION?.trim() || null;
-  return { v: 1, receivedAt: now, ticket: env.SHIPHERD_TICKET?.trim() || null, shipherdSession: sid, payload: { hook_event_name: MAILBOX_EVENT, session_id: sid } };
+  const sid = envValue(env, "SESSION")?.trim() || null;
+  return { v: 1, receivedAt: now, ticket: envValue(env, "TICKET")?.trim() || null, shipherdSession: sid, payload: { hook_event_name: MAILBOX_EVENT, session_id: sid } };
 }
