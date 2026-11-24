@@ -620,6 +620,14 @@ const ZH = {
   keepAwakeOn: "防休眠中",
   keepAwakeHint: "开着的时候电脑不会因为闲置而睡眠，屏幕也不熄，适合开着盖子让 session 自己跑。合上盖子或退出 Shipherd 时自动关掉。",
   ticketKey: "Ticket 号",
+  /** custom：设置里改过的 ticket 号格式（正则）；用默认格式时为 null。 */
+  ticketKeyHint: (example: string | null, suggested: "feature" | "all" | null, custom: string | null) =>
+    `格式：${custom ? `符合设置里的 ticket 号格式 ${custom}` : "前缀-数字，前缀是大写字母开头的两个以上字母或数字"}${example ? `，比如 ${example}` : ""}。` +
+    (suggested === "feature" ? "已按这个 epic 里已有的 ticket 填好下一个号，可以改。" : suggested === "all" ? "已按已有的 ticket 填好下一个号，可以改。" : ""),
+  ticketKeyFormatError: (input: string, example: string | null, custom: string | null) =>
+    custom
+      ? `「${input}」不是有效的 ticket 号：要符合设置里的 ticket 号格式 ${custom}${example ? `，比如 ${example}` : ""}。`
+      : `「${input}」不是有效的 ticket 号。应该是「前缀-数字」：前缀以大写字母开头，至少两个字符（大写字母或数字），再接一个连字符和数字${example ? `，比如 ${example}` : ""}。`,
   title: "标题（可选）",
   repo: "仓库目录",
   pick: "选择…",
@@ -720,7 +728,7 @@ const ZH = {
   oldWorkdir: (cwd: string, current: string, expected: string) =>
     `这个 session 是在 ${cwd} 里启动的，那里现在${current === "HEAD" ? "没有在任何分支上（ticket 改过工作方式）" : `在 ${current} 上`}，不是这个 ticket 的分支 ${expected}。在那里继续可能改错地方；也可以新开一个 session。`,
   createErrors: {
-    invalid_key: "ticket 号格式不对。",
+    invalid_key: "ticket 号格式不对：应该是「前缀-数字」，比如 PROJ-123。",
     exists: "这个 ticket 已经存在。",
     not_git_repo: "所选目录不是 git 仓库：选仓库所在的目录；新项目先在目录里运行 git init 并提交一次。",
     worktree_exists: "worktree 目录已存在。",

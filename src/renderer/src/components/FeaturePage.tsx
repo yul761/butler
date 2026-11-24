@@ -180,6 +180,8 @@ export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSessi
       {newTicket && (
         <NewTicketDialog
           feature={feature}
+          contextTickets={feature.tickets}
+          takenKeys={[...ctx.tickets.keys()]}
           onClose={() => setNewTicket(false)}
           onRestored={(key) => (setNewTicket(false), onTicketCreated(key))}
           onCreated={(key) => (setNewTicket(false), onTicketCreated(key))}

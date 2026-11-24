@@ -56,7 +56,7 @@ export interface IntakeDeps {
   activeInRepo: (repoPath: string) => Promise<RunningWork[]>;
   sessionModel: (tier: Tier) => { ok: true; model: string | null } | { ok: false; error: string };
   /** 建 ticket；有父 epic 时建在那个 epic 里（没有就新建一个，BTL-246 §7）。 */
-  createTicket: (i: { key: string; title: string; repoPath: string; startPoint: string | null; epic: { key: string; title: string | null } | null }) => Promise<{ ok: true; repoId: number; branch: string } | { ok: false; exists: boolean; message: string }>;
+  createTicket: (i: { key: string; title: string; repoPath: string; startPoint: string | null; epic: { key: string; title: string | null } | null }) => Promise<{ ok: true; repoId: number; branch: string } | { ok: false; exists: boolean; message: string; retry?: boolean }>;
   /** 已有的 ticket（澄清 session 建的、或者上次建好但没开成）的仓库。 */
   ticketRepo: (ticketKey: string) => { repoId: number; branch: string } | null;
   openSession: (ticketKey: string, repoId: number, model: string | null) => Promise<{ ok: true; termId: string } | { ok: false; message: string }>;
@@ -528,7 +528,8 @@ export class IntakeService {
     if (!repo) {
       if (this.d.ticketExists(r.key)) return { ok: false, message: "exists", retry: false, exists: true };
       const c = await this.d.createTicket({ key: r.key, title: r.title, repoPath: r.repoPath, startPoint: o.startPoint ?? null, epic: r.payload.epic ?? null });
-      if (!c.ok) return { ok: false, message: c.message, retry: false, exists: c.exists };
+      // retry：同一个号正被别处建着（busy），过一会儿再看（那边建好了下次就是 exists，建失败了就由这边建）。
+      if (!c.ok) return { ok: false, message: c.message, retry: c.retry ?? false, exists: c.exists };
       repo = { repoId: c.repoId, branch: c.branch };
       this.d.repo.update(r.key, { ticketKey: r.key });
       if (cancelled()) return stop;

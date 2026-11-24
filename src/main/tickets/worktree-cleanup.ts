@@ -3,6 +3,7 @@ import type { HandoffsRepo } from "../db/handoffs-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { combinedPr } from "../handoff/prs";
 import { GitError, gitErrorSummary, hasLocalChanges, removeWorktree, unbranchedCommits } from "./git";
+import { LockWaitTimeoutError, withRepoLock } from "./repo-lock";
 import { TicketError, type TicketService } from "./ticket-service";
 import { M } from "../strings";
 
@@ -48,12 +49,24 @@ export async function cleanupTicketWorktrees(d: CleanupDeps, ticketKey: string):
         const dir = r.worktreePath!;
         let reason: string | null;
         try {
-          reason = await blocker(d, ticketKey, r.id, dir);
-          // 上面等 git 的时候可能刚开了终端（开 session 在锁外先占了终端的情况）：删之前再看一眼。
-          if (!reason && d.repoBusy(ticketKey, r.id)) reason = M().cleanupTerminalRunning;
-          if (!reason) await removeWorktree(r.repoPath, dir);
+          // 仓库锁（BTL-264）：别的 ticket 正在同一个仓库里建 worktree 时等它建完再删。检查放在锁里：等锁的时候可能开了终端、改了文件。
+          reason = await withRepoLock(
+            r.repoPath,
+            async () => {
+              const why = await blocker(d, ticketKey, r.id, dir);
+              if (why) return why;
+              // 上面等 git 的时候可能刚开了终端（开 session 在锁外先占了终端的情况）：删之前再看一眼。
+              if (d.repoBusy(ticketKey, r.id)) return M().cleanupTerminalRunning;
+              await removeWorktree(r.repoPath, dir);
+              return null;
+            },
+            `remove ${ticketKey}'s merged worktree ${dir}`,
+          );
         } catch (e) {
-          reason = e instanceof GitError ? M().gitFailed(gitErrorSummary(e)) : (e as Error).message;
+          reason =
+            e instanceof GitError ? M().gitFailed(gitErrorSummary(e))
+            : e instanceof LockWaitTimeoutError ? M().repoGitBusy(r.repoPath, e.holder)
+            : (e as Error).message;
         }
         if (reason) {
           d.tickets.setCleanupBlocked(r.id, reason);

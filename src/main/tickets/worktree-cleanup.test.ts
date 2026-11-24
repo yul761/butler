@@ -7,6 +7,7 @@ import { TicketsRepo } from "../db/tickets-repo";
 import { makeRepo, memDb, tempDir } from "../test-utils";
 import { branchExists, currentBranch } from "./git";
 import { TicketError, TicketService } from "./ticket-service";
+import { repoLockKey, repoLocks } from "./repo-lock";
 import { cleanupIfMerged, cleanupTicketWorktrees } from "./worktree-cleanup";
 
 async function setup(workMode: "worktree" | "branch" = "worktree") {
@@ -116,6 +117,38 @@ describe("cleanup safety (final review)", () => {
     expect((await first)[0].result).toBe("removed");
     expect(ticketService.updating("DMS-1")).toBe(false);
     expect(tickets.getRepo(r.id)?.cleanupBlocked).toBeNull();
+  });
+
+  it("waits for the repo's lock before removing, so it never runs alongside another ticket's worktree add (BTL-264)", async () => {
+    const { clean, dir, repo } = await setup();
+    let release!: () => void;
+    const held = repoLocks.run(await repoLockKey(repo), () => new Promise<void>((r) => (release = r)));
+    const pass = clean();
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(existsSync(dir)).toBe(true);
+    release();
+    await held;
+    expect((await pass).map((o) => o.result)).toEqual(["removed"]);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("checks for local changes and terminals after it gets the repo lock, not before (BTL-264)", async () => {
+    const { clean, dir, repo, setBusy } = await setup();
+    for (const late of ["file", "terminal"] as const) {
+      let release!: () => void;
+      const held = repoLocks.run(await repoLockKey(repo), () => new Promise<void>((r) => (release = r)));
+      while (!release) await new Promise((r) => setImmediate(r));
+      const pass = clean();
+      for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 10));
+      // 排着队等锁的时候：写了个文件 / 开了终端。
+      if (late === "file") writeFileSync(join(dir, "late.txt"), "x");
+      else setBusy(true);
+      release();
+      await held;
+      expect((await pass).map((o) => o.result)).toEqual(["blocked"]);
+      expect(existsSync(dir)).toBe(true);
+      execFileSync("git", ["clean", "-fq"], { cwd: dir });
+    }
   });
 
   it("checks the repo's terminals again right before removing", async () => {

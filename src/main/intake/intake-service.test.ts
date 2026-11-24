@@ -396,6 +396,20 @@ describe("IntakeService: start conditions", () => {
     expect(c.openedCalls).toBe(1);
   });
 
+  it("retries when the ticket is busy being created elsewhere, instead of recording it as existing (BTL-264)", async () => {
+    const h = setup();
+    h.setTickets([ticket("PROJ-1")]);
+    await h.s.poll();
+    const create = h.d.createTicket;
+    let busy = 1;
+    h.d.createTicket = async (i) => (busy-- > 0 ? { ok: false, exists: false, retry: true, message: "busy" } : create(i));
+    expect((await h.drain())["PROJ-1"]).toMatchObject({ reason: "retry" });
+    expect(h.state("PROJ-1")).not.toBe("exists");
+    expect((await h.drain())["PROJ-1"]).toEqual({ done: true });
+    expect(h.state("PROJ-1")).toBe("started");
+    expect(h.created).toHaveLength(1);
+  });
+
   it("a failing session retries, then fails and alerts", async () => {
     const h = setup({ openFails: 5 });
     h.setTickets([ticket("PROJ-1")]);

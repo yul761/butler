@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { repoLockKey, repoLocks } from "../tickets/repo-lock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalActionKind } from "../../shared/external";
 import type { StackRunMode } from "../../shared/stacks";
@@ -173,6 +174,9 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?:
     repo, remote, hub, db, svc, deps, repoT, policy, external, delivered, posted,
     tip: (b: string) => g(repo, "rev-parse", b),
     remoteTip: (b: string) => g(remote, "rev-parse", b),
+    /** 几个分支的提交，一个 git 进程。 */
+    tips: (bs: readonly string[]) => g(repo, "rev-parse", ...bs).split(/\r?\n/),
+    remoteTips: (bs: readonly string[]) => g(remote, "rev-parse", ...bs).split(/\r?\n/),
     advance: (ms: number) => (clock += ms),
     /** 在「GitHub」上把 a 合进 main。 */
     mergeOnHub(branch: string, how: "squash" | "merge") {
@@ -235,10 +239,13 @@ async function defineAll(w: World) {
   return r.stackId!;
 }
 
-/** 从 trunk 到 branch 一共有几个提交、是不是直接接在 trunk 上。 */
-function shape(w: World, branch: string) {
+/**
+ * 每个分支从 trunk 起一共有几个提交、是不是直接接在 trunk 上。几个分支一起看只 fetch 一次：一次 fetch 自己还要起
+ * upload-pack、pack-objects、rev-list 等好几个进程，Windows runner 上每个都不便宜（见文件头）。
+ */
+function shapes(w: World, branches: readonly string[]) {
   g(w.repo, "fetch", "-q", "origin");
-  return {
+  return branches.map((branch) => ({
     count: Number(g(w.repo, "rev-list", "--count", `origin/main..${branch}`)),
     onTrunk: (() => {
       try {
@@ -248,7 +255,11 @@ function shape(w: World, branch: string) {
         return false;
       }
     })(),
-  };
+  }));
+}
+
+function shape(w: World, branch: string) {
+  return shapes(w, [branch])[0]!;
 }
 
 beforeEach(() => {
@@ -324,21 +335,20 @@ describe.each<[string, StackRunMode | undefined]>([["--update-refs", undefined],
     const w = world({ mode });
     const id = await defineAll(w);
     const head = w.mergeOnHub("a", how);
-    const old = { b: w.tip("b"), c: w.tip("c"), d: w.tip("d") };
+    const old = w.tips(["b", "c", "d"]);
     await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
 
     expect(w.repoT.get(id)!.mergeMethod).toBe(how);
-    for (const [b, n] of [["b", 1], ["c", 2], ["d", 3]] as const) {
-      expect(shape(w, b)).toEqual({ count: n, onTrunk: true });
-      expect(w.tip(b)).not.toBe(old[b]);
-      expect(w.remoteTip(b)).toBe(w.tip(b));
-    }
+    expect(shapes(w, ["b", "c", "d"])).toEqual([1, 2, 3].map((count) => ({ count, onTrunk: true })));
+    const now = w.tips(["b", "c", "d"]);
+    for (const i of [0, 1, 2]) expect(now[i]).not.toBe(old[i]);
+    expect(w.remoteTips(["b", "c", "d"])).toEqual(now);
     const run = w.repoT.lastRun(id)!;
     expect(run).toMatchObject({ trigger: "bottom_merged", outcome: "rebased" });
     expect(run.detail.mergeMethod).toBe(how);
     expect(run.detail.pushed).toEqual(["b", "c", "d"]);
     // 备份引用留着
-    for (const l of run.detail.layers!) expect(g(w.repo, "rev-parse", l.backupRef!)).toBe(l.oldTip);
+    expect(w.tips(run.detail.layers!.map((l) => l.backupRef!))).toEqual(run.detail.layers!.map((l) => l.oldTip));
     expect(w.external.filter((e) => e.kind === "force_push").map((e) => e.detail.target)).toEqual(["b", "c", "d"]);
 
     const create = fake.calls.find((c) => c.fn === "prCreate")!.args[0] as CreatePr;
@@ -438,14 +448,14 @@ describe("StackService switches", () => {
   it("does not touch branches with autoRebase off", async () => {
     const w = world({ autoRebase: false });
     const id = await defineAll(w);
-    const before = BRANCHES.map(w.tip);
+    const before = w.tips(BRANCHES);
     expect((await w.svc.rebaseNow(id)).ok).toBe(false);
     const head = w.mergeOnHub("a", "squash");
     await w.svc.onMerged({ url: "u1", number: 1, headSha: head, headBranch: "a" }, w.repo);
     w.pushMain("m.txt", "m\n");
     w.advance(10 * 60_000);
     await w.svc.tick();
-    expect(BRANCHES.map(w.tip)).toEqual(before);
+    expect(w.tips(BRANCHES)).toEqual(before);
     expect(w.repoT.layers(id)[0]!.state).toBe("merged");
     expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
   });
@@ -523,12 +533,11 @@ describe("StackService triggers", () => {
     w.pushMain("m.txt", "m\n");
     w.advance(10 * 60_000);
     await w.svc.tick();
-    expect(shape(w, "a").count).toBe(1);
-    expect(shape(w, "a").onTrunk).toBe(false); // 同一天不再跑
+    expect(shape(w, "a")).toEqual({ count: 1, onTrunk: false }); // 同一天不再跑
     w.advance(24 * 3600_000);
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "daily", outcome: "rebased" });
-    for (const [b, n] of [["a", 1], ["b", 2], ["c", 3], ["d", 4]] as const) expect(shape(w, b)).toEqual({ count: n, onTrunk: true });
+    expect(shapes(w, BRANCHES)).toEqual([1, 2, 3, 4].map((count) => ({ count, onTrunk: true })));
   });
 
   it("follows main when it moves", async () => {
@@ -540,16 +549,34 @@ describe("StackService triggers", () => {
     expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
   });
 
+  it("fetches and adds its temporary worktree only while holding the repo lock (BTL-264)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("m.txt", "m\n");
+    let release: (() => void) | undefined;
+    const held = repoLocks.run(await repoLockKey(w.repo), () => new Promise<void>((r) => (release = r)), "test holder");
+    while (!release) await new Promise((r) => setImmediate(r));
+    let finished = false;
+    const t = w.svc.tick().then(() => (finished = true));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(finished).toBe(false);
+    expect(w.repoT.lastRun(id)?.trigger).not.toBe("main_updated");
+    release();
+    await held;
+    await t;
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "rebased" });
+  });
+
   it("defers when a layer is checked out somewhere Shipherd does not manage and collapses repeats", async () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
     const wt = join(tempDir(), "wt");
     g(w.repo, "worktree", "add", "-q", wt, "c");
-    const before = BRANCHES.map(w.tip);
+    const before = w.tips(BRANCHES);
     w.pushMain("m.txt", "m\n");
     await w.svc.tick();
     await w.svc.rebaseNow(id);
-    expect(BRANCHES.map(w.tip)).toEqual(before);
+    expect(w.tips(BRANCHES)).toEqual(before);
     const runs = w.repoT.runs(id);
     expect(runs[0]).toMatchObject({ outcome: "deferred" });
     expect(runs[0]!.detail.repeats).toBe(2);
@@ -572,9 +599,9 @@ describe("StackService triggers", () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
     w.pushMain("b.txt", "main's b\n");
-    const before = BRANCHES.map(w.tip);
+    const before = w.tips(BRANCHES);
     await w.svc.tick();
-    expect(BRANCHES.map(w.tip)).toEqual(before);
+    expect(w.tips(BRANCHES)).toEqual(before);
     const run = w.repoT.lastRun(id)!;
     expect(run).toMatchObject({ outcome: "conflict" });
     expect(run.detail.conflict).toMatchObject({ branch: "b", files: ["b.txt"] });
@@ -609,9 +636,7 @@ describe("StackService triggers", () => {
     g(w.repo, "worktree", "remove", "--force", wt);
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "layer_commits", outcome: "rebased" });
-    expect(shape(w, "b")).toEqual({ count: 2, onTrunk: true });
-    expect(shape(w, "c")).toEqual({ count: 3, onTrunk: true });
-    expect(shape(w, "d")).toEqual({ count: 4, onTrunk: true });
+    expect(shapes(w, ["b", "c", "d"])).toEqual([2, 3, 4].map((count) => ({ count, onTrunk: true })));
     expect(w.repoT.layers(id).map((l) => l.conflictKey)).toEqual([null, null, null, null]);
     expect(w.svc.notices().filter((n) => n.reason === "conflict")).toEqual([]);
     // 两次整栈 rebase 加一次解冲突，全是真 git 调用：Windows CI 上贴着 30 秒的默认上限，放宽到 120 秒
@@ -686,12 +711,12 @@ describe("StackService restore", () => {
   it("puts every branch back from the backups of the last rebase", async () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
-    const before = BRANCHES.map(w.tip);
+    const before = w.tips(BRANCHES);
     w.pushMain("m.txt", "m\n");
     await w.svc.tick();
-    expect(BRANCHES.map(w.tip)).not.toEqual(before);
+    expect(w.tips(BRANCHES)).not.toEqual(before);
     expect(await w.svc.restore(id)).toEqual({ ok: true });
-    expect(BRANCHES.map(w.tip)).toEqual(before);
+    expect(w.tips(BRANCHES)).toEqual(before);
     expect(BRANCHES.map(w.remoteTip)).toEqual(before);
     expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "restore", outcome: "restored" });
     expect((await w.svc.restore(id)).ok).toBe(false);

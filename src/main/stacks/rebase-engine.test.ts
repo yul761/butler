@@ -44,11 +44,16 @@ function fourLayers() {
   return { repo: copyRepo(fourLayersTemplate.repo), tips: { ...fourLayersTemplate.tips } };
 }
 
-const layers = (repo: string, names: string[], start = 0): EngineLayer[] =>
-  names.map((b, i) => ({ position: start + i, branch: b, tip: g(repo, "rev-parse", b), base: null }));
+/** 一次 rev-parse 解析全部引用（每个 git 进程在 Windows runner 上都不便宜，见文件头）。 */
+const revs = (repo: string, refs: readonly string[]): string[] => g(repo, "rev-parse", ...refs).split(/\r?\n/);
+
+const layers = (repo: string, names: string[], start = 0): EngineLayer[] => {
+  const tips = revs(repo, names);
+  return names.map((b, i) => ({ position: start + i, branch: b, tip: tips[i]!, base: null }));
+};
 
 const input = (repo: string, extra: Partial<Parameters<typeof runEngine>[0]>) => ({
-  repo, workRoot: tempDir("shipherd-stack-work-"), runId: 1, trunk: g(repo, "rev-parse", "main"), layers: [] as EngineLayer[],
+  repo, workRoot: tempDir("shipherd-stack-work-"), runId: 1, trunk: extra.trunk ?? g(repo, "rev-parse", "main"), layers: [] as EngineLayer[],
   bottomOldParent: null, mode: "update_refs" as const, execPath: process.execPath, ...extra,
 });
 
@@ -112,8 +117,7 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     expect(r.tips.map((t) => t.branch)).toEqual(["a", "b", "c", "d"]);
     await chained(repo, trunk, r.tips);
     expect(r.tips.map((t) => t.newBase)).toEqual([trunk, r.tips[0]!.newTip, r.tips[1]!.newTip, r.tips[2]!.newTip]);
-    for (const b of ["a", "b", "c", "d"]) expect(g(repo, "rev-parse", b)).toBe(tips[b]);
-    expect(g(repo, "rev-parse", "bystander")).toBe(tips.b);
+    expect(revs(repo, ["a", "b", "c", "d", "bystander"])).toEqual(["a", "b", "c", "d", "b"].map((b) => tips[b]));
     expect(await refsUnder(repo, "refs/heads/shipherd-stack")).toEqual([]);
     expect(g(repo, "worktree", "list", "--porcelain").split("\n").filter((l) => l.startsWith("worktree "))).toHaveLength(1);
   });
@@ -153,7 +157,7 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     const trunk = commit(repo, "c.txt", "main's c\n", "main edits c");
     const r = await runEngine(input(repo, { mode, layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
     expect(r).toMatchObject({ kind: "conflict", branch: "c", position: 2, files: ["c.txt"] });
-    for (const b of ["a", "b", "c", "d"]) expect(g(repo, "rev-parse", b)).toBe(tips[b]);
+    expect(revs(repo, ["a", "b", "c", "d"])).toEqual(["a", "b", "c", "d"].map((b) => tips[b]));
     expect(await refsUnder(repo, "refs/heads/shipherd-stack")).toEqual([]);
   });
 
@@ -213,8 +217,7 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     const trunk = commit(repo, "main.txt", "m\n", "main moves");
     const r = await runEngine(input(repo, { mode, layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
     expect(r.kind).toBe("rebased");
-    for (const b of ["a", "b", "c", "d"]) expect(g(repo, "rev-parse", b)).toBe(tips[b]);
-    expect(g(repo, "rev-parse", "bystander")).toBe(tips.b);
+    expect(revs(repo, ["a", "b", "c", "d", "bystander"])).toEqual(["a", "b", "c", "d", "b"].map((b) => tips[b]));
   });
 
   it("treats a merged head that was never fetched as unknown instead of failing", async () => {

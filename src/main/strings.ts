@@ -129,6 +129,8 @@ const ZH = {
   // ticket / feature / 仓库
   gitFailed: (why: string) => `git 操作失败：${why}`,
   ticketBusy: "这个 ticket 正在修改，稍等一下",
+  repoGitBusy: (repo: string, holder: string | null) =>
+    `仓库 ${repo} 里有另一个 git 操作还没结束${holder ? `（${holder}）` : ""}，等了很久还没轮到。等它结束再试；一直这样的话看看是不是有 git 命令卡住了（比如在等输入的 hook 或 LFS 下载）。`,
   ticketNotFound: (key: string) => `找不到 ticket ${key}`,
   repoNotFound: "找不到这个仓库",
   featureNotFound: "找不到这个 epic",
@@ -793,6 +795,8 @@ const EN: MainStrings = {
   probeNoInit: "claude exited without printing an init message",
   gitFailed: (why: string) => `git failed: ${why}`,
   ticketBusy: "This ticket is being changed. Wait a moment",
+  repoGitBusy: (repo: string, holder: string | null) =>
+    `Another git operation in ${repo} hasn't finished${holder ? ` (${holder})` : ""}, and this one has waited a long time for its turn. Try again once it ends; if this keeps happening, check for a stuck git command (such as a hook waiting for input or an LFS download).`,
   ticketNotFound: (key: string) => `Ticket ${key} was not found`,
   repoNotFound: "That repo was not found",
   featureNotFound: "That epic was not found",

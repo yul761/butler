@@ -235,6 +235,7 @@ import { applyGitResolution, resolveGit } from "./util/git-path";
 import { knownPrLookup, openKnownPr } from "./util/github-url";
 import { openExternalLink } from "./util/external-link";
 import { TicketError, TicketService, samePath } from "./tickets/ticket-service";
+import { repoLocks } from "./tickets/repo-lock";
 import { isValidTicketKey } from "./tickets/ticket-key";
 import type { IntakeSourceKind } from "../shared/intake";
 import { defaultPrPolicy } from "../shared/pr-policy";
@@ -674,6 +675,8 @@ async function bootstrap(): Promise<void> {
     onSynced: (key) => safeSend(IPC.memoryChanged, key),
     log: logger,
   });
+  // 等仓库锁太久（BTL-264）写进日志：在等谁、等了多久。
+  repoLocks.log = (m) => logger(m);
   const ticketService = new TicketService({ tickets, features, settings, now: Date.now, workspacesDir: paths.workspaces, log: (m) => logger(m) });
   // hook 程序是当前版本（启动时刚换好或本来就是，或健康页刚装好）才看得到 skill 调用：从这时起记「开始记 skill 的时间」。幂等，不会往后移。
   const seedSkillTracking = () => {
@@ -2768,7 +2771,7 @@ async function bootstrap(): Promise<void> {
         notify();
         return { ok: true, repoId: r.id, branch: r.branch };
       } catch (e) {
-        if (e instanceof TicketError) return { ok: false, exists: e.code === "exists" || e.code === "archived", message: e.message };
+        if (e instanceof TicketError) return { ok: false, exists: e.code === "exists" || e.code === "archived", retry: e.code === "busy", message: e.message };
         return { ok: false, exists: false, message: e instanceof Error ? e.message : String(e) };
       }
     },

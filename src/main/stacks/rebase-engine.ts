@@ -4,6 +4,7 @@ import type { StackRunMode } from "../../shared/stacks";
 import {
   REBASE_TIMEOUT_MS, deleteRef, gitOk, isAncestor, mergeBase, refsUnder, revParse, runGit, treeOf, unmergedFiles, updateRefCas,
 } from "./git-stack";
+import { withRepoLock } from "../tickets/repo-lock";
 import { sequenceEditorEnv } from "./seq-editor";
 
 /**
@@ -169,7 +170,8 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
   ];
   const env = sequenceEditorEnv(work, i.execPath, tmpPrefix(i.runId));
   try {
-    await gitOk(i.repo, ["worktree", "add", "--detach", "--force", wt, i.trunk], { pre });
+    // 仓库锁（BTL-264）只包这一条：和建 ticket 的 worktree add 抢 .git/worktrees。rebase 本身在临时 worktree 里，不锁。
+    await withRepoLock(i.repo, () => gitOk(i.repo, ["worktree", "add", "--detach", "--force", wt, i.trunk], { pre }), `add stack run ${i.runId}'s temporary worktree`);
     for (const p of planned) await updateRefCas(i.repo, tmpRef(i.runId, p.layer.position), p.layer.tip, null);
 
     // autosquash 不挪栈底：第一段叠回它自己原来的起点。
@@ -294,7 +296,7 @@ async function cleanup(repo: string, wt: string, work: string, runId: number, lo
   try {
     if (existsSync(wt)) {
       if (await inRebase(wt)) await runGit(wt, ["rebase", "--abort"]);
-      await runGit(repo, ["worktree", "remove", "--force", wt]);
+      await withRepoLock(repo, () => runGit(repo, ["worktree", "remove", "--force", wt]), `remove stack run ${runId}'s temporary worktree`);
     }
     for (const r of await refsUnder(repo, tmpPrefix(runId).replace(/\/$/, ""))) await deleteRef(repo, r.ref);
   } catch (e) {
@@ -305,5 +307,5 @@ async function cleanup(repo: string, wt: string, work: string, runId: number, lo
   } catch {
     // Windows 上文件被占用：下次清
   }
-  await runGit(repo, ["worktree", "prune"]).catch(() => undefined);
+  await withRepoLock(repo, () => runGit(repo, ["worktree", "prune"]), `prune worktrees after stack run ${runId}`).catch(() => undefined);
 }
