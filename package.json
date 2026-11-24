@@ -1,6 +1,6 @@
 {
   "name": "shipherd",
-  "version": "4.2.0",
+  "version": "4.2.1",
   "private": true,
   "description": "One coordinator for all your Claude Code sessions",
   "author": "Yuchen Lin",
