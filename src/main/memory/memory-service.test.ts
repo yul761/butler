@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,16 +32,13 @@ function wrapScopes(match: (scope: string) => boolean, wrap: (s: ScopeHandle) =>
  * 没有它，每次 withScope 关闭都是最后一条连接：SQLite 要做 checkpoint、删掉 -wal 和 -shm，下次打开、第一次写入时再从空文件建起来。
  * 这些在 Windows 上很贵（建文件、删文件、刷盘都慢）：CI 实测关一次库 6–8 ms、写一次 15–24 ms，“more than 30 lifetime notes”一条用例开关库 169 次、写 86 次，
  * 单独跑就要 3–3.6 秒，整套并行、runner 一忙就到了 30 秒的上限；开着这条连接后关库约 0.1 ms、写入约 7 ms，这条用例约 1.2 秒。
- * 连接不开事务，不挡 StateCore 的读写和 checkpoint。dataDir 打不开（故意放了个文件）时不开。
+ * 连接不开事务，不挡 StateCore 的读写和 checkpoint。dataDir 不是目录（有用例故意放了个文件）时不开。
  */
 const keepers: DatabaseSync[] = [];
 function keepOpen(dataDir: string): void {
-  let db: DatabaseSync;
-  try {
-    db = new DatabaseSync(join(dataDir, "statecore.db"));
-  } catch {
-    return;
-  }
+  // 只跳过“dataDir 不是目录”这一种；别的打不开要报出来，不然用例照样过、却悄悄退回慢路径。
+  if (!statSync(dataDir, { throwIfNoEntry: false })?.isDirectory()) return;
+  const db = new DatabaseSync(join(dataDir, "statecore.db"));
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA journal_mode = WAL");
   // 读一次才会映射 -shm，之后一直占着它。
@@ -50,7 +47,13 @@ function keepOpen(dataDir: string): void {
 }
 afterEach(() => {
   vi.mocked(withScope).mockImplementation(realStatecore.withScope);
-  for (const db of keepers.splice(0)) db.close();
+  for (const db of keepers.splice(0)) {
+    try {
+      db.close();
+    } catch {
+      // 一条关不掉不影响关其他的。
+    }
+  }
 });
 
 // StateCore 的 pino 直接读 process.env.LOG_LEVEL（不看 env 选项），在它加载之前静音。
