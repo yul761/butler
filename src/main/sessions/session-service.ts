@@ -44,6 +44,7 @@ import { outsideSessionsOn } from "./outside-sessions";
 import { fixTaskMessage } from "./fix-task";
 import type { DeliverResult, PtyManager } from "./pty-manager";
 import { M } from "../strings";
+import { perfParts } from "../diag/perf-stats";
 
 export interface SessionServiceDeps {
   /** 模型路由里登记了这个名字：恢复 session 时才把记下的非别名模型传给 --model。 */
@@ -786,32 +787,53 @@ export class SessionService {
     return this.split(this.d.sessions.listByTicket(ticketKey), this.openHeads()).sessions;
   }
 
-  /** 单独的 ticket（属于未归档 feature 的在 featureViews 里）。 */
-  ticketViews(): TicketView[] {
-    const active = new Set((this.d.features?.list() ?? []).map((f) => f.id));
-    return this.allTicketViews(this.openHeads()).filter((t) => t.featureId === null || !active.has(t.featureId));
+  /**
+   * 所有 ticket 的视图（含 feature 下的、归档的）。ticketViews、featureViews 都用它：界面那边经视图缓存只拼一份传进去
+   * （tickets.all，不读活动，见 view-scopes.ts），主进程自己的逻辑不传、现拼。
+   */
+  allTickets(): TicketView[] {
+    return this.allTicketViews(this.openHeads());
   }
 
-  /** 未归档的 feature，带上它的 ticket 和 feature 级 session（总控和修复 session）。 */
-  featureViews(): FeatureView[] {
-    const heads = this.openHeads();
-    const tickets = this.allTicketViews(heads);
-    return (this.d.features?.list() ?? []).map((f) => {
-      const { sessions, hiddenSessions } = this.split(this.d.sessions.listByFeature(f.id), heads);
-      // 按建立顺序（和 list_tickets 一样），不是单独 ticket 列表的最新在前。
-      const own = tickets.filter((t) => t.featureId === f.id).sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
-      const ticketPrs: Record<string, Pr[]> = {};
-      const activity: Record<string, SessionActivity> = {};
-      for (const t of own) {
-        ticketPrs[t.key] = this.d.handoffs?.knownPrs(t.key) ?? [];
-        const a = mostUrgent(t.sessions.filter((s) => s.termId !== null).flatMap((s) => this.d.activity?.(s.id) ?? []));
-        if (a) activity[t.key] = a;
-      }
-      return {
-        ...f, tickets: own, blocks: this.d.blocks?.list(f.id) ?? [], sessions, hiddenSessions, waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting),
-        summary: this.d.featureHandoffs?.latest(f.id) ?? null, ticketPrs, activity,
-      };
-    });
+  /** 单独的 ticket（属于未归档 feature 的在 featureViews 里）。all 是 allTickets() 的结果，不要改它。 */
+  ticketViews(all: TicketView[] = this.allTickets()): TicketView[] {
+    const active = new Set((this.d.features?.list() ?? []).map((f) => f.id));
+    return all.filter((t) => t.featureId === null || !active.has(t.featureId));
+  }
+
+  /** 未归档的 feature，带上它的 ticket 和 feature 级 session（总控和修复 session）。all 同 ticketViews。 */
+  featureViews(all?: TicketView[]): FeatureView[] {
+    const p = perfParts("views.features");
+    try {
+      const heads = p.run("heads", () => this.openHeads());
+      const tickets = all ?? p.run("tickets", () => this.allTicketViews(heads));
+      const features = this.d.features?.list() ?? [];
+      // feature 级 session 和它们的链根一次取（BTL-265：原来每个 feature 各两次查询）。
+      const { byFeature, roots } = p.run("sessions", () => {
+        const byFeature = this.d.sessions.listByFeatures(features.map((f) => f.id));
+        return { byFeature, roots: this.d.sessions.rootsOf([...byFeature.values()].flat().filter((s) => !s.replacedBy).map((s) => s.id)) };
+      });
+      const out = features.map((f) => {
+        const { sessions, hiddenSessions } = this.split(byFeature.get(f.id) ?? [], heads, roots);
+        // 按建立顺序（和 list_tickets 一样），不是单独 ticket 列表的最新在前。
+        const own = tickets.filter((t) => t.featureId === f.id).sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
+        const ticketPrs: Record<string, Pr[]> = {};
+        const activity: Record<string, SessionActivity> = {};
+        for (const t of own) {
+          ticketPrs[t.key] = p.run("prs", () => this.d.handoffs?.knownPrs(t.key) ?? []);
+          const a = mostUrgent(t.sessions.filter((s) => s.termId !== null).flatMap((s) => this.d.activity?.(s.id) ?? []));
+          if (a) activity[t.key] = a;
+        }
+        return {
+          ...f, tickets: own, blocks: p.run("blocks", () => this.d.blocks?.list(f.id) ?? []), sessions, hiddenSessions,
+          waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting),
+          summary: p.run("summary", () => this.d.featureHandoffs?.latest(f.id) ?? null), ticketPrs, activity,
+        };
+      });
+      return out;
+    } finally {
+      p.done();
+    }
   }
 
   /** (featureId → 汇总是否变过的 stamp + 结果)：已归档的 feature 和汇总没变的 feature 不用每次状态变化都查库。 */

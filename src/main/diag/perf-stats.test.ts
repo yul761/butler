@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diagMode, PerfStats, perfOp, perfOpAsync, setPerfStats } from "./perf-stats";
+import { diagMode, PerfStats, perfOp, perfOpAsync, perfParts, setPerfStats } from "./perf-stats";
 
 function make(mode: "on" | "verbose" = "on") {
   let t = 0;
@@ -121,6 +121,35 @@ describe("perfOp", () => {
       expect(s.current().ops.x.n).toBe(1);
       expect(s.current().ops.y.n).toBe(1);
       expect(s.current().ops.z.n).toBe(1);
+    } finally {
+      setPerfStats(null);
+    }
+  });
+});
+
+describe("perfParts (BTL-265)", () => {
+  it("adds each part up and records one op per part on done", () => {
+    setPerfStats(null);
+    const off = perfParts("v");
+    expect(off.run("a", () => 1)).toBe(1);
+    off.done();
+    const { s } = make();
+    setPerfStats(s);
+    try {
+      const p = perfParts("v");
+      expect(p.run("a", () => 2)).toBe(2);
+      p.run("a", () => 3);
+      p.run("b", () => 4);
+      expect(() => p.run("c", () => {
+        throw new Error("boom");
+      })).toThrow("boom");
+      expect(s.current().ops["v.a"]).toBeUndefined();
+      p.done();
+      expect(s.current().ops["v.a"].n).toBe(1);
+      expect(s.current().ops["v.b"].n).toBe(1);
+      expect(s.current().ops["v.c"].n).toBe(1);
+      p.done();
+      expect(s.current().ops["v.a"].n).toBe(1);
     } finally {
       setPerfStats(null);
     }

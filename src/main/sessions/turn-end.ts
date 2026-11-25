@@ -10,3 +10,18 @@ export function markTurnEndedWithoutStop(sessions: Pick<SessionsRepo, "head" | "
   sessions.setWaiting(headId, true, at);
   return true;
 }
+
+/**
+ * ActivityMonitor 的 onTurnEnd：记成在等输入；真的改了就先发 data，再按停下处理。
+ * waiting 存在库里，ActivityMonitor 随后发的 activity 不作废 tickets.all（diag/view-scopes），
+ * 不发 data 的话界面重取拿到的还是「在干活」，之后没有别的 notify 就一直不变（BTL-265 review）。
+ */
+export function onTurnEndedWithoutStop(
+  d: { sessions: Pick<SessionsRepo, "head" | "setWaiting">; notify(scope: "data"): void; stopped(id: string): void },
+  headId: string,
+  at: number,
+): void {
+  if (!markTurnEndedWithoutStop(d.sessions, headId, at)) return;
+  d.notify("data");
+  d.stopped(headId);
+}

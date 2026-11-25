@@ -2,6 +2,7 @@ import { upgradeLegacyPr, type Handoff, type Pr } from "../../shared/handoff";
 import { dedupeHandoffPrs, rememberMergedPrs } from "../../shared/pr-memory";
 import type { HandoffRecord, HandoffTrigger } from "../../shared/types";
 import type { Db } from "./database";
+import { tableGen } from "./table-gen";
 
 interface HandoffRow {
   id: number;
@@ -23,6 +24,14 @@ function parsePayload(text: string | null): Handoff | null {
   } catch {
     return null;
   }
+}
+
+/** json_extract 的结果变回 JS 值：对象、数组是 JSON 文本，true / false 是 1 / 0，null 是 NULL，别的是本来的值。 */
+function sqlJson(type: string, v: unknown): unknown {
+  if (type === "object" || type === "array") return JSON.parse(v as string);
+  if (type === "true") return true;
+  if (type === "false") return false;
+  return v;
 }
 
 function toRecord(r: HandoffRow): HandoffRecord {
@@ -50,6 +59,13 @@ export interface NewHandoff {
   rawText: string | null;
   /** /handoff 输出所在的 transcript 条目 uuid，用来去重。 */
   sourceRef?: string | null;
+}
+
+interface PrCache {
+  stamp: string;
+  lists: Pr[][];
+  known?: Pr[];
+  all?: Pr[];
 }
 
 export class HandoffsRepo {
@@ -101,26 +117,56 @@ export class HandoffsRepo {
    * 没有有效 handoff 时是 []。
    */
   knownPrs(ticketKey: string): Pr[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM handoffs WHERE ticket_key = ? AND degraded = 0 AND payload IS NOT NULL ORDER BY created_at DESC, id DESC`)
-      .iterate(ticketKey) as Iterable<HandoffRow>;
-    const lists: Pr[][] = [];
-    for (const row of rows) {
-      const prs = toRecord(row).payload?.prs;
-      if (prs) lists.push(prs);
-    }
-    return lists.length === 0 ? [] : rememberMergedPrs(lists[0], lists.slice(1));
+    const c = this.prsOf(ticketKey);
+    c.known ??= c.lists.length === 0 ? [] : rememberMergedPrs(c.lists[0], c.lists.slice(1));
+    return c.known.map((p) => ({ ...p }));
   }
 
   /** 这个 ticket 任何一条有效 handoff 里出现过的 PR（不看状态），新的在前，同一个 PR 只留一个。 */
   allPrs(ticketKey: string): Pr[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM handoffs WHERE ticket_key = ? AND degraded = 0 AND payload IS NOT NULL ORDER BY created_at DESC, id DESC`)
-      .iterate(ticketKey) as Iterable<HandoffRow>;
-    const all: Pr[] = [];
-    for (const row of rows) all.push(...(toRecord(row).payload?.prs ?? []));
-    return dedupeHandoffPrs(all);
+    const c = this.prsOf(ticketKey);
+    c.all ??= dedupeHandoffPrs(c.lists.flat());
+    return c.all.map((p) => ({ ...p }));
   }
+
+  /**
+   * 每条有效 handoff 里的 prs，新的在前（BTL-265）。首页每次刷新对每个 ticket 都要读一遍：只取 payload（不取大的 raw_text），
+   * 解析结果按 ticket 缓存，戳是（行数、最大 id、表的原地改写代数）。handoff 只追加；原地改的（仓库改名改写链接）会 bumpTableGen。
+   * 以后谁要原地 UPDATE handoffs 的 payload / degraded，也要调 bumpTableGen，不然这里读到旧的。删行会改行数，不用管。
+   * knownPrs / allPrs 给出去的是复制的（Pr 只有平铺的字段，浅拷贝就够），调用方改了不会改到缓存。
+   * 不淘汰：一个 ticket 一条，条数最多是 ticket 数（几十到几百），每条只有几个 PR。
+   * 在事务里只算不存：handoffs 是 AUTOINCREMENT，回滚连 sqlite_sequence 一起回滚，回滚后再插的行会拿到同一个 id，
+   * 事务里存下的戳会和回滚后的真实内容撞上。
+   */
+  private prsOf(ticketKey: string): PrCache {
+    const s = this.db.prepare(`SELECT COUNT(*) AS n, MAX(id) AS m FROM handoffs WHERE ticket_key = ?`).get(ticketKey) as { n: number; m: number | null };
+    const stamp = `${s.n}:${s.m ?? 0}:${tableGen(this.db, "handoffs")}`;
+    const hit = this.prCache.get(ticketKey);
+    if (hit?.stamp === stamp) return hit;
+    // 只在库里取出 prs（1.1 之前的是单个 pr），不把整个 payload 解析一遍：和 parsePayload + upgradeLegacyPr 读到的一样
+    //（读不出来的 JSON、不是对象的跳过；有 prs 用 prs，没有 prs 有 pr 时是 [pr] 或 []，都没有跳过）。
+    const rows = this.db
+      .prepare(
+        `SELECT json_type(payload, '$.prs') AS prs_type, json_extract(payload, '$.prs') AS prs, json_type(payload, '$.pr') AS pr_type, json_extract(payload, '$.pr') AS pr
+         FROM handoffs WHERE ticket_key = ? AND degraded = 0 AND payload IS NOT NULL AND json_valid(payload) ORDER BY created_at DESC, id DESC`,
+      )
+      .all(ticketKey) as { prs_type: string | null; prs: unknown; pr_type: string | null; pr: unknown }[];
+    const lists: Pr[][] = [];
+    for (const r of rows) {
+      if (r.prs_type !== null) {
+        const prs = sqlJson(r.prs_type, r.prs) as Pr[] | null;
+        if (prs) lists.push(prs);
+      } else if (r.pr_type !== null) {
+        const pr = sqlJson(r.pr_type, r.pr) as Pr | null;
+        lists.push(pr ? [pr] : []);
+      }
+    }
+    const c: PrCache = { stamp, lists };
+    if (!this.db.isTransaction) this.prCache.set(ticketKey, c);
+    return c;
+  }
+
+  private readonly prCache = new Map<string, PrCache>();
 
   /** 最新的一条非刷新 handoff（任何有效性）；早间刷新不会把它顶掉。 */
   latestFull(ticketKey: string): HandoffRecord | null {

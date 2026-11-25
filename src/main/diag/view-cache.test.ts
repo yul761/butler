@@ -64,4 +64,35 @@ describe("ViewCache", () => {
     va();
     expect([a, b]).toEqual([1, 1]);
   });
+
+  it("invalidating some keys keeps the others (BTL-265)", () => {
+    const { c } = make();
+    let a = 0;
+    let b = 0;
+    const va = c.wrap("a", () => ++a);
+    const vb = c.wrap("b", () => ++b);
+    va();
+    vb();
+    c.invalidate(["a"]);
+    expect([va(), vb()]).toEqual([2, 1]);
+    c.invalidate([]);
+    expect([va(), vb()]).toEqual([2, 1]);
+    c.invalidate();
+    expect([va(), vb()]).toEqual([3, 2]);
+  });
+
+  it("a keyed invalidate during a build does not keep that key's stale result, and others still cache", () => {
+    const { c } = make();
+    let n = 0;
+    let m = 0;
+    const vb = c.wrap("b", () => ++m);
+    const v = c.wrap("x", () => {
+      n++;
+      if (n === 1) c.invalidate(["x"]);
+      return vb() + n * 10;
+    });
+    expect(v()).toBe(11);
+    expect(v()).toBe(21);
+    expect(m).toBe(1);
+  });
 });

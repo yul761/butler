@@ -14,7 +14,8 @@ import type { TicketPr } from "../db/ticket-prs-repo";
 import type { CommentLoop } from "../loop/comment-loop";
 import { deliveryKey, type Recipient } from "../prwatch/ci-delivery";
 import { scopeReviews, type ReviewRequestScope } from "../prwatch/review-requests";
-import { perfOp } from "../diag/perf-stats";
+import { perfOp, perfParts, type PerfParts } from "../diag/perf-stats";
+import { VIEW_KEYS } from "../diag/view-scopes";
 import { buildTurnBoard, type BoardInput, type BoardPr, type BoardTicket, type LooseItem } from "./turn-board";
 
 export type { TurnSendReason } from "../../shared/turn";
@@ -22,6 +23,8 @@ export type { TurnSendReason } from "../../shared/turn";
 export interface TurnServiceDeps {
   /** 看板输入的缓存（BTL-242，index.ts 的 ViewCache）：一次刷新里几次 board() 共用一份输入。不给就每次重新拼。 */
   cache?: <T>(key: string, build: () => T) => T;
+  /** 拼 turn 输入时套在外面（BTL-265）：期间 head、休眠的 head 这些读各只读一次（index 的 ReadScope）。没给就直接拼。 */
+  readScope?: <T>(build: () => T) => T;
   /** sessionService.ticketViews()：单独的 ticket。feature 下的从 features() 里取。 */
   tickets(): TicketView[];
   features(): FeatureView[];
@@ -108,9 +111,15 @@ export class TurnService {
 
   constructor(private readonly d: TurnServiceDeps) {}
 
-  /** 只算看板，不触发任何查询：第 2 层每次收到 turn:changed 都会重取。 */
+  /**
+   * 只算看板，不触发任何查询：第 2 层每次收到 turn:changed 都会重取。
+   * 计时（BTL-265）：turn.board 是整个调用，里面包着 turn.input.*（缓存没命中时）和 turn.build，不要和它们加在一起算。
+   */
   board(filter: TurnFilter | null): TurnBoard {
-    return perfOp("turn.board", () => buildTurnBoard(this.cachedInput(), filter));
+    return perfOp("turn.board", () => {
+      const input = this.cachedInput();
+      return perfOp("turn.build", () => buildTurnBoard(input, filter));
+    });
   }
 
   /**
@@ -136,7 +145,15 @@ export class TurnService {
   }
 
   private cachedInput(): BoardInput {
-    return this.d.cache ? this.d.cache("turn.input", () => this.input()) : this.input();
+    const build = (): BoardInput => {
+      const p = perfParts("turn.input");
+      try {
+        return this.d.readScope ? this.d.readScope(() => this.input(p)) : this.input(p);
+      } finally {
+        p.done();
+      }
+    };
+    return this.d.cache ? this.d.cache(VIEW_KEYS.turnInput, build) : build();
   }
 
   /** 切到首页（turn:home-opened）：补查请你 review 的 PR（离开时、一分钟内查过时由 poller 跳过）。 */
@@ -279,18 +296,18 @@ export class TurnService {
     });
   }
 
-  private input(): BoardInput {
-    const snap = this.snap();
+  private input(p: PerfParts): BoardInput {
+    const snap = p.run("snap", () => this.snap());
     const now = snap.now;
-    const hibernated = this.d.hibernatedHeads();
-    const features = this.d.features().filter((f) => f.archivedAt === null);
+    const hibernated = p.run("hibernated", () => this.d.hibernatedHeads());
+    const features = p.run("views", () => this.d.features()).filter((f) => f.archivedAt === null);
     const featureIds = new Set(features.map((f) => f.id));
-    const tickets = this.allTickets();
+    const tickets = p.run("views", () => this.allTickets());
     const loose: LooseItem[] = [];
 
     // R6：ask_user 按提问 session 的 head 分组（pendingDecisions 已经按时间排好）
     const asks = new Map<string, InboxItem[]>();
-    for (const a of this.d.decisions()) {
+    for (const a of p.run("decisions", () => this.d.decisions())) {
       const h = this.headId(a.sessionId);
       asks.set(h, [...(asks.get(h) ?? []), a]);
     }
@@ -300,7 +317,7 @@ export class TurnService {
 
     // 各 ticket 的 head；认得的 head 才把第一条 ask 当 sessionTurn 的输入
     const headsOf = new Map(tickets.map((t) => [t.key, ticketHeads(t, hibernated)]));
-    const coords = this.d.coordinators();
+    const coords = p.run("coords", () => this.d.coordinators());
     const known = new Set<string>([...[...headsOf.values()].flat().map((s) => s.id), ...coords.map((c) => c.session.id)]);
     const board = new Map<string, BoardTicket>();
     for (const t of tickets) {
@@ -320,7 +337,7 @@ export class TurnService {
       else loose.push({ ...tt, featureId: target?.page === "feature" ? target.id : null });
     };
     const prNotices: { n: NowNotice; tt: TimedTurn; key: string | null; target: NowTarget | null }[] = [];
-    for (const n of this.d.notices()) {
+    for (const n of p.run("notices", () => this.d.notices())) {
       if (!noticeNeedsYou(n) || n.kind === "session_limited") continue;
       const since = n.kind === "ci_undelivered" ? n.ci.since : n.kind === "comments_waiting" ? n.waiting.since : now;
       const tt: TimedTurn = { turn: { owner: "you", kind: "shipherd", notice: n }, since };
@@ -342,21 +359,21 @@ export class TurnService {
       const bt = board.get(t.key)!;
       const heads = headsOf.get(t.key) ?? [];
       const headIds = heads.map((s) => s.id);
-      for (const w of this.d.prs(t.key)) {
+      for (const w of p.run("prs.status", () => this.d.prs(t.key))) {
         const row = w.prId !== null ? this.d.prRow(w.prId) : null;
-        const p = row ? this.prInput(t.key, w, row, headIds, snap) : null;
-        if (!p || w.prId === null) continue;
-        bt.prs.push(p);
-        if (p.turn.owner === "you" && p.turn.kind === "unattended" && p.turn.why === "changes_requested" && p.turn.canSend) sendableReview.add(w.prId);
+        const pr = row ? p.run("prs.turn", () => this.prInput(t.key, w, row, headIds, snap)) : null;
+        if (!pr || w.prId === null) continue;
+        bt.prs.push(pr);
+        if (pr.turn.owner === "you" && pr.turn.kind === "unattended" && pr.turn.why === "changes_requested" && pr.turn.canSend) sendableReview.add(w.prId);
         if (w.ci === "failing") failingCi.add(w.prId);
       }
-      const report = heads.length > 0 ? this.d.lastReport(t.key) : null;
+      const report = heads.length > 0 ? p.run("sessions", () => this.d.lastReport(t.key)) : null;
       // 最近一条 report 只算在交它的那条链上：多仓库 ticket 里别的 session 不跟着「报告做不下去」。
       const reportHead = report && report.sessionId !== null ? this.headId(report.sessionId) : null;
       for (const s of heads) {
         const [first, ...rest] = asks.get(s.id) ?? [];
         const own = report !== null && (reportHead === null ? heads.length === 1 : reportHead === s.id) ? report : null;
-        bt.others.push(this.sessionInput(s, { page: "ticket", key: t.key, sessionId: s.id }, t.title, first ?? null, own, snap));
+        bt.others.push(p.run("sessions", () => this.sessionInput(s, { page: "ticket", key: t.key, sessionId: s.id }, t.title, first ?? null, own, snap)));
         for (const a of rest) bt.moreAsks.push(askTurn(a, s.id));
       }
       // R4：ticket 级的
@@ -378,16 +395,18 @@ export class TurnService {
     // R6：总控 session 要你的才进 loose
     for (const c of coords) {
       const [first, ...rest] = asks.get(c.session.id) ?? [];
-      const tt = this.sessionInput(c.session, c.target, c.title, first ?? null, null, snap);
+      const tt = p.run("coords", () => this.sessionInput(c.session, c.target, c.title, first ?? null, null, snap));
       // 总控停在提示符等输入是常态，不算要你动手：只有问你、卡住和 Shipherd 提醒进 loose。
       if (tt.turn.owner === "you" && tt.turn.kind !== "unattended") loose.push({ ...tt, featureId: c.featureId });
       for (const a of rest) loose.push({ ...askTurn(a, c.session.id), featureId: c.featureId });
     }
 
-    const registered = new Set(this.d.registeredSlugs().map((x) => x.toLowerCase()));
-    const reviews = scopeReviews(this.d.reviews(), this.d.reviewScope(), registered).map((r) => ({
-      repo: r.slug, number: r.number, title: r.title, url: r.url, author: r.author, since: r.firstSeenAt,
-    }));
+    const reviews = p.run("reviews", () => {
+      const registered = new Set(this.d.registeredSlugs().map((x) => x.toLowerCase()));
+      return scopeReviews(this.d.reviews(), this.d.reviewScope(), registered).map((r) => ({
+        repo: r.slug, number: r.number, title: r.title, url: r.url, author: r.author, since: r.firstSeenAt,
+      }));
+    });
 
     return {
       features: features.map((f) => ({ id: f.id, name: f.name })),

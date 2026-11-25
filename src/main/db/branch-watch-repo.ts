@@ -59,6 +59,11 @@ export class BranchWatchRepo {
     this.db.prepare(`UPDATE branch_watch SET delivered_key = ? WHERE repo_id = ?`).run(key, repoId);
   }
 
+  /** 这个 ticket 的分支行，按 repo_id。 */
+  byTicket(ticketKey: string): BranchWatchRow[] {
+    return (this.db.prepare(`SELECT * FROM branch_watch WHERE ticket_key = ? ORDER BY repo_id`).all(ticketKey) as unknown as Row[]).map(toRow);
+  }
+
   all(): BranchWatchRow[] {
     return (this.db.prepare(`SELECT * FROM branch_watch ORDER BY repo_id`).all() as unknown as Row[]).map(toRow);
   }

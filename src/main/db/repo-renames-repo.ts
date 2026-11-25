@@ -1,5 +1,6 @@
 import type { Db } from "./database";
 import { withTransaction } from "./database";
+import { bumpTableGen } from "./table-gen";
 
 /**
  * 仓库改名（BTL-261）：GitHub 上一个仓库改了名、换了 owner 以后，库里存的旧 slug、旧链接改写成新的。
@@ -177,7 +178,11 @@ export class RepoRenamesRepo {
       for (const [table, col] of SLUG_COLUMNS) this.moveValue(`${table}.${col}`, add, table, col, `lower(${col}) = ?`, "?", [o], [n]);
       for (const [table, col] of URL_COLUMNS) this.moveUrl(`${table}.${col}`, add, table, col, o, n);
       add("metrics_daily", this.mergeDaily(o, n));
-      for (const [table, col] of JSON_COLUMNS) add(`${table}.${col}`, this.rewriteText(table, col, o, n));
+      for (const [table, col] of JSON_COLUMNS) {
+        // 原地改写：按（行数、最大 id）缓存的读者（HandoffsRepo.knownPrs）认不出来，告诉它们（回滚了也只是多算一次）。
+        bumpTableGen(this.db, table);
+        add(`${table}.${col}`, this.rewriteText(table, col, o, n));
+      }
       this.rewriteStageKeys(add, o, n);
     });
   }

@@ -186,6 +186,23 @@ export class SessionsRepo {
     return out;
   }
 
+  /** 几个 feature 的 feature 级 session（同 listByFeature），一次取（BTL-265）。没有的 feature 不在结果里。 */
+  listByFeatures(featureIds: readonly number[]): Map<number, Session[]> {
+    const out = new Map<number, Session[]>();
+    if (featureIds.length === 0) return out;
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE feature_id IN (SELECT value FROM json_each(?)) AND ticket_key IS NULL ORDER BY ${RECENCY} DESC, id`)
+      .all(JSON.stringify(featureIds)) as unknown as SessionRow[];
+    for (const r of rows) {
+      const s = toSession(r);
+      const id = s.featureId as number;
+      const list = out.get(id);
+      if (list) list.push(s);
+      else out.set(id, [s]);
+    }
+    return out;
+  }
+
   /** feature 级 session（ticket_key 为空、feature_id 是这个 feature 的）：总控和修复 session。要选总控（汇总、handoff）用 listFeatureCoordinators。 */
   listByFeature(featureId: number): Session[] {
     const rows = this.db

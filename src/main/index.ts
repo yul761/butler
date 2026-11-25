@@ -15,7 +15,9 @@ import { PtySubscriptions } from "./sessions/pty-subscriptions";
 import { ViewCache } from "./diag/view-cache";
 import { throttle } from "./diag/throttle";
 import { isStateScope, type StateChangedPayload } from "../shared/state-scope";
-import { diagMode, perfOp } from "./diag/perf-stats";
+import { diagMode, perfOp, perfParts } from "./diag/perf-stats";
+import { ReadScope } from "./perf/read-scope";
+import { SCOPE_INVALIDATES, VIEW_KEYS } from "./diag/view-scopes";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sanitizeTask, taskMessage } from "../shared/control";
@@ -67,7 +69,7 @@ import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, locateRepo, MergeGate } from "./gate/merge-gate";
 import { BranchOwnership } from "./prwatch/branch-owners";
-import { CiDelivery, ciRecipient } from "./prwatch/ci-delivery";
+import { CiDelivery, ciRecipient, type RecipientCtx } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
 import { runPrBackfill } from "./prwatch/pr-backfill";
 import { ensureSkillTrackingSince, skillTrackingSince } from "./prwatch/skill-tracking";
@@ -186,7 +188,7 @@ import { execText } from "./util/exec";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
-import { markTurnEndedWithoutStop } from "./sessions/turn-end";
+import { onTurnEndedWithoutStop } from "./sessions/turn-end";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import { TurnService } from "./turn/turn-service";
@@ -707,7 +709,8 @@ async function bootstrap(): Promise<void> {
       safeSend(IPC.stateChanged, { scopes } satisfies StateChangedPayload);
       if (scopes.includes("data") || scopes.includes("activity")) turnChanged?.();
     },
-    onChange: () => viewCache.invalidate(),
+    // 按范围作废（BTL-265）：哪种范围作废哪些视图见 view-scopes.ts。
+    onChange: (scope) => viewCache.invalidate(SCOPE_INVALIDATES[scope]),
   });
   // 有些地方把 notify 直接当回调传（.then(notify)）：参数不是范围的一律当 data。
   const notify = (scope?: unknown) => invalidator.notify(isStateScope(scope) ? scope : "data");
@@ -1404,9 +1407,7 @@ async function bootstrap(): Promise<void> {
     onEvent: (e) => safeSend(IPC.activityEvent, e),
     // transcript 显示这一轮没经过 Stop 就结束了（Esc 打断、API / 限额错误）：Claude Code 不触发 Stop，不记成在等输入的话，
     // 之后往里发消息、闲置自动关闭都认为它还在忙。at 之后已经有输入（UserPromptSubmit）就不动。
-    onTurnEnd: (id, at) => {
-      if (markTurnEndedWithoutStop(sessions, id, at)) sessionStopped(id);
-    },
+    onTurnEnd: (id, at) => onTurnEndedWithoutStop({ sessions, notify, stopped: sessionStopped }, id, at),
     onLimit: (id, hit, at) => {
       availability.report({ ...hit, at, source: "session", job: null, sessionId: id });
       // 配置了路由：把撞限记到这个 session 的模型上（usage_limit 一般是整个账号的）。
@@ -2316,15 +2317,15 @@ async function bootstrap(): Promise<void> {
   });
   // 分支是谁的（工作流 W）：hook 看到的 git push / gh pr create 记下来，CI 的结论按它递。
   const branchOwners = new BranchOwnersRepo(db);
-  /** CI 结论和评论递给谁（pickRecipient + 休眠的，WS-M B）：CiDelivery 和评论闭环共用。 */
-  const loopRecipient = (key: string, repoId: number, branch: string) => {
+  /** CI 结论和评论递给谁（pickRecipient + 休眠的，WS-M B）：CiDelivery 和评论闭环共用。ctx 给了就用它读开着的、休眠的 head（首页一次拼输入里共用）。 */
+  const loopRecipient = (key: string, repoId: number, branch: string, ctx?: RecipientCtx) => {
     const o = branchOwners.get(key, repoId, branch);
     return ciRecipient({
       ticketKey: key, repoId, branch,
-      openHeads: pty.openIds().flatMap((t) => sessions.head(t) ?? []),
-      hibernatedHeads: hibernatedHeads(),
+      openHeads: ctx ? ctx.openHeads() : pty.openIds().flatMap((t) => sessions.head(t) ?? []),
+      hibernatedHeads: ctx ? ctx.hibernatedHeads() : hibernatedHeads(),
       ownerSessionId: o?.sessionId ?? null,
-      headOf: (id) => sessions.head(id),
+      headOf: ctx ? ctx.head : (id) => sessions.head(id),
       ownerTermOpen: o !== null && gateTerm(o.sessionId) !== null,
       ticketBranch: tickets.getRepo(repoId)?.branch ?? null,
     });
@@ -3274,17 +3275,19 @@ async function bootstrap(): Promise<void> {
     repo: reviewRequests,
     away: () => idleSignal.locked() || idleSignal.idleSeconds() >= REVIEW_AWAY_IDLE_SECONDS,
     ghAvailable: () => ghAvailable(),
-    // 写了 review 请求：看板的输入缓存作废（BTL-242）。
+    // 写了 review 请求：看板的输入缓存作废（BTL-242）；别的视图不读 review_requests（BTL-265）。
     changed: () => {
-      viewCache.invalidate();
+      viewCache.invalidate([VIEW_KEYS.turnInput]);
       turnService.changed();
     },
     now: Date.now,
     log: logger,
   });
+  // 所有 ticket 的视图（BTL-265）：单独的 ticket 列表和 feature 视图都从它拼，活动变了不用重拼（view-scopes.ts）。
+  const allTicketViews = viewCache.wrap(VIEW_KEYS.ticketsAll, () => perfOp("views.tickets.all", () => sessionService.allTickets()));
   const views = {
-    tickets: viewCache.wrap("tickets", () => perfOp("views.tickets", () => sessionService.ticketViews())),
-    features: viewCache.wrap("features", () => perfOp("views.features", () => sessionService.featureViews())),
+    tickets: viewCache.wrap(VIEW_KEYS.tickets, () => perfOp("views.tickets", () => sessionService.ticketViews(allTicketViews()))),
+    features: viewCache.wrap(VIEW_KEYS.features, () => perfOp("views.features", () => sessionService.featureViews(allTicketViews()))),
   };
   /** 总控 session（feature 总控和 Shipherd 总控）的 head：开着终端或休眠着的。 */
   const turnCoordinators = () =>
@@ -3293,16 +3296,34 @@ async function bootstrap(): Promise<void> {
       runningShipherd: () => sessionService.runningShipherd(),
       hibernatedHeads,
     });
+  // 拼首页 turn 输入时每个 PR、每个 session 都要问的（BTL-265）：在一次 turn.input 构建里（turnScope.run）只读一次，构建完就作废。
+  // 构建只读不写；sendToAgent 这些在构建外调用，读到的都是现读的。
+  const turnScope = new ReadScope();
+  const turnHead = turnScope.memo(() => {
+    const m = new Map<string, Session | null>();
+    return (id: string): Session | null => {
+      if (!m.has(id)) m.set(id, sessions.head(id));
+      return m.get(id) ?? null;
+    };
+  });
+  const turnTask = {
+    head: (id: string): Session | null => turnHead()(id),
+    openHeads: turnScope.memo((): Session[] => pty.openIds().flatMap((t) => turnHead()(t) ?? [])),
+    hibernatedHeads: turnScope.memo(hibernatedHeads),
+    mergeWaiting: turnScope.memo((): Set<string> => new Set([...gateRepo.waitingSessionIds()].map((w) => turnHead()(w)?.id ?? w))),
+  };
+  const turnRecipientCtx: RecipientCtx = turnTask;
   const turnService = new TurnService({
     cache: (key, build) => viewCache.get(key, build),
+    readScope: (build) => turnScope.run(build),
     tickets: views.tickets,
     features: views.features,
-    hibernatedHeads,
+    hibernatedHeads: turnTask.hibernatedHeads,
     coordinators: turnCoordinators,
-    head: (id) => sessions.head(id),
+    head: turnTask.head,
     prs: (key) => prWatcher.statusOf(key),
     prRow: (id) => ticketPrs.get(id),
-    recipient: loopRecipient,
+    recipient: (key, repoId, branch) => loopRecipient(key, repoId, branch, turnRecipientCtx),
     activity: (id) => activityMonitor.get(id),
     lastReplyAt: (id) => activityMonitor.lastReplyOf(id)?.at ?? null,
     needsYou: () => ({ reasons: needsYou.reasons(), categories: needsYou.categories() }),
@@ -3310,7 +3331,7 @@ async function bootstrap(): Promise<void> {
     lastReport: (key) => inboxRepo.lastReport(key),
     refreshing: (id) => refresher.stepOf(id) !== null,
     // 合并排队的等待者记的是 SHIPHERD_SESSION：换成 head 再对。
-    mergeQueued: (id) => [...gateRepo.waitingSessionIds()].some((w) => (sessions.head(w)?.id ?? w) === id),
+    mergeQueued: (id) => turnTask.mergeWaiting().has(id),
     risk: (prId, headSha) => {
       const r = assessRepo.risk(prId);
       return r && r.headSha === headSha ? r.level : null;
@@ -3628,32 +3649,43 @@ async function bootstrap(): Promise<void> {
     turnSendToAgent: (item) => turnService.sendToAgent(item),
     turnHomeOpened: () => turnService.homeOpened(),
     nowView: (merges) => {
-      // 合并排队的等待者记的是 SHIPHERD_SESSION：换成 head 再对；「需要你」的理由一次取齐。
-      const queued = new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id));
-      const reasons = needsYou.reasons();
-      const view = buildNowView({
-        tickets: views.tickets(),
-        features: views.features(),
-        // 休眠着的 Shipherd 总控照样算（WS-M B）。
-        shipherd: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
-          sessionService.runningShipherd() ?? hibernatedHeads().find((h) => h.shipherd && h.ticketKey === null) ?? null,
-        ),
-        activity: (id) => activityMonitor.get(id),
-        needsYouReason: (id) => reasons.get(id) ?? null,
-        prs: (key) => prWatcher.statusOf(key),
-        mergeQueued: (id) => queued.has(id),
-        refreshing: (id) => refresher.stepOf(id),
-        merges,
-        approvalText: M().nowApproval,
-        decisions: inboxService.pendingDecisionViews(),
-        recent: (id) => activityMonitor.recent(id),
-        memory: activityMonitor.memoryLog(),
-        notices: currentNotices(),
-        sessionMemory: (id) => procServices.monitor.memoryOf(id),
-        memorySnapshot: procServices.monitor.snapshot(),
-        sharedMcp: sharedMcpOn(settings),
-      });
-      return intake.active() ? { ...view, intake: intake.recent() } : view;
+      // 分段计时（BTL-265）：导出诊断的 ops 里 now.* 是这一次 now:view 的各部分。
+      const p = perfParts("now");
+      try {
+        // 合并排队的等待者记的是 SHIPHERD_SESSION：换成 head 再对；「需要你」的理由一次取齐。
+        const queued = p.run("queued", () => new Set([...gateRepo.waitingSessionIds()].map((id) => sessions.head(id)?.id ?? id)));
+        const reasons = p.run("needsYou", () => needsYou.reasons());
+        const tickets = p.run("views", () => views.tickets());
+        const features = p.run("views", () => views.features());
+        const decisions = p.run("decisions", () => inboxService.pendingDecisionViews());
+        const notices = p.run("notices", () => currentNotices());
+        const view = p.run("build", () => buildNowView({
+          tickets,
+          features,
+          // 休眠着的 Shipherd 总控照样算（WS-M B）。
+          shipherd: ((b) => (b ? { ...b, termId: sessionService.termIdOf(b.id), rootId: sessions.rootOf(b.id) ?? b.id } : null))(
+            sessionService.runningShipherd() ?? hibernatedHeads().find((h) => h.shipherd && h.ticketKey === null) ?? null,
+          ),
+          activity: (id) => activityMonitor.get(id),
+          needsYouReason: (id) => reasons.get(id) ?? null,
+          prs: (key) => prWatcher.statusOf(key),
+          mergeQueued: (id) => queued.has(id),
+          refreshing: (id) => refresher.stepOf(id),
+          merges,
+          approvalText: M().nowApproval,
+          decisions,
+          recent: (id) => activityMonitor.recent(id),
+          memory: activityMonitor.memoryLog(),
+          notices,
+          sessionMemory: (id) => procServices.monitor.memoryOf(id),
+          memorySnapshot: procServices.monitor.snapshot(),
+          sharedMcp: sharedMcpOn(settings),
+        }));
+        const out = p.run("intake", () => (intake.active() ? { ...view, intake: intake.recent() } : view));
+        return out;
+      } finally {
+        p.done();
+      }
     },
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, foreignPr }, key);
