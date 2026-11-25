@@ -69,28 +69,43 @@ function positionals(args: string[], valueOpts: string[]): string[] {
   return out;
 }
 
-const isAbsDir = (d: string): boolean => /^([/\\]|[A-Za-z]:)/.test(d);
+/** 绝对路径：`/`、`\`、盘符，或家目录 `~`（`cd foo && cd ~/repo` 不能拼成 foo/~/repo）。 */
+const isAbsDir = (d: string): boolean => /^([/\\~]|[A-Za-z]:)/.test(d);
 const joinDir = (base: string | null, next: string): string => (base && !isAbsDir(next) ? `${base}/${next}` : next);
 
 /** `gh pr merge` 合的是哪个仓库：`-R/--repo`（`--repo=x` 也算），否则 PR 参数是链接时取链接里的 owner/repo。`HOST/OWNER/REPO` 原样保留。 */
-function prMergeRepo(args: string[], pr: string | null): string | null {
+function prMergeRepo(args: string[], pr: string | null, env: string | null): string | null {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if ((a === "-R" || a === "--repo") && args[i + 1]) return args[i + 1];
     if (a.startsWith("--repo=") && a.length > 7) return a.slice(7);
+    if (/^-R[^-]/.test(a)) return a.slice(2); // -Ro/r
   }
-  return (pr && /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/\d+/i.exec(pr)?.[1]) || null;
+  return (pr && /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/\d+/i.exec(pr)?.[1]) || env;
 }
 
 function classifySegment(tokens: string[], dir: string | null): GateAction | null {
   let i = 0;
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+  let ghRepoEnv: string | null = null; // GH_REPO=o/r gh pr merge 12
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
+    if (tokens[i].startsWith("GH_REPO=") && tokens[i].length > 8) ghRepoEnv = tokens[i].slice(8);
+    i++;
+  }
   const cmd = tokens[i];
   if (cmd === "gh") {
-    if (tokens[i + 1] !== "pr" || tokens[i + 2] !== "merge") return null;
-    const args = tokens.slice(i + 3);
+    if (tokens[i + 1] !== "pr") return null;
+    // `gh pr -R o/r merge 12`：-R 也可以写在 pr 和 merge 之间。
+    let j = i + 2;
+    const before: string[] = [];
+    while (j < tokens.length && tokens[j] !== "merge" && isOption(tokens[j])) {
+      before.push(tokens[j]);
+      if ((tokens[j] === "-R" || tokens[j] === "--repo") && j + 1 < tokens.length) before.push(tokens[++j]);
+      j++;
+    }
+    if (tokens[j] !== "merge") return null;
+    const args = [...before, ...tokens.slice(j + 1)];
     const pr = positionals(args, ["-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"])[0] ?? null;
-    return { kind: "pr_merge", dir, pr, repo: prMergeRepo(args, pr) };
+    return { kind: "pr_merge", dir, pr, repo: prMergeRepo(args, pr, ghRepoEnv) };
   }
   if (cmd !== "git") return null;
   i++;
@@ -165,7 +180,7 @@ export function classifyPush(command: string): { dir: string | null } | null {
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
     if (tokens[i] === "cd") {
-      if (tokens[i + 1]) dir = dir && !/^([/\\]|[A-Za-z]:)/.test(tokens[i + 1]) ? `${dir}/${tokens[i + 1]}` : tokens[i + 1];
+      if (tokens[i + 1]) dir = joinDir(dir, tokens[i + 1]);
       continue;
     }
     if (tokens[i] !== "git") continue;
@@ -173,7 +188,7 @@ export function classifyPush(command: string): { dir: string | null } | null {
     let segDir = dir;
     while (i < tokens.length && isOption(tokens[i])) {
       if (tokens[i] === "-C" && i + 1 < tokens.length) {
-        segDir = segDir && !/^([/\\]|[A-Za-z]:)/.test(tokens[i + 1]) ? `${segDir}/${tokens[i + 1]}` : tokens[i + 1];
+        segDir = joinDir(segDir, tokens[i + 1]);
         i += 2;
       } else if (tokens[i] === "-c") i += 2;
       else i++;

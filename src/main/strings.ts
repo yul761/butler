@@ -283,6 +283,7 @@ const ZH = {
   gateWait: (who: string, files: string[]) => `先别合并：${who} 已经拿到合并许可、还没合完，它和你改了同样的地方（${files.join("、")}）。继续做别的事，不要再试合并；它合完后 Shipherd 会在这里告诉你，到时先 rebase 再合。`,
   gateRebase: (who: string | null, files: string[]) => `先别合并：你的分支和最新的目标分支有冲突（${files.join("、")}）${who ? `，冲突来自 ${who} 已经合进去的改动` : ""}。先 rebase 到最新的目标分支、解决冲突再合。解决冲突时两边的意图都要保留，不要直接用你的版本覆盖掉对方的。`,
   gateCheckFailed: (error: string) => `先别合并：Shipherd 没能检查这次合并会不会和别的 ticket 冲突（${error}）。命令里的目录或仓库写错了就改好再跑；否则把同一条命令原样再跑一次：Shipherd 会再查一次，还查不了就放行，那样这次合并没经过冲突检查，请在回复里告诉用户。`,
+  gateSwitchCheckFailed: (error: string) => `先别切换 branch：Shipherd 没能检查这个目录是不是正被别的 ticket 用着（${error}）。把命令里的目录写成实际路径再跑；或者把同一条命令原样再跑一次：Shipherd 会再查一次，还查不了就放行。`,
   gateDirBusy: (who: string, branch: string) => `先别切换：这个目录正被 ${who} 用着（branch ${branch}），切过去会打乱它的工作。继续做不需要切 branch 的事，或者请用户把你的 ticket 改成 worktree 方式。`,
   /** 文案里的“谁”：ticket 号后面括上它所在的 feature。 */
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key}（${within.join(" / ")}）` : key),
@@ -950,6 +951,7 @@ const EN: MainStrings = {
   gateWait: (who: string, files: string[]) => `Don't merge yet: ${who} already has permission to merge and hasn't finished, and it changed the same places you did (${files.join(", ")}). Keep working on other things and don't try to merge again; Shipherd will tell you here once it has merged, and then rebase before you merge.`,
   gateRebase: (who: string | null, files: string[]) => `Don't merge yet: your branch conflicts with the latest target branch (${files.join(", ")})${who ? `; the conflict comes from changes ${who} already merged` : ""}. Rebase onto the latest target branch and resolve the conflicts before you merge. Keep the intent of both sides when you resolve them; don't just overwrite the other side's changes with your version.`,
   gateCheckFailed: (error: string) => `Don't merge yet: Shipherd couldn't check whether this merge conflicts with other tickets (${error}). If the directory or repository in the command is wrong, fix it and run it again. Otherwise run the same command again unchanged: Shipherd checks once more and lets it through if it still can't check, in which case the merge wasn't checked for conflicts and you should tell the user so in your reply.`,
+  gateSwitchCheckFailed: (error: string) => `Don't switch branches yet: Shipherd couldn't check whether another ticket is using this directory (${error}). Write the directory in the command as an actual path and run it again, or run the same command again unchanged: Shipherd checks once more and lets it through if it still can't check.`,
   gateDirBusy: (who: string, branch: string) => `Don't switch yet: ${who} is using this directory (branch ${branch}), and switching would disrupt its work. Keep working on things that don't need a branch switch, or ask the user to change your ticket to the worktree mode.`,
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key} (${within.join(" / ")})` : key),
   gateMergedNotice: (who: string) => `Shipherd: ${who} has finished merging. You can now rebase onto the latest target branch and then merge.`,

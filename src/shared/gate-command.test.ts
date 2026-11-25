@@ -19,11 +19,21 @@ describe("classifyGateCommand", () => {
     expect(classifyGateCommand("gh pr merge 5 -R ghe.corp/org/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "5", repo: "ghe.corp/org/dems" });
     // -R 优先于链接。
     expect(classifyGateCommand("gh pr merge https://github.com/a/b/pull/7 -R c/d")).toMatchObject({ repo: "c/d" });
+    // 连写的 -Ro/r、写在 pr 和 merge 之间的 -R、GH_REPO 环境变量。
+    expect(classifyGateCommand("gh pr merge 12 -Rorg/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr -R org/dems merge 12 --squash")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr --repo=org/dems merge 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("GH_REPO=org/dems gh pr merge 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("GH_REPO=org/dems gh pr merge 12 -R c/d")).toMatchObject({ repo: "c/d" });
+    expect(classifyGateCommand("gh pr view 12 -R org/dems")).toBeNull();
+    expect(classifyGateCommand("gh pr -R org/dems view 12")).toBeNull();
   });
   it("joins consecutive relative cd directories (BTL-267)", () => {
     expect(classifyGateCommand("cd /w && cd api && git merge x")).toEqual({ kind: "local_merge", dir: "/w/api", source: "x" });
     expect(classifyGateCommand("cd api && cd /abs && git merge x")).toEqual({ kind: "local_merge", dir: "/abs", source: "x" });
     expect(classifyGateCommand("cd api; cd sub; gh pr merge 3")).toMatchObject({ dir: "api/sub" });
+    // `~` 开头是家目录，不拼到前一个目录后面。
+    expect(classifyGateCommand("cd foo && cd ~/repo && git merge x")).toEqual({ kind: "local_merge", dir: "~/repo", source: "x" });
   });
   it("recognises git merge, with -C and env prefixes", () => {
     expect(classifyGateCommand("git -C ../frontend merge feat/x --no-ff")).toEqual({ kind: "local_merge", dir: "../frontend", source: "feat/x" });

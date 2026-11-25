@@ -16,9 +16,9 @@ export const HOLD_MAX_MS = 2 * 60 * 60 * 1000;
 export const HOLD_CHECK_MS = 30_000;
 /** hook 最多等 5 秒（GATE_WAIT_MS）：4 秒还没判完就放行，并且什么都不记（hook 那边可能已经放行，命令已经在跑）。 */
 export const GATE_DEADLINE_MS = 4000;
-/** fetch 和 gh 各给 2 秒。 */
 /** 检查出错被拦下以后，多久之内同一个 session 再跑同一条命令时，再出错就放行。 */
 export const CHECK_RETRY_WINDOW_MS = 10 * 60 * 1000;
+/** fetch 和 gh 各给 2 秒。 */
 const FETCH_TIMEOUT_MS = 2000;
 const PR_TIMEOUT_MS = 2000;
 
@@ -47,6 +47,18 @@ export function commandDir(cwd: string, dir: string | null, platform: NodeJS.Pla
 export function findRepoBySlug(slug: string, paths: readonly string[], slugsOf: (path: string) => readonly string[]): string | null {
   const want = slug.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^github\.com\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
   return [...new Set(paths)].find((p) => slugsOf(p).includes(want)) ?? null;
+}
+
+/**
+ * `-R` 写的仓库和 PR 号拼成 PR 链接，gh 就不会按 cwd 的默认 remote 查同号的 PR：`owner/repo`、`github.com/owner/repo` 是 GitHub，
+ * `HOST/owner/repo` 是 GHE。认不出的写法原样返回号。
+ */
+export function prLink(slug: string, pr: string): string {
+  const s = slug.trim().replace(/^https?:\/\//i, "").replace(/\.git$/i, "").replace(/\/+$/, "");
+  const parts = s.split("/");
+  if (parts.length === 2 && parts.every(Boolean)) return `https://github.com/${s}/pull/${pr}`;
+  if (parts.length === 3 && parts.every(Boolean)) return `https://${s}/pull/${pr}`;
+  return pr;
 }
 
 export interface MergeGateDeps {
@@ -180,7 +192,7 @@ export class MergeGate {
     this.failedChecks.set(key, now);
     this.d.log(`merge gate: checking ${req.action.kind} failed, denying once (the same command within ${CHECK_RETRY_WINDOW_MS / 60_000} minutes is checked again and allowed if it fails again)`, e);
     const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300);
-    return deny(M().gateCheckFailed(msg));
+    return deny(req.action.kind === "switch" ? M().gateSwitchCheckFailed(msg) : M().gateCheckFailed(msg));
   }
 
   /** 共用目录被别的开着 session 的 ticket 占着时返回它，给“切换 branch”提示用。 */
@@ -203,11 +215,17 @@ export class MergeGate {
 
   private async before(req: GateRequest, clock: Clock): Promise<GateResult> {
     const a = req.action;
-    // `cd "$WT"`、`git -C $(…)`：hook 看到的是没展开的写法，不知道命令真正在哪个目录跑。
-    if (a.dir !== null && /[$`]/.test(a.dir)) throw new Error(`the directory ${a.dir} in the command uses a shell variable or substitution`);
-    const dir = commandDir(req.cwd, a.dir);
-    // 没写 PR 号的合的是 cwd 当前分支的 PR，还得按目录找。
+    // 推一个分支到同名的远端分支（git push -u origin feature/x）：推的是它自己，不是合并进别的分支，和目录无关。
+    if (a.kind === "push" && a.source && a.source !== "HEAD" && a.source === a.target) return ALLOW;
+    // 写了仓库和 PR 号的 gh pr merge 不看目录。没写 PR 号的合的是 cwd 当前分支的 PR，还得按目录找。
     if (a.kind === "pr_merge" && a.repo !== null && a.pr !== null) return this.checkPrIn(req, a, a.repo, clock);
+    // `cd "$WT"`、`git -C $(…)`：hook 看到的是没展开的写法，不知道命令真正在哪个目录跑。
+    if (a.dir !== null && /[$`]/.test(a.dir)) {
+      // 切 branch 只拦 branch 方式的 ticket（共用目录）；不是这种 ticket 的，在哪个目录切都不用查。
+      if (a.kind === "switch" && !(req.ticket && this.d.tickets.listRepos(req.ticket).some((r) => r.workMode === "branch"))) return ALLOW;
+      throw new Error(`the directory ${a.dir} in the command uses a shell variable or substitution`);
+    }
+    const dir = commandDir(req.cwd, a.dir);
     const repo = await this.repoAt(dir, a.kind === "pr_merge" ? "gh can't tell which repository to merge into there either" : "the git command can't run there either");
     if (a.kind === "switch") return this.checkSwitch(req, a, repo, clock);
     const m = await this.mergeOf(a, dir, repo);
@@ -231,11 +249,15 @@ export class MergeGate {
    * PR 也按这个仓库查：不能在 cwd 的仓库里查同号的 PR。
    */
   private async checkPrIn(req: GateRequest, a: Extract<GateAction, { kind: "pr_merge" }>, slug: string, clock: Clock): Promise<GateResult> {
+    // `-R "$REPO"`、`gh pr merge "$PR"`：和目录写成变量一样，不知道合的是哪个，先拦一次。
+    if (/[$`]/.test(slug) || (a.pr !== null && /[$`]/.test(a.pr))) throw new Error(`the repository or PR in the command uses a shell variable or substitution`);
     const repo = this.d.repoOfSlug?.(slug) ?? null;
     if (repo === null) throw new NotChecked(`no ticket uses ${slug} on this machine, nothing to check it against`);
-    const ref = a.pr !== null && /^\d+$/.test(a.pr) && /^[^/]+\/[^/]+$/.test(slug) ? `https://github.com/${slug}/pull/${a.pr}` : a.pr;
+    const ref = a.pr !== null && /^\d+$/.test(a.pr) ? prLink(slug, a.pr) : a.pr;
     const pr = await this.d.prInfo(repo, ref, PR_TIMEOUT_MS);
-    if (!pr || !(await this.mergeTreeOk(repo))) return ALLOW;
+    // gh 读不到这个 PR（没登录、断网、超时、写错了号）：判不了，先拦一次，不静默放行。
+    if (!pr) throw new Error(`gh couldn't read the PR ${ref} in ${repo}`);
+    if (!(await this.mergeTreeOk(repo))) return ALLOW;
     return this.checkMerge(req, { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url }, clock);
   }
 
@@ -262,8 +284,10 @@ export class MergeGate {
   /** 这个动作要合并什么进哪里；不算合并进目标分支的（只推自己的 branch、把 main 合进自己的 branch）返回 null。 */
   private async mergeOf(a: Exclude<GateAction, { kind: "switch" }>, dir: string, repo: string): Promise<Merge | null> {
     if (a.kind === "pr_merge") {
+      if (a.pr !== null && /[$`]/.test(a.pr)) throw new Error(`the PR ${a.pr} in the command uses a shell variable or substitution`);
       const pr = await this.d.prInfo(dir, a.pr, PR_TIMEOUT_MS);
-      return pr ? { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url } : null;
+      if (!pr) throw new Error(`gh couldn't read the PR ${a.pr ?? "of the current branch"} in ${dir}`);
+      return { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url };
     }
     const cur = await this.d.git.currentBranch(dir);
     const target = a.kind === "local_merge" ? cur : a.target === "HEAD" ? cur : a.target;

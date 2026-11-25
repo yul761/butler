@@ -646,7 +646,8 @@ export function ghErrorSummary(r: { stderr: string; spawnError?: string | null; 
  * 403 只算没权限，限流（rate limit）是临时的；401（没登录、token 过期）、网络、超时、「still in progress」都是临时的。
  */
 export function ghLogGone(stderr: string): boolean {
-  if (/rate limit/i.test(stderr)) return false;
+  // 限流、组织的 SAML SSO 没授权（403，用户授权后就能取）：都会好，不算永久。
+  if (/rate limit|SAML/i.test(stderr)) return false;
   return /\bHTTP (?:403|404|410)\b|\blog not found\b|Could not resolve to a Repository\b|Resource not accessible/i.test(stderr);
 }
 

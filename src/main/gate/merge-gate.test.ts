@@ -10,7 +10,7 @@ import { M } from "../strings";
 import { copyRepo, makeRepo, memDb, tempDir } from "../test-utils";
 import * as git from "../tickets/git";
 import type { PrInfo } from "../tickets/gh";
-import { CHECK_RETRY_WINDOW_MS, commandDir, findRepoBySlug, MergeGate, type MergeGateDeps } from "./merge-gate";
+import { CHECK_RETRY_WINDOW_MS, commandDir, findRepoBySlug, MergeGate, prLink, type MergeGateDeps } from "./merge-gate";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 const commitFile = (repo: string, file: string, text: string, msg: string) => {
@@ -208,8 +208,11 @@ describe("MergeGate: merges", () => {
     expect((await u.ask({ kind: "pr_merge", dir: null, pr: "9", repo: null })).decision).toBe("deny");
   });
 
-  it("allows a PR merge it can't look up, and records nothing", async () => {
+  it("denies a PR merge it can't look up once, allows the retry, and records nothing (BTL-267)", async () => {
     const t = setup({ pr: () => null });
+    const first = await t.ask({ kind: "pr_merge", dir: null, pr: "9", repo: null });
+    expect(first.decision).toBe("deny");
+    expect((first as { reason: string }).reason).toContain("couldn't read the PR 9");
     expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9", repo: null })).toEqual({ v: 1, decision: "allow" });
     expect(t.events).toEqual([]);
     expect(t.repo.activeHolds()).toEqual([]);
@@ -304,6 +307,33 @@ describe("MergeGate: merges", () => {
     expect(r.decision).toBe("deny");
     expect((r as { reason: string }).reason).toContain("$WT");
   });
+
+  it("doesn't stop commands that don't depend on the shell-variable directory (BTL-267)", async () => {
+    const t = setup({ pr: (pr) => (pr === "https://github.com/org/dems/pull/7" ? { number: 7, url: pr, head: "dms-3", base: "main", state: "OPEN" as const, autoMerge: false } : null), repoOfSlug: () => t.repoPath });
+    // 推自己的分支到同名的远端分支。
+    expect(await t.ask({ kind: "push", dir: "$WT", target: "feature/x", source: "feature/x" })).toEqual({ v: 1, decision: "allow" });
+    // 没有 ticket（或 ticket 不是 branch 方式）的切换。
+    expect(await t.ask({ kind: "switch", dir: "$WT", branch: "foo", create: true })).toEqual({ v: 1, decision: "allow" });
+    // 写了 -R 和 PR 号的 gh pr merge 不看目录。
+    expect(await t.ask({ kind: "pr_merge", dir: "$FEAT", pr: "7", repo: "org/dems" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).toMatchObject({ kind: "pr", target: "main" });
+  });
+
+  it("denies a switch in a shell-variable directory once for a branch-mode ticket, with a switch message (BTL-267)", async () => {
+    const t = setup({ tickets: (repo) => [ticket("DMS-1", repo, "dms-1", "branch")] });
+    const r = await t.ask({ kind: "switch", dir: "$WT", branch: "foo", create: true }, { ticket: "DMS-1" });
+    expect(r.decision).toBe("deny");
+    expect((r as { reason: string }).reason).toBe(M().gateSwitchCheckFailed("the directory $WT in the command uses a shell variable or substitution"));
+  });
+
+  it("denies once when the PR or the repository of gh pr merge is a shell variable (BTL-267)", async () => {
+    const t = setup({ repoOfSlug: () => t.repoPath });
+    for (const a of [{ pr: "$PR", repo: "org/dems" }, { pr: "7", repo: "$REPO" }]) {
+      const r = await t.ask({ kind: "pr_merge", dir: null, ...a }, { cwd: tempDir("shipherd-feature-") });
+      expect(r.decision, JSON.stringify(a)).toBe("deny");
+    }
+    expect(t.prInfo).not.toHaveBeenCalled();
+  });
 });
 
 describe("MergeGate: gh pr merge -R from a coordinator's feature directory (BTL-267)", () => {
@@ -333,6 +363,14 @@ describe("MergeGate: gh pr merge -R from a coordinator's feature directory (BTL-
     expect(await t.ask({ kind: "pr_merge", dir: null, pr: "7", repo: "other/repo" }, { cwd: tempDir("shipherd-feature-") })).toEqual({ v: 1, decision: "allow" });
     expect(t.logs.at(-1)).toContain("no ticket uses other/repo");
     expect(t.prInfo).not.toHaveBeenCalled();
+  });
+
+  it("prLink turns -R and a PR number into a link, also for a github.com or GHE host", () => {
+    expect(prLink("org/dems", "7")).toBe("https://github.com/org/dems/pull/7");
+    expect(prLink("github.com/org/dems", "7")).toBe("https://github.com/org/dems/pull/7");
+    expect(prLink("https://github.com/org/dems.git", "7")).toBe("https://github.com/org/dems/pull/7");
+    expect(prLink("ghe.corp/org/dems", "7")).toBe("https://ghe.corp/org/dems/pull/7");
+    expect(prLink("dems", "7")).toBe("7");
   });
 
   it("findRepoBySlug matches any of a repository's slugs, ignoring case and a github.com prefix", () => {

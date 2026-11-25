@@ -360,7 +360,8 @@ describe("ghLogGone / ghErrorSummary", () => {
     for (const e of ["HTTP 410: Gone", "HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/1)", "failed to get run log: log not found",
       "HTTP 403: Resource not accessible by integration", "GraphQL: Could not resolve to a Repository with the name 'o/r'."]) expect(ghLogGone(e), e).toBe(true);
     for (const e of ["HTTP 403: API rate limit exceeded for user ID 1.", "HTTP 401: Bad credentials", "error connecting to api.github.com",
-      "Could not resolve host: api.github.com", "run 1 is still in progress; logs will be available when it is complete", "HTTP 502: Bad Gateway", ""]) expect(ghLogGone(e), e).toBe(false);
+      "Could not resolve host: api.github.com", "run 1 is still in progress; logs will be available when it is complete", "HTTP 502: Bad Gateway", "",
+      "HTTP 403: Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."]) expect(ghLogGone(e), e).toBe(false);
   });
 
   it("summarizes a failure in one short line", () => {
