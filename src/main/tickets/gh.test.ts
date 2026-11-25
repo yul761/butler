@@ -245,15 +245,17 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
 
   it("failedLogDetail says why it failed (the first stderr line) and whether trying again can help", async () => {
     const dir = fakeGh(`printf 'a\\nb\\n'`);
-    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: "b", error: null, permanent: false });
+    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: "b", error: null, permanent: false, missing: false });
     fakeGh(`printf '\\nHTTP 410: Gone (https://api.github.com/repos/o/r/actions/runs/42/logs)\\nmore\\n' >&2; exit 1`);
-    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: null, error: "HTTP 410: Gone (https://api.github.com/repos/o/r/actions/runs/42/logs)", permanent: true });
+    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: null, error: "HTTP 410: Gone (https://api.github.com/repos/o/r/actions/runs/42/logs)", permanent: true, missing: false });
+    fakeGh(`echo 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/42/logs)' >&2; exit 1`);
+    expect(await failedLogDetail(dir, 42, 1, 5000)).toMatchObject({ log: null, permanent: false, missing: true });
     fakeGh(`echo 'HTTP 502: Bad Gateway' >&2; exit 1`);
-    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: null, error: "HTTP 502: Bad Gateway", permanent: false });
+    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: null, error: "HTTP 502: Bad Gateway", permanent: false, missing: false });
     fakeGh("exit 1");
-    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: null, error: "gh failed with no output", permanent: false });
+    expect(await failedLogDetail(dir, 42, 1, 5000)).toEqual({ log: null, error: "gh failed with no output", permanent: false, missing: false });
     fakeGh("sleep 2");
-    expect(await failedLogDetail(dir, 42, 1, 200)).toEqual({ log: null, error: "timed out after 0.2s", permanent: false });
+    expect(await failedLogDetail(dir, 42, 1, 200)).toEqual({ log: null, error: "timed out after 0.2s", permanent: false, missing: false });
   });
 });
 
@@ -356,12 +358,12 @@ exit 1`);
 });
 
 describe("ghLogGone / ghErrorSummary", () => {
-  it("expired logs, a missing run and no access are permanent; rate limits, auth, network and a running run are not", () => {
-    for (const e of ["HTTP 410: Gone", "HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/1)", "failed to get run log: log not found",
-      "HTTP 403: Resource not accessible by integration", "GraphQL: Could not resolve to a Repository with the name 'o/r'."]) expect(ghLogGone(e), e).toBe(true);
+  it("expired logs and no access are gone, a 404 is missing; rate limits, auth, network and a running run are neither", () => {
+    for (const e of ["HTTP 410: Gone", "HTTP 403: Resource not accessible by integration", "GraphQL: Could not resolve to a Repository with the name 'o/r'."]) expect(ghLogGone(e), e).toBe("gone");
+    for (const e of ["HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/1)", "failed to get run log: log not found"]) expect(ghLogGone(e), e).toBe("missing");
     for (const e of ["HTTP 403: API rate limit exceeded for user ID 1.", "HTTP 401: Bad credentials", "error connecting to api.github.com",
       "Could not resolve host: api.github.com", "run 1 is still in progress; logs will be available when it is complete", "HTTP 502: Bad Gateway", "",
-      "HTTP 403: Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."]) expect(ghLogGone(e), e).toBe(false);
+      "HTTP 403: Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."]) expect(ghLogGone(e), e).toBeNull();
   });
 
   it("summarizes a failure in one short line", () => {

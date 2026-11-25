@@ -40,18 +40,41 @@ export function commandDir(cwd: string, dir: string | null, platform: NodeJS.Pla
   return win32.resolve(cwd, d.replace(/^\/([a-zA-Z])(\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`));
 }
 
-/**
- * `-R` 写的仓库（`owner/repo`、`github.com/owner/repo`、`HOST/owner/repo`，不分大小写）在 paths 里是哪个：slugsOf 给一个仓库的所有 slug
- * （origin、upstream、改名前后），和 parseRemoteSlug 的写法一样（github.com 省掉主机名，其余主机名在前）。
- */
-export function findRepoBySlug(slug: string, paths: readonly string[], slugsOf: (path: string) => readonly string[]): string | null {
-  const want = normSlug(slug);
-  return [...new Set(paths)].find((p) => slugsOf(p).includes(want)) ?? null;
+/** 一个仓库的 slug（和 parseRemoteSlug 的写法一样：github.com 省掉主机名，其余主机名在前）：origin 的（改名前后），upstream 的。 */
+export interface RepoRemotes {
+  origin: readonly string[];
+  upstream: readonly string[];
 }
 
-/** `-R` 的写法换成 parseRemoteSlug 的写法：小写，去掉 https://、github.com/、.git 和结尾的 /。 */
+/** slug 去掉主机名后的 owner/repo；不到两段的返回 null。 */
+const ownerRepo = (s: string): string | null => {
+  const parts = s.split("/");
+  return parts.length >= 2 ? parts.slice(-2).join("/") : null;
+};
+
+/**
+ * `-R` 写的仓库（`owner/repo`、`github.com/owner/repo`、`HOST/owner/repo`，不分大小写）是 paths 里的哪个、对上的是它的哪个 remote：
+ * fork 的工作流里 -R 选的常是 upstream。先找连主机名都一样的；都没有再只比 owner/repo：SSH 别名主机（git@github-work:o/r）、
+ * ssh.github.com:443 解析出来的主机名不是 github.com。同一个仓库 origin 优先。
+ */
+export function locateRepo(slug: string, paths: readonly string[], remotesOf: (path: string) => RepoRemotes): { path: string; remote: string } | null {
+  const want = normSlug(slug);
+  const short = ownerRepo(want);
+  const uniq = [...new Set(paths)];
+  const rules = [(s: string) => s === want, (s: string) => short !== null && ownerRepo(s) === short];
+  for (const same of rules) {
+    for (const path of uniq) {
+      const r = remotesOf(path);
+      if (r.origin.some(same)) return { path, remote: "origin" };
+      if (r.upstream.some(same)) return { path, remote: "upstream" };
+    }
+  }
+  return null;
+}
+
+/** `-R` 的写法换成 parseRemoteSlug 的写法：小写，去掉 https://、github.com/（含 www.）、.git 和结尾的 /。 */
 export function normSlug(slug: string): string {
-  return slug.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^github\.com\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
+  return slug.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^(www\.)?github\.com\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
 }
 
 /**
@@ -84,14 +107,13 @@ export interface MergeGateDeps {
   /** 一次裁决最多用多久，默认 GATE_DEADLINE_MS（测试用）。 */
   deadlineMs?: number;
   /**
-   * `gh pr merge -R owner/repo`（或 PR 链接）合的仓库在本机的主 checkout：只认 ticket 用到的仓库，认不出是 null。
-   * feature 总控在 feature 目录（不是 git 仓库）里合 PR，只能靠它找到仓库（BTL-267）。
+   * `gh pr merge -R owner/repo`（或 PR 链接）合的仓库在本机哪个 checkout、用哪个 remote 取它的分支（BTL-267）：feature 总控在
+   * feature 目录（不是 git 仓库）里合 PR，只能靠它找到仓库。fork 的工作流里 -R 选的常是 upstream，这时目标分支（和同仓库 PR 的 head）
+   * 要按 upstream 的算，不能拿 origin（fork）的比。
+   * 不带 cwdRepo：在 ticket 用到的仓库里找，认不出是 null。带 cwdRepo（命令所在目录的主 checkout）：只看它，对不上是 null；
+   * 它的 remote 读不出来时当作就是它、按 origin 算（和没写 -R 时一样查）。不给这个依赖时 cwdRepo 按 origin 算。
    */
-  /**
-   * `-R` 的仓库在本机哪个主 checkout，用哪个 remote 取它的分支：fork 的工作流里 -R 选的常是 upstream，
-   * 这时目标分支（和同仓库 PR 的 head）要按 upstream 的算，不能拿 origin（fork）的比。
-   */
-  repoOfSlug?: (slug: string) => { path: string; remote: string } | null;
+  repoOfSlug?: (slug: string, cwdRepo?: string) => { path: string; remote: string } | null;
   /** 目录在不在（测试用）。 */
   exists?: (path: string) => boolean;
 }
@@ -174,7 +196,11 @@ export class MergeGate {
 
   private async decide(req: GateRequest, clock: Clock): Promise<GateResult> {
     try {
-      return req.phase === "post" ? await this.after(req) : await this.before(req, clock);
+      if (req.phase === "post") return await this.after(req);
+      const r = await this.before(req, clock);
+      // 查成了（不管放行还是拦下）：之前出错拦过的记录作废。不然“出错拦 → 查成、有冲突拦 → 再跑又出错”会直接放行。
+      this.failedChecks.delete(this.retryKey(req));
+      return r;
     } catch (e) {
       if (e instanceof NotChecked) {
         this.d.log(`merge gate: not checking ${req.action.kind}: ${e.message}`);
@@ -193,7 +219,7 @@ export class MergeGate {
   private checkFailed(req: GateRequest, e: unknown, clock: Clock): GateResult {
     const now = this.d.now();
     for (const [k, at] of this.failedChecks) if (now - at > CHECK_RETRY_WINDOW_MS) this.failedChecks.delete(k);
-    const key = JSON.stringify([req.session ?? req.cwd, req.cwd, req.action]);
+    const key = this.retryKey(req);
     if (this.failedChecks.has(key)) {
       this.failedChecks.delete(key);
       this.d.log(`merge gate: checking ${req.action.kind} failed again on the retry, allowing it unchecked`, e);
@@ -204,6 +230,11 @@ export class MergeGate {
     this.d.log(`merge gate: checking ${req.action.kind} failed, denying once (the same command within ${CHECK_RETRY_WINDOW_MS / 60_000} minutes is checked again and allowed if it fails again)`, e);
     const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300);
     return deny(req.action.kind === "switch" ? M().gateSwitchCheckFailed(msg) : M().gateCheckFailed(msg));
+  }
+
+  /** 出错重试认的是同一个 session 在同一个目录跑同一条命令。 */
+  private retryKey(req: GateRequest): string {
+    return JSON.stringify([req.session ?? req.cwd, req.cwd, req.action]);
   }
 
   /** 共用目录被别的开着 session 的 ticket 占着时返回它，给“切换 branch”提示用。 */
@@ -262,15 +293,30 @@ export class MergeGate {
   private async checkPrIn(req: GateRequest, a: Extract<GateAction, { kind: "pr_merge" }>, slug: string, clock: Clock): Promise<GateResult> {
     // `-R "$REPO"`、`gh pr merge "$PR"`：和目录写成变量一样，不知道合的是哪个，先拦一次。
     if (/[$`]/.test(slug) || (a.pr !== null && /[$`]/.test(a.pr))) throw new Error(`the repository or PR in the command uses a shell variable or substitution`);
-    const found = this.d.repoOfSlug?.(slug) ?? null;
-    if (found === null) throw new NotChecked(`no ticket uses ${slug} on this machine, nothing to check it against`);
-    const { path: repo, remote } = found;
+    const { repo, remote } = await this.slugRepo(req, a, slug);
     const ref = a.pr !== null && /^\d+$/.test(a.pr) ? prLink(slug, a.pr) : a.pr;
     const pr = await this.d.prInfo(repo, ref, PR_TIMEOUT_MS);
     // gh 读不到这个 PR（没登录、断网、超时、写错了号）：判不了，先拦一次，不静默放行。
     if (!pr) throw new Error(`gh couldn't read the PR ${ref} in ${repo}`);
     if (!(await this.mergeTreeOk(repo))) return ALLOW;
     return this.checkMerge(req, { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url, remote }, clock);
+  }
+
+  /**
+   * `-R` 的仓库在本机的主 checkout 和 remote。ticket 的仓库里认不出（SSH 别名主机、读 remote 超时）时退回按命令所在目录找，
+   * 和没写 -R 时一样；目录也不是仓库、或者是别的仓库，才不查（NotChecked）。路径都过一遍 mainRepoRoot：占位按 repo_path
+   * 严格相等比，大小写、斜杠、symlink 不同的同一个仓库不能变成两个。
+   */
+  private async slugRepo(req: GateRequest, a: Extract<GateAction, { kind: "pr_merge" }>, slug: string): Promise<{ repo: string; remote: string }> {
+    const found = this.d.repoOfSlug?.(slug) ?? null;
+    if (found !== null) return { repo: await this.repoAt(found.path, `the checkout of ${slug} is gone`), remote: found.remote };
+    const unknown = `no ticket uses ${slug} on this machine either`;
+    // 有 -R 时 gh 不看目录：目录写成变量（`cd "$WT" && gh pr merge -R o/r 12`）不是拦它的理由。
+    if (a.dir !== null && /[$`]/.test(a.dir)) throw new NotChecked(`the directory ${a.dir} is a shell variable; ${unknown}`);
+    const cwdRepo = await this.repoAt(commandDir(req.cwd, a.dir), unknown);
+    const here = this.d.repoOfSlug ? this.d.repoOfSlug(slug, cwdRepo) : { path: cwdRepo, remote: "origin" };
+    if (here === null) throw new NotChecked(`${cwdRepo} is a different repository; ${unknown}`);
+    return { repo: cwdRepo, remote: here.remote };
   }
 
   /** 命令执行完：本地合并、直接 push 的占位立刻定下来；PR 的占位交给 HoldWatcher。 */

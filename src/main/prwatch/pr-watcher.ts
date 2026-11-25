@@ -130,7 +130,7 @@ export class PrWatcher {
    * 取失败日志失败了的 run（键 runId）：done 是不再取（永久性错误、或临时错误试满了 CI_LOG_TRIES_MAX 次），否则 at 之前不取。
    * error 是上一次的原因：同一个 run 同一种失败只记一次日志。这个 run 又跑起来（重跑）、或取成功了就删掉。只在内存里。
    */
-  private readonly logFailures = new Map<number, { at: number; delay: number; tries: number; error: string; done: boolean }>();
+  private readonly logFailures = new Map<number, { at: number; delay: number; tries: number; error: string; done: boolean; missing: boolean }>();
 
   constructor(private readonly d: PrWatcherDeps) {}
 
@@ -615,7 +615,7 @@ export class PrWatcher {
       fetched.add(runId);
       const got = await this.gh(() => this.d.gh.failedLogDetail(cwd, runId, CI_LOG_LINES, PR_GH_TIMEOUT_MS, repo));
       if (got?.log == null) {
-        this.noteLogFailure(runId, got?.error ?? "gh call threw", got?.permanent ?? false, now);
+        this.noteLogFailure(runId, got?.error ?? "gh call threw", got?.permanent ?? false, got?.missing ?? false, now);
         out.push({ ...c });
         continue;
       }
@@ -632,14 +632,18 @@ export class PrWatcher {
     return running;
   }
 
-  /** 记下一个 run 的日志没取到：永久性的不再取；临时的退避、试满 CI_LOG_TRIES_MAX 次不再取。同一种原因只记一次日志。 */
-  private noteLogFailure(runId: number, error: string, permanent: boolean, now: number): void {
+  /**
+   * 记下一个 run 的日志没取到：永久性的不再取；404（missing）第一次按临时的算（刚跑完的 run 日志归档可能还没好），连着第二次才不再取；
+   * 临时的退避、试满 CI_LOG_TRIES_MAX 次不再取。同一种原因只记一次日志。
+   */
+  private noteLogFailure(runId: number, error: string, gone: boolean, missing: boolean, now: number): void {
     const prev = this.logFailures.get(runId);
     const tries = (prev?.tries ?? 0) + 1;
     const delay = prev ? Math.min(prev.delay * 2, CI_LOG_RETRY_MAX_MS) : CI_LOG_RETRY_MS;
+    const permanent = gone || (missing && prev?.missing === true);
     const done = permanent || tries >= CI_LOG_TRIES_MAX;
     this.logFailures.delete(runId);
-    this.logFailures.set(runId, { at: now + delay, delay, tries, error, done });
+    this.logFailures.set(runId, { at: now + delay, delay, tries, error, done, missing });
     if (this.logFailures.size > CI_LOG_FAILURES_MAX) this.logFailures.delete(this.logFailures.keys().next().value as number);
     const then = permanent ? "not trying it again" : done ? `giving up after ${tries} tries` : `trying again in ${Math.round(delay / 60_000)} min`;
     if (prev?.error !== error || done) this.d.log(`pr watch: fetching the log of run ${runId} failed: ${error}; ${then}`);

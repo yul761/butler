@@ -21,8 +21,8 @@ const pr = (o: Partial<PrStatus> = {}): PrStatus => ({
   number: 7, url: url(7), state: "OPEN", isDraft: false, review: "pending", headSha: "a1", headBranch: "b", checks: [check("test", "pending", 9)], ci: "pending",
   author: "me", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null, baseBranch: null, title: null, labels: [], reviewRequests: [], mergeable: null, mergeState: null, ...o,
 });
-const logOk = (log: string): Gh.FailedLogResult => ({ log, error: null, permanent: false });
-const logFailed = (error: string, permanent = false): Gh.FailedLogResult => ({ log: null, error, permanent });
+const logOk = (log: string): Gh.FailedLogResult => ({ log, error: null, permanent: false, missing: false });
+const logFailed = (error: string, permanent = false, missing = false): Gh.FailedLogResult => ({ log: null, error, permanent, missing });
 const listed = (n: number, o: Partial<BranchPr> = {}): BranchPr => ({ number: n, url: url(n), state: "OPEN", headRefName: "b", createdAt: 10, mergedAt: null, closedAt: null, ...o });
 
 type Opts = { sessionOpen?: PrWatcherDeps["sessionOpen"] };
@@ -44,7 +44,7 @@ function setup(o: Opts = {}) {
     prStatus: vi.fn<typeof Gh.prRead>(async () => null),
     prsForBranch: vi.fn<typeof Gh.prsForBranch>(async () => []),
     branchRuns: vi.fn<typeof Gh.branchRuns>(async () => null),
-    failedLogDetail: vi.fn<typeof Gh.failedLogDetail>(async (_cwd, runId) => ({ log: `log of ${runId}`, error: null, permanent: false })),
+    failedLogDetail: vi.fn<typeof Gh.failedLogDetail>(async (_cwd, runId) => ({ log: `log of ${runId}`, error: null, permanent: false, missing: false })),
     reviewComments: vi.fn<typeof Gh.reviewComments>(async () => []),
     reviewAuthors: vi.fn<typeof Gh.reviewAuthors>(async () => ({ botReviewIds: new Set(), botLogins: new Set() })),
   };
@@ -599,6 +599,33 @@ describe("PrWatcher: reading PRs", () => {
       check("old", "failing", 5), { ...check("a", "failing", 6), log: "log of 6" }, { ...check("b", "failing", 7), log: "log of 7" }, { ...check("c", "failing", 8), log: "log of 8" },
     ]);
     expect(s.deps.log.mock.calls.filter(([m]) => m.includes("fetching the log"))).toHaveLength(1);
+  });
+
+  it("a 404 is tried once more (the log archive of a run that just finished can 404); a second 404 in a row stops it (BTL-267 review)", async () => {
+    const s = setup();
+    s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    s.gh.failedLogDetail.mockResolvedValue(logFailed("HTTP 404: Not Found", false, true));
+    await s.w.check();
+    expect(s.deps.log).toHaveBeenLastCalledWith("pr watch: fetching the log of run 5 failed: HTTP 404: Not Found; trying again in 5 min");
+    s.advance(CI_LOG_RETRY_MS);
+    await s.w.check();
+    expect(s.deps.log).toHaveBeenLastCalledWith("pr watch: fetching the log of run 5 failed: HTTP 404: Not Found; not trying it again");
+    for (let i = 0; i < 5; i++) {
+      s.advance(CI_LOG_RETRY_MAX_MS);
+      await s.w.check();
+    }
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(2);
+    // 404 之间夹着别的临时错误：不算连着两次。
+    const t = setup();
+    t.link();
+    t.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    t.gh.failedLogDetail.mockResolvedValueOnce(logFailed("HTTP 404: Not Found", false, true)).mockResolvedValueOnce(logFailed("HTTP 502: Bad Gateway")).mockResolvedValueOnce(logFailed("HTTP 404: Not Found", false, true)).mockResolvedValueOnce(logOk("got it"));
+    for (let i = 0; i < 4; i++) {
+      await t.w.check();
+      t.advance(CI_LOG_RETRY_MAX_MS);
+    }
+    expect(t.gh.failedLogDetail).toHaveBeenCalledTimes(4);
   });
 
   it("the first failing read hands the log over as before; a log fetched after a failure is used, and a rerun of the run fetches it again", async () => {

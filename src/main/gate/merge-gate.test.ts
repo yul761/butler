@@ -10,7 +10,7 @@ import { M } from "../strings";
 import { copyRepo, makeRepo, memDb, tempDir } from "../test-utils";
 import * as git from "../tickets/git";
 import type { PrInfo } from "../tickets/gh";
-import { CHECK_RETRY_WINDOW_MS, commandDir, findRepoBySlug, MergeGate, prLink, type MergeGateDeps } from "./merge-gate";
+import { CHECK_RETRY_WINDOW_MS, commandDir, locateRepo, MergeGate, prLink, type MergeGateDeps, type RepoRemotes } from "./merge-gate";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 const commitFile = (repo: string, file: string, text: string, msg: string) => {
@@ -389,15 +389,98 @@ describe("MergeGate: gh pr merge -R from a coordinator's feature directory (BTL-
     expect(prLink("dems", "7")).toBe("7");
   });
 
-  it("findRepoBySlug matches any of a repository's slugs, ignoring case and a github.com prefix", () => {
-    const slugs: Record<string, string[]> = { "/a": ["org/a"], "/b": ["org/b-new", "org/b"], "/c": ["ghe.corp/org/c"] };
-    const of = (p: string) => slugs[p] ?? [];
-    const paths = ["/a", "/b", "/c", "/b"];
-    expect(findRepoBySlug("Org/B", paths, of)).toBe("/b");
-    expect(findRepoBySlug("github.com/org/a", paths, of)).toBe("/a");
-    expect(findRepoBySlug("https://github.com/org/a.git", paths, of)).toBe("/a");
-    expect(findRepoBySlug("ghe.corp/org/c", paths, of)).toBe("/c");
-    expect(findRepoBySlug("org/zzz", paths, of)).toBeNull();
+  it("locateRepo matches any of a repository's slugs, ignoring case and a github.com prefix, and says which remote matched", () => {
+    const slugs: Record<string, RepoRemotes> = {
+      "/a": { origin: ["org/a"], upstream: [] },
+      "/b": { origin: ["org/b-new", "org/b"], upstream: [] },
+      "/c": { origin: ["ghe.corp/org/c"], upstream: [] },
+      "/fork": { origin: ["me/f"], upstream: ["up/f"] },
+    };
+    const of = (p: string) => slugs[p] ?? { origin: [], upstream: [] };
+    const paths = ["/a", "/b", "/c", "/b", "/fork"];
+    expect(locateRepo("Org/B", paths, of)).toEqual({ path: "/b", remote: "origin" });
+    expect(locateRepo("github.com/org/a", paths, of)).toEqual({ path: "/a", remote: "origin" });
+    expect(locateRepo("www.github.com/org/a", paths, of)).toEqual({ path: "/a", remote: "origin" });
+    expect(locateRepo("https://github.com/org/a.git", paths, of)).toEqual({ path: "/a", remote: "origin" });
+    expect(locateRepo("ghe.corp/org/c", paths, of)).toEqual({ path: "/c", remote: "origin" });
+    expect(locateRepo("up/f", paths, of)).toEqual({ path: "/fork", remote: "upstream" });
+    expect(locateRepo("org/zzz", paths, of)).toBeNull();
+    expect(locateRepo("zzz", paths, of)).toBeNull();
+  });
+
+  it("locateRepo falls back to owner/repo for SSH alias hosts and ssh.github.com, but prefers an exact match (BTL-267 review)", () => {
+    const slugs: Record<string, RepoRemotes> = {
+      "/alias": { origin: ["github-work/org/a"], upstream: [] }, // git@github-work:org/a.git
+      "/ssh443": { origin: ["me/b"], upstream: ["ssh.github.com/org/b"] }, // ssh://git@ssh.github.com:443/org/b
+      "/ghe": { origin: ["ghe.corp/org/c"], upstream: [] },
+      "/gh": { origin: ["org/c"], upstream: [] },
+    };
+    const of = (p: string) => slugs[p];
+    const paths = Object.keys(slugs);
+    expect(locateRepo("org/a", paths, of)).toEqual({ path: "/alias", remote: "origin" });
+    expect(locateRepo("org/b", paths, of)).toEqual({ path: "/ssh443", remote: "upstream" });
+    expect(locateRepo("org/c", paths, of)).toEqual({ path: "/gh", remote: "origin" });
+    expect(locateRepo("ghe.corp/org/c", paths, of)).toEqual({ path: "/ghe", remote: "origin" });
+  });
+});
+
+describe("MergeGate: gh pr merge -R that no ticket's repository matches (BTL-267 review)", () => {
+  const prOf = (pr: string | null) => (pr === "https://github.com/org/dems/pull/7" ? { number: 7, url: pr, head: "dms-2", base: "main", state: "OPEN" as const, autoMerge: false } : null);
+  const a: GateAction = { kind: "pr_merge", dir: null, pr: "7", repo: "org/dems" };
+
+  it("falls back to the repository of the command's directory, as without -R", async () => {
+    const asked: (string | undefined)[] = [];
+    const t = setup({ pr: prOf, repoOfSlug: (_slug, cwdRepo) => (asked.push(cwdRepo), cwdRepo === undefined ? null : { path: cwdRepo, remote: "origin" }) });
+    await t.merge("dms-1");
+    const r = await t.ask(a, { session: "s-coord" });
+    expect(r.decision).toBe("deny");
+    expect((r as { reason: string }).reason).toContain("DMS-1");
+    expect(asked).toEqual([undefined, t.repoPath]);
+    expect(t.prInfo).toHaveBeenCalledWith(t.repoPath, "https://github.com/org/dems/pull/7", expect.any(Number));
+    // 没给 repoOfSlug 时也这样。
+    const n = setup({ repo: t.repoPath, pr: prOf });
+    expect(await n.ask(a)).toEqual({ v: 1, decision: "allow" });
+    expect(n.repo.activeHold(t.repoPath, "dms-2")).toMatchObject({ kind: "pr", target: "main" });
+  });
+
+  it("lets it through when the directory is another repository, not a repository, or a shell variable", async () => {
+    const t = setup({ pr: prOf, repoOfSlug: () => null });
+    expect(await t.ask(a)).toEqual({ v: 1, decision: "allow" });
+    expect(t.logs.at(-1)).toContain("is a different repository; no ticket uses org/dems");
+    expect(await t.ask(a, { cwd: tempDir("shipherd-feature-") })).toEqual({ v: 1, decision: "allow" });
+    expect(t.logs.at(-1)).toMatch(/not in a git repository; no ticket uses org\/dems/);
+    expect(await t.ask({ ...a, dir: "$WT" })).toEqual({ v: 1, decision: "allow" });
+    expect(t.logs.at(-1)).toContain("$WT is a shell variable");
+    expect(t.prInfo).not.toHaveBeenCalled();
+  });
+
+  it("holds under the main checkout's path, not the path repoOfSlug wrote (trailing slash, a worktree)", async () => {
+    const t = setup({ pr: prOf, repoOfSlug: () => ({ path: `${t.repoPath}/`, remote: "origin" }) });
+    expect(await t.ask(a, { cwd: tempDir("shipherd-feature-") })).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-2")).toMatchObject({ kind: "pr", target: "main" });
+    const wt = join(tempDir("shipherd-wt-"), "wt");
+    run(t.repoPath, "worktree", "add", "-q", wt, "dms-3");
+    const w = setup({ repo: t.repoPath, pr: (pr) => (pr === "https://github.com/org/dems/pull/8" ? { number: 8, url: pr, head: "dms-3", base: "main", state: "OPEN" as const, autoMerge: false } : null), repoOfSlug: () => ({ path: wt, remote: "origin" }) });
+    expect(await w.ask({ ...a, pr: "8" }, { cwd: tempDir("shipherd-feature-") })).toEqual({ v: 1, decision: "allow" });
+    expect(w.repo.activeHold(t.repoPath, "dms-3")).toMatchObject({ kind: "pr", target: "main" });
+  });
+});
+
+describe("MergeGate: a check that failed, then worked (BTL-267 review)", () => {
+  it("forgets the failure once a check runs through, so a later failure denies again instead of letting it through", async () => {
+    let readable = false;
+    const t = setup({ pr: (pr) => (readable && pr === "https://github.com/org/dems/pull/7" ? { number: 7, url: pr, head: "dms-2", base: "main", state: "OPEN" as const, autoMerge: false } : null), repoOfSlug: () => ({ path: t.repoPath, remote: "origin" }) });
+    await t.merge("dms-1", { session: "s-other" });
+    const a: GateAction = { kind: "pr_merge", dir: null, pr: "7", repo: "org/dems" };
+    expect((await t.ask(a)).decision).toBe("deny"); // gh 读不到：出错，拦一次
+    readable = true;
+    const waited = await t.ask(a);
+    expect((waited as { reason: string }).reason).toBe(M().gateWait("DMS-1（支付）", ["app.txt"])); // 查成了：等 dms-1
+    readable = false;
+    const again = await t.ask(a);
+    expect(again.decision).toBe("deny"); // 又出错：重新拦一次，不是直接放行
+    expect((again as { reason: string }).reason).toContain("couldn't read the PR");
+    expect((await t.ask(a)).decision).toBe("allow"); // 窗口内再出错才放行
   });
 });
 

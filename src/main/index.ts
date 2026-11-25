@@ -65,7 +65,7 @@ import { execHeadlessJson } from "./handoff/headless-exec";
 import { headlessUsageRow } from "./usage/headless-usage";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
-import { findRepoBySlug, HOLD_CHECK_MS, MergeGate, normSlug } from "./gate/merge-gate";
+import { HOLD_CHECK_MS, locateRepo, MergeGate } from "./gate/merge-gate";
 import { BranchOwnership } from "./prwatch/branch-owners";
 import { CiDelivery, ciRecipient } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
@@ -2691,16 +2691,16 @@ async function bootstrap(): Promise<void> {
   });
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
-    repoOfSlug: (slug) => {
-      const path = findRepoBySlug(
-        slug,
-        tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)),
-        (p) => [...new Set([...repoIdentity.remoteSlugsOf(p), repoIdentity.rawSlugOf(p)].filter((x): x is string => x !== null))],
-      );
-      if (path === null) return null;
-      // 对上的是 origin（改名前后都算）就用 origin，否则是 upstream（remoteSlugsOf 只看这两个）。
-      const want = normSlug(slug);
-      return { path, remote: [repoIdentity.slugOf(path), repoIdentity.rawSlugOf(path)].includes(want) ? "origin" : "upstream" };
+    repoOfSlug: (slug, cwdRepo) => {
+      const remotesOf = (p: string) => {
+        const origin = [repoIdentity.slugOf(p), repoIdentity.rawSlugOf(p)].filter((x): x is string => x !== null);
+        return { origin, upstream: repoIdentity.remoteSlugsOf(p).filter((x) => !origin.includes(x)) };
+      };
+      if (cwdRepo === undefined) return locateRepo(slug, tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)), remotesOf);
+      const here = remotesOf(cwdRepo);
+      // 读不出它的 remote（git 超时、没有 remote）：按没写 -R 时一样，在这个仓库里按 origin 查。
+      if (here.origin.length === 0 && here.upstream.length === 0) return { path: cwdRepo, remote: "origin" };
+      return locateRepo(slug, [cwdRepo], () => here);
     },
     openTerminals: (key) => sessionService.openTerminalCount(key),
     notify: () => notify(),

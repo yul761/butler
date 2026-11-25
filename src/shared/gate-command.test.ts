@@ -28,6 +28,23 @@ describe("classifyGateCommand", () => {
     expect(classifyGateCommand("gh pr view 12 -R org/dems")).toBeNull();
     expect(classifyGateCommand("gh pr -R org/dems view 12")).toBeNull();
   });
+  it("reads -R=o/r and the repository of a www.github.com or GHE PR link (BTL-267 review)", () => {
+    expect(classifyGateCommand("gh pr merge 12 -R=org/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr -R=org/dems merge 12")).toMatchObject({ repo: "org/dems" });
+    expect(classifyGateCommand("gh pr merge https://www.github.com/a/b/pull/7")).toMatchObject({ repo: "a/b" });
+    expect(classifyGateCommand("gh pr merge https://GitHub.com/a/b/pull/7")).toMatchObject({ repo: "a/b" });
+    expect(classifyGateCommand("gh pr merge https://ghe.corp/a/b/pull/7")).toMatchObject({ repo: "ghe.corp/a/b" });
+    expect(classifyGateCommand("gh pr merge https://ghe.corp/a/b/issues/7")).toMatchObject({ repo: null });
+  });
+  it("checks what follows a push of a branch to its own name (BTL-267 review)", () => {
+    expect(classifyGateCommand("git push -u origin feature/x && gh pr merge 12 -R org/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("git push origin feature/x && git push origin feature/x:main")).toEqual({ kind: "push", dir: null, target: "main", source: "feature/x" });
+    // 只有它自己、或者后面没有要审核的：照旧是这个 push。
+    expect(classifyGateCommand("git push -u origin feature/x")).toEqual({ kind: "push", dir: null, target: "feature/x", source: "feature/x" });
+    expect(classifyGateCommand("git push -u origin feature/x && pnpm test")).toEqual({ kind: "push", dir: null, target: "feature/x", source: "feature/x" });
+    // 推 HEAD 的不算推自己的分支。
+    expect(classifyGateCommand("git push origin HEAD:main && gh pr merge 12")).toMatchObject({ kind: "push", target: "main" });
+  });
   it("joins consecutive relative cd directories (BTL-267)", () => {
     expect(classifyGateCommand("cd /w && cd api && git merge x")).toEqual({ kind: "local_merge", dir: "/w/api", source: "x" });
     expect(classifyGateCommand("cd api && cd /abs && git merge x")).toEqual({ kind: "local_merge", dir: "/abs", source: "x" });

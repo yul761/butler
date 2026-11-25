@@ -79,9 +79,17 @@ function prMergeRepo(args: string[], pr: string | null, env: string | null): str
     const a = args[i];
     if ((a === "-R" || a === "--repo") && args[i + 1]) return args[i + 1];
     if (a.startsWith("--repo=") && a.length > 7) return a.slice(7);
-    if (/^-R[^-]/.test(a)) return a.slice(2); // -Ro/r
+    if (/^-R[^-]/.test(a) && a.length > 2) return a.slice(2).replace(/^=/, "") || null; // -Ro/r、-R=o/r
   }
-  return (pr && /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/\d+/i.exec(pr)?.[1]) || env;
+  return (pr && prUrlRepo(pr)) || env;
+}
+
+/** PR 链接里的仓库：`https://HOST/owner/repo/pull/N`。github.com（含 www.）只留 owner/repo，GHE 带上主机名（和 -R 的写法一样）。 */
+function prUrlRepo(pr: string): string | null {
+  const m = /^https?:\/\/([^/\s]+)\/([^/\s]+\/[^/\s]+)\/pull\/\d+/i.exec(pr);
+  if (!m) return null;
+  const host = m[1].toLowerCase().replace(/^www\./, "");
+  return host === "github.com" ? m[2] : `${m[1]}/${m[2]}`;
 }
 
 function classifySegment(tokens: string[], dir: string | null): GateAction | null {
@@ -153,8 +161,13 @@ function classifySegment(tokens: string[], dir: string | null): GateAction | nul
   return null;
 }
 
+/**
+ * 命令里要审核的第一个动作。推自己的分支到同名远端分支（`git push -u origin feature/x`）不用审核：后面还有别的动作时
+ * （`git push -u origin feature/x && gh pr merge -R o/r 12`）审核后面那个，只有它自己时照旧返回它。
+ */
 export function classifyGateCommand(command: string): GateAction | null {
   let dir: string | null = null;
+  let ownPush: GateAction | null = null;
   for (const tokens of splitSegments(command)) {
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
@@ -164,9 +177,10 @@ export function classifyGateCommand(command: string): GateAction | null {
       continue;
     }
     const action = classifySegment(tokens, dir);
-    if (action) return action;
+    if (action?.kind === "push" && action.source && action.source !== "HEAD" && action.source === action.target) ownPush ??= action;
+    else if (action) return action;
   }
-  return null;
+  return ownPush;
 }
 
 /**
