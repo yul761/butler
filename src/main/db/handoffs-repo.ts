@@ -135,6 +135,8 @@ export class HandoffsRepo {
    * 以后谁要原地 UPDATE handoffs 的 payload / degraded，也要调 bumpTableGen，不然这里读到旧的。删行会改行数，不用管。
    * knownPrs / allPrs 给出去的是复制的（Pr 只有平铺的字段，浅拷贝就够），调用方改了不会改到缓存。
    * 不淘汰：一个 ticket 一条，条数最多是 ticket 数（几十到几百），每条只有几个 PR。
+   * 在事务里只算不存：handoffs 是 AUTOINCREMENT，回滚连 sqlite_sequence 一起回滚，回滚后再插的行会拿到同一个 id，
+   * 事务里存下的戳会和回滚后的真实内容撞上。
    */
   private prsOf(ticketKey: string): PrCache {
     const s = this.db.prepare(`SELECT COUNT(*) AS n, MAX(id) AS m FROM handoffs WHERE ticket_key = ?`).get(ticketKey) as { n: number; m: number | null };
@@ -160,7 +162,7 @@ export class HandoffsRepo {
       }
     }
     const c: PrCache = { stamp, lists };
-    this.prCache.set(ticketKey, c);
+    if (!this.db.isTransaction) this.prCache.set(ticketKey, c);
     return c;
   }
 

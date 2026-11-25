@@ -3,7 +3,7 @@ import { upgradeLegacyPr, type Handoff, type Pr } from "../../shared/handoff";
 import { dedupeHandoffPrs, rememberMergedPrs } from "../../shared/pr-memory";
 import { emptyHandoff } from "../handoff/schema";
 import { insertTicket, memDb } from "../test-utils";
-import type { Db } from "./database";
+import { withTransaction, type Db } from "./database";
 import { HandoffsRepo } from "./handoffs-repo";
 import { RepoRenamesRepo } from "./repo-renames-repo";
 import { bumpTableGen } from "./table-gen";
@@ -88,6 +88,22 @@ describe("HandoffsRepo PR cache (BTL-265)", () => {
     renames.applyAll(10);
     expect(repo.knownPrs("T-1")[0].url).toBe("https://github.com/o/new/pull/1");
     expect(repo.allPrs("T-1")[0].url).toBe("https://github.com/o/new/pull/1");
+  });
+
+  it("a rolled-back transaction does not leave a stamp that collides with the rows inserted after it", () => {
+    // handoffs 是 AUTOINCREMENT：回滚连 sqlite_sequence 一起回滚，回滚后再插的行拿到同一个 id，（行数、最大 id）一样。
+    const { db, repo, add } = setup();
+    add("T-1", 100, [pr(1)]);
+    expect(() =>
+      withTransaction(db, () => {
+        add("T-1", 200, [pr(2)]);
+        expect(repo.knownPrs("T-1").map((p) => p.number)).toEqual([2]);
+        throw new Error("roll back");
+      }),
+    ).toThrow("roll back");
+    // 回滚后先不读，直接插：这一行和回滚掉的那行 id 相同。
+    add("T-1", 300, [pr(3)]);
+    expect(repo.knownPrs("T-1").map((p) => p.number)).toEqual([3]);
   });
 
   it("hands out copies: changing a result does not change the next one", () => {

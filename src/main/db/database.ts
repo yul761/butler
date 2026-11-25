@@ -49,17 +49,44 @@ export function prepareUncached(db: Db, sql: string): StatementSync {
 /** 每个连接最多留这么多条编译好的语句（拼出来的 SQL 不会把内存撑满）。 */
 export const STATEMENT_CACHE_MAX = 512;
 
+/** 绑定的参数超过这么大（文本按字符、blob 按字节），这条语句跑完就不留在缓存里（见 cacheStatements）。 */
+export const LARGE_PARAM_BYTES = 4096;
+
+const isLarge = (v: unknown): boolean =>
+  (typeof v === "string" && v.length > LARGE_PARAM_BYTES) || (ArrayBuffer.isView(v) && v.byteLength > LARGE_PARAM_BYTES);
+
+/** 位置参数，或者第一个参数是命名参数的对象（node:sqlite 两种都收）。 */
+function hasLargeParam(args: unknown[]): boolean {
+  for (const a of args) {
+    if (isLarge(a)) return true;
+    if (a !== null && typeof a === "object" && !ArrayBuffer.isView(a) && Object.values(a).some(isLarge)) return true;
+  }
+  return false;
+}
+
 /**
  * 编译好的语句按 SQL 文本留着重用（BTL-265）：node:sqlite 不缓存，每次 db.prepare 都要重新编译，
  * 首页一次刷新几百次查询，一半的时间花在编译上。最近用过的留 STATEMENT_CACHE_MAX 条。
  * 重用同一个 StatementSync 是安全的：all / get / run 同步跑完，开头都会重置语句；iterate 用 for-of 读，break / return 也会重置。
  * 不要拿着读了一半的 iterate 去查同一条 SQL（会被重置），也不要在缓存的语句上改选项（setReadBigInts 之类会留给下一个用的人）：带选项的 prepare 不走缓存。
  * iterate 的循环体里会调外面传进来的回调（说不定又查同一条 SQL）时，用 prepareUncached。
+ * node:sqlite 跑完不清绑定（也没有 clearBindings），缓存的语句会一直留着最后一次的参数：哪次带了大参数
+ *（超过 LARGE_PARAM_BYTES 的文本或 blob，比如 handoff 的 raw_text、json_each(?) 的长列表），跑完就把这条踢出缓存，参数随语句一起释放。
  */
 export function cacheStatements(db: Db): Db {
   const raw = db.prepare.bind(db) as (sql: string, ...rest: unknown[]) => StatementSync;
   uncached.set(db, raw);
   const cache = new Map<string, StatementSync>();
+  const dropIfLarge = (sql: string, s: StatementSync): void => {
+    for (const m of ["run", "get", "all", "iterate"] as const) {
+      const f = s[m].bind(s) as (...a: unknown[]) => unknown;
+      (s as unknown as Record<string, unknown>)[m] = (...a: unknown[]) => {
+        const r = f(...a);
+        if (cache.get(sql) === s && hasLargeParam(a)) cache.delete(sql);
+        return r;
+      };
+    }
+  };
   const prepare = (sql: string, ...rest: unknown[]): StatementSync => {
     if (rest.length > 0) return raw(sql, ...rest);
     const hit = cache.get(sql);
@@ -70,6 +97,7 @@ export function cacheStatements(db: Db): Db {
       return hit;
     }
     const s = raw(sql);
+    dropIfLarge(sql, s);
     cache.set(sql, s);
     if (cache.size > STATEMENT_CACHE_MAX) cache.delete(cache.keys().next().value as string);
     return s;

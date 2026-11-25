@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { cacheStatements, prepareUncached, STATEMENT_CACHE_MAX } from "./database";
+import { cacheStatements, LARGE_PARAM_BYTES, prepareUncached, STATEMENT_CACHE_MAX } from "./database";
 
 const make = () => {
   const db = cacheStatements(new DatabaseSync(":memory:"));
@@ -73,5 +73,28 @@ describe("cacheStatements (BTL-265)", () => {
     expect(seen).toEqual([1, 2, 3]);
     // 没包过的连接也能用。
     expect(prepareUncached(new DatabaseSync(":memory:"), "SELECT 1 AS v").get()).toEqual({ v: 1 });
+  });
+
+  it("a run with a large parameter drops the statement, so the cache does not hold on to the bound value", () => {
+    // node:sqlite 跑完不清绑定：留在缓存里的语句会一直拿着最后一次的参数。
+    const db = make();
+    db.exec("CREATE TABLE b (v)");
+    const sql = "INSERT INTO b VALUES (?)";
+    const small = db.prepare(sql);
+    small.run("x");
+    expect(db.prepare(sql)).toBe(small);
+    small.run("y".repeat(LARGE_PARAM_BYTES + 1));
+    const next = db.prepare(sql);
+    expect(next).not.toBe(small);
+    next.run(new Uint8Array(LARGE_PARAM_BYTES + 1));
+    expect(db.prepare(sql)).not.toBe(next);
+    // 命名参数和读也一样；结果照常返回。
+    const named = db.prepare("SELECT length(:v) AS n");
+    expect(named.get({ v: "z".repeat(LARGE_PARAM_BYTES + 1) })).toEqual({ n: LARGE_PARAM_BYTES + 1 });
+    expect(db.prepare("SELECT length(:v) AS n")).not.toBe(named);
+    const list = db.prepare("SELECT COUNT(*) AS n FROM json_each(?)");
+    expect(list.all(JSON.stringify(Array.from({ length: 2000 }, (_, i) => i)))).toEqual([{ n: 2000 }]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM json_each(?)")).not.toBe(list);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM b").get()).toEqual({ n: 3 });
   });
 });
