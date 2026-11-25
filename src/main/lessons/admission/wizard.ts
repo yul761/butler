@@ -12,7 +12,7 @@ import {
   type WizardVerdict,
 } from "../../../shared/lesson-admission";
 import type { LessonBulkVerb, LessonTarget } from "../../../shared/lessons";
-import type { Db } from "../../db/database";
+import { withTransaction, type Db } from "../../db/database";
 import type { LessonsRepo } from "../../db/lessons-repo";
 import type { LessonEnricher } from "../enrich";
 import { ENRICH_CHUNK } from "../enrich";
@@ -451,17 +451,12 @@ export class WizardService {
       const ins = this.d.db.prepare(`INSERT OR IGNORE INTO lesson_wizard_items (run_id, kind, key, status) VALUES (?, 'pr', ?, ?)`);
       const known = new Map<string, string>();
       for (const [slug, ns] of groupPrs(items)) for (const [n, st] of this.d.repo.queueStatusOf(slug, ns)) known.set(prKey(slug, n), st.status);
-      this.d.db.exec("BEGIN");
-      try {
+      withTransaction(this.d.db, () => {
         for (const k of items) {
           const st = known.get(k);
           ins.run(run.id, k, st === "done" || st === "skipped" || st === "failed" ? st : "queued");
         }
-        this.d.db.exec("COMMIT");
-      } catch (e) {
-        this.d.db.exec("ROLLBACK");
-        throw e;
-      }
+      });
       const uniq = (ns: WizardNote[]) => [...new Map(ns.map((n) => [JSON.stringify(n), n])).values()];
       this.patchDetail(run.id, (dt) => ({ ...dt, backfilled: true, notes: uniq([...dt.notes, ...notes]) }));
     }
@@ -728,15 +723,10 @@ export class WizardService {
 
   private writeVerdicts(id: number, verdicts: readonly LessonVerdict[]): void {
     const ins = this.d.db.prepare(`INSERT INTO lesson_wizard_verdicts (run_id, lesson_id, verdict, reason, ref, score) VALUES (?, ?, ?, ?, ?, ?)`);
-    this.d.db.exec("BEGIN");
-    try {
+    withTransaction(this.d.db, () => {
       this.d.db.prepare(`DELETE FROM lesson_wizard_verdicts WHERE run_id = ?`).run(id);
       for (const v of verdicts) ins.run(id, v.lessonId, v.verdict, v.reason, v.ref, v.score);
-      this.d.db.exec("COMMIT");
-    } catch (e) {
-      this.d.db.exec("ROLLBACK");
-      throw e;
-    }
+    });
   }
 
   verdicts(id: number): WizardVerdict[] {

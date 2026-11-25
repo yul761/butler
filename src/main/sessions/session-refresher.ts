@@ -13,7 +13,6 @@ export const REFRESH_OPEN_QUIET_MS = 60_000;
 export const REFRESH_MEMORY_MS = 60_000;
 /** 等待时多久看一次：handoff 收进来没有、新 id 接上没有、session 停下来没有。 */
 const POLL_MS = 1_000;
-const HANDOFF_COMMAND = "/handoff";
 const CLEAR_COMMAND = "/clear";
 
 export type RefreshKind = "ticket" | "feature";
@@ -412,7 +411,8 @@ export class SessionRefresher {
     // 从这一刻起收进来的 handoff 才算这次换新的（审查：用户自己的 /handoff 恰好在前面的检查期间收进来，不能让 /clear 跟着就输入）。
     run.stored = false;
     run.handoffTypedAt = this.d.now();
-    const typedHandoff = await this.type(run, HANDOFF_COMMAND, this.guardFor(run.trigger, run.mode).recheckAfter(run.headId, gate));
+    // feature 总控的 /handoff 后面写明它是总控、要哪种代码块（BTL-267）；ticket session 只输入 /handoff。
+    const typedHandoff = await this.type(run, M().refreshHandoffRequest(run.kind), this.guardFor(run.trigger, run.mode).recheckAfter(run.headId, gate));
     if (typedHandoff) return this.fail(run, `typing the handoff request: ${typedHandoff}`);
     const handedOff = await this.until(() => run.stored, REFRESH_HANDOFF_MS, POLL_MS);
     if (!handedOff) return this.fail(run, `the handoff was not stored within ${REFRESH_HANDOFF_MS / 60_000} minutes`);

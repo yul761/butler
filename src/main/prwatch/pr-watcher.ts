@@ -3,7 +3,7 @@ import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
 import { PR_GONE_RETRY_MS, prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
-  GH_NOT_FOUND, latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLog, type prRead, type prsForBranch, type reviewAuthors,
+  GH_NOT_FOUND, latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLogDetail, type prRead, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
 import { prUrlParts } from "../../shared/pr-url";
@@ -22,6 +22,13 @@ export const CI_LOG_LINES = 60;
 export const MERGED_RECENT_MS = 24 * 60 * 60_000;
 /** 每次最多取这么多个失败 run 的日志。 */
 const FAILED_LOGS_MAX = 3;
+/** 一个 run 的日志临时取不到（超时、网络、限流）：第一次等这么久再取，之后每次翻倍、最多 CI_LOG_RETRY_MAX_MS。 */
+export const CI_LOG_RETRY_MS = PR_SLOW_MS;
+export const CI_LOG_RETRY_MAX_MS = 60 * 60_000;
+/** 一个 run 的日志临时取不到这么多次：不再取（只在内存里，重启再试）。 */
+export const CI_LOG_TRIES_MAX = 6;
+/** 记着这么多个取日志失败的 run，多了丢最早的。 */
+const CI_LOG_FAILURES_MAX = 500;
 /** 同时跑的 gh 最多这么多个。 */
 const GH_PARALLEL = 4;
 /** 一个 Copilot review 的行内评论最多试这么多次。 */
@@ -55,7 +62,7 @@ export interface PrWatcherDeps {
   linker: Pick<PrLinker, "linkBranchPrs">;
   gh: {
     /** 读一个 PR：GH_NOT_FOUND 是 GitHub 说仓库看得见、没有这个 PR，null 是 gh 失败（包括仓库解析不到）。 */
-    prStatus: typeof prRead; prsForBranch: typeof prsForBranch; branchRuns: typeof branchRuns; failedLog: typeof failedLog;
+    prStatus: typeof prRead; prsForBranch: typeof prsForBranch; branchRuns: typeof branchRuns; failedLogDetail: typeof failedLogDetail;
     reviewComments: typeof reviewComments; reviewAuthors: typeof reviewAuthors;
   };
   git: { firstCommitAt: typeof firstCommitAt };
@@ -119,6 +126,11 @@ export class PrWatcher {
   private readonly ownedListedAt = new Map<string, number>();
   /** 从没读成功过的 PR 读失败后的退避（键 URL）：下次再试的时间、这次等了多久。读成功或行没了就删掉。只在内存里。 */
   private readonly unreadBackoff = new Map<string, { at: number; delay: number }>();
+  /**
+   * 取失败日志失败了的 run（键 runId）：done 是不再取（永久性错误、或临时错误试满了 CI_LOG_TRIES_MAX 次），否则 at 之前不取。
+   * error 是上一次的原因：同一个 run 同一种失败只记一次日志。这个 run 又跑起来（重跑）、或取成功了就删掉。只在内存里。
+   */
+  private readonly logFailures = new Map<number, { at: number; delay: number; tries: number; error: string; done: boolean; missing: boolean }>();
 
   constructor(private readonly d: PrWatcherDeps) {}
 
@@ -339,6 +351,7 @@ export class PrWatcher {
     // 行内评论和 review 作者只在开着变成合并 / 关闭的那一次还取（合并前刚交的 review 要记对）；之后的读（例如补链接来的）不取。
     const open = pr.state === "OPEN";
     const wasOpen = open || p.rows.some((r) => r.state === "open" && r.checkedAt > 0);
+    this.runningRuns(pr.checks);
     const failed = pr.ci !== "failing" ? [] : open ? await this.failedWithLogs(p.cwd, pr.checks, p.slug) : pr.checks.filter((c) => c.state === "failing").map((c) => ({ ...c }));
     const inline = wasOpen ? await this.inlineComments(p, pr) : [];
     const bots = wasOpen ? await this.botsOf(p, pr) : null;
@@ -535,6 +548,7 @@ export class PrWatcher {
     } else {
       // branchRuns 的 null 也可能是这个分支还没有 run：不当作读失败，留着上一次的。
       const runs = await this.gh(() => this.d.gh.branchRuns(t.cwd, t.branch, PR_GH_TIMEOUT_MS));
+      if (runs) this.runningRuns(runs.checks);
       const next = runs ? { ci: runs.ci, headSha: runs.headSha, failed: runs.ci === "failing" ? await this.failedWithLogs(t.cwd, runs.checks, null) : [] } : kept;
       this.d.branches.upsert({ ...base, ...next, readError: false, checkedAt: this.d.now() });
       if (!prev || prev.readError || prev.ci !== next.ci || prev.headSha !== next.headSha || !sameChecks(prev.failed, next.failed)) marks.changed = true;
@@ -580,23 +594,59 @@ export class PrWatcher {
     }
   }
 
-  /** 失败的检查；最多取 3 个 run 的日志。同一个 run 的几个 job 共用一份日志，只取一次、挂在第一个上，免得重复。 */
+  /**
+   * 失败的检查；最多取 3 个 run 的日志。同一个 run 的几个 job 共用一份日志，只取一次、挂在第一个上，免得重复。
+   * 还有 job 在跑的 run 不取（gh 要等整个 run 跑完才给日志）；取失败过的 run 按 logFailures 退避或不再取，不占这 3 个的名额。
+   */
   private async failedWithLogs(cwd: string, checks: CiCheck[], repo: string | null): Promise<CiCheck[]> {
+    const running = this.runningRuns(checks);
+    const now = this.d.now();
     const fetched = new Set<number>();
     const out: CiCheck[] = [];
     for (const c of checks) {
       if (c.state !== "failing") continue;
-      if (c.runId === null || fetched.has(c.runId) || fetched.size >= FAILED_LOGS_MAX) {
+      const runId = c.runId;
+      const failure = runId === null ? undefined : this.logFailures.get(runId);
+      const skip = runId === null || running.has(runId) || (failure !== undefined && (failure.done || now < failure.at));
+      if (skip || fetched.has(runId) || fetched.size >= FAILED_LOGS_MAX) {
         out.push({ ...c });
         continue;
       }
-      const runId = c.runId;
       fetched.add(runId);
-      const log = await this.gh(() => this.d.gh.failedLog(cwd, runId, CI_LOG_LINES, PR_GH_TIMEOUT_MS, repo));
-      if (log === null) this.d.log(`pr watch: fetching the log of run ${runId} failed`);
-      out.push(log === null ? { ...c } : { ...c, log });
+      const got = await this.gh(() => this.d.gh.failedLogDetail(cwd, runId, CI_LOG_LINES, PR_GH_TIMEOUT_MS, repo));
+      if (got?.log == null) {
+        this.noteLogFailure(runId, got?.error ?? "gh call threw", got?.permanent ?? false, got?.missing ?? false, now);
+        out.push({ ...c });
+        continue;
+      }
+      this.logFailures.delete(runId);
+      out.push({ ...c, log: got.log });
     }
     return out;
+  }
+
+  /** 还有 job 在跑的 run。又跑起来了的（重跑同一个 run id）顺便忘掉之前取日志的失败：跑完再取。每次读到检查都调，CI 不是 failing 也调。 */
+  private runningRuns(checks: CiCheck[]): Set<number> {
+    const running = new Set(checks.filter((c) => c.state === "pending" && c.runId !== null).map((c) => c.runId as number));
+    for (const id of running) this.logFailures.delete(id);
+    return running;
+  }
+
+  /**
+   * 记下一个 run 的日志没取到：永久性的不再取；404（missing）第一次按临时的算（刚跑完的 run 日志归档可能还没好），连着第二次才不再取；
+   * 临时的退避、试满 CI_LOG_TRIES_MAX 次不再取。同一种原因只记一次日志。
+   */
+  private noteLogFailure(runId: number, error: string, gone: boolean, missing: boolean, now: number): void {
+    const prev = this.logFailures.get(runId);
+    const tries = (prev?.tries ?? 0) + 1;
+    const delay = prev ? Math.min(prev.delay * 2, CI_LOG_RETRY_MAX_MS) : CI_LOG_RETRY_MS;
+    const permanent = gone || (missing && prev?.missing === true);
+    const done = permanent || tries >= CI_LOG_TRIES_MAX;
+    this.logFailures.delete(runId);
+    this.logFailures.set(runId, { at: now + delay, delay, tries, error, done, missing });
+    if (this.logFailures.size > CI_LOG_FAILURES_MAX) this.logFailures.delete(this.logFailures.keys().next().value as number);
+    const then = permanent ? "not trying it again" : done ? `giving up after ${tries} tries` : `trying again in ${Math.round(delay / 60_000)} min`;
+    if (prev?.error !== error || done) this.d.log(`pr watch: fetching the log of run ${runId} failed: ${error}; ${then}`);
   }
 
   /** 跑一个 gh 调用：同时最多 GH_PARALLEL 个；抛错当作失败（null），记日志。 */

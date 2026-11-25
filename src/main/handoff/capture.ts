@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { FeatureHandoffSchema, HandoffSchema, upgradeLegacyPr } from "../../shared/handoff";
+import { FeatureHandoffSchema, HandoffSchema, upgradeLegacyPr, type FeatureHandoff, type Handoff } from "../../shared/handoff";
 import { isHeadlessEnvelope, type HookEnvelope } from "../../shared/hook-envelope";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
+import { currentLang } from "../i18n";
 import type { FeatureIngestInput, FeatureIngestResult } from "./feature-ingest";
 import type { IngestInput, IngestResult } from "./ingest";
 import { parseJsonLoose, validate } from "./schema";
@@ -38,8 +39,11 @@ export interface CaptureDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** feature 总控里 /handoff 的结果：wrong_block 是总控输出了 ticket 的 shipherd-handoff 代码块（不存，记日志）。 */
-export type FeatureCaptureResult = { featureId: number } & (FeatureIngestResult | { stored: false; reason: "no_block" | "wrong_block" });
+/**
+ * feature 总控里 /handoff 的结果。总控输出了 ticket 的 shipherd-handoff 代码块时：能换成 feature 汇总就存下，fromTicketBlock 为 true
+ * （调用方记日志）；换不成（校验不过、没有内容）就是 wrong_block（不存，记日志）。
+ */
+export type FeatureCaptureResult = { featureId: number } & ((FeatureIngestResult & { fromTicketBlock?: true }) | { stored: false; reason: "no_block" | "wrong_block" });
 
 /**
  * Stop hook 有时比 claude 把最后一条回答写进 transcript 还早（Windows 上更常见）：认出是 /handoff、却还没有代码块时，
@@ -101,23 +105,62 @@ export async function captureCommandHandoff(d: CaptureDeps, stop: StopEvent): Pr
 }
 
 /**
+ * 总控误写成 ticket handoff 时（BTL-267），按总控身份换成 feature 汇总：blockers、decisions、open_questions 原样搬过去；
+ * next_steps 每条一项，ticket 填 null（代码块里的 ticket 号多半是总控所在 worktree 的 ticket，不能说明每一步属于谁）；
+ * summary 用 done_today 拼成一段，没有就用 blockers，再没有就用 next_steps。
+ * prs、jira、followups、learnings、status 汇总里没有对应的字段，丢掉（PR 汇总时由 Shipherd 实时读）。拼不出 summary（什么都没写）时返回 null。
+ */
+export function featureHandoffFromTicket(h: Handoff): FeatureHandoff | null {
+  const clean = (xs: string[]) => xs.map((x) => x.trim()).filter((x) => x.length > 0);
+  const nextSteps = clean(h.next_steps);
+  const parts = [clean(h.done_today), clean(h.blockers), nextSteps].find((xs) => xs.length > 0) ?? [];
+  const summary = parts.join(currentLang() === "en" ? "; " : "；");
+  const converted = {
+    summary,
+    blockers: clean(h.blockers),
+    next_steps: nextSteps.map((text) => ({ ticket: null, text })),
+    decisions: h.decisions,
+    open_questions: clean(h.open_questions),
+  };
+  const checked = validate(FeatureHandoffSchema, converted);
+  return checked.ok ? checked.value : null;
+}
+
+/**
  * feature 总控里的 /handoff：只收 shipherd-feature-handoff 代码块（没有时退回看起来是 feature 汇总的 ```json 代码块），
  * 存成这个 feature 的汇总（校验失败存成 degraded）。
- * 总控按旧习惯输出了 ticket 的 shipherd-handoff 代码块时，当作没有输出（wrong_block）：总控不属于任何 ticket，代码块里的 ticket 号也不能认领它。
- * 存下新汇总、wrong_block、no_block 都调用 afterFeatureCommand（后两种 handoffId 为 null：用户自己开的总控没有 Shipherd 的
- * MCP，常常写不出 feature 代码块，由调用方退回 Shipherd 自己生成）；duplicate 不调用（第一次采集已经调用过）。
+ * 总控输出了 ticket 的 shipherd-handoff 代码块时（BTL-267：判断错了身份，比如在某个 ticket 的 worktree 里），代码块里的 ticket 号
+ * 不能认领它（总控不属于任何 ticket），而是按总控身份换成 feature 汇总存下（featureHandoffFromTicket，fromTicketBlock）：
+ * 否则换新要白等 10 分钟然后放弃。换不成（校验不过、没有内容）时当作没有输出（wrong_block）。
+ * 存下新汇总、wrong_block、no_block 都调用 afterFeatureCommand；后两种和从 ticket 代码块换来的汇总 handoffId 为 null：用户自己开的
+ * 总控没有 Shipherd 的 MCP，常常写不出 feature 代码块，由调用方退回 Shipherd 自己生成（换来的那份缺 PR 等字段，生成的更完整，
+ * 存下后取代它；换新期间不生成，见 index.ts 的 afterFeatureCommand）。duplicate 不调用（第一次采集已经调用过）。
  */
 async function captureFeatureHandoff(d: CaptureDeps, stop: StopEvent, featureId: number): Promise<FeatureCaptureResult | null> {
   const r = await awaitCommandOutput(d, stop, (turn) => {
     const feature = findFeatureHandoffBlock(turn);
-    if (feature) return { feature };
-    return findHandoffBlock(turn) ? { feature: null } : null;
+    if (feature) return { feature, ticket: null };
+    const ticket = findHandoffBlock(turn);
+    return ticket ? { feature: null, ticket } : null;
   });
   if (!r) return null;
   const found = r.found?.feature;
+  const ticketBlock = r.found?.ticket ?? null;
+  if (!found && ticketBlock) {
+    const checked = validate(HandoffSchema, upgradeLegacyPr(parseJsonLoose(ticketBlock.block)));
+    const payload = checked.ok ? featureHandoffFromTicket(checked.value) : null;
+    if (payload) {
+      const res = d.ingestFeature({
+        featureId, sessionId: stop.sessionId, trigger: "command",
+        payload, rawText: ticketBlock.block, sourceRef: sourceRefOf(stop, ticketBlock),
+      });
+      if (res.stored) d.afterFeatureCommand(featureId, null, stop.sessionId);
+      return res.stored ? { featureId, ...res, fromTicketBlock: true } : { featureId, ...res };
+    }
+  }
   if (!found) {
     d.afterFeatureCommand(featureId, null, stop.sessionId);
-    return { featureId, stored: false, reason: r.found ? "wrong_block" : "no_block" };
+    return { featureId, stored: false, reason: ticketBlock ? "wrong_block" : "no_block" };
   }
   const checked = validate(FeatureHandoffSchema, parseJsonLoose(found.block));
   const res = d.ingestFeature({

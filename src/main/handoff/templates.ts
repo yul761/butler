@@ -219,8 +219,15 @@ export function parseHandoffCommand(text: string): { body: string } | null {
 /**
  * /handoff 正文开头给 feature 总控的一段（设计文档 2026-10-28）：只有总控 session 挂了 shipherd-sessions MCP，
  * 能调用它的 list_tickets 就说明是总控，改写 shipherd-feature-handoff 代码块；采集端仍以 Shipherd 的记录为准。
+ * BTL-267：Shipherd 换新时在命令后面写明「这是 epic 总控」（strings 的 refreshHandoffRequest），先看它；工具在延迟加载的
+ * 列表里也算能调用；不按目录、分支里的 ticket 号判断（总控常在某个 ticket 的 worktree 里，以前因此误写成 ticket handoff）。
  */
-const FEATURE_COORDINATOR_SECTION = `先看你能不能调用 shipherd-sessions 的 \`list_tickets\` 工具（mcp__shipherd-sessions__list_tickets）。能调用的话，这个 session 是 epic 总控，不属于某个 ticket，要写的是 epic 汇总：
+const FEATURE_COORDINATOR_SECTION = `先判断这个 session 是不是 epic 总控：
+- 这条命令后面写着这个 session 是 epic 总控（Shipherd 换新时会这样写）的，就是 epic 总控，不用再看工具。
+- 否则看你能不能调用 shipherd-sessions 的 \`list_tickets\` 工具（mcp__shipherd-sessions__list_tickets）：它在你的工具列表里就算能调用，在要先加载才能用的延迟加载（deferred）工具列表里也算。能调用就是 epic 总控。
+- 不要按当前目录、分支名里的 ticket 号判断：epic 总控常常在某个 ticket 的 worktree 里工作，那也不是 ticket session。
+
+是 epic 总控的话，这个 session 不属于某个 ticket，要写的是 epic 汇总：
 - 先用 \`list_tickets\` 看这个 epic 下各 ticket 的情况，再结合这个 session 的完整对话来写。
 - 只写跨 ticket 的整体情况：整体进展、卡在哪、接下来先做什么、ticket 之间的约定（接口、错误码等）。提到 ticket 时只写 ticket 号；不要写完成百分比。
 - 只读：不要修改文件，不要提交或推送。
@@ -234,11 +241,16 @@ ${FENCE}shipherd-feature-handoff
 ${featureHandoffExample("zh")}
 ${FENCE}
 
-不能调用 \`list_tickets\` 时，照下面的说明写 ticket 的 handoff。
+不是 epic 总控时，照下面的说明写 ticket 的 handoff。
 
 `;
 
-const FEATURE_COORDINATOR_SECTION_EN = `First check whether you can call the \`list_tickets\` tool of shipherd-sessions (mcp__shipherd-sessions__list_tickets). If you can, this session is an epic coordinator, it belongs to no single ticket, and what you write is an epic summary:
+const FEATURE_COORDINATOR_SECTION_EN = `First decide whether this session is an epic coordinator:
+- If the text after this command says this session is an epic coordinator (Shipherd writes that when it refreshes a session), it is one; don't check the tools.
+- Otherwise check whether you can call the \`list_tickets\` tool of shipherd-sessions (mcp__shipherd-sessions__list_tickets): it counts if it is in your tool list, and also if it is in the list of deferred tools that have to be loaded before use. If you can call it, this session is an epic coordinator.
+- Don't go by a ticket id in the current folder or branch name: an epic coordinator often works inside one ticket's worktree, and that doesn't make it a ticket session.
+
+If it is an epic coordinator, it belongs to no single ticket, and what you write is an epic summary:
 - First look at the tickets of this epic with \`list_tickets\`, then write the summary from them and from this session's whole conversation.
 - Only write about the picture across tickets: overall progress, what is in the way, what to do first, and agreements between tickets (APIs, error codes and so on). Refer to a ticket only by its id; don't write a completion percentage.
 - Read only: don't change files, don't commit or push.
@@ -253,7 +265,7 @@ ${FENCE}shipherd-feature-handoff
 ${featureHandoffExample("en")}
 ${FENCE}
 
-If you can't call \`list_tickets\`, write the ticket's handoff as described below.
+If it is not an epic coordinator, write the ticket's handoff as described below.
 
 `;
 

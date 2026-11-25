@@ -145,6 +145,22 @@ describe("/handoff command for feature coordinators", () => {
     },
   } as const;
 
+  it("decides the coordinator first from the arguments, counts a deferred list_tickets, and never goes by the folder or branch (BTL-267)", () => {
+    const zh = featureCoordinatorSection("zh");
+    expect(zh).toContain("这条命令后面写着这个 session 是 epic 总控");
+    expect(zh).toContain("延迟加载（deferred）");
+    expect(zh).toContain("不要按当前目录、分支名里的 ticket 号判断");
+    const en = featureCoordinatorSection("en");
+    expect(en).toContain("If the text after this command says this session is an epic coordinator");
+    expect(en).toContain("deferred tools");
+    expect(en).toContain("Don't go by a ticket id in the current folder or branch name");
+    for (const l of ["zh", "en"] as const) {
+      // 参数在正文最后（$ARGUMENTS），判断身份的那一段在最前面。
+      const body = handoffCommandBody(l);
+      expect(body.indexOf(featureCoordinatorSection(l))).toBeLessThan(body.indexOf("$ARGUMENTS"));
+    }
+  });
+
   for (const l of ["zh", "en"] as const) {
     it(`reports the previous ${l} body as stale and replaces it`, async () => {
       setLang(l);

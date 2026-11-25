@@ -282,6 +282,8 @@ const ZH = {
   /** 合并总控（设计文档 2026-11-04）：不放行时给 session 的原因，和之后的通知。who 是“ticket 号（feature 名）”这类写法。 */
   gateWait: (who: string, files: string[]) => `先别合并：${who} 已经拿到合并许可、还没合完，它和你改了同样的地方（${files.join("、")}）。继续做别的事，不要再试合并；它合完后 Shipherd 会在这里告诉你，到时先 rebase 再合。`,
   gateRebase: (who: string | null, files: string[]) => `先别合并：你的分支和最新的目标分支有冲突（${files.join("、")}）${who ? `，冲突来自 ${who} 已经合进去的改动` : ""}。先 rebase 到最新的目标分支、解决冲突再合。解决冲突时两边的意图都要保留，不要直接用你的版本覆盖掉对方的。`,
+  gateCheckFailed: (error: string) => `先别合并：Shipherd 没能检查这次合并会不会和别的 ticket 冲突（${error}）。命令里的目录或仓库写错了就改好再跑；否则把同一条命令原样再跑一次：Shipherd 会再查一次，还查不了就放行，那样这次合并没经过冲突检查，请在回复里告诉用户。`,
+  gateSwitchCheckFailed: (error: string) => `先别切换 branch：Shipherd 没能检查这个目录是不是正被别的 ticket 用着（${error}）。把命令里的目录写成实际路径再跑；或者把同一条命令原样再跑一次：Shipherd 会再查一次，还查不了就放行。`,
   gateDirBusy: (who: string, branch: string) => `先别切换：这个目录正被 ${who} 用着（branch ${branch}），切过去会打乱它的工作。继续做不需要切 branch 的事，或者请用户把你的 ticket 改成 worktree 方式。`,
   /** 文案里的“谁”：ticket 号后面括上它所在的 feature。 */
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key}（${within.join(" / ")}）` : key),
@@ -314,6 +316,15 @@ const ZH = {
    * ticket 是 ticket 号；feature 总控不用它（说"这个 feature"）。tailPath 是尾巴文件，没写成（null）就不提。
    * 整句只有一行：Windows 上按单行粘贴，sanitizeTask 也不会动路径。
    */
+  /**
+   * 换新的第一步输入的 handoff 请求（BTL-267）：ticket session 只是 /handoff；feature 总控在 /handoff 后面写明身份和代码块名
+   * （命令的 $ARGUMENTS），不靠它自己判断能不能调用 list_tickets（工具延迟加载、总控在某个 ticket 的 worktree 里时会判断错）。
+   * 旧版本的命令文件也会把参数带给 claude。整句只有一行。
+   */
+  refreshHandoffRequest: (kind: "ticket" | "feature"): string =>
+    kind === "ticket"
+      ? "/handoff"
+      : "/handoff 这个 session 是 Shipherd 的 epic 总控，不属于任何 ticket（不要按当前目录或分支里的 ticket 号判断）：写 epic 汇总，最后输出 shipherd-feature-handoff 代码块，不要输出 shipherd-handoff 代码块。",
   refreshResume: (kind: "ticket" | "feature", ticket: string, tailPath: string | null) => {
     const recall = kind === "ticket" ? `先用 recall 调出 ${ticket} 最新的 handoff` : "先用 shipherd-feature 的 recall 调出这个 epic 最新的 handoff";
     const tail = tailPath ? `，再读一下 ${tailPath} 里换新前的最近对话` : "";
@@ -939,6 +950,8 @@ const EN: MainStrings = {
   ctlReorderMismatch: (names: string) => `order must name every feature of this epic exactly once. Its features: ${names}`,
   gateWait: (who: string, files: string[]) => `Don't merge yet: ${who} already has permission to merge and hasn't finished, and it changed the same places you did (${files.join(", ")}). Keep working on other things and don't try to merge again; Shipherd will tell you here once it has merged, and then rebase before you merge.`,
   gateRebase: (who: string | null, files: string[]) => `Don't merge yet: your branch conflicts with the latest target branch (${files.join(", ")})${who ? `; the conflict comes from changes ${who} already merged` : ""}. Rebase onto the latest target branch and resolve the conflicts before you merge. Keep the intent of both sides when you resolve them; don't just overwrite the other side's changes with your version.`,
+  gateCheckFailed: (error: string) => `Don't merge yet: Shipherd couldn't check whether this merge conflicts with other tickets (${error}). If the directory or repository in the command is wrong, fix it and run it again. Otherwise run the same command again unchanged: Shipherd checks once more and lets it through if it still can't check, in which case the merge wasn't checked for conflicts and you should tell the user so in your reply.`,
+  gateSwitchCheckFailed: (error: string) => `Don't switch branches yet: Shipherd couldn't check whether another ticket is using this directory (${error}). Write the directory in the command as an actual path and run it again, or run the same command again unchanged: Shipherd checks once more and lets it through if it still can't check.`,
   gateDirBusy: (who: string, branch: string) => `Don't switch yet: ${who} is using this directory (branch ${branch}), and switching would disrupt its work. Keep working on things that don't need a branch switch, or ask the user to change your ticket to the worktree mode.`,
   gateWho: (key: string, within: string[]) => (within.length > 0 ? `${key} (${within.join(" / ")})` : key),
   gateMergedNotice: (who: string) => `Shipherd: ${who} has finished merging. You can now rebase onto the latest target branch and then merge.`,
@@ -964,6 +977,10 @@ const EN: MainStrings = {
   ciPassedNotice: (where: string, sha7: string) => `Shipherd: CI passed on ${where} (${sha7}). You can move on to the next step.`,
   ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
     `Shipherd: CI failed on ${where} (${sha7}). Failed checks: ${failed.map((f) => f.name).join(", ")}.\n\n${ciLogBlocks(failed)}\n\nFix it, then push. End this turn after pushing and Shipherd will tell you the result.`,
+  refreshHandoffRequest: (kind: "ticket" | "feature") =>
+    kind === "ticket"
+      ? "/handoff"
+      : "/handoff This session is Shipherd's epic coordinator and belongs to no ticket (don't go by a ticket id in the folder or branch): write the epic summary and finish with a shipherd-feature-handoff code block, not a shipherd-handoff code block.",
   refreshResume: (kind: "ticket" | "feature", ticket: string, tailPath: string | null) => {
     const recall = kind === "ticket" ? `First use recall to load the latest handoff of ${ticket}` : "First use shipherd-feature's recall to load the latest handoff of this epic";
     const tail = tailPath ? ` and read ${tailPath} for the conversation right before the refresh` : "";

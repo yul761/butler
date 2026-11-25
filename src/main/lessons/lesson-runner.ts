@@ -364,8 +364,14 @@ export class LessonRunner {
     }
   }
 
-  /** 运行记录和队列行在一个事务里收尾。时长没有 claude 给的就用墙钟。 */
+  /** 运行记录和队列行在一个事务里收尾，然后告诉 onRunDone。在别的事务里收尾的用 settleRows，提交后再调 runDone。 */
   private settle(a: Attempt, run: RunEnd, q: QueueEnd): void {
+    this.settleRows(a, run, q);
+    this.runDone(a, q);
+  }
+
+  /** 只写运行记录和队列行（一个事务；已经在事务里时是它的一部分）。时长没有 claude 给的就用墙钟。 */
+  private settleRows(a: Attempt, run: RunEnd, q: QueueEnd): void {
     const { repo } = this.d;
     const now = this.d.now();
     repo.transaction(() => {
@@ -373,12 +379,18 @@ export class LessonRunner {
       if ("defer" in q) repo.defer(a.item.id, q.notBefore ?? now, q.linkRun ? a.runId : undefined);
       else repo.finish(a.item.id, q.finish, now, q.error, { message: q.message ?? null, runId: a.runId });
     });
-    if (!("defer" in q) && q.finish === "done" && this.d.onRunDone) {
-      try {
-        this.d.onRunDone(a.item.slug, a.item.prNumber);
-      } catch (e) {
-        this.d.log?.("lessons: onRunDone failed", e);
-      }
+  }
+
+  /**
+   * 复盘做完了告诉 onRunDone。必须在事务提交之后调（BTL-267）：回调会同步走进 review 效果统计的写入，
+   * 在 analyze 的事务里调时那边开事务就抛 “cannot start a transaction within a transaction”；而且外层回滚了它也不该收到通知。
+   */
+  private runDone(a: Attempt, q: QueueEnd): void {
+    if ("defer" in q || q.finish !== "done" || !this.d.onRunDone) return;
+    try {
+      this.d.onRunDone(a.item.slug, a.item.prNumber);
+    } catch (e) {
+      this.d.log?.("lessons: onRunDone failed", e);
     }
   }
 
@@ -523,17 +535,20 @@ export class LessonRunner {
       return;
     }
     let changed = false;
+    const done: QueueEnd = { finish: "done" };
     repo.transaction(() => {
       const allowed = new Set<string>([pr.url]);
       for (const i of items) if (i.url) allowed.add(i.url);
       const applied = applyAnalysis(repo, item.slug, item.prNumber, v.value, this.d.now(), { allowed, prUrl: pr.url }, a.runId, {
         items, degradedFrom: r.route.degraded ? (r.route.fallbackFrom ?? r.route.requestedTier) : null,
       });
-      this.settle(a, { ...output, ...applied, status: "done", reason: null, findings: v.value.findings }, { finish: "done" });
+      this.settleRows(a, { ...output, ...applied, status: "done", reason: null, findings: v.value.findings }, done);
       // 降了档跑的：要求的档位恢复后重跑一次（D 也会读 fallback_from 降低这次结果的权重）。
       if (r.route.degraded) repo.markUpgrade(item.id);
       changed = applied.created + applied.hit > 0;
     });
+    // 回调都在提交之后：事务里同步调会让回调里的写入嵌套进来（BTL-267）。
+    this.runDone(a, done);
     if (changed) this.d.onLessonsChanged?.(item.slug);
   }
 }

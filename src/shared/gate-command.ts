@@ -3,7 +3,8 @@
 import type { BypassHow } from "./backtest";
 
 export type GateAction =
-  | { kind: "pr_merge"; dir: string | null; pr: string | null }
+  /** repo：`-R/--repo` 写的仓库，或 PR 参数是链接时链接里的 owner/repo；都没有是 null（gh 按 dir 所在的仓库找）。 */
+  | { kind: "pr_merge"; dir: string | null; pr: string | null; repo: string | null }
   | { kind: "local_merge"; dir: string | null; source: string }
   /** source：推的是哪个本地分支（可能是 HEAD，即当前分支）。没写 `src:` 时和 target 同名。 */
   | { kind: "push"; dir: string | null; target: string; source?: string }
@@ -68,14 +69,51 @@ function positionals(args: string[], valueOpts: string[]): string[] {
   return out;
 }
 
+/** 绝对路径：`/`、`\`、盘符，或家目录 `~`（`cd foo && cd ~/repo` 不能拼成 foo/~/repo）。 */
+const isAbsDir = (d: string): boolean => /^([/\\~]|[A-Za-z]:)/.test(d);
+const joinDir = (base: string | null, next: string): string => (base && !isAbsDir(next) ? `${base}/${next}` : next);
+
+/** `gh pr merge` 合的是哪个仓库：`-R/--repo`（`--repo=x` 也算），否则 PR 参数是链接时取链接里的 owner/repo。`HOST/OWNER/REPO` 原样保留。 */
+function prMergeRepo(args: string[], pr: string | null, env: string | null): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if ((a === "-R" || a === "--repo") && args[i + 1]) return args[i + 1];
+    if (a.startsWith("--repo=") && a.length > 7) return a.slice(7);
+    if (/^-R[^-]/.test(a) && a.length > 2) return a.slice(2).replace(/^=/, "") || null; // -Ro/r、-R=o/r
+  }
+  return (pr && prUrlRepo(pr)) || env;
+}
+
+/** PR 链接里的仓库：`https://HOST/owner/repo/pull/N`。github.com（含 www.）只留 owner/repo，GHE 带上主机名（和 -R 的写法一样）。 */
+function prUrlRepo(pr: string): string | null {
+  const m = /^https?:\/\/([^/\s]+)\/([^/\s]+\/[^/\s]+)\/pull\/\d+/i.exec(pr);
+  if (!m) return null;
+  const host = m[1].toLowerCase().replace(/^www\./, "");
+  return host === "github.com" ? m[2] : `${m[1]}/${m[2]}`;
+}
+
 function classifySegment(tokens: string[], dir: string | null): GateAction | null {
   let i = 0;
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+  let ghRepoEnv: string | null = null; // GH_REPO=o/r gh pr merge 12
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
+    if (tokens[i].startsWith("GH_REPO=") && tokens[i].length > 8) ghRepoEnv = tokens[i].slice(8);
+    i++;
+  }
   const cmd = tokens[i];
   if (cmd === "gh") {
-    if (tokens[i + 1] !== "pr" || tokens[i + 2] !== "merge") return null;
-    const pr = positionals(tokens.slice(i + 3), ["-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"])[0];
-    return { kind: "pr_merge", dir, pr: pr ?? null };
+    if (tokens[i + 1] !== "pr") return null;
+    // `gh pr -R o/r merge 12`：-R 也可以写在 pr 和 merge 之间。
+    let j = i + 2;
+    const before: string[] = [];
+    while (j < tokens.length && tokens[j] !== "merge" && isOption(tokens[j])) {
+      before.push(tokens[j]);
+      if ((tokens[j] === "-R" || tokens[j] === "--repo") && j + 1 < tokens.length) before.push(tokens[++j]);
+      j++;
+    }
+    if (tokens[j] !== "merge") return null;
+    const args = [...before, ...tokens.slice(j + 1)];
+    const pr = positionals(args, ["-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"])[0] ?? null;
+    return { kind: "pr_merge", dir, pr, repo: prMergeRepo(args, pr, ghRepoEnv) };
   }
   if (cmd !== "git") return null;
   i++;
@@ -123,19 +161,26 @@ function classifySegment(tokens: string[], dir: string | null): GateAction | nul
   return null;
 }
 
+/**
+ * 命令里要审核的第一个动作。推自己的分支到同名远端分支（`git push -u origin feature/x`）不用审核：后面还有别的动作时
+ * （`git push -u origin feature/x && gh pr merge -R o/r 12`）审核后面那个，只有它自己时照旧返回它。
+ */
 export function classifyGateCommand(command: string): GateAction | null {
   let dir: string | null = null;
+  let ownPush: GateAction | null = null;
   for (const tokens of splitSegments(command)) {
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
     if (tokens[i] === "cd") {
-      if (tokens[i + 1]) dir = tokens[i + 1]; // cd 的目录作用到后面的段
+      // cd 的目录作用到后面的段；连着几个相对的 cd 要拼起来（`cd repo && cd sub`），和 classifyShip 一样。
+      if (tokens[i + 1]) dir = joinDir(dir, tokens[i + 1]);
       continue;
     }
     const action = classifySegment(tokens, dir);
-    if (action) return action;
+    if (action?.kind === "push" && action.source && action.source !== "HEAD" && action.source === action.target) ownPush ??= action;
+    else if (action) return action;
   }
-  return null;
+  return ownPush;
 }
 
 /**
@@ -149,7 +194,7 @@ export function classifyPush(command: string): { dir: string | null } | null {
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
     if (tokens[i] === "cd") {
-      if (tokens[i + 1]) dir = dir && !/^([/\\]|[A-Za-z]:)/.test(tokens[i + 1]) ? `${dir}/${tokens[i + 1]}` : tokens[i + 1];
+      if (tokens[i + 1]) dir = joinDir(dir, tokens[i + 1]);
       continue;
     }
     if (tokens[i] !== "git") continue;
@@ -157,7 +202,7 @@ export function classifyPush(command: string): { dir: string | null } | null {
     let segDir = dir;
     while (i < tokens.length && isOption(tokens[i])) {
       if (tokens[i] === "-C" && i + 1 < tokens.length) {
-        segDir = segDir && !/^([/\\]|[A-Za-z]:)/.test(tokens[i + 1]) ? `${segDir}/${tokens[i + 1]}` : tokens[i + 1];
+        segDir = joinDir(segDir, tokens[i + 1]);
         i += 2;
       } else if (tokens[i] === "-c") i += 2;
       else i++;
@@ -180,8 +225,6 @@ export type ShipCommand =
   /** head：--head 写的分支（去掉 `owner:`）；没写是当前分支（null）。 */
   | { kind: "pr_create"; dir: string | null; head: string | null };
 
-const isAbsDir = (d: string): boolean => /^([/\\]|[A-Za-z]:)/.test(d);
-const joinDir = (base: string | null, next: string): string => (base && !isAbsDir(next) ? `${base}/${next}` : next);
 const remoteBranch = (r: string): string => r.replace(/^\+/, "").replace(/^refs\/heads\//, "");
 
 /**

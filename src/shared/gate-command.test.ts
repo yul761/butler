@@ -3,13 +3,54 @@ import { classifyBypass, classifyGateCommand, classifyPush, classifyShip } from 
 
 describe("classifyGateCommand", () => {
   it("recognises gh pr merge", () => {
-    expect(classifyGateCommand("gh pr merge 12 --squash")).toEqual({ kind: "pr_merge", dir: null, pr: "12" });
-    expect(classifyGateCommand("gh pr merge --auto --squash")).toEqual({ kind: "pr_merge", dir: null, pr: null });
+    expect(classifyGateCommand("gh pr merge 12 --squash")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: null });
+    expect(classifyGateCommand("gh pr merge --auto --squash")).toEqual({ kind: "pr_merge", dir: null, pr: null, repo: null });
     expect(classifyGateCommand("cd /w/backend && gh pr merge https://github.com/a/b/pull/7")).toEqual({
       kind: "pr_merge",
       dir: "/w/backend",
       pr: "https://github.com/a/b/pull/7",
+      repo: "a/b",
     });
+  });
+  it("takes the repository of gh pr merge from -R/--repo or the PR link (BTL-267)", () => {
+    expect(classifyGateCommand("gh pr merge 868 -R org/dems --squash")).toEqual({ kind: "pr_merge", dir: null, pr: "868", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr merge --repo org/dems 868")).toEqual({ kind: "pr_merge", dir: null, pr: "868", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr merge --repo=org/dems 868")).toEqual({ kind: "pr_merge", dir: null, pr: "868", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr merge 5 -R ghe.corp/org/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "5", repo: "ghe.corp/org/dems" });
+    // -R 优先于链接。
+    expect(classifyGateCommand("gh pr merge https://github.com/a/b/pull/7 -R c/d")).toMatchObject({ repo: "c/d" });
+    // 连写的 -Ro/r、写在 pr 和 merge 之间的 -R、GH_REPO 环境变量。
+    expect(classifyGateCommand("gh pr merge 12 -Rorg/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr -R org/dems merge 12 --squash")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr --repo=org/dems merge 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("GH_REPO=org/dems gh pr merge 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("GH_REPO=org/dems gh pr merge 12 -R c/d")).toMatchObject({ repo: "c/d" });
+    expect(classifyGateCommand("gh pr view 12 -R org/dems")).toBeNull();
+    expect(classifyGateCommand("gh pr -R org/dems view 12")).toBeNull();
+  });
+  it("reads -R=o/r and the repository of a www.github.com or GHE PR link (BTL-267 review)", () => {
+    expect(classifyGateCommand("gh pr merge 12 -R=org/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("gh pr -R=org/dems merge 12")).toMatchObject({ repo: "org/dems" });
+    expect(classifyGateCommand("gh pr merge https://www.github.com/a/b/pull/7")).toMatchObject({ repo: "a/b" });
+    expect(classifyGateCommand("gh pr merge https://GitHub.com/a/b/pull/7")).toMatchObject({ repo: "a/b" });
+    expect(classifyGateCommand("gh pr merge https://ghe.corp/a/b/pull/7")).toMatchObject({ repo: "ghe.corp/a/b" });
+    expect(classifyGateCommand("gh pr merge https://ghe.corp/a/b/issues/7")).toMatchObject({ repo: null });
+  });
+  it("checks what follows a push of a branch to its own name (BTL-267 review)", () => {
+    expect(classifyGateCommand("git push -u origin feature/x && gh pr merge 12 -R org/dems")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: "org/dems" });
+    expect(classifyGateCommand("git push origin feature/x && git push origin feature/x:main")).toEqual({ kind: "push", dir: null, target: "main", source: "feature/x" });
+    // 只有它自己、或者后面没有要审核的：照旧是这个 push。
+    expect(classifyGateCommand("git push -u origin feature/x")).toEqual({ kind: "push", dir: null, target: "feature/x", source: "feature/x" });
+    expect(classifyGateCommand("git push -u origin feature/x && pnpm test")).toEqual({ kind: "push", dir: null, target: "feature/x", source: "feature/x" });
+    // 推 HEAD 的不算推自己的分支。
+    expect(classifyGateCommand("git push origin HEAD:main && gh pr merge 12")).toMatchObject({ kind: "push", target: "main" });
+  });
+  it("joins consecutive relative cd directories (BTL-267)", () => {
+    expect(classifyGateCommand("cd /w && cd api && git merge x")).toEqual({ kind: "local_merge", dir: "/w/api", source: "x" });
+    expect(classifyGateCommand("cd api && cd /abs && git merge x")).toEqual({ kind: "local_merge", dir: "/abs", source: "x" });
+    expect(classifyGateCommand("cd api; cd sub; gh pr merge 3")).toMatchObject({ dir: "api/sub" });
+    // `~` 开头是家目录，不拼到前一个目录后面。
+    expect(classifyGateCommand("cd foo && cd ~/repo && git merge x")).toEqual({ kind: "local_merge", dir: "~/repo", source: "x" });
   });
   it("recognises git merge, with -C and env prefixes", () => {
     expect(classifyGateCommand("git -C ../frontend merge feat/x --no-ff")).toEqual({ kind: "local_merge", dir: "../frontend", source: "feat/x" });
@@ -32,7 +73,7 @@ describe("classifyGateCommand", () => {
   it("keeps Windows backslashes in double-quoted paths, as bash does", () => {
     expect(classifyGateCommand('cd "C:\\Users\\me\\repo" && git merge feat/x')).toEqual({ kind: "local_merge", dir: "C:\\Users\\me\\repo", source: "feat/x" });
     expect(classifyGateCommand('git -C "D:\\work\\api" push origin HEAD:main')).toEqual({ kind: "push", dir: "D:\\work\\api", target: "main", source: "HEAD" });
-    expect(classifyGateCommand("cd 'C:\\Users\\me' && gh pr merge 3")).toEqual({ kind: "pr_merge", dir: "C:\\Users\\me", pr: "3" });
+    expect(classifyGateCommand("cd 'C:\\Users\\me' && gh pr merge 3")).toEqual({ kind: "pr_merge", dir: "C:\\Users\\me", pr: "3", repo: null });
     // 双引号里 \" \\ \$ 仍是转义。
     expect(classifyGateCommand('cd "a\\"b\\\\c\\$d" && git merge x')).toEqual({ kind: "local_merge", dir: 'a"b\\c$d', source: "x" });
     expect(classifyGateCommand("cd /c/Users/me/repo && git merge x")).toEqual({ kind: "local_merge", dir: "/c/Users/me/repo", source: "x" });
@@ -49,7 +90,7 @@ describe("classifyGateCommand", () => {
   it("treats backslash-newline as whitespace", () => {
     expect(classifyGateCommand("git push origin \\\n HEAD:main")).toEqual({ kind: "push", dir: null, target: "main", source: "HEAD" });
     expect(classifyGateCommand("git merge \\\n feat/x")).toEqual({ kind: "local_merge", dir: null, source: "feat/x" });
-    expect(classifyGateCommand("gh pr merge \\\n 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12" });
+    expect(classifyGateCommand("gh pr merge \\\n 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: null });
     expect(classifyGateCommand("git -C d \\\n merge x")).toEqual({ kind: "local_merge", dir: "d", source: "x" });
   });
   it("ignores everything else", () => {

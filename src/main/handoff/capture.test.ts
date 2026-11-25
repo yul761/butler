@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { HookEnvelope } from "../../shared/hook-envelope";
 import { FeatureHandoffsRepo } from "../db/feature-handoffs-repo";
 import { FeaturesRepo } from "../db/features-repo";
@@ -8,8 +8,9 @@ import { FollowupsRepo } from "../db/followups-repo";
 import { HandoffsRepo } from "../db/handoffs-repo";
 import { SessionsRepo } from "../db/sessions-repo";
 import { TicketsRepo } from "../db/tickets-repo";
+import { setLang } from "../i18n";
 import { insertTicket, memDb, tempDir } from "../test-utils";
-import { captureCommandHandoff, stopFromEnvelope } from "./capture";
+import { captureCommandHandoff, featureHandoffFromTicket, stopFromEnvelope } from "./capture";
 import { ingestFeatureHandoff, type FeatureIngestInput } from "./feature-ingest";
 import { ingestHandoff, type IngestInput } from "./ingest";
 import { emptyHandoff } from "./schema";
@@ -292,6 +293,81 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     expect(afterCalls).toEqual([[3, null, "c1"]]);
   });
 
+  /** BTL-267：总控判断错了身份（比如在某个 ticket 的 worktree 里），写了 ticket 的代码块，而且写得有内容。 */
+  const misjudged = {
+    ...emptyHandoff("PROJ-1"),
+    status: "in_review" as const,
+    done_today: ["PROJ-1 的 PR 已提", " ", "PROJ-2 开始联调"],
+    next_steps: ["PROJ-2 补错误码", ""],
+    blockers: ["等运维开权限"],
+    prs: [{ number: 7, url: "https://github.com/acme/web/pull/7", state: "open" as const, review: "pending" as const }],
+    decisions: [{ key: "error-codes", statement: "过期返回 401" }],
+    learnings: ["要先 seed"],
+    open_questions: ["移动端呢？"],
+  };
+  const ticketBlock = (v: unknown) => `${FENCE}shipherd-handoff\n${typeof v === "string" ? v : JSON.stringify(v)}\n${FENCE}`;
+
+  it("stores a misjudged ticket block as the coordinator's feature handoff, and still asks for the fuller fallback", async () => {
+    const { deps, sessions, handoffs, featureHandoffs, featureInputs, afterCalls } = setup();
+    // 总控在某个 ticket 的 worktree 里工作：cwd、代码块里的 ticket 号都不能让它算成那个 ticket。
+    sessions.insertIfAbsent({ id: "c1", ticketKey: null, cwd: "/w/c/proj-1", origin: "shipherd", createdAt: 1, coordinator: true, featureId: 3 });
+    const file = write([userHandoff, answer("t2", ticketBlock(misjudged))]);
+    const r = await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file });
+    expect(r).toMatchObject({ featureId: 3, stored: true, degraded: false, fromTicketBlock: true });
+    expect(featureInputs).toHaveLength(1);
+    expect(featureInputs[0]).toMatchObject({ featureId: 3, sessionId: "c1", trigger: "command", sourceRef: "t2", rawText: JSON.stringify(misjudged) });
+    expect(featureHandoffs.latest(3)?.payload).toEqual({
+      summary: "PROJ-1 的 PR 已提；PROJ-2 开始联调",
+      blockers: ["等运维开权限"],
+      next_steps: [{ ticket: null, text: "PROJ-2 补错误码" }],
+      decisions: [{ key: "error-codes", statement: "过期返回 401" }],
+      open_questions: ["移动端呢？"],
+    });
+    // 不存成 ticket 的 handoff。
+    expect(handoffs.listByTicket("PROJ-1")).toHaveLength(0);
+    // handoffId 为 null：换新期间 index.ts 什么都不做；不在换新时由 Shipherd 生成更完整的汇总取代它。
+    expect(afterCalls).toEqual([[3, null, "c1"]]);
+    // 同一个 Stop 再处理一次：不重复存，也不再调用。
+    expect(await captureCommandHandoff(deps, { sessionId: "c1", transcriptPath: file })).toEqual({ featureId: 3, stored: false, reason: "duplicate" });
+    expect(featureHandoffs.listByFeature(3)).toHaveLength(1);
+    expect(afterCalls).toHaveLength(1);
+  });
+
+  it("also converts a ticket handoff in a plain ```json block and an old single-pr block", async () => {
+    const { deps, sessions, featureHandoffs } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("j3", `${FENCE}json\n${JSON.stringify(misjudged)}\n${FENCE}`)]);
+    expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file }))
+      .toMatchObject({ featureId: 3, stored: true, fromTicketBlock: true });
+    // 旧版本的命令输出单个 pr、没有 prs。
+    const legacy: Record<string, unknown> = { ...misjudged, pr: null, done_today: ["旧版本的命令"] };
+    delete legacy.prs;
+    const file2 = write([userHandoff, answer("t3", ticketBlock(legacy))]);
+    expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file2 }))
+      .toMatchObject({ featureId: 3, stored: true, fromTicketBlock: true });
+    expect(featureHandoffs.latest(3)?.payload?.summary).toBe("旧版本的命令");
+  });
+
+  it("keeps wrong_block for an invalid ticket block in a coordinator", async () => {
+    const { deps, sessions, featureInputs, afterCalls } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("t4", ticketBlock('{"ticket":"PROJ-1","done_today":"不是数组"}'))]);
+    expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file }))
+      .toEqual({ featureId: 3, stored: false, reason: "wrong_block" });
+    expect(featureInputs).toHaveLength(0);
+    expect(afterCalls).toEqual([[3, null, "c1"]]);
+  });
+
+  it("prefers the feature block when the turn has both", async () => {
+    const { deps, sessions, featureHandoffs } = setup();
+    coordinator(sessions);
+    const file = write([userHandoff, answer("b1", featureBlock(summary)), answer("b2", ticketBlock(misjudged))]);
+    const r = await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "c1", transcriptPath: file });
+    expect(r).toMatchObject({ featureId: 3, stored: true });
+    expect(r && "fromTicketBlock" in r).toBe(false);
+    expect(featureHandoffs.latest(3)?.payload?.summary).toBe(summary.summary);
+  });
+
   it("accepts a feature summary in a plain ```json block", async () => {
     const { deps, sessions, featureHandoffs, afterCalls } = setup();
     coordinator(sessions);
@@ -378,5 +454,25 @@ describe("captureCommandHandoff in a feature coordinator", () => {
     expect(await captureCommandHandoff({ ...deps, sleep: async () => undefined }, { sessionId: "s1", transcriptPath: file })).toEqual({ stored: false, reason: "no_block" });
     expect(featureInputs).toHaveLength(0);
     expect(afterCalls).toHaveLength(0);
+  });
+});
+
+describe("featureHandoffFromTicket (BTL-267)", () => {
+  afterEach(() => setLang("zh"));
+
+  it("takes the summary from done_today, else blockers, else next_steps, and gives up when all are empty", () => {
+    const h = emptyHandoff("PROJ-1");
+    expect(featureHandoffFromTicket({ ...h, done_today: ["a", "b"], blockers: ["x"] })?.summary).toBe("a；b");
+    expect(featureHandoffFromTicket({ ...h, blockers: ["卡住了"], next_steps: ["n"] })?.summary).toBe("卡住了");
+    expect(featureHandoffFromTicket({ ...h, next_steps: ["下一步"] })).toEqual({
+      summary: "下一步", blockers: [], next_steps: [{ ticket: null, text: "下一步" }], decisions: [], open_questions: [],
+    });
+    expect(featureHandoffFromTicket({ ...h, done_today: ["  "], open_questions: ["q"] })).toBeNull();
+    expect(featureHandoffFromTicket(h)).toBeNull();
+  });
+
+  it("joins the summary the English way in English", () => {
+    setLang("en");
+    expect(featureHandoffFromTicket({ ...emptyHandoff("PROJ-1"), done_today: ["Opened the PR", "Started the wiring"] })?.summary).toBe("Opened the PR; Started the wiring");
   });
 });

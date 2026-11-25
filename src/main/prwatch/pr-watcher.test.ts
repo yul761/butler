@@ -13,7 +13,7 @@ import { CiDelivery, pickRecipient } from "./ci-delivery";
 import { PrLinker } from "./pr-links";
 import { derivePrStages } from "./pr-stages";
 import { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX } from "./pr-schedule";
-import { CI_LOG_LINES, MERGED_RECENT_MS, PR_GH_TIMEOUT_MS, prStatusChanged, PrWatcher, type PrWatcherDeps } from "./pr-watcher";
+import { CI_LOG_LINES, CI_LOG_RETRY_MAX_MS, CI_LOG_RETRY_MS, CI_LOG_TRIES_MAX, MERGED_RECENT_MS, PR_GH_TIMEOUT_MS, prStatusChanged, PrWatcher, type PrWatcherDeps } from "./pr-watcher";
 
 const url = (n: number, repo = "app") => `https://github.com/o/${repo}/pull/${n}`;
 const check = (name: string, state: CiCheck["state"], runId: number | null = null): CiCheck => ({ name, state, runId });
@@ -21,6 +21,8 @@ const pr = (o: Partial<PrStatus> = {}): PrStatus => ({
   number: 7, url: url(7), state: "OPEN", isDraft: false, review: "pending", headSha: "a1", headBranch: "b", checks: [check("test", "pending", 9)], ci: "pending",
   author: "me", reviews: [], comments: [], firstCommitAt: null, createdAt: null, mergedAt: null, closedAt: null, baseBranch: null, title: null, labels: [], reviewRequests: [], mergeable: null, mergeState: null, ...o,
 });
+const logOk = (log: string): Gh.FailedLogResult => ({ log, error: null, permanent: false, missing: false });
+const logFailed = (error: string, permanent = false, missing = false): Gh.FailedLogResult => ({ log: null, error, permanent, missing });
 const listed = (n: number, o: Partial<BranchPr> = {}): BranchPr => ({ number: n, url: url(n), state: "OPEN", headRefName: "b", createdAt: 10, mergedAt: null, closedAt: null, ...o });
 
 type Opts = { sessionOpen?: PrWatcherDeps["sessionOpen"] };
@@ -42,7 +44,7 @@ function setup(o: Opts = {}) {
     prStatus: vi.fn<typeof Gh.prRead>(async () => null),
     prsForBranch: vi.fn<typeof Gh.prsForBranch>(async () => []),
     branchRuns: vi.fn<typeof Gh.branchRuns>(async () => null),
-    failedLog: vi.fn<typeof Gh.failedLog>(async (_cwd, runId) => `log of ${runId}`),
+    failedLogDetail: vi.fn<typeof Gh.failedLogDetail>(async (_cwd, runId) => ({ log: `log of ${runId}`, error: null, permanent: false, missing: false })),
     reviewComments: vi.fn<typeof Gh.reviewComments>(async () => []),
     reviewAuthors: vi.fn<typeof Gh.reviewAuthors>(async () => ({ botReviewIds: new Set(), botLogins: new Set() })),
   };
@@ -445,7 +447,7 @@ describe("PrWatcher: reading PRs", () => {
     s.gh.prStatus.mockResolvedValue(pr({ number: 3, url: url(3, "docs"), ci: "failing", checks: [check("t", "failing", 4)], reviews: [{ id: "R1", author: "alice", state: "APPROVED", body: "", submittedAt: 5 }] }));
     await s.w.check();
     expect(s.gh.prStatus).toHaveBeenCalledWith("/home", url(3, "docs"), PR_GH_TIMEOUT_MS);
-    expect(s.gh.failedLog).toHaveBeenCalledWith("/home", 4, CI_LOG_LINES, PR_GH_TIMEOUT_MS, "o/docs");
+    expect(s.gh.failedLogDetail).toHaveBeenCalledWith("/home", 4, CI_LOG_LINES, PR_GH_TIMEOUT_MS, "o/docs");
     expect(s.gh.reviewAuthors).toHaveBeenCalledWith("/home", 3, PR_GH_TIMEOUT_MS, "o/docs");
     expect(s.events("pr_opened")[0].data).toEqual({ number: 3 });
     expect(s.stages.has("BTL-1@o/docs:opened:b:3")).toBe(true);
@@ -510,13 +512,165 @@ describe("PrWatcher: reading PRs", () => {
     const row = s.link();
     const checks = [check("a", "failing", 1), check("b", "failing", 1), check("ok", "passing", 7), check("c", "failing", 2), check("d", "failing", 3), check("e", "failing", 4), check("f", "failing")];
     s.gh.prStatus.mockResolvedValueOnce(pr({ ci: "failing", checks }));
-    s.gh.failedLog.mockImplementation(async (_cwd, runId) => (runId === 2 ? null : `log of ${runId}`));
+    s.gh.failedLogDetail.mockImplementation(async (_cwd, runId) => (runId === 2 ? logFailed("HTTP 502") : logOk(`log of ${runId}`)));
     await s.w.check();
-    expect(s.gh.failedLog.mock.calls.map((c) => c[1])).toEqual([1, 2, 3]);
+    expect(s.gh.failedLogDetail.mock.calls.map((c) => c[1])).toEqual([1, 2, 3]);
     expect(s.prs.get(row.id)?.failed).toEqual([
       { name: "a", state: "failing", runId: 1, log: "log of 1" }, { name: "b", state: "failing", runId: 1 }, { name: "c", state: "failing", runId: 2 },
       { name: "d", state: "failing", runId: 3, log: "log of 3" }, { name: "e", state: "failing", runId: 4 }, { name: "f", state: "failing", runId: null },
     ]);
+  });
+
+  it("a run whose log fetch failed is not fetched again on a forced read, then backs off up to a limit, logging the reason once", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    s.gh.failedLogDetail.mockResolvedValue(logFailed("HTTP 502: Bad Gateway"));
+    await s.w.check();
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(1);
+    expect(s.deps.log).toHaveBeenCalledWith("pr watch: fetching the log of run 5 failed: HTTP 502: Bad Gateway; trying again in 5 min");
+    // 用户点了刷新：PR 照读，日志不再取。
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(2);
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(1);
+    // 退避 5、10、20、40、60 分钟：到点之前（强制读也）不取，到点取一次；第 6 次失败以后不再取。
+    const forced = async () => {
+      s.w.soonTicket("BTL-1");
+      await vi.advanceTimersByTimeAsync(1000);
+    };
+    let delay = CI_LOG_RETRY_MS;
+    for (let tries = 1; tries < CI_LOG_TRIES_MAX; tries++) {
+      s.advance(delay - 1000);
+      await forced();
+      expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(tries);
+      s.advance(1000);
+      await forced();
+      expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(tries + 1);
+      delay = Math.min(delay * 2, CI_LOG_RETRY_MAX_MS);
+    }
+    for (let i = 0; i < 5; i++) {
+      s.advance(CI_LOG_RETRY_MAX_MS);
+      await forced();
+    }
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(CI_LOG_TRIES_MAX);
+    // 同一种失败只记第一次和放弃的那一次。
+    const lines = s.deps.log.mock.calls.map(([m]) => m).filter((m) => m.includes("fetching the log of run 5"));
+    expect(lines).toEqual([
+      "pr watch: fetching the log of run 5 failed: HTTP 502: Bad Gateway; trying again in 5 min",
+      `pr watch: fetching the log of run 5 failed: HTTP 502: Bad Gateway; giving up after ${CI_LOG_TRIES_MAX} tries`,
+    ]);
+    expect(s.prs.get(row.id)?.failed).toEqual([check("t", "failing", 5)]);
+  });
+
+  it("a different failure of the same run is logged again", async () => {
+    const s = setup();
+    s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    s.gh.failedLogDetail.mockResolvedValueOnce(logFailed("timed out after 5s")).mockResolvedValueOnce(logFailed("HTTP 502: Bad Gateway"));
+    await s.w.check();
+    s.advance(CI_LOG_RETRY_MS);
+    await s.w.check();
+    expect(s.deps.log.mock.calls.map(([m]) => m).filter((m) => m.includes("fetching the log"))).toEqual([
+      "pr watch: fetching the log of run 5 failed: timed out after 5s; trying again in 5 min",
+      "pr watch: fetching the log of run 5 failed: HTTP 502: Bad Gateway; trying again in 10 min",
+    ]);
+  });
+
+  it("a permanent error (log expired, no access) is not fetched again; other runs still are, and it takes none of the three slots", async () => {
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("old", "failing", 5)] }));
+    s.gh.failedLogDetail.mockImplementation(async (_cwd, runId) => (runId === 5 ? logFailed("HTTP 410: Gone", true) : logOk(`log of ${runId}`)));
+    await s.w.check();
+    expect(s.deps.log).toHaveBeenCalledWith("pr watch: fetching the log of run 5 failed: HTTP 410: Gone; not trying it again");
+    for (let i = 0; i < 10; i++) {
+      s.advance(CI_LOG_RETRY_MAX_MS);
+      await s.w.check();
+    }
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(1);
+    const checks = [check("old", "failing", 5), check("a", "failing", 6), check("b", "failing", 7), check("c", "failing", 8)];
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks }));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.gh.failedLogDetail.mock.calls.map((c) => c[1])).toEqual([5, 6, 7, 8]);
+    expect(s.prs.get(row.id)?.failed).toEqual([
+      check("old", "failing", 5), { ...check("a", "failing", 6), log: "log of 6" }, { ...check("b", "failing", 7), log: "log of 7" }, { ...check("c", "failing", 8), log: "log of 8" },
+    ]);
+    expect(s.deps.log.mock.calls.filter(([m]) => m.includes("fetching the log"))).toHaveLength(1);
+  });
+
+  it("a 404 is tried once more (the log archive of a run that just finished can 404); a second 404 in a row stops it (BTL-267 review)", async () => {
+    const s = setup();
+    s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    s.gh.failedLogDetail.mockResolvedValue(logFailed("HTTP 404: Not Found", false, true));
+    await s.w.check();
+    expect(s.deps.log).toHaveBeenLastCalledWith("pr watch: fetching the log of run 5 failed: HTTP 404: Not Found; trying again in 5 min");
+    s.advance(CI_LOG_RETRY_MS);
+    await s.w.check();
+    expect(s.deps.log).toHaveBeenLastCalledWith("pr watch: fetching the log of run 5 failed: HTTP 404: Not Found; not trying it again");
+    for (let i = 0; i < 5; i++) {
+      s.advance(CI_LOG_RETRY_MAX_MS);
+      await s.w.check();
+    }
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(2);
+    // 404 之间夹着别的临时错误：不算连着两次。
+    const t = setup();
+    t.link();
+    t.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    t.gh.failedLogDetail.mockResolvedValueOnce(logFailed("HTTP 404: Not Found", false, true)).mockResolvedValueOnce(logFailed("HTTP 502: Bad Gateway")).mockResolvedValueOnce(logFailed("HTTP 404: Not Found", false, true)).mockResolvedValueOnce(logOk("got it"));
+    for (let i = 0; i < 4; i++) {
+      await t.w.check();
+      t.advance(CI_LOG_RETRY_MAX_MS);
+    }
+    expect(t.gh.failedLogDetail).toHaveBeenCalledTimes(4);
+  });
+
+  it("the first failing read hands the log over as before; a log fetched after a failure is used, and a rerun of the run fetches it again", async () => {
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    await s.w.check();
+    expect(s.prs.get(row.id)?.failed).toEqual([{ ...check("t", "failing", 5), log: "log of 5" }]);
+    expect(s.deps.onCiSettled).toHaveBeenCalledTimes(1);
+    // 取成功的照旧每次读都取（日志可能被重跑换掉）。
+    s.advance(PR_SLOW_MS);
+    s.gh.failedLogDetail.mockResolvedValueOnce(logFailed("HTTP 502: Bad Gateway"));
+    await s.w.check();
+    s.advance(CI_LOG_RETRY_MS);
+    await s.w.check();
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(3);
+    expect(s.prs.get(row.id)?.failed).toEqual([{ ...check("t", "failing", 5), log: "log of 5" }]);
+    // 永久失败以后重跑了这个 run（同一个 run id 又在跑）：跑完再取。
+    s.advance(PR_SLOW_MS);
+    s.gh.failedLogDetail.mockResolvedValueOnce(logFailed("HTTP 403: Resource not accessible by integration", true));
+    await s.w.check();
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "pending", checks: [check("t", "pending", 5)] }));
+    await s.w.check();
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(4);
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("t", "failing", 5)] }));
+    s.gh.failedLogDetail.mockResolvedValueOnce(logOk("rerun log"));
+    await s.w.check();
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(5);
+    expect(s.prs.get(row.id)?.failed).toEqual([{ ...check("t", "failing", 5), log: "rerun log" }]);
+  });
+
+  it("does not fetch the log of a run that still has jobs running", async () => {
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("lint", "failing", 5), check("test", "pending", 5), check("other", "failing", 6)] }));
+    await s.w.check();
+    expect(s.gh.failedLogDetail.mock.calls.map((c) => c[1])).toEqual([6]);
+    expect(s.prs.get(row.id)?.failed).toEqual([check("lint", "failing", 5), { ...check("other", "failing", 6), log: "log of 6" }]);
+    s.advance(PR_SLOW_MS);
+    s.gh.prStatus.mockResolvedValue(pr({ ci: "failing", checks: [check("lint", "failing", 5), check("test", "failing", 5)] }));
+    await s.w.check();
+    expect(s.gh.failedLogDetail.mock.calls.map((c) => c[1])).toEqual([6, 5]);
+    expect(s.prs.get(row.id)?.failed).toEqual([{ ...check("lint", "failing", 5), log: "log of 5" }, check("test", "failing", 5)]);
   });
 
   it("caps the PRs read in one round, preferring open sessions", async () => {
@@ -1087,7 +1241,7 @@ describe("PrWatcher: stages", () => {
       );
       await s.w.check();
       expect(s.prs.get(1)).toMatchObject({ state: state.toLowerCase(), ci: "failing", failed: [check("test", "failing", 4)] });
-      expect(s.gh.failedLog).not.toHaveBeenCalled();
+      expect(s.gh.failedLogDetail).not.toHaveBeenCalled();
       expect(s.gh.reviewComments).not.toHaveBeenCalled();
       expect(s.gh.reviewAuthors).not.toHaveBeenCalled();
       // review 照常记。
@@ -1104,7 +1258,7 @@ describe("PrWatcher: stages", () => {
     s.gh.prStatus.mockResolvedValue(pr({ state: "MERGED", mergedAt: s.now() - 5, ci: "failing", checks: [check("test", "failing", 4)], reviews: [review, copilot] }));
     await s.w.check();
     expect(s.prs.get(1)).toMatchObject({ state: "merged", failed: [check("test", "failing", 4)] });
-    expect(s.gh.failedLog).not.toHaveBeenCalled();
+    expect(s.gh.failedLogDetail).not.toHaveBeenCalled();
     expect(s.gh.reviewComments).toHaveBeenCalledTimes(1);
     expect(s.gh.reviewAuthors).toHaveBeenCalledTimes(1);
   });

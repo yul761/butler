@@ -65,7 +65,7 @@ import { execHeadlessJson } from "./handoff/headless-exec";
 import { headlessUsageRow } from "./usage/headless-usage";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
-import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
+import { HOLD_CHECK_MS, locateRepo, MergeGate } from "./gate/merge-gate";
 import { BranchOwnership } from "./prwatch/branch-owners";
 import { CiDelivery, ciRecipient } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
@@ -261,7 +261,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { RepoRenamesRepo } from "./db/repo-renames-repo";
 import { RENAME_RETRY_MS, RepoRenames } from "./tickets/repo-renames";
 import { LessonsRepo } from "./db/lessons-repo";
@@ -2639,7 +2639,7 @@ async function bootstrap(): Promise<void> {
     home: homedir(),
     slugOf: (path) => repoIdentity.slugOf(path),
     linker: prLinker,
-    gh: { prStatus: prRead, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
+    gh: { prStatus: prRead, prsForBranch, branchRuns, failedLogDetail, reviewComments, reviewAuthors },
     onSlugMoved: (from, to) => repoRenames.suggest(from, to),
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,
@@ -2691,6 +2691,17 @@ async function bootstrap(): Promise<void> {
   });
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
+    repoOfSlug: (slug, cwdRepo) => {
+      const remotesOf = (p: string) => {
+        const origin = [repoIdentity.slugOf(p), repoIdentity.rawSlugOf(p)].filter((x): x is string => x !== null);
+        return { origin, upstream: repoIdentity.remoteSlugsOf(p).filter((x) => !origin.includes(x)) };
+      };
+      if (cwdRepo === undefined) return locateRepo(slug, tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)), remotesOf);
+      const here = remotesOf(cwdRepo);
+      // 读不出它的 remote（git 超时、没有 remote）：按没写 -R 时一样，在这个仓库里按 origin 查。
+      if (here.origin.length === 0 && here.upstream.length === 0) return { path: cwdRepo, remote: "origin" };
+      return locateRepo(slug, [cwdRepo], () => here);
+    },
     openTerminals: (key) => sessionService.openTerminalCount(key),
     notify: () => notify(),
     checkSoon: () => holdWatcher.soon(),
@@ -2973,11 +2984,15 @@ async function bootstrap(): Promise<void> {
             // 换新在等这个 session 的 /handoff 收进来（ticket 的和 feature 总控的都算）。校验没过（degraded）的没写进记忆，
             // 清空以后接不上，不算：换新等到超时停下，什么都不再输入。
             if (r?.stored && !r.degraded) refresher.handoffStored(stop.sessionId);
+            // 总控写成了 ticket 代码块（BTL-267）：已按总控身份换成 feature 汇总存下，记一笔。
+            if (r?.stored && "featureId" in r && r.fromTicketBlock) {
+              logger(`/handoff in feature ${r.featureId} coordinator session ${stop.sessionId}: printed a ticket shipherd-handoff block instead of a shipherd-feature-handoff block; stored it as the feature handoff`);
+            }
             if (r?.stored) notify();
             // feature 总控（设计文档 2026-10-28）：没存下时记一笔；子 ticket 的 handoff 照样在后台跑（afterFeatureCommand）。
             else if (r && "featureId" in r) {
               const where = `/handoff in feature ${r.featureId} coordinator session ${stop.sessionId}`;
-              if (r.reason === "wrong_block") logger(`${where}: printed a ticket shipherd-handoff block instead of a shipherd-feature-handoff block; not stored`);
+              if (r.reason === "wrong_block") logger(`${where}: printed a ticket shipherd-handoff block instead of a shipherd-feature-handoff block that could not be turned into a feature handoff (invalid or empty); not stored`);
               else if (r.reason === "no_block") logger(`${where}: no feature handoff block found in the transcript; not stored`);
               else if (r.reason === "no_feature") logger(`${where}: the feature no longer exists; not stored`);
             }

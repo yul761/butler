@@ -6,6 +6,10 @@ import { AvailabilityRepo } from "../db/availability-repo";
 import { JOB_LESSONS_DAILY, JobsRepo } from "../db/jobs-repo";
 import { LessonRunsRepo, RUN_MAX_AGE_MS } from "../db/lesson-runs-repo";
 import { LessonsRepo } from "../db/lessons-repo";
+import { ReviewEffectRepo } from "../db/review-effect-repo";
+import { TicketPrsRepo } from "../db/ticket-prs-repo";
+import { TicketsRepo } from "../db/tickets-repo";
+import { ReviewEffectCollector } from "../review-effect/collector";
 import type { HeadlessExecDeps } from "../handoff/headless-exec";
 import type { MergedPr, PrLessonData } from "../tickets/gh";
 import { memDb } from "../test-utils";
@@ -916,6 +920,46 @@ describe("LessonRunner merged", () => {
     expect(s.db.prepare(`SELECT repo_slug, pr_number, origin FROM lesson_queue`).all()).toEqual([{ repo_slug: "acme/web", pr_number: 7, origin: "merged" }]);
     expect(s.repo.repo("acme/web")?.localPath).toBe("/w");
     expect(s.repo.repo("acme/other")).toBeNull();
+  });
+});
+
+describe("LessonRunner onRunDone (BTL-267)", () => {
+  it("is called after the analysis transaction commits, with the run already done", async () => {
+    const s = setup();
+    const seen: { inTx: boolean; status: string }[] = [];
+    s.deps.onRunDone = (slug, n) => seen.push({ inTx: s.db.isTransaction, status: s.runs.forPr(slug, n)[0]!.status });
+    s.run.mockResolvedValue(newRule);
+    s.repo.enqueue("acme/web", [7], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    expect(seen).toEqual([{ inTx: false, status: "done" }]);
+  });
+
+  it("the review effect collector writes its row from onRunDone (used to throw: cannot start a transaction within a transaction)", async () => {
+    const s = setup();
+    new TicketsRepo(s.db).insert({ key: "T-1", title: null, status: "active", statusManual: null, createdAt: 1, archivedAt: null });
+    const prId = new TicketPrsRepo(s.db).link({
+      ticketKey: "T-1", url: "https://x/pull/7", slug: "acme/web", repoId: null, number: 7, headBranch: "b7", state: "open", source: "branch", linkedAt: 1,
+    }).pr.id;
+    s.db.prepare(`UPDATE ticket_prs SET state = 'merged', opened_at = 1, merged_at = 2 WHERE id = ?`).run(prId);
+    const log = vi.fn();
+    const effects = new ReviewEffectRepo(s.db);
+    const collector = new ReviewEffectCollector({ db: s.db, repo: effects, files: async () => ["src/x.ts"], now: s.now, log });
+    // 合并时先算过一次（改动文件已经记下）：复盘完再算就不用等 git，一路同步走到 save。
+    await collector.collect(prId);
+    expect(effects.get(prId)).toMatchObject({ retroDone: false, files: ["src/x.ts"] });
+    let pending: Promise<void> = Promise.resolve();
+    s.deps.onRunDone = (slug, n) => {
+      pending = collector.retroDone(slug, n);
+    };
+    s.run.mockResolvedValue(newRule);
+    s.repo.enqueue("acme/web", [7], "merged", T0);
+    s.runner.start();
+    await s.runner.idle();
+    await pending;
+    expect(log).not.toHaveBeenCalled();
+    expect(effects.get(prId)).toMatchObject({ retroDone: true, files: ["src/x.ts"] });
+    expect(s.lastRun(7).status).toBe("done");
   });
 });
 

@@ -1,6 +1,6 @@
 // 工作流 F 的表：回测素材（backtest_prs / backtest_comments / backtest_files）、回测结果（check_backtests）、
 // 绕过记录（check_bypasses）、检查的综合分（check_scores）、降级 / 待复审（check_lifecycle）、自动升降级的事件、阈值复查。
-import type { Db } from "./database";
+import { withTransaction, type Db } from "./database";
 import type {
   BacktestCaught, BacktestResult, BacktestSample, BacktestSkipReason, BacktestStatus, BypassHow, CheckLifecycleReason, CheckLifecycleView, LifecycleReasonData,
   ThresholdReviewView,
@@ -103,16 +103,9 @@ export interface RepoMaterialState {
 export class BacktestRepo {
   constructor(private readonly db: Db) {}
 
+  /** 已经在事务里时用 SAVEPOINT（BTL-267：手写的 BEGIN 嵌套会抛错）。 */
   transaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN");
-    try {
-      const r = fn();
-      this.db.exec("COMMIT");
-      return r;
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    return withTransaction(this.db, fn);
   }
 
   // ------------------------------------------------------------ 素材
