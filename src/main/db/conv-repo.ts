@@ -27,7 +27,7 @@ export interface ConvTurn {
   qaBy: QaBy | null;
 }
 
-export interface ConvCursor { sessionId: string; rootSessionId: string; file: string; ino: number; offset: number; openTurnId: number | null; updatedAt: number }
+export interface ConvCursor { sessionId: string; rootSessionId: string; file: string; ino: string; offset: number; openTurnId: number | null; updatedAt: number }
 
 interface TurnRow {
   id: number;
@@ -58,7 +58,7 @@ interface MessageRow {
   turn_qa: QaState;
 }
 
-interface CursorRow { session_id: string; root_session_id: string; file: string; ino: number; byte_offset: number; open_turn_id: number | null; updated_at: number }
+interface CursorRow { session_id: string; root_session_id: string; file: string; ino: string; byte_offset: number; open_turn_id: number | null; updated_at: number }
 
 const toTurn = (r: TurnRow): ConvTurn => ({
   id: r.id,
@@ -299,7 +299,7 @@ export class ConvRepo {
   // ---- 游标 ----
 
   cursor(sessionId: string): ConvCursor | null {
-    const r = this.db.prepare(`SELECT * FROM conv_cursors WHERE session_id = ?`).get(sessionId) as CursorRow | undefined;
+    const r = this.db.prepare(`SELECT session_id, root_session_id, file, CAST(ino AS TEXT) AS ino, byte_offset, open_turn_id, updated_at FROM conv_cursors WHERE session_id = ?`).get(sessionId) as CursorRow | undefined;
     return r
       ? { sessionId: r.session_id, rootSessionId: r.root_session_id, file: r.file, ino: r.ino, offset: r.byte_offset, openTurnId: r.open_turn_id, updatedAt: r.updated_at }
       : null;

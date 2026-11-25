@@ -14,7 +14,7 @@ describe("readChunk", () => {
   it("reads complete lines and ends at the file size", async () => {
     const f = fresh("a\nbb\nccc\n");
     const r = await readChunk(f, { ino: null, offset: 0 });
-    expect(r).toMatchObject({ lines: ["a", "bb", "ccc"], start: 0, next: statSync(f).size, reset: false, skipped: 0, ino: statSync(f).ino });
+    expect(r).toMatchObject({ lines: ["a", "bb", "ccc"], start: 0, next: statSync(f).size, reset: false, skipped: 0, ino: `i${statSync(f,{bigint:true}).ino}` });
     expect(await readChunk(f, { ino: r!.ino, offset: r!.next })).toMatchObject({ lines: [], start: r!.next, next: r!.next, reset: false });
   });
 

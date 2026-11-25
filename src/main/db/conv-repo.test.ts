@@ -199,11 +199,23 @@ describe("ConvRepo cursors and reroot", () => {
   it("saves and reads cursors", () => {
     const { repo } = setup();
     expect(repo.cursor("s")).toBeNull();
-    const c = { sessionId: "s", rootSessionId: "r", file: "/f.jsonl", ino: 42, offset: 100, openTurnId: 3, updatedAt: 9 };
+    const c = { sessionId: "s", rootSessionId: "r", file: "/f.jsonl", ino: "i42", offset: 100, openTurnId: 3, updatedAt: 9 };
     repo.saveCursor(c);
     expect(repo.cursor("s")).toEqual(c);
     repo.saveCursor({ ...c, offset: 200, openTurnId: null });
     expect(repo.cursor("s")).toEqual({ ...c, offset: 200, openTurnId: null });
+  });
+
+  it("stores an ino above 2^53 without losing it and reads rows an old build wrote", () => {
+    const { db, repo } = setup();
+    const c = { sessionId: "big", rootSessionId: "big", file: "/f", ino: "i18858823440414829", offset: 1, openTurnId: null, updatedAt: 1 };
+    repo.saveCursor(c);
+    expect(repo.cursor("big")).toEqual(c);
+    // 旧版本把舍入过的 number 当 INTEGER 写进去：node:sqlite 默认读这一行会抛 RangeError，现在要读得出来。
+    db.prepare(`INSERT INTO conv_cursors (session_id, root_session_id, file, ino, byte_offset, open_turn_id, updated_at) VALUES ('old', 'old', '/g', 18858823440414828, 5, NULL, 1)`).run();
+    expect(repo.cursor("old")).toMatchObject({ ino: "18858823440414828", offset: 5 });
+    repo.saveCursor({ ...c, sessionId: "old", rootSessionId: "old", ino: "i18858823440414830" });
+    expect(repo.cursor("old")?.ino).toBe("i18858823440414830");
   });
 
   it("moves a session's turns, messages and cursor under a new root, dropping duplicates", () => {
@@ -217,7 +229,7 @@ describe("ConvRepo cursors and reroot", () => {
     repo.addMessage({ turnId: dupNew, rootSessionId: "s2", sessionId: "s2", role: "assistant", text: "回复 zebra", at: 2, forkId: null, sourceKey: "m-reply" });
     const own = repo.openTurn({ rootSessionId: "s2", sessionId: "s2", sourceKey: "u-own", forkId: null, kind: "user", at: 3, asked: false });
     repo.addMessage({ turnId: own, rootSessionId: "s2", sessionId: "s2", role: "user", text: "新问题 zebra", at: 3, forkId: null, sourceKey: "m-own" });
-    repo.saveCursor({ sessionId: "s2", rootSessionId: "s2", file: "/f", ino: 1, offset: 10, openTurnId: own, updatedAt: 1 });
+    repo.saveCursor({ sessionId: "s2", rootSessionId: "s2", file: "/f", ino: "i1", offset: 10, openTurnId: own, updatedAt: 1 });
 
     repo.reroot("s2", "s1");
 
