@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import { sanitizeTask } from "../../shared/control";
 import type { RefreshRefusal, Session } from "../../shared/types";
+import { isHandoffInvocation } from "../handoff/transcript";
 import { setLang } from "../i18n";
 import { M } from "../strings";
 import type { DeliveryBlock, DeliveryCheck } from "./delivery-guard";
@@ -118,9 +119,11 @@ function setup(o: { threshold?: number; commandReady?: boolean; noEndTerminal?: 
       const t = terms.find((x) => x.chain[0] === termId);
       if (recheck && !recheck()) return "blocked";
       typed.push({ termId, text, at: state.now });
-      const reaction = t?.reactions[text];
+      // feature 总控的 handoff 请求是「/handoff 身份说明」（BTL-267）：reactions、deliverResult 都按 "/handoff" 认。
+      const key = /^\/handoff(\s|$)/.test(text) ? "/handoff" : text;
+      const reaction = t?.reactions[key];
       if (reaction) later(reaction.ms, reaction.run);
-      return t?.deliverResult[text] ?? "sent";
+      return t?.deliverResult[key] ?? "sent";
     },
     // 信箱：排进来就当输入了（和别的输入一样记在 typed 里，termId 是 head 所在终端）。
     queueResume: (headId, text) => {
@@ -540,12 +543,33 @@ describe("SessionRefresher (plan 16)", () => {
       await t.settle();
     }
     // ticket 和 feature 总控都不输入 /handoff，各记一次日志（之后冷却）。
-    expect(t.typed.filter((x) => x.text === "/handoff")).toEqual([]);
+    expect(t.typed.filter((x) => x.text.startsWith("/handoff"))).toEqual([]);
     expect(t.logs.filter((l) => l.includes("f1") && l.includes("/handoff"))).toHaveLength(1);
     expect(t.logs.filter((l) => l.includes("s1") && l.includes("/handoff"))).toHaveLength(1);
     expect(await t.r.refresh("s1", "manual")).toBe("failed");
-    expect(t.typed.filter((x) => x.text === "/handoff")).toEqual([]);
+    expect(t.typed.filter((x) => x.text.startsWith("/handoff"))).toEqual([]);
   });
+
+  for (const lang of ["zh", "en"] as const) {
+    it(`tells a feature coordinator in the /handoff arguments that it is one, and types a bare /handoff for a ticket (BTL-267, ${lang})`, async () => {
+      setLang(lang);
+      const t = setup();
+      t.addTerm("s1");
+      t.addTerm("c1", { kind: "feature", session: { featureId: 3, coordinator: true } });
+      expect(await t.r.refresh("s1", "manual")).toBe("done");
+      expect(await t.r.refresh("c1", "manual")).toBe("done");
+      const handoffs = t.typed.filter((x) => x.text.startsWith("/handoff")).map((x) => ({ termId: x.termId, text: x.text }));
+      expect(handoffs).toEqual([{ termId: "s1", text: "/handoff" }, { termId: "c1", text: M().refreshHandoffRequest("feature") }]);
+      const request = handoffs[1].text;
+      // 一行、斜杠命令开头、写明代码块名；capture 和对话尾巴都认它是 /handoff。
+      expect(request).toMatch(/^\/handoff \S/);
+      expect(request).not.toContain("\n");
+      expect(request).toContain("shipherd-feature-handoff");
+      expect(sanitizeTask(request)).toBe(request);
+      expect(isHandoffInvocation(request)).toBe(true);
+      expect(isHandoffInvocation(`<command-message>handoff</command-message>\n<command-name>/handoff</command-name>\n<command-args>${request.slice("/handoff ".length)}</command-args>`)).toBe(true);
+    });
+  }
 
   it("skips the ticket fan-out while refreshing", async () => {
     const t = setup();

@@ -39,7 +39,7 @@ interface Entry {
   message?: { content?: unknown };
 }
 
-/** 这条 user 消息是不是 Shipherd 为这次换新输入的 handoff 请求：ticket session 和 feature 总控都是 /handoff。 */
+/** 这条 user 消息是不是 Shipherd 为这次换新输入的 handoff 请求：ticket session 和 feature 总控都是 /handoff（总控的后面带着身份说明，BTL-267）。 */
 export function refreshCommandMatcher(): (content: unknown) => boolean {
   return isHandoffInvocation;
 }

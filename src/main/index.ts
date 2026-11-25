@@ -2979,11 +2979,15 @@ async function bootstrap(): Promise<void> {
             // 换新在等这个 session 的 /handoff 收进来（ticket 的和 feature 总控的都算）。校验没过（degraded）的没写进记忆，
             // 清空以后接不上，不算：换新等到超时停下，什么都不再输入。
             if (r?.stored && !r.degraded) refresher.handoffStored(stop.sessionId);
+            // 总控写成了 ticket 代码块（BTL-267）：已按总控身份换成 feature 汇总存下，记一笔。
+            if (r?.stored && "featureId" in r && r.fromTicketBlock) {
+              logger(`/handoff in feature ${r.featureId} coordinator session ${stop.sessionId}: printed a ticket shipherd-handoff block instead of a shipherd-feature-handoff block; stored it as the feature handoff`);
+            }
             if (r?.stored) notify();
             // feature 总控（设计文档 2026-10-28）：没存下时记一笔；子 ticket 的 handoff 照样在后台跑（afterFeatureCommand）。
             else if (r && "featureId" in r) {
               const where = `/handoff in feature ${r.featureId} coordinator session ${stop.sessionId}`;
-              if (r.reason === "wrong_block") logger(`${where}: printed a ticket shipherd-handoff block instead of a shipherd-feature-handoff block; not stored`);
+              if (r.reason === "wrong_block") logger(`${where}: printed a ticket shipherd-handoff block instead of a shipherd-feature-handoff block that could not be turned into a feature handoff (invalid or empty); not stored`);
               else if (r.reason === "no_block") logger(`${where}: no feature handoff block found in the transcript; not stored`);
               else if (r.reason === "no_feature") logger(`${where}: the feature no longer exists; not stored`);
             }

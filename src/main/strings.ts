@@ -315,6 +315,15 @@ const ZH = {
    * ticket 是 ticket 号；feature 总控不用它（说"这个 feature"）。tailPath 是尾巴文件，没写成（null）就不提。
    * 整句只有一行：Windows 上按单行粘贴，sanitizeTask 也不会动路径。
    */
+  /**
+   * 换新的第一步输入的 handoff 请求（BTL-267）：ticket session 只是 /handoff；feature 总控在 /handoff 后面写明身份和代码块名
+   * （命令的 $ARGUMENTS），不靠它自己判断能不能调用 list_tickets（工具延迟加载、总控在某个 ticket 的 worktree 里时会判断错）。
+   * 旧版本的命令文件也会把参数带给 claude。整句只有一行。
+   */
+  refreshHandoffRequest: (kind: "ticket" | "feature"): string =>
+    kind === "ticket"
+      ? "/handoff"
+      : "/handoff 这个 session 是 Shipherd 的 epic 总控，不属于任何 ticket（不要按当前目录或分支里的 ticket 号判断）：写 epic 汇总，最后输出 shipherd-feature-handoff 代码块，不要输出 shipherd-handoff 代码块。",
   refreshResume: (kind: "ticket" | "feature", ticket: string, tailPath: string | null) => {
     const recall = kind === "ticket" ? `先用 recall 调出 ${ticket} 最新的 handoff` : "先用 shipherd-feature 的 recall 调出这个 epic 最新的 handoff";
     const tail = tailPath ? `，再读一下 ${tailPath} 里换新前的最近对话` : "";
@@ -966,6 +975,10 @@ const EN: MainStrings = {
   ciPassedNotice: (where: string, sha7: string) => `Shipherd: CI passed on ${where} (${sha7}). You can move on to the next step.`,
   ciFailedNotice: (where: string, sha7: string, failed: Array<{ name: string; log?: string }>) =>
     `Shipherd: CI failed on ${where} (${sha7}). Failed checks: ${failed.map((f) => f.name).join(", ")}.\n\n${ciLogBlocks(failed)}\n\nFix it, then push. End this turn after pushing and Shipherd will tell you the result.`,
+  refreshHandoffRequest: (kind: "ticket" | "feature") =>
+    kind === "ticket"
+      ? "/handoff"
+      : "/handoff This session is Shipherd's epic coordinator and belongs to no ticket (don't go by a ticket id in the folder or branch): write the epic summary and finish with a shipherd-feature-handoff code block, not a shipherd-handoff code block.",
   refreshResume: (kind: "ticket" | "feature", ticket: string, tailPath: string | null) => {
     const recall = kind === "ticket" ? `First use recall to load the latest handoff of ${ticket}` : "First use shipherd-feature's recall to load the latest handoff of this epic";
     const tail = tailPath ? ` and read ${tailPath} for the conversation right before the refresh` : "";
