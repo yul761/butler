@@ -1,4 +1,4 @@
-import type { Db } from "./database";
+import { withTransaction, type Db } from "./database";
 
 /** review_effect_prs 的一行：一个合并了的 PR 的 review 统计（工作流 G，设计 §11）。 */
 export interface ReviewEffectPr {
@@ -60,10 +60,9 @@ function toComment(r: Row): ReviewEffectComment & { prId: number } {
 export class ReviewEffectRepo {
   constructor(private readonly db: Db) {}
 
-  /** 整行重写一个 PR 的统计和它的评论（每次收集都是全量算）。 */
+  /** 整行重写一个 PR 的统计和它的评论（每次收集都是全量算）。已经在事务里时用 SAVEPOINT（BTL-267：手写的 BEGIN 嵌套会抛错）。 */
   save(pr: ReviewEffectPr, comments: ReviewEffectComment[]): void {
-    this.db.exec("BEGIN");
-    try {
+    withTransaction(this.db, () => {
       this.db
         .prepare(
           `INSERT INTO review_effect_prs (pr_id, repo_slug, number, shipherd, opened_at, merged_at, files, comments_human, comments_copilot, avoidable,
@@ -85,11 +84,7 @@ export class ReviewEffectRepo {
         `INSERT OR IGNORE INTO review_effect_comments (pr_id, source_id, lesson_id, who, path, lesson_confirmed_before, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       );
       for (const c of comments) ins.run(pr.prId, c.sourceId, c.lessonId, c.who, c.path, c.lessonConfirmedBefore ? 1 : 0, c.createdAt);
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    });
   }
 
   get(prId: number): ReviewEffectPr | null {

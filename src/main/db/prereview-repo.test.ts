@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
-import type { Db } from "./database";
+import { withTransaction, type Db } from "./database";
 import { AssessRepo } from "./assess-repo";
 import { PreReviewRepo, type NewEvidence } from "./prereview-repo";
 import { ReviewEffectRepo } from "./review-effect-repo";
@@ -130,5 +130,25 @@ describe("ReviewEffectRepo", () => {
     expect(repo.commentsForLessons([7], 0, 21)).toHaveLength(1);
     expect(repo.commentsForLessons([7], 21, 99)).toHaveLength(0);
     expect(repo.missingMerged(10)).toEqual([]);
+  });
+
+  it("save inside another transaction is part of it (BTL-267: a hand-written BEGIN threw “cannot start a transaction within a transaction”)", () => {
+    const { db, prId } = setup();
+    const repo = new ReviewEffectRepo(db);
+    const pr = {
+      prId, repoSlug: "a/b", number: 1, shipherd: false, openedAt: 1, mergedAt: 100, files: [], commentsHuman: 0, commentsCopilot: 0,
+      avoidable: 0, rounds: 0, firstReviewMs: null, submitToMergeMs: null, briefPosted: false, retroDone: true, computedAt: 100,
+    };
+    withTransaction(db, () => repo.save(pr, []));
+    expect(repo.get(prId)?.retroDone).toBe(true);
+    // 外层回滚时一起回滚。
+    expect(() =>
+      withTransaction(db, () => {
+        repo.save({ ...pr, retroDone: false }, []);
+        throw new Error("outer");
+      }),
+    ).toThrow("outer");
+    expect(repo.get(prId)?.retroDone).toBe(true);
+    expect(db.isTransaction).toBe(false);
   });
 });

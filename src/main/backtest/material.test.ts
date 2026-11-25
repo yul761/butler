@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BacktestRepo } from "../db/backtest-repo";
+import { withTransaction } from "../db/database";
 import { memDb } from "../test-utils";
 import { anchorsFor, materialState, MAX_REPO_ATTEMPTS, prefetchRepo, type BacktestGh } from "./material";
 import type { CommentAnchor } from "./gh-backtest";
@@ -74,5 +75,15 @@ describe("backtest material", () => {
     expect(anchorsFor({ id: 1, prNumber: 1, path: "src/a.ts", line: 4, reviewer: "REV" }, as).map((a) => a.id)).toEqual([1]);
     expect(anchorsFor({ id: 1, prNumber: 1, path: "src/a.ts", line: null, reviewer: null }, as).map((a) => a.id)).toEqual([1, 2, 3]);
     expect(anchorsFor({ id: 1, prNumber: 1, path: null, line: 4, reviewer: null }, as)).toEqual([]);
+  });
+});
+
+describe("BacktestRepo.transaction", () => {
+  it("nests inside another transaction (BTL-267: a hand-written BEGIN threw “cannot start a transaction within a transaction”)", () => {
+    const db = memDb();
+    const repo = new BacktestRepo(db);
+    withTransaction(db, () => repo.transaction(() => repo.setRepoState("a/b", "ok", [1], 5)));
+    expect(repo.repoState("a/b")).toMatchObject({ status: "ok", window: [1] });
+    expect(db.isTransaction).toBe(false);
   });
 });
