@@ -344,6 +344,35 @@ describe("ConvIngester scheduling", () => {
     expect(e.said("s1")).toHaveLength(2);
   });
 
+  it("catches a tick that throws: logs it once per window and never rejects", async () => {
+    const e = env();
+    e.file("s1", jsonl(user("u1", null, "第一问？", 1)));
+    const ing = e.make({ openHeads: () => ["s1"] });
+    vi.spyOn(e.repo, "cursor").mockImplementation(() => {
+      throw new RangeError("Value is too large to be represented as a JavaScript number: 18858823440414828");
+    });
+    for (let i = 0; i < 5; i++) await expect(ing.tick()).resolves.toBeUndefined();
+    expect(e.logs.filter((l) => l.startsWith("conv tick:"))).toHaveLength(1);
+    e.clock.now += 11 * 60_000;
+    await ing.tick();
+    expect(e.logs.filter((l) => l.startsWith("conv tick:"))).toHaveLength(2);
+  });
+
+  it("does not re-ingest a file whose cursor holds a legacy rounded ino", async () => {
+    const e = env();
+    const f = e.file("s1", jsonl(user("u1", null, "第一问？", 1)));
+    const ing = e.make({ openHeads: () => ["s1"] });
+    await ing.tick();
+    const c = e.repo.cursor("s1")!;
+    expect(c.ino.startsWith("i")).toBe(true);
+    const legacy = String(Number(c.ino.slice(1)));
+    e.db.prepare(`UPDATE conv_cursors SET ino = ? WHERE session_id = 's1'`).run(Number(legacy));
+    const spy = vi.spyOn(ing, "ingest");
+    await ing.tick();
+    expect(spy).not.toHaveBeenCalled();
+    expect(f).toBeTruthy();
+  });
+
   it("does not watch open heads that are not targets", async () => {
     const e = env();
     const w = fakeWatch();

@@ -7,6 +7,7 @@ import { DebouncedWatch, type WatchFn } from "../sessions/transcript-watch";
 import { capText, convEntriesOf, type ConvEntry, type UserOpen } from "./conv-parse";
 import { isQuestionLike, ruleQa, type ConvQaVerdict } from "./conv-qa";
 import { readChunk } from "./jsonl-reader";
+import { inoText, sameIno } from "./ino";
 import { perfOp } from "../diag/perf-stats";
 
 /**
@@ -25,6 +26,9 @@ export const CONV_TICK_MS = 10_000;
 export const CONV_JUDGE_MAX_AGE_MS = 24 * 3600_000;
 /** 一直没 stop 的轮，静止这么久算结束。 */
 export const CONV_STALE_TURN_MS = 30 * 60_000;
+/** tick 里同一条错误最多这么久记一次。 */
+const TICK_ERROR_LOG_MS = 10 * 60_000;
+
 /** 某个 ticket 的判断一时问不了模型（花费熔断、限流、超时……）：这么久之内不再为它问（别的 ticket 照常判）。 */
 export const CONV_PAUSE_RETRY_MS = CONV_SWEEP_MS;
 const JUDGE_BATCH = 20;
@@ -96,8 +100,26 @@ export class ConvIngester {
     this.watches.clear();
   }
 
-  /** 开着的 target head：挂上监视（重命名以后会掉，ensure 重新挂上），文件大小和游标对不上就读；已经关掉的 head 撤掉监视。 */
+  /** 定时器每 10 秒调一次：任何异常都接住记日志，同一条消息 10 分钟内只记一次，不能变成 unhandledRejection。 */
   async tick(): Promise<void> {
+    try {
+      await this.tickOnce();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const now = this.d.now();
+      if (msg !== this.lastTickError || now - this.lastTickErrorAt >= TICK_ERROR_LOG_MS) {
+        this.lastTickError = msg;
+        this.lastTickErrorAt = now;
+        this.d.log?.(`conv tick: ${msg}`);
+      }
+    }
+  }
+
+  private lastTickError = "";
+  private lastTickErrorAt = 0;
+
+  /** 开着的 target head：挂上监视（重命名以后会掉，ensure 重新挂上），文件大小和游标对不上就读；已经关掉的 head 撤掉监视。 */
+  private async tickOnce(): Promise<void> {
     if (this.stopped) return;
     const heads = new Set(this.d.openHeads().filter((h) => isConvTarget(this.d.sessions.get(h))));
     for (const [h, { w }] of this.watches) {
@@ -122,12 +144,12 @@ export class ConvIngester {
       entry.w.ensure();
       let st;
       try {
-        st = await stat(file);
+        st = await stat(file, { bigint: true });
       } catch {
         continue;
       }
       const c = this.d.repo.cursor(h);
-      if (!c || c.file !== file || c.ino !== st.ino || c.offset !== st.size) await this.ingest(h);
+      if (!c || c.file !== file || !sameIno(c.ino, inoText(st.ino)) || c.offset !== Number(st.size)) await this.ingest(h);
     }
   }
 

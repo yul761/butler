@@ -20,7 +20,7 @@ export class TranscriptTail {
   /** 上一次读成功时的文件大小：一时读不了不能当成文件变了。 */
   private lastSize = 0;
   /** 上一次读到的文件的 inode；还没读过为 null。 */
-  private ino: number | null = null;
+  private ino: bigint | null = null;
   /** 从头重建过几次（截短或轮转）：调用方据此知道重读出来的旧事件不是新的。 */
   restarts = 0;
 
@@ -33,8 +33,8 @@ export class TranscriptTail {
     try {
       const fh = await open(this.file, "r");
       try {
-        const st = await fh.stat();
-        const size = st.size;
+        const st = await fh.stat({ bigint: true });
+        const size = Number(st.size);
         const rotated = this.ino !== null && st.ino !== this.ino;
         this.ino = st.ino;
         if (size < this.offset || rotated) this.reset();
