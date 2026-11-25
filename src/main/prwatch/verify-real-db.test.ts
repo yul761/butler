@@ -17,7 +17,7 @@ import { SettingsRepo } from "../db/settings-repo";
 import { TicketPrsRepo } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { RepoIdentity } from "../lessons/repo-identity";
-import { applyGhResolution, branchRuns, failedLog, prsForBranch, prStatus, reviewAuthors, reviewComments } from "../tickets/gh";
+import { applyGhResolution, branchRuns, failedLogDetail, prsForBranch, prStatus, reviewAuthors, reviewComments } from "../tickets/gh";
 import { firstCommitAt } from "../tickets/git";
 import { resolveGh } from "../util/gh-path";
 import type { TicketRepo } from "../../shared/types";
@@ -78,7 +78,7 @@ describe.skipIf(!file)("real database copy (SHIPHERD_VERIFY_DB)", () => {
         sessionOpen: () => false,
         home: homedir(),
         slugOf, linker,
-        gh: { prStatus, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
+        gh: { prStatus, prsForBranch, branchRuns, failedLogDetail, reviewComments, reviewAuthors },
         git: { firstCommitAt },
         stages,
         onMerged: () => undefined,

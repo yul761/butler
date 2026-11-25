@@ -261,7 +261,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { RepoRenamesRepo } from "./db/repo-renames-repo";
 import { RENAME_RETRY_MS, RepoRenames } from "./tickets/repo-renames";
 import { LessonsRepo } from "./db/lessons-repo";
@@ -2639,7 +2639,7 @@ async function bootstrap(): Promise<void> {
     home: homedir(),
     slugOf: (path) => repoIdentity.slugOf(path),
     linker: prLinker,
-    gh: { prStatus: prRead, prsForBranch, branchRuns, failedLog, reviewComments, reviewAuthors },
+    gh: { prStatus: prRead, prsForBranch, branchRuns, failedLogDetail, reviewComments, reviewAuthors },
     onSlugMoved: (from, to) => repoRenames.suggest(from, to),
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,

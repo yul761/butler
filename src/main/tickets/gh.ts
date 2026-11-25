@@ -618,9 +618,43 @@ export async function branchRuns(cwd: string, branch: string, timeoutMs: number)
 
 /** gh run view <runId> --log-failed，取最后 lines 行；失败返回 null。 */
 export async function failedLog(cwd: string, runId: number, lines: number, timeoutMs: number, repo?: string | null): Promise<string | null> {
-  const out = await runGh(cwd, ["run", "view", String(runId), "--log-failed"], timeoutMs, 16 * 1024 * 1024, repoEnv(repo));
-  if (out === null) return null;
-  return out.replace(/\n+$/, "").split("\n").slice(-lines).join("\n");
+  return (await failedLogDetail(cwd, runId, lines, timeoutMs, repo)).log;
+}
+
+/** 取失败日志的结果。log 为 null 时 error 是一行原因，permanent 说这个 run 的日志以后也取不到。 */
+export interface FailedLogResult {
+  log: string | null;
+  /** 失败的原因：gh 的 stderr 第一行（截断）、超时、gh 起不来；成功为 null。 */
+  error: string | null;
+  /** GitHub 说这个 run 的日志不会再有了：run 或日志不存在（404）、过了保留期（410、log not found）、当前账号没权限（403，限流除外）。 */
+  permanent: boolean;
+}
+
+/** 日志里记的 stderr 摘要最多这么长。 */
+const GH_ERROR_CHARS = 200;
+
+/** gh 失败的一行摘要：超时、gh 起不来，否则 stderr 第一行非空的（截断）。 */
+export function ghErrorSummary(r: { stderr: string; spawnError?: string | null; timedOut?: boolean }, timeoutMs: number): string {
+  if (r.timedOut) return `timed out after ${timeoutMs / 1000}s`;
+  const line = r.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l !== "");
+  if (line) return line.length > GH_ERROR_CHARS ? `${line.slice(0, GH_ERROR_CHARS)}…` : line;
+  return r.spawnError ? `gh failed (${r.spawnError})` : "gh failed with no output";
+}
+
+/**
+ * gh run view --log-failed 的 stderr 是不是在说这个 run 的日志以后也拿不到：重试没有用。
+ * 403 只算没权限，限流（rate limit）是临时的；401（没登录、token 过期）、网络、超时、「still in progress」都是临时的。
+ */
+export function ghLogGone(stderr: string): boolean {
+  if (/rate limit/i.test(stderr)) return false;
+  return /\bHTTP (?:403|404|410)\b|\blog not found\b|Could not resolve to a Repository\b|Resource not accessible/i.test(stderr);
+}
+
+/** 同 failedLog，另外带回失败的原因、是不是永久的（PrWatcher 用来决定还取不取、日志里写什么）。 */
+export async function failedLogDetail(cwd: string, runId: number, lines: number, timeoutMs: number, repo?: string | null): Promise<FailedLogResult> {
+  const r = await runGhDetail(cwd, ["run", "view", String(runId), "--log-failed"], timeoutMs, 16 * 1024 * 1024, repoEnv(repo));
+  if (r.stdout === null) return { log: null, error: ghErrorSummary(r, timeoutMs), permanent: !r.timedOut && !r.spawnError && ghLogGone(r.stderr) };
+  return { log: r.stdout.replace(/\n+$/, "").split("\n").slice(-lines).join("\n"), error: null, permanent: false };
 }
 
 export const LESSON_GH_TIMEOUT_MS = 15_000;
