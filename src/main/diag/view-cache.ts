@@ -10,30 +10,44 @@ export interface ViewCacheDeps {
 
 export class ViewCache {
   private gen = 0;
-  private readonly entries = new Map<string, { gen: number; at: number; value: unknown }>();
+  /** 只作废了这几个 key（invalidate(keys)）的次数。 */
+  private readonly keyGen = new Map<string, number>();
+  private readonly entries = new Map<string, { gen: string; at: number; value: unknown }>();
   private readonly ttlMs: number;
 
   constructor(private readonly d: ViewCacheDeps) {
     this.ttlMs = d.ttlMs ?? 1000;
   }
 
-  invalidate(): void {
-    this.gen += 1;
-    this.entries.clear();
+  /** 不给 keys：全部作废。给了：只作废这几个（BTL-265：按 state:changed 的范围，见 view-scopes.ts）。 */
+  invalidate(keys?: readonly string[]): void {
+    if (keys === undefined) {
+      this.gen += 1;
+      this.entries.clear();
+      return;
+    }
+    for (const k of keys) {
+      this.keyGen.set(k, (this.keyGen.get(k) ?? 0) + 1);
+      this.entries.delete(k);
+    }
   }
 
   get<T>(key: string, build: () => T): T {
     const now = this.d.now();
     const e = this.entries.get(key);
-    if (e && e.gen === this.gen && now - e.at < this.ttlMs) return e.value as T;
-    const gen = this.gen;
+    const gen = this.genOf(key);
+    if (e && e.gen === gen && now - e.at < this.ttlMs) return e.value as T;
     const value = build();
     // 拼的时候作废了：这一份可能是旧的，这次照样返回，但不留下。
-    if (gen === this.gen) this.entries.set(key, { gen, at: now, value });
+    if (gen === this.genOf(key)) this.entries.set(key, { gen, at: now, value });
     return value;
   }
 
   wrap<T>(key: string, build: () => T): () => T {
     return () => this.get(key, build);
+  }
+
+  private genOf(key: string): string {
+    return `${this.gen}:${this.keyGen.get(key) ?? 0}`;
   }
 }

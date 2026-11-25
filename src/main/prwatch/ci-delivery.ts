@@ -75,6 +75,13 @@ export function pickRecipient(i: { owner: string | null; ownerOpen: boolean; ope
   return cands.length === 0 ? { ok: false, reason: "no_session" } : { ok: false, reason: "unowned", candidates: cands.map((c) => c.id), promised: onTicket };
 }
 
+/** 一次拼输入里共用的读（首页 turn，BTL-265）：开着的 head、休眠的 head、链上 id 的 head。 */
+export interface RecipientCtx {
+  openHeads(): Session[];
+  hibernatedHeads(): Session[];
+  head(id: string): Session | null;
+}
+
 /**
  * CI 结论递给谁（index.ts 的 recipient）：pickRecipient，加上休眠着的 session（WS-M B）。
  * 选中休眠的也没关系：排进它的信箱，信箱叫醒它，醒来停下时送进去。

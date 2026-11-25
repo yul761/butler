@@ -181,6 +181,39 @@ export function perfOp<T>(name: string, fn: () => T): T {
   }
 }
 
+export interface PerfParts {
+  /** 计时一部分；同一部分可以进出多次（循环里每个 ticket 一次），时间累加。 */
+  run<T>(part: string, fn: () => T): T;
+  /** 每个部分记一次 op，名字是 `前缀.部分`（导出诊断的 ops 里能看到一次重活里时间花在哪）。 */
+  done(): void;
+}
+
+const NO_PARTS: PerfParts = { run: (_part, fn) => fn(), done: () => undefined };
+
+/**
+ * 把一段重活拆成几部分计时（BTL-265）：循环里每次进出只是两次 performance.now()，结束时每部分记一次 op。
+ * 没装 PerfStats 时什么都不记。部分里套部分时外层的时间包含内层的。
+ */
+export function perfParts(prefix: string): PerfParts {
+  const s = active;
+  if (!s) return NO_PARTS;
+  const totals = new Map<string, number>();
+  return {
+    run(part, fn) {
+      const t0 = performance.now();
+      try {
+        return fn();
+      } finally {
+        totals.set(part, (totals.get(part) ?? 0) + performance.now() - t0);
+      }
+    },
+    done() {
+      for (const [part, ms] of totals) s.op(`${prefix}.${part}`, ms);
+      totals.clear();
+    },
+  };
+}
+
 /** 计时一段异步的活（从开始到结束的墙钟时间，含等待）。 */
 export async function perfOpAsync<T>(name: string, fn: () => Promise<T>): Promise<T> {
   const s = active;

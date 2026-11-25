@@ -184,8 +184,8 @@ export class PrWatcher {
         mergeable: r.mergeable, mergeState: r.mergeState, statusChangedAt: r.statusChangedAt, slug: r.slug,
       },
     }));
-    for (const b of this.d.branches.all()) {
-      if (b.ticketKey !== ticketKey || b.checkedAt === 0) continue;
+    for (const b of this.d.branches.byTicket(ticketKey)) {
+      if (b.checkedAt === 0) continue;
       const repo = this.d.repoOf(b.repoId);
       if (!repo || repo.branch !== b.branch) continue;
       if (prs.some((r) => r.state === "open" && r.repoId === b.repoId && r.headBranch === b.branch)) continue;

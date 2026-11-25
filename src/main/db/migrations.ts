@@ -1622,4 +1622,15 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE ticket_prs ADD COLUMN read_gone_at INTEGER;
   DELETE FROM ticket_prs WHERE source = 'handoff' AND repo_id IS NULL AND checked_at = 0 AND read_failures >= 10 AND read_retry_at IS NOT NULL;
   `,
+  // 59（BTL-265）：刷新时每次都要的查询加索引（外面开的 session 有几千个，以前要整表扫）：
+  // 休眠着的 head（listHibernated）、feature 直属的 session（listByFeature）、ticket 的分支 CI（BranchWatchRepo.byTicket），
+  // 链往回走（rootsOf 的递归每一步按 replaced_by 找上一个，以前每一步都整表扫）。
+  // sessions_feature 带上 ticket_key：只有 feature_id 一列时，没跑过 ANALYZE 的库里 listByFeatures（feature_id IN json_each AND ticket_key IS NULL）
+  // 会选 sessions_ticket，把所有没 ticket 的 session 扫一遍；两列都是等值，任何统计下都选它。
+  `
+  CREATE INDEX sessions_replaced_by ON sessions(replaced_by) WHERE replaced_by IS NOT NULL;
+  CREATE INDEX sessions_hibernated ON sessions(hibernated_at) WHERE hibernated_at IS NOT NULL;
+  CREATE INDEX sessions_feature ON sessions(feature_id, ticket_key) WHERE feature_id IS NOT NULL;
+  CREATE INDEX branch_watch_ticket ON branch_watch(ticket_key);
+  `,
 ];

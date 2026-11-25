@@ -1,5 +1,5 @@
 import type { BgKind } from "../../shared/background";
-import { withTransaction, type Db } from "./database";
+import { prepareUncached, withTransaction, type Db } from "./database";
 
 export type BgJobState = "queued" | "running" | "done" | "failed" | "cancelled";
 
@@ -81,12 +81,12 @@ export class BackgroundRepo {
         return v;
       };
       let r: Row | undefined;
-      const rows = this.db
-        .prepare(
-          `SELECT * FROM background_jobs WHERE state = 'queued' AND kind = ? AND (not_before IS NULL OR not_before <= ?)
-           ORDER BY priority DESC, id`,
-        )
-        .iterate(kind, now) as Iterable<Row>;
+      // 循环里会调 allowTicket（外面的回调）：不用缓存的语句，回调里再查同一条也不会把这里重置（BTL-265）。
+      const rows = prepareUncached(
+        this.db,
+        `SELECT * FROM background_jobs WHERE state = 'queued' AND kind = ? AND (not_before IS NULL OR not_before <= ?)
+         ORDER BY priority DESC, id`,
+      ).iterate(kind, now) as Iterable<Row>;
       for (const x of rows) {
         if (x.ticket_key === null || allowed(x.ticket_key)) {
           r = x;

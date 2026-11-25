@@ -290,3 +290,20 @@ describe("SessionsRepo resume bookkeeping (BTL-256)", () => {
     expect(repo.takeTermOpen()).toEqual([]);
   });
 });
+
+describe("refresh-path query plans (BTL-265)", () => {
+  // 没跑过 ANALYZE 的库（用户的库都是）里，这几条要走 migration 59 的索引，不能退回成扫所有没 ticket 的 session。
+  const plan = (sql: string, ...args: unknown[]) => {
+    const db = memDb();
+    return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...(args as never[])) as { detail: string }[]).map((r) => r.detail).join(" | ");
+  };
+
+  it("listByFeatures and listByFeature use sessions_feature", () => {
+    expect(plan(`SELECT * FROM sessions WHERE feature_id IN (SELECT value FROM json_each(?)) AND ticket_key IS NULL`, "[1,2]")).toContain("sessions_feature");
+    expect(plan(`SELECT * FROM sessions WHERE feature_id = ? AND ticket_key IS NULL`, 1)).toContain("sessions_feature");
+  });
+
+  it("listHibernated uses sessions_hibernated", () => {
+    expect(plan(`SELECT * FROM sessions WHERE hibernated_at IS NOT NULL AND replaced_by IS NULL AND epic_id IS NULL ORDER BY hibernated_at, id`)).toContain("sessions_hibernated");
+  });
+});

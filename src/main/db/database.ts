@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { backupBeforeMigrate, backupPath, type OnBackupFailed } from "./backup";
 import { MIGRATIONS } from "./migrations";
 import { M } from "../strings";
@@ -20,7 +20,7 @@ const userVersion = (db: Db): number => (db.prepare("PRAGMA user_version").get()
  * 新建的空库（版本 0）和内存库不备份。
  */
 export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
-  const db = new DatabaseSync(file);
+  const db = cacheStatements(new DatabaseSync(file));
   try {
     db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     const current = userVersion(db);
@@ -36,6 +36,45 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
     db.close();
     throw e;
   }
+  return db;
+}
+
+const uncached = new WeakMap<Db, (sql: string) => StatementSync>();
+
+/** 不走语句缓存、单独编译一条（cacheStatements 包过的连接；没包过的就是 db.prepare）：给读的时候会回调外面的 iterate 用。 */
+export function prepareUncached(db: Db, sql: string): StatementSync {
+  return (uncached.get(db) ?? ((q: string) => db.prepare(q)))(sql);
+}
+
+/** 每个连接最多留这么多条编译好的语句（拼出来的 SQL 不会把内存撑满）。 */
+export const STATEMENT_CACHE_MAX = 512;
+
+/**
+ * 编译好的语句按 SQL 文本留着重用（BTL-265）：node:sqlite 不缓存，每次 db.prepare 都要重新编译，
+ * 首页一次刷新几百次查询，一半的时间花在编译上。最近用过的留 STATEMENT_CACHE_MAX 条。
+ * 重用同一个 StatementSync 是安全的：all / get / run 同步跑完，开头都会重置语句；iterate 用 for-of 读，break / return 也会重置。
+ * 不要拿着读了一半的 iterate 去查同一条 SQL（会被重置），也不要在缓存的语句上改选项（setReadBigInts 之类会留给下一个用的人）：带选项的 prepare 不走缓存。
+ * iterate 的循环体里会调外面传进来的回调（说不定又查同一条 SQL）时，用 prepareUncached。
+ */
+export function cacheStatements(db: Db): Db {
+  const raw = db.prepare.bind(db) as (sql: string, ...rest: unknown[]) => StatementSync;
+  uncached.set(db, raw);
+  const cache = new Map<string, StatementSync>();
+  const prepare = (sql: string, ...rest: unknown[]): StatementSync => {
+    if (rest.length > 0) return raw(sql, ...rest);
+    const hit = cache.get(sql);
+    if (hit) {
+      // 挪到最后：Map 的顺序就是最近用过的顺序。
+      cache.delete(sql);
+      cache.set(sql, hit);
+      return hit;
+    }
+    const s = raw(sql);
+    cache.set(sql, s);
+    if (cache.size > STATEMENT_CACHE_MAX) cache.delete(cache.keys().next().value as string);
+    return s;
+  };
+  db.prepare = prepare as Db["prepare"];
   return db;
 }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { WorkMode } from "../shared/types";
-import { migrate, openDatabase, type Db } from "./db/database";
+import { cacheStatements, migrate, openDatabase, type Db } from "./db/database";
 import type { NewTicket, TicketsRepo } from "./db/tickets-repo";
 import type { PtyFactory, PtyProcess } from "./sessions/pty-manager";
 
@@ -45,7 +45,7 @@ export function memDb(): Db {
     if (typeof db.serialize === "function") migratedDb = db.serialize();
     return db;
   }
-  const db = new DatabaseSync(":memory:");
+  const db = cacheStatements(new DatabaseSync(":memory:"));
   db.deserialize(migratedDb);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   migrate(db);
