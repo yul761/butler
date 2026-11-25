@@ -45,8 +45,13 @@ export function commandDir(cwd: string, dir: string | null, platform: NodeJS.Pla
  * （origin、upstream、改名前后），和 parseRemoteSlug 的写法一样（github.com 省掉主机名，其余主机名在前）。
  */
 export function findRepoBySlug(slug: string, paths: readonly string[], slugsOf: (path: string) => readonly string[]): string | null {
-  const want = slug.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^github\.com\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
+  const want = normSlug(slug);
   return [...new Set(paths)].find((p) => slugsOf(p).includes(want)) ?? null;
+}
+
+/** `-R` 的写法换成 parseRemoteSlug 的写法：小写，去掉 https://、github.com/、.git 和结尾的 /。 */
+export function normSlug(slug: string): string {
+  return slug.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^github\.com\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
 }
 
 /**
@@ -82,7 +87,11 @@ export interface MergeGateDeps {
    * `gh pr merge -R owner/repo`（或 PR 链接）合的仓库在本机的主 checkout：只认 ticket 用到的仓库，认不出是 null。
    * feature 总控在 feature 目录（不是 git 仓库）里合 PR，只能靠它找到仓库（BTL-267）。
    */
-  repoOfSlug?: (slug: string) => string | null;
+  /**
+   * `-R` 的仓库在本机哪个主 checkout，用哪个 remote 取它的分支：fork 的工作流里 -R 选的常是 upstream，
+   * 这时目标分支（和同仓库 PR 的 head）要按 upstream 的算，不能拿 origin（fork）的比。
+   */
+  repoOfSlug?: (slug: string) => { path: string; remote: string } | null;
   /** 目录在不在（测试用）。 */
   exists?: (path: string) => boolean;
 }
@@ -108,6 +117,8 @@ interface Merge {
   target: string;
   kind: "pr" | "local";
   prUrl: string | null;
+  /** 目标分支在哪个 remote 上（`-R` 选了 upstream 时是 upstream）；不写是 origin。 */
+  remote?: string;
 }
 
 /**
@@ -251,14 +262,15 @@ export class MergeGate {
   private async checkPrIn(req: GateRequest, a: Extract<GateAction, { kind: "pr_merge" }>, slug: string, clock: Clock): Promise<GateResult> {
     // `-R "$REPO"`、`gh pr merge "$PR"`：和目录写成变量一样，不知道合的是哪个，先拦一次。
     if (/[$`]/.test(slug) || (a.pr !== null && /[$`]/.test(a.pr))) throw new Error(`the repository or PR in the command uses a shell variable or substitution`);
-    const repo = this.d.repoOfSlug?.(slug) ?? null;
-    if (repo === null) throw new NotChecked(`no ticket uses ${slug} on this machine, nothing to check it against`);
+    const found = this.d.repoOfSlug?.(slug) ?? null;
+    if (found === null) throw new NotChecked(`no ticket uses ${slug} on this machine, nothing to check it against`);
+    const { path: repo, remote } = found;
     const ref = a.pr !== null && /^\d+$/.test(a.pr) ? prLink(slug, a.pr) : a.pr;
     const pr = await this.d.prInfo(repo, ref, PR_TIMEOUT_MS);
     // gh 读不到这个 PR（没登录、断网、超时、写错了号）：判不了，先拦一次，不静默放行。
     if (!pr) throw new Error(`gh couldn't read the PR ${ref} in ${repo}`);
     if (!(await this.mergeTreeOk(repo))) return ALLOW;
-    return this.checkMerge(req, { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url }, clock);
+    return this.checkMerge(req, { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url, remote }, clock);
   }
 
   /** 命令执行完：本地合并、直接 push 的占位立刻定下来；PR 的占位交给 HoldWatcher。 */
@@ -317,9 +329,22 @@ export class MergeGate {
     const g = this.d.git;
     const own = this.ticketOf(repo, branch);
     // fetch 失败（没网）就用本地已有的，不因此拦人。PR 合并的是 GitHub 上的 head（可能在网页上 "Update branch" 过），也拉一下。
-    await Promise.all([g.fetchQuiet(repo, target, FETCH_TIMEOUT_MS), m.kind === "pr" ? g.fetchQuiet(repo, branch, FETCH_TIMEOUT_MS) : null]);
-    const upstream = await g.upstreamRef(repo, target);
-    const ref = m.kind === "pr" ? await g.upstreamRef(repo, m.ref) : m.ref;
+    // 目标分支按 PR 所在仓库的 remote 取（-R 选了 upstream 就是 upstream）。head 先在那个 remote 上找（同仓库的 PR）；
+    // 那里没有这个分支，就是从 fork 开的 PR，head 在 origin 上。
+    const remote = m.remote ?? "origin";
+    const viaOther = m.kind === "pr" && remote !== "origin";
+    const [, headOnRemote] = await Promise.all([
+      g.fetchQuiet(repo, target, FETCH_TIMEOUT_MS, remote),
+      m.kind === "pr" ? g.fetchQuiet(repo, branch, FETCH_TIMEOUT_MS, remote) : null,
+      viaOther ? g.fetchQuiet(repo, branch, FETCH_TIMEOUT_MS) : null,
+    ]);
+    const upstream = await g.upstreamRef(repo, target, remote);
+    let ref = m.ref;
+    if (m.kind === "pr") {
+      ref = viaOther && headOnRemote ? await g.upstreamRef(repo, m.ref, remote) : await g.upstreamRef(repo, m.ref);
+      // 没网、两边都没 fetch 成：origin 上没有、remote 上有的，用 remote 的。
+      if (viaOther && !headOnRemote && ref === m.ref) ref = await g.upstreamRef(repo, m.ref, remote);
+    }
     // 已经在最新的目标分支里了（比如在 main 上 git merge origin/main）：带不进新东西，不用审核也不占位。
     if (await g.isAncestor(repo, ref, upstream)) return ALLOW;
 

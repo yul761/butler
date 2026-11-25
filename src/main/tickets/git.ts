@@ -250,14 +250,14 @@ export async function isAncestor(repo: string, a: string, b: string): Promise<bo
 }
 
 /** 拉一下远端分支：失败或超时返回 false，从不抛错。 */
-export async function fetchQuiet(repo: string, remoteBranch: string, timeoutMs: number): Promise<boolean> {
-  return (await gitRaw(repo, ["fetch", "--quiet", "origin", remoteBranch], timeoutMs)).code === 0;
+export async function fetchQuiet(repo: string, remoteBranch: string, timeoutMs: number, remote = "origin"): Promise<boolean> {
+  return (await gitRaw(repo, ["fetch", "--quiet", remote, remoteBranch], timeoutMs)).code === 0;
 }
 
-/** 有 origin/<branch> 就用它，否则用本地 <branch>。 */
-export async function upstreamRef(repo: string, branch: string): Promise<string> {
-  const r = await gitRaw(repo, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
-  return r.code === 0 ? `origin/${branch}` : branch;
+/** 有 <remote>/<branch>（默认 origin）就用它，否则用本地 <branch>。 */
+export async function upstreamRef(repo: string, branch: string, remote = "origin"): Promise<string> {
+  const r = await gitRaw(repo, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]);
+  return r.code === 0 ? `${remote}/${branch}` : branch;
 }
 
 /** 默认分支：origin/HEAD 指向的分支；没有 origin/HEAD 时当作 main。 */

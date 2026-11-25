@@ -309,7 +309,7 @@ describe("MergeGate: merges", () => {
   });
 
   it("doesn't stop commands that don't depend on the shell-variable directory (BTL-267)", async () => {
-    const t = setup({ pr: (pr) => (pr === "https://github.com/org/dems/pull/7" ? { number: 7, url: pr, head: "dms-3", base: "main", state: "OPEN" as const, autoMerge: false } : null), repoOfSlug: () => t.repoPath });
+    const t = setup({ pr: (pr) => (pr === "https://github.com/org/dems/pull/7" ? { number: 7, url: pr, head: "dms-3", base: "main", state: "OPEN" as const, autoMerge: false } : null), repoOfSlug: () => ({ path: t.repoPath, remote: "origin" }) });
     // 推自己的分支到同名的远端分支。
     expect(await t.ask({ kind: "push", dir: "$WT", target: "feature/x", source: "feature/x" })).toEqual({ v: 1, decision: "allow" });
     // 没有 ticket（或 ticket 不是 branch 方式）的切换。
@@ -327,7 +327,7 @@ describe("MergeGate: merges", () => {
   });
 
   it("denies once when the PR or the repository of gh pr merge is a shell variable (BTL-267)", async () => {
-    const t = setup({ repoOfSlug: () => t.repoPath });
+    const t = setup({ repoOfSlug: () => ({ path: t.repoPath, remote: "origin" }) });
     for (const a of [{ pr: "$PR", repo: "org/dems" }, { pr: "7", repo: "$REPO" }]) {
       const r = await t.ask({ kind: "pr_merge", dir: null, ...a }, { cwd: tempDir("shipherd-feature-") });
       expect(r.decision, JSON.stringify(a)).toBe("deny");
@@ -341,7 +341,7 @@ describe("MergeGate: gh pr merge -R from a coordinator's feature directory (BTL-
 
   it("finds the repository by its slug and checks the PR there, though the cwd is not a git repository", async () => {
     const feature = tempDir("shipherd-feature-");
-    const t = setup({ pr: prOf, repoOfSlug: (slug) => (slug === "org/dems" ? t.repoPath : null) });
+    const t = setup({ pr: prOf, repoOfSlug: (slug) => (slug === "org/dems" ? { path: t.repoPath, remote: "origin" } : null) });
     await t.merge("dms-1");
     const r = await t.ask({ kind: "pr_merge", dir: null, pr: "7", repo: "org/dems" }, { session: "s-coord", cwd: feature });
     expect(r.decision).toBe("deny");
@@ -352,10 +352,26 @@ describe("MergeGate: gh pr merge -R from a coordinator's feature directory (BTL-
   });
 
   it("also works with a PR link and a cwd that no longer exists", async () => {
-    const t = setup({ pr: prOf, repoOfSlug: () => t.repoPath });
+    const t = setup({ pr: prOf, repoOfSlug: () => ({ path: t.repoPath, remote: "origin" }) });
     const r = await t.ask({ kind: "pr_merge", dir: null, pr: "https://github.com/org/dems/pull/7", repo: "org/dems" }, { cwd: join(t.repoPath, "gone") });
     expect(r).toEqual({ v: 1, decision: "allow" });
     expect(t.repo.activeHold(t.repoPath, "dms-2")).toMatchObject({ kind: "pr", target: "main" });
+  });
+
+  it("checks against the remote -R selected: upstream's main, not the fork's (BTL-267 review)", async () => {
+    const prOf3 = (pr: string | null) => (pr === "https://github.com/up/dems/pull/7" ? { number: 7, url: pr, head: "dms-3", base: "main", state: "OPEN" as const, autoMerge: false } : null);
+    const t = setup({ pr: prOf3, repoOfSlug: (slug) => (slug === "up/dems" ? { path: t.repoPath, remote: "upstream" } : null) });
+    // upstream 的 main 已经改了 dms-3 改的文件；本地 main（fork）还没有。
+    const up = copyRepo(t.repoPath, "shipherd-upstream-");
+    commitFile(up, "other.txt", "upstream\n", "upstream change");
+    run(t.repoPath, "remote", "add", "upstream", up);
+    const r = await t.ask({ kind: "pr_merge", dir: null, pr: "7", repo: "up/dems" }, { cwd: tempDir("shipherd-feature-") });
+    expect(r.decision).toBe("deny");
+    expect((r as { reason: string }).reason).toContain("other.txt");
+    expect(t.events.at(-1)).toMatchObject({ kind: "rebase", branch: "dms-3", files: ["other.txt"] });
+    // 同一个 PR 按 origin 算（本地 main）合得进去。
+    const o = setup({ repo: t.repoPath, pr: prOf3, repoOfSlug: () => ({ path: t.repoPath, remote: "origin" }) });
+    expect(await o.ask({ kind: "pr_merge", dir: null, pr: "7", repo: "up/dems" }, { cwd: tempDir("shipherd-feature-") })).toEqual({ v: 1, decision: "allow" });
   });
 
   it("lets a PR of a repository no ticket uses through", async () => {
