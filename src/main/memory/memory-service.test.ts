@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FeatureHandoff, Handoff } from "../../shared/handoff";
 import type { Followup, FollowupStatus, HandoffTrigger } from "../../shared/types";
@@ -26,8 +27,30 @@ function wrapScopes(match: (scope: string) => boolean, wrap: (s: ScopeHandle) =>
   vi.mocked(withScope).mockImplementation(((o: Parameters<typeof withScope>[0], fn: (s: ScopeHandle) => Promise<unknown>) =>
     realStatecore.withScope(o, (s) => fn(match(o.scope) ? wrap(s) : s))) as typeof withScope);
 }
+/**
+ * 每个用例的 statecore.db 上一直开着一条空闲连接（BTL-268）。产品里通常也是这样：claude 里挂的记忆 MCP 进程开着同一个库，主进程的“打开 → 做事 → 关闭”不是最后一条连接。
+ * 没有它，每次 withScope 关闭都是最后一条连接：SQLite 要做 checkpoint、删掉 -wal 和 -shm，下次打开、第一次写入时再从空文件建起来。
+ * 这些在 Windows 上很贵（建文件、删文件、刷盘都慢）：CI 实测关一次库 6–8 ms、写一次 15–24 ms，“more than 30 lifetime notes”一条用例开关库 169 次、写 86 次，
+ * 单独跑就要 3–3.6 秒，整套并行、runner 一忙就到了 30 秒的上限；开着这条连接后关库约 0.1 ms、写入约 7 ms，这条用例约 1.2 秒。
+ * 连接不开事务，不挡 StateCore 的读写和 checkpoint。dataDir 打不开（故意放了个文件）时不开。
+ */
+const keepers: DatabaseSync[] = [];
+function keepOpen(dataDir: string): void {
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(join(dataDir, "statecore.db"));
+  } catch {
+    return;
+  }
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_mode = WAL");
+  // 读一次才会映射 -shm，之后一直占着它。
+  db.prepare("SELECT count(*) FROM sqlite_master").get();
+  keepers.push(db);
+}
 afterEach(() => {
   vi.mocked(withScope).mockImplementation(realStatecore.withScope);
+  for (const db of keepers.splice(0)) db.close();
 });
 
 // StateCore 的 pino 直接读 process.env.LOG_LEVEL（不看 env 选项），在它加载之前静音。
@@ -55,6 +78,7 @@ function setup(o: { dataDir?: string; enabled?: boolean } = {}) {
     insertTicket(tickets, { key, title: null, repoPath: "/r", workMode: "branch", worktreePath: null, branch: "b", status: "active", statusManual: null, createdAt: 1, archivedAt: null });
   }
   const dataDir = o.dataDir ?? tempDir();
+  keepOpen(dataDir);
   const logs: string[] = [];
   let enabled = o.enabled ?? true;
   // 交接的 createdAt 默认晚于此前 StateCore 的所有写入，和产品里一样（后来的交接产生在前一次写入之后）。
