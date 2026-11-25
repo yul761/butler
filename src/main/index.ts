@@ -65,7 +65,7 @@ import { execHeadlessJson } from "./handoff/headless-exec";
 import { headlessUsageRow } from "./usage/headless-usage";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
 import { HoldWatcher } from "./gate/hold-watcher";
-import { HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
+import { findRepoBySlug, HOLD_CHECK_MS, MergeGate } from "./gate/merge-gate";
 import { BranchOwnership } from "./prwatch/branch-owners";
 import { CiDelivery, ciRecipient } from "./prwatch/ci-delivery";
 import { prHandoff } from "./prwatch/pr-handoff";
@@ -2691,6 +2691,12 @@ async function bootstrap(): Promise<void> {
   });
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
+    repoOfSlug: (slug) =>
+      findRepoBySlug(
+        slug,
+        tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)),
+        (p) => [...new Set([...repoIdentity.remoteSlugsOf(p), repoIdentity.rawSlugOf(p)].filter((x): x is string => x !== null))],
+      ),
     openTerminals: (key) => sessionService.openTerminalCount(key),
     notify: () => notify(),
     checkSoon: () => holdWatcher.soon(),

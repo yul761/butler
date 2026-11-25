@@ -7,10 +7,10 @@ import type { GateRequest } from "../../shared/gate";
 import type { MergeEvent, Ticket, TicketRepo, WorkMode } from "../../shared/types";
 import { MergeGateRepo } from "../db/merge-gate-repo";
 import { M } from "../strings";
-import { copyRepo, makeRepo, memDb } from "../test-utils";
+import { copyRepo, makeRepo, memDb, tempDir } from "../test-utils";
 import * as git from "../tickets/git";
 import type { PrInfo } from "../tickets/gh";
-import { commandDir, MergeGate, type MergeGateDeps } from "./merge-gate";
+import { CHECK_RETRY_WINDOW_MS, commandDir, findRepoBySlug, MergeGate, type MergeGateDeps } from "./merge-gate";
 
 const run = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore" });
 const commitFile = (repo: string, file: string, text: string, msg: string) => {
@@ -52,7 +52,7 @@ function ticket(key: string, repoPath: string, branch: string, workMode: WorkMod
  */
 const TEST_DEADLINE_MS = 60_000;
 
-function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number } = {}) {
+function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number; repoOfSlug?: MergeGateDeps["repoOfSlug"] } = {}) {
   const repoPath = o.repo ?? makeScenarioRepo();
   const tickets = o.tickets ? o.tickets(repoPath) : ["DMS-1", "DMS-2", "DMS-3"].map((k) => ticket(k, repoPath, k.toLowerCase()));
   const db = memDb();
@@ -70,7 +70,7 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
   const gate = new MergeGate({
     tickets: { list: () => tickets, listRepos: (key: string) => tickets.find((t) => t.key === key)?.repos ?? [] },
     repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs ?? TEST_DEADLINE_MS,
-    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold,
+    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold, repoOfSlug: o.repoOfSlug,
   });
   const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}, meta?: { ageMs?: number }) =>
     gate.handle({ v: 1, phase: "pre", action, cwd: repoPath, session: "s-req", ticket: null, ...extra } as GateRequest, meta);
@@ -131,7 +131,7 @@ describe("MergeGate: merges", () => {
   it("finds the ticket by the PR's head branch when a feature coordinator merges a PR", async () => {
     const t = setup({ pr: () => ({ number: 7, url: "https://x/pull/7", head: "dms-2", base: "main", state: "OPEN", autoMerge: false }) });
     await t.merge("dms-1");
-    const r = await t.ask({ kind: "pr_merge", dir: null, pr: "7" }, { session: "s-coord", ticket: null });
+    const r = await t.ask({ kind: "pr_merge", dir: null, pr: "7", repo: null }, { session: "s-coord", ticket: null });
     expect(r.decision).toBe("deny");
     expect((r as { reason: string }).reason).toContain("DMS-1");
     expect(t.prInfo).toHaveBeenCalledWith(t.repoPath, "7", expect.any(Number));
@@ -140,13 +140,13 @@ describe("MergeGate: merges", () => {
 
   it("holds an allowed PR merge as a pr hold with its URL", async () => {
     const t = setup({ pr: () => ({ number: 8, url: "https://x/pull/8", head: "dms-3", base: "main", state: "OPEN", autoMerge: false }) });
-    expect(await t.ask({ kind: "pr_merge", dir: null, pr: null })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: null, repo: null })).toEqual({ v: 1, decision: "allow" });
     expect(t.repo.activeHold(t.repoPath, "dms-3")).toMatchObject({ kind: "pr", prUrl: "https://x/pull/8", target: "main", ticketKey: "DMS-3" });
   });
 
   it("a PR hold calls onPrHold; a local hold does not", async () => {
     const t = setup({ pr: () => ({ number: 8, url: "https://x/pull/8", head: "dms-3", base: "main", state: "OPEN", autoMerge: false }) });
-    await t.ask({ kind: "pr_merge", dir: null, pr: null });
+    await t.ask({ kind: "pr_merge", dir: null, pr: null, repo: null });
     expect(t.onPrHold).toHaveBeenCalledTimes(1);
     expect(t.onPrHold).toHaveBeenCalledWith(t.repo.activeHold(t.repoPath, "dms-3")!.id);
     const local = setup();
@@ -172,7 +172,7 @@ describe("MergeGate: merges", () => {
     await t.merge("dms-2", { session: "s2" });
     const local = t.repo.activeHold(t.repoPath, "dms-1")!;
     expect(local.kind).toBe("local");
-    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "8" }, { session: "s-coord" })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "8", repo: null }, { session: "s-coord" })).toEqual({ v: 1, decision: "allow" });
     expect(t.repo.activeHolds()).toHaveLength(1);
     expect(t.repo.activeHold(t.repoPath, "dms-1")).toMatchObject({ id: local.id, kind: "pr", prUrl: "https://x/pull/8", target: "main", sessionId: "s-coord", ticketKey: "DMS-1", createdAt: 5000 });
     expect(t.repo.waitersOf(local.id).map((w) => w.sessionId)).toEqual(["s2"]);
@@ -200,17 +200,17 @@ describe("MergeGate: merges", () => {
     run(t.repoPath, "merge", "-q", "-s", "ours", "main", "-m", "update branch");
     run(t.repoPath, "update-ref", "refs/remotes/origin/dms-2", "updated");
     run(t.repoPath, "checkout", "-q", "main");
-    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9" })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9", repo: null })).toEqual({ v: 1, decision: "allow" });
     expect(t.repo.activeHold(t.repoPath, "dms-2")).toMatchObject({ kind: "pr", prUrl: "https://x/pull/9" });
     // 没有 origin/<head> 就用本地的：本地的 dms-2 和 main 冲突。
     const u = setup({ pr: () => ({ number: 9, url: "https://x/pull/9", head: "dms-2", base: "main", state: "OPEN", autoMerge: false }) });
     run(u.repoPath, "merge", "-q", "dms-1");
-    expect((await u.ask({ kind: "pr_merge", dir: null, pr: "9" })).decision).toBe("deny");
+    expect((await u.ask({ kind: "pr_merge", dir: null, pr: "9", repo: null })).decision).toBe("deny");
   });
 
   it("allows a PR merge it can't look up, and records nothing", async () => {
     const t = setup({ pr: () => null });
-    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9" })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "9", repo: null })).toEqual({ v: 1, decision: "allow" });
     expect(t.events).toEqual([]);
     expect(t.repo.activeHolds()).toEqual([]);
   });
@@ -246,11 +246,104 @@ describe("MergeGate: merges", () => {
     expect(t.repo.activeHold(t.repoPath, "dms-3")).not.toBeNull();
   });
 
-  it("fails open and logs when the conflict check throws", async () => {
-    const t = setup({ git: { mergeConflicts: vi.fn(async () => { throw new Error("boom"); }) } });
-    expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "allow" });
-    expect(t.logs.length).toBeGreaterThan(0);
+  it("denies once when the check throws, checks a retry again and lets it through if it throws again (BTL-267)", async () => {
+    let now = 1000;
+    const mergeConflicts = vi.fn(async (): Promise<string[]> => {
+      throw new Error("boom\nsecond line");
+    });
+    const t = setup({ git: { mergeConflicts }, now: () => now });
+    expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "deny", reason: M().gateCheckFailed("boom") });
+    expect(t.logs.at(-1)).toContain("denying once");
     expect(t.events).toEqual([]);
+    expect(t.repo.activeHold(t.repoPath, "dms-1")).toBeNull();
+    // 别的 session 跑同一条命令不算重试。
+    expect((await t.merge("dms-1", { session: "s-other" })).decision).toBe("deny");
+    now += 60_000;
+    expect(await t.merge("dms-1")).toEqual({ v: 1, decision: "allow" });
+    expect(mergeConflicts).toHaveBeenCalledTimes(3); // 重试也真的再查了一次
+    expect(t.logs.at(-1)).toContain("allowing it unchecked");
+    // 放行过一次之后，下一次又从拦一次开始。
+    expect((await t.merge("dms-1")).decision).toBe("deny");
+  });
+
+  it("a retry after the window is denied again; a retry whose check works is judged normally (BTL-267)", async () => {
+    let now = 1000;
+    let fail = true;
+    const t = setup({ now: () => now, git: { mergeConflicts: vi.fn(async (repo: string, a: string, b: string) => {
+      if (fail) throw new Error("boom");
+      return git.mergeConflicts(repo, a, b);
+    }) } });
+    expect((await t.merge("dms-3")).decision).toBe("deny");
+    now += CHECK_RETRY_WINDOW_MS + 1;
+    expect((await t.merge("dms-3")).decision).toBe("deny");
+    fail = false;
+    expect(await t.merge("dms-3")).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).not.toBeNull(); // 这次真查过：占了位
+  });
+
+  it("lets a merge in a directory that does not exist through: the command can't run there (BTL-267)", async () => {
+    const t = setup();
+    const gone = join(t.repoPath, "removed-worktree");
+    expect(await t.ask({ kind: "local_merge", dir: gone, source: "dms-1" })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "local_merge", dir: null, source: "dms-1" }, { cwd: gone })).toEqual({ v: 1, decision: "allow" });
+    expect(t.logs.at(-1)).toMatch(/not checking local_merge: .*does not exist/);
+  });
+
+  it("lets a merge outside any git repository through (BTL-267)", async () => {
+    const t = setup();
+    const plain = tempDir("shipherd-not-a-repo-");
+    expect(await t.ask({ kind: "local_merge", dir: null, source: "dms-1" }, { cwd: plain })).toEqual({ v: 1, decision: "allow" });
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "7", repo: null }, { cwd: plain })).toEqual({ v: 1, decision: "allow" });
+    expect(t.logs.at(-1)).toMatch(/not checking pr_merge: .*not in a git repository/);
+    expect(t.prInfo).not.toHaveBeenCalled();
+  });
+
+  it("denies once when the command's directory is a shell variable it can't see (BTL-267)", async () => {
+    const t = setup();
+    const r = await t.ask({ kind: "local_merge", dir: "$WT", source: "dms-1" });
+    expect(r.decision).toBe("deny");
+    expect((r as { reason: string }).reason).toContain("$WT");
+  });
+});
+
+describe("MergeGate: gh pr merge -R from a coordinator's feature directory (BTL-267)", () => {
+  const prOf = (pr: string | null) => (pr === "https://github.com/org/dems/pull/7" ? { number: 7, url: pr, head: "dms-2", base: "main", state: "OPEN" as const, autoMerge: false } : null);
+
+  it("finds the repository by its slug and checks the PR there, though the cwd is not a git repository", async () => {
+    const feature = tempDir("shipherd-feature-");
+    const t = setup({ pr: prOf, repoOfSlug: (slug) => (slug === "org/dems" ? t.repoPath : null) });
+    await t.merge("dms-1");
+    const r = await t.ask({ kind: "pr_merge", dir: null, pr: "7", repo: "org/dems" }, { session: "s-coord", cwd: feature });
+    expect(r.decision).toBe("deny");
+    expect((r as { reason: string }).reason).toContain("DMS-1");
+    // PR 号换成链接，在找到的仓库里查：不在 cwd 里查同号的 PR。
+    expect(t.prInfo).toHaveBeenCalledWith(t.repoPath, "https://github.com/org/dems/pull/7", expect.any(Number));
+    expect(t.events.at(-1)).toMatchObject({ kind: "wait", ticketKey: "DMS-2", branch: "dms-2", repoPath: t.repoPath });
+  });
+
+  it("also works with a PR link and a cwd that no longer exists", async () => {
+    const t = setup({ pr: prOf, repoOfSlug: () => t.repoPath });
+    const r = await t.ask({ kind: "pr_merge", dir: null, pr: "https://github.com/org/dems/pull/7", repo: "org/dems" }, { cwd: join(t.repoPath, "gone") });
+    expect(r).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-2")).toMatchObject({ kind: "pr", target: "main" });
+  });
+
+  it("lets a PR of a repository no ticket uses through", async () => {
+    const t = setup({ pr: prOf, repoOfSlug: () => null });
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "7", repo: "other/repo" }, { cwd: tempDir("shipherd-feature-") })).toEqual({ v: 1, decision: "allow" });
+    expect(t.logs.at(-1)).toContain("no ticket uses other/repo");
+    expect(t.prInfo).not.toHaveBeenCalled();
+  });
+
+  it("findRepoBySlug matches any of a repository's slugs, ignoring case and a github.com prefix", () => {
+    const slugs: Record<string, string[]> = { "/a": ["org/a"], "/b": ["org/b-new", "org/b"], "/c": ["ghe.corp/org/c"] };
+    const of = (p: string) => slugs[p] ?? [];
+    const paths = ["/a", "/b", "/c", "/b"];
+    expect(findRepoBySlug("Org/B", paths, of)).toBe("/b");
+    expect(findRepoBySlug("github.com/org/a", paths, of)).toBe("/a");
+    expect(findRepoBySlug("https://github.com/org/a.git", paths, of)).toBe("/a");
+    expect(findRepoBySlug("ghe.corp/org/c", paths, of)).toBe("/c");
+    expect(findRepoBySlug("org/zzz", paths, of)).toBeNull();
   });
 });
 
@@ -354,8 +447,8 @@ describe("MergeGate: after the command ran", () => {
 
   it("leaves a PR hold for the watcher", async () => {
     const t = setup({ pr: () => ({ number: 8, url: "https://x/pull/8", head: "dms-3", base: "main", state: "OPEN", autoMerge: true }) });
-    await t.ask({ kind: "pr_merge", dir: null, pr: "8" });
-    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "8" }, { phase: "post" })).toEqual({ v: 1, decision: "allow" });
+    await t.ask({ kind: "pr_merge", dir: null, pr: "8", repo: null });
+    expect(await t.ask({ kind: "pr_merge", dir: null, pr: "8", repo: null }, { phase: "post" })).toEqual({ v: 1, decision: "allow" });
     expect(t.outcomes()).toEqual([{ branch: "dms-3", outcome: null }]);
     expect(t.checkSoon).toHaveBeenCalled();
   });

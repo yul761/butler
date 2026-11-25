@@ -11,13 +11,19 @@ describe("parseGateRequest", () => {
 
   it("accepts every action kind", () => {
     for (const action of [
-      { kind: "pr_merge", dir: "/x", pr: "12" },
-      { kind: "pr_merge", dir: null, pr: null },
+      { kind: "pr_merge", dir: "/x", pr: "12", repo: null },
+      { kind: "pr_merge", dir: null, pr: null, repo: null },
       { kind: "local_merge", dir: null, source: "feat" },
       { kind: "push", dir: "/x", target: "main" },
       { kind: "push", dir: null, target: "main", source: "feat" },
       { kind: "switch", dir: null, branch: "b", create: true },
     ]) expect(parseGateRequest({ ...base, action })).toMatchObject({ action });
+  });
+
+  it("accepts a pr_merge repo, and reads an old hook's request without one as null (BTL-267)", () => {
+    expect(parseGateRequest({ ...base, action: { kind: "pr_merge", dir: null, pr: "3", repo: "org/r" } })?.action).toEqual({ kind: "pr_merge", dir: null, pr: "3", repo: "org/r" });
+    expect(parseGateRequest({ ...base, action: { kind: "pr_merge", dir: null, pr: "3" } })?.action).toEqual({ kind: "pr_merge", dir: null, pr: "3", repo: null });
+    expect(parseGateRequest({ ...base, action: { kind: "pr_merge", dir: null, pr: "3", repo: 7 } })).toBeNull();
   });
 
   it("leaves out a push source that was not given", () => {

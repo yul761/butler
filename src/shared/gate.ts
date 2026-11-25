@@ -32,7 +32,9 @@ function parseAction(raw: unknown): GateAction | null {
   const dir = a.dir;
   switch (a.kind) {
     case "pr_merge":
-      return okNullable(a.pr) ? { kind: "pr_merge", dir, pr: a.pr } : null;
+      // repo 是 4.2.2 加的：旧 hook 的请求里没有，当作 null。
+      if (!okNullable(a.pr) || (a.repo !== undefined && !okNullable(a.repo))) return null;
+      return { kind: "pr_merge", dir, pr: a.pr, repo: a.repo ?? null };
     case "local_merge":
       return okStr(a.source) ? { kind: "local_merge", dir, source: a.source } : null;
     case "push":

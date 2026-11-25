@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { posix, resolve, win32 } from "node:path";
 import type { GateRequest, GateResult } from "../../shared/gate";
@@ -16,6 +17,8 @@ export const HOLD_CHECK_MS = 30_000;
 /** hook 最多等 5 秒（GATE_WAIT_MS）：4 秒还没判完就放行，并且什么都不记（hook 那边可能已经放行，命令已经在跑）。 */
 export const GATE_DEADLINE_MS = 4000;
 /** fetch 和 gh 各给 2 秒。 */
+/** 检查出错被拦下以后，多久之内同一个 session 再跑同一条命令时，再出错就放行。 */
+export const CHECK_RETRY_WINDOW_MS = 10 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 2000;
 const PR_TIMEOUT_MS = 2000;
 
@@ -37,6 +40,15 @@ export function commandDir(cwd: string, dir: string | null, platform: NodeJS.Pla
   return win32.resolve(cwd, d.replace(/^\/([a-zA-Z])(\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`));
 }
 
+/**
+ * `-R` 写的仓库（`owner/repo`、`github.com/owner/repo`、`HOST/owner/repo`，不分大小写）在 paths 里是哪个：slugsOf 给一个仓库的所有 slug
+ * （origin、upstream、改名前后），和 parseRemoteSlug 的写法一样（github.com 省掉主机名，其余主机名在前）。
+ */
+export function findRepoBySlug(slug: string, paths: readonly string[], slugsOf: (path: string) => readonly string[]): string | null {
+  const want = slug.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^github\.com\//, "").replace(/\.git$/, "").replace(/\/+$/, "");
+  return [...new Set(paths)].find((p) => slugsOf(p).includes(want)) ?? null;
+}
+
 export interface MergeGateDeps {
   tickets: Pick<TicketsRepo, "list" | "listRepos">;
   repo: MergeGateRepo;
@@ -54,7 +66,20 @@ export interface MergeGateDeps {
   onPrHold?: (holdId: number) => void;
   /** 一次裁决最多用多久，默认 GATE_DEADLINE_MS（测试用）。 */
   deadlineMs?: number;
+  /**
+   * `gh pr merge -R owner/repo`（或 PR 链接）合的仓库在本机的主 checkout：只认 ticket 用到的仓库，认不出是 null。
+   * feature 总控在 feature 目录（不是 git 仓库）里合 PR，只能靠它找到仓库（BTL-267）。
+   */
+  repoOfSlug?: (slug: string) => string | null;
+  /** 目录在不在（测试用）。 */
+  exists?: (path: string) => boolean;
 }
+
+/** 确定这条命令不用审核：在这里它本来就跑不起来（目录不存在、不在 git 仓库里），或者合的仓库没有 ticket。只记日志、放行。 */
+class NotChecked extends Error {}
+
+/** git 说这里不是 git 仓库（不同版本、语言的措辞都有 "not a git repository"）。 */
+const notARepo = (e: unknown): boolean => /not a git repository/i.test(e instanceof Error ? e.message : String(e));
 
 /** 一次请求的计时：超过期限后不再写占位、等待者和事件。 */
 interface Clock {
@@ -74,11 +99,15 @@ interface Merge {
 }
 
 /**
- * 合并总控的裁决（设计文档 2026-11-04“怎么裁决”）。冲突由 git merge-tree 算，不让模型猜；
- * 任何一步出错都放行：总控是防混乱的辅助，不能变成合不了代码的原因。
+ * 合并总控的裁决（设计文档 2026-11-04“怎么裁决”）。冲突由 git merge-tree 算，不让模型猜。
+ * 出错时（BTL-267）：能确定这条命令不用审核的（目录不存在、不在 git 仓库里、合的仓库没有 ticket）放行并记日志；
+ * 真判不了的先拦一次，告诉 session 没查成、可以再跑一次；同一个 session 在 CHECK_RETRY_WINDOW_MS 内再跑同一条命令时重新检查，
+ * 还是出错才放行：总控是防混乱的辅助，不能变成合不了代码的原因，但也不能静默地什么都不查。超时照旧放行（hook 那边已经放行了）。
  */
 export class MergeGate {
   private mergeTree: Promise<boolean> | null = null;
+  /** 检查出错拦下过的请求（session + 命令）→ 拦下的时间。 */
+  private readonly failedChecks = new Map<string, number>();
 
   constructor(private readonly d: MergeGateDeps) {}
 
@@ -124,9 +153,34 @@ export class MergeGate {
     try {
       return req.phase === "post" ? await this.after(req) : await this.before(req, clock);
     } catch (e) {
-      this.d.log(`merge gate: checking ${req.action.kind} failed, allowing it`, e);
+      if (e instanceof NotChecked) {
+        this.d.log(`merge gate: not checking ${req.action.kind}: ${e.message}`);
+        return ALLOW;
+      }
+      // post 只释放占位：出错不影响命令，放行。
+      if (req.phase === "post") {
+        this.d.log(`merge gate: finishing ${req.action.kind} failed`, e);
+        return ALLOW;
+      }
+      return this.checkFailed(req, e, clock);
+    }
+  }
+
+  /** 真判不了：第一次拦下并说明；窗口内同一个 session 再跑同一条命令、又出错时放行。 */
+  private checkFailed(req: GateRequest, e: unknown, clock: Clock): GateResult {
+    const now = this.d.now();
+    for (const [k, at] of this.failedChecks) if (now - at > CHECK_RETRY_WINDOW_MS) this.failedChecks.delete(k);
+    const key = JSON.stringify([req.session ?? req.cwd, req.cwd, req.action]);
+    if (this.failedChecks.has(key)) {
+      this.failedChecks.delete(key);
+      this.d.log(`merge gate: checking ${req.action.kind} failed again on the retry, allowing it unchecked`, e);
       return ALLOW;
     }
+    if (this.late(clock)) return ALLOW;
+    this.failedChecks.set(key, now);
+    this.d.log(`merge gate: checking ${req.action.kind} failed, denying once (the same command within ${CHECK_RETRY_WINDOW_MS / 60_000} minutes is checked again and allowed if it fails again)`, e);
+    const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300);
+    return deny(M().gateCheckFailed(msg));
   }
 
   /** 共用目录被别的开着 session 的 ticket 占着时返回它，给“切换 branch”提示用。 */
@@ -149,12 +203,40 @@ export class MergeGate {
 
   private async before(req: GateRequest, clock: Clock): Promise<GateResult> {
     const a = req.action;
+    // `cd "$WT"`、`git -C $(…)`：hook 看到的是没展开的写法，不知道命令真正在哪个目录跑。
+    if (a.dir !== null && /[$`]/.test(a.dir)) throw new Error(`the directory ${a.dir} in the command uses a shell variable or substitution`);
     const dir = commandDir(req.cwd, a.dir);
-    const repo = await this.d.git.mainRepoRoot(dir);
+    // 没写 PR 号的合的是 cwd 当前分支的 PR，还得按目录找。
+    if (a.kind === "pr_merge" && a.repo !== null && a.pr !== null) return this.checkPrIn(req, a, a.repo, clock);
+    const repo = await this.repoAt(dir, a.kind === "pr_merge" ? "gh can't tell which repository to merge into there either" : "the git command can't run there either");
     if (a.kind === "switch") return this.checkSwitch(req, a, repo, clock);
     const m = await this.mergeOf(a, dir, repo);
     if (!m || !(await this.mergeTreeOk(repo))) return ALLOW;
     return this.checkMerge(req, m, clock);
+  }
+
+  /** dir 所在仓库的主 checkout。dir 不存在、不在 git 仓库里时命令本来就跑不起来，不用审核（NotChecked）；别的错照样抛。 */
+  private async repoAt(dir: string, why: string): Promise<string> {
+    if (!(this.d.exists ?? existsSync)(dir)) throw new NotChecked(`${dir} does not exist; ${why}`);
+    try {
+      return await this.d.git.mainRepoRoot(dir);
+    } catch (e) {
+      if (notARepo(e)) throw new NotChecked(`${dir} is not in a git repository; ${why}`);
+      throw e;
+    }
+  }
+
+  /**
+   * `gh pr merge -R owner/repo` 或 PR 链接：gh 不看 cwd，仓库按 slug 找本机的主 checkout（feature 总控常在不是 git 仓库的 feature 目录里合）。
+   * PR 也按这个仓库查：不能在 cwd 的仓库里查同号的 PR。
+   */
+  private async checkPrIn(req: GateRequest, a: Extract<GateAction, { kind: "pr_merge" }>, slug: string, clock: Clock): Promise<GateResult> {
+    const repo = this.d.repoOfSlug?.(slug) ?? null;
+    if (repo === null) throw new NotChecked(`no ticket uses ${slug} on this machine, nothing to check it against`);
+    const ref = a.pr !== null && /^\d+$/.test(a.pr) && /^[^/]+\/[^/]+$/.test(slug) ? `https://github.com/${slug}/pull/${a.pr}` : a.pr;
+    const pr = await this.d.prInfo(repo, ref, PR_TIMEOUT_MS);
+    if (!pr || !(await this.mergeTreeOk(repo))) return ALLOW;
+    return this.checkMerge(req, { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url }, clock);
   }
 
   /** 命令执行完：本地合并、直接 push 的占位立刻定下来；PR 的占位交给 HoldWatcher。 */
@@ -163,7 +245,7 @@ export class MergeGate {
     if (a.kind === "switch") return ALLOW;
     if (a.kind !== "pr_merge") {
       const dir = commandDir(req.cwd, a.dir);
-      const repo = await this.d.git.mainRepoRoot(dir);
+      const repo = await this.repoAt(dir, "nothing ran there");
       const branch = a.kind === "local_merge" ? a.source : this.pushSource(a, await this.d.git.currentBranch(dir));
       const hold = this.d.repo.activeHold(repo, branch);
       if (hold?.kind === "local") {
