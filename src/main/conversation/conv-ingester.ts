@@ -100,7 +100,6 @@ export class ConvIngester {
     this.watches.clear();
   }
 
-  /** 开着的 target head：挂上监视（重命名以后会掉，ensure 重新挂上），文件大小和游标对不上就读；已经关掉的 head 撤掉监视。 */
   /** 定时器每 10 秒调一次：任何异常都接住记日志，同一条消息 10 分钟内只记一次，不能变成 unhandledRejection。 */
   async tick(): Promise<void> {
     try {
@@ -119,6 +118,7 @@ export class ConvIngester {
   private lastTickError = "";
   private lastTickErrorAt = 0;
 
+  /** 开着的 target head：挂上监视（重命名以后会掉，ensure 重新挂上），文件大小和游标对不上就读；已经关掉的 head 撤掉监视。 */
   private async tickOnce(): Promise<void> {
     if (this.stopped) return;
     const heads = new Set(this.d.openHeads().filter((h) => isConvTarget(this.d.sessions.get(h))));
