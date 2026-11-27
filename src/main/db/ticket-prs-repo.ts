@@ -213,7 +213,6 @@ export class TicketPrsRepo {
     return r ? toPr(r) : null;
   }
 
-  /** 新的在前。 */
   /** byTicket() 的批量版（BTL-275：「现在」页每个 ticket 各查一次）。每个 ticket 内的顺序同 byTicket()；没有的不在 Map 里。 */
   byTickets(ticketKeys: readonly string[]): Map<string, TicketPr[]> {
     const out = new Map<string, TicketPr[]>();
@@ -230,6 +229,7 @@ export class TicketPrsRepo {
     return out;
   }
 
+  /** 新的在前。 */
   byTicket(ticketKey: string): TicketPr[] {
     return (
       this.db

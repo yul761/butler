@@ -41,11 +41,13 @@ describe("the shared process table (BTL-275)", () => {
   it("the memory sample and the activity probes read one ps within 5 s; a later one reads again", async () => {
     const { svc, runs, advance } = services();
     await svc.monitor.tick();
-    const probe = procTreeFrom(() => svc.table(), "darwin");
-    // 原来是各起一个 `ps -o pid,ppid,cputime,args`：两个 session 的探测 + 采样 = 3 个 ps。
-    expect(await probe(100, ["git push"])).toEqual({ cpuMs: 2500, liveShell: true });
+    let fresh = 0;
+    const probe = procTreeFrom(() => svc.table(), "darwin", async () => (fresh++, null));
+    // 原来是各起一个 `ps -o pid,ppid,cputime,args`：两个 session 的 CPU 探测 + 采样 = 3 个 ps。
     expect(await probe(100, [])).toEqual({ cpuMs: 2500, liveShell: null });
+    expect(await probe(200, [])).toEqual({ cpuMs: 0, liveShell: null });
     expect(runs).toEqual(["ps"]);
+    expect(fresh).toBe(0);
     advance(SHARED_TABLE_MS);
     await probe(100, []);
     expect(runs).toEqual(["ps", "ps"]);
@@ -58,6 +60,25 @@ describe("the shared process table (BTL-275)", () => {
     writeFileSync(ownedFile, JSON.stringify({ procs: [{ pid: 999, start: "Mon Nov 17 08:00:00 2026", args: "gone" }] }));
     await svc.orphans.sweepAtStartup();
     expect(runs).toHaveLength(2);
+  });
+
+  it("asking whether a background shell is still alive reads a fresh table: a shared one may predate the shell, and 'gone' is never re-asked", async () => {
+    const before = new Map([[100, { pid: 100, ppid: 1, rssKb: 1, cpuMs: 1000, start: "s", args: "claude" }]]);
+    const after = new Map([...before, [101, { pid: 101, ppid: 100, rssKb: 1, cpuMs: 0, start: "s", args: "/bin/zsh -c npm run dev" }]]);
+    const probe = procTreeFrom(async () => before, "darwin", async () => after);
+    expect(await probe(100, ["npm run dev"])).toEqual({ cpuMs: 0, liveShell: true });
+  });
+
+  it("the same session probed twice on one shared table reads fresh the second time (a CPU delta of 0 would look quiet)", async () => {
+    const shared = new Map([[100, { pid: 100, ppid: 1, rssKb: 1, cpuMs: 1000, start: "s", args: "claude" }], [101, { pid: 101, ppid: 100, rssKb: 1, cpuMs: 10, start: "s", args: "node" }]]);
+    const later = new Map([...shared, [101, { pid: 101, ppid: 100, rssKb: 1, cpuMs: 900, start: "s", args: "node" }]]);
+    let fresh = 0;
+    const probe = procTreeFrom(async () => shared, "darwin", async () => (fresh++, later));
+    expect((await probe(100, [])).cpuMs).toBe(10);
+    expect((await probe(100, [])).cpuMs).toBe(900);
+    expect(fresh).toBe(1);
+    expect((await probe(200, [])).cpuMs).toBe(0);
+    expect(fresh).toBe(1);
   });
 
   it("on Windows the activity probe still does not start PowerShell", async () => {

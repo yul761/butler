@@ -125,10 +125,25 @@ export function sampleFromTable(rootPid: number, commands: string[], table: Proc
   return { cpuMs: descendantCpuMs(rootPid, entries), liveShell: commands.length ? hasLiveShell(rootPid, entries, commands) : null };
 }
 
-/** 活动监控的 procTree：从共用的进程表里读；win32 上照旧不读（原来就不读，这里不为它多起 PowerShell）。 */
-export function procTreeFrom(table: () => Promise<ProcTable | null>, platform: NodeJS.Platform = process.platform): (rootPid: number, commands: string[]) => Promise<ProcSample> {
+/**
+ * 活动监控的 procTree：只看 CPU 时从共用的进程表里读；win32 上照旧不读（原来就不读，这里不为它多起 PowerShell）。
+ * 两种情况现读（fresh）：要看后台命令的 shell 还在不在（共用的表可能是 shell 起来之前读的，判成「没了」以后就不再问，会一直错）；
+ * 同一个 session 上次拿到的就是这张表（CPU 增量会是 0，看着像没在动）。
+ */
+export function procTreeFrom(
+  shared: () => Promise<ProcTable | null>,
+  platform: NodeJS.Platform = process.platform,
+  fresh: () => Promise<ProcTable | null> = shared,
+): (rootPid: number, commands: string[]) => Promise<ProcSample> {
+  const lastTable = new Map<number, ProcTable>();
   return async (rootPid, commands) => {
     if (platform === "win32") return { cpuMs: null, liveShell: null };
-    return sampleFromTable(rootPid, commands, await table().catch(() => null));
+    let table = commands.length ? null : await shared().catch(() => null);
+    if (!table || lastTable.get(rootPid) === table) table = await fresh().catch(() => null);
+    if (table) {
+      if (lastTable.size >= 200) lastTable.clear();
+      lastTable.set(rootPid, table);
+    }
+    return sampleFromTable(rootPid, commands, table);
   };
 }

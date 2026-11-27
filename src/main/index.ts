@@ -225,6 +225,7 @@ import { createProcServices, type ProcServices } from "./procs/proc-services";
 import { platformKill } from "./procs/orphans";
 import { readProcTable } from "./procs/proc-table";
 import { procTreeFrom } from "./sessions/proc-tree";
+import { changeWatcher } from "./diag/change-watch";
 import { MemorySamplesRepo } from "./db/memory-samples-repo";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
@@ -1402,7 +1403,7 @@ async function bootstrap(): Promise<void> {
     sessions, tickets, features, pty,
     transcriptFile: (id) => transcriptLocator.find(id),
     // 子孙进程的 CPU 从和内存采样共用的进程表里读（BTL-275）：原来每个 session 每次探测各起一个 ps。
-    procTree: procTreeFrom(() => (procs ? procs.table() : readProcTable(process.platform))),
+    procTree: procTreeFrom(() => (procs ? procs.table() : readProcTable(process.platform)), process.platform, () => readProcTable(process.platform)),
     judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
@@ -3951,7 +3952,12 @@ async function bootstrap(): Promise<void> {
   });
   // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
   if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
-  const scheduleTimer = setInterval(() => void checkSchedule("tick"), TICK_MS);
+  // 「现在」页的提醒有的只按时间出现（comment loop 超过 30 分钟没送到等），没有自己的 notify：每分钟看一次，变了才发（BTL-275，原来靠栈 tick 每分钟无条件发）。
+  const noticesWatch = changeWatcher(currentNotices, () => notify());
+  const scheduleTimer = setInterval(() => {
+    void checkSchedule("tick");
+    noticesWatch();
+  }, TICK_MS);
   // e2e 用：栈的 tick 另外按 SHIPHERD_STACKS_TICK_MS 跑（不用等整分钟的 schedule；没设时不跑）。
   const stacksTickMs = Number(process.env.SHIPHERD_STACKS_TICK_MS) || 0;
   const stacksTimer = stacksTickMs > 0 ? setInterval(() => void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e)), stacksTickMs) : null;
