@@ -31,6 +31,19 @@ const ticketView = (p: Partial<TicketWorkflowView> = {}): TicketWorkflowView => 
 });
 
 describe("workflow strips (BTL-273)", () => {
+  it("says the workflow turned the comment loop on, and that GitHub replies still follow the user's switch (review 12)", () => {
+    const fast = renderToStaticMarkup(createElement(TicketWorkflowStrip, { view: ticketView() }));
+    expect(fast).not.toContain("workflow-loop-note");
+    const strict = renderToStaticMarkup(createElement(TicketWorkflowStrip, { view: ticketView({ workflow: presetWorkflow("strict") }) }));
+    expect(strict).toContain("打开了评论闭环");
+    expect(strict).toContain("回复 review 评论");
+    const editor = renderToStaticMarkup(createElement(WorkflowEditor, { initial: presetWorkflow("strict"), busy: false, error: null, onSave: () => {}, onCancel: () => {} }));
+    expect(editor).toContain("workflow-loop-note");
+    setUiLang("en");
+    const en = renderToStaticMarkup(createElement(TicketWorkflowStrip, { view: ticketView({ workflow: presetWorkflow("strict") }) }));
+    expect(en).toContain("Reply to review comments");
+  });
+
   it("the ticket strip marks done and current, and names where the workflow comes from", () => {
     const html = renderToStaticMarkup(createElement(TicketWorkflowStrip, { view: ticketView() }));
     expect(html).toContain('data-step="implement" data-state="done"');

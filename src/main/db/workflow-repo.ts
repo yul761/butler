@@ -142,6 +142,11 @@ export class WorkflowRepo {
     });
   }
 
+  /** 有没有设过任何一层（热路径用：只查一行，不解析）。读坏的行也算，之后 effective 照样当没有。 */
+  hasLayers(): boolean {
+    return this.db.prepare(`SELECT 1 FROM workflow_layers LIMIT 1`).get() !== undefined;
+  }
+
   layers(): StoredLayer[] {
     const rows = this.db.prepare(`SELECT * FROM workflow_layers ORDER BY id`).all() as unknown as LayerRow[];
     const out: StoredLayer[] = [];

@@ -130,6 +130,8 @@ export const SETTING_DEFAULTS = {
   /** 工作流 N：自动接活缺信息时到 tracker 上提问；开工时把 ticket 改成进行中。 */
   externalIntakeTrackerComment: "0",
   externalIntakeTrackerStatus: "0",
+  /** BTL-273：工作流程里 Shipherd 替 session 请 Copilot / Codex review。关着时提醒 session 自己请。 */
+  externalPrReviewRequest: "0",
   /** 工作流 G：开发 session 交证据、提 PR 前后台预审（复跑、对照规矩、核对证据），结果送回 session：1 开 0 关。 */
   preReviewEnabled: "0",
   /** 工作流 D：一次分析加了或命中了规矩以后自动判那个仓库（只推荐，除非 admission.autoConfirm）：1 开 0 关。 */

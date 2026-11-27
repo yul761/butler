@@ -1,7 +1,7 @@
 import type { ControlResult } from "../../shared/control";
 import type { Feature, Session, Ticket } from "../../shared/types";
 import {
-  WORKFLOW_PRESETS, WORKFLOW_STEPS, parseScopeRef, presetOf, presetWorkflow,
+  WORKFLOW_PRESETS, WORKFLOW_STEPS, hasStep, parseScopeRef, presetOf, presetWorkflow,
   type Workflow, type WorkflowLayerView, type WorkflowScope,
 } from "../../shared/workflow";
 import type { WorkflowCoordinatorOp, WorkflowTicketOp } from "../../shared/workflow-control";
@@ -115,7 +115,10 @@ export function workflowControl(d: WorkflowControlDeps) {
     const r = d.service.setLayer(s, raw);
     if (!r.ok) return fail(r.message);
     const text = scopeText(s);
-    return ok({ scope: text, changed: r.changed, workflow: r.workflow, preset: r.workflow ? presetOf(r.workflow) : null, note: !r.changed ? WF().ctlUnchanged : r.workflow ? WF().ctlSet(text) : WF().ctlCleared(text) });
+    const note = !r.changed ? WF().ctlUnchanged : r.workflow ? WF().ctlSet(text) : WF().ctlCleared(text);
+    // 没有合并这一步：由用户自己合，总控也不能合（闸门照这个拦），这里说清楚。
+    const noMerge = r.workflow !== null && !hasStep(r.workflow, "merge");
+    return ok({ scope: text, changed: r.changed, workflow: r.workflow, preset: r.workflow ? presetOf(r.workflow) : null, note: noMerge ? `${note}${WF().noMergeStep}` : note });
   };
 
   const presets = (): ControlResult => {

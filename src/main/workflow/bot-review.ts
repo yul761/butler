@@ -23,7 +23,8 @@ export interface BotReviewTarget {
   bot: ReviewBot;
 }
 
-export type BotReviewResult = { ok: true; via: "api" | "api_pending" | "requested_reviewers" | "pr_edit" | "comment" } | { ok: false; error: string };
+/** off：对外动作「请 bot review」的开关关着，没请（交给 session 自己请）。 */
+export type BotReviewResult = { ok: true; via: "api" | "api_pending" | "requested_reviewers" | "pr_edit" | "comment" } | { ok: false; error: string; off?: true };
 
 const COPILOT_LOGIN = "copilot-pull-request-reviewer[bot]";
 
@@ -63,6 +64,30 @@ export async function requestBotReview(run: GhRun, t: BotReviewTarget): Promise<
   if (edit.stdout !== null) return { ok: true, via: "pr_edit" };
   // 第一个接口的错误最说明问题（422 没有额度、没开 Copilot review）；它没说什么才用后面的。
   return { ok: false, error: errorOf(api) || errorOf(edit) };
+}
+
+/**
+ * 经对外动作开关和审计请 bot review（契约 4.8）：开关 pr_review_request 关着不调 gh，返回 off（审计记 skipped）；
+ * 请了就记 done，没请成记 failed。
+ */
+export async function requestBotReviewGuarded(
+  external: { attempt<T>(kind: "pr_review_request", detail: { scope: { repoSlug: string; ticketKey: string | null }; target: string | null; summary: string }, run: () => Promise<T>): Promise<{ ran: false } | { ran: true; value: T }> },
+  t: BotReviewTarget & { ticketKey: string | null; url: string | null },
+  request: () => Promise<BotReviewResult>,
+): Promise<BotReviewResult> {
+  let result: BotReviewResult | null = null;
+  try {
+    const r = await external.attempt("pr_review_request", { scope: { repoSlug: t.slug, ticketKey: t.ticketKey }, target: t.url, summary: `ask ${t.bot} to review PR #${t.number}` }, async () => {
+      result = await request();
+      // 没请成要记成 failed：抛出去让 attempt 记，下面再接住。
+      if (!result.ok) throw new Error(result.error);
+      return result;
+    });
+    if (!r.ran) return { ok: false, off: true, error: "external action pr_review_request is off" };
+    return r.value;
+  } catch (e) {
+    return result ?? { ok: false, error: e instanceof Error ? e.message.split("\n")[0] : String(e) };
+  }
 }
 
 /**

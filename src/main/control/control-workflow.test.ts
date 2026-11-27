@@ -15,6 +15,8 @@ function setup(withWorkflow = true) {
     other: session("other", { featureId: 5, coordinator: true }),
     global: session("global", { shipherd: true }),
     dev: session("dev", { ticketKey: "A-1", featureId: 4 }),
+    fixer: session("fixer", { featureId: 4, fixesSession: "dev" }),
+    plain: session("plain", { featureId: 4 }),
   };
   const calls: unknown[][] = [];
   const workflow = {
@@ -58,6 +60,18 @@ describe("controlHandler workflow tools (BTL-273)", () => {
       expect(await t.handle(req as never), why).toMatchObject({ ok: false });
     }
     expect(t.calls).toEqual([]);
+  });
+
+  it("a fix session (or any non-coordinator) on the epic can read the workflow but not change it", async () => {
+    const t = setup();
+    for (const from of ["fixer", "plain"]) {
+      expect(await t.handle({ v: 1, featureId: 4, from, op: "set_workflow", steps: null }), from).toMatchObject({ ok: false });
+      expect(await t.handle({ v: 1, featureId: 4, from, op: "set_workflow", steps: ["implement", "open_pr"] }), from).toMatchObject({ ok: false });
+    }
+    expect(t.calls).toEqual([]);
+    expect(await t.handle({ v: 1, featureId: 4, from: "fixer", op: "get_workflow" })).toMatchObject({ ok: true });
+    expect(await t.handle({ v: 1, featureId: 4, from: "fixer", op: "list_workflow_presets" })).toMatchObject({ ok: true });
+    expect(t.calls).toEqual([["coordinator", "get_workflow", { featureId: 4 }], ["coordinator", "list_workflow_presets", { featureId: 4 }]]);
   });
 
   it("says the workflow isn't available when it isn't wired", async () => {

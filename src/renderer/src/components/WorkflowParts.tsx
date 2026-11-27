@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   MERGE_BY, REVIEW_BOTS, RE_REVIEW_MAX_ROUNDS, WORKFLOW_PRESETS, WORKFLOW_SCOPE_KINDS, presetOf, presetWorkflow, sameWorkflowScope,
   type FeatureWorkflowView, type TicketWorkflowView, type Workflow, type WorkflowLayerView, type WorkflowScope, type WorkflowScopeKind,
-  type WorkflowSettingsView, type WorkflowStep, type WorkflowStepId,
+  type WorkflowSettingsView, type WorkflowStep, type WorkflowStepId, workflowWantsComments,
 } from "../../../shared/workflow";
 import { api } from "../api";
 import { reportError } from "../errors";
@@ -32,6 +32,15 @@ export function WorkflowSteps({ steps, current }: { steps: { id: WorkflowStepId;
   );
 }
 
+/**
+ * 流程里有 review 类的步骤时，评论闭环会被打开（overrides.ts 的 loopWithWorkflow，和主进程同一个判断）。
+ * 说清楚：评论会转给 session，但回不回 GitHub 还按用户自己的对外动作开关。
+ */
+export function WorkflowLoopNote({ workflow }: { workflow: Workflow | null }) {
+  if (!workflowWantsComments(workflow)) return null;
+  return <p className="muted workflow-loop-note" data-testid="workflow-loop-note">{S.workflow.loopOn}</p>;
+}
+
 /** ticket 首页的流程条（纯视图）：没有流程时什么都不画。 */
 export function TicketWorkflowStrip({ view }: { view: TicketWorkflowView | null }) {
   if (!view?.workflow) return null;
@@ -42,6 +51,7 @@ export function TicketWorkflowStrip({ view }: { view: TicketWorkflowView | null 
       <span className="muted">{t.strip}</span>
       <WorkflowSteps steps={view.steps} />
       <span className="muted">{view.current ? `${t.current}${t.steps[view.current]}` : t.allDone}{where ? ` · ${t.from(where)}` : ""}</span>
+      <WorkflowLoopNote workflow={view.workflow} />
     </section>
   );
 }
@@ -150,6 +160,7 @@ export function WorkflowEditor({ initial, busy, error, onSave, onCancel }: { ini
         </div>
       )}
       {steps.length > 0 && !steps.some((s) => s.id === "merge") && <p className="muted" data-testid="workflow-no-merge">{t.noMerge}</p>}
+      <WorkflowLoopNote workflow={{ steps, notes }} />
       <textarea className="workflow-notes" placeholder={t.notes} value={notes} maxLength={4000} rows={2} onChange={(e) => setNotes(e.target.value)} />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row">
@@ -248,6 +259,7 @@ export function WorkflowSettingsView({ view, onSet, onAskClaude }: {
                 <>
                   <WorkflowSteps steps={l.workflow.steps} />
                   {l.workflow.notes && <p className="muted">{l.workflow.notes}</p>}
+                  <WorkflowLoopNote workflow={l.workflow} />
                 </>
               )}
             </li>

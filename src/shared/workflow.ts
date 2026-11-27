@@ -277,6 +277,18 @@ export function progressOf(w: Workflow, done: ReadonlyMap<WorkflowStepId, { at: 
 }
 
 /** 一个步骤前面还没完成的步骤（闸门用）。 */
+/** 流程里 a 排在 b 前面（两步都在）。 */
+export function stepBefore(w: Workflow, a: WorkflowStepId, b: WorkflowStepId): boolean {
+  const i = w.steps.findIndex((s) => s.id === a);
+  const j = w.steps.findIndex((s) => s.id === b);
+  return i >= 0 && j >= 0 && i < j;
+}
+
+/**
+ * 开 PR 要不要先过预审：预审排在开 PR 前面才要。开 PR 的提醒和 gh pr create 的闸门都用它（排在后面的预审是对 PR 做的，开 PR 时不查）。
+ */
+export const preReviewGatesPr = (w: Workflow): boolean => stepBefore(w, "pre_review", "open_pr");
+
 export function pendingBefore(w: Workflow, step: WorkflowStepId, done: ReadonlySet<WorkflowStepId>): WorkflowStepId[] {
   const i = w.steps.findIndex((s) => s.id === step);
   const before = i < 0 ? w.steps : w.steps.slice(0, i);

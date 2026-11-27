@@ -41,6 +41,8 @@ export interface BriefLayer {
   prNumber: number | null;
 }
 
+export type WorkflowPrGate = { mode: "open" } | { mode: "draft" } | { mode: "blocked"; reason: string };
+
 export interface StackServiceDeps {
   repo: StacksRepo;
   policy: StackPolicyService;
@@ -55,6 +57,12 @@ export interface StackServiceDeps {
     attempt<T>(kind: ExternalActionKind, detail: ExternalDetail, run: () => Promise<T>): Promise<AttemptResult<T>>;
     allowed(kind: ExternalActionKind, scope?: ExternalDetail["scope"]): boolean;
   };
+  /**
+   * 工作流程（BTL-273）：这一层的 ticket 现在能不能开 PR，和 gh pr create 的 hook 用同一个判断。
+   * open：照常开成可以 review 的；draft：流程要先开 draft；blocked：还不能开（比如预审排在开 PR 前面、这个提交没过）。
+   * 不给，或者这一层不属于 ticket，就是 open。
+   */
+  workflowGate?(i: { ticketKey: string; repoPath: string; branch: string }): Promise<WorkflowPrGate>;
   /** 临时 worktree 的目录（<SHIPHERD_HOME>/stack-work）。 */
   workRoot: string;
   /** 跑 sequence editor 的 node。 */
@@ -571,6 +579,25 @@ export class StackService {
     return m;
   }
 
+  /** 这一层的 ticket 按工作流程现在能不能开 PR（和 hook 同一个判断）。判断出错就先不开，记一次日志。 */
+  private async workflowGate(repoPath: string, layer: LayerRow): Promise<WorkflowPrGate> {
+    if (!this.d.workflowGate || !layer.ticketKey) return { mode: "open" };
+    let g: WorkflowPrGate;
+    try {
+      g = await this.d.workflowGate({ ticketKey: layer.ticketKey, repoPath, branch: layer.branch });
+    } catch (e) {
+      g = { mode: "blocked", reason: e instanceof Error ? e.message : String(e) };
+    }
+    if (g.mode === "blocked") {
+      const k = `${layer.id}:workflow:${g.reason}`;
+      if (!this.notPromotedLogged.has(k)) {
+        this.notPromotedLogged.add(k);
+        this.d.log(`stacks: not opening ${layer.branch} for review yet: the workflow says ${g.reason}`);
+      }
+    }
+    return g;
+  }
+
   /** 栈底下面有合并掉的层、自己还不是 ready：要提升。 */
   private needsPromotion(stack: StackRow): LayerRow | null {
     const all = this.d.repo.layers(stack.id);
@@ -597,6 +624,7 @@ export class StackService {
       }
       return;
     }
+    const gate = await this.workflowGate(repo, layer);
     const all = this.d.repo.layers(stack.id);
     const open = all.filter((l) => l.state !== "merged");
     const graph = await this.graph(stack, all);
@@ -615,6 +643,8 @@ export class StackService {
           const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `retarget #${pr.number} to ${stack.trunk}` }, () => gh.prEditBase(repo, slug, pr.number, stack.trunk));
           if (!r.ran) return;
         }
+        // 工作流程还不让开成可以 review 的（没过预审、流程要先开 draft）：留着 draft，等过了下一轮再改。
+        if (pr.isDraft && gate.mode !== "open") return;
         let ready = !pr.isDraft;
         if (pr.isDraft) {
           const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `mark #${pr.number} ready for review` }, () => gh.prReady(repo, slug, pr.number));
@@ -633,6 +663,7 @@ export class StackService {
         }
         return;
       }
+      if (gate.mode === "blocked") return;
       if (!remote) {
         const r = await this.d.external.attempt("branch_push", { scope, target: layer.branch, summary: `push ${layer.branch} before opening its PR` }, () =>
           pushBranch(repo, stack.remote, layer.branch, null));
@@ -640,9 +671,15 @@ export class StackService {
       }
       const title = owned?.ticketTitle ? `${owned.ticketKey} ${owned.ticketTitle}` : (commits[0] ?? layer.branch);
       const r = await this.d.external.attempt("pr_open", { scope, target: layer.branch, summary: `open the bottom-of-stack PR for ${layer.branch}`, payload: title }, () =>
-        gh.prCreate(repo, slug, { base: stack.trunk, head: layer.branch, title, body, draft: false, labels: [] }));
+        gh.prCreate(repo, slug, { base: stack.trunk, head: layer.branch, title, body, draft: gate.mode === "draft", labels: [] }));
       if (!r.ran) return;
       brief?.posted(r.value.url);
+      if (gate.mode === "draft") {
+        // 流程要先开 draft：PR 号记下，层还是 draft，等 draft 被改成可以 review（session 或你自己）以后再提升。
+        this.d.repo.updateLayer(layer.id, { mode: "draft", state: "draft", prNumber: r.value.number, prUrl: r.value.url, draftSince: this.d.now() });
+        this.d.record?.("stack.pr_open", { kind: "create_draft" });
+        return;
+      }
       this.d.repo.updateLayer(layer.id, { state: "ready", mode: "branch", prNumber: r.value.number, prUrl: r.value.url, draftSince: null });
       this.d.record?.("stack.pr_open", { kind: "create" });
     } catch (e) {

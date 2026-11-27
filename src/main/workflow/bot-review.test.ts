@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { botReviewCommands, requestBotReview, reviewCommentCount, type GhRun } from "./bot-review";
+import { botReviewCommands, requestBotReview, requestBotReviewGuarded, reviewCommentCount, type GhRun } from "./bot-review";
 
 type R = Awaited<ReturnType<GhRun>>;
 const ok: R = { stdout: "{}", stderr: "" };
@@ -65,5 +65,44 @@ describe("reviewCommentCount (BTL-273)", () => {
     expect(await reviewCommentCount(runner([fail("HTTP 502")]).run, { cwd: "/r", slug: "o/r", number: 1 }, ["1"])).toBeNull();
     expect(await reviewCommentCount(runner([{ stdout: "0", stderr: "" }, fail("", true)]).run, { cwd: "/r", slug: "o/r", number: 1 }, ["1", "2"])).toBeNull();
     expect(await reviewCommentCount(runner([{ stdout: "oops", stderr: "" }]).run, { cwd: "/r", slug: "o/r", number: 1 }, ["1"])).toBeNull();
+  });
+});
+
+describe("requestBotReviewGuarded (BTL-273)", () => {
+  const target = { cwd: "/w", slug: "o/a", number: 5, bot: "codex" as const, ticketKey: "X-1", url: "https://github.com/o/a/pull/5" };
+  function external(allowed: boolean) {
+    const audit: { kind: string; outcome: string; error?: string; target: string | null }[] = [];
+    return {
+      audit,
+      async attempt<T>(kind: "pr_review_request", detail: { target: string | null }, run: () => Promise<T>) {
+        if (!allowed) return (audit.push({ kind, outcome: "skipped", target: detail.target }), { ran: false as const });
+        try {
+          const value = await run();
+          audit.push({ kind, outcome: "done", target: detail.target });
+          return { ran: true as const, value };
+        } catch (e) {
+          audit.push({ kind, outcome: "failed", error: (e as Error).message, target: detail.target });
+          throw e;
+        }
+      },
+    };
+  }
+
+  it("with the switch off it doesn't call gh, says off, and audits a skip", async () => {
+    const x = external(false);
+    let calls = 0;
+    const r = await requestBotReviewGuarded(x, target, async () => (calls++, { ok: true, via: "comment" }));
+    expect(r).toMatchObject({ ok: false, off: true });
+    expect(calls).toBe(0);
+    expect(x.audit).toEqual([{ kind: "pr_review_request", outcome: "skipped", target: target.url }]);
+  });
+
+  it("with it on, a request that went through is audited done; one that failed is audited failed and keeps gh's error", async () => {
+    const on = external(true);
+    expect(await requestBotReviewGuarded(on, target, async () => ({ ok: true, via: "comment" }))).toEqual({ ok: true, via: "comment" });
+    expect(await requestBotReviewGuarded(on, target, async () => ({ ok: false, error: "HTTP 422" }))).toEqual({ ok: false, error: "HTTP 422" });
+    expect(await requestBotReviewGuarded(on, target, async () => Promise.reject(new Error("spawn gh ENOENT\nmore")))).toEqual({ ok: false, error: "spawn gh ENOENT" });
+    expect(on.audit.map((a) => a.outcome)).toEqual(["done", "failed", "failed"]);
+    expect(on.audit[1].error).toBe("HTTP 422");
   });
 });

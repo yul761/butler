@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutomationLevel } from "../../shared/automation";
 import type { PreReviewVerdict, ReviewTarget } from "../../shared/prereview";
 import type { Session, Ticket, TicketRepo } from "../../shared/types";
@@ -100,6 +100,23 @@ const ev = (o: Partial<StageEvent> & { kind: StageEvent["kind"]; at: number; dat
 });
 
 describe("WorkflowService: layers", () => {
+  it("the hot-path lookup doesn't read tickets or layers when no workflow is set (BTL-273 review 10)", () => {
+    const t = setup();
+    const layers = vi.spyOn(t.repo, "layers");
+    const get = vi.spyOn(t.tickets, "find");
+    expect(t.svc.workflowFor("X-1")).toBeNull();
+    expect(t.svc.workflowFor(null)).toBeNull();
+    expect(layers).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "open_pr"] });
+    expect(t.repo.hasLayers()).toBe(true);
+    expect(t.svc.workflowFor("X-1")?.steps.map((x) => (typeof x === "string" ? x : x.id))).toEqual(["implement", "open_pr"]);
+    // 一层读坏了：当成没有，按原来的开关走
+    t.db.prepare(`UPDATE workflow_layers SET workflow = 'not json'`).run();
+    expect(t.repo.hasLayers()).toBe(true);
+    expect(t.svc.workflowFor("X-1")).toBeNull();
+  });
+
   it("no layer means no workflow and nothing changes", async () => {
     const t = setup();
     expect(t.svc.effective("X-1")).toBeNull();
@@ -319,6 +336,126 @@ describe("WorkflowService: gate", () => {
   });
 });
 
+describe("WorkflowService: review fixes (BTL-273)", () => {
+  const coordMerge = { id: "merge", mergeBy: "coordinator" };
+  const queuedNotice = (t: ReturnType<typeof setup>) => [...t.queued.entries()].filter(([ref]) => ref.includes("X-1"));
+
+  it("a pre-review after open_pr doesn't hold back the PR: the reminder and the gate agree", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "open_pr", "pre_review", "merge"] });
+    t.svc.markStep("X-1", "implement", null);
+    await t.svc.evaluate("X-1");
+    const body = t.sent.at(-1)!.body;
+    expect(body).toContain("可以开 PR 了");
+    expect(body).not.toContain("通过预审");
+    t.heads.set("/r/a-wt|feature/X-1", "s1");
+    expect(await t.svc.prCreate({ ticketKey: "X-1", repoPath: "/r/a", dir: "/r/a-wt", branch: "feature/X-1", draft: false })).toBeNull();
+  });
+
+  it("a pre-review before open_pr: the reminder says the commit must pass, and the gate checks it", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "pre_review", "open_pr", "merge"] });
+    t.svc.markStep("X-1", "implement", null);
+    t.preReviews.push({ id: 1, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s1" }, verdict: "clean" });
+    await t.svc.evaluate("X-1");
+    expect(t.sent.at(-1)!.body).toContain("现在这个提交要通过预审");
+    // 预审之后又提交了：闸门按这次的提交拦
+    t.heads.set("/r/a-wt|feature/X-1", "s2");
+    expect(await t.svc.prCreate({ ticketKey: "X-1", repoPath: "/r/a", dir: "/r/a-wt", branch: "feature/X-1", draft: false })).toContain("还没通过预审");
+  });
+
+  it("the stack's own PR opening uses the hook's judgment: blocked without a pre-review, draft when the workflow wants one (review 11)", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "pre_review", { id: "open_pr", draft: true }, "merge"] });
+    t.heads.set("/r/a-wt|feature/X-1", "s1");
+    const at = { ticketKey: "X-1", repoPath: "/r/a", branch: "feature/X-1" };
+    expect(await t.svc.prOpenMode(at)).toEqual({ mode: "blocked", reason: expect.stringContaining("还没通过预审") });
+    t.preReviews.push({ id: 1, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s1" }, verdict: "clean" });
+    expect(await t.svc.prOpenMode(at)).toEqual({ mode: "draft" });
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "pre_review", "open_pr", "merge"] });
+    expect(await t.svc.prOpenMode(at)).toEqual({ mode: "open" });
+    // 没有流程：照常开
+    t.svc.setLayer({ kind: "global" }, null);
+    expect(await t.svc.prOpenMode(at)).toEqual({ mode: "open" });
+  });
+
+  it("a finished ticket gets no more reminders: a queued one is withdrawn, and evaluateAll / layer changes skip it", async () => {
+    const t = setup({ tickets: [ticket("X-1", [repoRow(1, "X-1", "/r/a", "feature/X-1")]), ticket("X-2", [repoRow(2, "X-2", "/r/a", "feature/X-2")])] });
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
+    await t.svc.evaluate("X-1");
+    expect(queuedNotice(t)).toHaveLength(1);
+    // 手动标成 done（status 还是进行中）：实际状态按手动的算
+    t.tickets[0].statusManual = "done";
+    await t.svc.evaluate("X-1");
+    expect(queuedNotice(t)).toEqual([]);
+    const n = t.sent.length;
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("strict"));
+    await t.svc.evaluateAll();
+    expect(t.sent.slice(n).some((m) => m.body.includes("X-1"))).toBe(false);
+    expect(t.sent.slice(n).some((m) => m.body.includes("X-2"))).toBe(true);
+    // 归档了也一样
+    t.tickets[1].archivedAt = 5;
+    await t.svc.evaluate("X-2");
+    expect([...t.queued.keys()].filter((r) => r.includes("X-2"))).toEqual([]);
+  });
+
+  it("all PRs merged: the workflow counts as finished and the reminder is withdrawn, even mid comment loop", async () => {
+    const t = setup();
+    const botFlow = { steps: ["implement", "open_pr", { id: "bot_review", bot: "copilot" }, "address_comments", "re_review", { id: "merge", mergeBy: "user" }] };
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 8, reviewId: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("address_comments");
+    expect(queuedNotice(t)).toHaveLength(1);
+    t.prs[0].state = "merged";
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBeNull();
+    expect(queuedNotice(t)).toEqual([]);
+    // 不记进库：只有 implement 这类真做过的才在库里
+    expect(t.repo.done("X-1").map((d) => d.step)).not.toContain("address_comments");
+  });
+
+  it("a workflow with no merge step says in the guide that the user merges", () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "open_pr", "ci_green"] });
+    expect(t.svc.guideLines("X-1").join("\n")).toContain("没有合并这一步：由用户自己合");
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
+    expect(t.svc.guideLines("X-1").join("\n")).not.toContain("没有合并这一步");
+  });
+
+  it("only the global coordinator or the ticket's own epic coordinator counts as the coordinator who merges", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "open_pr", coordMerge] });
+    t.svc.markStep("X-1", "implement", null);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    t.sessions.set("coord-5", session({ id: "coord-5", featureId: 5 }));
+    t.sessions.set("coord-4", session({ id: "coord-4", featureId: 4 }));
+    t.sessions.set("global", session({ id: "global", shipherd: true }));
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-5" })).toContain("由总控来合");
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toBeNull();
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "global" })).toBeNull();
+  });
+
+  it("a merge checks pre-review at the PR's current head: a new unreviewed push can't merge on the old record", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "pre_review", "open_pr", "ci_green", coordMerge] });
+    t.sessions.set("coord-4", session({ id: "coord-4", featureId: 4 }));
+    t.svc.markStep("X-1", "implement", null);
+    t.preReviews.push({ id: 1, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s1" }, verdict: "clean" });
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, headSha: "s1", ci: "passing" }));
+    await t.svc.evaluate("X-1");
+    expect(t.repo.done("X-1").map((d) => d.step)).toContain("pre_review");
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toBeNull();
+    t.prs[0].headSha = "s2";
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toContain("#1 现在的提交还没通过预审");
+    t.preReviews.push({ id: 2, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s2" }, verdict: "clean" });
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toBeNull();
+  });
+});
+
 describe("WorkflowService: bot review", () => {
   const botFlow = { steps: ["implement", "open_pr", { id: "bot_review", bot: "copilot" }, "address_comments", { id: "re_review", maxRounds: 1 }, { id: "merge", mergeBy: "user" }] };
 
@@ -364,6 +501,21 @@ describe("WorkflowService: bot review", () => {
     expect(t.bot.calls).toBe(0);
     expect(t.repo.botRequests("X-1")).toMatchObject([{ status: "asked_session" }]);
     expect(t.queued.get("workflow:X-1")!.body).toContain("请你跑一下这条命令");
+  });
+
+  it("with the external-action switch off, the session asks and is told where the switch is (BTL-273)", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    t.bot.result = { ok: false, off: true, error: "external action pr_review_request is off" };
+    await t.svc.evaluate("X-1");
+    expect(t.repo.botRequests("X-1")).toMatchObject([{ status: "asked_session" }]);
+    const body = t.queued.get("workflow:X-1")!.body;
+    expect(body).toContain("对外动作 › 请 bot review");
+    expect(body).toContain("gh api -X POST repos/o/a/pulls/1/copilot-code-review");
+    // 不算失败：不会再去请第二次
+    await t.svc.evaluate("X-1");
+    expect(t.bot.calls).toBe(1);
   });
 
   it("asks again after the fixes are pushed, and stops at the round limit", async () => {

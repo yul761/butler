@@ -323,6 +323,16 @@ export function effectiveStatus(t: Pick<Ticket, "status" | "statusManual">): Tic
   return t.statusManual ?? t.status;
 }
 
+/**
+ * [contract:ticket-finished] 算「已完成」的状态：不会再往下走的 ticket（工作流程不再提醒、不再判断）。
+ * needs_decision 不在里面（还等用户拿主意）。BTL-270 的 closed 合进来后加在这里。
+ */
+export const FINISHED_STATUSES: readonly TicketStatus[] = ["done"];
+
+/** ticket 已经完成：归档了，或者实际状态（手动改的优先）在 FINISHED_STATUSES 里。 */
+export const ticketFinished = (t: Pick<Ticket, "status" | "statusManual" | "archivedAt">): boolean =>
+  t.archivedAt !== null || FINISHED_STATUSES.includes(effectiveStatus(t));
+
 export const FOLLOWUP_KINDS = ["config", "flag", "deploy", "doc", "other"] as const;
 export type FollowupKind = (typeof FOLLOWUP_KINDS)[number];
 export const FOLLOWUP_TRIGGERS = ["after_merge", "after_deploy", "on_date", "none"] as const;

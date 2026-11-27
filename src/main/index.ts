@@ -316,7 +316,7 @@ import { SessionModelSwitcher } from "./routing/session-switch";
 import { routingSettings } from "./routing/routing-settings";
 import type { DiscoveryView, Tier } from "../shared/model-routing";
 import { WorkflowRepo } from "./db/workflow-repo";
-import { requestBotReview, reviewCommentCount } from "./workflow/bot-review";
+import { requestBotReview, requestBotReviewGuarded, reviewCommentCount } from "./workflow/bot-review";
 import { loopWithWorkflow, preReviewWithWorkflow } from "./workflow/overrides";
 import { workflowControl } from "./workflow/workflow-control";
 import { workflowHandlers } from "./workflow/workflow-ipc";
@@ -1158,15 +1158,7 @@ async function bootstrap(): Promise<void> {
     if (workflowHooks.service?.anyWorkflow()) void workflowHooks.service.evaluateAll();
   }, 2000);
   /** 这个 ticket 生效的流程；没有、读坏了都是 null（按原来的开关）。 */
-  const workflowOf = (ticketKey?: string | null) => {
-    if (!ticketKey || !workflowHooks.service) return null;
-    try {
-      return workflowHooks.service.effective(ticketKey)?.workflow ?? null;
-    } catch (e) {
-      logger(`workflow: reading the workflow of ${ticketKey} failed`, e);
-      return null;
-    }
-  };
+  const workflowOf = (ticketKey?: string | null) => workflowHooks.service?.workflowFor(ticketKey) ?? null;
   /** 有流程时流程说了算（流程里有 pre_review 才跑）；没有时按 epic 的档位和设置。 */
   const preReviewActive = (ticketKey?: string | null): boolean =>
     preReviewWithWorkflow(workflowOf(ticketKey), automation.preReview(ticketKey, settings.get("preReviewEnabled") === "1"));
@@ -2468,6 +2460,8 @@ async function bootstrap(): Promise<void> {
       ...new Set(tickets.list().filter((t) => t.archivedAt === null && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
     ],
     external: externalActions,
+    // 工作流程（BTL-273）：自动开栈底的 PR 不经过 hook，照样用 hook 的判断（工作流程服务在下面才建好）。
+    workflowGate: async (i) => workflowHooks.service?.prOpenMode(i) ?? { mode: "open" },
     workRoot: join(paths.home, "stack-work"),
     execPath: process.execPath,
     now: Date.now,
@@ -2698,10 +2692,15 @@ async function bootstrap(): Promise<void> {
       return null;
     },
     session: (id) => sessions.head(id),
-    requestBotReview: (pr, cwd, bot) =>
-      pr.slug === null || pr.number === null
-        ? Promise.resolve({ ok: false as const, error: "the PR has no repository or number yet" })
-        : requestBotReview((dir, args) => runGhDetail(dir, args, 30_000, 1024 * 1024), { cwd, slug: pr.slug, number: pr.number, bot }),
+    // 经对外动作开关（pr_review_request）和审计：关着不调 gh，交给 session 自己请。
+    requestBotReview: (pr, cwd, bot) => {
+      const { slug, number } = pr;
+      if (slug === null || number === null) return Promise.resolve({ ok: false as const, error: "the PR has no repository or number yet" });
+      const target = { cwd, slug, number, bot };
+      return requestBotReviewGuarded(externalActions, { ...target, ticketKey: pr.ticketKey, url: pr.url }, () =>
+        requestBotReview((dir, args) => runGhDetail(dir, args, 30_000, 1024 * 1024), target),
+      );
+    },
     reviewCommentCount: (pr, cwd, ids) =>
       pr.slug === null || pr.number === null
         ? Promise.resolve(null)

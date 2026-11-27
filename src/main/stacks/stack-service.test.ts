@@ -395,6 +395,66 @@ describe("StackService bottom merged during a run", () => {
   });
 });
 
+describe("StackService and the ticket workflow (BTL-273 review 11)", () => {
+  type Gate = Awaited<ReturnType<NonNullable<StackServiceDeps["workflowGate"]>>>;
+  function gated(w: World, gate: { now: Gate }) {
+    const asked: { ticketKey: string; repoPath: string; branch: string }[] = [];
+    w.deps.workflowGate = async (i) => (asked.push(i), gate.now);
+    return asked;
+  }
+
+  it("doesn't open the new bottom PR while the workflow blocks it, and opens it once the workflow allows", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const gate = { now: { mode: "blocked", reason: "pre-review" } as Gate };
+    const asked = gated(w, gate);
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    expect(asked).toContainEqual({ ticketKey: "B", repoPath: w.repo, branch: "b" });
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+    expect(w.repoT.layers(id).find((l) => l.branch === "b")).toMatchObject({ prNumber: null });
+    gate.now = { mode: "open" };
+    await w.svc.promoteBottom(w.repoT.get(id)!);
+    expect((fake.calls.find((c) => c.fn === "prCreate")!.args[0] as CreatePr)).toMatchObject({ head: "b", draft: false });
+    expect(w.repoT.layers(id).find((l) => l.branch === "b")).toMatchObject({ state: "ready" });
+  });
+
+  it("opens it as a draft when the workflow wants a draft, and leaves the draft alone after", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    gated(w, { now: { mode: "draft" } });
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    const create = fake.calls.find((c) => c.fn === "prCreate")!.args[0] as CreatePr;
+    expect(create).toMatchObject({ head: "b", draft: true });
+    const b = w.repoT.layers(id).find((l) => l.branch === "b")!;
+    expect(b).toMatchObject({ state: "draft", prNumber: expect.any(Number) });
+    await w.svc.promoteBottom(w.repoT.get(id)!);
+    expect(fake.calls.filter((c) => c.fn === "prReady")).toEqual([]);
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
+  });
+
+  it("doesn't mark an existing draft ready before the workflow allows it", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const [la, lb] = w.repoT.layers(id);
+    fake.prs.set(1, { number: 1, url: "https://github.com/acme/app/pull/1", state: "OPEN", isDraft: false, title: "A", body: "", base: "main", head: "a", headSha: null, labels: [] });
+    w.repoT.updateLayer(la!.id, { prNumber: 1, prUrl: "https://github.com/acme/app/pull/1", state: "ready" });
+    expect(await w.svc.setLayerMode(lb!.id, "draft")).toEqual({ ok: true });
+    const gate = { now: { mode: "blocked", reason: "pre-review" } as Gate };
+    gated(w, gate);
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    // base 照样改到 main（下面那层合了），但还是 draft
+    expect(fake.prs.get(100)).toMatchObject({ isDraft: true, base: "main" });
+    expect(w.repoT.layer(lb!.id)).toMatchObject({ state: "draft" });
+    gate.now = { mode: "open" };
+    await w.svc.promoteBottom(w.repoT.get(id)!);
+    expect(fake.prs.get(100)).toMatchObject({ isDraft: false });
+    expect(w.repoT.layer(lb!.id)).toMatchObject({ state: "ready" });
+  });
+});
+
 describe("StackService draft layers", () => {
   it("opens drafts with the prefix, label and depends line, and promotes them when their turn comes", async () => {
     const w = world();

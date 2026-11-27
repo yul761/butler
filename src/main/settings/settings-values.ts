@@ -272,6 +272,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "externalPrBriefPost":
     case "externalIntakeTrackerComment":
     case "externalIntakeTrackerStatus":
+    case "externalPrReviewRequest":
     case "preReviewEnabled":
     case "lessonsAutoAdmit":
     case "lessonsPrinciples":

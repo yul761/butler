@@ -64,6 +64,7 @@ export const EDITABLE_SETTINGS = [
   "externalPrBriefPost",
   "externalIntakeTrackerComment",
   "externalIntakeTrackerStatus",
+  "externalPrReviewRequest",
   "preReviewEnabled",
   "lessonsAutoAdmit",
   "lessonsPrinciples",

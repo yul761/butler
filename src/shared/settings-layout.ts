@@ -136,6 +136,7 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   externalPrBriefPost: adv("external"),
   externalIntakeTrackerComment: adv("external"),
   externalIntakeTrackerStatus: adv("external"),
+  externalPrReviewRequest: adv("external"),
   // 「复盘与规矩」页自己的区块
   checksEnabled: elsewhere,
   checksEditTimeoutSec: elsewhere,

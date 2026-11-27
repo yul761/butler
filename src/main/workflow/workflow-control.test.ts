@@ -84,6 +84,14 @@ describe("workflow tools", () => {
     expect(value(t.ctl.coordinator({ op: "set_workflow", scope: "ticket:a-1", steps: ["implement", "open_pr"] }, { featureId: 4 }))).toMatchObject({ scope: "ticket:A-1" });
   });
 
+  it("setting a workflow without a merge step says the user merges", () => {
+    const t = setup();
+    const r = value(t.ctl.coordinator({ op: "set_workflow", steps: ["implement", "open_pr"] }, { featureId: 4 }));
+    expect(r.note).toContain("没有合并这一步：由用户自己合");
+    const m = value(t.ctl.coordinator({ op: "set_workflow", steps: ["implement", "open_pr", "merge"] }, { featureId: 4 }));
+    expect(m.note).not.toContain("没有合并这一步");
+  });
+
   it("the global coordinator sets any layer and lists them all", () => {
     const t = setup();
     value(t.ctl.coordinator({ op: "set_workflow", scope: "global", steps: ["implement", "open_pr", "ci_green", "merge"] }, { shipherd: true }));

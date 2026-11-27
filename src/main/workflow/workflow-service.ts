@@ -1,8 +1,8 @@
 import type { AutomationLevel } from "../../shared/automation";
 import type { PreReviewVerdict, ReviewTarget } from "../../shared/prereview";
-import type { Session, Ticket, TicketRepo } from "../../shared/types";
+import { ticketFinished, type Session, type Ticket, type TicketRepo } from "../../shared/types";
 import {
-  botOf, hasStep, maxRoundsOf, mergeByOf, parseWorkflow, pendingBefore, presetOf, progressOf, scopeKey, stepOf,
+  botOf, hasStep, maxRoundsOf, mergeByOf, parseWorkflow, pendingBefore, preReviewGatesPr, presetOf, progressOf, scopeKey, stepOf,
   type MergeBy, type ReviewBot, type TicketWorkflowView, type Workflow, type WorkflowLayerView, type WorkflowProblem, type WorkflowScope, type WorkflowStep,
   type WorkflowStepId,
   WORKFLOW_SCOPE_KINDS,
@@ -28,6 +28,8 @@ import { WF } from "./strings";
 export const NO_CI_GRACE_MS = 10 * 60_000;
 /** bot 的 review 比请求早一点也算这一轮的（请求的时间是 gh 返回的时间）。 */
 const RESPONSE_SLACK_MS = 60_000;
+/** 请求行的 error 写这个：对外动作开关关着，交给 session 请的（提醒里说开关在哪）。 */
+const OFF_SWITCH = "external_off";
 /** session 自己标的步骤；其余的按实际情况判断，session 标不了。 */
 export const SESSION_STEPS: readonly WorkflowStepId[] = ["implement", "self_review", "address_comments", "re_review"];
 /** 只看现在、不记进库的步骤。 */
@@ -110,8 +112,24 @@ export class WorkflowService {
 
   // ---------------------------------------------------------------- 分层
 
+  /** 有没有设过流程。PR 轮询、hook 这些热路径每次都问，所以只查一行（BTL-273 review 第 10 点）。 */
   anyWorkflow(): boolean {
-    return this.d.repo.layers().length > 0;
+    return this.d.repo.hasLayers();
+  }
+
+  /**
+   * 这个 ticket 生效的流程（只要流程本身）；没设过任何流程就直接 null，不去读 ticket 和分层。
+   * 读坏了也是 null：按原来的开关走。
+   */
+  workflowFor(ticketKey: string | null | undefined): Workflow | null {
+    if (!ticketKey) return null;
+    try {
+      if (!this.anyWorkflow()) return null;
+      return this.effective(ticketKey)?.workflow ?? null;
+    } catch (e) {
+      this.d.log(`workflow: reading the workflow of ${ticketKey} failed`, e);
+      return null;
+    }
   }
 
   label(scope: WorkflowScope): string {
@@ -219,7 +237,7 @@ export class WorkflowService {
 
   /** 改了这一层会影响哪些进行中的 ticket。 */
   private affected(scope: WorkflowScope): string[] {
-    const open = this.d.tickets.list().filter((t) => t.archivedAt === null && t.status !== "done");
+    const open = this.d.tickets.list().filter((t) => !ticketFinished(t));
     if (scope.kind === "ticket") return open.some((t) => t.key === scope.ticketKey) ? [scope.ticketKey] : [];
     if (scope.kind === "feature") return open.filter((t) => t.featureId === scope.featureId).map((t) => t.key);
     return open.map((t) => t.key);
@@ -387,6 +405,12 @@ export class WorkflowService {
     const live = this.facts(t, w, new Set(done.keys()));
     const now = this.d.now();
     for (const [step, detail] of live) if (LIVE_ONLY.includes(step)) done.set(step, { at: now, detail });
+    // PR 都合了：流程算走完（不记进库：之后再开 PR 的话按实际情况重新算），别卡在处理评论、再请 review 上一直提醒。
+    const prs = this.prsOf(t.key);
+    if (prs.length > 0 && prs.every((p) => p.state === "merged")) {
+      const detail = prs.map((p) => `#${p.number}`).join(",");
+      for (const st of w.steps) if (!done.has(st.id)) done.set(st.id, { at: now, detail });
+    }
     return { done, live };
   }
 
@@ -463,14 +487,14 @@ export class WorkflowService {
   /** 启动时：有流程的进行中 ticket 都过一遍（提醒按库里记的那条判断，不重复送）。 */
   async evaluateAll(): Promise<void> {
     if (!this.anyWorkflow()) return;
-    for (const t of this.d.tickets.list()) if (t.archivedAt === null && t.status !== "done") await this.evaluate(t.key);
+    for (const t of this.d.tickets.list()) if (!ticketFinished(t)) await this.evaluate(t.key);
   }
 
   private async evaluateNow(ticketKey: string): Promise<void> {
     const t = this.d.tickets.get(ticketKey);
     const eff = t ? this.effective(ticketKey) : null;
-    if (!t || !eff) {
-      // 流程被清掉了：排着的提醒先撤回。
+    if (!t || !eff || ticketFinished(t)) {
+      // 流程被清掉了、ticket 已经完成（手动标 done、归档）：排着的提醒先撤回，不再往下判断。
       this.withdrawNotice(ticketKey);
       return;
     }
@@ -530,6 +554,12 @@ export class WorkflowService {
         }
       }
       // 写回时重读：别的路径（session 说请过了、行被删了）已经动过就不覆盖。
+      // 对外动作「请 bot review」的开关关着：Shipherd 没请，和手动档一样交给 session（提醒里说开关在哪）。
+      if (!r.ok && r.off) {
+        this.d.repo.finishBotRequest(claim.id, "asked_session", OFF_SWITCH, this.d.now());
+        this.d.log(`workflow: ${t.key} PR #${pr.number} round ${round}: asking ${bot} is off in external actions; the session asks`);
+        continue;
+      }
       this.d.repo.finishBotRequest(claim.id, r.ok ? "requested" : "failed", r.ok ? null : r.error, this.d.now());
       this.d.log(`workflow: ${t.key} PR #${pr.number} round ${round} ${bot} review ${r.ok ? `requested via ${r.via}` : `failed: ${r.error}`}`);
     }
@@ -610,7 +640,8 @@ export class WorkflowService {
       case "human_review":
         return s.doIt[step.id];
       case "open_pr":
-        return s.doIt.open_pr(step.draft === true);
+        // 和 gh pr create 的闸门同一个判断：预审排在前面才要求这次的提交过预审。
+        return s.doIt.open_pr(step.draft === true) + (preReviewGatesPr(w) ? s.openPrNeedsPreReview : "");
       case "merge":
         return s.mergeWait(mergeByOf(w));
       case "bot_review":
@@ -637,7 +668,7 @@ export class WorkflowService {
         continue;
       }
       if (last.status === "failed") out.push(s.botFailed(bot, last.error ?? "", cmds));
-      else if (last.status === "asked_session") out.push(s.botAskSession(bot, cmds));
+      else if (last.status === "asked_session") out.push(last.error === OFF_SWITCH ? s.botAskSessionOff(bot, cmds) : s.botAskSession(bot, cmds));
       else if (step.id === "re_review") out.push(s.reReviewAsked(bot, last.round - 1, max));
       else out.push(s.botAsked(bot));
     }
@@ -662,6 +693,7 @@ export class WorkflowService {
       if (st.note) extra += s.guideNote(st.note);
       lines.push(s.guideStep(i + 1, st.id, extra));
     });
+    if (!hasStep(w, "merge")) lines.push(s.noMergeStep);
     if (w.notes) lines.push(s.guideNotes(w.notes));
     lines.push(s.guideTool);
     lines.push(s.guideCurrent(this.view(ticketKey).current));
@@ -678,12 +710,23 @@ export class WorkflowService {
     const w = eff.workflow;
     const { done, live } = this.doneSet(t, w);
     const have = new Set<WorkflowStepId>([...done.keys(), ...live.keys()]);
-    // 写代码不用标：开 PR 本身就说明写完了。预审另外按这次的提交查。
+    // 写代码不用标：开 PR 本身就说明写完了。预审（排在开 PR 前面时）另外按这次的提交查；排在后面的预审是对 PR 做的，开 PR 时不查。
     const pending = pendingBefore(w, "open_pr", have).filter((s) => s !== "implement" && s !== "pre_review");
     if (pending.length > 0) return WF().prPending(pending);
-    if (hasStep(w, "pre_review") && !(await this.preReviewAtHead(t, i))) return WF().prPreReview;
+    if (preReviewGatesPr(w) && !(await this.preReviewAtHead(t, i))) return WF().prPreReview;
     if (stepOf(w, "open_pr")?.draft && !i.draft) return WF().prDraft;
     return null;
+  }
+
+  /**
+   * 不经 hook 开 PR 的路径（栈服务自动开栈底的 PR）用的判断：和 gh pr create 的 hook 是同一个 prCreate。
+   * 能开成可以 review 的就是 open；只差「流程要先开 draft」就是 draft；别的拦着就是 blocked，带上原因。
+   */
+  async prOpenMode(i: { ticketKey: string; repoPath: string; branch: string }): Promise<{ mode: "open" } | { mode: "draft" } | { mode: "blocked"; reason: string }> {
+    const at = { ticketKey: i.ticketKey, repoPath: i.repoPath, dir: null, branch: i.branch };
+    if ((await this.prCreate({ ...at, draft: false })) === null) return { mode: "open" };
+    const asDraft = await this.prCreate({ ...at, draft: true });
+    return asDraft === null ? { mode: "draft" } : { mode: "blocked", reason: asDraft };
   }
 
   /**
@@ -716,6 +759,18 @@ export class WorkflowService {
     return this.d.preReviews.latestFor({ repoSlug: slug, branch, headSha: sha })?.verdict === "clean";
   }
 
+  /** 开着的 PR 里，现在的 head 没有 clean 预审的（合并闸门用；和开 PR 一样按提交查）。返回 #号；全都过了是空。 */
+  private staleForMerge(t: Ticket): string[] {
+    const out: string[] = [];
+    for (const pr of this.prsOf(t.key).filter((p) => p.state === "open")) {
+      const repo = t.repos.find((r) => r.id === pr.repoId);
+      const slug = repo ? this.d.slugOf(repo.repoPath) : null;
+      const row = slug && pr.headSha ? this.d.preReviews.latestFor({ repoSlug: slug, branch: pr.headBranch ?? repo!.branch, headSha: pr.headSha }) : null;
+      if (row?.verdict !== "clean") out.push(`#${pr.number}`);
+    }
+    return out;
+  }
+
   /** 合并之前：谁来合对不对、合并前的步骤（PR 相关的按现在的状态）做完没有。 */
   merge(i: { ticketKey: string; sessionId: string | null }): string | null {
     const t = this.d.tickets.get(i.ticketKey);
@@ -725,12 +780,17 @@ export class WorkflowService {
     const by: MergeBy = mergeByOf(w);
     if (by === "user") return WF().mergeByUser;
     const who = i.sessionId ? this.d.session(i.sessionId) : null;
-    if (!isCoordinator(who)) return WF().mergeNotCoordinator;
+    // 总控：全局 Shipherd 总控，或者这个 ticket 所在 epic 的总控（别的 epic 的总控不算）。
+    if (!isCoordinator(who) || !(who!.shipherd || (t.featureId !== null && who!.featureId === t.featureId))) return WF().mergeNotCoordinator;
     const { done, live } = this.doneSet(t, w);
     const have = new Set<WorkflowStepId>();
-    for (const s of done.keys()) if (s !== "ci_green" && s !== "human_review") have.add(s);
-    for (const s of live.keys()) have.add(s);
+    // 预审和 CI、人工 review 一样按现在算：push 了没预审过的新提交，不能凭旧记录合。
+    for (const s of done.keys()) if (s !== "ci_green" && s !== "human_review" && s !== "pre_review") have.add(s);
+    for (const s of live.keys()) if (s !== "pre_review") have.add(s);
+    const stale = hasStep(w, "pre_review") ? this.staleForMerge(t) : [];
+    if (stale.length === 0 && hasStep(w, "pre_review")) have.add("pre_review");
     const pending = pendingBefore(w, "merge", have);
+    if (pending.length === 1 && pending[0] === "pre_review" && stale.length > 0) return WF().mergePreReview(stale);
     return pending.length > 0 ? WF().mergePending(pending) : null;
   }
 }

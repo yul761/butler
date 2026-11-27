@@ -49,6 +49,8 @@ const ZH = {
   },
   botAsked: (bot: ReviewBot) => `Shipherd 已经请了 ${BOT[bot]} review，等结果，意见会转给你。`,
   botAskSession: (bot: ReviewBot, cmds: string[]) => `请你跑一下这条命令请 ${BOT[bot]} review（结果 Shipherd 会转给你）：\n${cmds.join("\n")}`,
+  botAskSessionOff: (bot: ReviewBot, cmds: string[]) =>
+    `Shipherd 替你请 bot review 的开关没开（设置 › 高级 › 对外动作 › 请 bot review），请你跑一下这条命令请 ${BOT[bot]} review（结果 Shipherd 会转给你）：\n${cmds.join("\n")}`,
   botFailed: (bot: ReviewBot, error: string, cmds: string[]) => `Shipherd 请 ${BOT[bot]} review 没成功（${error}）。请你自己跑一下：\n${cmds.join("\n")}`,
   botWaiting: (bot: ReviewBot) => `等 ${BOT[bot]} 的 review 回来。`,
   reReview: (round: number, max: number) => `改完 push 以后，Shipherd 会再请一次 review（再请的第 ${round} 轮，最多 ${max} 轮）。觉得不用再请了，就调 workflow_step_done（step: re_review）。`,
@@ -58,6 +60,8 @@ const ZH = {
   // 闸门
   prPending: (ids: WorkflowStepId[]) => `先别开 PR：工作流程里开 PR 之前还有${ZH.list(ids)}没做完。做完再开。`,
   prPreReview: "先别开 PR：这个提交还没通过预审。先调 submit_evidence 交证据，等预审结果出来（没过就按意见改了再交）。",
+  openPrNeedsPreReview: "开之前，现在这个提交要通过预审（Shipherd 会核对；push 了新提交要重新交证据）。",
+  mergePreReview: (prs: string[]) => `先别合：${prs.join("、")} 现在的提交还没通过预审（push 过新的提交）。等预审过了再合。`,
   prDraft: "这个工作流程要先开 draft：加上 --draft 再开。",
   mergeByUser: "别合并：这个 ticket 的工作流程定了由用户自己合。停下等用户。",
   mergeNotCoordinator: "别合并：这个 ticket 的工作流程由总控来合。做完了就停下，等总控。",
@@ -101,6 +105,7 @@ const ZH = {
   guideNotes: (notes: string) => `补充说明：${notes}`,
   guideCurrent: (step: WorkflowStepId | null) => (step ? `现在是「${ZH_STEPS[step]}」。` : "流程已经走完了。"),
   guideTool: "写代码、自审、处理评论、再请 review 这几步做完后调 workflow_step_done（step 写步骤名）；别的步骤 Shipherd 自己会判断。",
+  noMergeStep: "没有合并这一步：由用户自己合，session 和总控都别合。",
   // 总控工具
   ctlOff: "工作流程没开（Shipherd 版本太旧）。",
   ctlBadScope: (ref: string) => `认不出 ${ref}：scope 写 global、product:<名字>、repo:<owner/repo>、epic:<名字> 或 ticket:<号>。`,
@@ -154,6 +159,8 @@ const EN: WorkflowStrings = {
   },
   botAsked: (bot) => `Shipherd asked ${BOT[bot]} for a review. Wait for it; Shipherd forwards the comments.`,
   botAskSession: (bot, cmds) => `Please run this to ask ${BOT[bot]} for a review (Shipherd forwards the result):\n${cmds.join("\n")}`,
+  botAskSessionOff: (bot, cmds) =>
+    `Shipherd asking a bot to review is off (Settings › Advanced › External actions › Ask a bot to review). Please run this to ask ${BOT[bot]} for a review (Shipherd forwards the result):\n${cmds.join("\n")}`,
   botFailed: (bot, error, cmds) => `Shipherd couldn't ask ${BOT[bot]} for a review (${error}). Please run this yourself:\n${cmds.join("\n")}`,
   botWaiting: (bot) => `Waiting for the ${BOT[bot]} review.`,
   reReview: (round, max) => `After you push your fixes, Shipherd asks for another review (extra round ${round}, at most ${max}). If no more review is needed, call workflow_step_done (step: re_review).`,
@@ -162,6 +169,8 @@ const EN: WorkflowStrings = {
   coordinatorMerge: (key, prs) => `${key} reached "merge" in its workflow: every earlier step is done, so you can merge ${prs.join(", ")}. Check once more that CI is green first.`,
   prPending: (ids) => `Don't open the PR yet: the workflow still has ${EN.list(ids)} to do first.`,
   prPreReview: "Don't open the PR yet: this commit hasn't passed pre-review. Call submit_evidence and wait for the result (if it fails, fix it and submit again).",
+  openPrNeedsPreReview: "Before you open it, the current commit has to pass pre-review (Shipherd checks; after a new push, submit evidence again).",
+  mergePreReview: (prs) => `Don't merge yet: the current commit of ${prs.join(", ")} hasn't passed pre-review (new commits were pushed). Merge once it passes.`,
   prDraft: "This workflow opens a draft first: add --draft.",
   mergeByUser: "Don't merge: this ticket's workflow leaves the merge to the user. Stop and wait.",
   mergeNotCoordinator: "Don't merge: in this ticket's workflow the coordinator merges. Stop when you're done and wait.",
@@ -204,6 +213,7 @@ const EN: WorkflowStrings = {
   guideNotes: (notes) => `Notes: ${notes}`,
   guideCurrent: (step) => (step ? `The current step is "${EN_STEPS[step]}".` : "The workflow is complete."),
   guideTool: "After implement, self-review, address comments or review again, call workflow_step_done (step is the step name); Shipherd tells the other steps from the facts.",
+  noMergeStep: "There's no merge step: the user merges. Neither the session nor the coordinator merges.",
   ctlOff: "Workflows aren't available (this Shipherd is too old).",
   ctlBadScope: (ref) => `Can't read ${ref}: scope is global, product:<name>, repo:<owner/repo>, epic:<name> or ticket:<key>.`,
   ctlNoProduct: (ref, names) => `No product named ${ref}. Products: ${names || "(none)"}`,

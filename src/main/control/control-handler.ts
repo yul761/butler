@@ -540,6 +540,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       return d.workflow.coordinator(req, { shipherd: true });
     }
     if (h.featureId !== req.featureId || h.ticketKey !== null) return fail(M().ctlInboxNotYours);
+    // 改流程只有这个 epic 的总控本人能做（和 featureSend 一样）：修复 session 也挂在 epic 上、ticketKey 为空，但只能读。
+    if (req.op === "set_workflow" && (!h.coordinator || h.fixesSession !== null)) return fail(M().ctlInboxNotYours);
     const f = d.features?.get(req.featureId);
     if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
     return d.workflow.coordinator(req, { featureId: f.id });

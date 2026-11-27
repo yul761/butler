@@ -117,9 +117,11 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "用户想定 ticket 的做法（写完直接合、要不要预审、要不要 Copilot review、谁来合并）时，用 get_workflow 看现在的流程，list_workflow_presets 看能用的步骤和预设，set_workflow 设好。" +
           "流程按 全局 → 产品/仓库 → epic → ticket 一层层覆盖；Shipherd 会按流程提醒 session 下一步，开 PR、合并的顺序不对会被拦住。" +
+          "流程里没有合并这一步时，由用户自己合，你也别合。" +
           (kind === "coordinator" ? "你只能改这个 epic 和它的 ticket；全局、产品、仓库那几层要在 Shipherd 总控里改。" : "")
         : "When the user wants to decide how tickets get done (merge right after writing, whether to pre-review, whether Copilot reviews, who merges), check the current one with get_workflow, see the steps and presets with list_workflow_presets, and set it with set_workflow. " +
-          "Workflows layer global → product/repo → epic → ticket, each overriding the one before; Shipherd nudges sessions to the next step and stops a PR or merge that comes out of order." +
+          "Workflows layer global → product/repo → epic → ticket, each overriding the one before; Shipherd nudges sessions to the next step and stops a PR or merge that comes out of order. " +
+          "When a workflow has no merge step, the user merges; don't merge it yourself." +
           (kind === "coordinator" ? " You can change only this epic and its tickets; the global, product and repo layers are changed from the Shipherd coordinator." : ""),
 ];
 
