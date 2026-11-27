@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { copyRepo, makeRepo, tempDir } from "../test-utils";
 import { isAncestor, parseGitVersion, parseWorktreeList, refsUnder, supportsUpdateRefs } from "./git-stack";
-import { runEngine, type EngineLayer } from "./rebase-engine";
+import { markersAdded, runEngine, type EngineLayer } from "./rebase-engine";
 
 // 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够。
 // 夹具已经按文件共享（BTL-240），剩下的是被测代码自己的 git 调用（一个用例几十到上百个进程）：Windows runner 上
@@ -323,5 +323,28 @@ describe("runEngine special cases", () => {
     const trunk2 = commit(repo2, "z.txt", "z\n", "main adds z");
     const r2 = await runEngine(input(repo2, { layers: layers(repo2, ["a", "b", "c", "d"]), trunk: trunk2 }));
     expect(r2.kind).toBe("rebased");
+  });
+
+  it("markersAdded looks only at the files a layer changes, reads odd file names literally, and throws when git fails", async () => {
+    const repo = makeRepo();
+    const base = g(repo, "rev-parse", "main");
+    // trunk 里本来就有一个带标记的文件、一堆别的文件：层没动它们，不看
+    for (let k = 0; k < 150; k++) writeFileSync(join(repo, `f${k}.txt`), `${k}\n`);
+    writeFileSync(join(repo, "fixture.txt"), "<<<<<<< ours\nx\n>>>>>>> theirs\n");
+    g(repo, "add", ".");
+    g(repo, "commit", "-q", "-m", "trunk");
+    const newBase = g(repo, "rev-parse", "HEAD");
+    g(repo, "checkout", "-q", "-b", "l");
+    writeFileSync(join(repo, "*.txt"), "<<<<<<< ours\nx\n>>>>>>> theirs\n");
+    writeFileSync(join(repo, "f3.txt"), "three\n");
+    g(repo, "add", ".");
+    g(repo, "commit", "-q", "-m", "layer");
+    const newTip = g(repo, "rev-parse", "HEAD");
+    const t = { branch: "l", oldTip: base, oldBase: base, newBase, newTip };
+    expect(await markersAdded(repo, [t])).toEqual([{ branch: "l", files: ["*.txt"] }]);
+    // 层没改任何文件：不起 git grep
+    expect(await markersAdded(repo, [{ ...t, newTip: newBase }])).toEqual([]);
+    // 版本不存在：抛出，不当成「没有标记」
+    await expect(markersAdded(repo, [{ ...t, newTip: "f".repeat(40) }])).rejects.toThrow();
   });
 });

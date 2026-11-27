@@ -26,6 +26,13 @@ describe("stack view (workstream K)", () => {
       expect(stackNoticeText({ reason: "behind", stackId: 1, stackName: "pay", branch: "b1", commits: 25, days: 4 }, S)).toContain("25");
       expect(stackNoticeText({ reason: "draft_stale", stackId: 1, stackName: "pay", branch: "b3", days: 15 }, S)).toContain("b3");
       expect(stackNoticeText({ reason: "stuck", stackId: 1, stackName: "pay", branch: "b1", detail: "gate held" }, S)).toContain("gate held");
+      const rewritten = stackNoticeText({ reason: "rewritten", stackId: 1, stackName: "pay", branch: "b1", branches: ["b1", "b2"] }, S);
+      expect(rewritten).toContain("b1, b2");
+      expect(rewritten).toMatch(/没编译|nothing was built/);
+      for (const why of ["ready_pr", "handoff"] as const) {
+        expect(stackNoticeText({ reason: "confirm", stackId: 1, stackName: "pay", branch: "b1", detail: why }, S)).toMatch(/不编译|doesn't build/);
+        expect(S.sk.confirmLine(why, "b1")).toMatch(/不编译|doesn't build/);
+      }
       const lines = lastRunLines({ id: 1, trigger: "bottom_merged", mode: "update_refs", outcome: "conflict", reason: null, hasBackup: true, conflict: { branch: "b2", files: ["x"] }, unpushed: ["b3"], confirm: null, startedAt: 0, finishedAt: 1 }, S, 0);
       expect(lines).toHaveLength(3);
       expect(lines[1]).toContain("b2");

@@ -1940,8 +1940,8 @@ export const EN: UiStrings = {
     epicIgnored: (names: string) => `These stacks' epic is semi-automatic, but auto rebase is turned off here, so it stays off: ${names}`,
     confirmLine: (why: "ready_pr" | "handoff", branches: string) =>
       why === "ready_pr"
-        ? `${branches} has a PR under review, so Shipherd didn't rewrite it. Click "Rebase now" to rewrite it.`
-        : `${branches} belong to a session for now (the conflict on the lowest one isn't solved yet), so Shipherd left them alone. Click "Rebase now" to rewrite them.`,
+        ? `${branches} has a PR under review, so Shipherd didn't rewrite it. Click "Rebase now" to rewrite it: Shipherd only runs git rebase and force-pushes. It doesn't build or run tests; afterwards it asks each layer's session to check.`
+        : `${branches} belong to a session for now (the conflict on the lowest one isn't solved yet), so Shipherd left them alone. Click "Rebase now" to rewrite them: Shipherd only runs git rebase and force-pushes. It doesn't build or run tests; afterwards it asks each layer's session to check.`,
     source: { mcp: "set by a coordinator", ticket: "made with stack_on", detected: "detected" } as Record<StackSource, string>,
     state: { branch_only: "branch", draft: "draft PR", ready: "PR", merged: "merged" } as Record<StackLayerState, string>,
     bottom: "bottom",
@@ -1967,8 +1967,9 @@ export const EN: UiStrings = {
       stuck: (stack: string, detail: string) => `Rebasing stack "${stack}" is stuck: ${detail}`,
       confirm: (stack: string, branches: string, why: "ready_pr" | "handoff") =>
         why === "ready_pr"
-          ? `Stack "${stack}" needs a rebase, but ${branches} has a PR under review. Shipherd left it alone. Click "Rebase now" if it's OK to rewrite.`
-          : `Stack "${stack}" needs a rebase, but ${branches} belong to a session for now: it still has the conflict on the lowest one. Shipherd left them alone. Click "Rebase now" if it's OK to rewrite.`,
+          ? `Stack "${stack}" needs a rebase, but ${branches} has a PR under review. Shipherd left it alone. Click "Rebase now" if it's OK to rewrite (Shipherd doesn't build or run tests).`
+          : `Stack "${stack}" needs a rebase, but ${branches} belong to a session for now: it still has the conflict on the lowest one. Shipherd left them alone. Click "Rebase now" if it's OK to rewrite (Shipherd doesn't build or run tests).`,
+      rewritten: (stack: string, branches: string) => `Shipherd just rebased ${branches} in stack "${stack}" on its own: git only carried the commits over; nothing was built or tested. Each layer's session was asked to check; build and test any layer without a session yourself.`,
     },
     noticeOpen: "View stacks",
     settingsIntro: "Policy for stacked PRs, in three layers: global → product → repo, each overriding the one above. \"Let Shipherd rebase stacks\" is off by default; only with it on does Shipherd change the local branches of stacks in that repo. Pushing, opening PRs and posting the overview issue also need the outward-action switches below, all off by default.",

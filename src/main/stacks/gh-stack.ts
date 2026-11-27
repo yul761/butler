@@ -107,6 +107,8 @@ export interface PrSnapshot {
   labels: string[];
   /** 从 fork 开过来的（head 同名也不是这个仓库的分支）。 */
   crossRepo?: boolean;
+  /** head 分支所在的仓库（owner/name，小写）；gh 没给时 null。fork 工作流里按它认是不是栈的 remote 上的分支（BTL-278）。 */
+  headRepo?: string | null;
 }
 
 function snapshot(v: unknown): PrSnapshot | null {
@@ -119,11 +121,17 @@ function snapshot(v: unknown): PrSnapshot | null {
     number: r.number, url: r.url, state, isDraft: r.isDraft === true, title: typeof r.title === "string" ? r.title : "",
     body: typeof r.body === "string" ? r.body : "", base: typeof r.baseRefName === "string" ? r.baseRefName : "",
     head: typeof r.headRefName === "string" ? r.headRefName : "", headSha: typeof r.headRefOid === "string" ? r.headRefOid : null, labels,
-    crossRepo: r.isCrossRepository === true,
+    crossRepo: r.isCrossRepository === true, headRepo: headRepoOf(r),
   };
 }
 
-const FIELDS = "number,url,state,isDraft,title,body,baseRefName,headRefName,headRefOid,labels,isCrossRepository";
+function headRepoOf(r: Record<string, unknown>): string | null {
+  const owner = (r.headRepositoryOwner as { login?: unknown } | null | undefined)?.login;
+  const name = (r.headRepository as { name?: unknown } | null | undefined)?.name;
+  return typeof owner === "string" && typeof name === "string" && owner && name ? `${owner}/${name}`.toLowerCase() : null;
+}
+
+const FIELDS = "number,url,state,isDraft,title,body,baseRefName,headRefName,headRefOid,labels,isCrossRepository,headRepository,headRepositoryOwner";
 
 export async function prView(cwd: string, slug: string | null, n: number): Promise<PrSnapshot | null> {
   try {

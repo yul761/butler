@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoLockKey, repoLocks } from "../tickets/repo-lock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,7 @@ import type { ExternalDetail } from "../external/actions";
 import { copyRepo, makeRepo, memDb, setOriginUrl, tempDir } from "../test-utils";
 import type { CreatePr, PrSnapshot } from "./gh-stack";
 import { StackPolicyService } from "./stack-policy";
-import { StackService, type StackServiceDeps } from "./stack-service";
+import { reasonKey, remoteKind, StackService, type StackServiceDeps } from "./stack-service";
 
 // 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够。
 // 夹具已经按文件共享（BTL-240），剩下的是被测代码自己的 git 调用（一个用例几十到上百个进程）：Windows runner 上
@@ -145,6 +145,8 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?:
   const external: { kind: ExternalActionKind; detail: ExternalDetail; ran: boolean }[] = [];
   const allow = o.allow ?? (() => true);
   const delivered: { ticketKey: string; text: string }[] = [];
+  const verify: { ticketKey: string; text: string }[] = [];
+  const verifyWithdrawn: string[] = [];
   const withdrawn: string[] = [];
   const posted: string[] = [];
   const deps: StackServiceDeps = {
@@ -168,14 +170,15 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?:
     sessionBusy: () => false,
     gateHeld: () => false,
     trunkBusy: () => false,
-    deliver: vi.fn(async (to: { ticketKey: string }, text: string) => (delivered.push({ ticketKey: to.ticketKey, text }), true)),
-    withdraw: vi.fn((to: { ticketKey: string; branch: string }) => void withdrawn.push(`${to.ticketKey}:${to.branch}`)),
+    deliver: vi.fn(async (to: { ticketKey: string }, text: string, topic?: "verify") =>
+      (topic === "verify" ? verify.push({ ticketKey: to.ticketKey, text }) : delivered.push({ ticketKey: to.ticketKey, text }), true)),
+    withdraw: vi.fn((to: { ticketKey: string; branch: string }, topic?: "verify") => void (topic ? verifyWithdrawn : withdrawn).push(`${to.ticketKey}:${to.branch}`)),
     briefProvider: (l) => ({ markdown: `<!-- shipherd:brief -->brief for ${l.branch}<!-- /shipherd:brief -->`, posted: (url) => posted.push(url) }),
     forceMode: o.mode,
   };
   const svc = new StackService(deps);
   return {
-    repo, remote, hub, db, svc, deps, repoT, policy, external, delivered, withdrawn, posted,
+    repo, remote, hub, db, svc, deps, repoT, policy, external, delivered, withdrawn, posted, verify, verifyWithdrawn,
     tip: (b: string) => g(repo, "rev-parse", b),
     remoteTip: (b: string) => g(remote, "rev-parse", b),
     /** 几个分支的提交，一个 git 进程。 */
@@ -636,7 +639,11 @@ describe("StackService triggers", () => {
     expect(run.detail.conflict).toMatchObject({ branch: "b", files: ["b.txt"] });
     expect(w.delivered).toHaveLength(1);
     expect(w.delivered[0]!.ticketKey).toBe("B");
-    expect(w.delivered[0]!.text).toContain("git rebase --onto");
+    expect(w.delivered[0]!.text).toContain("git -c rerere.enabled=false rebase --onto");
+    // 强推命令锁定交出去时远端的完整 sha（BTL-278）
+    const remoteB = w.remoteTips(["b"])[0];
+    expect(remoteB).toMatch(/^[0-9a-f]{40}$/);
+    expect(w.delivered[0]!.text).toContain(`--force-with-lease=refs/heads/b:${remoteB} --force-if-includes origin HEAD:refs/heads/b`);
     await w.svc.rebaseNow(id);
     expect(w.delivered).toHaveLength(1);
     expect(w.svc.notices().filter((n) => n.reason === "conflict")).toEqual([]);
@@ -650,7 +657,7 @@ describe("StackService triggers", () => {
     w.pushMain("b.txt", "main's b\n");
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict" });
-    const cmd = /git rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
+    const cmd = /git -c rerere\.enabled=false rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
     // session 在自己的 worktree 里照做、解决冲突（这里做完把 worktree 拿掉，免得算成 Shipherd 不管的检出）
     const wt = join(tempDir(), "wt-b");
     g(w.repo, "worktree", "add", "-q", wt, "b");
@@ -960,6 +967,40 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.repoT.lastRun(id)!.outcome).not.toBe("rebased");
   });
 
+  it("backs off while the open PRs can't be read: 5 minutes, doubling, at most an hour; a manual run still tries", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    let calls = 0;
+    vi.mocked(gh.openPrs).mockImplementation(async () => (calls++, null));
+    w.deps.slugOf = async () => "acme/app";
+    w.repoT.updateStack(id, { repoSlug: "acme/app" });
+    try {
+      w.pushMain("x.txt", "x\n");
+      await w.svc.tick();
+      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+      const tries = () => calls;
+      const at: number[] = [];
+      // 一分钟一个 tick，跑三个小时：每次读不到都等更久
+      for (let m = 1; m <= 180; m++) {
+        const before = tries();
+        w.advance(60_000);
+        await w.svc.tick();
+        if (tries() > before) at.push(m);
+      }
+      const gaps = at.map((m, k) => m - (k === 0 ? 0 : at[k - 1]!));
+      expect(gaps.slice(0, 4)).toEqual([5, 10, 20, 40]);
+      expect(Math.max(...gaps)).toBe(60);
+      expect(w.repoT.lastRun(id)!.detail.repeats).toBe(at.length + 1);
+      const before = tries();
+      await w.svc.rebaseNow(id);
+      expect(tries()).toBeGreaterThan(before);
+    } finally {
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+    }
+  });
+
   it("finds the layer's PR even when the repo has more open PRs than one page holds", async () => {
     const w = world({ policy: { dailyRebase: false } });
     openPr(1, "a", "main", false);
@@ -1128,6 +1169,79 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     }
   });
 
+  it("in a fork workflow reads the layers' PRs on upstream, by head repository; a same-named branch in someone else's fork is not ours (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    // origin 是自己的 fork（git 照旧走本地的 bare 仓库），PR 开在 upstream（acme/app）上
+    g(w.repo, "remote", "set-url", "origin", "https://github.com/me/app.git");
+    g(w.repo, "config", `url.${w.remote}.insteadOf`, "https://github.com/me/app.git");
+    w.deps.slugOf = async () => "me/app";
+    w.deps.remoteSlugs = async () => ["me/app", "acme/app"];
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    const up: PrSnapshot[] = [
+      { ...openPr(5, "b", "a", false), url: "https://github.com/acme/app/pull/5", crossRepo: true, headRepo: "me/app" },
+      { ...openPr(6, "c", "b", false), url: "https://github.com/acme/app/pull/6", crossRepo: true, headRepo: "someone/app" },
+    ];
+    fake.prs.clear();
+    let upstreamOk = true;
+    const seen: (string | null)[] = [];
+    vi.mocked(gh.openPrs).mockImplementation(async (_c, slug) => (seen.push(slug), slug === "acme/app" ? (upstreamOk ? up : null) : []));
+    try {
+      const id = await defineAll(w);
+      expect(seen).toEqual(expect.arrayContaining(["me/app", "acme/app"]));
+      const ls = w.repoT.layers(id);
+      expect(ls.find((l) => l.branch === "b")).toMatchObject({ state: "ready", prNumber: 5 });
+      expect(ls.find((l) => l.branch === "c")!.prNumber).toBeNull();
+      // trunk 跟着 upstream（栈的 remote 是 upstream）：fork 上的分支照样认得出
+      g(w.repo, "remote", "add", "upstream", w.remote);
+      w.repoT.updateStack(id, { remote: "upstream" });
+      w.repoT.updateLayer(w.repoT.layers(id).find((l) => l.branch === "b")!.id, { prNumber: null, prUrl: null, state: "branch_only" });
+      await w.svc.stackOn({ repoPath: w.repo, parentBranch: "d", branch: "e", featureId: null }).catch(() => undefined);
+      expect(w.repoT.layers(id).find((l) => l.branch === "b")).toMatchObject({ state: "ready", prNumber: 5 });
+      w.repoT.updateStack(id, { remote: "origin" });
+      // upstream 读不到：不当作没有 PR
+      upstreamOk = false;
+      w.pushMain("x.txt", "x\n");
+      await w.svc.tick();
+      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+    } finally {
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+    }
+  });
+
+  it("without a head repository from gh, falls back to: a PR from a fork is not ours", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(5, "b", "a", false).crossRepo = true;
+    openPr(6, "c", "b", false);
+    const id = await defineAll(w);
+    const ls = w.repoT.layers(id);
+    expect(ls.find((l) => l.branch === "b")!.prNumber).toBeNull();
+    expect(ls.find((l) => l.branch === "c")).toMatchObject({ prNumber: 6 });
+  });
+
+  it.each(["mcp", "ticket"] as const)("on a %s stack, a draft PR the user opened is not Shipherd's draft: its title and body are left alone", async (source) => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(2, "b", "a", true);
+    const id = (await w.svc.define({ repoPath: w.repo, branches: BRANCHES, source })).stackId!;
+    expect(w.repoT.layers(id)[1]).toMatchObject({ state: "draft", prNumber: 2, mode: "branch" });
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    await w.svc.syncDrafts(w.repoT.get(id)!);
+    expect(fake.calls.filter((c) => c.fn === "prEditTitle" || c.fn === "prEditBody")).toEqual([]);
+    expect(fake.prs.get(2)!.title).toBe("PR 2");
+  });
+
+  it("on a detected stack the drafts are Shipherd's: their mode follows the PR and their titles get k/n", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    openPr(2, "b", "a", true);
+    openPr(3, "c", "b", true);
+    const [id] = await w.svc.detect(w.repo);
+    expect(w.repoT.layers(id!).find((l) => l.branch === "b")).toMatchObject({ state: "draft", mode: "draft" });
+    await w.svc.syncDrafts(w.repoT.get(id!)!);
+    expect(fake.calls.some((c) => c.fn === "prEditTitle")).toBe(true);
+  });
+
   it("reads the PR of a layer added to an existing stack", async () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = (await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" })).stackId!;
@@ -1254,6 +1368,40 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.repoT.layers(id)[1]!.conflictKey).toBe(old.detail.conflict!.key);
   });
 
+  it.each([
+    ["git -C /w/stack-work/run-12/wt rebase failed", "git -C /w/stack-work/run-13/wt rebase failed"],
+    ["git update-ref refs/heads/shipherd-stack/12/0 abc failed: x", "git update-ref refs/heads/shipherd-stack/13/0 abc failed: x"],
+    [
+      "gave up after 30s waiting for lock /r to add stack run 12's temporary worktree; still held by remove stack run 11's temporary worktree",
+      "gave up after 31s waiting for lock /r to add stack run 13's temporary worktree; still held by remove stack run 12's temporary worktree",
+    ],
+    ["error: cannot open /w/stack-work/run-12/seq-editor.js", "error: cannot open /w/stack-work/run-99/seq-editor.js"],
+  ])("a failure that only differs by its run reads as the same reason: %s", (a, b) => {
+    expect(reasonKey(a, "/w/stack-work")).toBe(reasonKey(b, "/w/stack-work"));
+    expect(reasonKey(a, "/w/stack-work")).not.toBe(reasonKey("conflict markers left in a.txt", "/w/stack-work"));
+  });
+
+  it.each([
+    ["https://github.com/acme/app.git", "github"],
+    ["git@github.com:acme/app.git", "github"],
+    ["ssh://git@github.example.com/acme/app.git", "github"],
+    ["https://github.mycorp.internal/acme/app", "github"],
+    ["/Users/me/remote.git", "none"],
+    ["../remote.git", "none"],
+    ["file:///srv/remote.git", "none"],
+    ["C:\\repos\\remote.git", "none"],
+    ["https://gitlab.com/acme/app.git", "other"],
+    ["git@gitlab.mycorp.com:acme/app.git", "other"],
+    ["https://bitbucket.org/acme/app.git", "other"],
+    ["https://codeberg.org/acme/app.git", "other"],
+    ["https://dev.azure.com/acme/app/_git/app", "other"],
+    ["work:acme/app.git", "unknown"],
+    ["https://git.mycorp.com/acme/app.git", "unknown"],
+    ["", "unknown"],
+  ])("classifies the remote %s as %s", (url, kind) => {
+    expect(remoteKind(url)).toBe(kind);
+  });
+
   it("without a remote, or when git can't read it, an unreadable PR list without a slug is: no PRs / unreadable", async () => {
     const gh = await import("./gh-stack");
     const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
@@ -1264,11 +1412,36 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
       w.deps.slugOf = async () => null;
       const id = await defineAll(w);
       w.repoT.updateStack(id, { remote: "nowhere" });
-      const svc = w.svc as unknown as { notGithub(s: unknown): Promise<boolean> };
-      expect(await svc.notGithub(w.repoT.get(id)!)).toBe(true);
+      const svc = w.svc as unknown as { remoteInfo(s: unknown): Promise<{ kind: string }> };
+      expect((await svc.remoteInfo(w.repoT.get(id)!)).kind).toBe("none");
       // git 出错（配置文件坏了）：不知道，当作读不到
       writeFileSync(join(w.repo, ".git", "config"), "[remote \"origin\"\n\turl = broken\n");
-      expect(await svc.notGithub({ ...w.repoT.get(id)!, remote: "origin" })).toBe(false);
+      expect((await svc.remoteInfo({ ...w.repoT.get(id)!, remote: "origin" })).kind).toBe("unknown");
+    } finally {
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+    }
+  });
+
+  it.each([
+    ["a github.com remote", "https://github.com/acme/app.git", true],
+    ["an SSH alias", "work:acme/app.git", true],
+    ["a GitLab remote", "https://gitlab.com/acme/app.git", false],
+    ["an unknown host", "https://git.mycorp.com/acme/app.git", true],
+  ])("without a known slug, an unreadable PR list on %s defers: %s", async (_label, url, defers) => {
+    const w = world({ policy: { dailyRebase: false } });
+    w.deps.slugOf = async () => null;
+    g(w.repo, "remote", "set-url", "origin", url);
+    // git 照旧走本地的 bare 仓库
+    g(w.repo, "config", `url.${w.remote}.insteadOf`, url);
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    vi.mocked(gh.openPrs).mockResolvedValue(null);
+    try {
+      const id = await defineAll(w);
+      w.pushMain("x.txt", "x\n");
+      await w.svc.tick();
+      if (defers) expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+      else expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
     } finally {
       vi.mocked(gh.openPrs).mockImplementation(impl);
     }
@@ -1339,13 +1512,109 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
   });
 
+  it("asks before handing a new conflict above a layer whose conflict is still in a session's hands", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.delivered).toHaveLength(1);
+    // trunk 把 b.txt 删了（b 干净了），又加了一个和 d 冲突的 d.txt：冲突在 d，b 的冲突还在 session 手里
+    g(w.hub, "fetch", "-q", "origin");
+    g(w.hub, "rm", "-q", "b.txt");
+    writeFileSync(join(w.hub, "d.txt"), "main's d\n");
+    g(w.hub, "add", "d.txt");
+    g(w.hub, "commit", "-q", "-m", "main drops b.txt, adds d.txt");
+    g(w.hub, "push", "-q", "origin", "main");
+    const before = w.tips(BRANCHES);
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm", detail: { confirm: { why: "handoff", branches: ["b", "c", "d"] } } });
+    expect(w.delivered).toHaveLength(1);
+    expect(w.tips(BRANCHES)).toEqual(before);
+    // 确认了：d 的冲突交给 D
+    await w.svc.rebaseNow(id);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "conflict" });
+    expect(w.delivered.at(-1)!.ticketKey).toBe("D");
+  });
+
+  it("turns off the rerere an older Shipherd enabled, once; the session's command reuses no old resolution even with rerere on", async () => {
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const globalFile = join(tempDir(), "gitconfig");
+    writeFileSync(globalFile, "");
+    process.env.GIT_CONFIG_GLOBAL = globalFile;
+    try {
+      const w = world({ policy: { dailyRebase: false } });
+      await defineAll(w);
+      // 旧版留下的：local 层的 rerere.enabled=true 和共用的 rr-cache
+      g(w.repo, "config", "--local", "rerere.enabled", "true");
+      const rr = join(w.repo, ".git", "rr-cache");
+      mkdirSync(join(rr, "old"), { recursive: true });
+      w.pushMain("b.txt", "main's b\n");
+      await w.svc.tick();
+      expect(() => g(w.repo, "config", "--local", "--get", "rerere.enabled")).toThrow();
+      expect(existsSync(rr)).toBe(false);
+      expect(readdirSync(join(w.repo, ".git")).some((f) => f.startsWith("rr-cache.shipherd-off-"))).toBe(true);
+      expect(JSON.parse(readFileSync(join(w.deps.workRoot, "rerere-cleaned.json"), "utf8"))).toEqual([w.repo]);
+      // session 开着 rerere 解过一次、记下解法又放弃了；之后就算 rerere 又开着，照提示的命令 rebase 也不会套用
+      const cmd = /git -c rerere\.enabled=false rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
+      const wt = join(tempDir(), "wt-b");
+      g(w.repo, "worktree", "add", "-q", wt, "b");
+      try {
+        g(wt, "-c", "rerere.enabled=true", "rebase", "-q", "--onto", cmd[1]!, cmd[2]!);
+      } catch {
+        // 冲突
+      }
+      writeFileSync(join(wt, "b.txt"), "abandoned\n");
+      g(wt, "-c", "rerere.enabled=true", "rerere");
+      g(wt, "rebase", "--abort");
+      g(w.repo, "config", "--local", "rerere.enabled", "true");
+      const r = spawnSync("git", ["-c", "rerere.enabled=false", "rebase", "--onto", cmd[1]!, cmd[2]!], { cwd: wt, encoding: "utf8" });
+      expect(`${r.stdout}${r.stderr}`).not.toContain("previous resolution");
+      expect(readFileSync(join(wt, "b.txt"), "utf8")).toContain("<<<<<<<");
+      g(wt, "rebase", "--abort");
+      g(w.repo, "worktree", "remove", "--force", wt);
+      // 用户自己又开了：只清一次，重启以后也不再动
+      const again = new StackService(w.deps);
+      w.pushMain("x.txt", "x\n");
+      w.advance(5 * 60_000);
+      await again.tick();
+      expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe("true");
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+    }
+  });
+
+  it.each([
+    ["the user set rerere globally", (repo: string, globalFile: string) => writeFileSync(globalFile, "[rerere]\n\tenabled = true\n")],
+    ["the local config also has autoUpdate", (repo: string) => g(repo, "config", "--local", "rerere.autoUpdate", "true")],
+    ["the local value is not Shipherd's \"true\"", (repo: string) => g(repo, "config", "--local", "rerere.enabled", "yes")],
+  ])("leaves rerere alone when %s", async (_label, setup) => {
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const globalFile = join(tempDir(), "gitconfig");
+    writeFileSync(globalFile, "");
+    process.env.GIT_CONFIG_GLOBAL = globalFile;
+    try {
+      const w = world({ policy: { dailyRebase: false } });
+      await defineAll(w);
+      g(w.repo, "config", "--local", "rerere.enabled", "true");
+      setup(w.repo, globalFile);
+      const before = g(w.repo, "config", "--local", "--get", "rerere.enabled");
+      await w.svc.tick();
+      expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe(before);
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+    }
+  });
+
   it("never turns rerere on, and never pushes a resolution its session threw away", async () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
     w.pushMain("b.txt", "main's b\n");
     await w.svc.tick();
     expect(() => g(w.repo, "config", "--local", "--get", "rerere.enabled")).toThrow();
-    const cmd = /git rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
+    const cmd = /git -c rerere\.enabled=false rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
     // session 在自己的 worktree 里开着 rerere 试了一次、记下了一个解法，又放弃了
     const wt = join(tempDir(), "wt-b");
     g(w.repo, "worktree", "add", "-q", wt, "b");
@@ -1368,6 +1637,95 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.tips(BRANCHES)).toEqual(before);
     expect(w.remoteTips(BRANCHES)).toEqual(remote);
     expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
+  });
+
+  it("after rewriting layers on its own, asks each layer's session to build and test, and says so on the Now page until someone takes over", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    expect(w.delivered).toEqual([]);
+    expect(w.verify.map((v) => v.ticketKey)).toEqual(["A", "B", "C", "D"]);
+    const vb = w.verify.find((v) => v.ticketKey === "B")!.text;
+    expect(vb).toContain(w.tip("b").slice(0, 7));
+    expect(vb).toMatch(/没有编译|didn't build/);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "rewritten", branches: ["a", "b", "c", "d"] }));
+    // b 的 session 接手提交了：b 不再算「没人看过」
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b-fix.txt", "fix\n", "b fix");
+    g(w.repo, "checkout", "-q", "main");
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.svc.notices().filter((n) => n.reason === "rewritten").flatMap((n) => n.branches ?? [])).not.toContain("b");
+    // 一天以后不再提醒
+    w.advance(25 * 3600_000);
+    expect(w.svc.notices().filter((n) => n.reason === "rewritten")).toEqual([]);
+  });
+
+  it("withdraws a queued verify request when the layer then gets a conflict", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.verify).toHaveLength(4);
+    w.pushMain("b.txt", "main's b\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.delivered.map((d) => d.ticketKey)).toEqual(["B"]);
+    expect(w.verifyWithdrawn).toContain("B:b");
+  });
+
+  it("does not catch up a push of a tip that gained conflict markers; a git error skips the push too", async () => {
+    let on = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" || on });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    const remote = w.remoteTips(BRANCHES);
+    // 旧版留下的、还没推出去的 b：文件里有冲突标记
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), "<<<<<<< ours\nb\n=======\nmain's b\n>>>>>>> theirs\n");
+    g(w.repo, "commit", "-q", "-a", "--amend", "--no-edit");
+    g(w.repo, "checkout", "-q", "main");
+    const lb = w.repoT.layers(id)[1]!;
+    w.repoT.updateLayer(lb.id, { tipSha: w.tip("b") });
+    // d 记下的起点 git 里没有：检查做不了，也不推
+    w.repoT.updateLayer(w.repoT.layers(id)[3]!.id, { baseSha: "f".repeat(40) });
+    on = true;
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.remoteTip("a")).toBe(w.tip("a"));
+    expect(w.remoteTip("c")).toBe(w.tip("c"));
+    expect(w.remoteTip("b")).toBe(remote[1]);
+    expect(w.repoT.layers(id)[1]!.remoteOkSha).toBe(remote[1]);
+    expect(w.remoteTip("d")).toBe(remote[3]);
+  });
+
+  it("does not catch up a push while a run of the same stack is still going", async () => {
+    let on = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" || on });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    const remote = w.remoteTips(BRANCHES);
+    on = true;
+    // 一次手动 run 停在读 PR 上
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.mocked(gh.openPrs).mockImplementationOnce(async (...a) => (await gate, impl(...a)));
+    const n0 = vi.mocked(gh.openPrs).mock.calls.length;
+    const manual = w.svc.rebaseNow(id);
+    await vi.waitFor(() => expect(vi.mocked(gh.openPrs).mock.calls.length).toBeGreaterThan(n0));
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.remoteTips(BRANCHES)).toEqual(remote);
+    release();
+    await manual;
   });
 
   it("does not catch up a push onto a layer under review until someone confirms", async () => {

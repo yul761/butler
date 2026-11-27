@@ -3,16 +3,37 @@ import { parseCreatedUrl } from "./gh-stack";
 import { bottomBody, dependsLine, draftBody, draftTitle, stackGraph, stripPrefix, T, withDependsLine, withoutDependsLine } from "./pr-text";
 
 describe("stack PR text", () => {
-  it("the conflict hand-off says Shipherd won't reuse a rerere resolution, in both languages (BTL-278)", () => {
-    const p = { branch: "b", files: ["b.txt"], onto: "1111111", upstream: "2222222", above: ["c"], push: true };
-    const zh = T("zh").conflict(p);
-    const en = T("en").conflict(p);
-    expect(zh).toContain("不会自动套用 rerere 记下的解法");
-    expect(zh).not.toContain("自动套用。");
-    expect(en).toContain("never reuses a resolution rerere remembers");
-    expect(en).not.toContain("reuses your resolution next time");
-    expect(zh).toContain("不 rebase");
-    expect(en).toContain("not to rebase");
+  it("the conflict hand-off turns rerere off, distrusts an old resolution, and pushes with a lease on the full remote sha, in both languages (BTL-278)", () => {
+    const sha = "a".repeat(40);
+    const p = { branch: "b", files: ["b.txt"], onto: "1111111", upstream: "2222222", above: ["c"], push: true, remote: "origin", remoteSha: sha };
+    for (const lang of ["zh", "en"] as const) {
+      const t = T(lang).conflict(p);
+      expect(t).toContain("git -c rerere.enabled=false rebase --onto 1111111 2222222");
+      expect(t).toContain("using previous resolution");
+      expect(t).toContain(`git push --force-with-lease=refs/heads/b:${sha} --force-if-includes origin HEAD:refs/heads/b`);
+      expect(t).not.toMatch(/--force-with-lease(?!=)/);
+      expect(t).toContain("git grep -nE");
+      expect(t).toContain("blocked");
+      expect(t).not.toMatch(/不会自动套用 rerere|never reuses a resolution rerere/);
+    }
+    expect(T("zh").conflict(p)).toContain("不 rebase");
+    expect(T("en").conflict(p)).toContain("not to rebase");
+    // 远端还没有这个分支：lease 锁「不存在」
+    expect(T("en").conflict({ ...p, remoteSha: null })).toContain("--force-with-lease=refs/heads/b: --force-if-includes");
+    // 强推开关关着：不给推的命令
+    for (const lang of ["zh", "en"] as const) expect(T(lang).conflict({ ...p, push: false })).not.toContain("git push");
+  });
+
+  it("the verify request says nothing was built, and only says push when the rewrite is already pushed (BTL-278)", () => {
+    const p = { branch: "b", onto: "1".repeat(40), tip: "2".repeat(40), pushed: true };
+    for (const lang of ["zh", "en"] as const) {
+      const t = T(lang).verify(p);
+      expect(t).toContain("2222222");
+      expect(t).toMatch(/没有编译|didn't build/);
+      expect(t).toMatch(/blocked/);
+      expect(t).not.toMatch(/force-with-lease|push -f|--force /);
+      expect(T(lang).verify({ ...p, pushed: false })).toMatch(/先不要推|don't push/);
+    }
   });
 
   it("prefixes draft titles in both languages and strips either prefix", () => {

@@ -268,7 +268,8 @@ export interface StacksView {
 }
 
 /** 栈的提醒（「现在」页）。 */
-export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm";
+/** rewritten：最近一次自动 rebase 改写了这几层、它们还停在 Shipherd 写的顶端（没人编译过，BTL-278）。 */
+export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten";
 
 export interface StackNoticeInfo {
   reason: StackNoticeReason;
@@ -279,7 +280,7 @@ export interface StackNoticeInfo {
   ticketKey?: string | null;
   /** conflict：冲突文件；stuck：最近的原因；confirm：ready_pr 或 handoff。 */
   files?: string[];
-  /** confirm：等确认的几层。 */
+  /** confirm：等确认的几层；rewritten：刚被自动改写的几层。 */
   branches?: string[];
   detail?: string | null;
   /** draft_stale：已经多少天；behind：落后多少天。 */

@@ -2611,6 +2611,8 @@ async function bootstrap(): Promise<void> {
     log: logger,
     owned: stackOwned,
     slugOf: async (path) => repoIdentity.slugOf(path),
+    // fork 工作流：层的 PR 开在 upstream 上（BTL-278）
+    remoteSlugs: async (path) => repoIdentity.remoteSlugsOf(path),
     // 开着终端、在这个目录里、正在干活的 session（同一个 head 只看一次）。
     sessionBusy: (path) => pty.openIds().some((t) => {
       const h = sessions.head(t);
@@ -2620,15 +2622,15 @@ async function bootstrap(): Promise<void> {
     trunkBusy: (repoPath, trunk, ignore) => gateRepo.activeHolds().some((h) => samePath(h.repoPath, repoPath) && h.target === trunk && !ignore.includes(h.branch)),
     awaitingCheck: (url): boolean => ticketPrs.byUrl(url).some((r): boolean => commentLoop.awaitingCheck(r.id)),
     // 和 CI、评论同一个收件人；排进它的信箱（BTL-248），同一层新的冲突换掉还没送的旧的。认不出收件人时返回 false。
-    deliver: async (to, text) => {
+    deliver: async (to, text, topic) => {
       const repoId = to.ticketRepoId ?? tickets.listRepos(to.ticketKey).find((r) => r.branch === to.branch)?.id ?? null;
       if (repoId === null) return false;
       const rcpt = loopRecipient(to.ticketKey, repoId, to.branch);
       if (!rcpt.ok) return false;
-      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: `stack:${to.ticketKey}:${to.branch}` });
+      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: `stack:${to.ticketKey}:${to.branch}${topic ? `:${topic}` : ""}` });
       return true;
     },
-    withdraw: (to) => mailbox.withdraw(`stack:${to.ticketKey}:${to.branch}`),
+    withdraw: (to, topic) => mailbox.withdraw(`stack:${to.ticketKey}:${to.branch}${topic ? `:${topic}` : ""}`),
     record: recordEvent,
     onChange: () => notify(),
     closedByShipherd: (url) => ticketPrs.markShipherdClosed(url, Date.now()),

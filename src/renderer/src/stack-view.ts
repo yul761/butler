@@ -15,6 +15,7 @@ export function stackNoticeText(n: StackNoticeInfo, S: UiStrings): string {
     case "behind": return t.behind(n.stackName, n.commits ?? 0, n.days ?? 0);
     case "stuck": return t.stuck(n.stackName, n.detail ?? "—");
     case "confirm": return t.confirm(n.stackName, (n.branches ?? [n.branch]).join(", "), n.detail === "handoff" ? "handoff" : "ready_pr");
+    case "rewritten": return t.rewritten(n.stackName, (n.branches ?? [n.branch]).join(", "));
   }
 }
 

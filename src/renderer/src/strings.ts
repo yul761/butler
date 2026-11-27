@@ -1960,8 +1960,8 @@ const ZH = {
     epicIgnored: (names: string) => `这些栈的 epic 是半自动，但这里明确关了自动 rebase，按关：${names}`,
     confirmLine: (why: "ready_pr" | "handoff", branches: string) =>
       why === "ready_pr"
-        ? `${branches} 有在 review 的 PR，Shipherd 没改写。要改写就点「马上 rebase」。`
-        : `${branches} 现在归 session 管（最下面那层的冲突还没解完），Shipherd 没动。要改写就点「马上 rebase」。`,
+        ? `${branches} 有在 review 的 PR，Shipherd 没改写。要改写就点「马上 rebase」：Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。`
+        : `${branches} 现在归 session 管（最下面那层的冲突还没解完），Shipherd 没动。要改写就点「马上 rebase」：Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。`,
     source: { mcp: "总控定的", ticket: "stack_on 建的", detected: "自动识别" } as Record<StackSource, string>,
     state: { branch_only: "分支", draft: "draft PR", ready: "PR", merged: "已合并" } as Record<StackLayerState, string>,
     bottom: "栈底",
@@ -1987,8 +1987,9 @@ const ZH = {
       stuck: (stack: string, detail: string) => `栈「${stack}」的 rebase 卡住了：${detail}`,
       confirm: (stack: string, branches: string, why: "ready_pr" | "handoff") =>
         why === "ready_pr"
-          ? `栈「${stack}」要 rebase，可是 ${branches} 有在 review 的 PR。Shipherd 没动，确认要改写就点「马上 rebase」。`
-          : `栈「${stack}」要 rebase，可是 ${branches} 现在归 session 管：最下面那层的冲突交给它了，还没解完。Shipherd 没动，确认要改写就点「马上 rebase」。`,
+          ? `栈「${stack}」要 rebase，可是 ${branches} 有在 review 的 PR。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`
+          : `栈「${stack}」要 rebase，可是 ${branches} 现在归 session 管：最下面那层的冲突交给它了，还没解完。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`,
+      rewritten: (stack: string, branches: string) => `栈「${stack}」的 ${branches} 刚被 Shipherd 自动 rebase 过：只是 git 合了过去，没编译、没跑测试。已经请各层的 session 核对；没有 session 的层要自己编译、跑测试。`,
     },
     noticeOpen: "看栈",
     settingsIntro: "栈式 PR 的策略，分三层：全局 → 产品 → 仓库，下层覆盖上层。「允许 Shipherd 自动 rebase 栈」默认关，开了 Shipherd 才会改这个仓库里栈的本地分支；推送、开 PR、贴总览 issue 另外受下面的对外动作开关控制，也都默认关。",

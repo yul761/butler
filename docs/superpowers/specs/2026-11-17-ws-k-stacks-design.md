@@ -108,6 +108,15 @@
 
 推送前还要过几道（BTL-278）：结果里新多出冲突标记就算失败；自动触发的 run 要改写开着、可以 review 的 PR，或者冲突已经交给 session 的层，结果记成 `needs_confirm`，本地和远端都不动，等人点「马上 rebase」。冲突落在 ready 层上，或者它下面这次真要改写的层里有 ready 的，自动 run 同样记 `needs_confirm`，不交给 session；下面没动的 ready 层不算（引擎在冲突结果里带回下面各层的新顶端）。失败的 run 过一阵再试：第一次等 1 小时，同样的输入、同样的原因连着失败，每次翻倍，最多一天。
 
+第二轮 review 补的（BTL-278）：
+
+- 旧版替仓库打开的 rerere（local 层 `rerere.enabled=true`，global、system 都没设，也没设 `autoUpdate`）每个仓库清一次：去掉这项配置，把共用的 `rr-cache` 改名成 `rr-cache.shipherd-off-<时间>` 留着备查。用户自己在 global 或 system 开的不动。补推（`pushPending`）前也查冲突标记，查不了就不推。
+- 冲突正文给的 `--force-with-lease=<分支>:<远端完整 sha>` 加 `--force-if-includes`；不能推的时候不给推送命令。
+- 读不到开着的 PR 不当成「没有 PR」：remote 是本地路径、`file://` 或已知的非 GitHub 主机才算没有；SSH 别名之类认不出的按读不到处理，延后重试，从 5 分钟起翻倍，最多 1 小时。fork 工作流里，PR 的 head 仓库要是栈的 remote 或 origin（含改名后的名字）才算自己的。
+- 自动改写成功后，给每个改写过、有 ticket 的层发一条核对请求（不编译、不跑测试的事说清楚；没推出去时叫它先别推）；之后这一层有冲突、或被复原，就撤回这条请求。「现在」页挂一条 `rewritten` 提醒，直到这一层有了新提交或者过了一天。
+- 只有自动认出来的栈、或者不是 draft 的层，才按 PR 状态改 mode；用 MCP 或 ticket 定义的 draft 层不同步 k/n 标题。
+- `stack_rebase` 的说明写明：栈在 `needs_confirm` 时调它等于替用户确认改写，要先 `ask_user`。
+
 ### 3.8 冲突
 
 - 冲突发生在哪一层就送给那一层的 session（`stacks.conflictToSession`，默认开）：过 DeliveryGuard，用 `pty.deliver`。正文写清楚分支、冲突文件、要在自己 worktree 里执行的那条 `git rebase --onto <新父> <起点>`，解完 push；K 下一轮接着处理上面的层。冲突交出去以后，session 自己动这一层（和它上面的层）不算「有新提交」，自动 run 也不改写它们；直到这一层的顶端包含了新父，或者 trunk、父层真的变了。

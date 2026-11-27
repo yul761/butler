@@ -14,6 +14,26 @@ export interface GraphLayer {
   title: string | null;
 }
 
+export interface ConflictText {
+  branch: string;
+  files: string[];
+  onto: string;
+  upstream: string;
+  above: string[];
+  push: boolean;
+  /** 推到哪个 remote。 */
+  remote: string;
+  /** 交出去时远端这个分支的完整 sha（force-with-lease 锁它）；远端还没有这个分支时是 null。 */
+  remoteSha: string | null;
+}
+
+/** 给 session 的强推命令：lease 锁定交出去时远端的完整 sha（远端没有就锁「不存在」），再加 --force-if-includes（BTL-278）。 */
+/** 自动改写以后请那一层的 session 核对（BTL-278）。 */
+export interface VerifyText { branch: string; onto: string; tip: string; pushed: boolean; }
+
+export const pushLine = (p: { branch: string; remote: string; remoteSha: string | null }): string =>
+  `git push --force-with-lease=refs/heads/${p.branch}:${p.remoteSha ?? ""} --force-if-includes ${p.remote} HEAD:refs/heads/${p.branch}`;
+
 const ZH = {
   draftPrefix: (k: number, n: number) => `[stack ${k}/${n} · 勿 review]`,
   dependsPr: (n: number) => `依赖 #${n}，暂不需要 review`,
@@ -30,14 +50,24 @@ const ZH = {
   footer: "_这段由 Shipherd 维护。_",
   overviewTitle: (name: string) => `[stack] ${name}`,
   overviewIntro: "按 review 顺序列出这个栈的各层。从标出来的那一层开始看；它合并后 Shipherd 会把下一层 rebase 好并开成可以 review 的 PR。",
-  conflict: (p: { branch: string; files: string[]; onto: string; upstream: string; above: string[]; push: boolean }) =>
+  conflict: (p: ConflictText) =>
     `Shipherd：给栈做 rebase 时，分支 ${p.branch} 有冲突（${p.files.join("、")}）。真分支都没改。请在这个 worktree 里执行：\n\n` +
-    `git rebase --onto ${p.onto} ${p.upstream}\n\n` +
-    `解决冲突（两边的意图都要保留），git rebase --continue，` +
-    (p.push ? "然后 git push --force-with-lease。" : "先不要推（Shipherd 的「强推」开关关着，推不推由用户决定）。") +
-    `Shipherd 不会自动套用 rerere 记下的解法，冲突每次都交给你解。你不 rebase，Shipherd 也不会替你改这个分支；决定不 rebase 就说一声原因。` +
+    `git -c rerere.enabled=false rebase --onto ${p.onto} ${p.upstream}\n\n` +
+    `解决冲突（两边的意图都要保留），git rebase --continue。看到「Resolved '…' using previous resolution」不要信，那是以前记下的解法：git checkout -m 那个文件，重新解。` +
+    `推之前：确认没有冲突标记（git grep -nE '^(<<<<<<<|>>>>>>>)( |$)' 没有输出），构建、跑相关的测试，核对迁移号没有和 ${p.onto.slice(0, 7)} 里已有的撞。` +
+    (p.push
+      ? `然后只用这一条推：\n\n${pushLine(p)}\n\n推不上去（stale info、远端变了）就停下，用 report（kind 用 blocked）说明，不要重新 fetch 再推：可能是 reviewer 在 GitHub 上推了提交。`
+      : "先不要推（Shipherd 的「强推」开关关着，推不推由用户决定）。") +
+    `你不 rebase，Shipherd 也不会替你改这个分支；决定不 rebase 就说一声原因。` +
     (p.above.length ? `上面的层（${p.above.join("、")}）不要自己动，Shipherd 会接着处理。` : "") +
     `做完以后结束这一轮。`,
+  verify: (p: VerifyText) =>
+    `Shipherd：刚把这个分支 ${p.branch} 自动 rebase 到了新的 ${p.onto.slice(0, 7)} 上（现在的顶端是 ${p.tip.slice(0, 7)}）` +
+    (p.pushed ? "，也已经强推到远端。" : "，还没推到远端。") +
+    `Shipherd 只是让 git 把提交合了过去，没有编译、没有跑测试。请在这个 worktree 里：先 git status 看工作区，HEAD 不在 ${p.tip.slice(0, 7)} 就停下，用 report（kind 用 blocked）说明；` +
+    `然后构建、跑和这个分支相关的测试，核对迁移号没有和 trunk 新进来的撞。有问题就修好、提交（用 git commit --fixup 也行），` +
+    (p.pushed ? "照常 git push（不用 force）；" : "先不要推（改写还没推出去，Shipherd 的「强推」开关关着，推不推由用户决定）；") +
+    `都没问题不用回复。不要自己 rebase 别的层。做完以后结束这一轮。`,
   errors: {
     notFound: "没有这个栈",
     layerNotFound: "没有这一层",
@@ -89,12 +119,22 @@ const EN: StackTexts = {
   overviewIntro: "The layers of this stack in review order. Start with the marked one; when it merges, Shipherd rebases the next layer and opens it for review.",
   conflict: (p) =>
     `Shipherd: rebasing the stack hit a conflict on branch ${p.branch} (${p.files.join(", ")}). No real branch was changed. In this worktree, run:\n\n` +
-    `git rebase --onto ${p.onto} ${p.upstream}\n\n` +
-    `Resolve the conflict (keep the intent of both sides) and git rebase --continue` +
-    (p.push ? ", then git push --force-with-lease." : ". Don't push (Shipherd's Force push switch is off; pushing is up to the user).") +
-    ` Shipherd never reuses a resolution rerere remembers; every conflict comes to you. Until you rebase, Shipherd won't touch this branch. If you decide not to rebase, say why.` +
+    `git -c rerere.enabled=false rebase --onto ${p.onto} ${p.upstream}\n\n` +
+    `Resolve the conflict (keep the intent of both sides) and git rebase --continue. If you see "Resolved '…' using previous resolution", don't trust it; that is an old recorded resolution: git checkout -m that file and resolve it again. ` +
+    `Before pushing: make sure no conflict markers are left (git grep -nE '^(<<<<<<<|>>>>>>>)( |$)' prints nothing), build, run the related tests, and check your migration numbers don't clash with the ones already in ${p.onto.slice(0, 7)}.` +
+    (p.push
+      ? ` Then push with exactly this:\n\n${pushLine(p)}\n\nIf the push is rejected (stale info, the remote moved), stop and say so with report (kind blocked); don't fetch again and push: a reviewer may have pushed commits on GitHub.`
+      : " Don't push (Shipherd's Force push switch is off; pushing is up to the user).") +
+    ` Until you rebase, Shipherd won't touch this branch. If you decide not to rebase, say why.` +
     (p.above.length ? ` Leave the layers above (${p.above.join(", ")}) alone; Shipherd handles them next.` : "") +
     ` End the turn when done.`,
+  verify: (p) =>
+    `Shipherd: just rebased this branch ${p.branch} onto the new ${p.onto.slice(0, 7)} on its own (its tip is now ${p.tip.slice(0, 7)})` +
+    (p.pushed ? " and force-pushed it." : "; it isn't pushed yet.") +
+    ` Shipherd only had git carry the commits over; it didn't build or run any tests. In this worktree: first git status; if HEAD isn't at ${p.tip.slice(0, 7)}, stop and say so with report (kind blocked).` +
+    ` Then build, run the tests related to this branch, and check your migration numbers don't clash with the ones that just came in from trunk. Fix and commit anything that broke (git commit --fixup is fine)` +
+    (p.pushed ? " and git push as usual (no force)" : " but don't push (the rewrite isn't pushed yet: Shipherd's Force push switch is off, so pushing is up to the user)") +
+    `; if all is well, no reply is needed. Don't rebase other layers yourself. End the turn when done.`,
   errors: {
     notFound: "No such stack",
     layerNotFound: "No such layer",

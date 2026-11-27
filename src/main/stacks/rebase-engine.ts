@@ -291,29 +291,45 @@ async function rebaseOnce(
 
 const MARKER = "^(<<<<<<<|>>>>>>>)( |$)";
 
+/** 一次 git grep 带多少个路径（Windows 的命令行最长 32K 字符）。 */
+const GREP_PATHS = 100;
+
 /**
  * 每层新顶端里比「应有的」多出冲突标记的文件。应有的 = 新起点里的 + 这一层自己那段提交带进来的（旧顶端减旧起点），
- * 这样层里、trunk 里本来就有的标记（测试夹具之类）不算。所有提交一个 git grep 数完。
+ * 这样层里、trunk 里本来就有的标记（测试夹具之类）不算。只看这一层（新起点..新顶端）改到的文件（BTL-278：原来每个
+ * 版本的整棵树都 grep 一遍，大仓库里会超时）：没改到的文件新顶端和新起点一样，不会多出标记。git 出错、超时都抛出。
  */
 export async function markersAdded(
   repo: string, tips: { branch: string; oldTip: string; newTip: string; oldBase: string; newBase: string }[],
 ): Promise<{ branch: string; files: string[] }[]> {
   if (tips.length === 0) return [];
-  const revs = [...new Set(tips.flatMap((t) => [t.oldTip, t.newTip, t.oldBase, t.newBase]))];
-  // 用户配了 color.ui=always 时输出带颜色码，下面就一行都认不出来：关掉颜色
-  const r = await runGit(repo, ["-c", "color.grep=false", "grep", "--no-color", "-I", "-c", "-E", MARKER, ...revs, "--"]);
-  // 1 = 一处都没有
-  if (r.code !== 0 && r.code !== 1) throw new Error(`git grep failed: ${r.stderr.trim()}`);
-  const counts = new Map<string, Map<string, number>>();
-  for (const line of r.stdout.split(/\r?\n/)) {
-    const m = /^([0-9a-f]{7,64}):(.*):(\d+)$/.exec(line);
-    if (!m) continue;
-    const per = counts.get(m[1]!) ?? new Map<string, number>();
-    per.set(m[2]!, Number(m[3]));
-    counts.set(m[1]!, per);
+  const touched = new Set<string>();
+  for (const t of tips) {
+    const d = await runGit(repo, ["diff", "--name-only", "--no-renames", "-z", t.newBase, t.newTip]);
+    if (d.code !== 0) throw new Error(`git diff failed: ${d.stderr.trim()}`);
+    for (const f of d.stdout.split("\0")) if (f) touched.add(f);
   }
-  // 有匹配却一行都没认出来：输出格式不对，不能当成「没有标记」放过去
-  if (r.code === 0 && counts.size === 0) throw new Error(`git grep: unexpected output: ${r.stdout.slice(0, 200)}`);
+  if (touched.size === 0) return [];
+  const revs = [...new Set(tips.flatMap((t) => [t.oldTip, t.newTip, t.oldBase, t.newBase]))];
+  const counts = new Map<string, Map<string, number>>();
+  const paths = [...touched];
+  for (let k = 0; k < paths.length; k += GREP_PATHS) {
+    // 用户配了 color.ui=always 时输出带颜色码，下面就一行都认不出来：关掉颜色。路径按字面认（文件名里的 * 之类不当通配）。
+    const r = await runGit(repo, ["--literal-pathspecs", "-c", "color.grep=false", "grep", "--no-color", "-I", "-c", "-E", MARKER, ...revs, "--", ...paths.slice(k, k + GREP_PATHS)]);
+    // 1 = 一处都没有
+    if (r.code !== 0 && r.code !== 1) throw new Error(`git grep failed: ${r.stderr.trim()}`);
+    let seen = 0;
+    for (const line of r.stdout.split(/\r?\n/)) {
+      const m = /^([0-9a-f]{7,64}):(.*):(\d+)$/.exec(line);
+      if (!m) continue;
+      seen++;
+      const per = counts.get(m[1]!) ?? new Map<string, number>();
+      per.set(m[2]!, Number(m[3]));
+      counts.set(m[1]!, per);
+    }
+    // 有匹配却一行都没认出来：输出格式不对，不能当成「没有标记」放过去
+    if (r.code === 0 && seen === 0) throw new Error(`git grep: unexpected output: ${r.stdout.slice(0, 200)}`);
+  }
   const n = (rev: string, f: string) => counts.get(rev)?.get(f) ?? 0;
   const out: { branch: string; files: string[] }[] = [];
   for (const t of tips) {

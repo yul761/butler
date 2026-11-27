@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { ExternalActionKind } from "../../shared/external";
 import type { PolicyScope } from "../../shared/admission-policy";
 import {
@@ -13,11 +13,11 @@ import type { AttemptResult, ExternalDetail } from "../external/actions";
 import { withRepoLock } from "../tickets/repo-lock";
 import { applyTips, deferText, deleteBackups, type ApplyLayer } from "./apply";
 import {
-  behind, fetchRemote, gitVersion, hasFixups, isAncestor, pushBranch, refTips, remoteFor, remoteTip, revParse, runGit, subjects, supportsUpdateRefs, worktreeBranches,
+  behind, fetchRemote, gitVersion, hasFixups, isAncestor, mergeBase, pushBranch, refTips, remoteFor, remoteTip, revParse, runGit, subjects, supportsUpdateRefs, worktreeBranches,
 } from "./git-stack";
 import * as gh from "./gh-stack";
 import { bottomBody, dependsLine, draftBody, draftTitle, overviewBody, stripPrefix, T, withDependsLine, withoutDependsLine, type GraphLayer } from "./pr-text";
-import { runEngine, type EngineLayer, type NewTip } from "./rebase-engine";
+import { markersAdded, runEngine, type EngineLayer, type NewTip } from "./rebase-engine";
 import type { StackPolicyService } from "./stack-policy";
 import { prUrlKey, prUrlParts } from "../../shared/pr-url";
 import { parseRemoteSlug } from "../../shared/repo-slug";
@@ -68,6 +68,8 @@ export interface StackServiceDeps {
   owned(repoPath: string, branch: string): OwnedBranch | null;
   /** 仓库 slug（gh 的 GH_REPO）。 */
   slugOf(repoPath: string): Promise<string | null>;
+  /** origin 和 upstream 的 slug（fork 工作流里 PR 开在 upstream 上，BTL-278）。不给时只看 slugOf。 */
+  remoteSlugs?(repoPath: string): Promise<string[]>;
   /** 这个目录里的 session 在忙。 */
   sessionBusy(path: string): boolean;
   /** 这个分支有合并闸的活动占位。 */
@@ -76,10 +78,13 @@ export interface StackServiceDeps {
   trunkBusy(repoPath: string, trunk: string, ignore: string[]): boolean;
   /** 工作流 I：这个 PR 有送进 session、还没核对的评论。 */
   awaitingCheck?(prUrl: string): boolean;
-  /** 把一段话送进这一层的 session（ticket 的这个仓库、这个分支）；true = 递进去了。同一层新的一条换掉还没送的旧的。 */
-  deliver(to: { ticketKey: string; ticketRepoId: number | null; branch: string }, text: string): Promise<boolean>;
+  /**
+   * 把一段话送进这一层的 session（ticket 的这个仓库、这个分支）；true = 递进去了。同一层、同一个 topic 新的一条换掉还没送的旧的。
+   * topic 不给是冲突；verify 是自动改写后请它编译、跑测试（BTL-278），和冲突分开排，撤回冲突不撤它。
+   */
+  deliver(to: { ticketKey: string; ticketRepoId: number | null; branch: string }, text: string, topic?: "verify"): Promise<boolean>;
   /** 撤回还排在信箱里没送的那条冲突（BTL-278：层收回来了、冲突没了，旧的 rebase 指令不能再送进去）。 */
-  withdraw?(to: { ticketKey: string; branch: string }): void;
+  withdraw?(to: { ticketKey: string; branch: string }, topic?: "verify"): void;
   /** 工作流 G 的 review 简报。 */
   briefProvider?(layer: BriefLayer): { markdown: string; posted(prUrl: string): void } | null;
   /** 度量（契约 4.7）。 */
@@ -122,9 +127,15 @@ const FETCH_EVERY_MS = 5 * 60_000;
 const FAILED_RETRY_MS = 60 * 60_000;
 /** 同样的输入、同样的原因连着失败：每多一次等的时间翻倍，最多等一天（确定性的失败不用每小时重跑一遍）。 */
 const FAILED_RETRY_MAX_MS = 24 * 3600_000;
+/** 读不到开着的 PR（gh 没登录、网络断了）推迟的：等 5 分钟再读，每次翻倍，最多一小时（BTL-278：原来每个 tick 都起一次 gh）。 */
+const PRS_UNREADABLE = "can't read the open PRs";
+const PRS_RETRY_MS = 5 * 60_000;
+const PRS_RETRY_MAX_MS = 60 * 60_000;
 const DETECT_EVERY_MS = 15 * 60_000;
 const CONFLICT_NOTICE_AFTER_MS = 30 * 60_000;
 const STUCK_AFTER_MS = 24 * 3600_000;
+/** 自动改写后「没编译过」的提醒挂多久。 */
+const REWRITTEN_NOTICE_MS = 24 * 3600_000;
 export const BACKUP_KEEP_MS = 30 * 24 * 3600_000;
 const DAY_MS = 24 * 3600_000;
 const DAILY_RETRY_MS = 30 * 60_000;
@@ -167,6 +178,39 @@ function confirmPending(r: RunRow, open: LayerRow[]): string[] {
 /** ref（完整名字）现在指向的提交，没有为 null。 */
 type TipOf = (ref: string) => Promise<string | null>;
 
+type RemoteKind = "none" | "github" | "other" | "unknown";
+
+/** 确定不是 GitHub 的托管（这些仓库没有 GitHub PR）。别的认不出的主机（SSH 别名之类）按 unknown 算。 */
+const OTHER_HOSTS = /(^|\.)(gitlab|bitbucket|codeberg|gitea|gitee|sr\.ht|sourceforge|dev\.azure|visualstudio)(\.|$)|^gitlab[.-]|^bitbucket[.-]/i;
+
+/** 一个 remote 地址指向哪里：本地路径、GitHub（github.com 或主机名里带 github 的）、别家托管，还是认不出。 */
+export function remoteKind(url: string): RemoteKind {
+  const u = url.trim();
+  if (!u) return "unknown";
+  if (/^file:\/\//i.test(u) || u.startsWith("/") || u.startsWith(".") || /^[A-Za-z]:[\\/]/.test(u) || u.startsWith("\\\\")) return "none";
+  const sl = parseRemoteSlug(u);
+  if (!sl) return "unknown";
+  const parts = sl.split("/");
+  if (parts.length === 2) return "github";
+  const host = parts[0]!;
+  if (host.includes("github")) return "github";
+  return OTHER_HOSTS.test(host) ? "other" : "unknown";
+}
+
+/**
+ * 比较两次失败是不是同一个原因用（退避，BTL-278）：去掉每次 run 都不一样的部分——工作目录（workRoot/run-<id>）、
+ * 临时 ref（refs/heads/shipherd-stack/<id>/）、锁的说明里的「stack run <id>」和等了多少秒。
+ */
+export function reasonKey(reason: string, workRoot: string): string {
+  let r = reason;
+  if (workRoot) r = r.split(workRoot).join("<work>");
+  return r
+    .replace(/run-\d+/g, "run-")
+    .replace(/shipherd-stack\/\d+\//g, "shipherd-stack/<id>/")
+    .replace(/stack run \d+/g, "stack run <id>")
+    .replace(/gave up after \d+s/g, "gave up after <n>s");
+}
+
 export class StackService {
   private readonly running = new Set<number>();
   /** 等某个栈跑完的（onMerged 碰上 tick 正在跑时）。 */
@@ -185,6 +229,8 @@ export class StackService {
   private readonly autosquashTried = new Map<number, string>();
   /** 每个信箱 ref（ticket:分支）开始递送了几次冲突：递完发现过时时，期间有更新的递送就不撤（信箱里那条是它的）。 */
   private readonly deliverSeq = new Map<string, number>();
+  /** 这次运行里已经核对过旧 rerere 配置的仓库。 */
+  private readonly rerereChecked = new Set<string>();
   /** behindCache 是按哪一对（栈底顶端、trunk）算的（BTL-275）：两头都没动就不再起 git。 */
   private readonly behindOf = new Map<number, string>();
   /** 一段提交（仓库、base..tip）里有没有 fixup 提交：提交不会变，答案也不会变（BTL-275：原来每分钟每层一个 git log）。 */
@@ -274,12 +320,17 @@ export class StackService {
   async detect(repoPath: string): Promise<number[]> {
     repoPath = resolve(repoPath);
     const slug = await this.d.slugOf(repoPath).catch(() => null);
-    const prs = await gh.openPrs(repoPath, slug);
+    // fork 工作流：PR 开在 upstream 上，也读（BTL-278）
+    const prs = (await this.openPrsOf(repoPath, slug ? [slug] : [], null)).prs;
     if (!prs) return [];
     // 已有的栈（不管怎么建的）：层的 PR 状态按 GitHub 现在的对一遍
-    for (const st of this.d.repo.list()) if (st.repoPath === repoPath) this.reconcilePrs(st, prs);
+    for (const st of this.d.repo.list()) if (st.repoPath === repoPath) this.reconcilePrs(st, prs, (await this.remoteInfo(st)).own);
+    // 层的分支推到哪个 remote，就只认 head 在那个仓库的 PR（别人 fork 里的同名分支不算）
+    const remote = await remoteFor(repoPath, await this.trunkOf(repoPath));
+    const own = (await this.remoteInfo({ repoPath, remote, repoSlug: slug })).own;
+    const ours = (p: gh.PrSnapshot) => (p.headRepo && own.length > 0 ? own.includes(p.headRepo) : !p.crossRepo);
     // 用户删掉过的栈里的分支不再自动建回来
-    const mine = prs.filter((p) => this.d.owned(repoPath, p.head) && !this.d.repo.findBranch(repoPath, p.head) && !this.d.repo.inRemovedStack(repoPath, p.head));
+    const mine = prs.filter((p) => ours(p) && this.d.owned(repoPath, p.head) && !this.d.repo.findBranch(repoPath, p.head) && !this.d.repo.inRemovedStack(repoPath, p.head));
     const byHead = new Map(mine.map((p) => [p.head, p]));
     const childOf = new Map<string, gh.PrSnapshot>();
     for (const p of mine) if (byHead.has(p.base)) childOf.set(p.base, p);
@@ -306,55 +357,102 @@ export class StackService {
   /**
    * 层的 PR 号、链接、状态按 GitHub 上开着的 PR 对齐（BTL-278）。所有建栈、加层的入口和每次自动 run 都走这里：
    * 原来只有自动检测的栈记 PR，stack_define、stack_on 建的栈层上一直是 branch_only / 没有 PR，正在 review 的 PR 也被当成纯分支强推。
-   * 按 head 分支对（fork 来的同名分支不算）。GitHub 上没开着的不动（关掉、合并另有路径处理）。
+   * 按 head 分支对：head 仓库是栈的 remote 对应的仓库（own）的才算，fork 工作流里开在 upstream 上的也认得出；
+   * gh 没给 head 仓库、或者认不出 own 时退回「不是从 fork 来的」。GitHub 上没开着的不动（关掉、合并另有路径处理）。
    */
-  private reconcilePrs(stack: StackRow, prs: gh.PrSnapshot[]): void {
+  private reconcilePrs(stack: StackRow, prs: gh.PrSnapshot[], own: string[]): void {
+    const ours = (p: gh.PrSnapshot) => (p.headRepo && own.length > 0 ? own.includes(p.headRepo) : !p.crossRepo);
     for (const l of this.d.repo.layers(stack.id)) {
       if (l.state === "merged") continue;
-      const pr = prs.find((p) => p.head === l.branch && p.state === "OPEN" && !p.crossRepo);
+      const pr = prs.find((p) => p.head === l.branch && p.state === "OPEN" && ours(p));
       if (!pr) continue;
       const state = pr.isDraft ? "draft" : "ready";
       if (l.prNumber === pr.number && l.prUrl === pr.url && l.state === state) continue;
+      // mode 说的是「这一层的 PR 是不是 Shipherd 开的 draft」（syncDrafts 会改它的标题和正文）：只有自动检测的栈
+      // （PR 本来就是 Shipherd 的）按 PR 认；别的栈里用户自己开的 draft 不算 Shipherd 的，Shipherd 的 draft 被转成 ready 了才回到 branch（BTL-278）
       this.d.repo.updateLayer(l.id, {
-        prNumber: pr.number, prUrl: pr.url, state, mode: pr.isDraft ? "draft" : "branch",
+        prNumber: pr.number, prUrl: pr.url, state, mode: stack.source === "detected" || !pr.isDraft ? (pr.isDraft ? "draft" : "branch") : l.mode,
         draftSince: pr.isDraft ? (l.state === "draft" ? l.draftSince : this.d.now()) : null,
       });
     }
   }
 
   /**
-   * 读一次开着的 PR 再对齐；读不到返回 false。栈没记仓库 slug（建栈时没读到）先补上：读不到 slug 就是没有 GitHub 仓库，
-   * 也就没有 PR，返回 true。
+   * 读一次开着的 PR 再对齐；读不到返回 false。栈没记仓库 slug（建栈时没读到）先补上。
+   * origin 和 upstream 都读（openPrsOf）：有一个读不到就算读不到。
+   * 一个 slug 都认不出、gh 又读不到时看栈的 remote：没有这个 remote、是本地路径，或者确定是别家的托管（GitLab 之类）才当作没有 PR；
+   * GitHub 的、认不出的主机（SSH 别名之类）、git 出错，都当作读不到。
    */
   private async readPrs(stack: StackRow, known?: gh.PrSnapshot[]): Promise<boolean> {
+    const info = await this.remoteInfo(stack);
+    if (known) {
+      this.reconcilePrs(stack, known, info.own);
+      return true;
+    }
     let slug = stack.repoSlug;
-    if (!known && !slug) {
+    if (!slug) {
       slug = await this.d.slugOf(stack.repoPath).catch(() => null);
       if (slug) this.d.repo.updateStack(stack.id, { repoSlug: slug });
     }
-    // 没有 slug 也让 gh 按目录认一次仓库；读不到时看 remote：不是 github.com 的才当作没有 PR，
-    // github.com 的（slug 只是这次没认出来）或者 remote 都读不出，当作读不到（BTL-278）
-    let prs = known ?? (slug ? await gh.openPrs(stack.repoPath, slug) : ((await gh.openPrs(stack.repoPath, null)) ?? (await this.notGithub(stack) ? [] : null)));
-    // 读满了一页：后面可能还有这个栈的层的 PR，逐层再查，查不全就当读不到（BTL-278）
-    if (prs && prs.length >= gh.OPEN_PR_LIMIT) {
-      const heads = this.d.repo.layers(stack.id).filter((l) => l.state !== "merged").map((l) => l.branch);
-      const more = await gh.openPrsForHeads(stack.repoPath, slug, heads);
-      prs = more ? [...prs, ...more] : null;
-    }
+    const heads = this.d.repo.layers(stack.id).filter((l) => l.state !== "merged").map((l) => l.branch);
+    const r = await this.openPrsOf(stack.repoPath, slug ? [slug] : [], heads);
+    let prs = r.prs;
+    // 一个 slug 都认不出、gh 也读不到：remote 确定不在 GitHub 上（本地路径、别家托管、没有这个 remote）才当作没有 PR
+    if (!prs && !r.anySlug && (info.kind === "none" || info.kind === "other")) prs = [];
     if (!prs) return false;
-    this.reconcilePrs(stack, prs);
+    this.reconcilePrs(stack, prs, info.own);
     return true;
   }
 
-  /** 栈的 remote 确定不在 github.com 上（没有这个 remote，或者地址是别的主机）。git 出错时返回 false。 */
-  private async notGithub(stack: StackRow): Promise<boolean> {
-    // 读配置里的原值：remote get-url 会套 insteadOf
-    const r = await runGit(stack.repoPath, ["config", "--get", `remote.${stack.remote}.url`]).catch(() => null);
-    if (!r) return false;
-    if (r.code === 1) return true; // 没配这个 remote
-    if (r.code !== 0) return false;
-    const slug = parseRemoteSlug(r.stdout);
-    return slug === null || slug.split("/").length !== 2;
+  /**
+   * 仓库的 origin 和 upstream 上开着的 PR（fork 工作流里层的 PR 开在 upstream 上，BTL-278），按 url 去重。
+   * 有一个读不到就返回 null。给了 heads 时，读满一页的再逐层查（查不全也是 null）。
+   */
+  private async openPrsOf(repoPath: string, known: string[], heads: string[] | null): Promise<{ prs: gh.PrSnapshot[] | null; anySlug: boolean }> {
+    const extra = (await this.d.remoteSlugs?.(repoPath).catch(() => [] as string[])) ?? [];
+    const slugs: (string | null)[] = [...new Set([...known, ...extra].filter((x) => !!x))];
+    const anySlug = slugs.length > 0;
+    // 一个 slug 都没有：让 gh 按目录认一次仓库
+    if (!anySlug) slugs.push(null);
+    const all = new Map<string, gh.PrSnapshot>();
+    for (const sl of slugs) {
+      let prs = await gh.openPrs(repoPath, sl);
+      if (prs && heads && prs.length >= gh.OPEN_PR_LIMIT) {
+        const more = await gh.openPrsForHeads(repoPath, sl, heads);
+        prs = more ? [...prs, ...more] : null;
+      }
+      if (!prs) return { prs: null, anySlug };
+      for (const p of prs) all.set(p.url, p);
+    }
+    return { prs: [...all.values()], anySlug };
+  }
+
+
+  /**
+   * 栈的 remote 是什么（BTL-278）：git remote get-url（套了 insteadOf 的，git 真正用的地址）为主，配置里的原值是 GitHub 的也算 GitHub。
+   * own：这个 remote 对应的 GitHub 仓库（原样的和改名后的），认 PR 的 head 仓库用。
+   */
+  private async remoteInfo(stack: Pick<StackRow, "repoPath" | "remote" | "repoSlug">): Promise<{ kind: RemoteKind; own: string[] }> {
+    const run = (args: string[]) => runGit(stack.repoPath, args).catch(() => null);
+    const url = await run(["remote", "get-url", stack.remote]);
+    const raw = await run(["config", "--get", `remote.${stack.remote}.url`]);
+    // 没有这个 remote：get-url 报 2、config 报 1
+    if (url && url.code === 2 && raw?.code === 1) return { kind: "none", own: [] };
+    const urls = [url, raw].map((r) => (r?.code === 0 ? r.stdout.trim() : null));
+    const kinds = urls.map((u) => (u === null ? "unknown" : remoteKind(u)));
+    // 保守地取：有一个是 GitHub 就是 GitHub，有一个认不出就是认不出（按读不到处理），都确定不是才当没有 PR
+    const kind: RemoteKind = kinds.includes("github") ? "github" : kinds.includes("unknown") ? "unknown" : kinds.includes("other") ? "other" : "none";
+    // 层的分支在哪个仓库：栈的 remote，再加上 origin（fork 工作流里 trunk 常常跟着 upstream，ticket 分支却推在自己的 fork 上）
+    const originUrls = stack.remote === "origin" ? [] : [await run(["remote", "get-url", "origin"]), await run(["config", "--get", "remote.origin.url"])]
+      .map((r) => (r?.code === 0 ? r.stdout.trim() : null));
+    const own = new Set<string>();
+    for (const u of [...urls, ...originUrls]) {
+      const sl = u ? parseRemoteSlug(u) : null;
+      if (sl && sl.split("/").length === 2) own.add(sl.toLowerCase());
+    }
+    // origin 的改名后的名字（slugOf 给的；PR 上 GitHub 给的是现在的名字）
+    if (own.size > 0 && stack.repoSlug) own.add(stack.repoSlug.toLowerCase());
+    return { kind, own: [...own] };
   }
 
   remove(stackId: number): StackActionResult {
@@ -425,12 +523,13 @@ export class StackService {
 
   private async runLocked(stack0: StackRow, trigger: StackTrigger, o: RunOpts): Promise<RunRow | null> {
     const repo = stack0.repoPath;
+    await this.cleanLegacyRerere(repo);
     const policy = this.policyOf(stack0);
     const auto = trigger !== "manual";
     await this.fetch(repo, stack0.remote, true);
     const stack = this.d.repo.get(stack0.id)!;
     // 改写前先把层的 PR 状态读对（BTL-278）；读不到就不动，手动确认也一样（确认的是读对了的状态）
-    if (!(await this.readPrs(stack))) return this.defer(stack, trigger, "can't read the open PRs", "deferred");
+    if (!(await this.readPrs(stack))) return this.defer(stack, trigger, PRS_UNREADABLE, "deferred");
     const trunkSha = (await remoteTip(repo, stack.remote, stack.trunk)) ?? (await revParse(repo, `refs/heads/${stack.trunk}`));
     if (!trunkSha) return this.defer(stack, trigger, `no ${stack.trunk}`, "failed");
     const all = this.d.repo.layers(stack.id);
@@ -475,6 +574,14 @@ export class StackService {
         .filter((l) => l.state === "ready" && (l.position === res.position || (l.position < res.position && moved.has(l.branch))))
         .map((l) => l.branch);
       if (auto && ready.length > 0) return this.needsConfirm(stack, runId, "ready_pr", ready, o);
+      // 下面有一层的冲突还在 session 手里：新冲突的指令是接到这次 run 临时改写的下层上，那层 session 解完会再变，先问人（BTL-278）
+      if (auto) {
+        const handed = await this.handedOff(stack, open);
+        if (handed && res.position > handed.position) {
+          const over = open.filter((l) => l.position >= handed.position && l.position <= res.position).map((l) => l.branch);
+          return this.needsConfirm(stack, runId, "handoff", over, o);
+        }
+      }
       return this.onConflict(stack, open, runId, res, policy);
     }
 
@@ -556,8 +663,23 @@ export class StackService {
       trigger, mode, layers: changed.length, mergeMethod: detail.mergeMethod ?? null, pushed: applied.pushed.length, unpushed: applied.unpushed.length,
     });
     this.d.log(`stacks: stack ${stack.id} ${trigger}: rebased ${changed.map((t) => `${t.branch} ${sha7(t.oldTip)}→${sha7(t.newTip)}`).join(", ")}`);
+    await this.askToVerify(open, changed, applied.pushed);
     await this.afterRun(stack, trigger);
     return this.d.repo.run(runId);
+  }
+
+  /**
+   * 改写过的层没人编译、跑过测试（BTL-278）：请每一层的 session 核对一次。和冲突分开排（topic verify），
+   * 同一层新的一条换掉还没送的旧的。没有 session 的层由「刚自动改写」的提醒告诉用户。
+   */
+  private async askToVerify(open: LayerRow[], changed: NewTip[], pushed: string[]): Promise<void> {
+    for (const t of changed) {
+      const l = open.find((x) => x.branch === t.branch);
+      if (!l?.ticketKey) continue;
+      const text = T().verify({ branch: t.branch, onto: t.newBase, tip: t.newTip, pushed: pushed.includes(t.branch) });
+      await this.d.deliver({ ticketKey: l.ticketKey, ticketRepoId: l.ticketRepoId, branch: l.branch }, text, "verify")
+        .catch((e) => (this.d.log(`stacks: asking ${l.branch}'s session to verify failed`, e), false));
+    }
   }
 
   /**
@@ -736,10 +858,14 @@ export class StackService {
     if (!layer?.ticketKey) return;
     const above = layers.filter((l) => l.position > layer.position).map((l) => l.branch);
     const push = this.d.external.allowed("force_push", { repoSlug: stack.repoSlug, ticketKey: layer.ticketKey });
-    const text = T().conflict({ branch: c.branch, files: c.files, onto: c.onto, upstream: c.upstream, above, push });
+    // 强推命令锁定这时远端的完整 sha（BTL-278）：跟踪 ref 每 5 分钟 fetch 一次、所有 worktree 共用，不带 sha 的 lease 可能盖掉 reviewer 推的提交
+    const remoteSha = push ? await remoteTip(stack.repoPath, stack.remote, c.branch) : null;
+    const text = T().conflict({ branch: c.branch, files: c.files, onto: c.onto, upstream: c.upstream, above, push, remote: stack.remote, remoteSha });
     // 这次 run 已经不是最近一次（之后又跑过）：它的冲突过时了，不送
     if (this.d.repo.lastRun(stack.id)?.id !== runId) return;
     const to = { ticketKey: layer.ticketKey, ticketRepoId: layer.ticketRepoId, branch: layer.branch };
+    // 还没送进去的「改写后核对」说的是上一次改写的顶端：这一层又要交冲突了，先撤掉（BTL-278）
+    this.d.withdraw?.(to, "verify");
     const ref = `${to.ticketKey}:${to.branch}`;
     const seq = (this.deliverSeq.get(ref) ?? 0) + 1;
     this.deliverSeq.set(ref, seq);
@@ -890,12 +1016,14 @@ export class StackService {
     }
   }
 
-  /** draft 层的 k/n 和「依赖 #N」按现在的顺序改（只在变了时改）。 */
+  /** Shipherd 开的 draft 层的 k/n 和「依赖 #N」按现在的顺序改（只在变了时改）。 */
   async syncDrafts(stack: StackRow): Promise<void> {
     const all = this.d.repo.layers(stack.id);
     for (let i = 0; i < all.length; i++) {
       const l = all[i]!;
       if (l.state !== "draft" || !l.prNumber) continue;
+      // 只改 Shipherd 自己开的 draft（BTL-278）：用户自己开的 draft PR 的标题、正文不动
+      if (stack.source !== "detected" && l.mode !== "draft") continue;
       const parent = all[i - 1];
       if (!parent) continue;
       const pr = await gh.prView(stack.repoPath, stack.repoSlug, l.prNumber);
@@ -1016,6 +1144,8 @@ export class StackService {
       for (const l of layers) {
         const row = rows.find((r) => r.branch === l.branch);
         if (row) this.d.repo.updateLayer(row.id, { tipSha: l.newTip, baseSha: null, remoteOkSha: res.pushed.includes(l.branch) ? null : (row.remoteOkSha ?? l.remoteTip) });
+        // 改回去了：还排着的「改写后核对」说的是被撤销的那次改写，撤掉
+        if (row?.ticketKey) this.d.withdraw?.({ ticketKey: row.ticketKey, branch: row.branch }, "verify");
       }
       this.d.repo.finishRun(runId, { outcome: "restored", detail: { layers: res.layers, pushed: res.pushed, unpushed: res.unpushed, restoredFrom: from.id } });
       return { ok: true };
@@ -1051,6 +1181,7 @@ export class StackService {
       }
       for (const [repoPath, list] of repos) {
         if (!existsSync(repoPath)) continue;
+        await this.cleanLegacyRerere(repoPath);
         const fetched = await this.fetch(repoPath, list[0]!.remote, false);
         for (const s0 of list) {
           const s = this.d.repo.get(s0.id)!;
@@ -1105,6 +1236,11 @@ export class StackService {
     const open = this.d.repo.layers(s.id).filter((l) => l.state !== "merged");
     if (open.length === 0) return null;
     const lr = this.d.repo.lastRun(s.id);
+    // 上次读不到 PR：退避着再读（同一条推迟会合并成一行，repeats 是连着读不到的次数）
+    if (lr?.outcome === "deferred" && lr.reason === PRS_UNREADABLE) {
+      const wait = Math.min(PRS_RETRY_MAX_MS, PRS_RETRY_MS * 2 ** Math.max(0, (lr.detail.repeats ?? 1) - 1));
+      if (this.d.now() - (lr.finishedAt ?? lr.startedAt) < wait) return null;
+    }
     // 上一次没落地（冲突、失败、要确认、回滚）、输入没变：再跑也是一样的结果，不跑（BTL-278）。trunk 或下面的层真动了才重试。
     // 等确认的那几层已经不用确认了（PR 转回 draft、冲突交回来了）：放行，按现在的状态重跑。
     const stale = (lr?.outcome === "needs_confirm" && confirmPending(lr, open).length === 0)
@@ -1130,8 +1266,8 @@ export class StackService {
 
   /** 上一次失败后要等多久再试：同样的输入、同样的原因连着失败了 n 次，等 FAILED_RETRY_MS·2^(n-1)，最多一天。 */
   private failedRetryMs(stackId: number, lr: RunRow): number {
-    // 原因里带着这次 run 的临时目录（run-<id>）：去掉编号再比，不然每次都像新原因
-    const why = (r: RunRow): string | null => r.reason?.replace(/run-\d+/g, "run-") ?? null;
+    // 原因里带着这次 run 的编号（临时目录、临时 ref、锁的说明）：去掉再比，不然每次都像新原因
+    const why = (r: RunRow): string | null => (r.reason == null ? null : reasonKey(r.reason, this.d.workRoot));
     let streak = 0;
     for (const r of this.d.repo.runs(stackId, 8)) {
       if (r.outcome !== "failed" || why(r) !== why(lr) || r.detail.inputs !== lr.detail.inputs) break;
@@ -1161,6 +1297,8 @@ export class StackService {
 
   /** 上一次因为开关关着没做完的提升 / 总览：开关打开后补做（关着时不试，免得审计里每分钟一笔 skipped）。 */
   private async retryPending(s: StackRow, p: StackPolicy): Promise<void> {
+    // 这个栈正在跑（手动 rebase 停在读 PR、等锁上）：它会自己推，这里补推会和它抢（BTL-278）
+    if (this.running.has(s.id)) return;
     const scope = { repoSlug: s.repoSlug };
     const lr = this.d.repo.lastRun(s.id);
     const settled = !lr || isSettledOutcome(lr.outcome);
@@ -1197,12 +1335,79 @@ export class StackService {
     for (const { l: l0, local, remote } of due) {
       const l = this.d.repo.layer(l0.id) ?? l0;
       if (!confirmed && (l.state === "ready" || l.conflictKey)) continue;
+      // 推之前再查一次冲突标记（BTL-278：旧版套用 rerere 留下的、还没推出去的顶端）：多出标记、或者查不了，都不推
+      if (!(await this.cleanOfMarkers(s, l, local, remote))) continue;
       const ok = await this.forcePush(s, { position: l.position, branch: l.branch, oldTip: local, newTip: local, checkout: null, remoteTip: remote, remoteOkSha: l.remoteOkSha }, l).catch((e) => {
         this.d.log(`stacks: pushing ${l.branch} failed`, e);
         return false;
       });
       if (ok) this.d.repo.updateLayer(l.id, { remoteOkSha: null });
     }
+  }
+
+  /** 补推的顶端比远端那份多出冲突标记了吗：远端那份是旧顶端，层这段提交带进来的标记不算。git 出错按「不干净」算。 */
+  private async cleanOfMarkers(s: StackRow, l: LayerRow, local: string, remote: string | null): Promise<boolean> {
+    try {
+      if (!l.baseSha || !remote) throw new Error("no base");
+      const oldBase = await mergeBase(s.repoPath, remote, l.baseSha);
+      if (!oldBase) throw new Error(`no merge base of ${remote} and ${l.baseSha}`);
+      const bad = await markersAdded(s.repoPath, [{ branch: l.branch, oldTip: remote, oldBase, newBase: l.baseSha, newTip: local }]);
+      if (bad.length === 0) return true;
+      this.d.log(`stacks: not pushing ${l.branch}: conflict markers in ${bad[0]!.files.join(", ")}`);
+    } catch (e) {
+      this.d.log(`stacks: not pushing ${l.branch}: checking for conflict markers failed`, e);
+    }
+    return false;
+  }
+
+  /**
+   * 旧版（BTL-278 之前）给栈所在的仓库打开过 rerere：没有任何一层配过 rerere.enabled 时写了 local 层的 rerere.enabled=true
+   * （autoUpdate 只在引擎的命令行上带，没写进配置）。session 照冲突提示 rebase 时 git 会按它套用 rr-cache 里放弃过的解法。
+   * 每个仓库只看一次（记在 workRoot 的 rerere-cleaned.json 里）：local 层正好是 Shipherd 写的样子（"true"、没有 local 的
+   * autoUpdate、global 和 system 都没配）就删掉这一项，rr-cache 改名留作备份（不删，git 不再用它）。用户自己配的不动。
+   */
+  private async cleanLegacyRerere(repoPath: string): Promise<void> {
+    const key = resolve(repoPath);
+    if (this.rerereChecked.has(key)) return;
+    this.rerereChecked.add(key);
+    const file = join(this.d.workRoot, "rerere-cleaned.json");
+    let done: string[] = [];
+    try {
+      const j = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      if (Array.isArray(j)) done = j.filter((x): x is string => typeof x === "string");
+    } catch {
+      // 还没有
+    }
+    if (done.includes(key)) return;
+    const get = (args: string[]) => runGit(key, ["config", ...args]).catch(() => ({ code: -1, stdout: "", stderr: "" }));
+    const local = await get(["--local", "--get", "rerere.enabled"]);
+    // git 出错：这次不算看过，下次再看
+    if (local.code !== 0 && local.code !== 1) return void this.rerereChecked.delete(key);
+    let cleaned = false;
+    if (local.code === 0 && local.stdout.trim() === "true") {
+      const others = [await get(["--local", "--get", "rerere.autoUpdate"]), await get(["--global", "--get", "rerere.enabled"]), await get(["--system", "--get", "rerere.enabled"])];
+      if (others.some((r) => r.code !== 0 && r.code !== 1)) return void this.rerereChecked.delete(key);
+      if (others.every((r) => r.code === 1)) {
+        const u = await get(["--local", "--unset", "rerere.enabled"]);
+        if (u.code !== 0) return void this.rerereChecked.delete(key);
+        const common = await runGit(key, ["rev-parse", "--git-common-dir"]).catch(() => null);
+        const rr = common?.code === 0 ? resolve(key, common.stdout.trim(), "rr-cache") : null;
+        try {
+          if (rr && existsSync(rr)) renameSync(rr, `${rr}.shipherd-off-${this.d.now()}`);
+        } catch (e) {
+          this.d.log(`stacks: moving ${rr} aside failed`, e);
+        }
+        cleaned = true;
+        this.d.log(`stacks: turned off the rerere an older Shipherd enabled in ${key}`);
+      }
+    }
+    try {
+      mkdirSync(this.d.workRoot, { recursive: true });
+      writeFileSync(file, JSON.stringify([...done, key]));
+    } catch (e) {
+      this.d.log(`stacks: recording the rerere cleanup failed`, e);
+    }
+    this.d.record?.("stack.rerere_cleanup", { cleaned });
   }
 
   /** 第 3.6 节：每个仓库每 5 分钟 fetch 一次（force = 现在就要）；同一个仓库串行。返回这次真的 fetch 了。 */
@@ -1415,6 +1620,16 @@ export class StackService {
       if (lr?.detail.confirm && pending.length > 0) {
         const l = layers.find((x) => x.branch === pending[0]);
         out.push({ reason: "confirm", stackId: s.id, stackName: s.name, branch: pending[0]!, branches: pending, detail: lr.detail.confirm.why, ticketKey: l?.ticketKey ?? null, prNumber: l?.prNumber ?? null });
+      }
+      // 刚自动改写过、还停在 Shipherd 写的顶端的层（之后有人提交了就说明有人接手了）：提醒没编译过（BTL-278）
+      if (lr?.outcome === "rebased" && lr.trigger !== "manual" && now - (lr.finishedAt ?? lr.startedAt) < REWRITTEN_NOTICE_MS) {
+        const rewritten = (lr.detail.layers ?? [])
+          .filter((d) => d.newTip !== d.oldTip && open.some((l) => l.branch === d.branch && l.tipSha === d.newTip))
+          .map((d) => d.branch);
+        if (rewritten.length > 0) {
+          const l = layers.find((x) => x.branch === rewritten[0]);
+          out.push({ reason: "rewritten", stackId: s.id, stackName: s.name, branch: rewritten[0]!, branches: rewritten, ticketKey: l?.ticketKey ?? null, prNumber: l?.prNumber ?? null });
+        }
       }
       if (lr && (lr.outcome === "deferred" || lr.outcome === "failed" || lr.outcome === "rolled_back") && now - lr.startedAt >= STUCK_AFTER_MS) {
         out.push({ reason: "stuck", stackId: s.id, stackName: s.name, branch: open[0]!.branch, detail: lr.reason, ticketKey: open[0]!.ticketKey });
