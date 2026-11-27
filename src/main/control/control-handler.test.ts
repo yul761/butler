@@ -259,7 +259,7 @@ describe("controlHandler", () => {
       outputs.set("s-1", "tail");
       const shown: Partial<SessionActivity> = activity("s-1");
       delete shown.lastOutput;
-      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({ v: 1, ok: true, value: { ...shown, output: "tail", mailbox: null, last_reply: null } });
+      expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({ v: 1, ok: true, value: { ...shown, output: "tail", mailbox: null, last_reply: null, waiting_on_user: null } });
       // /clear：旧 id 指向新 id
       await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
       sessions.setReplacedBy("s-1", "s-2");
@@ -272,7 +272,7 @@ describe("controlHandler", () => {
       await sessionService.open({ ticketKey: "FULL-1", repoId: 1 });
       expect(await handle({ ...base, op: "session_activity", session: "s-1" })).toEqual({
         v: 1, ok: true,
-        value: { sessionId: "s-1", kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, limit: null, output: "", mailbox: null, last_reply: null },
+        value: { sessionId: "s-1", kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, limit: null, output: "", mailbox: null, last_reply: null, waiting_on_user: null },
       });
     });
   });

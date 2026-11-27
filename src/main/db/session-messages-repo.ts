@@ -130,7 +130,7 @@ export class SessionMessagesRepo {
   /** 送到了，记下怎么送的和送到时目标最后一条回复的 id。只从 queued 改；改了返回 true。 */
   delivered(id: string, o: { at: number; via: "hook" | "input"; toSession: string; baseReplyId: string | null }): boolean {
     const r = this.db
-      .prepare(`UPDATE session_messages SET status = 'delivered', delivered_at = ?, via = ?, to_session = ?, base_reply_id = ? WHERE id = ? AND status = 'queued'`)
+      .prepare(`UPDATE session_messages SET status = 'delivered', delivered_at = ?, via = ?, to_session = ?, base_reply_id = ?, blocked_reason = NULL, blocked_since = NULL WHERE id = ? AND status = 'queued'`)
       .run(o.at, o.via, o.toSession, o.baseReplyId, id);
     return Number(r.changes) > 0;
   }

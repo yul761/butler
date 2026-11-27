@@ -280,6 +280,8 @@ export const api = {
     call<{ ok: boolean; reason?: TurnSendReason }>(IPC.turnSendToAgent, { ticketKey: item.ticketKey, pr: { repo: item.pr.repo, number: item.pr.number } }),
   inbox: (scope: InboxScope) => call<InboxView>(IPC.inboxList, scope),
   answerInbox: (id: number, text: string) => call<boolean>(IPC.inboxAnswer, id, text),
+  /** 「总控已代答」（BTL-269 A2）：改答案或者知道了；不能改了返回 false。 */
+  inboxBehalf: (a: { op: "correct"; id: number; text: string } | { op: "dismiss"; id: number }) => call<boolean>(IPC.inboxBehalf, a),
   followups: (ticketKey: string) => call<Followup[]>(IPC.followupsList, ticketKey),
   setFollowupStatus: (id: string, status: FollowupStatus) => call<void>(IPC.followupsSetStatus, id, status),
   handoffs: (ticketKey: string) => call<HandoffRecord[]>(IPC.handoffsList, ticketKey),

@@ -370,6 +370,11 @@ const ZH = {
   mailboxInstruction: (from: string, text: string, interrupt: boolean) => `【${from}${interrupt ? " · 叫停" : ""}】${text}`,
   mailboxConvention: (who: string, text: string) => `【约定 · ${who}】${who} 刚存进 epic 记忆的一条约定（同一个 epic 里的 session 都要知道）：\n${text}`,
   mailboxReplyNote: "它读到之后这一轮的最后一段回复会以【回复】自动送回给你（带同一个 requestId）。",
+  ctlWaitingOnUser: (asks: { id: number; question: string }[], reason: string | null) =>
+    asks.length > 0
+      ? `它在等用户回答：${asks.map((a) => `『${a.question}』（id ${a.id}）`).join("、")}。要替用户回答就在 send_message 里带 answers（这个 id）；不带的不算回答，提问留给用户。`
+      : `它在等用户回答：${reason ?? ""}。要替用户回答就在 send_message 里带 answers: true；不带的不算回答。`,
+  ctlNotPendingAsk: (id: number) => `${id} 不是它现在还没答的提问（看 list_sessions 的 waiting_on_user；用户可能已经答了）。没发出去。`,
   // BTL-256：给关着的 session 发消息时在后台恢复它。
   mailboxWakeNote: (wake: "resuming" | "waiting_memory" | "ended_by_user" | "resume_failed" | "not_managed" | "hibernated", error?: string): string =>
     wake === "resuming"
@@ -711,8 +716,10 @@ const ZH = {
     notifySummary: (event: string, n: number) => `推送通知：${event} × ${n}`,
   },
   // BTL-269：信箱里的消息为什么还没送到、什么时候能送到。
-  mailboxCoordinatorAnswering: "（它在等用户回答问题。下面是你的总控发来的，当作对那个问题的回答；那个提问已经记成总控代答。用户要是另有想法，会在终端里直接告诉你。）",
-  inboxCoordinatorAnswered: "（总控代答了）",
+  mailboxAnswersQuestion: (question: string) => `（你在等用户回答『${question}』。下面这条是你的总控替用户答的，当作那个问题的回答。用户要是另有想法，会再告诉你。）`,
+  mailboxNotAnAnswer: "（你在等用户回答问题。下面这条是你的总控发来的，但不是对那个提问的回答，问题还在等用户。）",
+  inboxCorrection: (question: string, coordinator: string, answer: string) =>
+    `【用户更正】你问的『${question}』，之前总控替用户答的是：${coordinator}\n用户自己的回答：${answer}\n以用户的回答为准。`,
   mailboxBlocked: {
     turn: "它这一轮还在干活",
     unsure: "记录说它在干活，屏幕上看已经停了，Shipherd 在确认",
@@ -720,6 +727,7 @@ const ZH = {
     auto_input: "Shipherd 正在往里送前一批消息",
     screen: "它屏幕上有确认框在等用户点",
     needs_you: "它在等用户回答问题",
+    judging: "它刚停下，Shipherd 在判断它是不是在问用户问题",
     typing: "用户刚在它的终端里打过字",
     draft: "它的输入框里有用户没发出去的字",
     closed: "它的终端关着",
@@ -734,6 +742,7 @@ const ZH = {
     auto_input: "前一批送完，它下一次调用工具或者停下来时送到",
     screen: "用户点完确认框以后送到",
     needs_you: "用户回答或者处理完以后送到",
+    judging: "判断完（一般几秒到几十秒）就送；它要是在问用户，就等用户",
     typing: "用户停手 30 秒以后送到",
     draft: "用户发出或者清空输入框以后送到",
     closed: "它下次打开时送到",
@@ -1063,6 +1072,11 @@ const EN: MainStrings = {
   mailboxInstruction: (from: string, text: string, interrupt: boolean) => `[${from}${interrupt ? " · interrupt" : ""}] ${text}`,
   mailboxConvention: (who: string, text: string) => `[Convention · ${who}] ${who} just saved a convention to the epic memory (every session in this epic should know it):\n${text}`,
   mailboxReplyNote: "The last reply it writes in the turn after reading it comes back to you automatically as [Reply] with the same requestId.",
+  ctlWaitingOnUser: (asks: { id: number; question: string }[], reason: string | null) =>
+    asks.length > 0
+      ? `It is waiting for the user to answer: ${asks.map((a) => `"${a.question}" (id ${a.id})`).join(", ")}. To answer for the user, pass answers (that id) to send_message; without it the message is not an answer and the question stays with the user. `
+      : `It is waiting for the user to answer: ${reason ?? ""}. To answer for the user, pass answers: true to send_message; without it the message is not an answer. `,
+  ctlNotPendingAsk: (id: number) => `${id} is not a question it is still waiting on (see waiting_on_user in list_sessions; the user may have answered it). Nothing was sent.`,
   mailboxWakeNote: (wake: "resuming" | "waiting_memory" | "ended_by_user" | "resume_failed" | "not_managed" | "hibernated", error?: string): string =>
     wake === "resuming"
       ? "Its terminal is closed. Shipherd is resuming it in the background (continuing its conversation) and types the message in as soon as it is up; you get a [Receipt] when it is delivered."
@@ -1393,8 +1407,10 @@ const EN: MainStrings = {
     notifySummary: (event: string, n: number) => `Push notification: ${event} × ${n}`,
   },
   // BTL-269: why a queued message has not gone in yet, and when it will.
-  mailboxCoordinatorAnswering: "(It is waiting for the user to answer a question. What follows is from your coordinator; take it as the answer. The question has been marked as answered by the coordinator; if the user thinks otherwise they will tell you in the terminal.)",
-  inboxCoordinatorAnswered: "(answered by the coordinator)",
+  mailboxAnswersQuestion: (question: string) => `(You are waiting for the user to answer "${question}". The next message is your coordinator answering for the user; take it as the answer. If the user thinks otherwise they will tell you.)`,
+  mailboxNotAnAnswer: "(You are waiting for the user to answer a question. The next message is from your coordinator, but it is not an answer to that question; the question is still waiting for the user.)",
+  inboxCorrection: (question: string, coordinator: string, answer: string) =>
+    `[User correction] You asked "${question}". Your coordinator answered for the user: ${coordinator}\nThe user's own answer: ${answer}\nGo with the user's answer.`,
   mailboxBlocked: {
     turn: "it is still working on this turn",
     unsure: "the record says it is working but the screen shows it stopped; Shipherd is confirming",
@@ -1402,6 +1418,7 @@ const EN: MainStrings = {
     auto_input: "Shipherd is typing an earlier batch into it",
     screen: "a confirmation prompt on its screen is waiting for the user",
     needs_you: "it is waiting for the user to answer a question",
+    judging: "it just stopped and Shipherd is checking whether it is asking the user something",
     typing: "the user just typed in its terminal",
     draft: "its input box has text the user has not sent",
     closed: "its terminal is closed",
@@ -1416,6 +1433,7 @@ const EN: MainStrings = {
     auto_input: "It goes in after that batch, at its next tool call or when it stops",
     screen: "It goes in once the user answers the prompt",
     needs_you: "It goes in once the user answers or deals with it",
+    judging: "It goes in once that check is done (seconds to tens of seconds); if it is asking the user, it waits for the user",
     typing: "It goes in 30 seconds after the user stops typing",
     draft: "It goes in once the user sends or clears the input box",
     closed: "It goes in the next time it opens",

@@ -1,5 +1,5 @@
 import type { ReportKind } from "../../shared/control";
-import type { InboxItemView, InboxRole, InboxScope, InboxView, NowTarget, Session, Ticket } from "../../shared/types";
+import type { InboxItemView, InboxRole, InboxScope, InboxView, NowNotice, NowTarget, Session, Ticket } from "../../shared/types";
 import type { InboxArchiveScope, InboxFilter, InboxItem, InboxOwner, InboxRepo } from "../db/inbox-repo";
 import type { ChoiceService } from "../interrupts/choices";
 import type { RecordEvent } from "../metrics/events";
@@ -87,7 +87,9 @@ export class InboxService {
   constructor(private readonly d: InboxServiceDeps) {
     // 回答送到了：结束这一条，记下送出去的那份答案（投递途中用户又改了，新答案会替换还在排队的那条）。
     d.mailbox.on("answer", (m) => {
-      const id = Number(m.ref?.slice("answer:".length));
+      // 用户更正（correct:<id>，BTL-269 A2）也是 kind answer：那条早就 answered 了，不用再结束。
+      if (!m.ref?.startsWith("answer:")) return;
+      const id = Number(m.ref.slice("answer:".length));
       const answer = (m.meta as { answer?: unknown } | null)?.answer;
       if (this.d.repo.resolve(id, "answered", this.d.now(), typeof answer === "string" ? answer : undefined)) this.d.notify();
     });
@@ -218,17 +220,71 @@ export class InboxService {
   }
 
   /**
-   * 「需要你」时它自己的总控的指示送进去了（BTL-269 A）：它还没答的 ask_user 记成总控代答（answered，答案写明是总控答的），
-   * 不然这张过时的卡片会一直挡住 CI 结果、换新和闲置关闭。卡片上用户已经答好、还没送的不动。
+   * 它自己的总控明确替用户回答的指示送进去了（BTL-269 A2，send_message 带了 answers）：这几个 ask_user 记成总控代答
+   * （answered，答案是总控写的原文，记下是谁答的），不然这张过时的卡片会一直挡住 CI 结果、换新和闲置关闭。
+   * 只认这个 session 的、还没答的、在那条消息排进来（queuedAt）之前问的：卡片上用户已经答好、还没送的不动，之后才问的也不动。
+   * 「现在」页上留一条「总控已代答」提醒，用户可以改答案（correctBehalf）。
    */
-  coordinatorAnswered(sessionId: string): void {
+  coordinatorAnswered(sessionId: string, o: { asks: number[]; answer: string; by: string; queuedAt: number }): void {
     const head = this.headId(sessionId);
     const now = this.d.now();
     let changed = false;
-    for (const item of this.d.repo.pendingDecisions()) {
-      if (item.answer === null && this.headId(item.sessionId) === head && this.d.repo.answerOnBehalf(item.id, M().inboxCoordinatorAnswered, now)) changed = true;
+    for (const id of o.asks) {
+      const item = this.d.repo.get(id);
+      if (!item || this.headId(item.sessionId) !== head) continue;
+      if (this.d.repo.answerOnBehalf(id, { answer: o.answer, by: o.by, before: o.queuedAt, at: now })) changed = true;
     }
     if (changed) this.d.notify();
+  }
+
+  /** 这个 session（链上任何一个 id）还没答的 ask_user（卡片上答好、还没送的不算：那是在等送，不是在等用户），从早到晚。 */
+  unansweredAsks(sessionId: string): { id: number; question: string; at: number }[] {
+    const head = this.headId(sessionId);
+    return this.d.repo.pendingDecisions()
+      .filter((x) => x.answer === null && this.headId(x.sessionId) === head)
+      .map((x) => ({ id: x.id, question: x.text, at: x.createdAt }));
+  }
+
+  /** 总控代答了、用户还没看过的：「现在」页的「总控已代答」提醒，每个提问一条。title 是 ticket 的标题（没有为 null）。 */
+  behalfNotices(titleOf: (ticketKey: string) => string | null): Extract<NowNotice, { kind: "behalf_answered" }>[] {
+    return this.d.repo.unseenBehalf().map((x) => ({
+      kind: "behalf_answered", askId: x.id, question: x.text, answer: x.answer ?? "", by: x.behalfBy ?? "", at: x.resolvedAt ?? x.createdAt,
+      target: this.itemView(x).target, title: x.ticketKey === null ? null : titleOf(x.ticketKey),
+    }));
+  }
+
+  /**
+   * 用户改了总控代答的答案（BTL-269 A2）：当作更正送进提问的 session（kind answer：它在等用户时也能进去），这条提醒就算看过了。
+   * 不是总控代答过的返回 false。text 的长度由 IPC 拦（超长直接报错，不截）；送进去的正文太长时截的是总控之前那份答案，用户的原文不截。
+   */
+  correctBehalf(id: number, text: string): boolean {
+    const answer = text.trim();
+    const x = this.d.repo.get(id);
+    if (!answer || !x || x.kind !== "decision" || x.behalfBy === null || x.status !== "answered") return false;
+    const m = M();
+    const prior = x.answer ?? "";
+    let body = m.inboxCorrection(x.text, prior, answer);
+    if (body.length > MAILBOX_BODY_LIMIT) {
+      const keep = Math.max(0, MAILBOX_BODY_LIMIT - m.inboxCorrection(x.text, "", answer).length - m.inboxAnswerCut.length);
+      body = m.inboxCorrection(x.text, Array.from(prior).slice(0, keep).join("") + m.inboxAnswerCut, answer);
+    }
+    try {
+      this.d.mailbox.send({ kind: "answer", from: null, to: this.headId(x.sessionId), featureId: x.featureId, body, ref: `correct:${id}`, meta: { answer } });
+    } catch (e) {
+      this.d.log(`inbox: queueing correction ${id} failed`, e);
+      return false;
+    }
+    this.d.repo.seeBehalf(id, this.d.now());
+    this.recordAnswer(x, "card");
+    this.d.notify();
+    return true;
+  }
+
+  /** 用户在「总控已代答」提醒上点了知道了。 */
+  dismissBehalf(id: number): boolean {
+    const changed = this.d.repo.seeBehalf(id, this.d.now());
+    if (changed) this.d.notify();
+    return changed;
   }
 
   /** 这个 session（链上任何一个 id）有未决的 ask_user：不自动输入（除了回答本身）、不闲置关闭、不自动换新。 */

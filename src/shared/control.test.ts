@@ -84,6 +84,19 @@ describe("parseControlRequest for a feature (design 2026-10-26)", () => {
     expect(parseControlRequest({ v: 1, featureId: 7, from: null, op: "start_session", ticket: "DMS-1", repo: "fe", task: "t" })).toMatchObject({ repo: "fe" });
   });
 
+  it("send_message takes answers: a question id, or true for the one it waits on now; nothing else (BTL-269 A2)", () => {
+    const m = { v: 1, featureId: 7, from: null, op: "send_message", session: "s", text: "B" };
+    expect(parseControlRequest({ ...m, answers: 12 })).toMatchObject({ answers: 12 });
+    expect(parseControlRequest({ ...m, answers: true })).toMatchObject({ answers: true });
+    expect(parseControlRequest(m)).not.toHaveProperty("answers");
+    const s = { v: 1, shipherd: true, from: null, op: "send_message", session: "s", text: "B" };
+    expect(parseControlRequest({ ...s, answers: 3 })).toMatchObject({ answers: 3 });
+    for (const answers of [false, 0, -1, 1.5, "12", null, [1]]) {
+      expect(parseControlRequest({ ...m, answers }), JSON.stringify(answers)).toBeNull();
+      expect(parseControlRequest({ ...s, answers }), JSON.stringify(answers)).toBeNull();
+    }
+  });
+
   it("rejects a feature id that is not a positive integer, both scopes at once, and ops of the other scope", () => {
     for (const featureId of ["1", 0, -1, 1.5, null]) expect(parseControlRequest({ v: 1, featureId, from: null, op: "list_tickets" }), String(featureId)).toBeNull();
     expect(parseControlRequest({ v: 1, featureId: 7, ticketKey: "A-1", from: null, op: "list_sessions" })).toBeNull();

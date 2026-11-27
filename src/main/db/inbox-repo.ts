@@ -18,6 +18,10 @@ export interface InboxItem {
   answer: string | null;
   createdAt: number;
   resolvedAt: number | null;
+  /** 替用户回答的总控（BTL-269 A2）：名字；用户自己答的、还没答的为 null。 */
+  behalfBy: string | null;
+  /** 用户看过「总控已代答」（点了知道了、或者改了答案）的时间；没看过为 null。 */
+  behalfSeenAt: number | null;
 }
 
 /** 新的一条：提问 / 汇报的 session 和它所属的 ticket、feature。 */
@@ -41,6 +45,8 @@ interface Row {
   answer: string | null;
   created_at: number;
   resolved_at: number | null;
+  behalf_by: string | null;
+  behalf_seen_at: number | null;
 }
 
 const toItem = (r: Row): InboxItem => ({
@@ -48,6 +54,7 @@ const toItem = (r: Row): InboxItem => ({
   featureId: r.feature_id === null ? null : Number(r.feature_id),
   text: r.text, options: r.options ? (JSON.parse(r.options) as string[]) : [], context: r.context, reportKind: r.report_kind,
   status: r.status, answer: r.answer, createdAt: Number(r.created_at), resolvedAt: r.resolved_at === null ? null : Number(r.resolved_at),
+  behalfBy: r.behalf_by ?? null, behalfSeenAt: r.behalf_seen_at === null || r.behalf_seen_at === undefined ? null : Number(r.behalf_seen_at),
 });
 
 /** 收件箱看哪一块：一个 feature（含它下面的 ticket），或者全部。 */
@@ -165,9 +172,28 @@ export class InboxRepo {
     return Number(this.db.prepare(`UPDATE inbox_items SET status = ?, resolved_at = ? WHERE id = ? AND status = 'pending'`).run(status, at, id).changes) > 0;
   }
 
-  /** 别人替用户答了（总控代答，BTL-269 A）：还未决、卡片上也没答过的这一条记成 answered，答案写 label。返回改没改。 */
-  answerOnBehalf(id: number, label: string, at: number): boolean {
-    return Number(this.db.prepare(`UPDATE inbox_items SET status = 'answered', answer = ?, resolved_at = ? WHERE id = ? AND status = 'pending' AND answer IS NULL`).run(label, at, id).changes) > 0;
+  /**
+   * 总控替用户答了（BTL-269 A2）：还未决、卡片上也没答过、而且是在 before（那条消息排进来的时间）之前问的这一条记成 answered，
+   * 答案是总控写的原文，behalf_by 记总控。条件都写在这一句 UPDATE 里：判断之后用户在卡片上答了、又问了一遍的不动。返回改没改。
+   */
+  answerOnBehalf(id: number, o: { answer: string; by: string; before: number; at: number }): boolean {
+    return Number(
+      this.db
+        .prepare(`UPDATE inbox_items SET status = 'answered', answer = ?, behalf_by = ?, resolved_at = ? WHERE id = ? AND kind = 'decision' AND status = 'pending' AND answer IS NULL AND created_at < ?`)
+        .run(o.answer, o.by, o.at, id, o.before).changes,
+    ) > 0;
+  }
+
+  /** 总控代答了、用户还没看过的提问，从早到晚（「总控已代答」提醒）。 */
+  unseenBehalf(): InboxItem[] {
+    return (
+      this.db.prepare(`SELECT * FROM inbox_items WHERE kind = 'decision' AND status = 'answered' AND behalf_by IS NOT NULL AND behalf_seen_at IS NULL ORDER BY resolved_at, id`).all() as unknown as Row[]
+    ).map(toItem);
+  }
+
+  /** 用户看过了这条代答（知道了、改了答案）。只改总控代答过、还没看过的；返回改没改。 */
+  seeBehalf(id: number, at: number): boolean {
+    return Number(this.db.prepare(`UPDATE inbox_items SET behalf_seen_at = ? WHERE id = ? AND behalf_by IS NOT NULL AND behalf_seen_at IS NULL`).run(at, id).changes) > 0;
   }
 
   /** ticket、feature 归档时：这个范围里还未决的「待你决定」和汇报都记成 dismissed。返回结束了几条。 */

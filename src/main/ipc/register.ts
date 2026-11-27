@@ -87,7 +87,7 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openShipherdArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg, preReviewStatusArg, preReviewQueueActionArg, messageIdArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -238,7 +238,7 @@ export interface IpcDeps {
   /** 重发一条递不出去的 CI 结论（工作流 W）。 */
   ciResend: (item: CiItemRef) => Promise<string>;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
-  inbox: Pick<InboxService, "view" | "answer" | "reportsPage">;
+  inbox: Pick<InboxService, "view" | "answer" | "reportsPage" | "correctBehalf" | "dismissBehalf">;
   /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
   refreshSession: (sessionId: string) => RefreshSessionResult;
   /** 「清理闲置」按钮（BTL-190 第 8 点）：把这些 session 里闲置的关掉，返回开始关的个数（关闭在后台跑）。 */
@@ -817,6 +817,10 @@ export function registerIpc(d: IpcDeps): void {
   // 答了由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));
+  handle(IPC.inboxBehalf, (v: unknown): boolean => {
+    const a = inboxBehalfArg(v);
+    return a.op === "correct" ? d.inbox.correctBehalf(a.id, a.text) : d.inbox.dismissBehalf(a.id);
+  });
   handle(IPC.inboxReports, (scope: unknown, o: unknown) => d.inbox.reportsPage(inboxScopeArg(scope), reportsPageArg(o)));
 
   handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));

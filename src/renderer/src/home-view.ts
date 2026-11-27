@@ -33,6 +33,7 @@ export function noticeKey(n: NowNotice): string {
   if (n.kind === "stack") return `stack:${n.stack.reason}:${n.stack.stackId}:${n.stack.branch}`;
   if (n.kind === "check_promoted" || n.kind === "check_demoted") return `${n.kind}:${n.eventId}`;
   if (n.kind === "intake") return `intake:${n.item.key}`;
+  if (n.kind === "behalf_answered") return `behalf_answered:${n.askId}`;
   if (n.kind === "ci_undelivered") return `ci_undelivered:${n.ci.item.kind}:${n.ci.item.kind === "pr" ? n.ci.item.id : n.ci.item.repoId}`;
   if (n.kind !== "session_limited" && n.kind !== "approval") return n.kind;
   const t = n.target;

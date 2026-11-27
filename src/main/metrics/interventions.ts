@@ -147,7 +147,7 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答是 needs_you_answer。 */
-export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer]);
+export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer, IPC.inboxBehalf]);
 
 /** 不算人介入：只读的、配置和整理（搭环境，不是推动一次工作）。 */
 export const NOT_TRIGGERS: ReadonlySet<string> = new Set([

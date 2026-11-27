@@ -775,6 +775,94 @@ describe("PtyManager draft: clearing keys and the screen (BTL-269 C)", () => {
   });
 });
 
+describe("PtyManager draft: multi-line drafts, dictation, NO_COLOR (PR #108 review)", () => {
+  // 只假 Date：xterm 解析屏幕用真的定时器。
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+  afterEach(() => vi.useRealTimers());
+  const later = (ms: number) => vi.setSystemTime(Date.now() + ms);
+  const RULE = "─".repeat(120);
+  const twoLineBox = `\x1b[2J\x1b[H${RULE}\r\n❯ first line\r\n  \x1b[7m \x1b[27m\r\n${RULE}`;
+
+  for (const [name, newline] of [
+    ["\\ then Enter", ["\\", "\r"]],
+    ["\\ and Enter in one write", ["\\\r"]],
+    ["Option+Enter (\\x1b\\r)", ["\x1b\r"]],
+  ] as const) {
+    it(`${name} is a new line, not a submit: the draft is kept for 60 s`, async () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      mgr.write("t1", "first line");
+      for (const d of newline) mgr.write("t1", d);
+      expect(mgr.hasDraft("t1")).toBe(true);
+      spawned[0].pty.emit(twoLineBox);
+      await mgr.screenSettled("t1");
+      later(60_000);
+      expect(mgr.hasDraft("t1")).toBe(true);
+    });
+  }
+
+  it("Enter that left the same text in the box (a newline key we don't know) keeps it as the draft", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "first line");
+    mgr.write("t1", "\r");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    spawned[0].pty.emit(twoLineBox);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    // 真的提交了（UserPromptSubmit 来了、输入框空了）：之后出现的字不算。
+    mgr.write("t1", "\x15");
+    mgr.write("t1", "go\r");
+    mgr.markSubmitted("t1");
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ go on\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("dictated text (all dim, cursor after it) is not an empty box once the user has pressed a key", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const dictating = "\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[2mplease fix the\x1b[22m\x1b[7m \x1b[27m\r\n${RULE}`;
+    // 用户没碰过：暗色的字是 claude 建议的下一句，输入框算空。
+    spawned[0].pty.emit(dictating);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    // 按了听写键（打了一个字又删掉）：同样的暗色字算用户的草稿。
+    mgr.write("t1", "x\x7f");
+    spawned[0].pty.emit(dictating);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(false);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    // claude 的提示（光标领着的暗色字）照样算空。
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry\x1b[22m\x1b[5C\x1b[2m"fix lint errors"\x1b[22m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("NO_COLOR: an undimmed Try \"…\" is an empty box until the user types; their own Try \"…\" is a draft", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit(`${RULE}\r\n❯ \x1b[7mT\x1b[27mry "fix lint errors"\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", 'Try "the other approach"');
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ Try "the other approach"\x1b[7m \x1b[27m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(false);
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+});
+
 describe("PtyManager.hasDraft", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

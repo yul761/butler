@@ -1,5 +1,5 @@
 import { Terminal } from "@xterm/headless";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { aboveInputBox, dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen, workingOnScreen } from "./screen";
 
 const RULE = "─".repeat(120);
@@ -309,5 +309,91 @@ describe("inputBoxText / pasteInInputBox", () => {
 
   it("squash lowercases and drops all whitespace", () => {
     expect(squash(" Yes,  I\ttrust\nthis ")).toBe("yes,itrustthis");
+  });
+
+  it("cursorLed keeps dim text the cursor does not lead (dictation), and still drops the placeholder (PR #108 review)", () => {
+    const rule = "─".repeat(40);
+    const s = new TermScreen(40, 4);
+    s.write(`${rule}\r\n❯ \x1b[2mplease fix\x1b[22m\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(true);
+    expect(inputBoxText(s.lines({ dropDim: "cursorLed" }))).toBe("please fix");
+    // 提示的词之间光标跳过去（没画的空格子）：整段还是提示。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry\x1b[22m\x1b[2C\x1b[2m"fix lint"\x1b[22m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: "cursorLed" }))).toBe(true);
+    s.dispose();
+  });
+});
+
+describe("TermScreen.lines cache (PR #108 review suggestion 5)", () => {
+  /** 一格一格读的入口（xterm 的 IBufferLine.getCell）上的计数。 */
+  function spyCells(s: TermScreen) {
+    const line = (s as unknown as { term: Terminal }).term.buffer.active.getLine(0)!;
+    return vi.spyOn(Object.getPrototypeOf(line) as { getCell: (...a: unknown[]) => unknown }, "getCell");
+  }
+
+  it("an unchanged screen is not read cell by cell again; new output, resize and the dropDim mode each read afresh", () => {
+    const s = new TermScreen(40, 4);
+    s.write(`${RULE.slice(0, 40)}\r\n❯ \x1b[2mhint\x1b[22m\r\n${RULE.slice(0, 40)}`);
+    const spy = spyCells(s);
+    try {
+      const first = s.lines({ dropDim: true });
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      spy.mockClear();
+      expect(s.lines({ dropDim: true })).toEqual(first);
+      expect(spy).not.toHaveBeenCalled();
+      // 别的模式不拿这份缓存。
+      expect(s.lines({ dropDim: "cursorLed" })[1]).toBe("❯ hint");
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      // 调用方改了返回的数组，缓存不跟着变。
+      first[1] = "changed";
+      expect(s.lines({ dropDim: true })[1]).toBe("❯");
+      // 新的输出（还在排队、没解析）：读到新的内容。
+      spy.mockClear();
+      s.write("\x1b[2;3Hreal");
+      expect(s.lines({ dropDim: true })[1]).toBe("❯ real");
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      // 改尺寸：按新尺寸读。
+      s.resize(40, 6);
+      expect(s.lines({ dropDim: true })).toHaveLength(6);
+      expect(s.lines()).toHaveLength(6);
+    } finally {
+      spy.mockRestore();
+      s.dispose();
+    }
+  });
+
+  it("each cell read reuses the same cell objects", () => {
+    const s = new TermScreen(40, 2);
+    s.write("abc\x1b[7md\x1b[27m\x1b[2mef\x1b[22m");
+    const spy = spyCells(s);
+    try {
+      expect(s.lines({ dropDim: true })[0]).toBe("abc");
+      const targets = new Set(spy.mock.calls.map((c) => c[1]));
+      expect(targets.has(undefined)).toBe(false);
+      expect(targets.size).toBe(2);
+    } finally {
+      spy.mockRestore();
+      s.dispose();
+    }
+  });
+
+  it("a rebuild after a parse error is read afresh, not from the cache", () => {
+    const s = new TermScreen(20, 2, () => "\x1b[2J\x1b[Hfrom tail");
+    s.write("first");
+    expect(s.lines()[0]).toBe("first");
+    const core = (s as unknown as { core: { writeSync(d: string): void } }).core;
+    const real = core.writeSync.bind(core);
+    let fail = true;
+    core.writeSync = (d: string) => {
+      if (fail) {
+        fail = false;
+        throw new Error("boom");
+      }
+      real(d);
+    };
+    s.write("second");
+    expect(() => s.lines()).toThrow("boom");
+    expect(s.lines()[0]).toBe("from tail");
+    s.dispose();
   });
 });

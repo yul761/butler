@@ -645,7 +645,12 @@ export type NowNotice =
   /** 强制的检查被自动降回影子（batchId 有值，可撤销），或者只标了待复查（flagged）。 */
   | { kind: "check_demoted"; eventId: number; batchId: number | null; names: string[]; reason: "bypassed" | "no_reduction" | null; flagged: boolean; at: number }
   /** 自动接活（工作流 N）：拿不准、缺信息、没映射到仓库、开不成、同路径冲突在排队。每个 ticket 一条。 */
-  | { kind: "intake"; item: IntakeNoticeInfo };
+  | { kind: "intake"; item: IntakeNoticeInfo }
+  /**
+   * 总控替你回答了一个 ask_user（BTL-269 A2）：问题、总控写的答案、是谁答的。可以改答案（当作更正送进那个 session）、打开、知道了。
+   * 每个提问一条，点了知道了或者改过就不再出现。
+   */
+  | { kind: "behalf_answered"; askId: number; question: string; answer: string; by: string; at: number; target: NowTarget; title: string | null };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */
@@ -709,6 +714,8 @@ export type MessageScope = { shipherd: true } | { featureId: number };
  */
 export type MailboxBlockReason =
   | "turn" | "unsure" | "refreshing" | "auto_input" | "screen" | "needs_you" | "typing" | "draft" | "closed" | "hibernated" | "cost_paused"
+  /** 刚停下，「需要你」还没判断完（BTL-269 A1）：不知道它是不是在问用户，先不送，也不当作在等用户。 */
+  | "judging"
   /** guard 放行了，往里贴的时候没成（等输入框超时）。 */
   | "deliver_failed";
 

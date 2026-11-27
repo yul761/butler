@@ -90,7 +90,7 @@ import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
 import { SessionMessagesRepo, type SessionMessage } from "./db/session-messages-repo";
-import { Mailbox, MAILBOX_BODY_LIMIT } from "./mailbox/mailbox";
+import { Mailbox, MAILBOX_BODY_LIMIT, type AwaitingUser } from "./mailbox/mailbox";
 import { broadcastConvention } from "./mailbox/broadcast";
 import { sessionName } from "./mailbox/names";
 import { ExternalAuditRepo } from "./db/external-audit-repo";
@@ -1890,6 +1890,8 @@ async function bootstrap(): Promise<void> {
   // BTL-269 B：记录说在干活（Stop hook 没来、transcript 没写结束）、屏幕上看已经停着的，凭屏幕、输出、transcript 的证据放行。
   const idleEvidence = new IdleEvidence({
     screen: (termId) => pty.screenLines(termId, { dropDim: true }),
+    // 输入框空不空和草稿保护同一个判断（听写的暗字、NO_COLOR 的提示，审查疑点 i/ii）。
+    boxEmpty: (termId, lines) => pty.inputBoxEmpty(termId, lines),
     lastOutputAt: (termId) => pty.lastOutputAt(termId),
     // 活动还没读到（刚打开）就当 transcript 刚动过：不知道它在干什么不放行。
     transcriptGrewAt: (headId) => {
@@ -1930,6 +1932,16 @@ async function bootstrap(): Promise<void> {
   // 正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
   /** 自动输入眼里的「需要你」：判断出来需要你、还没判断完，或者有未决的 ask_user。inboxService 在下面才建好：回调里才用到。 */
   const deliveryNeedsYouOf = (id: string): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id);
+  /**
+   * 它在等用户回答什么（BTL-269 A1/A2）：未答的 ask_user、判断出来的「需要你」（理由和那条回复的时间）。
+   * 只是刚停下、还没判断完（undecided）、也没有未答 ask_user 的返回 null：不知道它是不是在问用户，总控的消息不当作回答。
+   */
+  const awaitingUserOf = (head: string): AwaitingUser | null => {
+    const asks = inboxService.unansweredAsks(head);
+    const reason = needsYou.reasonOf(head);
+    if (asks.length === 0 && reason === null && needsYou.undecided(head)) return null;
+    return { asks, text: reason === null ? null : { reason, at: activityMonitor.lastReplyOf(head)?.at ?? null } };
+  };
   const deliveryGuard = new DeliveryGuard({
     ...guardDeps,
     // 有未决 ask_user 的也算在等用户（BTL-190 第 2+3 点）。inboxService 在下面才建好：回调里才用到。
@@ -2188,8 +2200,8 @@ async function bootstrap(): Promise<void> {
     },
     nameOf: mailboxName,
     typing: (h, phase) => inboxService.shipherdTyping(h, phase),
-    coordinatorAnswered: (h) => inboxService.coordinatorAnswered(h),
-    needsYou: (h) => deliveryNeedsYouOf(h),
+    coordinatorAnswered: (h, o) => inboxService.coordinatorAnswered(h, o),
+    awaitingUser: (h) => awaitingUserOf(h),
     // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；真关了的、总控管的在后台恢复（BTL-256）。熔断压着的不叫。
     // 真关了的只为别的 session 发来的消息恢复（总控的指示、汇报……）：CI、合并这类 Shipherd 自己的通知排着等下次打开，
     // 免得总控刚 end_session 的 session 被下一条通知又拉起来。
@@ -3428,6 +3440,7 @@ async function bootstrap(): Promise<void> {
     ...stackNotices(stackService.notices()),
     ...backtest.notices(),
     ...intakeNotices(intake.notices()),
+    ...inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
   ];
   // 请你 review 的 PR（UI 重做第 1 层，计划 R9）：gh search 的结果整体替换进 review_requests。
   const reviewRequests = new ReviewRequestsRepo(db);
@@ -3945,6 +3958,7 @@ async function bootstrap(): Promise<void> {
       activityOutput: (id) => activityMonitor.output(id),
       refresher,
       lastReply: (id) => activityMonitor.lastReply(id),
+      awaitingUser: (id) => awaitingUserOf(sessions.head(id)?.id ?? id),
       inbox: inboxService,
       mailbox,
       // Shipherd 总控（BTL-190 第 5 点）的只读数据。

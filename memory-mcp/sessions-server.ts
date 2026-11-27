@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import {
   BLOCK_DESCRIPTION_LIMIT, BLOCK_NAME_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, LESSONS_TOOL_MAX_PATHS, LESSONS_TOOL_MAX_QUERY, MAX_CREATE_REPOS, parseControlRequest, OPTION_LIMIT, OPTIONS_MAX,
-  MAX_STACK_LAYERS, MESSAGE_LIMIT, preReviewOp, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind, type SessionCapacity,
+  MAX_STACK_LAYERS, MESSAGE_LIMIT, okAnswers, preReviewOp, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind, type SessionCapacity,
 } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 import { EVIDENCE_CATEGORIES, EVIDENCE_LIMITS, parseSubmitEvidence } from "../src/shared/prereview";
@@ -792,11 +792,12 @@ export const FEATURE_SEND_TOOL = {
   description:
     `给这个 epic 的一个 ticket session 或修复 session 发一条消息（最多 ${MESSAGE_LIMIT} 字符）：改主意了、接口变了、要它先做别的。` +
     "消息排进它的信箱，不会因为它在忙被拒：它在干活一般在下一次调用工具时读到，停着就直接输入。" +
-    "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发一条「【回执】」，不用重发。" +
+    "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、judging 刚停下还在判断是不是在等用户、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发一条「【回执】」，不用重发。" +
     "终端关着（比如 Shipherd 重启过）时，总控开的 session 会在后台接着原来的对话恢复（和 start_session 一样先看内存），起来以后送进去；返回值的 wake 说清楚：" +
     "resuming 正在恢复，送到时你会收到一条「【回执】」；waiting_memory 内存不够，消息排着，内存够了再试（wakeError 说差多少）；" +
     "ended_by_user 用户自己点 × 结束的，不自动恢复，用户打开时送到；resume_failed 恢复失败过（wakeError 是原因），用户打开时送到；not_managed 不是总控开的，下次打开时送到。" +
     "后台恢复失败时也会发「【回执】」告诉你原因。" +
+    "它在等用户回答问题（list_sessions 的 waiting_on_user）时，你的消息照样送进去：带了 answers 的当作替用户回答，那个提问记成总控代答（用户能在「现在」页上改）；没带的会注明「不是对那个提问的回答」，提问留给用户。" +
     "interrupt: true 先按 Esc 叫停它手上的事再送（只在真要它马上停下时用，比如它在做的方向错了）。" +
     "返回 requestId；它读到之后这一轮的最后一段回复会以「【回复】」开头自动送回给你，不用去轮询 session_activity。",
   inputSchema: {
@@ -805,6 +806,7 @@ export const FEATURE_SEND_TOOL = {
       session: { type: "string", description: "ticket session 或修复 session 的 id（list_sessions 里的）" },
       text: { type: "string", description: `要发的话，最长 ${MESSAGE_LIMIT} 字符` },
       interrupt: { type: "boolean", description: "可选：true 先按 Esc 叫停它再送" },
+      answers: { anyOf: [{ type: "integer", minimum: 1 }, { type: "boolean", const: true }], description: "可选：这条是在替用户回答它的提问时才给：ask_user 的 id（list_sessions 的 waiting_on_user 里有），或 true 表示它现在等着的那个问题。不给就不算回答，提问留给用户" },
     },
     required: ["session", "text"],
     additionalProperties: false,
@@ -816,11 +818,12 @@ export const FEATURE_SEND_TOOL_EN = {
   description:
     `Send a message (at most ${MESSAGE_LIMIT} characters) to one of this epic's ticket sessions or fix sessions: a change of plan, an interface that changed, something to do first. ` +
     "It goes into its mailbox and is never refused for being busy: a working session usually reads it at its next tool call, and a stopped one gets it typed in. " +
-    "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes (10 if its turn is simply still running) you get a \"[Receipt]\", so do not resend. " +
+    "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; judging: it just stopped and Shipherd is still working out whether it waits for the user; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes (10 if its turn is simply still running) you get a \"[Receipt]\", so do not resend. " +
     "When the terminal is closed (for example after Shipherd restarted), a session a coordinator started is resumed in the background on its conversation (after the same memory check as start_session) and gets the message once it is up; the wake field in the result says which: " +
     "resuming (being resumed; you get a \"[Receipt]\" when it is delivered); waiting_memory (memory is short; the message stays queued and Shipherd tries again when there is room; wakeError says how short); " +
     "ended_by_user (the user ended it with ×; not resumed, delivered when the user opens it); resume_failed (resuming failed earlier, wakeError says why; delivered when the user opens it); not_managed (not started by a coordinator; delivered the next time it opens). " +
     "If resuming fails in the background you also get a \"[Receipt]\" with the reason. " +
+    "When it is waiting for the user to answer (waiting_on_user in list_sessions) your message still goes in: with answers it counts as answering for the user and the question is marked as answered by the coordinator (the user can change it on the Now page); without it, it is marked as not an answer and the question stays with the user. " +
     "interrupt: true presses Esc to stop what it is doing first (only when it really has to stop now, for example when it is heading the wrong way). " +
     "It returns a requestId; the last reply it writes in the turn after reading it comes back to you automatically, starting with \"[Reply]\", so you do not need to poll session_activity.",
   inputSchema: {
@@ -829,6 +832,7 @@ export const FEATURE_SEND_TOOL_EN = {
       session: { type: "string", description: "the id of a ticket session or fix session (from list_sessions)" },
       text: { type: "string", description: `what to send, at most ${MESSAGE_LIMIT} characters` },
       interrupt: { type: "boolean", description: "optional: true presses Esc to stop it before sending" },
+      answers: { anyOf: [{ type: "integer", minimum: 1 }, { type: "boolean", const: true }], description: "optional: give it only when this message answers its question for the user: the ask_user id (shown in waiting_on_user of list_sessions), or true for the question it is waiting on now. Without it the message is not an answer and the question stays with the user" },
     },
   },
 } as const;
@@ -903,9 +907,10 @@ export const SHIPHERD_TOOLS = [
       `给一个 epic 总控发一条消息（最多 ${MESSAGE_LIMIT} 字符），用来跨 epic 协调：比如告诉它另一个 epic 的接口改了、先合哪个 PR。` +
       "目标给 epic（发给它的总控）或 session 两者之一；epic 用名字或 id（list_epics 里的）。epic 里的 feature 没有自己的总控，要它做什么告诉 epic 总控。" +
       "消息一律排进它的信箱，不会因为它在忙被拒：它在干活一般在下一次调用工具时读到，停着就直接输入，用户正在输入时等用户打完。" +
-      "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发一条「【回执】」，不用重发。" +
+      "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、judging 刚停下还在判断是不是在等用户、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发一条「【回执】」，不用重发。" +
       "终端关着（比如闲置时被自动关掉了）也能发：Shipherd 接着它最近的对话打开（epic 从没开过总控就新开一个），再把消息交进去。" +
       "用户自己点 × 结束的总控不替用户打开，消息排着，返回 wake: ended_by_user；内存不够时返回 wake: waiting_memory，消息排着，内存够了 Shipherd 在后台恢复它再送。" +
+  "它在等用户回答问题（list_sessions 的 waiting_on_user）时，你的消息照样送进去：带了 answers 的当作替用户回答，那个提问记成总控代答（用户能在「现在」页上改）；没带的会注明「不是对那个提问的回答」，提问留给用户。" +
       "interrupt: true 先按 Esc 叫停它手上的事再送（只在真要它马上停下时用）。不能发给 ticket 的 session 和修复 session，要它们做什么就告诉管它们的总控。" +
       "消息前面会带上「Shipherd 总控发来的消息」。返回 requestId；它读到之后这一轮的最后一段回复会以「【回复】」开头自动送回给你，带同一个 requestId，不用去轮询 session_activity。",
     inputSchema: {
@@ -915,6 +920,7 @@ export const SHIPHERD_TOOLS = [
         epic: { type: "string", description: "可选：发给这个 epic 的总控（名字或 id）" },
         text: { type: "string", description: `要发的话，最长 ${MESSAGE_LIMIT} 字符` },
         interrupt: { type: "boolean", description: "可选：true 先按 Esc 叫停它再送" },
+        answers: { anyOf: [{ type: "integer", minimum: 1 }, { type: "boolean", const: true }], description: "可选：这条是在替用户回答它的提问时才给：ask_user 的 id（list_sessions 的 waiting_on_user 里有），或 true 表示它现在等着的那个问题。不给就不算回答，提问留给用户" },
       },
       required: ["text"],
       additionalProperties: false,
@@ -1049,7 +1055,8 @@ export const SHIPHERD_TOOLS_EN = [
       "A closed terminal (for example one closed for being idle) is fine: Shipherd reopens its latest conversation (or opens a new coordinator if the epic never had one) and hands it the message. " +
       "A coordinator the user ended with × is not reopened for them: the message stays queued and the result says wake: ended_by_user. When memory is short the result says wake: waiting_memory; the message stays queued and Shipherd resumes it in the background once there is room. " +
       "Every message goes into its mailbox and is never refused for being busy: a working target usually reads it at its next tool call, a stopped one gets it typed in, and Shipherd waits while the user is typing. " +
-      "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes (10 if its turn is simply still running) you get a \"[Receipt]\", so do not resend. " +
+      "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; judging: it just stopped and Shipherd is still working out whether it waits for the user; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes (10 if its turn is simply still running) you get a \"[Receipt]\", so do not resend. " +
+  "When it is waiting for the user to answer (waiting_on_user in list_sessions) your message still goes in: with answers it counts as answering for the user and the question is marked as answered by the coordinator (the user can change it on the Now page); without it, it is marked as not an answer and the question stays with the user. " +
       "interrupt: true presses Esc to stop what it is doing first (only when it really has to stop now). Ticket sessions and fix sessions cannot be messaged; tell the coordinator that manages them instead. " +
       "The message is prefixed with \"Message from Shipherd control\". It returns a requestId; the last reply the target writes in the turn after reading it comes back to you automatically, starting with \"[Reply]\" and carrying the same requestId, so you do not need to poll session_activity.",
     inputSchema: {
@@ -1059,6 +1066,7 @@ export const SHIPHERD_TOOLS_EN = [
         epic: { type: "string", description: "optional: send to this epic's coordinator (name or id)" },
         text: { type: "string", description: `what to send, at most ${MESSAGE_LIMIT} characters` },
         interrupt: { type: "boolean", description: "optional: true presses Esc to stop it before sending" },
+        answers: { anyOf: [{ type: "integer", minimum: 1 }, { type: "boolean", const: true }], description: "optional: give it only when this message answers its question for the user: the ask_user id (shown in waiting_on_user of list_sessions), or true for the question it is waiting on now. Without it the message is not an answer and the question stays with the user" },
       },
     },
   },
@@ -1152,8 +1160,8 @@ const TEXT = {
           ? `现在还能再开 ${c.canStart} 个 session（读不到内存，只按同时开着最多 ${c.maxRunning} 个的上限算）。`
           : `现在还能再开 ${c.canStart} 个 session（按内存算${c.maxRunning !== null ? `，以及同时开着最多 ${c.maxRunning} 个的上限` : ""}）：` +
             `可用 ${mbText(c.availableMb)}，每个按 ${mbText(c.sessionMb)} 算${c.estimate === "measured" ? "（实测）" : ""}，留 ${mbText(c.reserveMb)} 给系统。`,
-    needMessage: `send_message 需要字符串参数 text（不能为空，最多 ${MESSAGE_LIMIT} 字符），以及 session、epic 两者之一`,
-    needFeatureMessage: `send_message 需要字符串参数 session（list_sessions 里的 id）和 text（不能为空，最多 ${MESSAGE_LIMIT} 字符），interrupt 可选，是布尔值`,
+    needMessage: `send_message 需要字符串参数 text（不能为空，最多 ${MESSAGE_LIMIT} 字符），以及 session、epic 两者之一；answers 可选，是 ask_user 的 id（正整数）或 true`,
+    needFeatureMessage: `send_message 需要字符串参数 session（list_sessions 里的 id）和 text（不能为空，最多 ${MESSAGE_LIMIT} 字符），interrupt 可选，是布尔值；answers 可选，是 ask_user 的 id（正整数）或 true`,
     badEpicFilter: (tool: string): string => `${tool} 的 epic 必须是非空的名字或 id`,
     needSummaryEpic: "refresh_epic_summary 需要参数 epic（epic 的名字或 id）",
     badMetricsDays: "metrics_overview 的 days 必须是 1–365 的整数",
@@ -1196,8 +1204,8 @@ const TEXT = {
           ? `You can start ${c.canStart} more session${c.canStart === 1 ? "" : "s"} now (memory could not be read, so only the cap of ${c.maxRunning} open at once counts).`
           : `You can start ${c.canStart} more session${c.canStart === 1 ? "" : "s"} now (by memory${c.maxRunning !== null ? `, and the cap of ${c.maxRunning} open at once` : ""}): ` +
             `${mbText(c.availableMb)} available, ${mbText(c.sessionMb)} per session${c.estimate === "measured" ? " (measured)" : ""}, ${mbText(c.reserveMb)} kept free.`,
-    needMessage: `send_message needs a string text (not empty, at most ${MESSAGE_LIMIT} characters) and exactly one of session and epic`,
-    needFeatureMessage: `send_message needs a string session (an id from list_sessions) and a string text (not empty, at most ${MESSAGE_LIMIT} characters); interrupt is an optional boolean`,
+    needMessage: `send_message needs a string text (not empty, at most ${MESSAGE_LIMIT} characters) and exactly one of session and epic; answers is optional: an ask_user id (a positive integer) or true`,
+    needFeatureMessage: `send_message needs a string session (an id from list_sessions) and a string text (not empty, at most ${MESSAGE_LIMIT} characters); interrupt is an optional boolean; answers is optional: an ask_user id (a positive integer) or true`,
     badEpicFilter: (tool: string): string => `epic for ${tool} must be a non-empty name or id`,
     needSummaryEpic: "refresh_epic_summary needs epic (the epic's name or id)",
     badMetricsDays: "metrics_overview needs days to be a whole number from 1 to 365",
@@ -1380,7 +1388,8 @@ export class SessionsServer {
           return toolError(this.text.needMessage);
         }
         if (args.interrupt !== undefined && typeof args.interrupt !== "boolean") return toolError(this.text.needMessage);
-        return { ...base, op: "send_message", text, [given[0]]: value, ...(args.interrupt === true && { interrupt: true }) } as ControlRequest;
+        if (!okAnswers(args.answers)) return toolError(this.text.needMessage);
+        return { ...base, op: "send_message", text, [given[0]]: value, ...(args.interrupt === true && { interrupt: true }), ...(args.answers !== undefined && { answers: args.answers }) } as ControlRequest;
       }
       default:
         return toolError(this.text.noTool(String(tool)));
@@ -1406,10 +1415,11 @@ export class SessionsServer {
       case "pre_review_queue_act":
         return this.preReviewRequest(base, tool, args);
       case "send_message": {
-        const { session, text, interrupt } = args;
+        const { session, text, interrupt, answers } = args;
         if (typeof session !== "string" || !session.trim() || session.length > 200 || typeof text !== "string" || !text.trim() || text.length > MESSAGE_LIMIT) return toolError(this.text.needFeatureMessage);
         if (interrupt !== undefined && typeof interrupt !== "boolean") return toolError(this.text.needFeatureMessage);
-        return { ...base, op: "send_message", session, text, ...(interrupt === true && { interrupt: true }) };
+        if (!okAnswers(answers)) return toolError(this.text.needFeatureMessage);
+        return { ...base, op: "send_message", session, text, ...(interrupt === true && { interrupt: true }), ...(answers !== undefined && { answers }) };
       }
       case "session_activity":
         return typeof args.session === "string" ? { ...base, op: "session_activity", session: args.session } : toolError(this.text.needSession);

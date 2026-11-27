@@ -12,6 +12,27 @@ function world(lines: string[]) {
 }
 
 describe("IdleEvidence (BTL-269 B)", () => {
+  it("asks boxEmpty when given (dictation, NO_COLOR placeholder: PR #108 review), with the termId and this screen", () => {
+    const w = { now: 1_000_000 };
+    const asked: [string, string[]][] = [];
+    let empty: boolean | null = false;
+    const e = new IdleEvidence({
+      screen: () => idle,
+      lastOutputAt: () => 1,
+      transcriptGrewAt: () => null,
+      now: () => w.now,
+      boxEmpty: (t, l) => {
+        asked.push([t, l]);
+        return empty;
+      },
+    });
+    w.now += IDLE_QUIET_MS;
+    expect(e.check("h", "t")).toEqual({ idle: false, working: false, looksIdle: false });
+    expect(asked).toEqual([["t", idle]]);
+    empty = true;
+    expect(e.check("h", "t").idle).toBe(true);
+  });
+
   it("is idle only after the output and the transcript have both been quiet for 45 s under an empty input box", () => {
     const { w, check } = world(idle);
     expect(check()).toEqual({ idle: false, working: false, looksIdle: true });

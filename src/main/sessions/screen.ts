@@ -5,6 +5,13 @@ export const SCREEN_PENDING_LIMIT = 64 * 1024;
 
 type Step = { data: string } | { cols: number; rows: number };
 
+/**
+ * lines 怎么处理暗色（SGR 2）的字：
+ * - true：都换成空格（灰色提示、建议的下一句）；光标领着的提示（反色的字后面跟暗色的字）也换掉。
+ * - "cursorLed"：只换光标领着的那一段提示，别的暗色字照样读出来（语音听写还没定下来的字是暗色的，光标在它后面：PR #108 review 存疑 i）。
+ */
+export type DimMode = boolean | "cursorLed";
+
 /** xterm 的同步解析入口（公开 API 只有异步的 write）：没有它就退回原来的做法，每块输出马上交给 xterm 异步解析。 */
 interface SyncCore {
   writeSync(data: string): void;
@@ -36,6 +43,10 @@ export class TermScreen {
   private rebuild: { cols: number; rows: number } | null = null;
   private cols: number;
   private rows: number;
+  /** 屏幕内容可能变了就加一：写进输出、改尺寸、要重建。lines 的缓存按这个认新旧。 */
+  private version = 0;
+  /** 上一次读出来的一屏，按 dropDim 分开存，带当时的 version（PR #108 review 建议 5）。 */
+  private readonly cache = new Map<string, { version: number; lines: string[] }>();
 
   constructor(cols: number, rows: number, private readonly tail?: () => string) {
     this.cols = cols;
@@ -47,6 +58,7 @@ export class TermScreen {
 
   write(data: string): void {
     if (this.disposed || data === "") return;
+    this.version++;
     if (!this.core) {
       this.term.write(data);
       return;
@@ -72,6 +84,7 @@ export class TermScreen {
     if (this.disposed || cols <= 0 || rows <= 0) return;
     this.cols = cols;
     this.rows = rows;
+    this.version++;
     if (!this.core) {
       // xterm 在解析完前面那一段、开始下一段之前调回调，正好落在流里的这个位置。
       this.term.write("", () => {
@@ -94,6 +107,7 @@ export class TermScreen {
         this.pendingChars = 0;
         this.rebuild = { cols: this.cols, rows: this.rows };
       }
+      this.version++;
       throw e;
     }
   }
@@ -137,23 +151,44 @@ export class TermScreen {
    * （Try "…"、建议的下一句）是暗色画的，看输入框是不是真的空着时用（BTL-269）。光标停在提示第一个字上时那个字是反色、
    * 不是暗色：反色的字后面紧跟着暗色的字，也当提示换成空格。按画法认，不按字认：用户自己打的 Try "…" 照样是字。
    */
-  lines(o: { dropDim?: boolean } = {}): string[] {
+  lines(o: { dropDim?: DimMode } = {}): string[] {
     if (this.disposed) return [];
     this.catchUp();
+    const mode = o.dropDim ?? false;
+    const key = String(mode);
+    // 屏幕没变（没有新输出、没改尺寸、没重建）就用上次读的，不再一格一格读。没有同步解析时 xterm 自己在后台解析，认不出新旧，不缓存。
+    // version 在 catchUp 之后取：catchUp 出错要重建时会加一。
+    const hit = this.core ? this.cache.get(key) : undefined;
+    if (hit && hit.version === this.version && this.steps.length === 0 && !this.rebuild) return hit.lines.slice();
+    const version = this.version;
+    const out = this.read(mode);
+    if (this.core) this.cache.set(key, { version, lines: out });
+    return out.slice();
+  }
+
+  private read(mode: DimMode): string[] {
     const b = this.term.buffer.active;
+    // 每格都复用这两个对象，不每格新建（PR #108 review 建议 5）。
+    const cell = b.getNullCell();
+    const next = b.getNullCell();
     const out: string[] = [];
     for (let i = 0; i < this.term.rows; i++) {
       const line = b.getLine(b.viewportY + i);
       if (!line) out.push("");
-      else if (!o.dropDim) out.push(line.translateToString(true));
+      else if (!mode) out.push(line.translateToString(true));
       else {
         let text = "";
+        // 光标领着的提示：从反色的那一格开始，到下一个不是暗色的字为止（词之间光标跳过去的空格子不算断开）。
+        let led = false;
         for (let x = 0; x < line.length; x++) {
-          const cell = line.getCell(x);
-          if (!cell || cell.getWidth() === 0) continue;
-          const next = line.getCell(x + cell.getWidth());
-          const hint = cell.isDim() || (cell.isInverse() && next !== undefined && next.isDim() && next.getChars() !== "");
-          text += hint ? " ".repeat(cell.getWidth()) : cell.getChars() || " ";
+          if (!line.getCell(x, cell)) continue;
+          const w = cell.getWidth();
+          if (w === 0) continue;
+          const cursor = cell.isInverse() && line.getCell(x + w, next) !== undefined && next.isDim() && next.getChars() !== "";
+          if (cursor) led = true;
+          else if (!cell.isDim() && (cell.getChars() || " ").trim() !== "") led = false;
+          const hint = cursor || (cell.isDim() && (mode === true || led));
+          text += hint ? " ".repeat(w) : cell.getChars() || " ";
         }
         out.push(text.trimEnd());
       }
@@ -271,7 +306,6 @@ export function workingOnScreen(lines: string[]): boolean {
   return lines.some((l) => squash(l).includes("esctointerrupt"));
 }
 
-/** 空输入框里 claude 画的提示：Try "…"。 */
 /**
  * 输入框画着、里面是空的：true；画着、里面有字：false；没画输入框：null。
  * 要传 dropDim 读出来的那一屏：灰色提示（Try "…"、建议的下一句）按画法去掉。不按字认提示：用户自己打的 Try "…" 是草稿（PR #108 review）。

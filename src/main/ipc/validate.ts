@@ -150,6 +150,18 @@ export function inboxIdArg(v: unknown): number {
   return v;
 }
 
+/**
+ * 「总控已代答」提醒上的操作（BTL-269 A2）：correct 改答案（非空，最多 CONTEXT_LIMIT 字，超长直接报错、不截），dismiss 知道了。
+ */
+export function inboxBehalfArg(v: unknown): { op: "correct"; id: number; text: string } | { op: "dismiss"; id: number } {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("invalid behalf action");
+  const o = v as { op?: unknown; id?: unknown; text?: unknown };
+  const id = inboxIdArg(o.id);
+  if (o.op === "dismiss") return { op: "dismiss", id };
+  if (o.op === "correct") return { op: "correct", id, text: inboxAnswerArg(o.text) };
+  throw new Error("invalid behalf action");
+}
+
 /** 卡片上的回答：非空，最多 CONTEXT_LIMIT 字（送进 session 时还会按 sanitizeTask 清理）。 */
 export function inboxAnswerArg(v: unknown): string {
   if (typeof v !== "string" || v.trim().length === 0 || v.length > CONTEXT_LIMIT) throw new Error("invalid answer");

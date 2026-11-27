@@ -166,6 +166,8 @@ export const IPC = {
   inboxList: "inbox:list",
   /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
   inboxAnswer: "inbox:answer",
+  /** 「总控已代答」提醒（BTL-269 A2）：改答案（当作更正送进 session）或者知道了。 */
+  inboxBehalf: "inbox:behalf",
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",
@@ -276,7 +278,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.linkOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft,
   IPC.baselinesView, IPC.baselinesAct, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyAct, IPC.legacyViolations, IPC.checkExportList, IPC.checkExportAct, IPC.backtestView, IPC.backtestAct, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.admissionState, IPC.wizardEstimate, IPC.wizardAct, IPC.calibrationSample, IPC.calibrationStats, IPC.calibrationAct, IPC.principlesRegroup,
-  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.costView, IPC.costSet, IPC.costResume, IPC.costBreakers, IPC.backgroundStatus, IPC.backgroundAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.turnBoard, IPC.turnSendToAgent, IPC.turnHomeOpened, IPC.inboxList, IPC.inboxAnswer,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.costView, IPC.costSet, IPC.costResume, IPC.costBreakers, IPC.backgroundStatus, IPC.backgroundAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.turnBoard, IPC.turnSendToAgent, IPC.turnHomeOpened, IPC.inboxList, IPC.inboxAnswer, IPC.inboxBehalf,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools, IPC.settingsFeaturePolicy, IPC.settingsPolicyPatch,
   IPC.externalAuditList,

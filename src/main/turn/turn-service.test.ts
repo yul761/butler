@@ -29,7 +29,7 @@ const act = (kind: SessionActivity["kind"], over: Partial<SessionActivity> = {})
 });
 const ask = (id: number, sessionId: string, over: Partial<InboxItem> = {}): InboxItem => ({
   id, kind: "decision", sessionId, ticketKey: null, featureId: null, text: `q${id}`, options: ["a", "b"], context: null,
-  reportKind: null, status: "pending", answer: null, createdAt: 50 + id, resolvedAt: null, ...over,
+  reportKind: null, status: "pending", answer: null, createdAt: 50 + id, resolvedAt: null, behalfBy: null, behalfSeenAt: null, ...over,
 });
 
 function fakeDeps(over: Partial<TurnServiceDeps> = {}): TurnServiceDeps {

@@ -13,6 +13,11 @@ export interface IdleEvidenceDeps {
   transcriptGrewAt(headId: string): number | null;
   now(): number;
   quietMs?: number;
+  /**
+   * 输入框空不空（PtyManager.inputBoxEmpty：还照顾语音听写的暗色字、NO_COLOR 的提示，PR #108 review）。
+   * 不给就只按这一屏认（inputBoxEmpty(lines)）。
+   */
+  boxEmpty?(termId: string, lines: string[]): boolean | null;
 }
 
 /**
@@ -38,7 +43,7 @@ export class IdleEvidence {
     const lines = this.d.screen(termId);
     const working = workingOnScreen(lines);
     const stableFor = this.stableFor(termId, lines, now);
-    const empty = inputBoxEmpty(lines) === true;
+    const empty = (this.d.boxEmpty ? this.d.boxEmpty(termId, lines) : inputBoxEmpty(lines)) === true;
     if (!empty || working || permissionOnScreen(lines) || dialogOnScreen(lines)) return { idle: false, working, looksIdle: false };
     const out = this.d.lastOutputAt(termId);
     const outputQuiet = (out > 0 && now - Math.max(out, this.resumedAt) >= quiet) || stableFor >= quiet;

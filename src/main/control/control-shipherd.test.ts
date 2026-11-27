@@ -14,7 +14,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionMessagesRepo } from "../db/session-messages-repo";
-import { Mailbox } from "../mailbox/mailbox";
+import { Mailbox, type AwaitingUser } from "../mailbox/mailbox";
+import { M } from "../strings";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import { MemoryAdmission } from "../sessions/memory-admission";
 import type { ControlHandlerDeps } from "./control-handler";
@@ -103,6 +104,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
     stuck: [], stacks: [], groups: { byLabel: [], byPrefix: [] }, featureGroups: [], freshness: { generatedAt: 0, prsCheckedOldest: null, prsCheckedNewest: null, readErrors: 0, unread: 0, summaryOldest: null } } satisfies ProgressView;
   const summaryState = { running: new Set<number>(), stale: new Set<number>(), prStatusAt: new Map<number, number>(), refreshed: [] as number[] };
   const asked: string[] = [];
+  const awaiting = new Map<string, AwaitingUser>();
   const handle = controlHandler({
     tickets, sessions, features, blocks,
     ticketService: { workDir: (r: { worktreePath: string | null; repoPath: string }) => r.worktreePath ?? r.repoPath } as never,
@@ -117,6 +119,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
     activity: (id) => activities.get(id) ?? null,
     activityOutput: async () => "out",
     lastReply: (id) => (id === "fc" ? "等你定" : null),
+    awaitingUser: (id) => awaiting.get(id) ?? null,
     inbox: { ask: (s) => (asked.push(s.id), 7), report: () => ({ id: 8, queued: false, noCoordinator: false }) },
     kill: () => {},
     screenNeedsUser: () => false,
@@ -155,7 +158,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
   const base = { v: 1 as const, shipherd: true as const, from: "bt" };
   const call = (req: Record<string, unknown>) => handle({ ...base, ...req } as ShipherdControlRequest);
   return {
-    handle, call, base, checkout, docs, payment, cart, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
+    awaiting, handle, call, base, checkout, docs, payment, cart, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
     prs, replies, mailbox, repo, interrupts, progressCalls, metricsCalls, summaryState, setNow: (t: number) => (now = t),
   };
 }
@@ -350,6 +353,23 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
     const r = await handle({ ...base, op: "send_message", session: "fc", text: "x" } as ShipherdControlRequest, { release: () => void released++ });
     expect(released).toBe(1);
     expect(value(r)).toMatchObject({ delivery: "delivered" });
+  });
+
+  it("send_message shows what the epic coordinator waits on the user for; answers is passed on, a question it is not waiting on is refused (BTL-269 A2)", async () => {
+    const { call, awaiting, repo, delivered } = setup();
+    awaiting.set("fc", { asks: [{ id: 4, question: "合吗？", at: 1 }], text: null });
+    const note = M().ctlWaitingOnUser([{ id: 4, question: "合吗？" }], null);
+    const plain = value<{ waiting_on_user: { questions: { id: number }[] }; note: string; requestId: string }>(await call({ op: "send_message", session: "fc", text: "顺便说一下" }));
+    expect(plain.waiting_on_user.questions.map((q) => q.id)).toEqual([4]);
+    expect(plain.note).toContain(note);
+    expect(repo.get(plain.requestId)?.meta).toBeNull();
+    expect(await call({ op: "send_message", session: "fc", text: "合", answers: 9 })).toEqual({ v: 1, ok: false, error: M().ctlNotPendingAsk(9) });
+    const n = delivered.length;
+    const yes = value<{ note: string; requestId: string }>(await call({ op: "send_message", session: "fc", text: "合", answers: 4 }));
+    expect(yes.note).not.toContain(note);
+    expect(repo.get(yes.requestId)?.meta).toEqual({ answers: 4, text: "合" });
+    await tick();
+    expect(delivered.length).toBeGreaterThan(n);
   });
 
   it("queues a message for an epic coordinator; the mailbox types it in with a prefix (BTL-245)", async () => {

@@ -24,7 +24,7 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments" | "stacks" | "undo" | "checks" | "dismiss" | "intake" | "intakeStart" | "intakeSkip" | "intakeParallel";
+export type NoticeAction = "correct" | "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments" | "stacks" | "undo" | "checks" | "dismiss" | "intake" | "intakeStart" | "intakeSkip" | "intakeParallel";
 
 /** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
 export function ciReasonText(reason: string, S: UiStrings): string {
@@ -75,6 +75,8 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
       return btNoticeText(n, S);
     // 自动接活（工作流 N）：拿不准、缺信息的可以直接开工或不做；同路径排着的可以照样并行。
     case "intake": return { text: intakeNoticeText(n.item, S), actions: intakeNoticeActions(n.item) };
+    // 总控替你答了（BTL-269 A2）：显示答案；可以改、打开那个 session、知道了。
+    case "behalf_answered": return { text: S.noticeBehalf(n.by, n.question, n.answer, n.title), actions: ["correct", "open", "dismiss"] };
   }
 }
 

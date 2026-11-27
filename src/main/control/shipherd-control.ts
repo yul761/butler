@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { type ShipherdControlRequest, type ControlResult, type InboxControlOp, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
+import { type ShipherdControlRequest, type ControlResult, type InboxControlOp, type SendAnswers, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { Turn } from "../../shared/turn";
 import { effectiveStatus, type Block, type Feature, type FeatureStatusRow, type OpenSessionResult, type Session, type Ticket, type WatchedPr } from "../../shared/types";
@@ -59,6 +59,10 @@ export interface ShipherdControlHelpers {
   /** 信箱里排给它、还没送到的（BTL-269）。 */
   pendingMail: (id: string) => object | null;
   lastReply: (id: string) => string | null;
+  /** 它在等用户回答什么（BTL-269 A2）；不在等为 null。 */
+  waitingOnUser: (id: string) => { questions: { id: number }[]; note: string } | null;
+  /** send_message 的 answers 是 id 时，不是它还没答的提问就返回错误。 */
+  badAnswers: (id: string, answers: SendAnswers | undefined) => string | null;
 }
 
 export type Named = { id: number; name: string } | null;
@@ -186,15 +190,16 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
     };
     const mailbox = d.mailbox;
     /** 排进目标的信箱（BTL-245）：在忙的下一次工具调用时读到，停着的直接输入；从不因为它在忙而拒绝。 */
-    const enqueue = (sessionId: string, text: string, featureId: number | null, interrupt: boolean, hold = false) =>
-      mailbox!.send({ kind: "shipherd", from: self?.id ?? null, to: sessionId, featureId, body: text, interrupt, hold });
+    const enqueue = (sessionId: string, text: string, featureId: number | null, interrupt: boolean, hold = false, meta: object | null = null) =>
+      mailbox!.send({ kind: "shipherd", from: self?.id ?? null, to: sessionId, featureId, body: text, interrupt, hold, ...(meta && { meta }) });
     /** 如实说这条现在怎么样了（BTL-269）：等这一次尝试（最多 15 秒），送到了还是排着、为什么排着。 */
-    const queued = async (r: { id: string; state: "busy" | "idle" | "closed" }, sessionId: string, extra: object = {}): Promise<ControlResult> => {
+    const queued = async (r: { id: string; state: "busy" | "idle" | "closed" }, sessionId: string, extra: { waitNote?: string; [k: string]: unknown } = {}): Promise<ControlResult> => {
       meta.release?.(); // 只剩等了，别的请求先走（BTL-269）。
       const o = await mailbox!.outcome(r.id);
+      const { waitNote = "", ...rest } = extra;
       return ok({
         queued: o.delivery === "queued", delivery: o.delivery, sessionId: d.sessions.head(sessionId)?.id ?? sessionId, requestId: r.id, state: r.state,
-        ...(o.delivery === "queued" && { blockedBy: o.blockedBy, blockedSince: o.blockedSince }), ...extra, note: `${o.note}${M().mailboxReplyNote}`,
+        ...(o.delivery === "queued" && { blockedBy: o.blockedBy, blockedSince: o.blockedSince }), ...rest, note: `${o.note}${waitNote}${M().mailboxReplyNote}`,
       });
     };
     /**
@@ -202,7 +207,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
      * 排着的消息当作它的第一条输入（submit 等输入框就绪）。epic 从没开过总控时新开一个。
      * 正在打开（同时来的第二条）、打开失败：消息照样排在接着的那个 session 的信箱里，下次打开时送；没有可接着的才报错。
      */
-    const openAndSend = async (target: Target, text: string, featureId: number | null, interrupt: boolean): Promise<ControlResult> => {
+    const openAndSend = async (target: Target, text: string, featureId: number | null, interrupt: boolean, meta: object | null): Promise<ControlResult> => {
       const svc = d.sessionService;
       const f = target.feature;
       const key = `f${f.id}`;
@@ -211,19 +216,19 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       const resume = given ?? d.sessions.listFeatureCoordinators(f.id).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
       // 用户点 × 结束的（BTL-256）：不替用户再打开，消息排着，用户打开时送到。
       if (resume && resume.userEndedAt != null) {
-        const r = enqueue(resume.id, text, featureId, false);
+        const r = enqueue(resume.id, text, featureId, false, false, meta);
         return ok({ queued: true, sessionId: resume.id, requestId: r.id, state: r.state, wake: "ended_by_user", note: `${M().mailboxWakeNote("ended_by_user")}${M().mailboxReplyNote}` });
       }
       const openFeature = svc.openFeature.bind(svc);
       const open = (): Promise<OpenSessionResult> => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
       // 先排进接着的那个的信箱：打开时一起送；打不开也不丢。
       // hold：马上就要打开它（或交给 opened），不让信箱再去唤醒一次，免得两边同时 --resume 同一个 session。
-      const early = resume ? enqueue(resume.id, text, featureId, false, true) : null;
+      const early = resume ? enqueue(resume.id, text, featureId, false, true, meta) : null;
       const pending = opening.get(key);
       if (pending) {
         if (early) return queued(early, resume!.id);
         const head = await pending;
-        return head === null ? fail(M().ctlOpenFailed("open_failed")) : queued(enqueue(head, text, featureId, interrupt), head);
+        return head === null ? fail(M().ctlOpenFailed("open_failed")) : queued(enqueue(head, text, featureId, interrupt, false, meta), head);
       }
       let settle: (head: string | null) => void = () => {};
       opening.set(key, new Promise((res) => (settle = res)));
@@ -253,7 +258,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       d.notify();
       const headId = d.sessions.head(r.termId)?.id ?? r.termId;
       // 查过没在跑、打开时却已经开着（和用户同时点开）：信箱照常送（在忙走 hook，停着直接输入）；还没排过的照样能叫停。
-      const sent = early ?? enqueue(headId, text, featureId, r.alreadyOpen && interrupt, !r.alreadyOpen);
+      const sent = early ?? enqueue(headId, text, featureId, r.alreadyOpen && interrupt, !r.alreadyOpen, meta);
       if (r.alreadyOpen) return queued(sent, headId);
       void mailbox!.opened(headId, r.termId, d.submit).catch((err: unknown) => d.log?.(`control: shipherd message for ${headId} failed`, err));
       return queued({ ...sent, state: "closed" }, headId, { opened: resume ? "resumed" : "opened" });
@@ -326,6 +331,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
             id: s.id, role: roleOf(s), ...own, repo: repo ? name(repo) : null, firstPrompt: s.firstPrompt,
             waitingForInput: s.waitingForInput, lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
             activity: h.listedActivity(s.id), needs_you: b.needsYou(s.id), decisions: decisions.get(s.id) ?? 0, mailbox: h.pendingMail(s.id), last_reply: h.lastReply(s.id),
+            waiting_on_user: h.waitingOnUser(s.id),
             ...(pre && { preReview: pre.has(s.id) ? preReviewField(pre.get(s.id)!) : null }),
           };
         }));
@@ -346,8 +352,15 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
         const text = sanitizeTask(`${M().shipherdMessagePrefix}\n${req.text}`);
         const running = d.sessionService.runningCoordinator?.(target.feature.id) ?? null;
         const featureId = target.feature.id;
-        if (running) return queued(enqueue(running.id, text, featureId, req.interrupt === true), running.id);
-        return openAndSend(target, text, featureId, req.interrupt === true);
+        // answers（BTL-269 A2）：是 id 时得是收件的那个总控还没答的提问；它在等用户时把这件事带回去。
+        const recipient = running?.id ?? target.session?.id ?? null;
+        const bad = typeof req.answers === "number" ? (recipient === null ? M().ctlNotPendingAsk(req.answers) : h.badAnswers(recipient, req.answers)) : null;
+        if (bad) return fail(bad);
+        const waiting = recipient === null ? null : h.waitingOnUser(recipient);
+        const extra = waiting ? { waiting_on_user: waiting, ...(req.answers === undefined && { waitNote: waiting.note }) } : {};
+        const meta = req.answers !== undefined ? { answers: req.answers, text: req.text } : null;
+        if (running) return queued(enqueue(running.id, text, featureId, req.interrupt === true, false, meta), running.id, extra);
+        return openAndSend(target, text, featureId, req.interrupt === true, meta);
       }
       case "progress_overview": {
         if (!b.progress) return fail(M().ctlProgressUnavailable);

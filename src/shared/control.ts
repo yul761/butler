@@ -152,8 +152,17 @@ export type FeatureControlRequest =
   | { v: 1; featureId: number; from: string | null; op: "start_session"; ticket: string; repo?: string; task: string; model?: StartModel }
   | { v: 1; featureId: number; from: string | null; op: "end_session"; session: string; reason: string }
   | { v: 1; featureId: number; from: string | null; op: "refresh_session"; session: string }
-  /** 给这个 feature 的 ticket session 或修复 session 发一条（排进它的信箱，BTL-245）；interrupt 先按 Esc 叫停。 */
-  | { v: 1; featureId: number; from: string | null; op: "send_message"; session: string; text: string; interrupt?: boolean };
+  /**
+   * 给这个 feature 的 ticket session 或修复 session 发一条（排进它的信箱，BTL-245）；interrupt 先按 Esc 叫停。
+   * answers（BTL-269 A2）：这条是在替用户回答它的提问，ask_user 的 id，或者 true = 它现在等着的那个（排进来之前问的）。
+   */
+  | { v: 1; featureId: number; from: string | null; op: "send_message"; session: string; text: string; interrupt?: boolean; answers?: SendAnswers };
+
+/** send_message 的 answers（BTL-269 A2）：替用户回答的 ask_user id，或者 true = 它现在等着的那个。 */
+export type SendAnswers = number | true;
+
+/** answers 合不合法：没给、true、或者正整数 id。 */
+export const okAnswers = (v: unknown): v is SendAnswers | undefined => v === undefined || v === true || (typeof v === "number" && Number.isSafeInteger(v) && v > 0);
 
 /** epic 里 feature（block）名字、说明的上限，和一次 reorder_features 最多列几个。 */
 export const BLOCK_NAME_LIMIT = 100;
@@ -185,7 +194,7 @@ export type ShipherdControlRequest =
   | { v: 1; shipherd: true; from: string | null; op: "list_sessions" }
   | { v: 1; shipherd: true; from: string | null; op: "session_activity"; session: string }
   | { v: 1; shipherd: true; from: string | null; op: "list_inbox" }
-  | ({ v: 1; shipherd: true; from: string | null; op: "send_message"; text: string; interrupt?: boolean } & ShipherdMessageTarget)
+  | ({ v: 1; shipherd: true; from: string | null; op: "send_message"; text: string; interrupt?: boolean; answers?: SendAnswers } & ShipherdMessageTarget)
   | { v: 1; shipherd: true; from: string | null; op: "refresh_session"; session: string }
   /** 后台给一个 epic 重新生成汇总（ws-b）：立刻返回，生成完 list_epics 能看到新的 summaryAt。 */
   | { v: 1; shipherd: true; from: string | null; op: "refresh_epic_summary"; epic: string }
@@ -318,7 +327,8 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.op === "send_message") {
       if (!okName(o.session, 200) || typeof o.text !== "string" || !o.text.trim() || o.text.length > MESSAGE_LIMIT) return null;
       if (o.interrupt !== undefined && typeof o.interrupt !== "boolean") return null;
-      return { ...base, op: "send_message", session: o.session, text: o.text, ...(o.interrupt === true && { interrupt: true }) };
+      if (!okAnswers(o.answers)) return null;
+      return { ...base, op: "send_message", session: o.session, text: o.text, ...(o.interrupt === true && { interrupt: true }), ...(o.answers !== undefined && { answers: o.answers }) };
     }
     if (isSessionOp(o.op)) return sessionOp(base, o);
     if (isStackOp(o.op)) return stackOp(base, o);
@@ -427,7 +437,8 @@ function parseShipherdRequest(o: Record<string, unknown>, from: string | null): 
     const key = given[0];
     if (!okName(o[key], key === "session" ? 200 : 500)) return null;
     if (o.interrupt !== undefined && typeof o.interrupt !== "boolean") return null;
-    return { ...base, op: "send_message", text: o.text, [key]: o[key], ...(o.interrupt === true && { interrupt: true }) } as ShipherdControlRequest;
+    if (!okAnswers(o.answers)) return null;
+    return { ...base, op: "send_message", text: o.text, [key]: o[key], ...(o.interrupt === true && { interrupt: true }), ...(o.answers !== undefined && { answers: o.answers }) } as ShipherdControlRequest;
   }
   return null;
 }

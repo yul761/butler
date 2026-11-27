@@ -2,7 +2,7 @@ import { basename } from "node:path";
 import type { SessionActivity } from "../../shared/activity";
 import {
   sanitizeTask, taskMessage,
-  type ControlRequest, type SessionCapacity, type ControlResult, type FeatureControlRequest, type InboxControlOp, type StartModel,
+  type ControlRequest, type SendAnswers, type SessionCapacity, type ControlResult, type FeatureControlRequest, type InboxControlOp, type StartModel,
 } from "../../shared/control";
 import { effectiveStatus, type Block, type Feature, type FeatureRepo, type OpenSessionResult, type Session, type Ticket, type TicketRepo } from "../../shared/types";
 import type { BlocksRepo } from "../db/blocks-repo";
@@ -24,7 +24,7 @@ import type { SessionService } from "../sessions/session-service";
 import { startRefresh, type SessionRefresher } from "../sessions/session-refresher";
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
-import type { Mailbox } from "../mailbox/mailbox";
+import type { AwaitingUser, Mailbox } from "../mailbox/mailbox";
 import { featureOwns } from "../mailbox/controller";
 import type { ResumeStart, WakeState } from "../sessions/resumer";
 
@@ -51,6 +51,8 @@ export interface ControlHandlerDeps {
   screenNeedsUser: (termId: string) => boolean;
   /** session 最后一条 assistant 文字回复的结尾（最多 500 字符）；读不到为 null。 */
   lastReply?: (sessionId: string) => string | null;
+  /** 它在等用户回答什么（BTL-269 A2，和信箱同一个判断）：list_sessions、session_activity、send_message 带上，总控好决定要不要替用户答。 */
+  awaitingUser?: (sessionId: string) => AwaitingUser | null;
   /** 设置里的记忆开关（memoryOn）：关着时交任务不提 recall。不给当作开着。 */
   memoryEnabled?: () => boolean;
   /** 把任务作为第一条消息交给新 session（等启动对话框过去、输入框就绪、粘贴、回车）。 */
@@ -181,6 +183,22 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
 
   const lastReply = (id: string) => d.lastReply?.(id) ?? null;
   const pendingMail = (id: string) => d.mailbox?.pendingView(id) ?? null;
+  /** 给总控看的问题最多这么多字（完整的在 list_inbox 里）。 */
+  const WAITING_QUESTION_CUT = 200;
+  const cutText = (t: string, n: number): string => (Array.from(t).length > n ? `${Array.from(t).slice(0, n).join("")}…` : t);
+  /**
+   * 它在等用户回答什么（BTL-269 A2）：未答的 ask_user（id、问题、提问时间）和判断出来的理由，note 告诉总控要替用户答得带 answers。
+   * 不在等（或者还没判断完）为 null。
+   */
+  const waitingOnUser = (id: string) => {
+    const w = d.awaitingUser?.(id) ?? null;
+    if (!w || (w.asks.length === 0 && w.text === null)) return null;
+    const questions = w.asks.map((a) => ({ id: a.id, question: cutText(a.question, WAITING_QUESTION_CUT), askedAt: new Date(a.at).toISOString() }));
+    return { questions, reason: w.text?.reason ?? null, note: M().ctlWaitingOnUser(questions, w.text?.reason ?? null) };
+  };
+  /** send_message 的 answers 是 id 时，得是它现在还没答的提问（不然总控以为答了，其实什么都没结束）。不对返回错误。 */
+  const badAnswers = (id: string, answers: SendAnswers | undefined): string | null =>
+    typeof answers === "number" && !(d.awaitingUser?.(id)?.asks ?? []).some((a) => a.id === answers) ? M().ctlNotPendingAsk(answers) : null;
 
   /** list_sessions：带上现在还能再开几个（工作流 W）。 */
   const listed = async (rows: unknown[]): Promise<ControlResult> => okCap(rows, d.admission ? await d.admission.capacity() : undefined);
@@ -203,6 +221,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     // BTL-269：信箱里排着、还没送到的消息，挡住的原因和开始时间。
     mailbox: pendingMail(s.id),
     last_reply: lastReply(s.id),
+    // BTL-269 A2：它在等用户回答的提问；不在等为 null。
+    waiting_on_user: waitingOnUser(s.id),
     };
   };
 
@@ -221,14 +241,14 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     if (!h || !belongs(h)) return fail(M().ctlNoSuchSession(wanted));
     const a = listedActivity(h.id);
     // 监控还没看到：键和有活动时一样，值都是 null
-    if (!a) return ok({ sessionId: h.id, kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, limit: null, output: "", mailbox: pendingMail(h.id), last_reply: lastReply(h.id) });
+    if (!a) return ok({ sessionId: h.id, kind: null, detail: null, background: null, startedAt: null, lastOutputAt: null, stuck: null, reason: null, action: null, limit: null, output: "", mailbox: pendingMail(h.id), last_reply: lastReply(h.id), waiting_on_user: waitingOnUser(h.id) });
     let output = "";
     try {
       output = (await d.activityOutput?.(h.id)) ?? "";
     } catch (e) {
       d.log?.(`control: output of ${h.id} failed`, e);
     }
-    return ok({ ...a, output, mailbox: pendingMail(h.id), last_reply: lastReply(h.id) });
+    return ok({ ...a, output, mailbox: pendingMail(h.id), last_reply: lastReply(h.id), waiting_on_user: waitingOnUser(h.id) });
   };
 
   /**
@@ -425,15 +445,20 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     const belongs = !!t && !t.dismissed && featureOwns(f.id, keys, t);
     if (!t || !belongs) return fail(M().mailboxNotYours(req.session));
     const interrupt = req.interrupt === true;
+    const bad = badAnswers(t.id, req.answers);
+    if (bad) return fail(bad);
+    // 发之前它在等什么（BTL-269 A2）：带回去给总控看；没带 answers 时 note 里说清楚这条不算回答。
+    const waiting = waitingOnUser(t.id);
     const body = sanitizeTask(M().mailboxInstruction(M().shipherdTargetFeature(f.name), req.text, interrupt));
-    const r = d.mailbox.send({ kind: "instruction", from: h.id, to: t.id, featureId: f.id, body, interrupt });
+    const r = d.mailbox.send({ kind: "instruction", from: h.id, to: t.id, featureId: f.id, body, interrupt, ...(req.answers !== undefined && { meta: { answers: req.answers, text: req.text } }) });
+    const waitNote = waiting && req.answers === undefined ? waiting.note : "";
     // 终端关着（BTL-256）：信箱已经叫恢复了（同一个请求），这里等准入和打开的结果，告诉总控是在恢复、等内存还是用户结束了。
     const w = r.state === "closed" && d.resume ? await d.resume(t.id) : null;
     if (w && w.state !== "running") {
       const error = "error" in w ? w.error : undefined;
       return ok({
         queued: true, sessionId: t.id, requestId: r.id, state: r.state, wake: w.state, ...(error !== undefined && { wakeError: error }),
-        note: `${M().mailboxWakeNote(w.state, error)}${M().mailboxReplyNote}`,
+        ...(waiting && { waiting_on_user: waiting }), note: `${M().mailboxWakeNote(w.state, error)}${waitNote}${M().mailboxReplyNote}`,
       });
     }
     const state = w?.state === "running" ? "idle" : r.state;
@@ -442,7 +467,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     const o = await d.mailbox.outcome(r.id);
     return ok({
       queued: o.delivery === "queued", delivery: o.delivery, sessionId: t.id, requestId: r.id, state,
-      ...(o.delivery === "queued" && { blockedBy: o.blockedBy, blockedSince: o.blockedSince }), note: `${o.note}${M().mailboxReplyNote}`,
+      ...(o.delivery === "queued" && { blockedBy: o.blockedBy, blockedSince: o.blockedSince }), ...(waiting && { waiting_on_user: waiting }),
+      note: `${o.note}${waitNote}${M().mailboxReplyNote}`,
     });
   };
 
@@ -579,7 +605,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
   };
 
   // Shipherd 总控（BTL-190 第 5 点）。
-  const shipherdRequest = shipherdControl(d, { sessionActivity, refreshSession, listedActivity, lastReply, pendingMail });
+  const shipherdRequest = shipherdControl(d, { sessionActivity, refreshSession, listedActivity, lastReply, pendingMail, waitingOnUser, badAnswers });
 
   return async (req, meta = {}) => {
     if (req.op === "ask_user" || req.op === "report") return inboxRequest(req);
