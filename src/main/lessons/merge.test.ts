@@ -14,12 +14,14 @@ function build(answer: FakeAnswer, o: { overBudget?: (l: MergeLayer) => boolean;
   const recorder = new BatchRecorder(s.db, [lessonAdapter(s.db), mergeProposalAdapter(s.db)]);
   const fake = fakeRunner({ lesson_merge: answer });
   let changed = 0;
-  const svc = new LessonMergeService({
+  const make = () => new LessonMergeService({
     db: s.db, repo: s.repo, recorder, now: () => s.clock.now,
     ctx: () => ({ run: fake.run, judgments: s.judgments, lang: () => "en", now: () => s.clock.now, cwd: "/home", gate: OPEN_GATE }),
     overBudget: o.overBudget ?? (() => false), auto: () => auto, onChanged: () => changed++,
   });
-  return { ...s, recorder, fake, svc, changed: () => changed, setAuto: (v: boolean) => (auto = v) };
+  const svc = make();
+  // 模拟重启：同一个库，新建一个服务（内存里的状态都没了）。
+  return { ...s, recorder, fake, svc, restart: make, changed: () => changed, setAuto: (v: boolean) => (auto = v) };
 }
 
 const all = (text = "Re-read the row in the write transaction") => (req: { prompt: string }) => ({ merges: [{ ids: ids(req.prompt), text, why: "races lose edits" }] });
@@ -189,6 +191,26 @@ describe("LessonMergeService", () => {
     fail = false;
     expect(await s.svc.suggest(undefined, { force: true })).toMatchObject({ added: 1, failed: 0 });
     expect(calls()).toBe(3);
+  });
+
+  it("the failure count survives a restart while the failed blocks are still backing off", async () => {
+    let fail = true;
+    const s = build((req) => (fail ? failed("timeout") : all()(req)));
+    s.lesson("re-read the row inside the write transaction before saving", { status: "confirmed" });
+    s.lesson("re-read the row inside the write transaction before writing back", { status: "confirmed" });
+    expect(s.svc.failed()).toBe(0);
+    await s.svc.suggest();
+    expect(s.svc.failed()).toBe(1);
+    const after = s.restart();
+    expect(after.failed()).toBe(1);
+    // 重启后照样在退避：定时任务不重问，计数不变。
+    expect(await after.suggest()).toMatchObject({ failed: 1 });
+    expect(s.fake.of("lesson_merge")).toHaveLength(1);
+    // 问成了，计数清零，再重启也是 0。
+    fail = false;
+    await after.suggest(undefined, { force: true });
+    expect(after.failed()).toBe(0);
+    expect(s.restart().failed()).toBe(0);
   });
 
   it("blocks are cut by lesson id, so removing one lesson only re-asks its own block", async () => {

@@ -5,6 +5,7 @@ import type { BatchRecorder } from "../batches/batch-recorder";
 import { withTransaction, type Db } from "../db/database";
 import type { LessonsRepo } from "../db/lessons-repo";
 import { callModel, chunks, inputHash } from "./admission/call";
+import { JudgmentCache } from "./admission/judgments";
 import type { StepCtx } from "./admission/model-steps";
 import { globsOverlap, textSimilarity, tokens, UnionFind } from "./admission/similarity";
 
@@ -64,6 +65,8 @@ export function stableBlocks(units: readonly Lesson[][]): Lesson[][] {
 }
 
 interface MergeFail { failures: number }
+/** merge_fail 里存「上次没问成几块」的那一行；块的键都是「层:编号」，不会撞上。 */
+const LAST_RUN_KEY = "last_run";
 
 export const MergeSchema = z.object({
   merges: z.array(z.object({ ids: z.array(z.number().int()).max(50), text: z.string().max(2000), why: z.string().max(2000) })).max(60),
@@ -141,17 +144,34 @@ class Stale extends Error {}
 
 export class LessonMergeService {
   private current: Promise<SuggestOutcome> | null = null;
-  private lastFailed = 0;
+  /** 上次没问成的块数；null 表示还没从库里读（重启后第一次问时读）。 */
+  private lastFailed: number | null = null;
+  private readonly counts: JudgmentCache;
 
-  constructor(private readonly d: MergeDeps) {}
+  constructor(private readonly d: MergeDeps) {
+    this.counts = new JudgmentCache(d.db);
+  }
 
   running(): boolean {
     return this.current !== null;
   }
 
-  /** 上一次找相似规矩时没问成的块数（重启后为 0）。 */
+  /**
+   * 上一次找相似规矩时没问成的块数。和每块的失败记录（merge_fail）存在同一张表里，重启后照样是重启前的数：
+   * 那些块还在退避、没重问，不能显示成「没有失败」。
+   */
   failed(): number {
+    if (this.lastFailed === null) this.lastFailed = this.counts.get<MergeFail>("merge_fail", LAST_RUN_KEY, LAST_RUN_KEY)?.result.failures ?? 0;
     return this.lastFailed;
+  }
+
+  private setFailed(n: number): void {
+    this.lastFailed = n;
+    try {
+      this.counts.put("merge_fail", LAST_RUN_KEY, LAST_RUN_KEY, { failures: n }, { model: null, degraded: false, at: this.d.now() });
+    } catch (e) {
+      this.d.log?.("lessons: merge failure count not saved", e);
+    }
   }
 
   private layers(slug?: string): MergeLayer[] {
@@ -210,7 +230,7 @@ export class LessonMergeService {
       failed++;
       throw e;
     } finally {
-      this.lastFailed = failed;
+      this.setFailed(failed);
     }
     let accepted = 0;
     if (this.d.auto()) for (const id of this.autoCandidates(slug)) if (this.accept(id, "auto").ok) accepted++;
