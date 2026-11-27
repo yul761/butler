@@ -11,6 +11,7 @@ import type { StageEvent } from "../db/pr-stage-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
 import type { BotRequest, WorkflowRepo } from "../db/workflow-repo";
 import { LayeredResolver, type ScopeRef } from "../scope/layered";
+import { aiReviewerOf } from "../tickets/gh";
 import { samePath } from "../tickets/ticket-service";
 import { botReviewCommands, type BotReviewResult } from "./bot-review";
 import { WF } from "./strings";
@@ -238,7 +239,7 @@ export class WorkflowService {
     const out = new Map<number, StageEvent[]>();
     for (const [prId, list] of byPr) {
       list.sort((a, b) => a.round - b.round);
-      const split = splitBotRounds(list.map((r) => r.requestedAt), events.filter((e) => e.prId === prId));
+      const split = splitBotRounds(list.map((r) => ({ requestedAt: r.requestedAt, bot: r.bot })), events.filter((e) => e.prId === prId));
       list.forEach((r, i) => out.set(r.id, split[i]));
     }
     return out;
@@ -360,7 +361,9 @@ export class WorkflowService {
       if (hasStep(w, "bot_review") && (open.length === 0 ? prs.length > 0 : firstBack)) out.set("bot_review", null);
       // 第一轮一条意见都没有：没什么要处理的。
       if (hasStep(w, "address_comments") && open.length > 0 && firstBack && open.every((p) => rounds.get(p.id)![0].reviewComments === 0)) out.set("address_comments", null);
-      if (hasStep(w, "re_review") && open.length > 0 && (done.has("address_comments") || out.has("address_comments"))) {
+      // 流程里没有「处理评论」：复审不用等它（open_pr → bot_review → re_review → merge 这种流程合法）。
+      const addressed = !hasStep(w, "address_comments") || done.has("address_comments") || out.has("address_comments");
+      if (hasStep(w, "re_review") && open.length > 0 && addressed) {
         const max = maxRoundsOf(stepOf(w, "re_review"));
         const settled = open.every((p) => {
           const rs = rounds.get(p.id) ?? [];
@@ -733,14 +736,29 @@ export class WorkflowService {
 }
 
 /**
- * 把一个 PR 上 bot 的 review / 评论分给各轮请求（requestedAt 按轮次排好）。谁是 bot 按 PR 监视记下的 who，和评论闭环同一个判断 reviewerKind。
+ * 把一个 PR 上 bot 的 review / 评论分给各轮请求（按轮次排好）。谁是 bot 按 PR 监视记下的 who，和评论闭环同一个判断 reviewerKind；
+ * 每一轮只认它请的那个 bot（aiReviewerOf(author)）：同一个 PR 上 Copilot 和 Codex 都在回时，Copilot 的回复不算 Codex 那一轮的。
+ * 同一个 bot 的各轮按 splitRounds 分。
+ */
+export function splitBotRounds(rounds: { requestedAt: number; bot: ReviewBot }[], events: StageEvent[]): StageEvent[][] {
+  const out: StageEvent[][] = rounds.map(() => []);
+  for (const bot of new Set(rounds.map((r) => r.bot))) {
+    const idx = rounds.flatMap((r, i) => (r.bot === bot ? [i] : []));
+    const mine = events.filter((e) => e.data.who === "copilot" && typeof e.data.author === "string" && aiReviewerOf(e.data.author) === bot);
+    splitRounds(idx.map((i) => rounds[i].requestedAt), mine).forEach((ev, k) => (out[idx[k]] = ev));
+  }
+  return out;
+}
+
+/**
+ * 同一个 bot 的回复分给它的各轮请求（requestedAt 按轮次排好）：
  * - 每轮从「请求前 RESPONSE_SLACK_MS」算起（请求的时间是 gh 返回的时间，bot 可能更早就回了），但不早于上一轮的终点。
  * - 上一轮的终点：它在下一轮请求前 slack 之外已经有回复，就到「下一轮请求前 slack」为止（之后的算下一轮，比如 push 后自动 review）；
  *   没有的话到下一轮请求为止（请求前 slack 内才回的，是上一轮的回复，不能算成新一轮回来了）。
  * - 行内评论跟着它的 review 走：review 分在哪轮，评论就算哪轮的（晚到的评论不会被算进后面一轮）。
  */
-export function splitBotRounds(requestedAt: number[], events: StageEvent[]): StageEvent[][] {
-  const bot = events.filter((e) => (e.kind === "review" || e.kind === "comment") && e.data.who === "copilot").sort((a, b) => a.at - b.at);
+function splitRounds(requestedAt: number[], events: StageEvent[]): StageEvent[][] {
+  const bot = events.filter((e) => e.kind === "review" || e.kind === "comment").sort((a, b) => a.at - b.at);
   const reviewOf = (e: StageEvent): string | null => (e.kind === "comment" && e.data.reviewId != null ? String(e.data.reviewId) : null);
   const ends: number[] = [];
   const starts: number[] = [];

@@ -350,8 +350,8 @@ describe("WorkflowService: bot review", () => {
     expect(body).toContain("HTTP 422");
     expect(body).toContain("gh api -X POST repos/o/a/pulls/1/copilot-code-review");
     // session 自己请了，bot 回来：照样认
-    t.events.push(ev({ kind: "review", at: t.now() + 10, data: { id: 1, who: "copilot", state: "COMMENTED", body: "x" } }));
-    t.events.push(ev({ kind: "comment", at: t.now() + 10, data: { id: 2, reviewId: 1, who: "copilot" } }));
+    t.events.push(ev({ kind: "review", at: t.now() + 10, data: { id: 1, who: "copilot", author: "copilot-pull-request-reviewer", state: "COMMENTED", body: "x" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 10, data: { id: 2, reviewId: 1, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     expect(t.svc.view("X-1").current).toBe("address_comments");
   });
@@ -371,8 +371,8 @@ describe("WorkflowService: bot review", () => {
     t.svc.setLayer({ kind: "global" }, botFlow);
     t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, headSha: "s1" }));
     await t.svc.evaluate("X-1");
-    t.events.push(ev({ kind: "review", at: t.now() + 10, data: { id: 7, who: "copilot" } }));
-    t.events.push(ev({ kind: "comment", at: t.now() + 10, data: { id: 8, reviewId: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "review", at: t.now() + 10, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 10, data: { id: 8, reviewId: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     expect(t.svc.view("X-1").current).toBe("address_comments");
     t.svc.markStep("X-1", "address_comments", null);
@@ -387,7 +387,7 @@ describe("WorkflowService: bot review", () => {
     expect(t.repo.botRequests("X-1").map((r) => [r.round, r.sha])).toEqual([[1, "s1"], [2, "s2"]]);
     // 第二轮又有意见，但已经到上限（再请 1 轮）：re_review 结束
     t.tick(1000);
-    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 9, reviewId: 10, who: "copilot" } }));
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 9, reviewId: 10, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     expect(t.svc.view("X-1").current).toBe("merge");
   });
@@ -399,8 +399,8 @@ describe("WorkflowService: bot review", () => {
     await t.svc.evaluate("X-1");
     // 第 1 轮的 review 很晚才到：离第 2 轮请求不到 60 秒
     t.tick(5 * 60_000);
-    t.events.push(ev({ kind: "review", at: t.now(), data: { id: 7, who: "copilot" } }));
-    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 8, reviewId: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "review", at: t.now(), data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 8, reviewId: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     t.svc.markStep("X-1", "address_comments", null);
     t.prs[0].headSha = "s2";
@@ -409,7 +409,7 @@ describe("WorkflowService: bot review", () => {
     expect(t.bot.calls).toBe(2);
     // 第 1 轮 review 的行内评论晚到（在第 2 轮请求之后），仍算第 1 轮的
     t.tick(1000);
-    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 9, reviewId: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 9, reviewId: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     const [r1, r2] = t.repo.botRequests("X-1");
     expect(r2.round).toBe(2);
@@ -418,11 +418,35 @@ describe("WorkflowService: bot review", () => {
     expect(t.svc.view("X-1").current).toBe("re_review");
     // 第 2 轮真的回来了
     t.tick(1000);
-    t.events.push(ev({ kind: "review", at: t.now(), data: { id: 10, who: "copilot", body: "no comments" } }));
-    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 11, reviewId: 10, who: "copilot" } }));
+    t.events.push(ev({ kind: "review", at: t.now(), data: { id: 10, who: "copilot", author: "copilot-pull-request-reviewer", body: "no comments" } }));
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 11, reviewId: 10, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     expect(t.repo.botRequests("X-1")[1].reviewedAt).toBe(t.now());
     expect(t.repo.botRequests("X-1")[1].reviewComments).toBe(1);
+  });
+
+  it("a Codex workflow isn't advanced by a Copilot review on the same PR", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["open_pr", { id: "bot_review", bot: "codex" }, "address_comments", "merge"] });
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer", body: "no comments" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("bot_review");
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: null })).not.toBeNull();
+    t.events.push(ev({ kind: "comment", at: t.now() + 6, data: { id: 8, who: "copilot", author: "chatgpt-codex-connector", body: "Didn't find any major issues." } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("merge");
+  });
+
+  it("without an address-comments step, a clean bot answer completes re-review on its own", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["open_pr", "bot_review", "re_review", "merge"] });
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer", body: "no comments" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("merge");
   });
 
   it("a first round with no comments skips addressing and re-review", async () => {
@@ -430,7 +454,7 @@ describe("WorkflowService: bot review", () => {
     t.svc.setLayer({ kind: "global" }, botFlow);
     t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
     await t.svc.evaluate("X-1");
-    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", body: "no comments" } }));
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer", body: "no comments" } }));
     await t.svc.evaluate("X-1");
     expect(t.svc.view("X-1").current).toBe("merge");
     expect(t.bot.calls).toBe(1);
@@ -442,7 +466,7 @@ describe("WorkflowService: bot review", () => {
     t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
     await t.svc.evaluate("X-1");
     // PR 监视拉行内评论失败：只记下了 review，没有行内评论
-    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", state: "COMMENTED" } }));
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer", state: "COMMENTED" } }));
     t.counts.result = null;
     await t.svc.evaluate("X-1");
     expect(t.counts.calls).toEqual([["7"]]);
@@ -462,10 +486,10 @@ describe("WorkflowService: bot review", () => {
     t.svc.setLayer({ kind: "global" }, botFlow);
     t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
     await t.svc.evaluate("X-1");
-    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot" } }));
-    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 8, reviewId: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 8, reviewId: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
-    t.events.push(ev({ kind: "comment", at: t.now() + 6, data: { id: 9, reviewId: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 6, data: { id: 9, reviewId: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     expect(t.repo.botRequests("X-1")[0]).toMatchObject({ reviewComments: 2 });
   });
@@ -494,8 +518,8 @@ describe("WorkflowService: bot review", () => {
     expect(t.svc.markStep("X-1", "address_comments", null)).toMatchObject({ ok: false, message: expect.stringContaining("bot review") });
     expect(t.repo.done("X-1").map((d) => d.step)).not.toContain("address_comments");
     // 说明超长：拒绝，不截断
-    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot" } }));
-    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 8, reviewId: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 8, reviewId: 7, who: "copilot", author: "copilot-pull-request-reviewer" } }));
     await t.svc.evaluate("X-1");
     expect(t.svc.markStep("X-1", "address_comments", "x".repeat(501))).toMatchObject({ ok: false, message: expect.stringContaining("500") });
     expect(t.svc.markStep("X-1", "address_comments", "改好了")).toMatchObject({ ok: true });
@@ -527,26 +551,39 @@ describe("WorkflowService: guide", () => {
 });
 
 describe("splitBotRounds (BTL-273)", () => {
-  const bot = (kind: "review" | "comment", at: number, data: Record<string, unknown>) => ev({ kind, at, data: { who: "copilot", ...data } });
+  const cp = (at: number[]) => at.map((requestedAt) => ({ requestedAt, bot: "copilot" as const }));
+  const bot = (kind: "review" | "comment", at: number, data: Record<string, unknown>) => ev({ kind, at, data: { who: "copilot", author: "copilot-pull-request-reviewer", ...data } });
 
   it("a review within the slack before the next request belongs to the round that had no answer yet", () => {
-    const [r1, r2] = splitBotRounds([0, 100_000], [bot("review", 70_000, { id: 1 })]);
+    const [r1, r2] = splitBotRounds(cp([0, 100_000]), [bot("review", 70_000, { id: 1 })]);
     expect(r1.map((e) => e.data.id)).toEqual([1]);
     expect(r2).toEqual([]);
   });
 
   it("once the earlier round was answered, a review just before the next request (review on push) is the next round's", () => {
-    const [r1, r2] = splitBotRounds([0, 600_000], [bot("review", 10_000, { id: 1 }), bot("review", 590_000, { id: 2 })]);
+    const [r1, r2] = splitBotRounds(cp([0, 600_000]), [bot("review", 10_000, { id: 1 }), bot("review", 590_000, { id: 2 })]);
     expect(r1.map((e) => e.data.id)).toEqual([1]);
     expect(r2.map((e) => e.data.id)).toEqual([2]);
   });
 
   it("inline comments follow their review across round boundaries; humans are left out", () => {
     const [r1, r2] = splitBotRounds(
-      [0, 600_000],
+      cp([0, 600_000]),
       [bot("review", 10_000, { id: 1 }), bot("comment", 700_000, { id: 5, reviewId: 1 }), bot("comment", 700_000, { id: 6, reviewId: 2 }), ev({ kind: "review", at: 700_000, data: { id: 3, who: "human" } })],
     );
     expect(r1.map((e) => e.data.id)).toEqual([1, 5]);
     expect(r2.map((e) => e.data.id)).toEqual([6]);
+  });
+
+  it("each round only takes replies from the bot it asked: Copilot's review doesn't answer a Codex round", () => {
+    const codex = (kind: "review" | "comment", at: number, data: Record<string, unknown>) => ev({ kind, at, data: { who: "copilot", author: "chatgpt-codex-connector", ...data } });
+    const [c1, x1] = splitBotRounds(
+      [{ requestedAt: 0, bot: "copilot" }, { requestedAt: 0, bot: "codex" }],
+      [bot("review", 10_000, { id: 1 }), codex("comment", 20_000, { id: 2 })],
+    );
+    expect(c1.map((e) => e.data.id)).toEqual([1]);
+    expect(x1.map((e) => e.data.id)).toEqual([2]);
+    const [onlyCodex] = splitBotRounds([{ requestedAt: 0, bot: "codex" }], [bot("review", 10_000, { id: 1 })]);
+    expect(onlyCodex).toEqual([]);
   });
 });

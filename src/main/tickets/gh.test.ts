@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, aiReviewerOf, resetGhBinary, setGhBinary } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -612,5 +612,16 @@ describe.skipIf(process.platform === "win32")("prRead and repoCurrentSlug (BTL-2
     expect(await repoCurrentSlug(dir, "x/y", 5000)).toBe("not_found");
     fakeGh(`echo '{"nameWithOwner":""}'`);
     expect(await repoCurrentSlug(dir, "x/y", 5000)).toBeNull();
+  });
+});
+
+describe("aiReviewerOf (BTL-273)", () => {
+  it("tells Codex from Copilot among the logins reviewerKind calls copilot, and nothing else", () => {
+    expect(aiReviewerOf("chatgpt-codex-connector")).toBe("codex");
+    expect(aiReviewerOf("chatgpt-codex-connector[bot]")).toBe("codex");
+    expect(aiReviewerOf("copilot-pull-request-reviewer")).toBe("copilot");
+    expect(aiReviewerOf("Copilot")).toBe("copilot");
+    expect(aiReviewerOf("dependabot[bot]")).toBeNull();
+    expect(aiReviewerOf("alice")).toBeNull();
   });
 });

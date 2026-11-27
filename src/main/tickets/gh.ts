@@ -410,6 +410,15 @@ export function reviewerKind(login: string, prAuthor: string): "copilot" | "huma
   return "human";
 }
 
+/**
+ * 纯函数：reviewerKind 归成 copilot 的 login 具体是哪个 AI 审查者（Codex 还是 Copilot），其余 null。
+ * 工作流程按这个把 bot 的回复对到「请的是哪个 bot」那一轮（BTL-273）。
+ */
+export function aiReviewerOf(login: string): "copilot" | "codex" | null {
+  if (reviewerKind(login, "") !== "copilot") return null;
+  return login.toLowerCase().replace(/\[bot\]$/, "") === "chatgpt-codex-connector" ? "codex" : "copilot";
+}
+
 const REVIEWS = { REVIEW_REQUIRED: "pending", CHANGES_REQUESTED: "changes_requested", APPROVED: "approved" } as const;
 
 // 这些字段要 gh >= 2.18（headRefOid，2022-10）；更旧的 gh 报 Unknown JSON field，prStatus 返回 null。
