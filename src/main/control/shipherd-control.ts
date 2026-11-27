@@ -1,3 +1,4 @@
+import type { WorkflowCoordinatorOp } from "../../shared/workflow-control";
 import { basename } from "node:path";
 import { type ShipherdControlRequest, type ControlResult, type InboxControlOp, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
@@ -68,7 +69,7 @@ const fail = (error: string): ControlResult => ({ v: 1, ok: false, error });
  * 只有 send_message 会开 session：目标 feature 总控的终端关着（比如闲置时自动关掉了）时，接着它最近的那个再把消息交进去。
  * 请求文件谁都能写：往终端里写东西的 send_message 和换新别人的 refresh_session 要求 from 是开着终端的 Shipherd 总控自己。
  */
-export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers): (req: Exclude<ShipherdControlRequest, { op: InboxControlOp["op"] }>) => Promise<ControlResult> {
+export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers): (req: Exclude<ShipherdControlRequest, { op: InboxControlOp["op"] | WorkflowCoordinatorOp["op"] }>) => Promise<ControlResult> {
   const name = (r: { repoPath: string }) => basename(r.repoPath);
 
   /** 名字或 id（数字先按 id 找，再按名字，不分大小写）。 */
@@ -240,6 +241,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
         return ok(list.map((t) => ({
           key: t.key, title: t.title, status: effectiveStatus(t), ...ticketOwners(t),
           repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
+          ...(d.workflow && { workflow: d.workflow.summary(t.key) }),
         })));
       }
       case "list_prs": {

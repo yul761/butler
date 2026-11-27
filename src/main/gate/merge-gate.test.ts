@@ -52,7 +52,7 @@ function ticket(key: string, repoPath: string, branch: string, workMode: WorkMod
  */
 const TEST_DEADLINE_MS = 60_000;
 
-function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number; repoOfSlug?: MergeGateDeps["repoOfSlug"] } = {}) {
+function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number; repoOfSlug?: MergeGateDeps["repoOfSlug"]; workflow?: MergeGateDeps["workflow"] } = {}) {
   const repoPath = o.repo ?? makeScenarioRepo();
   const tickets = o.tickets ? o.tickets(repoPath) : ["DMS-1", "DMS-2", "DMS-3"].map((k) => ticket(k, repoPath, k.toLowerCase()));
   const db = memDb();
@@ -70,7 +70,7 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
   const gate = new MergeGate({
     tickets: { list: () => tickets, listRepos: (key: string) => tickets.find((t) => t.key === key)?.repos ?? [] },
     repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs ?? TEST_DEADLINE_MS,
-    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold, repoOfSlug: o.repoOfSlug,
+    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold, repoOfSlug: o.repoOfSlug, workflow: o.workflow,
   });
   const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}, meta?: { ageMs?: number }) =>
     gate.handle({ v: 1, phase: "pre", action, cwd: repoPath, session: "s-req", ticket: null, ...extra } as GateRequest, meta);
@@ -746,5 +746,72 @@ describe("commandDir", () => {
     expect(commandDir("C:\\w\\repo", "C:/Users/me/api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
     expect(commandDir("C:\\w\\repo", "..\\api", "win32", "C:\\Users\\me")).toBe("C:\\w\\api");
     expect(commandDir("C:\\w\\repo", "~/api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
+  });
+});
+
+describe("MergeGate: workflow (BTL-273)", () => {
+  const wf = (o: { prCreate?: string | null; merge?: string | null; any?: boolean } = {}) => {
+    const calls: { prCreate: unknown[]; merge: unknown[] } = { prCreate: [], merge: [] };
+    const workflow: NonNullable<MergeGateDeps["workflow"]> = {
+      anyWorkflow: () => o.any ?? true,
+      prCreate: async (i) => {
+        calls.prCreate.push(i);
+        return o.prCreate ?? null;
+      },
+      merge: (i) => {
+        calls.merge.push(i);
+        return o.merge ?? null;
+      },
+    };
+    return { workflow, calls };
+  };
+
+  it("doesn't look at gh pr create when no workflow is set anywhere", async () => {
+    const w = wf({ any: false, prCreate: "no" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.ask({ kind: "pr_create", dir: "$WT", head: null, draft: false, repo: null })).toEqual({ v: 1, decision: "allow" });
+    expect(w.calls.prCreate).toEqual([]);
+  });
+
+  it("asks the workflow about gh pr create for the ticket of this repo and branch", async () => {
+    const w = wf({ prCreate: "先别开 PR" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.ask({ kind: "pr_create", dir: null, head: "dms-2", draft: true, repo: null }, { session: "s2" })).toEqual({ v: 1, decision: "deny", reason: "先别开 PR" });
+    expect(w.calls.prCreate).toEqual([{ ticketKey: "DMS-2", repoPath: t.repoPath, dir: t.repoPath, branch: "dms-2", draft: true, sessionId: "s2" }]);
+    // 命令跑完（post）不拦
+    expect(await t.ask({ kind: "pr_create", dir: null, head: "dms-2", draft: true, repo: null }, { phase: "post" })).toEqual({ v: 1, decision: "allow" });
+  });
+
+  it("the same branch name in another repo belongs to that repo's ticket", async () => {
+    const w = wf({ prCreate: "no" });
+    const other = copyRepo(makeScenarioRepo());
+    const t = setup({ workflow: w.workflow, tickets: (repo) => [ticket("A-1", repo, "dms-1"), ticket("B-1", other, "dms-1")] });
+    await t.ask({ kind: "pr_create", dir: other, head: "dms-1", draft: false, repo: null });
+    expect(w.calls.prCreate).toMatchObject([{ ticketKey: "B-1" }]);
+    // 这个仓库里没有 ticket 用 dms-3：不归任何 ticket，不查
+    await t.ask({ kind: "pr_create", dir: null, head: "dms-3", draft: false, repo: null }, { ticket: "A-1" });
+    expect(w.calls.prCreate).toHaveLength(1);
+  });
+
+  it("falls back to the session's ticket when the directory is a shell variable", async () => {
+    const w = wf({ prCreate: "no" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.ask({ kind: "pr_create", dir: "$WT", head: null, draft: false, repo: null }, { ticket: "DMS-1" })).toMatchObject({ decision: "deny" });
+    expect(w.calls.prCreate).toMatchObject([{ ticketKey: "DMS-1", repoPath: null, dir: null, branch: null }]);
+  });
+
+  it("denies a merge the workflow doesn't allow before checking conflicts, and holds nothing", async () => {
+    const w = wf({ merge: "别合并：由用户自己合" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.merge("dms-3", { session: "coord" })).toEqual({ v: 1, decision: "deny", reason: "别合并：由用户自己合" });
+    expect(w.calls.merge).toEqual([{ ticketKey: "DMS-3", sessionId: "coord", prUrl: null }]);
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).toBeNull();
+  });
+
+  it("lets the merge through to the usual checks when the workflow allows it", async () => {
+    const w = wf({ merge: null });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.merge("dms-3")).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).not.toBeNull();
   });
 });

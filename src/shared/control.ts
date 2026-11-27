@@ -1,3 +1,4 @@
+import { isWorkflowCoordinatorOp, parseWorkflowCoordinatorOp, parseWorkflowTicketOp, type WorkflowCoordinatorOp, type WorkflowTicketOp } from "./workflow-control";
 import type { Lang } from "./i18n";
 import { isModelName, isTier } from "./model-routing";
 
@@ -90,7 +91,9 @@ export type TicketControlRequest =
   /** 开发 session 交完成证据（工作流 G）：参数原样带过来，主进程按 parseSubmitEvidence 验。 */
   | { v: 1; ticketKey: string; from: string | null; op: "submit_evidence"; evidence: Record<string, unknown> }
   /** 开发 session 取自己最近一次预审的结果（工作流 G）。只读。 */
-  | { v: 1; ticketKey: string; from: string | null; op: "pre_review_result" };
+  | { v: 1; ticketKey: string; from: string | null; op: "pre_review_result" }
+  /** 开发 session 标做完流程里的一步（BTL-273）。 */
+  | ({ v: 1; ticketKey: string; from: string | null } & WorkflowTicketOp);
 
 /**
  * feature 的规划（features.brief；界面上叫 epic）在 feature 记忆的 handoff 里最多占这么多字符：规划优先，但总要给约定和进度留位置，
@@ -109,6 +112,7 @@ export const MAX_CREATE_REPOS = 20;
  */
 export type FeatureControlRequest =
   | ({ v: 1; featureId: number; from: string | null } & InboxControlOp)
+  | ({ v: 1; featureId: number; from: string | null } & WorkflowCoordinatorOp)
   | ({ v: 1; featureId: number; from: string | null } & StackControlOp)
   | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
   | { v: 1; featureId: number; from: string | null; op: "list_repos" }
@@ -148,6 +152,7 @@ export type ShipherdMessageTarget = { session: string; epic?: undefined } | { ep
 
 export type ShipherdControlRequest =
   | ({ v: 1; shipherd: true; from: string | null } & InboxControlOp)
+  | ({ v: 1; shipherd: true; from: string | null } & WorkflowCoordinatorOp)
   | ({ v: 1; shipherd: true; from: string | null } & StackControlOp)
   /** epic（内部是 features 表）和它们里面 feature 的进度（BTL-246）。 */
   | { v: 1; shipherd: true; from: string | null; op: "list_epics" }
@@ -275,6 +280,10 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     }
     if (isSessionOp(o.op)) return sessionOp(base, o);
     if (isStackOp(o.op)) return stackOp(base, o);
+    if (isWorkflowCoordinatorOp(o.op)) {
+      const w = parseWorkflowCoordinatorOp(o);
+      return w && { ...base, ...w };
+    }
     if (o.op === "create_ticket") {
       if (!okName(o.ticket, 200)) return null;
       if (o.title !== undefined && (typeof o.title !== "string" || o.title.length > 500)) return null;
@@ -327,6 +336,10 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   const base = { v: 1 as const, ticketKey: o.ticketKey, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
   if (o.op === "pre_review_result") return { ...base, op: "pre_review_result" };
+  if (o.op === "workflow_step_done") {
+    const w = parseWorkflowTicketOp(o);
+    return w && { ...base, ...w };
+  }
   if (o.op === "submit_evidence") {
     const e = o.evidence;
     if (!e || typeof e !== "object" || Array.isArray(e)) return null;
@@ -341,6 +354,10 @@ function parseShipherdRequest(o: Record<string, unknown>, from: string | null): 
   const base = { v: 1 as const, shipherd: true as const, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
   if (isStackOp(o.op)) return stackOp(base, o);
+  if (isWorkflowCoordinatorOp(o.op)) {
+    const w = parseWorkflowCoordinatorOp(o);
+    return w && { ...base, ...w };
+  }
   if (o.op === "list_epics" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
     return { ...base, op: o.op };
   }

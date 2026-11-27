@@ -1,0 +1,391 @@
+import { afterEach, describe, expect, it } from "vitest";
+import type { AutomationLevel } from "../../shared/automation";
+import type { PreReviewVerdict, ReviewTarget } from "../../shared/prereview";
+import type { Session, Ticket, TicketRepo } from "../../shared/types";
+import { presetWorkflow, type Workflow } from "../../shared/workflow";
+import type { StageEvent } from "../db/pr-stage-repo";
+import type { TicketPr } from "../db/ticket-prs-repo";
+import { WorkflowRepo } from "../db/workflow-repo";
+import { setLang } from "../i18n";
+import { memDb } from "../test-utils";
+import type { BotReviewResult } from "./bot-review";
+import { NO_CI_GRACE_MS, WorkflowService } from "./workflow-service";
+
+afterEach(() => setLang("zh"));
+
+const repoRow = (id: number, key: string, path: string, branch: string): TicketRepo => ({
+  id, ticketKey: key, repoPath: path, workMode: "worktree", worktreePath: `${path}-wt`, branch, createdAt: 1, worktreeRemovedAt: null, cleanupBlocked: null,
+});
+
+const ticket = (key: string, repos: TicketRepo[], featureId: number | null = 4): Ticket => ({
+  key, title: null, repos, status: "in_progress" as Ticket["status"], statusManual: null, createdAt: 1, archivedAt: null, featureId,
+});
+
+const pr = (o: Partial<TicketPr> & { id: number; ticketKey: string; repoId: number | null }): TicketPr =>
+  ({
+    url: `https://github.com/o/a/pull/${o.id}`, slug: "o/a", number: o.id, headBranch: "feature/X-1", state: "open", review: null, ci: "pending", readError: false,
+    headSha: "s1", failed: [], openedAt: 1, mergedAt: null, closedAt: null, source: "branch", linkedAt: 1, checkedAt: 1, ...o,
+  }) as TicketPr;
+
+const session = (o: Partial<Session> & { id: string }): Session => ({ ticketKey: null, coordinator: false, featureId: null, fixesSession: null, shipherd: false, repoId: null, gitBranch: null, ...o }) as Session;
+
+function setup(o: { tickets?: Ticket[]; level?: AutomationLevel } = {}) {
+  const db = memDb();
+  const repo = new WorkflowRepo(db);
+  let now = 1_000_000;
+  const tickets = o.tickets ?? [ticket("X-1", [repoRow(1, "X-1", "/r/a", "feature/X-1")])];
+  const prs: TicketPr[] = [];
+  const events: StageEvent[] = [];
+  const preReviews: { target: ReviewTarget; verdict: PreReviewVerdict; id: number }[] = [];
+  const sent: { to: string; body: string; ref: string }[] = [];
+  const queued = new Map<string, { to: string; body: string }>();
+  const heads = new Map<string, string>();
+  const sessions = new Map<string, Session>();
+  const bot: { calls: number; result: BotReviewResult; gate?: Promise<void> } = { calls: 0, result: { ok: true, via: "api" } };
+  let recipient: string | null = "sess-1";
+  let level: AutomationLevel = o.level ?? "semi";
+  const mk = () =>
+    new WorkflowService({
+      repo,
+      tickets: { get: (k) => tickets.find((t) => t.key === k) ?? null, list: () => tickets },
+      featureName: (id) => (id === 4 ? "4.3.0" : null),
+      productsOf: (slug) => (slug === "o/a" ? [{ id: 9, name: "Shipherd" }] : []),
+      productName: (id) => (id === 9 ? "Shipherd" : null),
+      slugOf: (p) => (p === "/r/a" ? "o/a" : p === "/r/b" ? "o/b" : null),
+      prs: { byTicket: (k) => prs.filter((p) => p.ticketKey === k) },
+      stages: { forTicket: (k) => events.filter((e) => e.ticketKey === k) },
+      preReviews: {
+        latestFor: (t) => [...preReviews].reverse().find((p) => p.target.repoSlug === t.repoSlug && p.target.branch === t.branch && p.target.headSha === t.headSha) ?? null,
+        latestForBranch: (slug, branch) => [...preReviews].reverse().find((p) => p.target.repoSlug === slug && p.target.branch === branch) ?? null,
+      },
+      headSha: async (dir, branch) => heads.get(`${dir}|${branch}`) ?? null,
+      level: () => level,
+      mailbox: {
+        send: (m) => {
+          sent.push({ to: m.to, body: m.body, ref: m.ref });
+          queued.set(m.ref, { to: m.to, body: m.body });
+        },
+        withdraw: (ref) => void queued.delete(ref),
+      },
+      recipient: () => recipient,
+      coordinator: (f) => (f === 4 ? "coord-4" : null),
+      session: (id) => sessions.get(id) ?? null,
+      requestBotReview: async () => {
+        bot.calls++;
+        if (bot.gate) await bot.gate;
+        return bot.result;
+      },
+      ghCwd: () => "/r/a-wt",
+      now: () => now,
+      log: () => {},
+      onChange: () => {},
+    });
+  return {
+    db, repo, tickets, prs, events, preReviews, sent, queued, heads, sessions, bot, mk,
+    svc: mk(),
+    tick: (ms: number) => (now += ms),
+    now: () => now,
+    setRecipient: (r: string | null) => (recipient = r),
+    setLevel: (l: AutomationLevel) => (level = l),
+  };
+}
+
+const ev = (o: Partial<StageEvent> & { kind: StageEvent["kind"]; at: number; data: Record<string, unknown> }): StageEvent => ({
+  id: Math.random(), ticketKey: "X-1", repoId: 1, prId: 1, branch: "feature/X-1", featureId: null, sessionId: null, ...o,
+});
+
+describe("WorkflowService: layers", () => {
+  it("no layer means no workflow and nothing changes", async () => {
+    const t = setup();
+    expect(t.svc.effective("X-1")).toBeNull();
+    expect(t.svc.anyWorkflow()).toBe(false);
+    await t.svc.evaluate("X-1");
+    expect(t.sent).toEqual([]);
+    expect(await t.svc.prCreate({ ticketKey: "X-1", repoPath: "/r/a", dir: "/r/a-wt", branch: "feature/X-1", draft: false })).toBeNull();
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "sess-1" })).toBeNull();
+  });
+
+  it("the deepest layer wins: global → product → repo → epic → ticket", () => {
+    const t = setup();
+    const at = (w: Workflow) => ({ steps: w.steps, notes: "" });
+    t.svc.setLayer({ kind: "global" }, at(presetWorkflow("strict")));
+    expect(t.svc.effective("X-1")?.scope).toEqual({ kind: "global" });
+    t.svc.setLayer({ kind: "product", productId: 9 }, presetWorkflow("fast"));
+    expect(t.svc.effective("X-1")).toMatchObject({ scope: { kind: "product", productId: 9 }, label: "Shipherd" });
+    t.svc.setLayer({ kind: "repo", slug: "O/A" }, presetWorkflow("strict"));
+    expect(t.svc.effective("X-1")?.scope).toEqual({ kind: "repo", slug: "o/a" });
+    t.svc.setLayer({ kind: "feature", featureId: 4 }, presetWorkflow("fast"));
+    expect(t.svc.effective("X-1")).toMatchObject({ scope: { kind: "feature", featureId: 4 }, label: "4.3.0" });
+    t.svc.setLayer({ kind: "ticket", ticketKey: "X-1" }, { steps: ["implement", "open_pr"] });
+    expect(t.svc.effective("X-1")?.workflow.steps.map((s) => s.id)).toEqual(["implement", "open_pr"]);
+    expect(t.svc.chain("X-1").map((l) => l.scope.kind)).toEqual(["global", "product", "repo", "feature", "ticket"]);
+    t.svc.setLayer({ kind: "ticket", ticketKey: "X-1" }, null);
+    expect(t.svc.effective("X-1")?.scope.kind).toBe("feature");
+  });
+
+  it("a repo layer applies only to tickets in that repo", () => {
+    const t = setup({ tickets: [ticket("X-1", [repoRow(1, "X-1", "/r/a", "feature/X-1")]), ticket("Y-1", [repoRow(2, "Y-1", "/r/b", "feature/X-1")])] });
+    t.svc.setLayer({ kind: "repo", slug: "o/b" }, presetWorkflow("fast"));
+    expect(t.svc.effective("X-1")).toBeNull();
+    expect(t.svc.effective("Y-1")?.scope).toEqual({ kind: "repo", slug: "o/b" });
+  });
+
+  it("rejects a bad workflow with a readable reason", () => {
+    const t = setup();
+    expect(t.svc.setLayer({ kind: "global" }, { steps: ["ci_green"] })).toMatchObject({ ok: false, message: "「CI 通过」要排在「开 PR」后面（流程里也要有开 PR 这一步）" });
+    setLang("en");
+    expect(t.svc.setLayer({ kind: "global" }, { steps: ["deploy"] })).toMatchObject({ ok: false, message: expect.stringMatching(/^Unknown step: deploy/) });
+  });
+});
+
+describe("WorkflowService: progress and notices", () => {
+  it("records steps from the facts and tells the session the next step once, even after a restart", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "feature", featureId: 4 }, presetWorkflow("fast"));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("implement");
+    expect(t.sent.map((s) => s.ref)).toEqual(["workflow:X-1"]);
+    expect(t.sent[0].body).toContain("第 1/4 步「写代码」");
+    // 同样的状态再判断：不重送；重启（新实例、同一个库）也不重送
+    await t.svc.evaluate("X-1");
+    await t.mk().evaluateAll();
+    expect(t.sent).toHaveLength(1);
+
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    const v = t.svc.view("X-1");
+    expect(v.steps.map((s) => s.state)).toEqual(["done", "done", "current", "todo"]);
+    expect(t.sent.at(-1)!.body).toContain("CI 通过");
+  });
+
+  it("withdraws the queued notice when the step moves on, even if no session can take the new one", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "feature", featureId: 4 }, presetWorkflow("fast"));
+    await t.svc.evaluate("X-1");
+    expect(t.queued.has("workflow:X-1")).toBe(true);
+    t.setRecipient(null);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    expect(t.queued.has("workflow:X-1")).toBe(false);
+    // session 回来以后补送
+    t.setRecipient("sess-1");
+    await t.svc.evaluate("X-1");
+    expect(t.queued.get("workflow:X-1")?.body).toContain("CI 通过");
+  });
+
+  it("a PR in another repo on the same branch name is not this ticket's", async () => {
+    const t = setup({ tickets: [ticket("X-1", [repoRow(1, "X-1", "/r/a", "feature/X-1")]), ticket("Y-1", [repoRow(2, "Y-1", "/r/b", "feature/X-1")])] });
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
+    // Y-1 的仓库里同名分支开了 PR：挂在 X-1 名下的那条 repoId 是 null（slug 对不上），不算
+    t.prs.push(pr({ id: 5, ticketKey: "X-1", repoId: null, slug: "o/b", ci: "passing" }));
+    t.prs.push(pr({ id: 6, ticketKey: "Y-1", repoId: 2, slug: "o/b", ci: "passing" }));
+    await t.svc.evaluate("X-1");
+    await t.svc.evaluate("Y-1");
+    expect(t.svc.view("X-1").current).toBe("implement");
+    expect(t.svc.view("Y-1").current).toBe("merge");
+  });
+
+  it("ci none counts only after the grace period", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, ci: "none", openedAt: t.now() }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("ci_green");
+    t.tick(NO_CI_GRACE_MS);
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("merge");
+  });
+
+  it("tells the epic coordinator when a coordinator-merged ticket reaches the merge", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, ci: "passing" }));
+    await t.svc.evaluate("X-1");
+    const c = t.sent.filter((s) => s.to === "coord-4");
+    expect(c).toHaveLength(1);
+    expect(c[0].body).toContain("https://github.com/o/a/pull/1");
+    expect(t.queued.get("workflow:X-1")?.body).toContain("等总控来合");
+    // 合并以后流程走完：两条提醒都撤掉
+    t.prs[0].state = "merged";
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBeNull();
+    expect(t.queued.size).toBe(0);
+  });
+
+  it("only session steps can be marked by the session", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("strict"));
+    expect(t.svc.markStep("X-1", "pre_review", null)).toMatchObject({ ok: false });
+    expect(t.svc.markStep("X-1", "human_review", null)).toMatchObject({ ok: false, message: expect.stringContaining("没有") });
+    expect(t.svc.markStep("X-1", "implement", "done")).toMatchObject({ ok: true, message: "记下了：「写代码」做完了。下一步是「自审」。" });
+  });
+
+  it("a review skill completes the self-review", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("strict"));
+    t.svc.markStep("X-1", "implement", null);
+    t.events.push(ev({ kind: "skill", at: 5, prId: null, data: { name: "code-review", category: "review" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("pre_review");
+  });
+});
+
+describe("WorkflowService: gate", () => {
+  const strictUpToPr = { steps: ["implement", "self_review", "pre_review", { id: "open_pr", draft: true }, "ci_green", "merge"] };
+
+  it("blocks gh pr create until the steps before it are done and the commit passed pre-review", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, strictUpToPr);
+    const req = { ticketKey: "X-1", repoPath: "/r/a", dir: "/r/a-wt", branch: "feature/X-1", draft: true };
+    expect(await t.svc.prCreate(req)).toContain("「自审」");
+    t.svc.markStep("X-1", "self_review", null);
+    t.heads.set("/r/a-wt|feature/X-1", "s2");
+    expect(await t.svc.prCreate(req)).toContain("还没通过预审");
+    // 旧提交的预审 clean 不算
+    t.preReviews.push({ id: 1, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s1" }, verdict: "clean" });
+    expect(await t.svc.prCreate(req)).toContain("还没通过预审");
+    t.preReviews.push({ id: 2, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s2" }, verdict: "violations" });
+    expect(await t.svc.prCreate(req)).toContain("还没通过预审");
+    t.preReviews.push({ id: 3, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s2" }, verdict: "clean" });
+    expect(await t.svc.prCreate({ ...req, draft: false })).toContain("--draft");
+    expect(await t.svc.prCreate(req)).toBeNull();
+  });
+
+  it("a user-merged workflow blocks every session, the coordinator included", () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("strict"));
+    t.sessions.set("coord-4", session({ id: "coord-4", featureId: 4 }));
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toContain("用户自己合");
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "sess-1" })).toContain("用户自己合");
+  });
+
+  it("a workflow without a merge step leaves the merge to the user", () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "open_pr", "ci_green"] });
+    t.sessions.set("coord-4", session({ id: "coord-4", featureId: 4 }));
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toContain("用户自己合");
+  });
+
+  it("a coordinator-merged workflow lets only a coordinator merge, and only once CI is green now", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
+    t.sessions.set("coord-4", session({ id: "coord-4", featureId: 4 }));
+    t.sessions.set("sess-1", session({ id: "sess-1", ticketKey: "X-1", featureId: 4 }));
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, ci: "passing" }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "sess-1" })).toContain("由总控来合");
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toBeNull();
+    // 记下过 CI 绿，但新 push 以后 CI 又在跑：按现在的状态拦
+    t.prs[0].ci = "pending";
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: "coord-4" })).toContain("「CI 通过」");
+  });
+});
+
+describe("WorkflowService: bot review", () => {
+  const botFlow = { steps: ["implement", "open_pr", { id: "bot_review", bot: "copilot" }, "address_comments", { id: "re_review", maxRounds: 1 }, { id: "merge", mergeBy: "user" }] };
+
+  it("asks once even when two evaluations race, and waits for the bot", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    let release!: () => void;
+    t.bot.gate = new Promise<void>((r) => (release = r));
+    const a = t.svc.evaluate("X-1");
+    // 另一个实例（另一个入口）同时判断：行已经占了，不再请
+    const b = t.mk().evaluate("X-1");
+    release();
+    await Promise.all([a, b]);
+    expect(t.bot.calls).toBe(1);
+    expect(t.repo.botRequests("X-1")).toMatchObject([{ round: 1, status: "requested" }]);
+    expect(t.svc.view("X-1").current).toBe("bot_review");
+    expect(t.queued.get("workflow:X-1")?.body).toContain("已经请了 Copilot review");
+  });
+
+  it("a failed request is not done and hands the command to the session", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    t.bot.result = { ok: false, error: "HTTP 422: not eligible" };
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("bot_review");
+    const body = t.queued.get("workflow:X-1")!.body;
+    expect(body).toContain("HTTP 422");
+    expect(body).toContain("gh api -X POST repos/o/a/pulls/1/copilot-code-review");
+    // session 自己请了，bot 回来：照样认
+    t.events.push(ev({ kind: "review", at: t.now() + 10, data: { id: 1, who: "copilot", state: "COMMENTED", body: "x" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 10, data: { id: 2, reviewId: 1, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("address_comments");
+  });
+
+  it("in manual mode Shipherd doesn't call gh and asks the session instead", async () => {
+    const t = setup({ level: "manual" });
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    expect(t.bot.calls).toBe(0);
+    expect(t.repo.botRequests("X-1")).toMatchObject([{ status: "asked_session" }]);
+    expect(t.queued.get("workflow:X-1")!.body).toContain("请你跑一下这条命令");
+  });
+
+  it("asks again after the fixes are pushed, and stops at the round limit", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, headSha: "s1" }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "review", at: t.now() + 10, data: { id: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 10, data: { id: 8, reviewId: 7, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("address_comments");
+    t.svc.markStep("X-1", "address_comments", null);
+    await t.svc.evaluate("X-1");
+    // 还没 push：不再请
+    expect(t.bot.calls).toBe(1);
+    expect(t.svc.view("X-1").current).toBe("re_review");
+    t.prs[0].headSha = "s2";
+    t.tick(1000);
+    await t.svc.evaluate("X-1");
+    expect(t.bot.calls).toBe(2);
+    expect(t.repo.botRequests("X-1").map((r) => [r.round, r.sha])).toEqual([[1, "s1"], [2, "s2"]]);
+    // 第二轮又有意见，但已经到上限（再请 1 轮）：re_review 结束
+    t.tick(1000);
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 9, reviewId: 10, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("merge");
+  });
+
+  it("a first round with no comments skips addressing and re-review", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", body: "no comments" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("merge");
+    expect(t.bot.calls).toBe(1);
+  });
+
+  it("a human comment isn't the bot's answer", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 3, reviewId: null, who: "human" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("bot_review");
+  });
+});
+
+describe("WorkflowService: guide", () => {
+  it("lists the steps, notes and the current step", () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "feature", featureId: 4 }, { steps: ["implement", { id: "open_pr", note: "标题写 ticket 号" }, "ci_green", "merge"], notes: "别改版本号" });
+    const g = t.svc.guideLines("X-1");
+    expect(g[0]).toContain("epic「4.3.0」");
+    expect(g).toContain("2. 开 PR：标题写 ticket 号");
+    expect(g).toContain("4. 合并（总控来合）");
+    expect(g).toContain("补充说明：别改版本号");
+    expect(g.at(-1)).toBe("现在是「写代码」。");
+    expect(t.svc.guideLines("NOPE-1")).toEqual([]);
+  });
+});

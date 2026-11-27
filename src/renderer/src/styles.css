@@ -749,3 +749,21 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 /* 发送反馈（BTL-254） */
 .modal.feedback-dialog.wide { width: min(760px, calc(100vw - 48px)); }
 .feedback-preview { max-height: 50vh; overflow: auto; margin: 0; padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; border: 1px solid var(--border); border-radius: 6px; user-select: text; }
+
+/* 工作流程（BTL-273） */
+.workflow-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; }
+.workflow-steps { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.workflow-step { padding: 1px 8px; border-radius: 10px; font-size: 12px; background: rgba(128, 128, 128, 0.12); color: var(--muted); white-space: nowrap; }
+.workflow-step.done { color: var(--pill-merged); background: var(--pill-merged-bg); }
+.workflow-step.current { color: var(--accent); background: transparent; outline: 1px solid var(--accent); font-weight: 600; }
+.workflow-tickets { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; width: 100%; font-size: 12px; }
+.workflow-layer { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.workflow-editor { display: flex; flex-direction: column; gap: 8px; }
+.workflow-editor .row, .workflow-layer .row, .workflow-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.workflow-editor button.active { outline: 1px solid var(--accent); }
+.workflow-edit-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.workflow-edit-steps li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.workflow-edit-steps li strong { min-width: 7em; }
+.workflow-step-options { display: inline-flex; gap: 8px; align-items: center; }
+.workflow-note { flex: 1; min-width: 160px; }
+.workflow-notes { width: 100%; }

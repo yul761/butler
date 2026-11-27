@@ -298,7 +298,7 @@ export function App() {
             {route.page === "effect" && <EffectPage />}
             {route.page === "unclaimed" && <UnclaimedPage tickets={allTickets} />}
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} />}
-            {route.page === "settings" && <SettingsPage section={route.section} nonce={route.nonce} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
+            {route.page === "settings" && <SettingsPage section={route.section} nonce={route.nonce} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} onOpenShipherd={(id) => setRoute({ page: "shipherd", focusSession: id })} />}
             {route.page === "audit" && <AuditPage />}
             {route.page === "lessons" && <LessonsPage tab={route.tab} onOpenSession={(id) => setRoute({ page: "shipherd", focusSession: id })} />}
           </>

@@ -25,6 +25,9 @@ import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
 import type { Mailbox } from "../mailbox/mailbox";
 import type { ResumeStart, WakeState } from "../sessions/resumer";
+import { isWorkflowCoordinatorOp, type WorkflowCoordinatorOp } from "../../shared/workflow-control";
+import { WF } from "../workflow/strings";
+import type { WorkflowControl } from "../workflow/workflow-control";
 
 export interface ControlHandlerDeps {
   tickets: TicketsRepo;
@@ -89,10 +92,12 @@ export interface ControlHandlerDeps {
   /** 栈式 PR（工作流 K）：list_stacks、stack_define、stack_rebase、stack_layer_mode 和 create_ticket 的 stack_on。不给时这些都报「没开」。 */
   stacks?: StackControl;
   log?: (msg: string, err?: unknown) => void;
+  /** 工作流程（BTL-273）：workflow_step_done 和总控的 get/set/list_workflow_presets。不给就报「没开」。 */
+  workflow?: WorkflowControl;
 }
 
-/** 除了 ask_user、report 以外的请求（那两个先单独处理）。 */
-type NonInbox<T> = Exclude<T, { op: InboxControlOp["op"] }>;
+/** 除了 ask_user、report 和工作流程以外的请求（那几个先单独处理）。 */
+type NonInbox<T> = Exclude<T, { op: InboxControlOp["op"] | WorkflowCoordinatorOp["op"] }>;
 
 const ok = (value: unknown): ControlResult => ({ v: 1, ok: true, value });
 const fail = (error: string): ControlResult => ({ v: 1, ok: false, error });
@@ -435,6 +440,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       return ok(own.map((t) => ({
         key: t.key, title: t.title, status: effectiveStatus(t), feature: (t.blockId != null && blockName.get(t.blockId)) || null,
         repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
+        ...(d.workflow && { workflow: d.workflow.summary(t.key) }),
       })));
     }
 
@@ -522,12 +528,31 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   // Shipherd 总控（BTL-190 第 5 点）。
   const shipherdRequest = shipherdControl(d, { sessionActivity, refreshSession, listedActivity, lastReply });
 
+  /**
+   * 工作流程（BTL-273）的总控工具：调用的必须是这个作用域的总控（核对 from，和 ask_user 一样），epic 还得没归档。
+   */
+  const workflowRequest = (req: Extract<ControlRequest, { op: WorkflowCoordinatorOp["op"] }>): ControlResult => {
+    if (!d.workflow) return fail(WF().ctlOff);
+    const h = req.from ? d.sessions.head(req.from) : null;
+    if (!h) return fail(M().ctlInboxNoSession);
+    if ("shipherd" in req) {
+      if (!h.shipherd || h.ticketKey !== null) return fail(M().ctlInboxNotYours);
+      return d.workflow.coordinator(req, { shipherd: true });
+    }
+    if (h.featureId !== req.featureId || h.ticketKey !== null) return fail(M().ctlInboxNotYours);
+    const f = d.features?.get(req.featureId);
+    if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
+    return d.workflow.coordinator(req, { featureId: f.id });
+  };
+
   return async (req) => {
     if (req.op === "ask_user" || req.op === "report") return inboxRequest(req);
-    if ("shipherd" in req) return shipherdRequest(req);
-    if ("featureId" in req) return featureRequest(req);
+    if (isWorkflowCoordinatorOp(req.op) && !("ticketKey" in req)) return workflowRequest(req as Extract<ControlRequest, { op: WorkflowCoordinatorOp["op"] }>);
+    if ("shipherd" in req) return shipherdRequest(req as NonInbox<typeof req>);
+    if ("featureId" in req) return featureRequest(req as NonInbox<typeof req>);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
+    if (req.op === "workflow_step_done") return d.workflow ? d.workflow.ticketStep(req, t) : fail(WF().ctlOff);
     return preReviewRequest(req, t);
   };
 }

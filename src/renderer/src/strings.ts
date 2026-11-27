@@ -15,6 +15,7 @@ import type { ExportContent, FileScope, PreviewStatus, SectionApplyCounts } from
 import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason, LessonRunStatus } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
+import type { MergeBy, WorkflowPresetId, WorkflowScopeKind, WorkflowStepId } from "../../shared/workflow";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
 import type { CheckAbsenceReason, CheckMode, CheckOutcome, CheckSeverity, CheckStage, CheckType, CheckVerdict, ChecksBulkOp } from "../../shared/checks";
@@ -52,7 +53,7 @@ const ZH = {
   },
   /** 设置页（UI 重做第 6 层）：四个 tab、高级里的分组、健康检查。 */
   set: {
-    tabs: { basic: "基本", features: "自动化", advanced: "高级", health: "健康检查", about: "关于" } as Record<SettingsTabId, string>,
+    tabs: { basic: "基本", features: "自动化", workflow: "工作流程", advanced: "高级", health: "健康检查", about: "关于" } as Record<SettingsTabId, string>,
     groups: {
       schedule: "定时与状态",
       sessions: "Session 与内存",
@@ -2467,6 +2468,54 @@ const ZH = {
   /** 终端里点的链接（BTL-257）。 */
   terminalLink: {
     refused: (url: string) => `这个链接不能打开（只开 http / https，链接里不能带用户名或密码）：${url}`,
+  },
+  /** 工作流程（BTL-273）：设置页的分层编辑、ticket 首页和 epic 页的流程条。 */
+  workflow: {
+    intro: "给 ticket 定一套做法。每做完一步，Shipherd 会提醒 session 下一步；开 PR、合并的顺序不对会被拦住。下面的层覆盖上面的层，都没设就照原来的方式做。",
+    askClaude: "用 Claude 设置",
+    askClaudeHint: "打开 Shipherd 总控，用一句话说你想怎么做，它会帮你设好",
+    prefill: "帮我设一下 ticket 的工作流程：",
+    none: "还没设任何一层，ticket 照原来的方式做。",
+    scope: { global: "全局", product: "产品", repo: "仓库", feature: "epic", ticket: "ticket" } as Record<WorkflowScopeKind, string>,
+    scopeLabel: (kind: string, label: string) => (label ? `${kind} · ${label}` : kind),
+    add: "加一层",
+    edit: "改",
+    clear: "清掉",
+    save: "保存",
+    cancel: "取消",
+    pickTarget: "选一个",
+    noTargets: "没有可选的",
+    startFrom: "从预设开始：",
+    preset: { fast: "快速：写完开 PR，CI 过了就合", strict: "严格：自审、预审、Copilot review、改完再合" } as Record<WorkflowPresetId, string>,
+    presetName: { fast: "快速", strict: "严格" } as Record<WorkflowPresetId, string>,
+    custom: "自定义",
+    steps: {
+      implement: "写代码", self_review: "自我 review", pre_review: "预审", open_pr: "开 PR", ci_green: "CI 通过",
+      bot_review: "bot review", address_comments: "处理意见", re_review: "再请 review", human_review: "人工 review", merge: "合并",
+    } as Record<WorkflowStepId, string>,
+    addStep: "加一步：",
+    up: "上移",
+    down: "下移",
+    remove: "去掉",
+    draft: "先开 draft",
+    bot: "请谁",
+    rounds: "最多几轮",
+    mergeBy: { coordinator: "总控合", user: "我自己合" } as Record<MergeBy, string>,
+    note: "这一步的要求（可不填）",
+    notes: "整体说明（可不填）",
+    saved: "存好了。",
+    unchanged: "和原来一样，没改。",
+    strip: "工作流程",
+    from: (where: string) => `按${where}`,
+    current: "现在：",
+    allDone: "都做完了",
+    doneAt: (when: string) => `${when} 做完`,
+    rounds_: (n: number) => `已请 ${n} 轮`,
+    epicOwn: "这个 epic 的流程",
+    epicInherit: "这个 epic 没单独设流程，按上层的。",
+    epicTickets: "各 ticket 走到哪",
+    progress: (done: number, total: number) => `${done}/${total}`,
+    setHere: "去设置",
   },
 };
 

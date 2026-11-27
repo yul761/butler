@@ -17,6 +17,8 @@ describe("parseGateRequest", () => {
       { kind: "push", dir: "/x", target: "main" },
       { kind: "push", dir: null, target: "main", source: "feat" },
       { kind: "switch", dir: null, branch: "b", create: true },
+      { kind: "pr_create", dir: null, head: null, draft: false, repo: null },
+      { kind: "pr_create", dir: "/x", head: "feat", draft: true, repo: "o/r" },
     ]) expect(parseGateRequest({ ...base, action })).toMatchObject({ action });
   });
 

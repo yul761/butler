@@ -1633,4 +1633,45 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX sessions_feature ON sessions(feature_id, ticket_key) WHERE feature_id IS NOT NULL;
   CREATE INDEX branch_watch_ticket ON branch_watch(ticket_key);
   `,
+  // 60（BTL-273）：可配的工作流程。workflow_layers 每一层存一份完整的流程（JSON：steps、notes），层是全局、产品、仓库、epic（feature）、ticket。
+  // workflow_progress 记每个 ticket 每一步完成的时间（只增不减，source 是谁标的：session、预审、PR 监视……）。
+  // workflow_bot_requests 记向 Copilot / Codex 请求的每一轮 review：先占一行（requesting）再调 gh，防止同一轮请求两次。
+  // workflow_notices 记最后一次「下一步做什么」提醒的是哪一步：重启以后不再重复送。
+  `
+  CREATE TABLE workflow_layers (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo','feature','ticket')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    feature_id INTEGER,
+    ticket_key TEXT,
+    workflow TEXT NOT NULL,
+    updated_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX workflow_layers_scope ON workflow_layers
+    (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''), COALESCE(feature_id, 0), COALESCE(ticket_key, ''));
+  CREATE TABLE workflow_progress (
+    ticket_key TEXT NOT NULL,
+    step TEXT NOT NULL,
+    done_at INTEGER NOT NULL,
+    detail TEXT,
+    source TEXT NOT NULL,
+    PRIMARY KEY (ticket_key, step));
+  CREATE TABLE workflow_bot_requests (
+    id INTEGER PRIMARY KEY,
+    ticket_key TEXT NOT NULL,
+    pr_id INTEGER NOT NULL,
+    round INTEGER NOT NULL,
+    bot TEXT NOT NULL,
+    sha TEXT,
+    status TEXT NOT NULL CHECK (status IN ('requesting','requested','asked_session','failed')),
+    requested_at INTEGER NOT NULL,
+    reviewed_at INTEGER,
+    review_comments INTEGER,
+    error TEXT,
+    UNIQUE (ticket_key, pr_id, round));
+  CREATE TABLE workflow_notices (
+    ticket_key TEXT PRIMARY KEY,
+    notice TEXT NOT NULL,
+    sent_at INTEGER NOT NULL);
+  `,
 ];

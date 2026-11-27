@@ -9,6 +9,8 @@ import {
 import type { Lang } from "../src/shared/i18n";
 import { EVIDENCE_CATEGORIES, EVIDENCE_LIMITS, parseSubmitEvidence } from "../src/shared/prereview";
 import { isModelName, isTier } from "../src/shared/model-routing";
+import { WORKFLOW_STEPS } from "../src/shared/workflow";
+import { WORKFLOW_STEP_NOTE_LIMIT, isWorkflowCoordinatorOp, parseWorkflowCoordinatorOp, parseWorkflowTicketOp } from "../src/shared/workflow-control";
 
 /**
  * shipherd-sessions：挂给总控 session 的 MCP server（设计文档 2026-10-23 第二步）。stdio 上按行收发 JSON-RPC 2.0；
@@ -285,8 +287,39 @@ export const PRE_REVIEW_RESULT_TOOL_EN = {
     "The result is usually sent to you; use this when it did not arrive or you want every violation. Read-only.",
 } as const;
 
-export const MEMBER_TOOLS = [SUBMIT_EVIDENCE_TOOL, PRE_REVIEW_RESULT_TOOL] as const;
-export const MEMBER_TOOLS_EN = [SUBMIT_EVIDENCE_TOOL_EN, PRE_REVIEW_RESULT_TOOL_EN] as const;
+/** 工作流程（BTL-273）：ticket session 标做完一步。 */
+export const WORKFLOW_STEP_TOOL = {
+  name: "workflow_step_done",
+  description:
+    "这个 ticket 设了工作流程时，做完一步就调它：写代码（implement）、自审（self_review）、处理评论（address_comments）、不用再请 review（re_review）。" +
+    "别的步骤（预审、开 PR、CI、bot review、合并）Shipherd 按实际情况自己判断，不用标。返回下一步是什么。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      step: { type: "string", enum: ["implement", "self_review", "address_comments", "re_review"], description: "做完的步骤" },
+      note: { type: "string", description: `可选：一句说明，最多 ${WORKFLOW_STEP_NOTE_LIMIT} 字` },
+    },
+    required: ["step"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const WORKFLOW_STEP_TOOL_EN = {
+  ...WORKFLOW_STEP_TOOL,
+  description:
+    "When this ticket has a workflow, call this after finishing a step: implement, self_review, address_comments, or re_review (no more review needed). " +
+    "Shipherd tells the other steps (pre-review, opening the PR, CI, bot review, merge) from the facts, so don't mark them. Returns the next step.",
+  inputSchema: {
+    ...WORKFLOW_STEP_TOOL.inputSchema,
+    properties: {
+      step: { ...WORKFLOW_STEP_TOOL.inputSchema.properties.step, description: "the step you finished" },
+      note: { type: "string", description: `optional: one sentence, at most ${WORKFLOW_STEP_NOTE_LIMIT} characters` },
+    },
+  },
+} as const;
+
+export const MEMBER_TOOLS = [SUBMIT_EVIDENCE_TOOL, PRE_REVIEW_RESULT_TOOL, WORKFLOW_STEP_TOOL] as const;
+export const MEMBER_TOOLS_EN = [SUBMIT_EVIDENCE_TOOL_EN, PRE_REVIEW_RESULT_TOOL_EN, WORKFLOW_STEP_TOOL_EN] as const;
 
 /** start_session 的 model 参数（两种总控共用）：档位或模型名，主进程按模型路由选实际的模型。 */
 const MODEL_PROP = {
@@ -396,6 +429,103 @@ export const STACK_TOOLS_EN = [
         mode: { type: "string", enum: ["draft", "branch"], description: "draft: open a draft PR; branch: back to a plain branch" },
       },
     },
+  },
+] as const;
+
+/**
+ * 工作流程（BTL-273）的总控工具，两级总控都有（追加在各自工具表的末尾）。scope：global、product:<名字>、repo:<owner/repo>、epic:<名字>、ticket:<号>。
+ */
+const WORKFLOW_SCOPE_ZH = "哪一层：global、product:<产品名>、repo:<owner/repo>、epic:<epic 名或 id>、ticket:<ticket 号>。epic 总控不写是自己的 epic，全局总控不写是 global";
+const WORKFLOW_STEP_ITEM = {
+  anyOf: [
+    { type: "string", enum: [...WORKFLOW_STEPS] },
+    {
+      type: "object",
+      properties: {
+        id: { type: "string", enum: [...WORKFLOW_STEPS] },
+        note: { type: "string" },
+        draft: { type: "boolean" },
+        bot: { type: "string", enum: ["copilot", "codex"] },
+        maxRounds: { type: "integer", minimum: 1, maximum: 5 },
+        mergeBy: { type: "string", enum: ["coordinator", "user"] },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  ],
+} as const;
+
+export const WORKFLOW_TOOLS = [
+  {
+    name: "get_workflow",
+    description:
+      "看工作流程（ticket 从写代码到合并要走的步骤）。给 ticket：它实际用的流程、来自哪一层、每一步做没做完、现在在哪一步。给 scope：那一层自己设的流程（epic 还列出每个 ticket 在哪一步）。" +
+      "全局总控什么都不给：列出所有设过的层。分层是 全局 → 产品 → 仓库 → epic → ticket，下层整份覆盖上层；都没设就照旧。只读。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", description: WORKFLOW_SCOPE_ZH },
+        ticket: { type: "string", description: "可选：看这个 ticket 实际用的流程和进度（和 scope 二选一）" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "set_workflow",
+    description:
+      "给一层设工作流程（用户说「我的 ticket 写完开 PR 直接合」「要预审、Copilot review、改完再 review」这类话时用）。steps 按顺序列步骤，可以直接用 list_workflow_presets 里的预设；steps: null 清掉这一层。" +
+      "设好后 Shipherd 按流程提醒 session 下一步、拦下不按顺序的开 PR 和合并、到 bot review 时请 Copilot / Codex。epic 总控只能改自己的 epic 和它的 ticket。设之前先跟用户确认步骤。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", description: WORKFLOW_SCOPE_ZH },
+        steps: { type: ["array", "null"], items: WORKFLOW_STEP_ITEM, description: "按顺序的步骤：步骤 id，或 { id, note, draft, bot, maxRounds, mergeBy }；null 清掉这一层" },
+        notes: { type: "string", description: "可选：整个流程的补充说明（写进 session 的指引），最多 4000 字" },
+      },
+      required: ["steps"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_workflow_presets",
+    description: "列出工作流程的预设（fast：写完开 PR、CI 过了总控合；strict：自审、预审、开 PR、CI、Copilot review、改、再 review、用户合）和每个步骤的意思。只读。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+] as const;
+
+const WORKFLOW_SCOPE_EN = "which layer: global, product:<name>, repo:<owner/repo>, epic:<name or id>, ticket:<key>. Left out, it is your own epic for an epic coordinator, and global for the global coordinator";
+
+export const WORKFLOW_TOOLS_EN = [
+  {
+    ...WORKFLOW_TOOLS[0],
+    description:
+      "Read a workflow (the steps a ticket goes through from code to merge). With ticket: the workflow it actually uses, which layer it comes from, which steps are done and the current step. With scope: that layer's own workflow (an epic also lists where each ticket is). " +
+      "The global coordinator with neither: every layer that is set. Layers are global → product → repo → epic → ticket; a lower layer replaces the one above it as a whole; with none set, nothing changes. Read-only.",
+    inputSchema: {
+      ...WORKFLOW_TOOLS[0].inputSchema,
+      properties: {
+        scope: { type: "string", description: WORKFLOW_SCOPE_EN },
+        ticket: { type: "string", description: "optional: this ticket's workflow and progress (instead of scope)" },
+      },
+    },
+  },
+  {
+    ...WORKFLOW_TOOLS[1],
+    description:
+      "Set the workflow for a layer (when the user says things like \"for my tickets, open the PR and merge\" or \"pre-review, Copilot review, fix, review again\"). steps lists the steps in order; the presets from list_workflow_presets work as-is; steps: null clears the layer. " +
+      "Then Shipherd reminds the session of the next step, blocks opening the PR or merging out of order, and asks Copilot / Codex at the bot review. An epic coordinator can only change its own epic and its tickets. Confirm the steps with the user first.",
+    inputSchema: {
+      ...WORKFLOW_TOOLS[1].inputSchema,
+      properties: {
+        scope: { type: "string", description: WORKFLOW_SCOPE_EN },
+        steps: { ...WORKFLOW_TOOLS[1].inputSchema.properties.steps, description: "the steps in order: a step id, or { id, note, draft, bot, maxRounds, mergeBy }; null clears the layer" },
+        notes: { type: "string", description: "optional: notes for the whole workflow (go into the session guide), at most 4000 characters" },
+      },
+    },
+  },
+  {
+    ...WORKFLOW_TOOLS[2],
+    description: "List the workflow presets (fast: open the PR when done, the coordinator merges once CI passes; strict: self-review, pre-review, PR, CI, Copilot review, fixes, review again, the user merges) and what each step means. Read-only.",
   },
 ] as const;
 
@@ -513,6 +643,7 @@ export const FEATURE_TOOLS = [
       additionalProperties: false,
     },
   },
+  ...WORKFLOW_TOOLS,
 ] as const;
 
 /** 英文版：工具名、参数和 schema 一样，只有描述不同。 */
@@ -614,6 +745,7 @@ export const FEATURE_TOOLS_EN = [
       },
     },
   },
+  ...WORKFLOW_TOOLS_EN,
 ] as const;
 
 
@@ -814,6 +946,7 @@ export const SHIPHERD_TOOLS = [
       additionalProperties: false,
     },
   },
+  ...WORKFLOW_TOOLS,
 ] as const;
 
 export const SHIPHERD_TOOLS_EN = [
@@ -935,6 +1068,7 @@ export const SHIPHERD_TOOLS_EN = [
       "Pass epic (a name or id from list_epics) to list only that epic's. To change features, tell the epic's coordinator (send_message); you cannot change them yourself.",
     inputSchema: { ...SHIPHERD_TOOLS[12].inputSchema, properties: { epic: { type: "string", description: "optional: only this epic's features (name or id)" } } },
   },
+  ...WORKFLOW_TOOLS_EN,
 ] as const;
 
 /** MB 写成「3.5 GB」（不到 1 GB 写 MB）。 */
@@ -964,6 +1098,7 @@ const TEXT = {
     needEvidence: "submit_evidence 至少要一条成形的检查（name 或 command、result 是 pass 或 fail）、验收条件或没跑的说明",
     needPr: "pr_assessment 需要参数 pr：list_prs 里的 prId，或者 PR 的链接",
     noTool: (t: string) => `没有这个工具：${t}`,
+    badWorkflowArgs: (t: string) => `${t} 的参数不对：scope 写 global、product:<名字>、repo:<owner/repo>、epic:<名字> 或 ticket:<号>；steps 是步骤数组或 null；step 是 implement、self_review、address_comments、re_review 之一；说明不能太长。`,
     capacity: (c: SessionCapacity) =>
       c.canStart === null
         ? "现在还能再开的 session：读不到内存，不限。"
@@ -1004,6 +1139,7 @@ const TEXT = {
     needEvidence: "submit_evidence needs at least one well-formed check (name or command, result pass or fail), acceptance criterion or not-run note",
     needPr: "pr_assessment needs a pr argument: a prId from list_prs or the PR's URL",
     noTool: (t: string) => `No such tool: ${t}`,
+    badWorkflowArgs: (t: string) => `Bad arguments for ${t}: scope is global, product:<name>, repo:<owner/repo>, epic:<name> or ticket:<key>; steps is an array of steps or null; step is one of implement, self_review, address_comments, re_review; notes can't be too long.`,
     capacity: (c: SessionCapacity) =>
       c.canStart === null
         ? "Sessions you can still start: memory could not be read, no limit."
@@ -1094,6 +1230,7 @@ export class SessionsServer {
       : { v: CONTROL_VERSION, ticketKey: scope.ticketKey, from: this.o.from } as const;
     const req =
       this.inboxRequest(base, params.name, args)
+      ?? this.workflowRequest(base, params.name, args)
       ?? ("shipherd" in scope ? this.shipherdRequest(params.name, args)
         : "featureId" in scope ? this.featureRequest(scope.featureId, params.name, args)
         : this.memberRequest(scope.ticketKey, params.name, args));
@@ -1110,12 +1247,23 @@ export class SessionsServer {
     return { content: text };
   }
 
+  /** 两级总控的 get_workflow、set_workflow、list_workflow_presets（BTL-273）；ticket session 没有。参数规则和 Shipherd 那边同一份。 */
+  private workflowRequest(base: { v: 1; from: string | null } & ({ shipherd: true } | { featureId: number } | { ticketKey: string }), tool: unknown, args: Record<string, unknown>): ControlRequest | ToolError | null {
+    if (!isWorkflowCoordinatorOp(tool) || "ticketKey" in base) return null;
+    const w = parseWorkflowCoordinatorOp({ ...args, op: tool });
+    return w ? ({ ...base, ...w } as ControlRequest) : toolError(this.text.badWorkflowArgs(tool));
+  }
+
   /** 普通 ticket session：submit_evidence、pre_review_result（工作流 G）。参数在这里先验一遍，Shipherd 再验一遍。 */
   private memberRequest(ticketKey: string, tool: unknown, args: Record<string, unknown>): ControlRequest | ToolError {
     const base = { v: CONTROL_VERSION, ticketKey, from: this.o.from } as const;
     switch (tool) {
       case "pre_review_result":
         return { ...base, op: "pre_review_result" };
+      case "workflow_step_done": {
+        const w = parseWorkflowTicketOp({ ...args, op: tool });
+        return w ? { ...base, ...w } : toolError(this.text.badWorkflowArgs(tool));
+      }
       case "submit_evidence": {
         const evidence = parseSubmitEvidence(args);
         return evidence ? { ...base, op: "submit_evidence", evidence: { ...evidence } } : toolError(this.text.needEvidence);

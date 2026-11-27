@@ -202,6 +202,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.automationState, IPC.featuresSetAutomationLevel,
   // 更新提示（BTL-253）：查更新、跳过、关提示条、开 release 页都和工作无关
   IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease,
+  // 工作流程（BTL-273）：读流程、改一层都是搭环境
+  IPC.workflowState, IPC.workflowSet, IPC.workflowTicket, IPC.workflowFeature,
 ]);
 
 /** 这个通道算不算手动触发。 */

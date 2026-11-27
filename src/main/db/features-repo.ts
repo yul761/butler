@@ -28,6 +28,8 @@ const toRepo = (r: FeatureRepoRow): FeatureRepo => ({ id: Number(r.id), featureI
 export const FEATURE_REFS = [
   "tickets", "sessions", "blocks", "session_messages", "feature_handoffs", "epic_history", "epic_memory_archive",
   "inbox_items", "pr_stage_events", "stacks", "fork_discussions", "shipherd_messages",
+  // BTL-273：epic 设了自己的流程也不算空（id 可能被新 epic 复用，留下的层会套到它头上）。
+  "workflow_layers",
 ] as const;
 
 export class FeaturesRepo {

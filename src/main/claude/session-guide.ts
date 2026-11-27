@@ -110,6 +110,17 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
       ? "上下文太长时 Shipherd 会替你写 handoff、清空、再让你从记忆里接上，这时按它的话做就行。重要的决定和约定随时用 remember 写进记忆。"
       : "Shipherd may refresh a session whose context grows too long: it writes a handoff for you, clears the session, and has you pick up from memory; just follow what it says. Save important decisions and agreements to memory with remember as you go.",
+  // 工作流程（BTL-273）：两级总控能看、能设。epic 总控只能改自己的 epic 和它的 ticket。
+  (lang, kind) =>
+    kind !== "coordinator" && kind !== "shipherd"
+      ? null
+      : lang === "zh"
+        ? "用户想定 ticket 的做法（写完直接合、要不要预审、要不要 Copilot review、谁来合并）时，用 get_workflow 看现在的流程，list_workflow_presets 看能用的步骤和预设，set_workflow 设好。" +
+          "流程按 全局 → 产品/仓库 → epic → ticket 一层层覆盖；Shipherd 会按流程提醒 session 下一步，开 PR、合并的顺序不对会被拦住。" +
+          (kind === "coordinator" ? "你只能改这个 epic 和它的 ticket；全局、产品、仓库那几层要在 Shipherd 总控里改。" : "")
+        : "When the user wants to decide how tickets get done (merge right after writing, whether to pre-review, whether Copilot reviews, who merges), check the current one with get_workflow, see the steps and presets with list_workflow_presets, and set it with set_workflow. " +
+          "Workflows layer global → product/repo → epic → ticket, each overriding the one before; Shipherd nudges sessions to the next step and stops a PR or merge that comes out of order." +
+          (kind === "coordinator" ? " You can change only this epic and its tickets; the global, product and repo layers are changed from the Shipherd coordinator." : ""),
 ];
 
 export interface GuideOptions {

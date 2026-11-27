@@ -42,6 +42,9 @@ function parseAction(raw: unknown): GateAction | null {
       return a.source === undefined ? { kind: "push", dir, target: a.target } : { kind: "push", dir, target: a.target, source: a.source };
     case "switch":
       return okStr(a.branch) && typeof a.create === "boolean" ? { kind: "switch", dir, branch: a.branch, create: a.create } : null;
+    case "pr_create":
+      if (!okNullable(a.head) || typeof a.draft !== "boolean" || !okNullable(a.repo)) return null;
+      return { kind: "pr_create", dir, head: a.head, draft: a.draft, repo: a.repo };
     default:
       return null;
   }

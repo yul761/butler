@@ -9,6 +9,8 @@ import { BasicSettings } from "./BasicSettings";
 import { FeatureSettings } from "./FeatureSettings";
 import { HealthSettings } from "./HealthSettings";
 import { AboutSettings } from "./AboutSettings";
+import { WorkflowSettings } from "./WorkflowParts";
+import { reportError } from "../errors";
 
 /** 没有 section 时回到上次看的 tab；记录不对就是「基本」。 */
 function initialTab(section: SettingsSection | undefined): SettingsTabId {
@@ -18,7 +20,7 @@ function initialTab(section: SettingsSection | undefined): SettingsTabId {
 }
 
 /** 设置页（UI 重做 spec §5.3）：基本 / 功能 / 高级 / 健康检查 / 关于（BTL-253）。 */
-export function SettingsPage({ onRerunWizard, section, nonce }: { onRerunWizard: () => void; section?: SettingsSection; nonce?: number }) {
+export function SettingsPage({ onRerunWizard, section, nonce, onOpenShipherd }: { onRerunWizard: () => void; section?: SettingsSection; nonce?: number; onOpenShipherd?: (sessionId: string) => void }) {
   const [tab, setTab] = useState<SettingsTabId>(() => initialTab(section));
   const [openGroup, setOpenGroup] = useState<AdvancedGroupId | null>(() => sectionTarget(section).group);
   useEffect(() => {
@@ -83,6 +85,7 @@ export function SettingsPage({ onRerunWizard, section, nonce }: { onRerunWizard:
       {tab === "basic" &&
         (report ? <BasicSettings report={report} onHealth={applyHealth} onRerunWizard={onRerunWizard} /> : <p className="empty">{error ?? S.loading}</p>)}
       {tab === "features" && <FeatureSettings onOpenAdvanced={openAdvanced} />}
+      {tab === "workflow" && <WorkflowSettings onAskClaude={() => void askClaude(onOpenShipherd)} />}
       {tab === "advanced" && <AdvancedSettings openGroup={openGroup} />}
       {tab === "health" && (
         <HealthSettings
@@ -98,4 +101,18 @@ export function SettingsPage({ onRerunWizard, section, nonce }: { onRerunWizard:
       {tab === "about" && <AboutSettings />}
     </div>
   );
+}
+
+/**
+ * 「用 Claude 设置」（BTL-273）：和总控页一样经 openShipherdSession 打开 Shipherd 总控（开着的就用它），把开头的话填进输入框，
+ * 再跳到总控页、聚焦返回的那个终端。打不开时说原因。
+ */
+export async function askClaude(onOpen: ((sessionId: string) => void) | undefined): Promise<void> {
+  try {
+    const r = await api.openShipherdSession({ prefill: S.workflow.prefill });
+    if (r.ok) onOpen?.(r.termId);
+    else reportError(new Error(S.shipherdOpenErrors[r.reason] ?? S.openErrors[r.reason] ?? r.reason));
+  } catch (e) {
+    reportError(e);
+  }
 }

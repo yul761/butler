@@ -94,7 +94,7 @@ describe("Hub", () => {
     const hub = new Hub({ backend: (s) => fakeBackend(s, []) });
     hub.apply({ op: "add", token: T1, route: { server: "sessions", env: { SHIPHERD_TICKET: "A", SHIPHERD_MEMBER: "1", SHIPHERD_CONTROL_REQUESTS: "/r", SHIPHERD_CONTROL_RESULTS: "/s" }, from: "t" } });
     const r = (await hub.handler(T1)!({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(r.result.tools.map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "ask_user", "report"]);
+    expect(r.result.tools.map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "workflow_step_done", "ask_user", "report"]);
     // 少了控制目录：不建，也不报错。
     hub.apply({ op: "add", token: T2, route: { server: "sessions", env: { SHIPHERD_TICKET: "A" }, from: null } });
     expect(hub.handler(T2)).toBeNull();

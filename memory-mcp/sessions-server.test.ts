@@ -136,7 +136,7 @@ describe("shipherd-sessions for a feature coordinator (design 2026-10-26)", () =
     const list = (await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as { result: { tools: { name: string }[] } };
     expect(list.result.tools.map((t) => t.name)).toEqual([
       "list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session",
-      "list_features", "create_feature", "reorder_features", "set_ticket_feature", "send_message",
+      "list_features", "create_feature", "reorder_features", "set_ticket_feature", "get_workflow", "set_workflow", "list_workflow_presets", "send_message",
       "list_stacks", "stack_define", "stack_rebase", "stack_layer_mode", "ask_user", "report",
     ]);
     expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS]);
@@ -426,8 +426,8 @@ describe("ask_user and report for every Shipherd session (BTL-190 2+3)", () => {
     for (const name of ["list_sessions", "list_repos", "session_activity", "end_session", "refresh_session"]) {
       expect(await callTool(server, name, { session: "s", reason: "r" }), name).toMatchObject({ result: { isError: true } });
     }
-    // ticket 的 session 只有这四个工具：没有总控的那一套。
-    expect((await tools(server)).map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "ask_user", "report"]);
+    // ticket 的 session 只有这五个工具：没有总控的那一套（BTL-273 加了 workflow_step_done）。
+    expect((await tools(server)).map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "workflow_step_done", "ask_user", "report"]);
     expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
   });
 
@@ -475,7 +475,7 @@ describe("ask_user and report for every Shipherd session (BTL-190 2+3)", () => {
 });
 
 describe("shipherd-sessions for the Shipherd 总控 (BTL-190 5)", () => {
-  const NAMES = ["list_epics", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_epic_summary", "metrics_overview", "pr_assessment", "list_features"];
+  const NAMES = ["list_epics", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_epic_summary", "metrics_overview", "pr_assessment", "list_features", "get_workflow", "set_workflow", "list_workflow_presets"];
 
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
     expect(await tools(setup(2000, { shipherd: true }).server)).toEqual([...SHIPHERD_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS]);
@@ -590,5 +590,61 @@ describe("sessionsOptionsFromEnv", () => {
     // 升级前写下的配置里可能还有这两个变量：SHIPHERD_EPIC 不再是作用域，SHIPHERD_FEATURE_EPIC 不再加工具。
     expect(sessionsOptionsFromEnv({ ...dirs, SHIPHERD_EPIC: "3" }, "s1")).toBeNull();
     expect(sessionsOptionsFromEnv({ ...dirs, SHIPHERD_FEATURE: "7", SHIPHERD_FEATURE_EPIC: "1" }, "s1")?.scope).toEqual({ featureId: 7 });
+  });
+});
+
+describe("workflow tools (BTL-273)", () => {
+  it("both coordinators get get/set/list_workflow_presets in both languages; a ticket session gets workflow_step_done", async () => {
+    for (const scope of [{ featureId: 7 }, { shipherd: true }] as const) {
+      const zh = (await tools(setup(2000, scope).server)).map((t) => t.name);
+      const en = (await tools(setup(2000, scope, "en").server)).map((t) => t.name);
+      for (const n of ["get_workflow", "set_workflow", "list_workflow_presets"]) {
+        expect(zh, JSON.stringify(scope)).toContain(n);
+        expect(en).toContain(n);
+      }
+      expect(zh).not.toContain("workflow_step_done");
+    }
+    const member = await tools(setup(2000, { ticketKey: "P-1" }).server);
+    expect(member.map((t) => t.name)).toContain("workflow_step_done");
+    expect(member.map((t) => t.name)).not.toContain("set_workflow");
+    const zhSet = FEATURE_TOOLS.find((t) => t.name === "set_workflow")!;
+    const enSet = FEATURE_TOOLS_EN.find((t) => t.name === "set_workflow")!;
+    expect(zhSet.description).toMatch(/[\u4e00-\u9fff]/);
+    expect(/[\u4e00-\u9fff]/.test(JSON.stringify(enSet))).toBe(false);
+    expect(Object.keys(enSet.inputSchema.properties)).toEqual(Object.keys(zhSet.inputSchema.properties));
+    expect(SHIPHERD_TOOLS.find((t) => t.name === "set_workflow")).toBe(zhSet);
+  });
+
+  it("sends the workflow requests with the caller's scope, and refuses bad arguments without asking Shipherd", async () => {
+    const f = setup(2000, { featureId: 7 });
+    const get = callTool(f.server, "get_workflow", { ticket: "DMS-1" });
+    expect(await f.answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, featureId: 7, from: "boss", op: "get_workflow", ticket: "DMS-1" });
+    await get;
+    const set = callTool(f.server, "set_workflow", { scope: "epic:4.3.0", steps: ["implement", "open_pr", { id: "merge", mergeBy: "coordinator" }] });
+    expect(await f.answer({ v: 1, ok: true, value: {} })).toEqual({
+      v: 1, featureId: 7, from: "boss", op: "set_workflow", scope: "epic:4.3.0", steps: ["implement", "open_pr", { id: "merge", mergeBy: "coordinator" }],
+    });
+    await set;
+    const g = setup(2000, { shipherd: true });
+    const clear = callTool(g.server, "set_workflow", { scope: "global", steps: null });
+    expect(await g.answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, shipherd: true, from: "boss", op: "set_workflow", scope: "global", steps: null });
+    await clear;
+    const bad = setup(200, { shipherd: true });
+    for (const args of [{ scope: "planet:x", steps: null }, { steps: [] }, {}, { steps: ["implement"], notes: "x".repeat(4001) }]) {
+      expect(await callTool(bad.server, "set_workflow", args), JSON.stringify(args).slice(0, 80)).toMatchObject({ result: { isError: true } });
+    }
+    expect(existsSync(bad.requestsDir) ? readdirSync(bad.requestsDir) : []).toEqual([]);
+  });
+
+  it("a ticket session sends workflow_step_done and can't send coordinator workflow tools", async () => {
+    const t = setup(2000, { ticketKey: "P-1" });
+    const done = callTool(t.server, "workflow_step_done", { step: "self_review", note: " ran code-review " });
+    expect(await t.answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, ticketKey: "P-1", from: "boss", op: "workflow_step_done", step: "self_review", note: "ran code-review" });
+    await done;
+    const bad = setup(200, { ticketKey: "P-1" });
+    for (const [name, args] of [["workflow_step_done", { step: "fly" }], ["workflow_step_done", {}], ["set_workflow", { steps: null }]] as const) {
+      expect(await callTool(bad.server, name, args), name).toMatchObject({ result: { isError: true } });
+    }
+    expect(existsSync(bad.requestsDir) ? readdirSync(bad.requestsDir) : []).toEqual([]);
   });
 });
