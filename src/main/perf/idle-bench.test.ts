@@ -44,10 +44,7 @@ describe.skipIf(!bench)("idle bench (BTL-275)", () => {
     const sessions = new SessionsRepo(db);
     const ids = Array.from({ length: 20 }, (_, i) => `s${i}`);
     for (const id of ids) sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/tmp", origin: "shipherd", createdAt: 0 });
-    const record = time(50, (k) => {
-      if ("setMemoryMany" in sessions) (sessions as unknown as { setMemoryMany(r: { id: string; kb: number; at: number }[]): void }).setMemoryMany(ids.map((id) => ({ id, kb: k, at: k })));
-      else for (const id of ids) sessions.setMemory(id, k, k);
-    });
+    const record = time(50, (k) => sessions.setMemoryMany(ids.map((id) => ({ id, kb: k, at: k }))));
     out(`memory monitor: writing 20 sessions' memory takes ${record.toFixed(3)} ms per sample`);
     db.close();
   });

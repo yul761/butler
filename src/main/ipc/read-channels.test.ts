@@ -4,7 +4,7 @@ import { IPC } from "../../shared/ipc";
 
 describe("isReadChannel", () => {
   it("knows the refresh burst's channels are reads", () => {
-    for (const c of [IPC.ticketsList, IPC.featuresList, IPC.nowView, IPC.turnBoard, IPC.sessionsLimits, IPC.healthGet, IPC.loopPolicyGet, IPC.memUsageHistory]) {
+    for (const c of [IPC.ticketsList, IPC.featuresList, IPC.nowView, IPC.turnBoard, IPC.sessionsLimits, IPC.healthGet, IPC.loopPolicyGet, IPC.memUsageHistory, IPC.sessionsUnclaimed, IPC.sessionsUnclaimedCount]) {
       expect(isReadChannel(c), c).toBe(true);
     }
   });

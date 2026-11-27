@@ -72,6 +72,36 @@ function readJson(file: string, log: ProjectMcpPaths["log"], o: { repo: boolean 
   return undefined;
 }
 
+/** 文件的版本：设备、inode、大小、修改和变更时间（纳秒）。读不到（不存在等）为 null。 */
+function fileVersion(file: string): string | null {
+  try {
+    const st = statSync(file, { bigint: true });
+    return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 用户自己的 JSON（~/.claude.json、用户级 settings.json）按文件版本缓存解析结果（BTL-275）：~/.claude.json 常有几 MB，
+ * 开一个 session 原来要同步读、解析两三遍。文件一变（版本不同）就重读；读不出来的不缓存（下次照旧重试、记日志）。
+ * 返回的对象是共享的，调用方只读不改。
+ */
+const userJsonCache = new Map<string, { version: string; value: Json }>();
+function readUserJson(file: string, log: ProjectMcpPaths["log"]): Json | undefined {
+  const version = fileVersion(file);
+  const hit = userJsonCache.get(file);
+  if (version !== null && hit?.version === version) return hit.value;
+  const value = readJson(file, log, { repo: false });
+  if (version !== null && value !== undefined) {
+    if (userJsonCache.size >= 8) userJsonCache.clear();
+    userJsonCache.set(file, { version, value });
+  } else {
+    userJsonCache.delete(file);
+  }
+  return value;
+}
+
 function realpathOr(p: string): string {
   try {
     return realpathSync(p);
@@ -152,20 +182,38 @@ function approvals(cwd: string, claudeJson: Json | undefined, p: ProjectMcpPaths
     if (src.enableAllProjectMcpServers === true) a.enableAll = true;
   };
   add(projectEntry(cwd, claudeJson), true);
-  if (p.claudeSettings) add(readJson(p.claudeSettings, p.log, { repo: false }), true);
+  if (p.claudeSettings) add(readUserJson(p.claudeSettings, p.log), true);
   const rel = join(".claude", "settings.local.json");
   const local = readJson(join(cwd, rel), p.log, { repo: true });
   if (local) add(local, localSettingsTrusted(cwd));
   return a;
 }
 
+/**
+ * 主目录按 cwd 缓存（BTL-275：每开一个 session 都起一次 git）。只缓存 cwd 下面就有 .git 的（主目录或 worktree 的根），
+ * 而且只在 cwd/.git 没变时用：worktree 删了、同一个路径换成别的仓库的 worktree，.git 文件就换了，要重新问 git，
+ * 不能把上一个仓库的批准带过来。git 失败的不缓存。
+ */
+const mainCache = new Map<string, { version: string; main: string | undefined }>();
+
 /** cwd 所在仓库的主目录（主 worktree）：--git-common-dir 的上一级。不在 git 仓库里、bare 仓库、git 失败时返回 undefined。 */
 function mainCheckout(cwd: string): string | undefined {
+  const version = fileVersion(join(cwd, ".git"));
+  const hit = mainCache.get(cwd);
+  if (version !== null && hit?.version === version) return hit.main;
   const r = git(cwd, ["rev-parse", "--git-common-dir"]);
   const out = r.stdout.trim();
-  if (r.status !== 0 || !out) return undefined;
+  if (r.status !== 0 || !out) {
+    mainCache.delete(cwd);
+    return undefined;
+  }
   const common = resolve(cwd, out);
-  return basename(common) === ".git" ? dirname(common) : undefined;
+  const main = basename(common) === ".git" ? dirname(common) : undefined;
+  if (version !== null) {
+    if (mainCache.size >= 500) mainCache.clear();
+    mainCache.set(cwd, { version, main });
+  }
+  return main;
 }
 
 /**
@@ -255,7 +303,7 @@ const fileKey = (cwd: string, kind: string): string => `${kind}-${createHash("sh
 export function projectMcpConfigs(cwd: string, p: ProjectMcpPaths): string[] {
   const out: string[] = [];
   sweepStaleTmp(p.mcpDir);
-  const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
+  const claudeJson = readUserJson(p.claudeJson, p.log);
   const localRaw = INCLUDE_LOCAL_SCOPE ? projectEntry(cwd, claudeJson)?.mcpServers : undefined;
   const local = isServerMap(localRaw) ? localRaw : undefined;
   try {
@@ -314,7 +362,7 @@ export function projectMcpApprovalSettings(
 ): string | null {
   try {
     sweepStaleTmp(p.mcpDir);
-    const claudeJson = readJson(p.claudeJson, p.log, { repo: false });
+    const claudeJson = readUserJson(p.claudeJson, p.log);
     const [cwd, ...repos] = dirs;
     const a = cwd ? mergedApprovals(approvalDirs(cwd, repos), claudeJson, p) : { enabled: new Set<string>(), disabled: new Set<string>(), enableAll: false };
     const content: Record<string, unknown> = {};

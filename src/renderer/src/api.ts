@@ -132,6 +132,7 @@ export const api = {
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),
   scanRepos: (dir: string) => call<ScanResult>(IPC.reposScan, dir),
   unclaimed: () => call<UnclaimedSession[]>(IPC.sessionsUnclaimed),
+  unclaimedCount: () => call<number>(IPC.sessionsUnclaimedCount),
   claim: (sessionId: string, ticketKey: string) => call<void>(IPC.sessionsClaim, sessionId, ticketKey),
   dismiss: (sessionId: string) => call<void>(IPC.sessionsDismiss, sessionId),
   hideSession: (sessionId: string) => call<void>(IPC.sessionsHide, sessionId),

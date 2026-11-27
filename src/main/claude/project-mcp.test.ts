@@ -631,3 +631,57 @@ describe("projectMcpApprovalSettings: interactive sessions use the same approval
     expect(s.logs.some((l) => l.includes("approval settings not written"))).toBe(true);
   });
 });
+
+describe("opening a session does not re-read and re-ask what has not changed (BTL-275)", () => {
+  const read = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { enabledMcpjsonServers: string[] };
+  /** 照样真的跑 git，只数 rev-parse 的次数。 */
+  const countRevParse = async () => {
+    const real = (await vi.importActual<typeof import("node:child_process")>("node:child_process")).spawnSync as (...a: unknown[]) => unknown;
+    const calls = { n: 0 };
+    mocks.spawnSync = (...a: unknown[]) => {
+      if ((a[1] as string[]).includes("rev-parse")) calls.n++;
+      return real(...a);
+    };
+    return calls;
+  };
+
+  it("parses ~/.claude.json once while it is unchanged, and again as soon as it changes", () => {
+    const s = setup();
+    s.writeClaudeJson({ enabledMcpjsonServers: ["one"] });
+    const parse = vi.spyOn(JSON, "parse");
+    const big = () => parse.mock.calls.filter(([text]) => typeof text === "string" && text.includes('"/other"')).length;
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enabledMcpjsonServers).toEqual(["one"]);
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enabledMcpjsonServers).toEqual(["one"]);
+    expect(big()).toBe(1);
+    // 同样长度、不同内容：也要重读
+    s.writeClaudeJson({ enabledMcpjsonServers: ["two"] });
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enabledMcpjsonServers).toEqual(["two"]);
+    expect(big()).toBe(2);
+    parse.mockRestore();
+  });
+
+  it("asks git for a worktree's main checkout once, and again when the worktree is re-created for another repo at the same path", async () => {
+    const s = setup();
+    mkdirSync(s.repo, { recursive: true });
+    s.gitInit();
+    s.git("commit", "-q", "--allow-empty", "-m", "init");
+    const worktree = join(s.root, "worktree");
+    s.git("worktree", "add", "-q", "-b", "wt", worktree);
+    // 仓库 B：同名分支，用户批准过的不一样
+    const other = join(s.root, "other");
+    mkdirSync(other);
+    const gb = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: other, stdio: "pipe" });
+    gb("init", "-q");
+    gb("commit", "-q", "--allow-empty", "-m", "init");
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { enabledMcpjsonServers: ["a-only"] }, [other]: { enabledMcpjsonServers: ["b-only"] } } }));
+    const revParse = await countRevParse();
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["a-only"]);
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["a-only"]);
+    expect(revParse.n).toBe(1);
+    // 同一个路径换成仓库 B 的 worktree：A 的批准不能带过来
+    s.git("worktree", "remove", "--force", worktree);
+    gb("worktree", "add", "-q", "-b", "wt", worktree);
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["b-only"]);
+    expect(revParse.n).toBe(2);
+  });
+});

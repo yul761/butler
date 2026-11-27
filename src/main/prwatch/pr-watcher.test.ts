@@ -1390,3 +1390,27 @@ describe("PrWatcher.onPrRead (workstream I)", () => {
     release();
   });
 });
+
+describe("PrWatcher.statusOfMany (BTL-275)", () => {
+  it("is statusOf() for several tickets from one PR read and one branch read", () => {
+    const s = setup();
+    s.addTicket("BTL-2");
+    const r2 = s.addRepo("BTL-2", "api", "x");
+    s.addTicket("BTL-3");
+    s.link();
+    s.link({ url: url(8), number: 8, state: "merged" });
+    // BTL-1 的分支上有开着的 PR：分支行不另出；BTL-2 只有分支行；没读过的分支行不出。
+    s.branches.upsert({ repoId: s.repoId, ticketKey: "BTL-1", branch: "b", ci: "passing", headSha: "h1", failed: [], readError: false, checkedAt: 5 });
+    s.branches.upsert({ repoId: r2, ticketKey: "BTL-2", branch: "x", ci: "failing", headSha: "h2", failed: [], readError: false, checkedAt: 5 });
+    const byTicket = vi.spyOn(s.prs, "byTicket");
+    const branchesByTicket = vi.spyOn(s.branches, "byTicket");
+    const many = s.w.statusOfMany(["BTL-1", "BTL-2", "BTL-3", "BTL-1"]);
+    expect([byTicket.mock.calls.length, branchesByTicket.mock.calls.length]).toEqual([0, 0]);
+    byTicket.mockRestore();
+    branchesByTicket.mockRestore();
+    for (const key of ["BTL-1", "BTL-2", "BTL-3"]) expect(many.get(key)).toEqual(s.w.statusOf(key));
+    expect(many.get("BTL-1")!.map((p) => p.number).sort()).toEqual([7, 8]);
+    expect(many.get("BTL-2")).toEqual([expect.objectContaining({ prId: null, branch: "x", ci: "failing" })]);
+    expect(many.get("BTL-3")).toEqual([]);
+  });
+});

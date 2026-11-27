@@ -156,7 +156,7 @@ export function buildNowView(i: NowInput): NowView {
   const add = (fid: number | null, t: TicketView): void => {
     if (seen.has(t.key)) return;
     seen.add(t.key);
-    ticketsOf.set(fid, [...(ticketsOf.get(fid) ?? []), t]);
+    (ticketsOf.get(fid) ?? ticketsOf.set(fid, []).get(fid)!).push(t);
   };
   for (const f of i.features) for (const t of f.tickets) add(f.id, t);
   for (const t of i.tickets) add(t.featureId !== null && featureIds.has(t.featureId) ? t.featureId : null, t);

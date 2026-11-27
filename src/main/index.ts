@@ -332,6 +332,10 @@ const BG_FINISHED_RETENTION_MS = 30 * 24 * 3600_000;
 let win: BrowserWindow | null = null;
 /** 窗口 show / restore 时调（bootstrap 里接到 WS-M 的优先级上）。 */
 let windowShownHook: () => void = () => undefined;
+/** 窗口又看得见了（show / restore / focus）：补发藏着时攒下的 state:changed（BTL-275，bootstrap 里接到 invalidator.resume）。 */
+let windowBackHook: () => void = () => undefined;
+/** 窗口现在看得见：建好了、没藏到托盘、没最小化。 */
+const windowVisible = (): boolean => !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
 let tray: Tray | null = null;
 /** 启动时的第一个窗口建好以后为 true：之后窗口被关掉（崩溃对话框里选了关掉），showWindow 可以再建一个。 */
 let windowReopenable = false;
@@ -496,8 +500,9 @@ function createWindow(): BrowserWindow {
     if (win === w) win = null;
   });
   // 窗口又出现了：看得见的终端马上恢复优先级（WS-M E）。
-  w.on("show", () => windowShownHook());
-  w.on("restore", () => windowShownHook());
+  w.on("show", () => (windowShownHook(), windowBackHook()));
+  w.on("restore", () => (windowShownHook(), windowBackHook()));
+  w.on("focus", () => windowBackHook());
   // Windows 注销 / 关机：不能再把关窗口拦成“藏到托盘”，否则会挡住系统（计划 1 Task 12）。
   w.on("session-end", () => quitState.requestQuit());
   // 关窗口只是藏到托盘，终端进程继续运行。
@@ -702,7 +707,8 @@ async function bootstrap(): Promise<void> {
   // 「谁该动」看板（UI 重做第 1 层）跟着 stateChanged 一起防抖推 turn:changed；TurnService 在下面才建好。
   let turnChanged: (() => void) | null = null;
   // 找对话记录文件（BTL-242）：记住找到过的路径，命中时只看那一个文件还在不在。
-  const transcriptLocator = new TranscriptLocator(paths.claudeProjects);
+  // 还没有记录文件的 session 先看 cwd 推出的目录，整个目录 20 秒最多扫一次（BTL-275）；hook 说它起来了、收到输入时 forget。
+  const transcriptLocator = new TranscriptLocator(paths.claudeProjects, undefined, undefined, undefined, undefined, { cwdOf: (id) => sessions.get(id)?.cwd ?? null });
   // 视图缓存（BTL-242）：界面那边的读（列表、首页、看板）在下一次 notify / 写操作 / 1 秒之前共用一份。主进程自己的逻辑不走它。
   const viewCache = new ViewCache({ now: Date.now });
   // notify 合并（BTL-242）：一小段时间里的多次 notify 合成一次 state:changed（带上范围），turn:changed 跟着同一次发。
@@ -714,7 +720,10 @@ async function bootstrap(): Promise<void> {
     },
     // 按范围作废（BTL-265）：哪种范围作废哪些视图见 view-scopes.ts。
     onChange: (scope) => viewCache.invalidate(SCOPE_INVALIDATES[scope]),
+    // 窗口藏着时不推（BTL-275）：攒着，窗口回来时 windowBackHook 补发一次。
+    visible: windowVisible,
   });
+  windowBackHook = () => invalidator.resume();
   // 有些地方把 notify 直接当回调传（.then(notify)）：参数不是范围的一律当 data。
   const notify = (scope?: unknown) => invalidator.notify(isStateScope(scope) ? scope : "data");
   // session 只是又有了输出：隔 5 秒才告诉界面一次（只有 ticket 速览听 output）。
@@ -3016,6 +3025,8 @@ async function bootstrap(): Promise<void> {
       const stageObs = stageEventFromHook(env, sessions);
       if (stageObs && prStages.add(stageObs.event, stageObs.dedupeKey)) notify();
       if (effect.kind === "ignored") return;
+      // 记录文件快要有了（SessionStart、UserPromptSubmit）：忘掉「没找到」的记忆（BTL-275）。
+      if (effect.kind === "session_started" || (effect.kind === "waiting" && !effect.waiting)) transcriptLocator.forget(effect.sessionId);
       // 总控开的子 session 等这个信号才交任务（信任文件夹之类的启动对话框已经过去）。
       // 终端按 SHIPHERD_SESSION 记：--resume 有时换 session id，唤醒（WS-M B）和交任务等的都是终端的 id。
       if (effect.kind === "session_started") {
@@ -3066,7 +3077,7 @@ async function bootstrap(): Promise<void> {
     activity: (id) => activityMonitor.get(id),
     refresher,
     appMetrics: () => app.getAppMetrics().map((m) => ({ pid: m.pid, type: m.type, kb: m.memory.workingSetSize })),
-    windowShown: () => !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized(),
+    windowShown: windowVisible,
     ownedFile: paths.procsOwned,
     pinned: (head) => sessions.head(head)?.pinned === true,
     restart: (head) => hibernator?.restart(head) ?? Promise.resolve(),
@@ -3655,7 +3666,8 @@ async function bootstrap(): Promise<void> {
     }),
     turnSendToAgent: (item) => turnService.sendToAgent(item),
     turnHomeOpened: () => turnService.homeOpened(),
-    nowView: (merges) => {
+    // 进视图缓存（BTL-275）：每种 notify 都作废它（view-scopes.ts），只省掉同一批变化之间重复的 now:view。
+    nowView: (merges) => viewCache.getFor(VIEW_KEYS.now, JSON.stringify(merges), () => {
       // 分段计时（BTL-265）：导出诊断的 ops 里 now.* 是这一次 now:view 的各部分。
       const p = perfParts("now");
       try {
@@ -3666,6 +3678,8 @@ async function bootstrap(): Promise<void> {
         const features = p.run("views", () => views.features());
         const decisions = p.run("decisions", () => inboxService.pendingDecisionViews());
         const notices = p.run("notices", () => currentNotices());
+        // 所有 ticket 的 PR 状态一次读（BTL-275：原来每个 ticket 各查 PR 和分支）。
+        const prs = p.run("prs", () => prWatcher.statusOfMany([...tickets, ...features.flatMap((f) => f.tickets)].map((t) => t.key)));
         const view = p.run("build", () => buildNowView({
           tickets,
           features,
@@ -3675,7 +3689,7 @@ async function bootstrap(): Promise<void> {
           ),
           activity: (id) => activityMonitor.get(id),
           needsYouReason: (id) => reasons.get(id) ?? null,
-          prs: (key) => prWatcher.statusOf(key),
+          prs: (key) => prs.get(key) ?? [],
           mergeQueued: (id) => queued.has(id),
           refreshing: (id) => refresher.stepOf(id),
           merges,
@@ -3693,7 +3707,7 @@ async function bootstrap(): Promise<void> {
       } finally {
         p.done();
       }
-    },
+    }),
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, foreignPr }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。

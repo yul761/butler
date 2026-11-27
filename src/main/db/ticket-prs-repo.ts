@@ -214,6 +214,22 @@ export class TicketPrsRepo {
   }
 
   /** 新的在前。 */
+  /** byTicket() 的批量版（BTL-275：「现在」页每个 ticket 各查一次）。每个 ticket 内的顺序同 byTicket()；没有的不在 Map 里。 */
+  byTickets(ticketKeys: readonly string[]): Map<string, TicketPr[]> {
+    const out = new Map<string, TicketPr[]>();
+    if (ticketKeys.length === 0) return out;
+    const rows = this.db
+      .prepare(`SELECT * FROM ticket_prs WHERE ticket_key IN (SELECT value FROM json_each(?)) ORDER BY COALESCE(opened_at, linked_at) DESC, id DESC`)
+      .all(JSON.stringify(ticketKeys)) as unknown as Row[];
+    for (const r of rows) {
+      const p = toPr(r);
+      const list = out.get(p.ticketKey);
+      if (list) list.push(p);
+      else out.set(p.ticketKey, [p]);
+    }
+    return out;
+  }
+
   byTicket(ticketKey: string): TicketPr[] {
     return (
       this.db

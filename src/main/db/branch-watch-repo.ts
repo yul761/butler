@@ -64,6 +64,21 @@ export class BranchWatchRepo {
     return (this.db.prepare(`SELECT * FROM branch_watch WHERE ticket_key = ? ORDER BY repo_id`).all(ticketKey) as unknown as Row[]).map(toRow);
   }
 
+  /** byTicket() 的批量版（BTL-275）。没有的不在 Map 里。 */
+  byTickets(ticketKeys: readonly string[]): Map<string, BranchWatchRow[]> {
+    const out = new Map<string, BranchWatchRow[]>();
+    if (ticketKeys.length === 0) return out;
+    const rows = (
+      this.db.prepare(`SELECT * FROM branch_watch WHERE ticket_key IN (SELECT value FROM json_each(?)) ORDER BY repo_id`).all(JSON.stringify(ticketKeys)) as unknown as Row[]
+    ).map(toRow);
+    for (const r of rows) {
+      const list = out.get(r.ticketKey);
+      if (list) list.push(r);
+      else out.set(r.ticketKey, [r]);
+    }
+    return out;
+  }
+
   all(): BranchWatchRow[] {
     return (this.db.prepare(`SELECT * FROM branch_watch ORDER BY repo_id`).all() as unknown as Row[]).map(toRow);
   }

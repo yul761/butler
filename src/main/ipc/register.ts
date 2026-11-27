@@ -126,7 +126,7 @@ export interface IpcDeps {
   /** 终端里点的链接（BTL-257）：在系统浏览器里打开，只放行 http / https（openExternalLink）。 */
   linkOpen: (url: string) => LinkOpenResult;
   /** 复盘规矩页。 */
-  lessons: Pick<LessonsService, "state" | "act" | "pendingCount" | "runs" | "run">;
+  lessons: Pick<LessonsService, "state" | "warm" | "act" | "pendingCount" | "runs" | "run">;
   /** 批次历史（契约 4.4）。 */
   batches: Pick<BatchRecorder, "list" | "get">;
   /** 规矩准入（工作流 D）：向导、校准页、原则。 */
@@ -452,6 +452,7 @@ export function registerIpc(d: IpcDeps): void {
     return r;
   });
   handle(IPC.sessionsUnclaimed, () => d.sessionService.unclaimed());
+  handle(IPC.sessionsUnclaimedCount, (): number => d.sessionService.unclaimedCount());
   handle(IPC.sessionsClaim, (id: string, key: string) => {
     d.sessionService.claim(id, key);
     d.notify();
@@ -553,7 +554,11 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.prStages, (raw: unknown): PrStagesTicket[] => d.prStages.view(prStagesScopeArg(raw)));
   handle(IPC.prOpen, (raw: unknown): PrOpenResult => d.prOpen(prUrlArg(raw)));
   handle(IPC.linkOpen, (raw: unknown): LinkOpenResult => d.linkOpen(linkUrlArg(raw)));
-  handle(IPC.lessonsState, (): LessonsState => d.lessons.state());
+  // 仓库身份先在后台查好（BTL-275），state() 里不再同步起 git。
+  handle(IPC.lessonsState, async (): Promise<LessonsState> => {
+    await d.lessons.warm();
+    return d.lessons.state();
+  });
   handle(IPC.lessonsAct, (raw: unknown) => d.lessons.act(lessonActionArg(raw)));
   handle(IPC.lessonsRuns, (raw: unknown): LessonQueueRowView[] => d.lessons.runs(lessonSlugArg(raw)));
   handle(IPC.lessonsRun, (raw: unknown): LessonRunDetail | null => d.lessons.run(lessonRunIdArg(raw)));

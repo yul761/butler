@@ -32,6 +32,9 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
       backupBeforeMigrate(db, file, current, { log: o.log, onBackupFailed: o.onBackupFailed, failedMessage: (f) => M().databaseBackupFailed(f.backup, f.reason, f.diskFull) });
     }
     migrate(db);
+    // WAL 下 NORMAL 是安全的（BTL-275）：断电最多丢最后几次提交，库不会坏；FULL 每次自动提交都在主线程 fsync 一次。
+    // 迁移完才改：迁移和它前面的备份照旧在 FULL 下跑，备份自己还另外 fsync（backup.ts）。
+    db.exec("PRAGMA synchronous = NORMAL;");
   } catch (e) {
     db.close();
     throw e;

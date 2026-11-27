@@ -17,7 +17,7 @@ import { readSystemMemory } from "./system-memory";
  */
 export interface ProcServicesDeps {
   settings: SettingsRepo;
-  sessions: Pick<SessionsRepo, "head" | "setMemory">;
+  sessions: Pick<SessionsRepo, "head" | "setMemoryMany">;
   samples: MemorySamplesRepo;
   pty: { openIds(): string[]; pid(termId: string): number | null };
   activity: (head: string) => SessionActivity | null;

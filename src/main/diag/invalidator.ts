@@ -11,10 +11,17 @@ export interface InvalidatorDeps {
   quietMs?: number;
   /** 第一次 notify 之后最多等这么久。 */
   maxWaitMs?: number;
+  /**
+   * 窗口现在看不看得见（BTL-275）：看不见（藏到托盘、最小化）时不发，范围攒着，窗口回来时 resume() 一次补发。
+   * 渲染进程藏着时照样会按每次 state:changed 重取。视图缓存照旧每次 notify 马上作废。不给就当一直看得见。
+   */
+  visible?: () => boolean;
 }
 
 export class Invalidator {
   private pending = new Set<StateScope>();
+  /** 窗口看不见时到点没发出去的范围：窗口回来（resume）或者看得见以后的下一次发送时一起发。 */
+  private held = new Set<StateScope>();
   private quiet: ReturnType<typeof setTimeout> | null = null;
   private max: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
@@ -38,9 +45,23 @@ export class Invalidator {
   flushNow(): void {
     this.clear();
     if (this.disposed || this.pending.size === 0) return;
-    const scopes = [...this.pending];
+    if (this.d.visible && !this.d.visible()) {
+      for (const s of this.pending) this.held.add(s);
+      this.pending = new Set();
+      return;
+    }
+    const scopes = [...new Set([...this.held, ...this.pending])];
+    this.held = new Set();
     this.pending = new Set();
     this.d.emit(scopes);
+  }
+
+  /** 窗口又看得见了（show / restore / focus）：把看不见时攒下的范围马上发一次。还看不见、或者没攒下什么，什么都不做。 */
+  resume(): void {
+    if (this.disposed || this.held.size === 0) return;
+    for (const s of this.held) this.pending.add(s);
+    this.held = new Set();
+    this.flushNow();
   }
 
   private clear(): void {
@@ -54,5 +75,6 @@ export class Invalidator {
     this.disposed = true;
     this.clear();
     this.pending.clear();
+    this.held.clear();
   }
 }

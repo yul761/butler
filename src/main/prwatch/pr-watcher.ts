@@ -174,7 +174,18 @@ export class PrWatcher {
 
   /** 这个 ticket 的 PR 行，和还没有开着的 PR 的分支行（读过的、分支是仓库现在的分支）。 */
   statusOf(ticketKey: string): WatchedPr[] {
-    const prs = this.d.prs.byTicket(ticketKey);
+    return this.statusFrom(ticketKey, this.d.prs.byTicket(ticketKey), this.d.branches.byTicket(ticketKey));
+  }
+
+  /** statusOf() 的批量版（BTL-275：「现在」页每个 ticket 各查两次）：PR 和分支各一次查询。 */
+  statusOfMany(ticketKeys: readonly string[]): Map<string, WatchedPr[]> {
+    const keys = [...new Set(ticketKeys)];
+    const prs = this.d.prs.byTickets(keys);
+    const branches = this.d.branches.byTickets(keys);
+    return new Map(keys.map((k) => [k, this.statusFrom(k, prs.get(k) ?? [], branches.get(k) ?? [])]));
+  }
+
+  private statusFrom(ticketKey: string, prs: TicketPr[], branches: BranchWatchRow[]): WatchedPr[] {
     const out: WatchedPr[] = prs.map((r) => ({
       ticketKey, prId: r.id, repoId: r.repoId, repoPath: r.repoId === null ? null : (this.d.repoOf(r.repoId)?.repoPath ?? null),
       branch: r.headBranch ?? "", number: r.number, url: r.url, state: r.state, review: r.review, ci: r.ci, headSha: r.headSha,
@@ -184,7 +195,7 @@ export class PrWatcher {
         mergeable: r.mergeable, mergeState: r.mergeState, statusChangedAt: r.statusChangedAt, slug: r.slug,
       },
     }));
-    for (const b of this.d.branches.byTicket(ticketKey)) {
+    for (const b of branches) {
       if (b.checkedAt === 0) continue;
       const repo = this.d.repoOf(b.repoId);
       if (!repo || repo.branch !== b.branch) continue;

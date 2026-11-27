@@ -6,6 +6,7 @@ import type { Session } from "../../shared/types";
 import type { SessionsRepo } from "../db/sessions-repo";
 import { extractTicketKey } from "../tickets/ticket-key";
 import { perfOp } from "../diag/perf-stats";
+import { claudeProjectDirName } from "../migrate/legacy-home";
 
 export const UNCLAIMED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -223,10 +224,26 @@ export function needsDiscovery(s: Session, requested: ReadonlySet<string>): bool
 /**
  * 找对话记录文件的缓存（BTL-242）：findTranscript 每次都 readdir 整个 projects 目录、再挨个目录 existsSync，
  * 首页和看板一次刷新要找好几十次（Windows 上每次几毫秒）。记住找到过的路径：命中时只 existsSync 那一个文件，
- * 文件没了（删了、搬了）就当没记过再找一遍。没找到的不记（刚开的 session 过一会儿才有记录文件）。
+ * 文件没了（删了、搬了）就当没记过再找一遍。
+ * 还没有记录文件的 session（BTL-275）：activity / conv（10 秒）、usage（30 秒）的 tick 每次都找，worktree 多时一分钟上千次同步 stat。
+ * 先看由 session 的 cwd 推出的那个目录（Claude Code 的目录名规则，一次 existsSync）；整个目录的扫描对同一个 session 每 missMs 最多一次，
+ * SessionStart / UserPromptSubmit 的 hook 来了就 forget，下次马上重扫。state() 不用这个记忆：absent 会删行，要照原样查。
  */
+export const TRANSCRIPT_MISS_MS = 20_000;
+
+export interface TranscriptLocatorOptions {
+  /** session 的工作目录（库里记的 cwd）；不知道为 null。 */
+  cwdOf?: (sessionId: string) => string | null;
+  missMs?: number;
+  now?: () => number;
+}
+
 export class TranscriptLocator {
   private readonly hits = new Map<string, string>();
+  /** 扫过整个目录也没找到的 session -> 到这个时间之前不再整个扫。 */
+  private readonly misses = new Map<string, number>();
+  private readonly missMs: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly projectsDir: string,
@@ -234,7 +251,11 @@ export class TranscriptLocator {
     private readonly exists: (file: string) => boolean = existsSync,
     private readonly scan: (dir: string, id: string) => string | null = findTranscript,
     private readonly stateScan: (dir: string, id: string) => TranscriptState = transcriptState,
-  ) {}
+    private readonly o: TranscriptLocatorOptions = {},
+  ) {
+    this.missMs = o.missMs ?? TRANSCRIPT_MISS_MS;
+    this.now = o.now ?? Date.now;
+  }
 
   private cached(sessionId: string): string | null {
     const f = this.hits.get(sessionId);
@@ -254,9 +275,42 @@ export class TranscriptLocator {
   find(sessionId: string): string | null {
     const hit = this.cached(sessionId);
     if (hit) return hit;
+    const hinted = this.hinted(sessionId);
+    if (hinted) {
+      this.misses.delete(sessionId);
+      this.remember(sessionId, hinted);
+      return hinted;
+    }
+    const until = this.misses.get(sessionId);
+    if (until !== undefined && this.now() < until) return null;
     const file = perfOp("findTranscript", () => this.scan(this.projectsDir, sessionId));
-    if (file) this.remember(sessionId, file);
+    if (file) {
+      this.misses.delete(sessionId);
+      this.remember(sessionId, file);
+    } else {
+      this.misses.delete(sessionId);
+      this.misses.set(sessionId, this.now() + this.missMs);
+      if (this.misses.size > this.max) this.misses.delete(this.misses.keys().next().value as string);
+    }
     return file;
+  }
+
+  /** cwd 推出的那个目录里的记录文件，在就返回。 */
+  private hinted(sessionId: string): string | null {
+    let cwd: string | null = null;
+    try {
+      cwd = this.o.cwdOf?.(sessionId) ?? null;
+    } catch {
+      return null;
+    }
+    if (!cwd) return null;
+    const file = join(this.projectsDir, claudeProjectDirName(cwd), `${sessionId}.jsonl`);
+    return this.exists(file) ? file : null;
+  }
+
+  /** hook 说这个 session 起来了、收到了输入（记录文件快要有了）：忘掉没找到的记忆，下次 find 马上重扫。 */
+  forget(sessionId: string): void {
+    this.misses.delete(sessionId);
   }
 
   /** 同 transcriptState：记得的文件还在就是 present，否则照原样查（unknown 和 absent 要分清）。 */

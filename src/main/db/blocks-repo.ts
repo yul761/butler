@@ -23,6 +23,18 @@ const toBlock = (r: BlockRow): Block => ({
   createdAt: r.created_at,
 });
 
+/** 按 key 分组，保持行的顺序。 */
+function groupBy<K, T>(rows: readonly T[], key: (r: T) => K): Map<K, T[]> {
+  const out = new Map<K, T[]>();
+  for (const r of rows) {
+    const k = key(r);
+    const list = out.get(k);
+    if (list) list.push(r);
+    else out.set(k, [r]);
+  }
+  return out;
+}
+
 export class BlocksRepo {
   constructor(private readonly db: Db) {}
 
@@ -30,6 +42,15 @@ export class BlocksRepo {
   list(featureId: number): Block[] {
     const rows = this.db.prepare(`SELECT * FROM blocks WHERE feature_id = ? ORDER BY position, id`).all(featureId) as unknown as BlockRow[];
     return rows.map(toBlock);
+  }
+
+  /** 几个 epic 的 feature 一次读（BTL-275：首页每次刷新对每个 epic 各查一次）。每个 epic 内的顺序同 list()；没有的不在 Map 里。 */
+  listMany(featureIds: readonly number[]): Map<number, Block[]> {
+    if (featureIds.length === 0) return new Map();
+    const rows = this.db
+      .prepare(`SELECT * FROM blocks WHERE feature_id IN (SELECT value FROM json_each(?)) ORDER BY feature_id, position, id`)
+      .all(JSON.stringify(featureIds)) as unknown as BlockRow[];
+    return groupBy(rows.map(toBlock), (b) => b.featureId);
   }
 
   get(id: number): Block | null {

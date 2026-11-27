@@ -271,3 +271,20 @@ describe("TicketPrsRepo", () => {
     expect(prs.get(p.id)?.repoId).toBeNull();
   });
 });
+
+describe("TicketPrsRepo.byTickets (BTL-275)", () => {
+  it("is byTicket() for several tickets in one query, same order", () => {
+    const { prs, repoId } = setup();
+    const link = (ticketKey: string, n: number, openedAt: number | null, linkedAt: number) =>
+      prs.link({ ticketKey, url: `https://github.com/o/r/pull/${n}`, slug: "o/r", repoId, number: n, headBranch: "feat", state: "open", source: "branch", linkedAt, ...(openedAt !== null && { openedAt }) });
+    link("T-1", 1, null, 5);
+    link("T-1", 2, 9, 1);
+    link("T-2", 3, null, 2);
+    const many = prs.byTickets(["T-1", "T-2", "T-3"]);
+    expect(many.get("T-1")).toEqual(prs.byTicket("T-1"));
+    expect(many.get("T-1")!.map((p) => p.number)).toEqual(prs.byTicket("T-1").map((p) => p.number));
+    expect(many.get("T-2")).toEqual(prs.byTicket("T-2"));
+    expect(many.get("T-3")).toBeUndefined();
+    expect(prs.byTickets([]).size).toBe(0);
+  });
+});

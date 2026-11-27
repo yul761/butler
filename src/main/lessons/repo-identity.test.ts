@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { makeRepo, tempDir } from "../test-utils";
 import { defaultGit, parseRemoteSlug, RepoIdentity } from "./repo-identity";
@@ -88,6 +89,54 @@ describe("RepoIdentity", () => {
     expect(id.slugOf("/plain")).toBeNull();
     expect(id.resolve("/plain")).toEqual({ reason: "not_git" });
     expect(git).not.toHaveBeenCalled();
+  });
+
+  describe("warm (BTL-275): the first lessons:state asks git off the main thread", () => {
+    it("fills the cache asynchronously, so slugOf afterwards does not run the blocking git", async () => {
+      const git = vi.fn(() => "git@github.com:acme/sync.git");
+      const asyncGit = vi.fn(async (p: string) => (p === "/none" ? null : `git@github.com:acme/${p.slice(1)}.git`));
+      const id = new RepoIdentity({ git, asyncGit, exists: () => true });
+      await id.warm(["/web", "/api", "/none", "/web"]);
+      expect(asyncGit).toHaveBeenCalledTimes(3);
+      expect([id.slugOf("/web"), id.slugOf("/api"), id.slugOf("/none")]).toEqual(["acme/web", "acme/api", null]);
+      expect(git).not.toHaveBeenCalled();
+      await id.warm(["/web"]);
+      expect(asyncGit).toHaveBeenCalledTimes(3);
+    });
+
+    it("a lookup that failed is not cached; missing paths and non-repos are handled like slugOf", async () => {
+      const git = vi.fn(() => "git@github.com:acme/later.git");
+      const asyncGit = vi.fn(async () => {
+        throw new Error("timeout");
+      });
+      const id = new RepoIdentity({ git, asyncGit, exists: (p) => !p.startsWith("/gone") && !p.startsWith("/plain/") });
+      await id.warm(["/slow", "/gone", "/plain"]);
+      expect(asyncGit).toHaveBeenCalledTimes(1);
+      expect(id.slugOf("/slow")).toBe("acme/later");
+      expect(id.slugOf("/plain")).toBeNull();
+      expect(git).toHaveBeenCalledTimes(1);
+    });
+
+    it("an answer that arrives after slugOf already cached one does not overwrite it", async () => {
+      let release!: (v: string) => void;
+      const asyncGit = vi.fn(() => new Promise<string>((r) => (release = r)));
+      const id = new RepoIdentity({ git: () => "git@github.com:acme/fresh.git", asyncGit, exists: () => true });
+      const w = id.warm(["/r"]);
+      expect(id.slugOf("/r")).toBe("acme/fresh");
+      release("git@github.com:acme/stale.git");
+      await w;
+      expect(id.slugOf("/r")).toBe("acme/fresh");
+    });
+
+    it("the default asynchronous git reads the real origin, and knows a repo without one", async () => {
+      const [withOrigin, without] = [makeRepo(), makeRepo()];
+      execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/real.git"], { cwd: withOrigin });
+      const git = vi.fn(() => "git@github.com:acme/blocking.git");
+      const id = new RepoIdentity({ git });
+      await id.warm([withOrigin, without]);
+      expect([id.slugOf(withOrigin), id.slugOf(without)]).toEqual(["acme/real", null]);
+      expect(git).not.toHaveBeenCalled();
+    });
   });
 
   it("a missing path is not cached", () => {

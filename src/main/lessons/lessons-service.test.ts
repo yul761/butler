@@ -54,6 +54,24 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
 };
 
 describe("LessonsService.state", () => {
+  it("warm asks git for every known and grouped repo off the main thread, so the first state() blocks on none (BTL-275)", async () => {
+    const db = memDb();
+    const sync = vi.fn(() => "git@github.com:acme/blocking.git");
+    const asyncGit = vi.fn(async (p: string) => `git@github.com:acme/${posix(p).slice(1)}.git`);
+    const a = setup();
+    const svc = new LessonsService({
+      repo: new LessonsRepo(db), batches: a.batches, runs: new LessonRunsRepo(db), availability: a.availability,
+      identity: new RepoIdentity({ git: sync, asyncGit, exists: () => true }), runner: a.runner, openRun: a.openRun, log: a.log,
+      knownRepoPaths: () => ["/web", "/api"], repoGroups: () => [["/web", "/docs"]], exists: () => true,
+      ghAvailable: () => true, openExternal: a.openExternal, now: () => 100, notify: a.notify,
+    });
+    await svc.warm();
+    const s = svc.state();
+    expect(s.repos.map((r) => r.slug)).toEqual(["acme/api", "acme/web"]);
+    expect(sync).not.toHaveBeenCalled();
+    expect(asyncGit).toHaveBeenCalledTimes(3);
+  });
+
   it("splits known paths into repos and unknown repos, one repo per slug", () => {
     const { svc } = setup({ paths: ["/acme_web", "/acme_web", "/acme_api", "/none_x"] });
     const s = svc.state();

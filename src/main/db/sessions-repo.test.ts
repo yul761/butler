@@ -99,6 +99,16 @@ describe("SessionsRepo hibernation (WS-M B)", () => {
     expect(repo.listHibernated()).toEqual([]);
   });
 
+  it("setMemoryMany writes every session's reading in one go (BTL-275)", () => {
+    const { repo } = setup();
+    row(repo, "a");
+    row(repo, "b");
+    repo.setMemoryMany([{ id: "a", kb: 100.4, at: 7 }, { id: "b", kb: 200, at: 7 }]);
+    expect(repo.get("a")).toMatchObject({ memKb: 100, memAt: 7 });
+    expect(repo.get("b")).toMatchObject({ memKb: 200, memAt: 7 });
+    repo.setMemoryMany([]);
+  });
+
   it("keeps the last memory reading when hibernating without one", () => {
     const { repo } = setup();
     row(repo, "a");

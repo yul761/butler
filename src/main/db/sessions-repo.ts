@@ -113,6 +113,9 @@ const FORGOTTEN_LIMIT = 500;
 /** rootOf 往回最多走几段：replaced_by 万一成了环（坏数据），带深度的递归不会自己停。 */
 const ROOT_MAX_DEPTH = 1000;
 
+/** 未认领的 session（参数：最近活动不早于这个时间）。 */
+const UNCLAIMED = `ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND shipherd = 0 AND lesson_run_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?`;
+
 export class SessionsRepo {
   /** 最近被删除的 session id（按删除顺序，超出上限丢弃最旧的）。 */
   private readonly forgotten = new Set<string>();
@@ -259,13 +262,14 @@ export class SessionsRepo {
   /** 没认领的 session。以前的 epic session（BTL-246 去掉了，迁移时隐藏）也没有 ticket、feature，靠 epic_id 挡在外面。 */
   listUnclaimed(sinceMs: number): Session[] {
     const rows = this.db
-      .prepare(
-        `SELECT * FROM sessions
-         WHERE ticket_key IS NULL AND feature_id IS NULL AND epic_id IS NULL AND shipherd = 0 AND lesson_run_id IS NULL AND dismissed = 0 AND replaced_by IS NULL AND ${RECENCY} >= ?
-         ORDER BY ${RECENCY} DESC, id`,
-      )
+      .prepare(`SELECT * FROM sessions WHERE ${UNCLAIMED} ORDER BY ${RECENCY} DESC, id`)
       .all(sinceMs) as unknown as SessionRow[];
     return rows.map(toSession);
+  }
+
+  /** listUnclaimed(sinceMs).length（BTL-275：侧栏每次刷新只要个数）。 */
+  countUnclaimed(sinceMs: number): number {
+    return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ${UNCLAIMED}`).get(sinceMs) as { n: number }).n);
   }
 
   /** Shipherd 新建、还没有第一句话、也没被 /clear 替换的 session：handleExit 和启动时清理空 session 的候选。 */
@@ -284,6 +288,14 @@ export class SessionsRepo {
   /** 最近一次采到的进程树内存（WS-M A），记在 head 上。 */
   setMemory(id: string, kb: number, at: number): void {
     this.db.prepare(`UPDATE sessions SET mem_kb = ?, mem_at = ? WHERE id = ?`).run(Math.round(kb), at, id);
+  }
+
+  /** 一次采样里所有 session 的内存：合在一个事务里写（BTL-275：原来每个 session 一次自动提交）。 */
+  setMemoryMany(rows: readonly { id: string; kb: number; at: number }[]): void {
+    if (rows.length === 0) return;
+    withTransaction(this.db, () => {
+      for (const r of rows) this.setMemory(r.id, r.kb, r.at);
+    });
   }
 
   /** 休眠（WS-M B）：在结束进程之前写，handleExit 才知道这次退出是休眠。memKb 是休眠前那棵树的内存。 */

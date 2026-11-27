@@ -89,6 +89,11 @@ export class LessonsService {
     return isAllowedGithubUrl(url, this.d.repo.repos().map((r) => r.slug));
   }
 
+  /** lessons:state 之前（BTL-275）：state() 要用到的仓库身份先在后台查好，state() 里就不再同步起 git。 */
+  async warm(): Promise<void> {
+    await this.d.identity.warm([...this.d.knownRepoPaths(), ...this.d.repoGroups().flat()]);
+  }
+
   /** 先把 knownRepoPaths 里解析得出、且表里还没有（或路径变了）的 upsertRepo，再拼视图。 */
   state(): LessonsState {
     const { repo, identity } = this.d;
