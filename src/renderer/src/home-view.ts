@@ -154,7 +154,8 @@ export function locationOf(item: TurnItem, ctx: NameCtx, now: number, S: UiStrin
   return { path: scope ? `${scope} › ${key}` : key, scope: scope ? `${scope} › ` : "", key, age };
 }
 
-const allMerged = (r: ScopeTurnRow) => r.total > 0 && r.merged === r.total;
+/** 都结束了：合了的加关掉不做的（BTL-270）。 */
+const allMerged = (r: ScopeTurnRow) => r.total > 0 && r.merged + r.closed === r.total;
 
 /** 首页小表：轮到你多的在前，全合了的排最后，最多 8 行。 */
 export function visibleScopes(rows: ScopeTurnRow[]): { shown: ScopeTurnRow[]; hidden: number } {
@@ -177,7 +178,7 @@ export function scopeRoute(row: ScopeTurnRow): Route {
 }
 
 export function scopeLine(row: ScopeTurnRow, S: UiStrings): string {
-  return row.total === 0 ? S.hm.scopeEmpty : S.hm.scopeLine(row.total, row.merged, row.slowest);
+  return row.total === 0 ? S.hm.scopeEmpty : S.hm.scopeLine(row.total, row.merged, row.slowest, row.closed);
 }
 
 /** feature 汇总行的「谁该动」（看 scope 行的计数）。单独的 ticket 不用它：ticket 行的 bar 按 PR 计，看不出 session 在干活，用 ticketWhoTurn。 */
@@ -185,7 +186,7 @@ export function scopeWho(row: ScopeTurnRow, S: UiStrings): { tone: TurnTone | nu
   if (row.youCount > 0) return { tone: "ask", text: S.hm.whoYou(row.youCount) };
   if (row.bar.agent > 0) return { tone: "agent", text: S.hm.whoAgent };
   if (row.bar.external > 0) return { tone: "external", text: S.hm.whoExternal };
-  if (allMerged(row)) return { tone: "done", text: S.hm.whoDone };
+  if (allMerged(row)) return row.closed === row.total ? { tone: "idle", text: S.hm.whoClosed } : { tone: "done", text: S.hm.whoDone };
   return { tone: "idle", text: S.hm.whoIdle };
 }
 
@@ -205,7 +206,8 @@ export function ticketWhoTurn(items: TurnItem[], scope: ScopeTurnRow | null, tic
   const own = ticketItem(items, ticketKey);
   if (own) return own.turn;
   if (scope === null || scope.total === 0) return null;
-  return scope.merged >= scope.total ? { owner: "done", kind: "merged" } : { owner: "idle", kind: "not_started" };
+  if (scope.closed >= scope.total) return { owner: "done", kind: "closed" };
+  return scope.merged + scope.closed >= scope.total ? { owner: "done", kind: "merged" } : { owner: "idle", kind: "not_started" };
 }
 
 /**
@@ -217,7 +219,8 @@ export function ticketNowText(items: TurnItem[], scope: ScopeTurnRow | null, tic
   const own = ticketItem(items, ticketKey);
   if (own) return own.others > 0 ? `${turnSentence(own.turn, own, S)} · ${S.lay.morePrs(own.others)}` : turnSentence(own.turn, own, S);
   if (scope === null || scope.total === 0) return "—";
-  if (scope.merged >= scope.total) return S.turn.done;
+  if (scope.closed >= scope.total) return S.turn.closed;
+  if (scope.merged + scope.closed >= scope.total) return S.turn.done;
   if (scope.bar.idle > 0) return S.turn.idle;
   return "—";
 }

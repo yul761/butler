@@ -53,8 +53,8 @@ export function titlePrefix(title: string | null): string | null {
   return null;
 }
 
-/** 汇总条的五格（定义见设计文档第 4 节）。 */
-export const PROGRESS_BUCKETS = ["merged", "blocked", "in_review", "in_progress", "not_started"] as const;
+/** 汇总条的格子（定义见设计文档第 4 节）。closed：关掉不做的 ticket（BTL-270），和 merged 一样算结束，分开数。 */
+export const PROGRESS_BUCKETS = ["merged", "closed", "blocked", "in_review", "in_progress", "not_started"] as const;
 export type ProgressBucket = (typeof PROGRESS_BUCKETS)[number];
 
 export interface ProgressFilter {

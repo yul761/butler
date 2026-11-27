@@ -124,7 +124,7 @@ export function promptOnTerminalChain(headOf: (id: string) => string | null, hoo
  * 每一个 invoke 通道都必须在 MANUAL_TRIGGERS、COUNTED_ELSEWHERE、NOT_TRIGGERS 三者之一里（测试检查）。
  */
 export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
-  IPC.ticketsSetStatus, IPC.ticketsSwitchBranch, IPC.ticketsRecheckCleanup,
+  IPC.ticketsSetStatus, IPC.ticketsClose, IPC.ticketsReopen, IPC.ticketsSwitchBranch, IPC.ticketsRecheckCleanup,
   IPC.sessionsOpen, IPC.sessionOpenFix, IPC.sessionsRefresh, IPC.sessionsWake, IPC.sessionsSwitchModel, IPC.sessionsCloseIdle,
   IPC.activityDismiss, IPC.ptyKill, IPC.handoffsRun, IPC.featuresSummaryRun, IPC.featuresOpenSession,
   IPC.shipherdOpenSession, IPC.jobsRunNightly, IPC.ciResend, IPC.followupsSetStatus, IPC.lessonsRun, IPC.availabilityAct,
@@ -214,7 +214,7 @@ export const isManualTrigger = (channel: string): boolean => MANUAL_TRIGGERS.has
 /** 第一个参数是 session（终端）id 的手动触发。 */
 const SESSION_ARG: ReadonlySet<string> = new Set([IPC.sessionsRefresh, IPC.sessionsWake, IPC.sessionsSwitchModel, IPC.activityDismiss, IPC.ptyKill]);
 /** 第一个参数是 ticket key 的手动触发。 */
-const TICKET_ARG: ReadonlySet<string> = new Set([IPC.ticketsSetStatus, IPC.ticketsRecheckCleanup, IPC.handoffsRun]);
+const TICKET_ARG: ReadonlySet<string> = new Set([IPC.ticketsSetStatus, IPC.ticketsClose, IPC.ticketsReopen, IPC.ticketsRecheckCleanup, IPC.handoffsRun]);
 
 const shortString = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 && v.length <= 200 ? v : undefined);
 

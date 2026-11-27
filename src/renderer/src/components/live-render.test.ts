@@ -50,7 +50,7 @@ const card = (n: number, question: string): TurnItem => ({
   turn: { owner: "you", kind: "answer", question, options: ["好"], askId: n, sessionId: `s-T-${n}` },
 });
 const scope = (id: number, youCount: number): ScopeTurnRow => ({
-  kind: "feature", id, name: `Feature ${id}`, total: 1, merged: 0, bar: { done: 0, agent: 0, you: youCount, external: 0, idle: 1 - youCount }, youCount, slowest: null,
+  kind: "feature", id, name: `Feature ${id}`, total: 1, merged: 0, closed: 0, bar: { done: 0, agent: 0, you: youCount, external: 0, idle: 1 - youCount }, youCount, slowest: null,
 });
 const board = (q2: string): TurnBoard => ({
   items: [card(1, "第一个问题？"), card(2, q2)], scopes: [scope(1, 1), scope(2, 1)], counts: { you: 2, agent: 0, external: 0, mergedToday: 0 }, generatedAt: 1,

@@ -358,3 +358,43 @@ describe("parseControlRequest for stacks (workstream K)", () => {
     expect(parseControlRequest({ v: 1, featureId: 2, op: "create_ticket", ticket: "P-2", stack_on: 3 })).toBeNull();
   });
 });
+
+describe("parseControlRequest for closing tickets and followups (BTL-270)", () => {
+  for (const base of [{ v: 1, featureId: 2, from: "c" }, { v: 1, shipherd: true, from: "c" }] as const) {
+    const scope = "featureId" in base ? "an epic coordinator" : "the Shipherd coordinator";
+    it(`accepts close_ticket, reopen_ticket and set_ticket_status from ${scope}`, () => {
+      expect(parseControlRequest({ ...base, op: "close_ticket", ticket: "P-1", reason: "需求变了", close_prs: true, end_sessions: false }))
+        .toEqual({ ...base, op: "close_ticket", ticket: "P-1", reason: "需求变了", close_prs: true });
+      expect(parseControlRequest({ ...base, op: "reopen_ticket", ticket: "P-1" })).toEqual({ ...base, op: "reopen_ticket", ticket: "P-1" });
+      expect(parseControlRequest({ ...base, op: "set_ticket_status", ticket: "P-1", status: "auto" })).toEqual({ ...base, op: "set_ticket_status", ticket: "P-1", status: "auto" });
+      expect(parseControlRequest({ ...base, op: "set_ticket_status", ticket: "P-1", status: "closed", reason: "r" }))
+        .toEqual({ ...base, op: "set_ticket_status", ticket: "P-1", status: "closed", reason: "r" });
+    });
+
+    it(`rejects bad close and status requests from ${scope}`, () => {
+      expect(parseControlRequest({ ...base, op: "close_ticket", ticket: "P-1" })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "close_ticket", ticket: "P-1", reason: "  " })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "close_ticket", ticket: "P-1", reason: "x".repeat(REASON_LIMIT + 1) })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "close_ticket", ticket: "P-1", reason: "r", close_prs: "yes" })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "close_ticket", reason: "r" })).toBeNull();
+      // needs_decision 只由 PR 推出来，手动设不了；closed 要原因。
+      expect(parseControlRequest({ ...base, op: "set_ticket_status", ticket: "P-1", status: "needs_decision" })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "set_ticket_status", ticket: "P-1", status: "closed" })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "set_ticket_status", ticket: "P-1", status: "nope" })).toBeNull();
+    });
+
+    it(`accepts list_followups and resolve_followup from ${scope}`, () => {
+      expect(parseControlRequest({ ...base, op: "list_followups" })).toEqual({ ...base, op: "list_followups" });
+      expect(parseControlRequest({ ...base, op: "list_followups", ticket: "P-1", all: true })).toEqual({ ...base, op: "list_followups", ticket: "P-1", all: true });
+      expect(parseControlRequest({ ...base, op: "resolve_followup", followup: "f1", status: "ignored", reason: "以后再说" }))
+        .toEqual({ ...base, op: "resolve_followup", followup: "f1", status: "ignored", reason: "以后再说" });
+      expect(parseControlRequest({ ...base, op: "resolve_followup", followup: "f1", status: "snoozed", reason: "r" })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "resolve_followup", followup: "f1", status: "done" })).toBeNull();
+      expect(parseControlRequest({ ...base, op: "list_followups", all: "yes" })).toBeNull();
+    });
+  }
+
+  it("a ticket session cannot close tickets", () => {
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "close_ticket", ticket: "P-1", reason: "r" })).toBeNull();
+  });
+});

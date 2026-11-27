@@ -38,7 +38,7 @@ import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicySe
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type DeliverNowResult, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr, type TicketView, type FeatureView,
+  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type DeliverNowResult, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type ManualTicketStatus, type WatchedPr, type TicketView, type FeatureView,
 } from "../../shared/types";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
@@ -52,6 +52,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { UsageRepo } from "../db/usage-repo";
 import { summarizeUsage, USAGE_WINDOW_MS } from "../usage/usage-summary";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { CloseOptions, CloseResult, ReopenResult, SetStatusResult } from "../tickets/ticket-close";
 import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
@@ -87,7 +88,7 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, automationLevelArg, closeTicketArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openShipherdArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg, preReviewStatusArg, preReviewQueueActionArg, messageIdArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -278,6 +279,12 @@ export interface IpcDeps {
   update: { view(): UpdateView; checkNow(): Promise<UpdateCheckResult>; skip(version: string): void; dismiss(version: string): void; openRelease(): void };
   /** followup 状态变化后重新推导 ticket 状态。 */
   rederive: (ticketKey: string) => void;
+  /** 关掉 / 重新打开 ticket（tickets/ticket-close.ts，BTL-270）。来源记成 user。 */
+  ticketClose?: {
+    close(key: string, o: CloseOptions): Promise<CloseResult>;
+    reopen(key: string): ReopenResult;
+    setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null): SetStatusResult;
+  };
   detectTrackerTools: () => Promise<McpProbe>;
   /** 设置 › 功能：三张策略表各读一次（UI 重做第 6 层）。 */
   featurePolicy: () => FeaturePolicyState;
@@ -347,8 +354,30 @@ export function registerIpc(d: IpcDeps): void {
     return t;
   });
   handle(IPC.ticketsSetStatus, (key: string, status: TicketStatus | null) => {
+    // closed 要原因、要忽略后续事项，走 ticketsClose；needs_decision 只能自动得出。
+    if (status === "closed" || status === "needs_decision") throw new TicketError("invalid_status", M().ticketStatusNotManual);
+    // 和总控的 set_ticket_status 同一个函数：从「已关闭」换成别的，先撤销关闭（关闭时忽略的后续事项还原）。
+    if (d.ticketClose) {
+      if (!d.ticketClose.setStatus(key, status).ok) throw new TicketError("not_found", M().ctlNoTicket(key));
+      return;
+    }
     d.tickets.setStatusManual(key, status, d.now());
     d.notify();
+  });
+  handle(IPC.ticketsClose, async (rawKey: unknown, raw: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const o = closeTicketArg(raw);
+    const r = await d.ticketClose.close(key, { ...o, source: "user" });
+    if (!r.ok) throw new TicketError(r.error === "no_ticket" ? "not_found" : "invalid_reason", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ticketCloseNeedsReason);
+    return r;
+  });
+  handle(IPC.ticketsReopen, (rawKey: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const r = d.ticketClose.reopen(key);
+    if (!r.ok) throw new TicketError("not_found", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ctlTicketNotClosed(key));
+    return r;
   });
   handle(IPC.ticketsArchive, (key: string) => {
     d.tickets.archive(key, d.now());

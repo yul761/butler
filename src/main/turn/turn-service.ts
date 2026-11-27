@@ -337,8 +337,13 @@ export class TurnService {
       else loose.push({ ...tt, featureId: target?.page === "feature" ? target.id : null });
     };
     const prNotices: { n: NowNotice; tt: TimedTurn; key: string | null; target: NowTarget | null }[] = [];
+    // 关了的 ticket（BTL-270）：PR 可能没跟着关（没勾、或者 gh 失败），它的评论等着、CI 没递出去都不再要你动手，
+    // 不然会盖过「已关闭」、让这张又成了要你处理的。没回答的提问另算，照样出卡。
+    const closedKeys = new Set(tickets.filter((t) => t.effectiveStatus === "closed").map((t) => t.key));
     for (const n of p.run("notices", () => this.d.notices())) {
       if (!noticeNeedsYou(n) || n.kind === "session_limited") continue;
+      if (n.kind === "comments_waiting" && closedKeys.has(n.waiting.ticketKey)) continue;
+      if (n.kind === "ci_undelivered" && closedKeys.has(n.ci.ticketKey)) continue;
       const since = n.kind === "ci_undelivered" ? n.ci.since : n.kind === "comments_waiting" ? n.waiting.since : now;
       const tt: TimedTurn = { turn: { owner: "you", kind: "shipherd", notice: n }, since };
       const target = "target" in n ? n.target : null;
@@ -358,6 +363,12 @@ export class TurnService {
     for (const t of tickets) {
       const bt = board.get(t.key)!;
       const heads = headsOf.get(t.key) ?? [];
+      if (t.effectiveStatus === "closed") {
+        // 关了、不做了（BTL-270）：不再看 PR 和 session 的轮次（不会再挂「卡住」），算结束；没回答的提问照样各出一张。
+        for (const s of heads) for (const a of asks.get(s.id) ?? []) bt.moreAsks.push(askTurn(a, s.id));
+        bt.others.push({ turn: { owner: "done", kind: "closed" }, since: t.closure?.at ?? now });
+        continue;
+      }
       const headIds = heads.map((s) => s.id);
       for (const w of p.run("prs.status", () => this.d.prs(t.key))) {
         const row = w.prId !== null ? this.d.prRow(w.prId) : null;
@@ -380,6 +391,10 @@ export class TurnService {
       if (t.effectiveStatus === "blocked") {
         const first = heads[0];
         bt.others.push({ turn: { owner: "you", kind: "stuck", source: "ticket_blocked", detail: null, sessionId: first?.id ?? null }, since: (first && this.d.lastReplyAt(first.id)) ?? now });
+      }
+      // PR 都关了没合（BTL-270）：要你决定还做不做（重开 PR、开新的，或者 close_ticket）。
+      if (t.effectiveStatus === "needs_decision") {
+        bt.others.push({ turn: { owner: "you", kind: "stuck", source: "ticket_needs_decision", detail: null, sessionId: heads[0]?.id ?? null }, since: (heads[0] && this.d.lastReplyAt(heads[0].id)) ?? now });
       }
       if (bt.prs.length === 0 && (t.effectiveStatus === "done" || t.effectiveStatus === "merged_pending_followup")) {
         bt.others.push({ turn: { owner: "done", kind: "merged" }, since: now });

@@ -1,0 +1,138 @@
+import type { ManualTicketStatus, TicketCloseSource, TicketStatus } from "../../shared/types";
+import { effectiveStatus } from "../../shared/types";
+import type { FollowupsRepo } from "../db/followups-repo";
+import type { TicketsRepo } from "../db/tickets-repo";
+
+/** 关 ticket 时要关的一个开着的 PR：gh 在 cwd 里跑，slug 是仓库（-R）。 */
+export interface ClosablePr {
+  url: string;
+  number: number;
+  slug: string | null;
+  cwd: string;
+}
+
+/** ticket 的一个还在的 session（head）：终端开着（termId），或者休眠着。 */
+export interface LiveSession {
+  id: string;
+  termId: string | null;
+  hibernated: boolean;
+}
+
+export interface TicketCloseDeps {
+  tickets: Pick<TicketsRepo, "get" | "close" | "setStatusManual">;
+  followups: Pick<FollowupsRepo, "ignoreForClose" | "restoreAfterReopen">;
+  transaction<T>(fn: () => T): T;
+  /** 这个 ticket 开着的 PR（读过的、没放弃的、在 ticket 的仓库里的）。 */
+  openPrs(key: string): ClosablePr[];
+  closePr(pr: ClosablePr, comment: string): Promise<void>;
+  /** 这个 ticket 开着终端或休眠着的 session。 */
+  liveSessions(key: string): LiveSession[];
+  /** 关终端（休眠着的不再唤醒），记成用户结束的。 */
+  endSession(s: LiveSession): void;
+  /** followup 变了以后重算自动状态（rederiveTicketStatus）。 */
+  rederive(key: string): void;
+  /** 马上重读这个 ticket 的 PR（prWatcher.soonTicket），不等下一轮轮询。 */
+  refreshPrs(key: string): void;
+  notify(): void;
+  now(): number;
+  log(msg: string, err?: unknown): void;
+}
+
+export interface CloseOptions {
+  reason: string;
+  source: TicketCloseSource;
+  /** 顺便把 ticket 开着的 PR 关掉（gh pr close，评论里写原因）。 */
+  closePrs?: boolean;
+  /** 顺便结束 ticket 的 session（开着的关终端、休眠着的不再唤醒）。 */
+  endSessions?: boolean;
+  /** 不结束的 session（发起关闭的那个自己）。 */
+  except?: string | null;
+}
+
+export type CloseResult =
+  | { ok: true; ticket: string; ignoredFollowups: number; closedPrs: string[]; prErrors: { url: string; error: string }[]; endedSessions: string[] }
+  | { ok: false; error: "no_ticket" | "empty_reason" };
+
+export type ReopenResult = { ok: true; ticket: string; restoredFollowups: number; status: TicketStatus } | { ok: false; error: "no_ticket" | "not_closed" };
+
+const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
+
+/**
+ * 关掉 ticket（BTL-270）：不做了，和 done（做完了）分开。手动状态写 closed，记下原因和来源；没做完的后续事项（open、snoozed）
+ * 标成忽略、记下原来的状态（reopenTicket 还原）。要求了就关开着的 PR、结束 session：这两步失败不回滚关闭，结果里分项报告。
+ * 最后马上重读 PR、通知界面刷新。
+ */
+export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptions): Promise<CloseResult> {
+  const reason = oneLine(o.reason);
+  if (!d.tickets.get(key)) return { ok: false, error: "no_ticket" };
+  if (!reason) return { ok: false, error: "empty_reason" };
+  const ignoredFollowups = d.transaction(() => {
+    d.tickets.close(key, { at: d.now(), reason, source: o.source });
+    return d.followups.ignoreForClose(key, reason, o.source);
+  });
+  d.log(`ticket ${key} closed by ${o.source}: ${reason}`);
+  d.notify();
+  const closedPrs: string[] = [];
+  const prErrors: { url: string; error: string }[] = [];
+  if (o.closePrs) {
+    for (const pr of d.openPrs(key)) {
+      try {
+        await d.closePr(pr, reason);
+        closedPrs.push(pr.url);
+      } catch (e) {
+        prErrors.push({ url: pr.url, error: e instanceof Error ? e.message : String(e) });
+        d.log(`ticket ${key}: closing ${pr.url} failed`, e);
+      }
+    }
+  }
+  const endedSessions: string[] = [];
+  if (o.endSessions) {
+    for (const s of d.liveSessions(key)) {
+      if (s.id === o.except) continue;
+      try {
+        d.endSession(s);
+        endedSessions.push(s.id);
+      } catch (e) {
+        d.log(`ticket ${key}: ending session ${s.id} failed`, e);
+      }
+    }
+  }
+  d.rederive(key);
+  d.refreshPrs(key);
+  d.notify();
+  return { ok: true, ticket: key, ignoredFollowups, closedPrs, prErrors, endedSessions };
+}
+
+/** 撤销关闭：回到自动状态，关闭时忽略的后续事项（之后没人动过的）还原。关掉的 PR、结束的 session 不会自己回来。 */
+export function reopenTicket(d: TicketCloseDeps, key: string): ReopenResult {
+  const t = d.tickets.get(key);
+  if (!t) return { ok: false, error: "no_ticket" };
+  if (t.statusManual !== "closed") return { ok: false, error: "not_closed" };
+  const restoredFollowups = d.transaction(() => {
+    d.tickets.setStatusManual(key, null);
+    return d.followups.restoreAfterReopen(key);
+  });
+  d.log(`ticket ${key} reopened`);
+  d.rederive(key);
+  d.refreshPrs(key);
+  d.notify();
+  const after = d.tickets.get(key);
+  return { ok: true, ticket: key, restoredFollowups, status: after ? effectiveStatus(after) : t.status };
+}
+
+export type SetStatusResult = { ok: true; ticket: string; status: TicketStatus; reopened: boolean } | { ok: false; error: "no_ticket" };
+
+/**
+ * 手动设状态（closed 以外；null 是清掉手动状态、回到自动）：界面的状态下拉框和总控的 set_ticket_status 共用。
+ * 关着的先撤销关闭（reopenTicket：后续事项还原），再设；只是撤销关闭时（null）不再多写一次。
+ */
+export function setTicketStatus(d: TicketCloseDeps, key: string, status: Exclude<ManualTicketStatus, "closed"> | null): SetStatusResult {
+  const t = d.tickets.get(key);
+  if (!t) return { ok: false, error: "no_ticket" };
+  const reopened = t.statusManual === "closed";
+  if (reopened) reopenTicket(d, key);
+  if (status !== null || !reopened) d.tickets.setStatusManual(key, status, d.now());
+  d.notify();
+  const after = d.tickets.get(key);
+  return { ok: true, ticket: key, status: after ? effectiveStatus(after) : t.status, reopened };
+}

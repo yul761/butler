@@ -33,6 +33,8 @@ export const EN_STATUS: Record<TicketStatus, string> = {
   blocked: "Blocked",
   in_review: "In review",
   done: "Done",
+  needs_decision: "Needs a decision",
+  closed: "Closed",
 };
 
 export const EN: UiStrings = {
@@ -394,7 +396,8 @@ export const EN: UiStrings = {
     reviewAgo: (d: string) => `asked ${d} ago`,
     reviewNow: "asked just now",
     scopesHeading: "Epics",
-    scopeLine: (total: number, merged: number, slowest: string | null) => `${merged} of ${total} merged${slowest === null ? "" : ` · slowest: "${slowest}"`}`,
+    scopeLine: (total: number, merged: number, slowest: string | null, closed = 0) =>
+      `${merged} of ${total} merged${closed > 0 ? `, ${closed} closed` : ""}${slowest === null ? "" : ` · slowest: "${slowest}"`}`,
     scopeEmpty: "No tickets yet",
     scopeMore: (n: number) => `See all ${n} in All work`,
     whoYou: (n: number) => `You ${n}`,
@@ -403,6 +406,7 @@ export const EN: UiStrings = {
     whoExternal: "Others",
     whoStackBelow: "Layer below",
     whoDone: "Merged",
+    whoClosed: "Closed",
     whoIdle: "Not started",
     running: (n: number) => `In progress ${n}`,
     moreHeading: "How it is running",
@@ -521,6 +525,7 @@ export const EN: UiStrings = {
       blocked_report: (d: string | null) => (d === null ? "Reported it's blocked" : `Reported it's blocked: ${d}`),
       silent: (d: string | null) => (d === null ? "Running but silent for a long time" : `Running but silent for a long time: ${d}`),
       ticket_blocked: () => "The ticket is marked blocked",
+      ticket_needs_decision: () => "Its PRs were all closed; decide whether to keep going",
     },
     unattended: {
       ci_failing: "CI failed and nobody is fixing it",
@@ -540,6 +545,7 @@ export const EN: UiStrings = {
       stackBelow: (names: string[]) => `Waiting for the layer below (${names.join(", ")}) to merge`,
     },
     done: "Merged",
+    closed: "Closed, not doing it",
     idle: "Not started",
     shipherd: {
       approval: "Waiting for you to confirm a permission prompt",
@@ -705,6 +711,23 @@ export const EN: UiStrings = {
   colArchivedAt: "Archived",
   restoreArchived: (key: string) => `Restore ${key}`,
   statusAuto: (current: string) => `Automatic (now: ${current})`,
+  tc: {
+    close: "Close ticket",
+    title: (key: string) => `Close ${key}`,
+    lede: "Close it when you're not doing it (the need changed, or you went another way). It's counted apart from Done, and you can reopen it later.",
+    reason: "Reason",
+    reasonHint: "For example: the need changed, we're not doing this",
+    reasonCount: (n: number, max: number) => `${n}/${max}`,
+    reasonTooLong: (max: number) => `Keep the reason under ${max} characters`,
+    closePrs: "Also close its open PRs",
+    endSessions: "Also end its sessions",
+    confirm: "Close",
+    banner: (reason: string) => `Closed: ${reason}`,
+    by: { user: "closed by you", coordinator: "closed by a coordinator", routing: "closed by routing" } as Record<"user" | "coordinator" | "routing", string>,
+    reopen: "Reopen",
+    reopened: (n: number) => (n > 0 ? `Reopened; ${n} follow-ups are back` : "Reopened"),
+    prErrors: (n: number) => `The ticket is closed, but ${n} PRs could not be closed; check the PR tab`,
+  },
   noSessions: "No sessions yet. Click “New session” to start.",
   resume: "Resume",
   exited: (code: number) => `claude exited (exit code ${code})`,
@@ -2284,8 +2307,8 @@ export const EN: UiStrings = {
     effOverrideSub: (items: number, size: number, risk: number, clarify: number) => `${items} tickets · size ${size} · risk ${risk} · info ${clarify}`,
   },
   lay: {
-    progressLine: (merged: number, total: number, you: number) =>
-      total === 0 ? "No tickets yet" : `${merged} of ${total} merged · ${you === 0 ? "nothing waiting on you" : `${you} waiting on you`}`,
+    progressLine: (merged: number, total: number, you: number, closed = 0) =>
+      total === 0 ? "No tickets yet" : `${merged} of ${total} merged${closed > 0 ? `, ${closed} closed` : ""} · ${you === 0 ? "nothing waiting on you" : `${you} waiting on you`}`,
     slowest: (name: string) => `Slowest: "${name}".`,
     noSlowest: "Nothing is clearly behind.",
     whoYou: "You",
@@ -2331,13 +2354,13 @@ export const EN: UiStrings = {
     convNoSession: "This ticket has no session yet.",
     youHere: "Waiting on you here",
     noYouHere: "Nothing here is waiting on you.",
-    featureCard: (merged: number, total: number) => `${merged}/${total} merged`,
+    featureCard: (merged: number, total: number, closed = 0) => `${merged}/${total} merged${closed > 0 ? ` · ${closed} closed` : ""}`,
     runningEmpty: "Nothing is being worked on by an agent, CI or anyone else right now.",
     colTicket: "Ticket",
     colWho: "Who's up",
     colNow: "Status",
     colPr: "PR",
-    groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} merged`,
+    groupHeader: (name: string, merged: number, total: number, closed = 0) => `${name} · ${merged}/${total} merged${closed > 0 ? ` · ${closed} closed` : ""}`,
     noTicketsInGroup: "No tickets in this group yet.",
     notInAFeature: "Not in a feature",
     featuresHeading: "Features",

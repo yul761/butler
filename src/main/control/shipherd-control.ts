@@ -167,7 +167,9 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       const own = d.tickets.listByFeature(epicId);
       return blocksIn(epicId).map((x, i) => {
         const mine = own.filter((t) => t.blockId === x.id);
-        return { id: x.id, name: x.name, position: i + 1, merged: mine.filter((t) => effectiveStatus(t) === "done").length, total: mine.length, mine };
+        // closed（不做了，BTL-270）和合并了的一样算结束，分开数。
+        const closed = mine.filter((t) => effectiveStatus(t) === "closed").length;
+        return { id: x.id, name: x.name, position: i + 1, merged: mine.filter((t) => effectiveStatus(t) === "done").length, closed, total: mine.length, mine };
       });
     };
     const self = req.from ? (d.sessions.head(req.from) ?? null) : null;
@@ -269,7 +271,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
         return ok(b.featureRows().map((r) => ({
           id: r.id, name: r.name, status: r.status, jiraEpic: featureById.get(r.id)?.jiraEpicKey ?? null,
           // epic 里的 feature 和各自合了几个（BTL-246），顺序就是推进的顺序。
-          features: blockProgress(r.id).map((x) => ({ id: x.id, name: x.name, position: x.position, merged: x.merged, total: x.total })),
+          features: blockProgress(r.id).map((x) => ({ id: x.id, name: x.name, position: x.position, merged: x.merged, closed: x.closed, total: x.total })),
           coordinatorRunning: !!d.sessionService.runningCoordinator?.(r.id), coordinatorSession: d.sessionService.runningCoordinator?.(r.id)?.id ?? null,
           summary: r.summary === null ? null : r.summary.slice(0, SUMMARY_LIMIT), summaryAt: r.summaryAt === null ? null : new Date(r.summaryAt).toISOString(),
           // 汇总读 PR 状态的时间（总控 /handoff 交上来的汇总没有，按 summaryAt 算）；stale：之后有新活动，含 PR 状态变化（ws-b）。
@@ -378,6 +380,13 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       }
       case "list_stacks":
         return d.stacks ? d.stacks.handle({ kind: "shipherd" }, req) : fail(M().ctlStacksOff);
+      // ticket 的关闭和后续事项（BTL-270）：改东西的只接受开着的 Shipherd 总控自己发的，list_followups 谁都能看。
+      case "close_ticket":
+      case "reopen_ticket":
+      case "set_ticket_status":
+      case "list_followups":
+      case "resolve_followup":
+        return d.ticketOps ? d.ticketOps.handle({ kind: "shipherd" }, req, { from: self?.id ?? req.from, canWrite: fromOpenShipherd }) : fail(M().ctlTicketOpsOff);
       case "stack_define":
       case "stack_rebase":
       case "stack_layer_mode":

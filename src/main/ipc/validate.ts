@@ -2,7 +2,7 @@ import { isAutomationLevel, type AutomationLevel } from "../../shared/automation
 import type { AvailabilityAction, LimitKind } from "../../shared/availability";
 import { isBgKind, type BackgroundAction } from "../../shared/background";
 import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRuleKind, type RegistryModel, type RoutingAction, type Tier } from "../../shared/model-routing";
-import { CONTEXT_LIMIT, TASK_LIMIT } from "../../shared/control";
+import { CONTEXT_LIMIT, REASON_LIMIT, TASK_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import { normTurnFilter, type TurnFilter } from "../../shared/turn";
 import type {
@@ -70,6 +70,21 @@ export function updateTicketArg(v: unknown): UpdateTicketInput {
   const key = ticketKeyArg(o.key);
   if (typeof o.title !== "string" || o.title.length > 500) throw new Error("invalid ticket update");
   return { key, title: o.title };
+}
+
+/**
+ * 关 ticket（BTL-270）：原因必填、不超过 REASON_LIMIT（界面上同样限长，超了直接报错、不截断）；
+ * closePrs、endSessions 是布尔或不给。
+ */
+export function closeTicketArg(v: unknown): { reason: string; closePrs: boolean; endSessions: boolean } {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("invalid ticket close");
+  if (typeof o.reason !== "string" || o.reason.trim().length === 0 || o.reason.length > REASON_LIMIT) throw new Error("invalid ticket close reason");
+  const flag = (x: unknown) => {
+    if (x !== undefined && typeof x !== "boolean") throw new Error("invalid ticket close");
+    return x === true;
+  };
+  return { reason: o.reason, closePrs: flag(o.closePrs), endSessions: flag(o.endSessions) };
 }
 
 /** ticket 仓库的 id：正整数。 */

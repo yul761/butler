@@ -99,7 +99,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
   });
   const progressCalls: ProgressFilter[] = [];
   const metricsCalls: (number | undefined)[] = [];
-  const progressView = { filter: { featureId: null }, features: [], counts: { merged: 0, blocked: 0, in_review: 0, in_progress: 0, not_started: 0, total: 0 },
+  const progressView = { filter: { featureId: null }, features: [], counts: { merged: 0, closed: 0, blocked: 0, in_review: 0, in_progress: 0, not_started: 0, total: 0 },
     stuck: [], stacks: [], groups: { byLabel: [], byPrefix: [] }, featureGroups: [], freshness: { generatedAt: 0, prsCheckedOldest: null, prsCheckedNewest: null, readErrors: 0, unread: 0, summaryOldest: null } } satisfies ProgressView;
   const summaryState = { running: new Set<number>(), stale: new Set<number>(), prStatusAt: new Map<number, number>(), refreshed: [] as number[] };
   const asked: string[] = [];
@@ -181,7 +181,7 @@ describe("Shipherd 总控 read-only tools (BTL-190 5)", () => {
     expect(list[0].blockers).toEqual(["等 API"]);
     expect(list[0]).toMatchObject({
       jiraEpic: null,
-      features: [{ id: cart, name: "Cart", position: 1, merged: 0, total: 0 }, { id: payment, name: "Payment", position: 2, merged: 0, total: 1 }],
+      features: [{ id: cart, name: "Cart", position: 1, merged: 0, closed: 0, total: 0 }, { id: payment, name: "Payment", position: 2, merged: 0, closed: 0, total: 1 }],
     });
     expect(list[1]).toMatchObject({ features: [] });
   });
@@ -190,8 +190,8 @@ describe("Shipherd 总控 read-only tools (BTL-190 5)", () => {
     const { call, checkout, payment, cart } = setup();
     const all = value<Record<string, unknown>[]>(await call({ op: "list_features" }));
     expect(all).toEqual([
-      { epic: { id: checkout, name: "checkout" }, id: cart, name: "Cart", position: 1, merged: 0, total: 0, description: null, tickets: [] },
-      { epic: { id: checkout, name: "checkout" }, id: payment, name: "Payment", position: 2, merged: 0, total: 1, description: "付款", tickets: [{ key: "BTL-1", title: "BTL-1 title", status: "active" }] },
+      { epic: { id: checkout, name: "checkout" }, id: cart, name: "Cart", position: 1, merged: 0, closed: 0, total: 0, description: null, tickets: [] },
+      { epic: { id: checkout, name: "checkout" }, id: payment, name: "Payment", position: 2, merged: 0, closed: 0, total: 1, description: "付款", tickets: [{ key: "BTL-1", title: "BTL-1 title", status: "active" }] },
     ]);
     expect(value(await call({ op: "list_features", epic: "docs" }))).toEqual([]);
     expect(value<unknown[]>(await call({ op: "list_features", epic: String(checkout) }))).toHaveLength(2);

@@ -64,7 +64,7 @@ describe("buildTurnBoard", () => {
     expect(buildTurnBoard(input(), { featureId: 10 }).scopes.map((s) => s.id)).toEqual([10, "PAY-1", "PAY-2"]);
     const t = buildTurnBoard(input(), { ticketKey: "PAY-1" });
     // slowest：PR 2 的 since（NOW-2）比 PR 1（NOW-1）早，最久没进展的是 #2
-    expect(t.scopes).toEqual([{ kind: "ticket", id: "PAY-1", name: "PAY-1", total: 2, merged: 0, bar: { done: 0, agent: 0, you: 1, external: 1, idle: 0 }, youCount: 1, slowest: "acme/app#2" }]);
+    expect(t.scopes).toEqual([{ kind: "ticket", id: "PAY-1", name: "PAY-1", total: 2, merged: 0, closed: 0, bar: { done: 0, agent: 0, you: 1, external: 1, idle: 0 }, youCount: 1, slowest: "acme/app#2" }]);
   });
   it("feature row totals count tickets; youCount adds loose feature-level asks", () => {
     const refund = buildTurnBoard(input(), null).scopes.find((s) => s.kind === "feature" && s.id === 11)!;

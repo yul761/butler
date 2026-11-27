@@ -50,13 +50,13 @@ describe("ticketRows", () => {
 
 describe("lines and labels", () => {
   it("progressLine", () => {
-    const r = { total: 15, merged: 9, youCount: 2 };
+    const r = { total: 15, merged: 9, closed: 0, youCount: 2 };
     expect(progressLine(r, S)).toBe("15 个里合了 9 个 · 2 件轮到你");
     expect(progressLine({ ...r, youCount: 0 }, S)).toBe("15 个里合了 9 个 · 没有事轮到你");
-    expect(progressLine({ total: 0, merged: 0, youCount: 0 }, S)).toBe("还没有 ticket");
+    expect(progressLine({ total: 0, merged: 0, closed: 0, youCount: 0 }, S)).toBe("还没有 ticket");
     expect(progressLine(r, SE)).toBe("9 of 15 merged · 2 waiting on you");
     expect(progressLine({ ...r, youCount: 0 }, SE)).toBe("9 of 15 merged · nothing waiting on you");
-    expect(progressLine({ total: 0, merged: 0, youCount: 0 }, SE)).toBe("No tickets yet");
+    expect(progressLine({ total: 0, merged: 0, closed: 0, youCount: 0 }, SE)).toBe("No tickets yet");
   });
   it("slowestLine", () => {
     expect(slowestLine("收尾 R/X", S)).toBe("最慢的是「收尾 R/X」。");
@@ -89,14 +89,14 @@ describe("lines and labels", () => {
 
 describe("scopeTotal", () => {
   const bar = (done: number, you: number): ScopeTurnRow["bar"] => ({ done, agent: 0, you, external: 0, idle: 0 });
-  const f1: ScopeTurnRow = { kind: "feature", id: 1, name: "a", total: 3, merged: 1, bar: bar(1, 2), youCount: 2, slowest: "a" };
+  const f1: ScopeTurnRow = { kind: "feature", id: 1, name: "a", total: 3, merged: 1, closed: 0, bar: bar(1, 2), youCount: 2, slowest: "a" };
   it("uses the feature's own row, or else adds up only its ticket rows", () => {
     const own: ScopeTurnRow = { ...f1, id: 4 };
-    const t1: ScopeTurnRow = { kind: "ticket", id: "K-1", name: "K-1", total: 2, merged: 1, bar: bar(1, 1), youCount: 1, slowest: "K-1" };
-    const t2: ScopeTurnRow = { kind: "ticket", id: "K-2", name: "K-2", total: 1, merged: 0, bar: bar(0, 0), youCount: 0, slowest: null };
+    const t1: ScopeTurnRow = { kind: "ticket", id: "K-1", name: "K-1", total: 2, merged: 1, closed: 0, bar: bar(1, 1), youCount: 1, slowest: "K-1" };
+    const t2: ScopeTurnRow = { kind: "ticket", id: "K-2", name: "K-2", total: 1, merged: 0, closed: 0, bar: bar(0, 0), youCount: 0, slowest: null };
     expect(scopeTotal([own, t1, t2], "feature", 4)).toBe(own);
     // 另一个 feature 的行不算它自己的；feature 行也不算进 ticket 的和里。
-    expect(scopeTotal([f1, t1, t2], "feature", 4)).toEqual({ kind: "feature", id: 4, name: "", total: 3, merged: 1, bar: bar(1, 1), youCount: 1, slowest: null });
+    expect(scopeTotal([f1, t1, t2], "feature", 4)).toEqual({ kind: "feature", id: 4, name: "", total: 3, merged: 1, closed: 0, bar: bar(1, 1), youCount: 1, slowest: null });
     expect(scopeTotal([f1], "feature", 4).total).toBe(0);
   });
 });
@@ -104,7 +104,7 @@ describe("scopeTotal", () => {
 describe("flatGroup", () => {
   it("is one unnamed group that counts the merged rows, or nothing when there are no rows", () => {
     const rows = ticketRows([tk("K-1"), tk("K-2", 10, "done"), tk("K-3")], [item("K-1", agent, null)]);
-    expect(flatGroup(rows)).toEqual([{ name: null, merged: 1, total: 3, rows }]);
+    expect(flatGroup(rows)).toEqual([{ name: null, merged: 1, closed: 0, total: 3, rows }]);
     expect(flatGroup([])).toEqual([]);
   });
 });
@@ -182,15 +182,15 @@ describe("scopeRowLine / ticketsWithPr", () => {
   it("a ticket with no PR says so; tickets with PRs and feature rows count merged", () => {
     const withPr = ticketsWithPr([item("K-2", ext, { repo: "app", number: 1 }), item("K-3", agent, null), { ...item("K-4", ext, null), ticketKey: null }]);
     expect([...withPr]).toEqual(["K-2"]);
-    expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, total: 1 }, withPr, S)).toBe("还没开 PR");
-    expect(scopeRowLine({ kind: "ticket", id: "K-2", merged: 0, total: 1 }, withPr, S)).toBe("0/1 合了");
-    expect(scopeRowLine({ kind: "feature", id: 3, merged: 1, total: 2 }, withPr, S)).toBe("1/2 合了");
-    expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, total: 1 }, withPr, SE)).toBe("No PR yet");
+    expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, closed: 0, total: 1 }, withPr, S)).toBe("还没开 PR");
+    expect(scopeRowLine({ kind: "ticket", id: "K-2", merged: 0, closed: 0, total: 1 }, withPr, S)).toBe("0/1 合了");
+    expect(scopeRowLine({ kind: "feature", id: 3, merged: 1, closed: 0, total: 2 }, withPr, S)).toBe("1/2 合了");
+    expect(scopeRowLine({ kind: "ticket", id: "K-3", merged: 0, closed: 0, total: 1 }, withPr, SE)).toBe("No PR yet");
   });
   it("a ticket with no PR that is done (its bar is all green) says merged, not that it has no PR yet", () => {
-    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 1, total: 1 }, new Set(), S)).toBe(S.turn.done);
-    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 1, total: 1 }, new Set(), SE)).toBe(SE.turn.done);
-    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 0, total: 1 }, new Set(), S)).toBe(S.lay.noPrYet);
+    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 1, closed: 0, total: 1 }, new Set(), S)).toBe(S.turn.done);
+    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 1, closed: 0, total: 1 }, new Set(), SE)).toBe(SE.turn.done);
+    expect(scopeRowLine({ kind: "ticket", id: "K-5", merged: 0, closed: 0, total: 1 }, new Set(), S)).toBe(S.lay.noPrYet);
   });
 });
 
@@ -251,5 +251,22 @@ describe("an orphan question on a ticket with nothing else going (no PR, no live
     const [row] = ticketRows([tk("K-1")], buildTurnBoard(one, { ticketKey: "K-1" }).items);
     expect(row.turn).toEqual(ask);
     expect(row.asks).toEqual([]);
+  });
+});
+
+describe("closed tickets (BTL-270)", () => {
+  it("a closed ticket row says closed, counts as finished but apart from merged", () => {
+    const rows = ticketRows([
+      { key: "C-1", title: null, featureId: 1, effectiveStatus: "closed" },
+      { key: "C-2", title: null, featureId: 1, effectiveStatus: "done" },
+      { key: "C-3", title: null, featureId: 1, effectiveStatus: "active" },
+    ], []);
+    expect(rows[0].turn).toEqual({ owner: "done", kind: "closed" });
+    expect(whoLabel(rows[0].turn, S)).toBe("关了");
+    expect(flatGroup(rows)).toEqual([expect.objectContaining({ merged: 1, closed: 1, total: 3 })]);
+    expect(S.lay.featureCard(1, 3, 1)).toBe("1/3 合了 · 关了 1");
+    expect(SE.lay.featureCard(1, 3, 1)).toBe("1/3 merged · 1 closed");
+    expect(scopeRowLine({ kind: "ticket", id: "C-1", merged: 0, closed: 1, total: 1 }, new Set(), S)).toBe(S.turn.closed);
+    expect(progressLine({ total: 3, merged: 1, closed: 1, youCount: 0 }, S)).toBe("3 个里合了 1 个、关了 1 个 · 没有事轮到你");
   });
 });

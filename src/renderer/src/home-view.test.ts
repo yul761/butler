@@ -29,7 +29,7 @@ const ci: Turn = { owner: "external", kind: "ci_running", names: [] };
 const pr = { repo: "acme/app", number: 12, title: "Fix", url: "https://gh.example/acme/app/pull/12" };
 
 function scope(o: Partial<ScopeTurnRow> = {}): ScopeTurnRow {
-  return { kind: "feature", id: 1, name: "F", total: 10, merged: 2, bar: { done: 2, agent: 3, you: 1, external: 2, idle: 2 }, youCount: 1, slowest: null, ...o };
+  return { kind: "feature", id: 1, name: "F", total: 10, merged: 2, closed: 0, bar: { done: 2, agent: 3, you: 1, external: 2, idle: 2 }, youCount: 1, slowest: null, ...o };
 }
 
 describe("turnTone", () => {
@@ -167,7 +167,7 @@ describe("locationOf", () => {
 describe("visibleScopes", () => {
   it("puts more of your turns first, all-merged last, and caps at 8", () => {
     const rows = Array.from({ length: 10 }, (_, i) => scope({ id: i, youCount: i % 3 }));
-    rows[0] = scope({ id: 0, youCount: 5, total: 4, merged: 4 });
+    rows[0] = scope({ id: 0, youCount: 5, total: 4, merged: 4, closed: 0 });
     const copy = [...rows];
     const { shown, hidden } = visibleScopes(rows);
     expect(shown).toHaveLength(8);
@@ -194,16 +194,16 @@ describe("scope rows", () => {
     expect(scopeRoute(scope({ kind: "ticket", id: "BTL-9" }))).toEqual({ page: "ticket", key: "BTL-9" });
   });
   it("says how far it got", () => {
-    expect(scopeLine(scope({ total: 15, merged: 9, slowest: "收尾" }), S)).toBe(S.hm.scopeLine(15, 9, "收尾"));
-    expect(scopeLine(scope({ total: 0, merged: 0 }), S)).toBe(S.hm.scopeEmpty);
+    expect(scopeLine(scope({ total: 15, merged: 9, closed: 0, slowest: "收尾" }), S)).toBe(S.hm.scopeLine(15, 9, "收尾"));
+    expect(scopeLine(scope({ total: 0, merged: 0, closed: 0 }), S)).toBe(S.hm.scopeEmpty);
     expect(S.hm.scopeLine(15, 9, null)).not.toContain("最慢");
   });
   it("says who moves", () => {
     expect(scopeWho(scope({ youCount: 2 }), S)).toEqual({ tone: "ask", text: S.hm.whoYou(2) });
     expect(scopeWho(scope({ youCount: 0 }), S)).toEqual({ tone: "agent", text: S.hm.whoAgent });
     expect(scopeWho(scope({ youCount: 0, bar: { done: 1, agent: 0, you: 0, external: 1, idle: 0 } }), S)).toEqual({ tone: "external", text: S.hm.whoExternal });
-    expect(scopeWho(scope({ youCount: 0, total: 3, merged: 3, bar: { done: 3, agent: 0, you: 0, external: 0, idle: 0 } }), S)).toEqual({ tone: "done", text: S.hm.whoDone });
-    expect(scopeWho(scope({ youCount: 0, total: 0, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 } }), S)).toEqual({ tone: "idle", text: S.hm.whoIdle });
+    expect(scopeWho(scope({ youCount: 0, total: 3, merged: 3, closed: 0, bar: { done: 3, agent: 0, you: 0, external: 0, idle: 0 } }), S)).toEqual({ tone: "done", text: S.hm.whoDone });
+    expect(scopeWho(scope({ youCount: 0, total: 0, merged: 0, closed: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 } }), S)).toEqual({ tone: "idle", text: S.hm.whoIdle });
   });
 });
 
@@ -307,15 +307,15 @@ describe("homeOpenedSignal (layer 1's turn:home-opened contract)", () => {
 });
 
 describe("ticketNowText (All work ticket rows)", () => {
-  const s1 = (o: Partial<ScopeTurnRow>) => scope({ kind: "ticket", id: "BTL-1", total: 1, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, ...o });
+  const s1 = (o: Partial<ScopeTurnRow>) => scope({ kind: "ticket", id: "BTL-1", total: 1, merged: 0, closed: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, ...o });
   it("a live item gives its sentence", () => {
     const i = item(merge, { pr, ticketLevel: true });
     expect(ticketNowText([i], s1({ bar: { done: 0, agent: 0, you: 1, external: 0, idle: 0 } }), "BTL-1", S)).toBe(turnSentence(i.turn, i, S));
   });
   it("without a live item: merged or not started, said as a ticket, never the scope line", () => {
-    expect(ticketNowText([], s1({ merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).toBe(S.turn.done);
+    expect(ticketNowText([], s1({ merged: 1, closed: 0, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).toBe(S.turn.done);
     expect(ticketNowText([], s1({ bar: { done: 0, agent: 0, you: 0, external: 0, idle: 1 } }), "BTL-1", S)).toBe(S.turn.idle);
-    expect(ticketNowText([], s1({ merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).not.toBe(S.hm.scopeLine(1, 1, null));
+    expect(ticketNowText([], s1({ merged: 1, closed: 0, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } }), "BTL-1", S)).not.toBe(S.hm.scopeLine(1, 1, null));
   });
   it("says when the ticket has other PRs too, like the running tab and the scope pages (spec §5.1)", () => {
     const i = item(merge, { pr, ticketLevel: true, others: 1 });

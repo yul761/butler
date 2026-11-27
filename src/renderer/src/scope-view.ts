@@ -46,7 +46,7 @@ export function ticketRows(tickets: Pick<TicketView, "key" | "title" | "featureI
     const { turn, others, item: picked } = ticketPick(t.key, mine);
     const item: TurnItem = picked ?? {
       ticketKey: t.key, pr: null, featureId: t.featureId, since: 0, others,
-      turn: t.effectiveStatus === "done" ? { owner: "done", kind: "merged" } : turn,
+      turn: t.effectiveStatus === "done" ? { owner: "done", kind: "merged" } : t.effectiveStatus === "closed" ? { owner: "done", kind: "closed" } : turn,
     };
     const seen = new Map<string, { repo: string; number: number }>();
     for (const i of mine) if (i.pr) seen.set(`${i.pr.repo}#${i.pr.number}`, i.pr);
@@ -79,16 +79,20 @@ export function scopeBoardView(items: TurnItem[], S: UiStrings, now: number): { 
   return { youItems, running: runningRows(out, S, now), attention: youItems.length > 0 };
 }
 
-/** 一组里合了几个。 */
-const mergedOf = (rows: TicketRow[]): number => rows.filter((r) => r.turn.owner === "done").length;
+/** 一组里合了几个（关掉不做的另算，BTL-270）。 */
+const mergedOf = (rows: TicketRow[]): number => rows.filter((r) => r.turn.owner === "done" && r.turn.kind === "merged").length;
+const closedOf = (rows: TicketRow[]): number => rows.filter((r) => r.turn.owner === "done" && r.turn.kind === "closed").length;
+
+/** 合了的加关掉的：都算结束。 */
+export const finishedOf = (r: { merged: number; closed: number }): number => r.merged + r.closed;
 
 /** 不分组（feature 页）：一组、没有组名；没有行时没有组（表格显示空状态）。 */
-export function flatGroup(rows: TicketRow[]): { name: null; merged: number; total: number; rows: TicketRow[] }[] {
-  return rows.length === 0 ? [] : [{ name: null, merged: mergedOf(rows), total: rows.length, rows }];
+export function flatGroup(rows: TicketRow[]): { name: null; merged: number; closed: number; total: number; rows: TicketRow[] }[] {
+  return rows.length === 0 ? [] : [{ name: null, merged: mergedOf(rows), closed: closedOf(rows), total: rows.length, rows }];
 }
 
 /** name 为 null：不分组（epic 里还没有 feature）。 */
-export interface BlockGroup { id: number | null; name: string | null; description: string | null; merged: number; total: number; rows: TicketRow[] }
+export interface BlockGroup { id: number | null; name: string | null; description: string | null; merged: number; closed: number; total: number; rows: TicketRow[] }
 
 /**
  * epic 页按 feature（内部叫 block，BTL-246）分组：按 position 一组一个（没有 ticket 的 feature 也出），
@@ -99,7 +103,7 @@ export function blockGroups(blocks: Block[], tickets: Pick<TicketView, "key" | "
   const blockOf = new Map(tickets.map((t) => [t.key, t.blockId ?? null]));
   const known = new Set(blocks.map((b) => b.id));
   const group = (id: number | null, name: string, description: string | null, mine: TicketRow[]): BlockGroup =>
-    ({ id, name, description, merged: mergedOf(mine), total: mine.length, rows: mine });
+    ({ id, name, description, merged: mergedOf(mine), closed: closedOf(mine), total: mine.length, rows: mine });
   const out = [...blocks].sort((a, b) => a.position - b.position || a.id - b.id)
     .map((b) => group(b.id, b.name, b.description, rows.filter((r) => blockOf.get(r.key) === b.id)));
   const loose = rows.filter((r) => { const b = blockOf.get(r.key) ?? null; return b === null || !known.has(b); });
@@ -112,11 +116,12 @@ export function scopeTotal(scopes: ScopeTurnRow[], kind: "feature", id: number):
   const own = scopes.find((r) => r.kind === kind && r.id === id);
   if (own) return own;
   const child = "ticket";
-  const sum: ScopeTurnRow = { kind, id, name: "", total: 0, merged: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, youCount: 0, slowest: null };
+  const sum: ScopeTurnRow = { kind, id, name: "", total: 0, merged: 0, closed: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, youCount: 0, slowest: null };
   for (const r of scopes) {
     if (r.kind !== child) continue;
     sum.total += r.total;
     sum.merged += r.merged;
+    sum.closed += r.closed;
     sum.youCount += r.youCount;
     for (const k of Object.keys(sum.bar) as (keyof ScopeTurnRow["bar"])[]) sum.bar[k] += r.bar[k];
   }
@@ -132,13 +137,16 @@ export function ticketsWithPr(items: TurnItem[]): Set<string> {
  * 概况里一行的那句：feature 行和有 PR 的 ticket 行是「合了几个」；ticket 没有 PR 时说还没开（不写「0/1 合了」），
  * 但没有 PR 也已经完成的（进度条全绿）说「合了」。
  */
-export function scopeRowLine(r: Pick<ScopeTurnRow, "kind" | "id" | "merged" | "total">, withPr: ReadonlySet<string> | undefined, S: UiStrings): string {
-  if (r.kind === "ticket" && withPr !== undefined && !withPr.has(String(r.id))) return r.total > 0 && r.merged === r.total ? S.turn.done : S.lay.noPrYet;
-  return S.lay.featureCard(r.merged, r.total);
+export function scopeRowLine(r: Pick<ScopeTurnRow, "kind" | "id" | "merged" | "closed" | "total">, withPr: ReadonlySet<string> | undefined, S: UiStrings): string {
+  if (r.kind === "ticket" && withPr !== undefined && !withPr.has(String(r.id))) {
+    if (r.total > 0 && r.closed === r.total) return S.turn.closed;
+    return r.total > 0 && finishedOf(r) === r.total ? S.turn.done : S.lay.noPrYet;
+  }
+  return S.lay.featureCard(r.merged, r.total, r.closed);
 }
 
-export function progressLine(r: Pick<ScopeTurnRow, "total" | "merged" | "youCount">, S: UiStrings): string {
-  return S.lay.progressLine(r.merged, r.total, r.youCount);
+export function progressLine(r: Pick<ScopeTurnRow, "total" | "merged" | "closed" | "youCount">, S: UiStrings): string {
+  return S.lay.progressLine(r.merged, r.total, r.youCount, r.closed);
 }
 
 export function slowestLine(slowest: string | null, S: UiStrings): string {
@@ -150,7 +158,7 @@ export function whoLabel(turn: Turn, S: UiStrings): string {
     case "you": return S.lay.whoYou;
     case "agent": return S.hm.whoAgent;
     case "external": return externalWho(turn, S);
-    case "done": return S.hm.whoDone;
+    case "done": return turn.kind === "closed" ? S.hm.whoClosed : S.hm.whoDone;
     case "idle": return S.hm.whoIdle;
   }
 }

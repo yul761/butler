@@ -18,6 +18,7 @@ describe("prHandoff", () => {
       prs: [pr({ state: "merged", review: "approved" }), pr({ number: 3, url: "https://github.com/o/api/pull/3", review: null })],
       status: "in_review",
       sourceRef: "prwatch:BTL-1:7:merged:approved,3:open:@41",
+      clearBlockers: false,
     });
   });
 
@@ -81,5 +82,33 @@ describe("prHandoff", () => {
     expect(out?.prs).toEqual([pr({ state: "merged" })]);
     expect(out?.status).toBe("done");
   });
-});
 
+  // BTL-270：PR 都关了没合，也没有开着的：等人决定，旧的 blockers 不再沿用。
+  it("every PR closed without a merge and none open: needs_decision, and the old blockers are dropped", () => {
+    const out = prHandoff("BTL-1", [row({ state: "closed", review: null })], { ...base(1, [pr()]), status: "blocked" });
+    expect(out?.status).toBe("needs_decision");
+    expect(out?.clearBlockers).toBe(true);
+  });
+
+  it("a closed PR next to an open one keeps the status and the blockers", () => {
+    const rows = [row({ state: "closed", review: null }), row({ id: 2, number: 8, url: "https://github.com/o/app/pull/8" })];
+    const out = prHandoff("BTL-1", rows, { ...base(1, [pr()]), status: "blocked" });
+    expect(out?.status).toBe("blocked");
+    expect(out?.clearBlockers).toBe(false);
+  });
+
+  it("a closed PR next to a merged one is not a decision to make", () => {
+    const rows = [row({ state: "closed", review: null }), row({ id: 2, number: 8, url: "https://github.com/o/app/pull/8", state: "merged", mergedAt: 5 })];
+    expect(prHandoff("BTL-1", rows, base(1, [pr()]))?.status).toBe("done");
+  });
+
+  it("a reopened PR after needs_decision goes back to in_review", () => {
+    const out = prHandoff("BTL-1", [row()], { ...base(1, [pr({ state: "closed", review: null })]), status: "needs_decision" });
+    expect(out?.status).toBe("in_review");
+  });
+
+  it("a PR merged after needs_decision promotes it to done", () => {
+    const out = prHandoff("BTL-1", [row({ state: "merged", mergedAt: 5 })], { ...base(1, [pr({ state: "closed", review: null })]), status: "needs_decision" });
+    expect(out?.status).toBe("done");
+  });
+});

@@ -277,6 +277,25 @@ describe("PrWatcher: reading PRs", () => {
     expect(s.prs.get(b.id)).toMatchObject({ readError: true, readFailures: 1, readFailingSince: s.now() });
   });
 
+  it("after gh pr reopen a forced read with includeSettled re-reads a closed PR; a plain one does not (BTL-270)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ state: "CLOSED" }));
+    await s.w.check();
+    expect(s.prs.get(row.id)?.state).toBe("closed");
+    s.gh.prStatus.mockResolvedValue(pr());
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    s.w.soonTicket("BTL-1", { includeSettled: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(2);
+    expect(s.prs.get(row.id)?.state).toBe("open");
+    expect(s.deps.onPrChanged).toHaveBeenLastCalledWith("BTL-1");
+    expect(s.deps.notify).toHaveBeenCalled();
+  });
+
   it("a forced refresh reads a given-up PR", async () => {
     vi.useFakeTimers();
     const s = setup();

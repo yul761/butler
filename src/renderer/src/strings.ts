@@ -34,6 +34,8 @@ const ZH_STATUS: Record<TicketStatus, string> = {
   blocked: "阻塞",
   in_review: "等 review",
   done: "完成",
+  needs_decision: "待决定",
+  closed: "已关闭",
 };
 
 
@@ -401,7 +403,8 @@ const ZH = {
     reviewAgo: (d: string) => `请你 ${d} 了`,
     reviewNow: "刚刚请你",
     scopesHeading: "各个 epic",
-    scopeLine: (total: number, merged: number, slowest: string | null) => `${total} 个里合了 ${merged} 个${slowest === null ? "" : ` · 最慢的是「${slowest}」`}`,
+    scopeLine: (total: number, merged: number, slowest: string | null, closed = 0) =>
+      `${total} 个里合了 ${merged} 个${closed > 0 ? `、关了 ${closed} 个` : ""}${slowest === null ? "" : ` · 最慢的是「${slowest}」`}`,
     scopeEmpty: "还没有 ticket",
     scopeMore: (n: number) => `全部工作里看全部 ${n} 个`,
     whoYou: (n: number) => `你 ${n}`,
@@ -410,6 +413,7 @@ const ZH = {
     whoExternal: "外部",
     whoStackBelow: "栈的下一层",
     whoDone: "合了",
+    whoClosed: "关了",
     whoIdle: "没开始",
     running: (n: number) => `进行中 ${n}`,
     moreHeading: "运行情况",
@@ -532,6 +536,7 @@ const ZH = {
       blocked_report: (d: string | null) => (d === null ? "报告做不下去" : `报告做不下去：${d}`),
       silent: (d: string | null) => (d === null ? "在跑，但很久没动静" : `在跑，但很久没动静：${d}`),
       ticket_blocked: () => "ticket 标成了阻塞",
+      ticket_needs_decision: () => "PR 都关了，等你决定还做不做",
     },
     unattended: {
       ci_failing: "CI 挂了，没人在修",
@@ -551,6 +556,7 @@ const ZH = {
       stackBelow: (names: string[]) => `在等栈的下一层 ${names.join("、")} 合并`,
     },
     done: "合了",
+    closed: "关了，不做了",
     idle: "还没开始",
     shipherd: {
       approval: "在终端里等你确认权限",
@@ -716,6 +722,24 @@ const ZH = {
   colArchivedAt: "归档时间",
   restoreArchived: (key: string) => `恢复 ${key}`,
   statusAuto: (current: string) => `自动（当前：${current}）`,
+  /** ticket 关闭（不做了，BTL-270）。 */
+  tc: {
+    close: "关闭 ticket",
+    title: (key: string) => `关闭 ${key}`,
+    lede: "不做了（需求变了、换了做法）就关掉。和「完成」分开算，之后还能重新打开。",
+    reason: "原因",
+    reasonHint: "比如：需求变了，这个不做了",
+    reasonCount: (n: number, max: number) => `${n}/${max}`,
+    reasonTooLong: (max: number) => `原因最多 ${max} 个字`,
+    closePrs: "顺便关掉开着的 PR",
+    endSessions: "顺便结束它的 session",
+    confirm: "关闭",
+    banner: (reason: string) => `已关闭：${reason}`,
+    by: { user: "你关的", coordinator: "总控关的", routing: "路由关的" } as Record<"user" | "coordinator" | "routing", string>,
+    reopen: "重新打开",
+    reopened: (n: number) => (n > 0 ? `重新打开了，还原了 ${n} 条后续事项` : "重新打开了"),
+    prErrors: (n: number) => `关了 ticket，但有 ${n} 个 PR 没关掉，去 PR 页看看`,
+  },
   noSessions: "还没有 session。点“新 session”开始。",
   resume: "续接",
   exited: (code: number) => `claude 已退出（退出码 ${code}）`,
@@ -2304,8 +2328,8 @@ const ZH = {
   },
   /** 范围页（feature）的文案（UI 重做第 3 层）。 */
   lay: {
-    progressLine: (merged: number, total: number, you: number) =>
-      total === 0 ? "还没有 ticket" : `${total} 个里合了 ${merged} 个 · ${you === 0 ? "没有事轮到你" : `${you} 件轮到你`}`,
+    progressLine: (merged: number, total: number, you: number, closed = 0) =>
+      total === 0 ? "还没有 ticket" : `${total} 个里合了 ${merged} 个${closed > 0 ? `、关了 ${closed} 个` : ""} · ${you === 0 ? "没有事轮到你" : `${you} 件轮到你`}`,
     slowest: (name: string) => `最慢的是「${name}」。`,
     noSlowest: "没有明显落后的。",
     whoYou: "你",
@@ -2353,13 +2377,13 @@ const ZH = {
     convNoSession: "这个 ticket 还没有 session。",
     youHere: "这个范围里轮到你的",
     noYouHere: "这里没有事轮到你。",
-    featureCard: (merged: number, total: number) => `${merged}/${total} 合了`,
+    featureCard: (merged: number, total: number, closed = 0) => `${merged}/${total} 合了${closed > 0 ? ` · 关了 ${closed}` : ""}`,
     runningEmpty: "现在没有 agent、CI 或别人在处理的事。",
     colTicket: "ticket",
     colWho: "谁该动",
     colNow: "现在怎么样",
     colPr: "PR",
-    groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} 合了`,
+    groupHeader: (name: string, merged: number, total: number, closed = 0) => `${name} · ${merged}/${total} 合了${closed > 0 ? ` · 关了 ${closed}` : ""}`,
     noTicketsInGroup: "这一组还没有 ticket。",
     notInAFeature: "不在任何 feature 里",
     featuresHeading: "feature",

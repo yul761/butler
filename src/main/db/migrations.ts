@@ -1673,4 +1673,43 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE inbox_items ADD COLUMN behalf_by TEXT;
   ALTER TABLE inbox_items ADD COLUMN behalf_seen_at INTEGER;
   `,
+  // 63（BTL-270）：ticket 关闭。tickets 的 status / status_manual 加两个值：closed（不做了，手动的终态，和 done 做完了分开）、
+  // needs_decision（PR 都关了没合、也没有开着的：等人决定是重开、另开还是关掉）。SQLite 改不了 CHECK，只能重建 tickets 表：
+  // 别的表的外键指着它，DROP 要在外键关着时做（下面的标记让 migrate 在事务外关掉外键，提交前查有没有新的违规，之后再开）。
+  // 列按原来的顺序抄过来（ALTER ADD COLUMN 加过的四列在最后），新加 closed_at / closed_reason / closed_source：谁、为什么关的。
+  // followups 加五列：resolved_reason / resolved_source 是总控或用户处理（完成、忽略）时写的原因和来源；
+  // ignored_by_close 标记是关 ticket 时顺手忽略的，prior_status / prior_snoozed_until 记忽略前的状态，重新打开时按它们还原。
+  `
+  -- shipherd:foreign-keys-off
+  CREATE TABLE tickets_new (
+    key TEXT PRIMARY KEY,
+    title TEXT,
+    repo_path TEXT NOT NULL,
+    work_mode TEXT NOT NULL CHECK (work_mode IN ('worktree', 'branch')),
+    worktree_path TEXT,
+    branch TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+      CHECK (status IN ('active', 'in_review', 'blocked', 'merged_pending_followup', 'done', 'needs_decision', 'closed')),
+    status_manual TEXT
+      CHECK (status_manual IS NULL OR status_manual IN ('active', 'in_review', 'blocked', 'merged_pending_followup', 'done', 'needs_decision', 'closed')),
+    created_at INTEGER NOT NULL,
+    archived_at INTEGER,
+    status_changed_at INTEGER,
+    status_manual_at INTEGER,
+    feature_id INTEGER REFERENCES features(id),
+    block_id INTEGER REFERENCES blocks(id),
+    closed_at INTEGER,
+    closed_reason TEXT,
+    closed_source TEXT CHECK (closed_source IS NULL OR closed_source IN ('user', 'coordinator', 'routing'))
+  );
+  INSERT INTO tickets_new (key, title, repo_path, work_mode, worktree_path, branch, status, status_manual, created_at, archived_at, status_changed_at, status_manual_at, feature_id, block_id)
+    SELECT key, title, repo_path, work_mode, worktree_path, branch, status, status_manual, created_at, archived_at, status_changed_at, status_manual_at, feature_id, block_id FROM tickets;
+  DROP TABLE tickets;
+  ALTER TABLE tickets_new RENAME TO tickets;
+  ALTER TABLE followups ADD COLUMN resolved_reason TEXT;
+  ALTER TABLE followups ADD COLUMN resolved_source TEXT;
+  ALTER TABLE followups ADD COLUMN ignored_by_close INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE followups ADD COLUMN prior_status TEXT;
+  ALTER TABLE followups ADD COLUMN prior_snoozed_until TEXT;
+  `,
 ];

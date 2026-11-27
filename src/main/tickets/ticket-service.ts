@@ -16,7 +16,7 @@ import { M } from "../strings";
 export type TicketErrorCode =
   | "invalid_key" | "exists" | "archived" | "not_git_repo" | "worktree_exists" | "dirty" | "not_found"
   | "invalid_branch" | "empty_repo" | "git_failed" | "sessions_open" | "branch_checked_out" | "busy" | "unbranched_commits"
-  | "repo_exists" | "invalid_name" | "workspace_taken" | "invalid_workspace";
+  | "repo_exists" | "invalid_name" | "workspace_taken" | "invalid_workspace" | "invalid_reason" | "invalid_status";
 
 export class TicketError extends Error {
   constructor(readonly code: TicketErrorCode, message: string) {

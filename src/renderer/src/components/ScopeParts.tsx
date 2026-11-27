@@ -85,7 +85,7 @@ export function ScopeOverview(p: {
 
 /** epic 里的 feature：按顺序一行一个，可以展开看它的 ticket（同「全部 ticket」的列）。第一个还没合完的默认展开。 */
 export function ScopeBlocks(p: { groups: BlockGroup[]; onOpenTicket: (key: string) => void }) {
-  const firstOpen = p.groups.find((g) => g.id !== null && g.merged < g.total) ?? null;
+  const firstOpen = p.groups.find((g) => g.id !== null && g.merged + g.closed < g.total) ?? null;
   return (
     <section className="scope-blocks">
       <h3>{S.lay.featuresHeading}</h3>
@@ -94,7 +94,7 @@ export function ScopeBlocks(p: { groups: BlockGroup[]; onOpenTicket: (key: strin
         <details key={g.id ?? "none"} className="scope-block" data-block={g.id ?? "none"} open={g === firstOpen || undefined}>
           <summary title={g.description ?? undefined}>
             <span className="name">{g.name}</span>
-            <span className="line muted">{S.lay.featureCard(g.merged, g.total)}</span>
+            <span className="line muted">{S.lay.featureCard(g.merged, g.total, g.closed)}</span>
           </summary>
           <ScopeTicketTable groups={[{ ...g, name: null }]} onOpenTicket={p.onOpenTicket} emptyText={S.lay.noTicketsInGroup} />
         </details>
@@ -109,7 +109,7 @@ export function ScopeRunning(p: { rows: RunningRow[]; onOpenTicket: (key: string
 }
 
 export function ScopeTicketTable(p: {
-  groups: { name: string | null; merged: number; total: number; rows: TicketRow[] }[];
+  groups: { name: string | null; merged: number; closed: number; total: number; rows: TicketRow[] }[];
   onOpenTicket: (key: string) => void; emptyText: string;
 }) {
   if (p.groups.length === 0) return <p className="muted">{p.emptyText}</p>;
@@ -121,7 +121,7 @@ export function ScopeTicketTable(p: {
       <tbody>
         {p.groups.map((g, n) => (
           <Fragment key={g.name ?? n}>
-            {g.name !== null && <tr className="group-row"><th colSpan={5}>{S.lay.groupHeader(g.name, g.merged, g.total)}</th></tr>}
+            {g.name !== null && <tr className="group-row"><th colSpan={5}>{S.lay.groupHeader(g.name, g.merged, g.total, g.closed)}</th></tr>}
             {g.rows.length === 0 && <tr><td colSpan={5} className="muted">{S.lay.noTicketsInGroup}</td></tr>}
             {g.rows.map((r) => (
               // 点这一行哪儿都去 ticket 页；ticket 号是按钮，键盘 Tab 到它按回车也行（点击冒泡到这一行）。

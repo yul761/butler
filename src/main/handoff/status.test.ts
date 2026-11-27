@@ -17,7 +17,16 @@ describe("deriveStatus", () => {
     ["open PR", h({ prs: [pr("open", "pending")] }), 0, "in_review"],
     ["open PR with waiting listed as a blocker", h({ prs: [pr("open")], blockers: ["等 review"] }), 0, "in_review"],
     ["blockers without a PR", h({ blockers: ["等后端接口"] }), 0, "blocked"],
-    ["closed PR", h({ status: "in_review", prs: [pr("closed")] }), 0, "active"],
+    // BTL-270：PR 都关了没合，也没有开着的：等人决定，不再沿用旧的 blockers / blocked，也不悄悄变回 active。
+    ["closed PR", h({ status: "in_review", prs: [pr("closed")] }), 0, "needs_decision"],
+    ["closed PR on a blocked ticket with old blockers", h({ status: "blocked", prs: [pr("closed")], blockers: ["等 review"] }), 0, "needs_decision"],
+    ["closed PR, the model says it is working again", h({ status: "active", prs: [pr("closed")] }), 0, "active"],
+    ["closed PR, the model says active but lists blockers", h({ status: "active", prs: [pr("closed")], blockers: ["等后端"] }), 0, "blocked"],
+    ["needs_decision with a new open PR", h({ status: "needs_decision", prs: [pr("closed"), pr("open")] }), 0, "in_review"],
+    ["needs_decision with a PR merged after all", h({ status: "needs_decision", prs: [pr("merged")] }), 1, "merged_pending_followup"],
+    ["needs_decision without PRs", h({ status: "needs_decision" }), 0, "needs_decision"],
+    // closed 只能手动关（closeTicket）：模型自己报 closed 当作等人决定。
+    ["the model says closed", h({ status: "closed" }), 0, "needs_decision"],
     ["in review without PR info", h({ status: "in_review" }), 0, "in_review"],
     ["plain active", h({}), 0, "active"],
   ])("%s", (_name, input, open, expected) => {

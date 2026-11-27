@@ -18,6 +18,7 @@ import { admitOrRefuse, type AdmissionGate } from "./admission";
 import type { StackControl } from "./stack-control";
 import { ownersOf, prRows, shipherdControl, type ShipherdControlDeps } from "./shipherd-control";
 import { preReviewControl, preReviewField, ticketPreReviewField, type PreReviewOps } from "./prereview-control";
+import type { TicketControl } from "./ticket-control";
 import type { InboxService } from "../inbox/inbox-service";
 import type { DeliverResult } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
@@ -96,6 +97,8 @@ export interface ControlHandlerDeps {
   admission?: AdmissionGate;
   /** 栈式 PR（工作流 K）：list_stacks、stack_define、stack_rebase、stack_layer_mode 和 create_ticket 的 stack_on。不给时这些都报「没开」。 */
   stacks?: StackControl;
+  /** ticket 的关闭和后续事项（BTL-270）：close_ticket、reopen_ticket、set_ticket_status、list_followups、resolve_followup。不给时报「用不了」。 */
+  ticketOps?: TicketControl;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -386,7 +389,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
         const mine = own.filter((t) => t.blockId === b.id);
         return {
           id: b.id, name: b.name, description: b.description, position: i + 1,
-          tickets: mine.map(row), merged: mine.filter((t) => effectiveStatus(t) === "done").length, total: mine.length,
+          // closed（不做了，BTL-270）和合并了的一样算结束，分开数。
+          tickets: mine.map(row), merged: mine.filter((t) => effectiveStatus(t) === "done").length, closed: mine.filter((t) => effectiveStatus(t) === "closed").length, total: mine.length,
         };
       });
       const known = new Set(features.map((b) => b.id));
@@ -517,6 +521,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     if (req.op === "list_features" || req.op === "create_feature" || req.op === "reorder_features" || req.op === "set_ticket_feature") return blockRequest(f, own, req);
     if (req.op === "list_stacks" || req.op === "stack_define" || req.op === "stack_rebase" || req.op === "stack_layer_mode") {
       return d.stacks ? d.stacks.handle({ kind: "feature", featureId: f.id }, req) : fail(M().ctlStacksOff);
+    }
+    if (req.op === "close_ticket" || req.op === "reopen_ticket" || req.op === "set_ticket_status" || req.op === "list_followups" || req.op === "resolve_followup") {
+      if (!d.ticketOps) return fail(M().ctlTicketOpsOff);
+      // 改东西的只认这个 epic 开着终端的总控（请求文件谁都能写）。
+      const h = req.from ? d.sessions.head(req.from) : null;
+      const canWrite = !!h && h.featureId === f.id && h.coordinator && !!d.sessionService.termIdOf(h.id);
+      return d.ticketOps.handle({ kind: "feature", featureId: f.id }, req, { from: h?.id ?? req.from, canWrite });
     }
 
     if (req.op === "session_activity") {

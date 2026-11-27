@@ -5,6 +5,8 @@ export type TurnTone = "ask" | "merge" | "stuck" | "shipherd" | "agent" | "exter
 
 /** 颜色只表示谁该动（spec §5.1 的表）。 */
 export function turnTone(turn: Turn): TurnTone {
+  // 关掉不做的（BTL-270）用灰色，和合了的绿色分开。
+  if (turn.owner === "done" && turn.kind === "closed") return "idle";
   if (turn.owner !== "you") return turn.owner;
   switch (turn.kind) {
     case "answer":

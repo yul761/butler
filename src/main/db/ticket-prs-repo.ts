@@ -238,6 +238,11 @@ export class TicketPrsRepo {
     ).map(toPr);
   }
 
+  /** 号码是 n 的 PR 行（各个仓库的都有）：调用方再按仓库、ticket 筛。 */
+  byNumber(n: number): TicketPr[] {
+    return (this.db.prepare(`SELECT * FROM ticket_prs WHERE number = ? ORDER BY id`).all(n) as unknown as Row[]).map(toPr);
+  }
+
   byUrl(url: string): TicketPr[] {
     return (this.db.prepare(`SELECT * FROM ticket_prs WHERE url = ? ORDER BY id`).all(prUrlKey(url)) as unknown as Row[]).map(toPr);
   }

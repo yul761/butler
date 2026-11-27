@@ -10,8 +10,25 @@ import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 import type { PrMergeable, PrMergeState, PrReviewer, PrReviewRequest } from "./progress";
-export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
+/**
+ * done 是做完了；closed 是不做了（需求变了、PR 关掉了，只能手动设，见 closeTicket）；
+ * needs_decision 是自动的：PR 全都关了没合、也没有开着的，等人决定重开、另开还是关掉（BTL-270）。
+ */
+export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done", "needs_decision", "closed"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
+/** 手动能设的状态：needs_decision 只由 PR 推出来，手动设没有意义。 */
+export const MANUAL_TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done", "closed"] as const satisfies readonly TicketStatus[];
+export type ManualTicketStatus = (typeof MANUAL_TICKET_STATUSES)[number];
+/** 结束了的 ticket：做完了或者不做了（进度里不再算在进行中）。 */
+export const isFinishedStatus = (s: TicketStatus): boolean => s === "done" || s === "closed";
+/** 谁关的 ticket：用户在界面上、总控（close_ticket）、还是信息路由（BTL-272）。 */
+export const TICKET_CLOSE_SOURCES = ["user", "coordinator", "routing"] as const;
+export type TicketCloseSource = (typeof TICKET_CLOSE_SOURCES)[number];
+export interface TicketClosure {
+  at: number;
+  reason: string;
+  source: TicketCloseSource;
+}
 export type WorkMode = "worktree" | "branch";
 
 /** ticket 涉及的一个仓库：各自的工作方式和分支（设计文档 2026-10-23 多仓库 ticket）。 */
@@ -86,6 +103,8 @@ export interface Ticket {
   featureId: number | null;
   /** 在 epic 里属于哪个 feature（内部叫 block，见 BTL-246；null 或省略：不属于任何 feature）。 */
   blockId?: number | null;
+  /** 关掉时记的原因和来源（BTL-270）；没关过、或者重新打开了是 null / 省略。 */
+  closure?: TicketClosure | null;
 }
 
 /**
@@ -346,6 +365,11 @@ export interface Followup {
   source: FollowupSource;
   createdAt: number;
   doneAt: number | null;
+  /** 总控或用户处理（完成、忽略）时写的原因（BTL-270 resolve_followup / close_ticket）。 */
+  resolvedReason?: string | null;
+  resolvedSource?: TicketCloseSource | null;
+  /** 关 ticket 时顺手忽略的：重新打开时还原成忽略前的状态。 */
+  ignoredByClose?: boolean;
 }
 
 export type HandoffTrigger = "nightly" | "manual" | "command" | "refresh";

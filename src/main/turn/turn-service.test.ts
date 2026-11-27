@@ -266,6 +266,49 @@ describe("TurnService.board", () => {
     expect(review.board(null).items[0].turn).toEqual({ owner: "agent", kind: "working", sessionId: "s1" });
   });
 
+  it("a closed ticket is finished: its failing PR and blocked status no longer make it stuck, its open question still shows (BTL-270)", () => {
+    const s = new TurnService(failingPr({
+      tickets: () => [ticket("BTL-1", { effectiveStatus: "closed", status: "blocked", statusManual: "closed", closure: { at: 77, reason: "需求变了", source: "coordinator" }, sessions: [sv("s1")] })],
+      decisions: () => [ask(3, "s1", { ticketKey: "BTL-1" })],
+    }));
+    const b = s.board({ ticketKey: "BTL-1" });
+    expect(b.items.find((i) => i.ticketLevel)?.turn).toEqual({ owner: "done", kind: "closed" });
+    expect(b.items.some((i) => i.turn.owner === "you" && i.turn.kind === "answer" && i.turn.askId === 3)).toBe(true);
+    expect(b.items.some((i) => i.turn.kind === "stuck" || i.pr !== null)).toBe(false);
+    expect(b.scopes).toEqual([expect.objectContaining({ id: "BTL-1", total: 1, merged: 0, closed: 1 })]);
+  });
+
+  it("a closed ticket whose PR stayed open drops its comments / CI-undelivered notices but keeps its open question (BTL-270)", () => {
+    const waiting = { reason: "review" as const, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 40 };
+    const prCi = { item: { kind: "pr", id: 1 }, ticketKey: "BTL-1", number: 3, branch: "feat", reason: "no_session", since: 77, sessionId: null } as const;
+    const branchCi = { ...prCi, item: { kind: "branch", repoId: 1 }, number: null } as const;
+    const target = { page: "ticket", key: "BTL-1", sessionId: null } as const;
+    const s = new TurnService(failingPr({
+      tickets: () => [ticket("BTL-1", { effectiveStatus: "closed", statusManual: "closed", closure: { at: 77, reason: "需求变了", source: "user" }, sessions: [sv("s1")] })],
+      ciUndelivered: () => [prCi, branchCi],
+      decisions: () => [ask(3, "s1", { ticketKey: "BTL-1" })],
+      notices: () => [
+        { kind: "comments_waiting", waiting, target, title: null },
+        { kind: "ci_undelivered", ci: prCi, target, title: null },
+        { kind: "ci_undelivered", ci: branchCi, target, title: null },
+      ],
+    }));
+    for (const f of [null, { ticketKey: "BTL-1" }]) {
+      const b = s.board(f);
+      expect(b.items.some((i) => i.turn.kind === "shipherd")).toBe(false);
+      expect(b.items.filter((i) => i.turn.owner === "you").map((i) => i.turn.kind)).toEqual(["answer"]);
+      expect(b.counts.you).toBe(1);
+    }
+    const b = s.board({ ticketKey: "BTL-1" });
+    expect(b.items.find((i) => i.ticketLevel)?.turn).toEqual({ owner: "done", kind: "closed" });
+    expect(b.scopes).toEqual([expect.objectContaining({ id: "BTL-1", total: 1, closed: 1 })]);
+  });
+
+  it("a ticket whose PRs were all closed unmerged waits for your decision (BTL-270)", () => {
+    const s = new TurnService(fakeDeps({ tickets: () => [ticket("BTL-1", { effectiveStatus: "needs_decision" })] }));
+    expect(s.board(null).items[0].turn).toEqual({ owner: "you", kind: "stuck", source: "ticket_needs_decision", detail: null, sessionId: null });
+  });
+
   it("a done ticket without PRs shows only with a filter", () => {
     const s = new TurnService(fakeDeps({ tickets: () => [ticket("BTL-1", { effectiveStatus: "done" })] }));
     expect(s.board(null).items).toEqual([]);

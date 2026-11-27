@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { MESSAGE_LIMIT, REASON_LIMIT } from "../src/shared/control";
 import {
-  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, FEATURE_PR_TOOLS, FEATURE_PR_TOOLS_EN, PRE_REVIEW_TOOLS, PRE_REVIEW_TOOLS_EN, PRE_REVIEW_ACT_TOOL, PRE_REVIEW_ACT_TOOL_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer, LESSONS_TOOL, LESSONS_TOOL_EN,
+  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, FEATURE_PR_TOOLS, FEATURE_PR_TOOLS_EN, PRE_REVIEW_TOOLS, PRE_REVIEW_TOOLS_EN, PRE_REVIEW_ACT_TOOL, PRE_REVIEW_ACT_TOOL_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, TICKET_TOOLS, TICKET_TOOLS_EN, SessionsServer, LESSONS_TOOL, LESSONS_TOOL_EN,
   type SessionsServerOptions,
 } from "./sessions-server";
 import { serveStdio } from "./stdio";
@@ -43,7 +43,7 @@ describe("shipherd-sessions MCP server", () => {
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
     expect(await server.handle({ jsonrpc: "2.0", id: 2, method: "ping" })).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
     const list = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL]);
+    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL, ...TICKET_TOOLS]);
     expect(await server.handle({ jsonrpc: "2.0", id: 4, method: "resources/list" })).toMatchObject({ id: 4, error: { code: -32601 } });
   });
 
@@ -139,8 +139,9 @@ describe("shipherd-sessions for a feature coordinator (design 2026-10-26)", () =
       "list_features", "create_feature", "reorder_features", "set_ticket_feature", "send_message",
       "list_stacks", "stack_define", "stack_rebase", "stack_layer_mode", "ask_user", "report",
       "list_prs", "pr_assessment", "pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act",
+      "close_ticket", "reopen_ticket", "set_ticket_status", "list_followups", "resolve_followup",
     ]);
-    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL]);
+    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL, ...TICKET_TOOLS]);
     expect(FEATURE_TOOLS_EN.find((t) => t.name === "set_ticket_feature")!.inputSchema.properties.feature.type).toEqual(["string", "null"]);
     expect(FEATURE_SEND_TOOL_EN.inputSchema.required).toEqual(["session", "text"]);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(FEATURE_SEND_TOOL_EN))).toBe(false);
@@ -294,6 +295,55 @@ describe("stack tools (workstream K)", () => {
     expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ v: 1, featureId: 7, from: "boss", op: "create_ticket", ticket: "P-2", stack_on: "P-1" });
     await call;
     expect(((await callTool(server, "create_ticket", { ticket: "P-2", stack_on: 1 })) as { result: { isError?: boolean } }).result.isError).toBe(true);
+  });
+});
+
+describe("ticket close and follow-up tools (BTL-270)", () => {
+  it("both coordinators have them in Chinese and English with the same arguments", async () => {
+    expect(TICKET_TOOLS.map((t) => t.name)).toEqual(["close_ticket", "reopen_ticket", "set_ticket_status", "list_followups", "resolve_followup"]);
+    for (const [i, t] of TICKET_TOOLS.entries()) {
+      expect(t.description).toMatch(/[\u4e00-\u9fff]/);
+      expect(TICKET_TOOLS_EN[i].name).toBe(t.name);
+      expect(/[\u4e00-\u9fff]/.test(JSON.stringify(TICKET_TOOLS_EN[i])), t.name).toBe(false);
+      expect(Object.keys(TICKET_TOOLS_EN[i].inputSchema.properties), t.name).toEqual(Object.keys(t.inputSchema.properties));
+      expect("required" in TICKET_TOOLS_EN[i].inputSchema ? TICKET_TOOLS_EN[i].inputSchema.required : [], t.name).toEqual("required" in t.inputSchema ? t.inputSchema.required : []);
+    }
+    for (const scope of [{ featureId: 7 }, { shipherd: true as const }]) {
+      for (const lang of ["zh", "en"] as const) {
+        const names = (await tools(setup(2000, scope, lang).server)).map((t) => t.name);
+        for (const t of TICKET_TOOLS) expect(names).toContain(t.name);
+      }
+    }
+  });
+
+  it("sends them as requests for either coordinator and refuses bad arguments before asking Shipherd", async () => {
+    for (const scope of [{ featureId: 7 }, { shipherd: true as const }]) {
+      const { server, answer } = setup(2000, scope);
+      const base = { v: 1, ...scope, from: "boss" };
+      const cases: [string, object, object][] = [
+        ["close_ticket", { ticket: "P-1", reason: "需求变了", close_prs: true }, { op: "close_ticket", ticket: "P-1", reason: "需求变了", close_prs: true }],
+        ["reopen_ticket", { ticket: "P-1" }, { op: "reopen_ticket", ticket: "P-1" }],
+        ["set_ticket_status", { ticket: "P-1", status: "auto" }, { op: "set_ticket_status", ticket: "P-1", status: "auto" }],
+        ["set_ticket_status", { ticket: "P-1", status: "closed", reason: "r" }, { op: "set_ticket_status", ticket: "P-1", status: "closed", reason: "r" }],
+        ["list_followups", {}, { op: "list_followups" }],
+        ["list_followups", { ticket: "P-1", all: true }, { op: "list_followups", ticket: "P-1", all: true }],
+        ["resolve_followup", { followup: "f1", status: "ignored", reason: "不用做" }, { op: "resolve_followup", followup: "f1", status: "ignored", reason: "不用做" }],
+      ];
+      for (const [tool, args, req] of cases) {
+        const call = callTool(server, tool, args);
+        expect(await answer({ v: 1, ok: true, value: {} })).toEqual({ ...base, ...req });
+        await call;
+      }
+      for (const [tool, args] of [
+        ["close_ticket", { ticket: "P-1" }], ["close_ticket", { ticket: "P-1", reason: "x".repeat(REASON_LIMIT + 1) }], ["close_ticket", { ticket: "P-1", reason: "r", close_prs: "yes" }],
+        ["set_ticket_status", { ticket: "P-1", status: "closed" }], ["set_ticket_status", { ticket: "P-1", status: "needs_decision" }],
+        ["resolve_followup", { followup: "f1", status: "open", reason: "r" }], ["reopen_ticket", {}],
+      ] as [string, object][]) {
+        const bad = (await callTool(server, tool, args)) as { result: { isError?: boolean; content: { text: string }[] } };
+        expect(bad.result.isError, `${tool} ${JSON.stringify(args)}`).toBe(true);
+        expect(bad.result.content[0].text).toContain(tool);
+      }
+    }
   });
 });
 
@@ -504,7 +554,7 @@ describe("shipherd-sessions for the Shipherd 总控 (BTL-190 5)", () => {
   const NAMES = ["list_epics", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_epic_summary", "metrics_overview", "pr_assessment", "list_features"];
 
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
-    expect(await tools(setup(2000, { shipherd: true }).server)).toEqual([...SHIPHERD_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL]);
+    expect(await tools(setup(2000, { shipherd: true }).server)).toEqual([...SHIPHERD_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL, ...TICKET_TOOLS]);
     expect(SHIPHERD_TOOLS.map((t) => t.name)).toEqual(NAMES);
     // 不建、不删、不结束；没有开 session 的工具（send_message 会接着关掉的终端）。
     for (const t of ["create_ticket", "start_session", "end_session"]) expect(NAMES).not.toContain(t);
@@ -513,7 +563,7 @@ describe("shipherd-sessions for the Shipherd 总控 (BTL-190 5)", () => {
       .toEqual(SHIPHERD_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
     const en = await tools(setup(2000, { shipherd: true }, "en").server);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
-    expect(en.map((t) => t.name)).toEqual([...NAMES, ...STACK_TOOLS.map((t) => t.name), "ask_user", "report", "pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act"]);
+    expect(en.map((t) => t.name)).toEqual([...NAMES, ...STACK_TOOLS.map((t) => t.name), "ask_user", "report", "pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act", ...TICKET_TOOLS.map((t) => t.name)]);
     // send_message 说清楚只能发给 epic 总控（BTL-246）。
     const send = SHIPHERD_TOOLS.find((t) => t.name === "send_message")!;
     expect(send.description).toContain("epic 总控");

@@ -137,6 +137,8 @@ export class PrWatcher {
   /** soon() / soonTicket() 要求马上查的仓库和 ticket；ticket 的值：放弃了的 PR 要不要也读。 */
   private dueRepos = new Set<number>();
   private dueTickets = new Map<string, boolean>();
+  /** soonTicket 的 includeSettled：这些 ticket 已经合并、关掉的 PR 也重读一次（gh pr reopen 之后，BTL-270）。 */
+  private settledTickets = new Set<string>();
   private ghActive = 0;
   private readonly ghWaiting: (() => void)[] = [];
   /** Copilot review 的行内评论拉失败的次数，键 `${url}:${reviewId}`；拉到了就删掉。只在内存里。 */
@@ -185,8 +187,10 @@ export class PrWatcher {
    * 立刻查这个 ticket 所有仓库的分支和它所有的 PR。retryGivenUp（默认 true）：放弃读了的 PR 也读一次（用户点了刷新、ticket 的 session 停下来）。
    * 总控停下来时把 epic 里每个 ticket 都查一遍，那时传 false：不然放弃了的 PR 总控每停一次就读一次，放弃等于没放弃。
    */
-  soonTicket(ticketKey: string, o: { retryGivenUp?: boolean } = {}): void {
+  soonTicket(ticketKey: string, o: { retryGivenUp?: boolean; includeSettled?: boolean } = {}): void {
     this.dueTickets.set(ticketKey, (this.dueTickets.get(ticketKey) ?? false) || (o.retryGivenUp ?? true));
+    // 平时读过的合并 / 关掉的 PR 不再读；session 或总控刚跑了 gh pr reopen 之类的，要把它们也读一次才看得到。
+    if (o.includeSettled) this.settledTickets.add(ticketKey);
     this.schedule();
   }
 
@@ -266,8 +270,10 @@ export class PrWatcher {
   private async round(): Promise<void> {
     const repos = this.dueRepos;
     const keys = this.dueTickets;
+    const settled = this.settledTickets;
     this.dueRepos = new Set();
     this.dueTickets = new Map();
+    this.settledTickets = new Set();
     const forced: Forced = (key, repoId) => keys.has(key) || (repoId !== null && repos.has(repoId));
     const retryGivenUp: Forced = (key, repoId) => keys.get(key) === true || (repoId !== null && repos.has(repoId));
     const marks: Marks = { prChanged: new Set(), changed: false };
@@ -276,7 +282,7 @@ export class PrWatcher {
       tickets = this.d.tickets();
     });
     await this.part("pruning old branches", () => this.prune(tickets, marks));
-    await this.part("reading PRs", () => this.pollPrs(tickets, forced, retryGivenUp, marks));
+    await this.part("reading PRs", () => this.pollPrs(tickets, forced, retryGivenUp, marks, settled));
     await this.part("checking branches", () => this.checkBranches(tickets, forced, marks));
     await this.part("checking owned branches", () => this.checkOwnedBranches(tickets, forced, marks));
     await this.part("handling merged PRs", () => this.handleMerged());
@@ -300,15 +306,17 @@ export class PrWatcher {
     }
   }
 
-  private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, retryGivenUp: Forced, marks: Marks): Promise<void> {
+  private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, retryGivenUp: Forced, marks: Marks, settled: ReadonlySet<string> = new Set()): Promise<void> {
     const live = new Set(tickets.map((t) => t.key));
     const now = this.d.now();
     // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。
     // 放弃了的（read_retry_at 还没到）和认定不存在的（read_gone_at，一周内）不读，除非这一轮强制、而且要重试放弃了的
     // （用户点了刷新、session 刚 push 或停下；总控停下的那种不算）：认定错了（比如换了账号、补了权限）用户刷新一下就能读回来。
     const goneUntil = now - PR_GONE_RETRY_MS;
-    const rows = this.d.prs
-      .needingRead(now, { includeGone: true })
+    const needed = this.d.prs.needingRead(now, { includeGone: true });
+    const ids = new Set(needed.map((r) => r.id));
+    for (const key of settled) for (const r of this.d.prs.byTicket(key)) if (!ids.has(r.id) && r.state !== "open") needed.push(r);
+    const rows = needed
       .filter(
         (r) =>
           (live.has(r.ticketKey) || r.checkedAt === 0) &&

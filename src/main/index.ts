@@ -49,7 +49,7 @@ import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { MAILBOX_EVENT, mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
-import { DatabaseBackupError, NewerDatabaseError, openDatabase } from "./db/database";
+import { DatabaseBackupError, NewerDatabaseError, openDatabase, withTransaction } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
@@ -268,6 +268,10 @@ import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
 import { StackService, type OwnedBranch } from "./stacks/stack-service";
 import { StackControl } from "./control/stack-control";
+import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
+import { TicketControl } from "./control/ticket-control";
+import { closeTicket, reopenTicket, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
+import { prClose } from "./stacks/gh-stack";
 import { classifyCommentsByModel } from "./loop/comment-model";
 import { LoopPolicies } from "./loop/policies";
 import { effectDays, LoopStats } from "./loop/stats";
@@ -2426,6 +2430,16 @@ async function bootstrap(): Promise<void> {
   // 不在 ticket 任何仓库里的 PR（BTL-261）：不收录、不跟踪，handoff 里说它开着也不把 ticket 留在 in_review。
   const foreignPr = (k: string, url: string): boolean => prLinker.foreign(k, url);
   const branchWatch = new BranchWatchRepo(db);
+  const prCommandDeps: PrCommandDeps = {
+    session: (id) => {
+      const h = sessions.head(id);
+      return h ? { ticketKey: h.ticketKey, featureId: h.coordinator ? h.featureId : null } : null;
+    },
+    ticketsOfFeature: (f) => tickets.listByFeature(f).map((t) => t.key),
+    prsByUrl: (u) => ticketPrs.byUrl(u),
+    prsByNumber: (n) => ticketPrs.byNumber(n),
+    prsOfTicket: (k) => ticketPrs.byTicket(k),
+  };
   // 仓库改名（BTL-261）：记下的改名启动时先去 GitHub 复查（旧名字可能被新仓库占了），确认的才改写、才用；之后定时复查。
   // 启动后再扫一遍存着的 slug，watcher / linker 看到链接换了仓库名时再查。
   const repoRenamesRepo = new RepoRenamesRepo(db);
@@ -2834,7 +2848,10 @@ async function bootstrap(): Promise<void> {
       // 和早间刷新一样：done_today、followups、decisions、learnings 清空，免得重复计算、重复写进记忆。
       ingest({
         ticketKey: key, sessionId: null, trigger: "refresh",
-        payload: { ...base.payload, status: next.status, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs },
+        payload: {
+          ...base.payload, status: next.status, done_today: [], followups: [], decisions: [], learnings: [], prs: next.prs,
+          ...(next.clearBlockers && { blockers: [] }),
+        },
         rawText: null, sourceRef: next.sourceRef,
       });
     },
@@ -3178,6 +3195,11 @@ async function bootstrap(): Promise<void> {
       }
       // 推送和开 PR 记下分支是谁的（工作流 W）。同样在 ignored 提前返回之前（PostToolUse）。
       void branchOwnership.handle(env).catch((e: unknown) => logger("branch owner: recording failed", e));
+      // gh pr merge / close / reopen 跑完（BTL-270）：马上重读动到的 ticket 的 PR（关掉、合并了的也读，reopen 才看得到），不等下一轮轮询。
+      const prCmd = prStateFromEnvelope(env);
+      if (prCmd) {
+        for (const key of ticketsForPrCommands(prCmd, prCommandDeps)) prWatcher.soonTicket(key, { includeSettled: true });
+      }
       // 设计 / 自我 review 的 skill 调用记进 PR 进度。必须在 ignored 提前返回之前：PostToolUse 在 applyHookEnvelope 里恒为 ignored。
       const stageObs = stageEventFromHook(env, sessions);
       if (stageObs && prStages.add(stageObs.event, stageObs.dedupeKey)) notify();
@@ -3620,8 +3642,61 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
+  // 关 ticket（BTL-270）：界面（IPC）和两级总控（close_ticket 等）共用这一份依赖。
+  const ticketCloseDeps: TicketCloseDeps = {
+    tickets, followups,
+    transaction: (fn) => withTransaction(db, fn),
+    // 读过、没放弃、在 ticket 自己仓库里的开着的 PR；关的时候在那个仓库的 gh 目录里跑。
+    openPrs: (key) =>
+      ticketPrs.byTicket(key)
+        .filter((p) => p.state === "open" && p.checkedAt > 0 && !prGivenUp(p) && p.repoId !== null)
+        .map((p) => ({ url: p.url, number: p.number, slug: p.slug, cwd: prGhDir(p) })),
+    // 用户（或总控替用户）明说要关的：照做，审计里记一笔（和 stacks 把草稿 PR 关掉记在同一类下）。
+    closePr: async (pr, reason) => {
+      const detail = { scope: { repoSlug: pr.slug }, target: pr.url, summary: `close #${pr.number} (ticket closed)`, payload: reason };
+      try {
+        await prClose(pr.cwd, pr.slug, pr.number, M().ticketClosePrComment(reason));
+        externalActions.record("pr_open", { ...detail, outcome: "done" });
+      } catch (e) {
+        externalActions.record("pr_open", { ...detail, outcome: "failed", error: e instanceof Error ? e.message : String(e) });
+        throw e;
+      }
+    },
+    liveSessions: (key) =>
+      sessions.listByTicket(key)
+        .filter((s) => sessions.head(s.id)?.id === s.id)
+        .map((s) => ({ id: s.id, termId: sessionService.termIdOf(s.id), hibernated: isHibernated(s.id) }))
+        .filter((s) => s.termId !== null || s.hibernated),
+    // 和用户点 × 一样关终端，并记成用户结束的（不会被自动恢复）；休眠着的不再唤醒。
+    endSession: (s) => {
+      sessions.setUserEnded(s.id, Date.now());
+      if (s.termId) pty.kill(s.termId);
+      else if (s.hibernated) {
+        hibernator?.forget(s.id, "ended by ticket close");
+        const h = sessions.get(s.id);
+        if (h?.waitingForInput) sessions.setWaiting(s.id, false, h.lastActivityAt ?? 0);
+      }
+    },
+    rederive: (key) => {
+      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, foreignPr }, key);
+      void memory.syncTicket(key);
+    },
+    refreshPrs: (key) => prWatcher.soonTicket(key),
+    notify: () => {
+      viewCache.invalidate();
+      notify();
+    },
+    now: Date.now,
+    log: logger,
+  };
+  const ticketClose = {
+    close: (key: string, o: Parameters<typeof closeTicket>[2]) => closeTicket(ticketCloseDeps, key, o),
+    reopen: (key: string) => reopenTicket(ticketCloseDeps, key),
+    setStatus: (key: string, status: Parameters<typeof setTicketStatus>[2]) => setTicketStatus(ticketCloseDeps, key, status),
+  };
   registerIpc({
     diag: diag ?? undefined,
+    ticketClose,
     feedback,
     userEnded: (termId) => {
       const h = sessions.head(termId);
@@ -4034,6 +4109,7 @@ async function bootstrap(): Promise<void> {
       sessionModel: (m) => routing.sessionModel(m),
       admission,
       stacks: new StackControl({ service: stackService, tickets: () => tickets.list(), features }),
+      ticketOps: new TicketControl({ tickets, followups, ...ticketClose, rederive: ticketCloseDeps.rederive, notify: ticketCloseDeps.notify, now: Date.now, log: logger }),
       log: logger,
     }),
     log: logger,
