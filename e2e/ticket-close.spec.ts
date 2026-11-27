@@ -116,3 +116,59 @@ test("when a PR fails to close, the dialog stays open with the reason and retryi
   expect(closes).toHaveLength(3);
   expect(closes.every((a) => a[2] === "44")).toBe(true);
 });
+
+// BTL-270 审查（建议 1）：关 ticket 时没勾的 PR 还开着，ticket 页上有「关掉剩下的 PR」：同一个勾选框，评论写关闭时的原因。
+test("a closed ticket with an open PR of its own offers to close the remaining PRs with the same checkboxes", async ({ makeSandbox, launch }) => {
+  test.skip(process.platform === "win32", "the fake gh is an sh wrapper; resolveGh only accepts gh.exe on Windows");
+  const url = "https://github.com/acme/app/pull/45";
+  const s = makeSandbox({ gh: {
+    branches: { "feature/E2E-13": [{ number: 45, url, state: "OPEN", headRefName: "feature/E2E-13", createdAt: "2026-11-18T08:00:00Z", mergedAt: null, closedAt: null }] },
+    prs: {
+      [url]: {
+        number: 45, url, state: "OPEN", headRefName: "feature/E2E-13", createdAt: "2026-11-18T08:00:00Z", mergedAt: null, closedAt: null,
+        isDraft: false, reviewDecision: "", headRefOid: "ffff6666ffff", author: { login: "dev" }, reviews: [], comments: [], commits: [], statusCheckRollup: [],
+        isCrossRepository: false, headRepositoryOwner: { login: "acme" }, baseRefName: "main",
+      },
+    },
+  } });
+  const repo = makeGitRepo(join(s.dir, "proj", "app"), FAKE_GH_ORIGIN);
+  execFileSync("git", ["-C", repo, "checkout", "-q", "-b", "feature/E2E-13"]);
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await (await newButton(page, "newTicket")).click();
+  await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-13");
+  await page.getByRole("textbox", { name: `${S.repoOptional} ${S.pick}`, exact: true }).fill(repo);
+  await page.getByRole("radio", { name: S.branch, exact: true }).check();
+  await page.getByRole("button", { name: S.create, exact: true }).click();
+  await expect(page.getByRole("heading", { name: "E2E-13", exact: true })).toBeVisible();
+  await expect.poll(() => ghReadPr(s, url), { timeout: 60_000 }).toBe(true);
+  let last = -1;
+  await expect.poll(() => { const n = ghCalls(s).length; const same = n === last; last = n; return same; }, { timeout: 30_000, intervals: [2000] }).toBe(true);
+
+  // 关 ticket，PR 不勾：关上了，PR 还开着。
+  await expect(page.locator(".ticket-close-rest")).toHaveCount(0);
+  await page.getByRole("button", { name: S.tc.close, exact: true }).click();
+  const dialog = page.locator("form.close-ticket");
+  await dialog.getByRole("textbox").fill("先不做了");
+  await expect(dialog.locator("fieldset.close-prs").getByRole("checkbox", { name: url })).toBeVisible();
+  await dialog.getByRole("button", { name: S.tc.confirm, exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(ghCalls(s).filter((a) => a[0] === "pr" && a[1] === "close")).toHaveLength(0);
+
+  // 「关掉剩下的 PR」：没有原因框，写着关闭时的原因；不勾不能提交，勾了才关。
+  await page.getByRole("button", { name: S.tc.closeRest, exact: true }).click();
+  const rest = page.locator("form.close-ticket-rest");
+  await expect(rest.getByRole("heading", { name: S.tc.restTitle("E2E-13") })).toBeVisible();
+  await expect(rest.getByRole("textbox")).toHaveCount(0);
+  await expect(rest.locator(".close-rest-reason")).toContainText("先不做了");
+  await expect(rest.getByRole("button", { name: S.tc.restConfirm, exact: true })).toBeDisabled();
+  await rest.locator("fieldset.close-prs").getByRole("checkbox", { name: url }).check();
+  await rest.getByRole("button", { name: S.tc.restConfirm, exact: true }).click();
+  await expect(page.locator("form.close-ticket")).toHaveCount(0);
+  const closes = ghCalls(s).filter((a) => a[0] === "pr" && a[1] === "close");
+  expect(closes).toHaveLength(1);
+  expect(closes[0][2]).toBe("45");
+  // 评论用的是关闭时的原因；ticket 还是关着，原因没变。
+  expect(closes[0].join(" ")).toContain("先不做了");
+  await expect(page.locator(".ticket-closed-banner")).toContainText(S.tc.banner("先不做了"));
+});

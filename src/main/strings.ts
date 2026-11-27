@@ -414,12 +414,15 @@ const ZH = {
   ctlClosePrErrors: (errs: readonly { kind: ClosePrErrorKind; ticket?: string }[]) => {
     const n = (k: ClosePrErrorKind) => errs.filter((e) => e.kind === k).length;
     const shared = [...new Set(errs.flatMap((e) => (e.kind === "shared" && e.ticket ? [e.ticket] : [])))];
+    const sharedBranch = [...new Set(errs.flatMap((e) => (e.kind === "shared_branch" && e.ticket ? [e.ticket] : [])))];
     return [
       `有 ${errs.length} 个 PR 没关掉，逐个原因见 prErrors。`,
       n("failed") > 0 && `${n("failed")} 个是 gh 关失败了：看 error，问题解决了可以自己 gh pr close 再关。`,
       n("skipped") > 0 && `${n("skipped")} 个没关是因为对外动作开关关着：要关就请用户打开开关，或者请用户自己关。`,
-      n("unverified") > 0 && `${n("unverified")} 个关之前核对 PR 失败了（gh 出错或超时），还不知道是不是这个 ticket 自己的：不要自己 gh pr close，请用户在关闭框里重试。`,
-      n("shared") > 0 && `${n("shared")} 个也挂在别的 ticket（${shared.join("、")}）上（关了的也算，重新打开时还要用）：不要替它们关，问那个 ticket 的 session 或用户。`,
+      n("unverified") > 0 && `${n("unverified")} 个关之前核对 PR 失败了（gh 出错、超时或版本太老），还不知道是不是这个 ticket 自己的：不要自己 gh pr close。` +
+        "看 error 解决了以后，再调一次 close_ticket（close_prs，pr_urls 点名它们）会重新核对再关；也可以请用户在 ticket 页点「关掉剩下的 PR」。",
+      n("shared") > 0 && `${n("shared")} 个也挂在别的 ticket（${shared.join("、")}）上（那个 ticket 关了也算，它重新打开时还要用这个 PR）：不要替它们关，问那个 ticket 的 session 或用户。`,
+      n("shared_branch") > 0 && `${n("shared_branch")} 个的分支名别的 ticket（${sharedBranch.join("、")}）也用过，不知道 PR 是谁的：不要关，问用户。`,
       n("not_own_branch") > 0 && `${n("not_own_branch")} 个的分支不是这个 ticket 自己的，可能是别人的 PR：不要关。`,
       n("foreign") > 0 && `${n("foreign")} 个不在这个 ticket 的仓库里：不要关。`,
       n("never_read") + n("given_up") > 0 && `${n("never_read") + n("given_up")} 个 Shipherd 读不到状态：先 gh pr view 看清是不是真开着、是不是这个 ticket 的，再决定。`,
@@ -432,17 +435,21 @@ const ZH = {
       given_up: "一直读不到这个 PR，已经不读了",
       foreign: "不在这个 ticket 的仓库里",
       not_own_branch: "分支不是这个 ticket 自己的",
-      shared: `也挂在 ${ticket ?? "别的 ticket"} 上（重新打开它时还要用）`,
+      shared: `也挂在 ${ticket ?? "别的 ticket"} 上（${ticket ?? "那个 ticket"} 重新打开时还要用这个 PR）`,
+      shared_branch: `${ticket ?? "别的 ticket"} 也用过这个分支名，不知道 PR 是谁的`,
     })[kind],
   ticketClosePrSkipped: "对外动作的开关关着，没去关",
   ticketCloseVerifyFailed: (err: string) => `关之前核对 PR 失败（${err}），这次没关；重试时会再核对`,
-  ctlTicketAlreadyClosed: (key: string) => `${key} 已经关了：关闭的时间和原因不变。没关掉的 PR、没结束的 session，请用户在 ticket 页的关闭框里重试，或者按 prErrors 的说明处理`,
+  ticketCloseGhTooOld: (err: string) => `gh 版本太老，读不到 PR 的 head 在哪（${err}），这次没关：升级 gh（brew upgrade gh 或到 cli.github.com 下载）以后重试`,
+  ctlTicketAlreadyClosed: (key: string) =>
+    `${key} 已经关了（关闭的时间和原因不变），也没有剩下能关的 PR。还开着的 session 可以带 end_sessions 再调 close_ticket 结束。`,
   ctlFollowupsAllNeedsTicket: "all: true 要和 ticket 一起用：先不带 all 列出没处理完的，再对一个 ticket 带 all 看全部。",
   ctlCloseSessionErrors: (n: number) => `有 ${n} 个 session 没结束（正在干活或在等用户确认），见 sessionErrors。`,
   ctlCloseReopenedMeanwhile: "关的时候 ticket 被重新打开了：后面的 PR 没关、session 没结束。",
-  ctlClosePickPrs: (closable: number, unclosable: number) =>
-    `什么都没做，ticket 也没关：要关 PR 得用 pr_urls 点名。closablePrs 里是能关的 ${closable} 个，看过确实该关的再带上 pr_urls 调一次；` +
-    `不关 PR 就去掉 close_prs。${unclosable > 0 ? `另有 ${unclosable} 个关不了，原因见 prErrors。` : ""}`,
+  ctlClosePickPrs: (closable: number, unclosable: number, alreadyClosed: boolean) =>
+    `什么都没做${alreadyClosed ? "（ticket 本来就关着）" : "，ticket 也没关"}：要关 PR 得用 pr_urls 点名。closablePrs 里是能关的 ${closable} 个，看过确实该关的再带上 pr_urls 调一次；` +
+    `prErrors 里 kind 是 unverified 的（核对失败）也可以点名，点名后会再核对一次。` +
+    `${alreadyClosed ? "不关就不用再调。" : "不关 PR 就去掉 close_prs。"}${unclosable > 0 ? `prErrors 里一共 ${unclosable} 个，原因逐个写着。` : ""}`,
   ctlCloseNotOpenPrs: (n: number) => `pr_urls 里有 ${n} 个不是这个 ticket 开着的 PR（已经关了、别的 ticket 的、或者写错了），没碰，见 notOpenPrs。`,
   ctlReopenNote: "关掉的 PR、结束的 session 不会自己回来：要接着做，就重开 PR 或开新的 session。",
   ctlMetricsUnavailable: "Shipherd 这里没有效果数据",
@@ -1159,12 +1166,15 @@ const EN: MainStrings = {
   ctlClosePrErrors: (errs: readonly { kind: ClosePrErrorKind; ticket?: string }[]) => {
     const n = (k: ClosePrErrorKind) => errs.filter((e) => e.kind === k).length;
     const shared = [...new Set(errs.flatMap((e) => (e.kind === "shared" && e.ticket ? [e.ticket] : [])))];
+    const sharedBranch = [...new Set(errs.flatMap((e) => (e.kind === "shared_branch" && e.ticket ? [e.ticket] : [])))];
     return [
       `${errs.length} PR(s) were not closed; see prErrors for each reason.`,
       n("failed") > 0 && ` ${n("failed")}: gh failed to close it; read the error, and once it is fixed you can run gh pr close yourself.`,
       n("skipped") > 0 && ` ${n("skipped")}: the external action switch is off; ask the user to turn it on, or to close it themselves.`,
-      n("unverified") > 0 && ` ${n("unverified")}: checking the PR before closing it failed (gh error or timeout), so it is not known to be this ticket's own; don't run gh pr close yourself, ask the user to retry from the close dialog.`,
-      n("shared") > 0 && ` ${n("shared")}: also linked to another ticket (${shared.join(", ")}), closed ones included, which needs it if reopened; don't close it for them, ask that ticket's session or the user.`,
+      n("unverified") > 0 && ` ${n("unverified")}: checking the PR before closing it failed (gh error, timeout or a gh that is too old), so it is not known to be this ticket's own; don't run gh pr close yourself.` +
+        " Once the error is fixed, call close_ticket again with close_prs and these in pr_urls; it checks them again before closing. Or ask the user to click \"Close remaining PRs\" on the ticket page.",
+      n("shared") > 0 && ` ${n("shared")}: also linked to another ticket (${shared.join(", ")}), even a closed one, which needs the PR if it is reopened; don't close it for them, ask that ticket's session or the user.`,
+      n("shared_branch") > 0 && ` ${n("shared_branch")}: another ticket (${sharedBranch.join(", ")}) has used the same branch name, so it is unclear whose PR it is; don't close it, ask the user.`,
       n("not_own_branch") > 0 && ` ${n("not_own_branch")}: its branch is not this ticket's own, so it may be someone else's PR; don't close it.`,
       n("foreign") > 0 && ` ${n("foreign")}: not in a repo of this ticket; don't close it.`,
       n("never_read") + n("given_up") > 0 && ` ${n("never_read") + n("given_up")}: Shipherd can't read its state; check with gh pr view that it is really open and belongs to this ticket before deciding.`,
@@ -1176,17 +1186,21 @@ const EN: MainStrings = {
       given_up: "This PR could never be read, so Shipherd stopped reading it",
       foreign: "Not in a repo of this ticket",
       not_own_branch: "Its branch is not this ticket's own",
-      shared: `Also linked to ${ticket ?? "another ticket"} (it still needs it if reopened)`,
+      shared: `Also linked to ${ticket ?? "another ticket"} (${ticket ?? "that ticket"} still needs this PR if it is reopened)`,
+      shared_branch: `${ticket ?? "Another ticket"} has used this branch name too, so it is unclear whose PR this is`,
     })[kind],
   ticketClosePrSkipped: "The external action switch is off, so it was not closed",
   ticketCloseVerifyFailed: (err: string) => `Checking the PR before closing it failed (${err}), so it was not closed; a retry checks it again`,
-  ctlTicketAlreadyClosed: (key: string) => `${key} is already closed; its close time and reason stay as they are. For leftover PRs and sessions, ask the user to retry from the close dialog on the ticket page, or follow the notes on prErrors`,
+  ticketCloseGhTooOld: (err: string) => `gh is too old to tell where the PR's head is (${err}), so it was not closed: upgrade gh (brew upgrade gh, or download it from cli.github.com) and retry`,
+  ctlTicketAlreadyClosed: (key: string) =>
+    `${key} is already closed (its close time and reason stay as they are) and has no PRs left that can be closed. To end sessions that are still open, call close_ticket again with end_sessions.`,
   ctlFollowupsAllNeedsTicket: "all: true needs a ticket: list the unfinished ones without all, then pass all with one ticket to see everything.",
   ctlCloseSessionErrors: (n: number) => `${n} session(s) were not ended (working, or waiting for the user to confirm); see sessionErrors.`,
   ctlCloseReopenedMeanwhile: "The ticket was reopened while closing: the remaining PRs were left open and no sessions were ended.",
-  ctlClosePickPrs: (closable: number, unclosable: number) =>
-    `Nothing was done and the ticket is still open: to close PRs, name them in pr_urls. closablePrs lists the ${closable} that can be closed; check them and call again with pr_urls for the ones that should go, ` +
-    `or drop close_prs to close the ticket without closing PRs.${unclosable > 0 ? ` ${unclosable} more can't be closed; see prErrors for why.` : ""}`,
+  ctlClosePickPrs: (closable: number, unclosable: number, alreadyClosed: boolean) =>
+    `Nothing was done${alreadyClosed ? " (the ticket was already closed)" : " and the ticket is still open"}: to close PRs, name them in pr_urls. closablePrs lists the ${closable} that can be closed; check them and call again with pr_urls for the ones that should go. ` +
+    `Ones in prErrors with kind unverified (the check failed) can be named too; they are checked again first. ` +
+    `${alreadyClosed ? "If none should go, there is no need to call again." : "Drop close_prs to close the ticket without closing PRs."}${unclosable > 0 ? ` prErrors lists ${unclosable}, each with its reason.` : ""}`,
   ctlCloseNotOpenPrs: (n: number) => `${n} URL(s) in pr_urls are not open PRs of this ticket (already closed, another ticket's, or mistyped) and were left alone; see notOpenPrs.`,
   ctlReopenNote: "Closed PRs and ended sessions do not come back by themselves: reopen the PR or start a new session to keep going.",
   ctlMetricsUnavailable: "Shipherd has no effect data here",

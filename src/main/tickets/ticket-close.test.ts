@@ -11,7 +11,7 @@ const followup = (id: string, o: Partial<Followup> = {}): Followup => ({
   id, ticketKey: "T-1", kind: "doc", description: id, trigger: "none", dueDate: null, status: "open", snoozedUntil: null, source: "session", createdAt: 1, doneAt: null, ...o,
 });
 
-function setup(o: { prs?: ClosablePr[]; unclosable?: OpenPrs["unclosable"]; sessions?: LiveSession[]; closePr?: TicketCloseDeps["closePr"]; endSession?: TicketCloseDeps["endSession"] } = {}) {
+function setup(o: { prs?: ClosablePr[]; unclosable?: OpenPrs["unclosable"]; openPrs?: TicketCloseDeps["openPrs"]; sessions?: LiveSession[]; closePr?: TicketCloseDeps["closePr"]; endSession?: TicketCloseDeps["endSession"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const followups = new FollowupsRepo(db);
@@ -24,7 +24,7 @@ function setup(o: { prs?: ClosablePr[]; unclosable?: OpenPrs["unclosable"]; sess
   const d: TicketCloseDeps = {
     tickets, followups,
     transaction: (fn) => withTransaction(db, fn),
-    openPrs: async () => ({ closable: o.prs ?? [], unclosable: o.unclosable ?? [] }),
+    openPrs: o.openPrs ?? (async () => ({ closable: o.prs ?? [], unclosable: o.unclosable ?? [] })),
     closePr: o.closePr ?? (async (pr) => (calls.push(`close ${pr.url}`), "closed")),
     liveSessions: () => o.sessions ?? [],
     endSession: o.endSession ?? ((s) => (calls.push(`end ${s.id}`), { ok: true })),
@@ -120,11 +120,11 @@ describe("closeTicket", () => {
     expect(tickets.get("T-1")?.statusManual).toBeNull();
   });
 
-  it("refuses a ticket that is already closed and keeps the first close's time, reason and source (BTL-270 review)", async () => {
+  it("refuses a closed ticket when asked for nothing more, and keeps the first close's time, reason and source (BTL-270 review)", async () => {
     const { d, tickets, calls } = setup({ prs: [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }] });
     await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
     calls.length = 0;
-    expect(await closeTicket(d, "T-1", { reason: "又说一遍", source: "coordinator", closePrs: true })).toEqual({ ok: false, error: "already_closed" });
+    expect(await closeTicket(d, "T-1", { reason: "又说一遍", source: "coordinator" })).toEqual({ ok: false, error: "already_closed" });
     expect(tickets.get("T-1")!.closure).toEqual({ at: 100, reason: "需求变了", source: "user" });
     expect(calls).toEqual([]);
   });
@@ -176,7 +176,7 @@ describe("closeTicket", () => {
       const r = await closeTicket(d, "T-1", { reason: "不做了", source, closePrs: true, endSessions: true });
       expect(r).toEqual({
         ok: false, error: "pick_prs", ticket: "T-1", closable: [{ url: "https://github.com/o/r/pull/1", number: 1 }],
-        prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "given_up", error: M().ticketClosePrWhy("given_up", null) }],
+        prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "given_up", error: M().ticketClosePrWhy("given_up", null) }], alreadyClosed: false,
       });
       expect(calls).toEqual([]);
       expect(tickets.get("T-1")?.statusManual).toBeNull();
@@ -211,6 +211,93 @@ describe("closeTicket", () => {
     expect(await closeTicket(d, "NOPE", { reason: "x", source: "user" })).toEqual({ ok: false, error: "no_ticket" });
     expect(await closeTicket(d, "T-1", { reason: "  ", source: "user" })).toEqual({ ok: false, error: "empty_reason" });
     expect(tickets.get("T-1")?.statusManual).toBeNull();
+  });
+});
+
+describe("closeTicket on a ticket that is already closed (closing the PRs left over, BTL-270 review)", () => {
+  const pr = (n: number): ClosablePr => ({ url: `https://github.com/o/r/pull/${n}`, number: n, slug: "o/r", cwd: "/r" });
+
+  it("a coordinator asking again without naming PRs gets the list to name, with alreadyClosed; nothing is touched", async () => {
+    const { d, tickets, calls } = setup({ prs: [pr(1)], unclosable: [{ url: pr(3).url, number: 3, kind: "unverified", error: "e" }] });
+    await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
+    calls.length = 0;
+    const r = await closeTicket(d, "T-1", { reason: "再关一次", source: "coordinator", closePrs: true });
+    expect(r).toEqual({
+      ok: false, error: "pick_prs", ticket: "T-1", closable: [{ url: pr(1).url, number: 1 }], prErrors: [{ url: pr(3).url, kind: "unverified", error: "e" }], alreadyClosed: true,
+    });
+    expect(calls).toEqual([]);
+    expect(tickets.get("T-1")!.closure).toEqual({ at: 100, reason: "需求变了", source: "user" });
+  });
+
+  it("closing named leftovers succeeds: only the named ones are read and checked, the comment carries the first reason, the close itself is unchanged", async () => {
+    const reasons: string[] = [];
+    const asked: (string[] | undefined)[] = [];
+    let first = true;
+    const { d, tickets, calls } = setup({
+      openPrs: async (_key, only) => {
+        asked.push(only && [...only]);
+        // 第一次关时 PR 2 的核对失败了；这次核对上了。
+        const all = first ? { closable: [pr(1)], unclosable: [{ url: pr(2).url, number: 2, kind: "unverified" as const, error: "timeout" }] } : { closable: [pr(1), pr(2)], unclosable: [] };
+        return { closable: all.closable.filter((p) => !only || only.has(p.url)), unclosable: all.unclosable.filter((p) => !only || only.has(p.url)) };
+      },
+      closePr: async (p, reason) => (reasons.push(reason), calls.push(`close ${p.number}`), "closed"),
+    });
+    const r1 = await closeTicket(d, "T-1", { reason: "需求变了", source: "coordinator", closePrs: true, prUrls: [pr(1).url, pr(2).url] });
+    expect(r1).toMatchObject({ ok: true, closedPrs: [pr(1).url], prErrors: [{ url: pr(2).url, kind: "unverified" }] });
+    first = false;
+    calls.length = 0;
+    reasons.length = 0;
+    const r2 = await closeTicket(d, "T-1", { reason: "再试一次", source: "coordinator", closePrs: true, prUrls: [pr(2).url] });
+    expect(r2).toEqual({ ok: true, ticket: "T-1", ignoredFollowups: 0, closedPrs: [pr(2).url], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false, alreadyClosed: true });
+    expect(asked.at(-1)).toEqual([pr(2).url]);
+    expect(calls).toEqual(["close 2", "rederive T-1", "refresh T-1"]);
+    expect(reasons).toEqual(["需求变了"]);
+    expect(tickets.get("T-1")!.closure).toEqual({ at: 100, reason: "需求变了", source: "coordinator" });
+  });
+
+  it("a named leftover whose check fails again is reported as unverified again and not closed", async () => {
+    const { d, calls } = setup({ prs: [], unclosable: [{ url: pr(2).url, number: 2, kind: "unverified", error: "timeout" }] });
+    await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
+    calls.length = 0;
+    const r = await closeTicket(d, "T-1", { reason: "x", source: "coordinator", closePrs: true, prUrls: [pr(2).url] });
+    expect(r).toMatchObject({ ok: true, alreadyClosed: true, closedPrs: [], prErrors: [{ url: pr(2).url, kind: "unverified", error: "timeout" }] });
+    expect(calls.filter((c) => c.startsWith("close "))).toEqual([]);
+  });
+
+  it("with no PR left that can be closed (none open, or only ones that can't be closed) it is already_closed, for every source", async () => {
+    for (const unclosable of [[], [{ url: pr(8).url, number: 8, kind: "shared" as const, ticket: "T-2" }]]) {
+      for (const source of ["user", "coordinator", "routing"] as const) {
+        const { d, calls } = setup({ prs: [], unclosable });
+        await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
+        calls.length = 0;
+        expect(await closeTicket(d, "T-1", { reason: "x", source, closePrs: true })).toEqual({ ok: false, error: "already_closed" });
+        expect(calls).toEqual([]);
+      }
+    }
+  });
+
+  it("end_sessions on a closed ticket ends the sessions still left, even with no PR to close", async () => {
+    const { d, calls } = setup({ sessions: [{ id: "s1", termId: "s1", hibernated: false }] });
+    await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
+    calls.length = 0;
+    const r = await closeTicket(d, "T-1", { reason: "x", source: "coordinator", closePrs: true, endSessions: true });
+    expect(r).toMatchObject({ ok: true, alreadyClosed: true, closedPrs: [], endedSessions: ["s1"] });
+    expect(calls).toEqual(["end s1", "rederive T-1", "refresh T-1"]);
+  });
+
+  it("a ticket closed by someone else while the coordinator's first read runs is treated as closed: nothing is closed twice", async () => {
+    const ref: { tickets?: TicketsRepo } = {};
+    const { d, tickets: t, followups } = setup({
+      openPrs: async () => {
+        if (ref.tickets!.get("T-1")?.statusManual !== "closed") ref.tickets!.close("T-1", { at: 50, reason: "用户先关了", source: "user" });
+        return { closable: [], unclosable: [] };
+      },
+    });
+    ref.tickets = t;
+    expect(await closeTicket(d, "T-1", { reason: "不做了", source: "coordinator", closePrs: true })).toEqual({ ok: false, error: "already_closed" });
+    expect(t.get("T-1")!.closure).toEqual({ at: 50, reason: "用户先关了", source: "user" });
+    // 没走第二次关闭：后续事项没被这次忽略。
+    expect(followups.get("open")?.status).toBe("open");
   });
 });
 
@@ -330,6 +417,18 @@ describe("classifyOpenPrs (which open PRs closing a ticket may close)", () => {
     });
     expect(r.closable.map((p) => p.number)).toEqual([3]);
     expect(r.unclosable.map((u) => [u.number, u.kind])).toEqual([[1, "not_own_branch"], [2, "not_own_branch"]]);
+  });
+
+  it("an own branch name another ticket in the repo also used is shared_branch, naming that ticket; not folded into not_own_branch (BTL-270 review)", () => {
+    const rows = [row(1, { headBranch: "develop" }), row(2), row(3, { headBranch: "develop", other: "T-3" })];
+    const r = classifyOpenPrs(rows, {
+      givenUp: () => false, ownBranch: () => true, sharedBranch: (_id, b) => (b === "develop" ? "T-2" : null), sharedWith: (x) => x.other, ghDir: () => "/r",
+    });
+    expect(r.closable.map((p) => p.number)).toEqual([2]);
+    expect(r.unclosable).toEqual([
+      { url: "https://github.com/o/r/pull/1", number: 1, kind: "shared_branch", ticket: "T-2" },
+      { url: "https://github.com/o/r/pull/3", number: 3, kind: "shared_branch", ticket: "T-2" },
+    ]);
   });
 
   it("asks ownBranch with the PR's repo and head branch", () => {

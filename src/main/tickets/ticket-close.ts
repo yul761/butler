@@ -25,15 +25,18 @@ export interface PrCloseError {
   /** 给人看的原因（gh 的报错原文，或者按 kind 写的中英文说明）。 */
   error: string;
   kind: PrCloseErrorKind;
-  /** shared：也挂着它的那个 ticket。 */
+  /** shared：也挂着它的那个 ticket；shared_branch：也用过这个分支名的那个 ticket。 */
   ticket?: string;
 }
+
+/** 带 ticket 的关不了的原因：shared（PR 也挂在它上）、shared_branch（它也用过这个分支名）。 */
+export type UnclosableWithTicket = "shared" | "shared_branch";
 
 /**
  * 关不了的一个开着的 PR。unverified 是关之前核对 head 失败（gh 失败、超时，BTL-270 审查）：这次不关，可以重试，error 写着原因。
  */
 export type UnclosablePr =
-  | { url: string; number: number; kind: UnclosableKind; /** shared：也挂着它的那个 ticket。 */ ticket?: string; error?: undefined }
+  | { url: string; number: number; kind: UnclosableKind; /** shared、shared_branch：牵涉到的那个 ticket。 */ ticket?: string; error?: undefined }
   | { url: string; number: number; kind: "unverified"; error: string; ticket?: undefined };
 
 /** 这个 ticket 开着的 PR：能关的，和看着开着、但关不了的，后者照样报告。 */
@@ -59,13 +62,16 @@ export interface OpenPrRow {
  * 关 ticket 时哪些开着的 PR 能关（BTL-270 审查）：读过的、没放弃的、在 ticket 自己仓库里的、head 分支是这个 ticket 自己的分支
  * （ticket 仓库的分支、session 推过的有归属的分支）、而且没挂在别的 ticket 上。其余报出来，写明为什么不关：
  * 不替别人关 PR、不往别人的 PR 上发公开评论。head 是公共分支（publicBranch：仓库的默认分支、main / master）或者就是 PR 的目标分支的，
- * 就算 ticket 记的分支也叫这个名字也不是它自己的（BTL-270 审查）。fork 上的同名分支由调用方关之前核对（verifyHeads）。
+ * 就算 ticket 记的分支也叫这个名字也不是它自己的（BTL-270 审查）。同一个仓库里别的 ticket 也用过这个分支名的（sharedBranch）单独报
+ * shared_branch，写明是哪个 ticket。fork 上的同名分支由调用方关之前核对（verifyHeads）。
  */
 export function classifyOpenPrs<R extends OpenPrRow>(rows: readonly R[], c: {
   givenUp(r: R): boolean;
   ownBranch(repoId: number, branch: string): boolean;
   /** 这个仓库的公共分支（默认分支等）：从这里开的 PR 不是哪个 ticket 自己的。 */
   publicBranch?(repoId: number, branch: string): boolean;
+  /** 同一个仓库里也用过这个分支名的别的 ticket（没有是 null）。 */
+  sharedBranch?(repoId: number, branch: string): string | null;
   sharedWith(r: R): string | null;
   ghDir(r: R): string;
 }): OpenPrs {
@@ -81,8 +87,10 @@ export function classifyOpenPrs<R extends OpenPrRow>(rows: readonly R[], c: {
       r.headBranch === null || r.headBranch === (r.baseBranch ?? null) || (c.publicBranch?.(r.repoId, r.headBranch) ?? false) || !c.ownBranch(r.repoId, r.headBranch)
     ) no("not_own_branch");
     else {
-      const other = c.sharedWith(r);
-      if (other) no("shared", other);
+      const branchToo = c.sharedBranch?.(r.repoId, r.headBranch) ?? null;
+      const other = branchToo === null ? c.sharedWith(r) : null;
+      if (branchToo) no("shared_branch", branchToo);
+      else if (other) no("shared", other);
       else closable.push({ url: r.url, number: r.number, slug: r.slug, cwd: c.ghDir(r) });
     }
   }
@@ -131,9 +139,11 @@ export interface TicketCloseDeps {
   tickets: Pick<TicketsRepo, "get" | "close" | "setStatusManual">;
   followups: Pick<FollowupsRepo, "ignoreForClose" | "restoreAfterReopen">;
   transaction<T>(fn: () => T): T;
-  /** 这个 ticket 开着的 PR：能关的和关不了的（classifyOpenPrs）。 */
-  /** 要核对 gh（默认分支、head 在不在 fork 上），所以是异步的。 */
-  openPrs(key: string): Promise<OpenPrs>;
+  /**
+   * 这个 ticket 开着的 PR：能关的和关不了的（classifyOpenPrs）。要核对 gh（默认分支、head 在不在 fork 上），所以是异步的。
+   * 给了 onlyPrs（prUrlKey）就只看、只核对点名的这些（BTL-270 审查）。
+   */
+  openPrs(key: string, onlyPrs?: ReadonlySet<string>): Promise<OpenPrs>;
   /** 关一个 PR：closed 关了；skipped 开关关着没跑（抛错是 gh 失败）。key 是审计里记的 ticket。 */
   closePr(pr: ClosablePr, reason: string, o: { key: string; source: TicketCloseSource }): Promise<"closed" | "skipped">;
   /** 这个 ticket 开着终端或休眠着的 session。 */
@@ -178,10 +188,15 @@ export type CloseResult =
       sessionErrors: { id: string; error: string }[];
       /** 关 PR 的时候有人重新打开了 ticket：后面的 PR 没关、session 没结束。 */
       reopenedMeanwhile: boolean;
+      /** ticket 本来就关着：这次只关了剩下的 PR、结束了剩下的 session，关闭的时间、原因、来源不变。 */
+      alreadyClosed?: true;
     }
   | { ok: false; error: "no_ticket" | "empty_reason" | "already_closed" }
-  /** 不是用户、要关 PR 却没点名（prUrls）：什么都没做。closable 是能关的（点名用），prErrors 是关不了的。 */
-  | { ok: false; error: "pick_prs"; ticket: string; closable: { url: string; number: number }[]; prErrors: PrCloseError[] };
+  /**
+   * 不是用户、要关 PR 却没点名（prUrls）：什么都没做。closable 是能关的（点名用），prErrors 是关不了的（核对失败的 unverified 也能点名）。
+   * alreadyClosed：ticket 本来就关着，这次是关剩下的 PR。
+   */
+  | { ok: false; error: "pick_prs"; ticket: string; closable: { url: string; number: number }[]; prErrors: PrCloseError[]; alreadyClosed: boolean };
 
 export type ReopenResult = { ok: true; ticket: string; restoredFollowups: number; status: TicketStatus } | { ok: false; error: "no_ticket" | "not_closed" };
 
@@ -198,19 +213,16 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   const t = d.tickets.get(key);
   if (!t) return { ok: false, error: "no_ticket" };
   if (!reason) return { ok: false, error: "empty_reason" };
-  // 已经关着：不再关一次，第一次关的时间、原因、来源留着（剩下的 PR / session 用 retryClose）。
-  if (t.statusManual === "closed") return { ok: false, error: "already_closed" };
+  // 已经关着：不再关一次，第一次关的时间、原因、来源留着；要关 PR、结束 session 的，去关剩下的（BTL-270 审查）。
+  if (t.statusManual === "closed") return closeRemaining(d, key, oneLine(t.closure?.reason ?? "") || reason, o);
   // 总控、路由要关 PR 必须点名：PR 的评论是公开发到 GitHub 的，不让它一句「全关」就关掉没看过的 PR。
-  // ticket 也先不关：关了以后就不能再带 prUrls 关一次（already_closed），只能请用户在关闭框里重试。
-  // 没有能点名的（全是关不了的）就不用再来一趟：直接关，就用这次读到的清单，不再去读一次 gh。
+  // ticket 也先不关：点名了再来一次时一起关。没有能点名的（全是关不了的）就不用再来一趟：直接关，就用这次读到的清单，不再去读一次 gh。
   let known: OpenPrs | undefined;
   if (o.closePrs && o.source !== "user" && o.prUrls === undefined) {
     known = await d.openPrs(key);
-    if (nameable(known) > 0) {
-      return { ok: false, error: "pick_prs", ticket: key, closable: known.closable.map((p) => ({ url: p.url, number: p.number })), prErrors: known.unclosable.map(unclosableError) };
-    }
-    // 等 gh 的时候可能有人关了它。
-    if (d.tickets.get(key)?.statusManual === "closed") return { ok: false, error: "already_closed" };
+    if (nameable(known) > 0) return pickPrs(key, known, false);
+    // 等 gh 的时候可能有人关了它：那就按关着的走（关剩下的）。
+    if (d.tickets.get(key)?.statusManual === "closed") return closeTicket(d, key, o);
   }
   const ignoredFollowups = d.transaction(() => {
     d.tickets.close(key, { at: d.now(), reason, source: o.source });
@@ -221,6 +233,30 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   // 点名了的（关闭框里勾了的、pr_urls）才关、才报；没点名时关不了的照样全报出来（它们还开着，不当作关完了）。
   const r = await closeLeftovers(d, key, reason, { ...o, ...(o.prUrls && { onlyPrs: new Set(o.prUrls.map(prUrlKey)) }), ...(known && { known, noClose: true }) });
   return { ok: true, ticket: key, ignoredFollowups, ...r };
+}
+
+const pickPrs = (key: string, open: OpenPrs, alreadyClosed: boolean): CloseResult => ({
+  ok: false, error: "pick_prs", ticket: key, closable: open.closable.map((p) => ({ url: p.url, number: p.number })), prErrors: open.unclosable.map(unclosableError), alreadyClosed,
+});
+
+/**
+ * 已经关着的 ticket 再要关 PR、结束 session（BTL-270 审查）：只对剩下的、开着的本 ticket PR 走 closeLeftovers，核对和第一次关一样；
+ * 总控、路由没点名（prUrls）就回 pick_prs。没有能关的 PR（能关的和核对失败、可以再试的都没有）、也不结束 session 时回 already_closed。
+ * 评论里写第一次关时记下的原因。
+ */
+async function closeRemaining(d: TicketCloseDeps, key: string, reason: string, o: CloseOptions): Promise<CloseResult> {
+  if (!o.closePrs && !o.endSessions) return { ok: false, error: "already_closed" };
+  const onlyPrs = o.prUrls && new Set(o.prUrls.map(prUrlKey));
+  const unnamed = o.source !== "user" && o.prUrls === undefined;
+  let known: OpenPrs | undefined;
+  if (o.closePrs) {
+    known = await d.openPrs(key, onlyPrs);
+    const left = nameable(known);
+    if (unnamed && left > 0) return pickPrs(key, known, true);
+    if (left === 0 && !o.endSessions) return { ok: false, error: "already_closed" };
+  }
+  const r = await closeLeftovers(d, key, reason, { ...o, ...(onlyPrs && { onlyPrs }), ...(known && { known, noClose: unnamed }) });
+  return { ok: true, ticket: key, ignoredFollowups: 0, ...r, alreadyClosed: true };
 }
 
 export interface RetryCloseOptions {
@@ -273,7 +309,7 @@ async function closeLeftovers(d: TicketCloseDeps, key: string, reason: string, o
   const stillClosed = () => d.tickets.get(key)?.statusManual === "closed";
   let reopenedMeanwhile = false;
   if (o.closePrs) {
-    const open = o.known ?? (await d.openPrs(key));
+    const open = o.known ?? (await d.openPrs(key, o.onlyPrs));
     const wanted = (url: string) => !o.onlyPrs || o.onlyPrs.has(prUrlKey(url));
     for (const u of open.unclosable) if (wanted(u.url)) prErrors.push(unclosableError(u));
     for (const pr of o.noClose ? [] : open.closable) {

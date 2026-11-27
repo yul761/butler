@@ -5,7 +5,7 @@ export interface ClosePrError {
   url: string;
   error: string;
   kind: ClosePrErrorKind;
-  /** shared：也挂着它的那个 ticket。 */
+  /** shared、shared_branch：牵涉到的那个 ticket。 */
   ticket?: string;
 }
 
@@ -43,6 +43,9 @@ export function closeOutcome(r: CloseLeftoversResult): CloseOutcome {
 /** 预览里关不了、但再试可能成的（关之前核对 head 失败）：也能勾，关的时候再核对一次（BTL-270 审查）。 */
 export const retryableInPreview = (preview: ClosePreview | null): ClosePrError[] =>
   (preview?.unclosable ?? []).filter((p) => RETRYABLE_CLOSE_PR_ERRORS.includes(p.kind));
+
+/** 预览里能勾的有几个（能关的，和核对失败、再试可能成的）：关着的 ticket 有这些才给「关掉剩下的 PR」入口（BTL-270 审查）。 */
+export const pickableInPreview = (preview: ClosePreview | null): number => (preview?.closable.length ?? 0) + retryableInPreview(preview).length;
 
 /**
  * 关闭框提交时要关哪些 PR：只关勾了的、而且是这次列出来能勾的（能关的，和核对失败、再试可能成的）。一个都没勾就不要求关 PR（BTL-270 审查）：

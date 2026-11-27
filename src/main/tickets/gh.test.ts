@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, ghApiGet, prBatch, prBatchable, PR_BATCH_CHUNK, prBatchQuery, prBatchResult, GH_NOT_FOUND, parsePrHead } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, ghApiGet, prBatch, prBatchable, PR_BATCH_CHUNK, prBatchQuery, prBatchResult, GH_NOT_FOUND, parsePrHead, prHead } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -824,10 +824,29 @@ describe("parsePrHead", () => {
     expect(parsePrHead(JSON.stringify(pr))).toEqual({ crossRepo: true, headOwner: "fork", headBranch: "main", baseBranch: "main", open: true });
     expect(parsePrHead(JSON.stringify({ ...pr, isCrossRepository: false, headRefName: "t-1", state: "CLOSED" }))).toEqual({ crossRepo: false, headOwner: "fork", headBranch: "t-1", baseBranch: "main", open: false });
     // head 仓库删了：owner 是 null（不是这个 ticket 的）。
-    expect(parsePrHead(JSON.stringify({ ...pr, headRepositoryOwner: null }))?.headOwner).toBeNull();
-    expect(parsePrHead(JSON.stringify({ headRefName: "t-1", baseRefName: "main", state: "OPEN" }))).toBeNull();
-    expect(parsePrHead(JSON.stringify({ ...pr, baseRefName: undefined }))).toBeNull();
+    expect(parsePrHead(JSON.stringify({ ...pr, headRepositoryOwner: null }))).toMatchObject({ headOwner: null });
+    expect(parsePrHead(JSON.stringify({ ...pr, isCrossRepository: "yes" }))).toBeNull();
+    expect(parsePrHead(JSON.stringify({ ...pr, headRefName: 3 }))).toBeNull();
     expect(parsePrHead("not json")).toBeNull();
     expect(parsePrHead(null)).toBeNull();
+  });
+
+  it("an old gh that leaves out headRepositoryOwner or baseRefName is too_old, not just malformed (BTL-270 review)", () => {
+    const pr = { isCrossRepository: false, headRepositoryOwner: { login: "o" }, headRefName: "t-1", baseRefName: "main", state: "OPEN" };
+    expect(parsePrHead(JSON.stringify({ ...pr, headRepositoryOwner: undefined }))).toBe("too_old");
+    expect(parsePrHead(JSON.stringify({ ...pr, baseRefName: undefined }))).toBe("too_old");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("prHead", () => {
+  it("says gh is too old when gh rejects a --json field, or leaves the field out; other failures are plain errors", async () => {
+    const unknown = fakeGh(`echo 'Unknown JSON field: "headRepositoryOwner"' >&2\nexit 1`);
+    expect(await prHead(unknown, "https://github.com/o/app/pull/1", 5000)).toEqual({ error: 'Unknown JSON field: "headRepositoryOwner"', ghTooOld: true });
+    const missing = fakeGh(`echo '{"isCrossRepository":false,"headRefName":"t-1","state":"OPEN"}'`);
+    expect(await prHead(missing, "1", 5000)).toMatchObject({ ghTooOld: true });
+    const other = fakeGh(`echo 'HTTP 502' >&2\nexit 1`);
+    expect(await prHead(other, "1", 5000)).toEqual({ error: "HTTP 502" });
+    const ok = fakeGh(`echo '{"isCrossRepository":true,"headRepositoryOwner":{"login":"me"},"headRefName":"t-1","baseRefName":"main","state":"OPEN"}'`);
+    expect(await prHead(ok, "1", 5000)).toEqual({ crossRepo: true, headOwner: "me", headBranch: "t-1", baseBranch: "main", open: true });
   });
 });

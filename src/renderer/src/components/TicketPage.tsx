@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Turn } from "../../../shared/turn";
 import { MANUAL_TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
+import { pickableInPreview } from "../close-ticket-outcome";
 import { reportError } from "../errors";
 import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
@@ -83,6 +84,25 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
 
   const statusValue = ticket.statusManual ?? "auto";
   const closed = ticket.statusManual === "closed";
+  // 关着的 ticket 还有开着的、能关的（或核对失败、可以再试的）自己的 PR：给一个「关掉剩下的 PR」入口（BTL-270 审查），打开同一个勾选框。
+  // 对话框关上以后再看一次（restSeq）。
+  const [restLeft, setRestLeft] = useState(0);
+  const [restSeq, setRestSeq] = useState(0);
+  const [closingRest, setClosingRest] = useState(false);
+  useEffect(() => {
+    if (!closed) {
+      setRestLeft(0);
+      return;
+    }
+    let live = true;
+    api.closePreview(ticket.key).then(
+      (p) => live && setRestLeft(pickableInPreview(p)),
+      () => live && setRestLeft(0),
+    );
+    return () => {
+      live = false;
+    };
+  }, [ticket.key, closed, restSeq]);
   const reopen = () => api.reopenTicket(ticket.key).then((r) => setNotice(S.tc.reopened(r.restoredFollowups)), reportError);
 
   return (
@@ -102,6 +122,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         {closed
           ? <button className="ticket-reopen" onClick={() => void reopen()}>{S.tc.reopen}</button>
           : <button className="ticket-close" onClick={() => { setNotice(null); setClosing(true); }}>{S.tc.close}</button>}
+        {closed && restLeft > 0 && <button className="ticket-close-rest" onClick={() => { setNotice(null); setClosingRest(true); }}>{S.tc.closeRest}</button>}
         <button onClick={() => setEditingTitle(true)}>{S.editTitle}</button>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
@@ -117,7 +138,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       )}
       {notice && <div className="muted ticket-notice">{notice}</div>}
       {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
-      {closing && <CloseTicketDialog ticket={ticket} onClose={() => setClosing(false)} onNotice={setNotice} />}
+      {closing && <CloseTicketDialog ticket={ticket} onClose={() => { setClosing(false); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
+      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={() => { setClosingRest(false); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
 
       <PageTabs
         page={`ticket:${ticket.key}`}

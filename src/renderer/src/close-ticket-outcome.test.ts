@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeOutcome, closePrsRequest, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
+import { closeOutcome, closePrsRequest, pickableInPreview, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
 
 const base: CloseLeftoversResult = { closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
 
@@ -33,7 +33,7 @@ describe("closeOutcome (BTL-270 close dialog)", () => {
     const prErrors = [
       { url: "u1", error: "e", kind: "failed" as const },
       { url: "u2", error: "e", kind: "skipped" as const },
-      ...(["never_read", "given_up", "foreign", "not_own_branch", "shared"] as const).map((kind, i) => ({ url: `x${i}`, error: "e", kind })),
+      ...(["never_read", "given_up", "foreign", "not_own_branch", "shared", "shared_branch"] as const).map((kind, i) => ({ url: `x${i}`, error: "e", kind })),
     ];
     expect(retryRequest({ prErrors, sessionErrors: [] })).toEqual({ prUrls: ["u1", "u2"], sessionIds: [] });
     // 都是关不了的：没东西可重试。
@@ -67,6 +67,11 @@ describe("PRs whose head check failed (unverified)", () => {
   const preview = { closable: [], unclosable: [unverified, { url: "https://github.com/o/r/pull/9", error: "e", kind: "not_own_branch" as const }] };
   it("can be ticked in the preview and are sent to be checked again; PRs that can't be closed can't", () => {
     expect(retryableInPreview(preview)).toEqual([unverified]);
+    // 关掉的 ticket 上「关掉剩下的 PR」按钮按这个数显示：能勾的 + 能再核对的，关不了的不算。
+    expect(pickableInPreview(preview)).toBe(1);
+    expect(pickableInPreview({ closable: [{ url: "u", number: 1 }], unclosable: [] })).toBe(1);
+    expect(pickableInPreview({ closable: [], unclosable: [preview.unclosable[1]] })).toBe(0);
+    expect(pickableInPreview(null)).toBe(0);
     expect(closePrsRequest(preview, new Set([unverified.url, "https://github.com/o/r/pull/9"]))).toEqual({ closePrs: true, prUrls: [unverified.url] });
   });
   it("are not done after closing, and the retry sends them again", () => {

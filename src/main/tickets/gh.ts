@@ -468,9 +468,19 @@ export interface PrHead {
 
 const PR_HEAD_FIELDS = "isCrossRepository,headRepositoryOwner,headRefName,baseRefName,state";
 
-/** gh pr view <ref> --json PR_HEAD_FIELDS 的输出 → PrHead；不对就是 null。 */
-export function parsePrHead(text: string | null): PrHead | null {
+/** 核对 head 失败：error 是给人看的原因；ghTooOld 是 gh 太老、不认识要读的字段（headRepositoryOwner、baseRefName），要升级 gh。 */
+export interface PrHeadError {
+  error: string;
+  ghTooOld?: true;
+}
+
+/** gh 不认识 --json 的某个字段（版本太老）时的报错。 */
+const UNKNOWN_JSON_FIELD = /unknown json field/i;
+
+/** gh pr view <ref> --json PR_HEAD_FIELDS 的输出 → PrHead；输出里缺老版 gh 不给的字段是 "too_old"；别的不对是 null。 */
+export function parsePrHead(text: string | null): PrHead | "too_old" | null {
   const j = obj(parseJson(text));
+  if (j && (!("headRepositoryOwner" in j) || !("baseRefName" in j))) return "too_old";
   if (!j || typeof j.isCrossRepository !== "boolean" || typeof j.headRefName !== "string" || typeof j.baseRefName !== "string" || typeof j.state !== "string") return null;
   const owner = obj(j.headRepositoryOwner)?.login;
   return { crossRepo: j.isCrossRepository, headOwner: typeof owner === "string" && owner ? owner : null, headBranch: j.headRefName, baseBranch: j.baseRefName, open: j.state === "OPEN" };
@@ -478,12 +488,17 @@ export function parsePrHead(text: string | null): PrHead | null {
 
 /**
  * 关 ticket 时实时核对一个 PR 的 head（BTL-270 审查）：head 在哪个 owner 下、分支名、目标分支、还开不开着。
- * gh 失败、超时、输出不对时是 { error }（给人看的原因），调用方当作「核对失败、可以重试」。
+ * gh 失败、超时、输出不对时是 { error }（给人看的原因），调用方当作「核对失败、可以重试」；gh 太老、不认识要读的字段时带 ghTooOld。
  */
-export async function prHead(cwd: string, ref: string, timeoutMs: number): Promise<PrHead | { error: string }> {
+export async function prHead(cwd: string, ref: string, timeoutMs: number): Promise<PrHead | PrHeadError> {
   const r = await runGhDetail(cwd, ["pr", "view", ref, "--json", PR_HEAD_FIELDS], timeoutMs, 1024 * 1024);
-  if (r.stdout === null) return { error: ghErrorSummary(r, timeoutMs) };
-  return parsePrHead(r.stdout) ?? { error: "gh pr view returned unexpected output" };
+  if (r.stdout === null) {
+    const error = ghErrorSummary(r, timeoutMs);
+    return UNKNOWN_JSON_FIELD.test(r.stderr) ? { error, ghTooOld: true } : { error };
+  }
+  const h = parsePrHead(r.stdout);
+  if (h === "too_old") return { error: "gh pr view did not return headRepositoryOwner / baseRefName", ghTooOld: true };
+  return h ?? { error: "gh pr view returned unexpected output" };
 }
 
 /**

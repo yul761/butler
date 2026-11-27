@@ -113,6 +113,28 @@ describe("TicketControl (BTL-270)", () => {
     expect(tickets.get("A-1")?.closure).toEqual({ at: 5, reason: "需求变了", source: "coordinator" });
   });
 
+  it("close_ticket with close_prs on a closed ticket lists the PRs left to name, then closes the named ones and says alreadyClosed (BTL-270 review)", async () => {
+    const pr1 = { url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" };
+    let left = [pr1];
+    const closed: string[] = [];
+    const { run, tickets } = setup({
+      openPrs: () => ({ closable: left, unclosable: [] }),
+      closePr: async (p) => (closed.push(p.url), (left = []), "closed"),
+    });
+    await run({ op: "close_ticket", ticket: "A-1", reason: "需求变了" });
+    expect(await run({ op: "close_ticket", ticket: "A-1", reason: "x", close_prs: true })).toMatchObject({
+      ok: true, value: { closed: true, closablePrs: [{ url: pr1.url, number: 1 }], note: M().ctlClosePickPrs(1, 0, true) },
+    });
+    expect(closed).toEqual([]);
+    expect(await run({ op: "close_ticket", ticket: "A-1", reason: "x", close_prs: true, pr_urls: [pr1.url] })).toMatchObject({
+      ok: true, value: { status: "closed", alreadyClosed: true, closedPrs: [pr1.url], prErrors: [] },
+    });
+    expect(closed).toEqual([pr1.url]);
+    expect(tickets.get("A-1")?.closure).toMatchObject({ reason: "需求变了" });
+    // 没剩下的了：already_closed。
+    expect(await run({ op: "close_ticket", ticket: "A-1", reason: "x", close_prs: true })).toEqual({ v: 1, ok: false, error: M().ctlTicketAlreadyClosed("A-1") });
+  });
+
   it("close_ticket lists what was closed and what was not among the named PRs, with a hint per reason; it never says to gh pr close a PR shared with a ticket or not checked", async () => {
     const { run } = setup({
       openPrs: () => ({
@@ -164,7 +186,7 @@ describe("TicketControl (BTL-270)", () => {
         ticket: "A-1", closed: false, status: "merged_pending_followup",
         closablePrs: [{ url: "https://github.com/o/r/pull/1", number: 1 }],
         prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "not_own_branch" }],
-        note: M().ctlClosePickPrs(1, 1),
+        note: M().ctlClosePickPrs(1, 1, false),
       },
     });
     expect(closed).toEqual([]);

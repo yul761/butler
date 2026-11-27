@@ -29,9 +29,10 @@ export interface TicketClosure {
 }
 /**
  * 关 ticket 时关不了的 PR 为什么关不了（BTL-270）：never_read 还没读过；given_up 放弃读了（一直读不到、或认定不存在）；
- * foreign 不在 ticket 的仓库里；not_own_branch head 分支不是这个 ticket 自己的分支；shared 也挂在别的 ticket 上（关了的也算）。
+ * foreign 不在 ticket 的仓库里；not_own_branch head 分支不是这个 ticket 自己的分支；shared 也挂在别的 ticket 上（关了的也算）；
+ * shared_branch 同一个仓库里别的 ticket 也用过这个分支名（不知道 PR 是谁的）。
  */
-export const UNCLOSABLE_PR_KINDS = ["never_read", "given_up", "foreign", "not_own_branch", "shared"] as const;
+export const UNCLOSABLE_PR_KINDS = ["never_read", "given_up", "foreign", "not_own_branch", "shared", "shared_branch"] as const;
 export type UnclosablePrKind = (typeof UNCLOSABLE_PR_KINDS)[number];
 /**
  * 关 ticket 时没关掉的 PR：failed 是 gh 关失败，skipped 是对外动作开关关着，unverified 是关之前用 gh 实时核对 head 失败了

@@ -5,16 +5,16 @@ import { TicketsRepo } from "../db/tickets-repo";
 import { RETRYABLE_CLOSE_PR_ERRORS } from "../../shared/types";
 import { M } from "../strings";
 import { insertTicket, memDb } from "../test-utils";
-import type { PrHead } from "./gh";
+import type { PrHead, PrHeadError } from "./gh";
 import { closeWiring, type CloseWiringDeps } from "./ticket-close-wiring";
 
 // BTL-270 审查（建议 3、两条决定）：index.ts 里关 PR、结束 session 的接线拿出来单独测。
 const url = (n: number) => `https://github.com/o/app/pull/${n}`;
 
-type Head = PrHead | { error: string };
+type Head = PrHead | PrHeadError;
 const head = (over: Partial<PrHead> = {}): PrHead => ({ crossRepo: false, headOwner: "o", headBranch: "t-1", baseBranch: "main", open: true, ...over });
 
-function setup(o: { defaultBranch?: string; ticketBranch?: string; heads?: Record<number, Head | (() => Promise<Head>)>; ran?: boolean; kind?: string | null; waiting?: boolean; screen?: boolean } = {}) {
+function setup(o: { defaultBranch?: string | ((repoPath: string) => Promise<string>); slugs?: Record<string, string | null>; ticketBranch?: string; heads?: Record<number, Head | (() => Promise<Head>)>; ran?: boolean; kind?: string | null; waiting?: boolean; screen?: boolean } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const ticketPrs = new TicketPrsRepo(db);
@@ -34,7 +34,9 @@ function setup(o: { defaultBranch?: string; ticketBranch?: string; heads?: Recor
   const d: CloseWiringDeps = {
     tickets, ticketPrs, branchOwners,
     ghDir: () => "/r/app",
-    defaultBranch: async () => o.defaultBranch ?? "main",
+    // 默认 /r/app 的 origin 是 o/app，别的路径读不到 slug（按路径比）。
+    slugOf: vi.fn((p: string) => (o.slugs && p in o.slugs ? o.slugs[p] : p === "/r/app" ? "o/app" : null)),
+    defaultBranch: vi.fn(typeof o.defaultBranch === "function" ? o.defaultBranch : async () => (o.defaultBranch as string | undefined) ?? "main"),
     prHead: vi.fn(async (_cwd: string, u: string) => {
       const n = Number(u.split("/").pop());
       const h = o.heads?.[n];
@@ -136,14 +138,15 @@ describe("closeWiring.openPrs", () => {
     }
   });
 
-  it("a same-named branch on a fork (another owner, or cross-repo) or a deleted head repo is not the ticket's own; one no longer open is left out", async () => {
+  it("a same-named branch under another owner (a fork) or a deleted head repo is not the ticket's own; one no longer open is left out", async () => {
     const s = setup({ heads: {
       1: head({ crossRepo: true, headOwner: "fork" }), 2: head({ headOwner: "fork" }), 3: head({ headOwner: null }), 4: head({ open: false }), 5: head({ headOwner: "O" }),
+      6: head({ crossRepo: true, headOwner: "o" }),
     } });
-    for (const n of [1, 2, 3, 4, 5]) s.link(n, "t-1");
+    for (const n of [1, 2, 3, 4, 5, 6]) s.link(n, "t-1");
     const r = await s.w.openPrs("T-1");
-    // owner 不分大小写：O 和 slug 的 o 是同一个。
-    expect(r.closable.map((p) => p.number)).toEqual([5]);
+    // owner 不分大小写：O 和 slug 的 o 是同一个。cross-repo 但 head 在 ticket 仓库的 owner 下的也算（按 owner 比，BTL-270 审查）。
+    expect(r.closable.map((p) => p.number).sort()).toEqual([5, 6]);
     expect(r.unclosable).toEqual(expect.arrayContaining([1, 2, 3].map((n) => ({ url: url(n), number: n, kind: "not_own_branch" }))));
     expect(r.unclosable).toHaveLength(3);
   });
@@ -182,7 +185,7 @@ describe("closeWiring.openPrs", () => {
     expect(RETRYABLE_CLOSE_PR_ERRORS).toContain("unverified");
   });
 
-  it("a branch name another ticket in the same repo also used (a ticket repo branch or a pushed branch) is public; the same name in another repo is not", async () => {
+  it("a branch name another ticket in the same repo also used (a ticket repo branch or a pushed branch) is shared_branch, naming it; the same name in another repo is not", async () => {
     const s = setup({ ticketBranch: "develop" });
     s.link(1, "develop");
     s.link(2, "feat/wt");
@@ -192,13 +195,117 @@ describe("closeWiring.openPrs", () => {
     s.branchOwners.record({ ticketKey: "T-2", repoId: t2, branch: "feat/wt", sessionId: "s2", dir: "/wt2", at: 1 });
     const r = await s.w.openPrs("T-1");
     expect(r.closable).toEqual([]);
-    expect(r.unclosable).toEqual(expect.arrayContaining([1, 2].map((n) => ({ url: url(n), number: n, kind: "not_own_branch" }))));
+    expect(r.unclosable).toEqual(expect.arrayContaining([
+      { url: url(1), number: 1, kind: "shared_branch", ticket: "T-4" },
+      { url: url(2), number: 2, kind: "shared_branch", ticket: "T-2" },
+    ]));
+    expect(r.unclosable).toHaveLength(2);
+    expect(M().ticketClosePrWhy("shared_branch", "T-4")).toContain("T-4");
     // 别的仓库的同名分支不算。
     const other = setup({ ticketBranch: "develop" });
     other.link(1, "develop");
     insertTicket(other.tickets, { key: "T-3", title: null, repoPath: "/r/other", workMode: "branch", worktreePath: null, branch: "develop", status: "in_review", statusManual: null, createdAt: 1, archivedAt: null });
     other.branchOwners.record({ ticketKey: "T-3", repoId: other.tickets.listRepos("T-3")[0].id, branch: "develop", sessionId: "s3", dir: "/wt3", at: 1 });
     expect((await other.w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
+  });
+
+  it("compares repos by slug: another clone of the same repo is the same repo, a different slug is not; with no slug on either side it falls back to the path", async () => {
+    const make = (slugs: Record<string, string | null>) => {
+      const s = setup({ ticketBranch: "develop", slugs });
+      s.link(1, "develop");
+      insertTicket(s.tickets, { key: "T-5", title: null, repoPath: "/clone/app", workMode: "branch", worktreePath: null, branch: "develop", status: "in_review", statusManual: null, createdAt: 1, archivedAt: null });
+      return s;
+    };
+    const same = await make({ "/r/app": "o/app", "/clone/app": "o/app" }).w.openPrs("T-1");
+    expect(same.unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-5" }]);
+    expect((await make({ "/r/app": "o/app", "/clone/app": "o/other" }).w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
+    // 一边读不到 slug：按路径比，路径不同就不算。
+    expect((await make({ "/r/app": "o/app", "/clone/app": null }).w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
+    // 同一个路径两边都读不到 slug：按路径比，算同一个仓库。
+    const s = setup({ ticketBranch: "develop", slugs: { "/r/app": null } });
+    s.link(1, "develop");
+    insertTicket(s.tickets, { key: "T-6", title: null, repoPath: "/r/app", workMode: "branch", worktreePath: null, branch: "develop", status: "in_review", statusManual: null, createdAt: 1, archivedAt: null });
+    expect((await s.w.openPrs("T-1")).unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-6" }]);
+  });
+
+  it("fork flow (origin me/app, PR opened to org/app): a head under the origin's owner is the ticket's own even cross-repo; another owner or a deleted head repo is not", async () => {
+    const s = setup({ slugs: { "/r/app": "me/app" }, heads: {
+      1: head({ crossRepo: true, headOwner: "me" }), 2: head({ crossRepo: false, headOwner: "org" }), 3: head({ crossRepo: true, headOwner: "bob" }), 4: head({ crossRepo: true, headOwner: null }),
+    } });
+    for (const n of [1, 2, 3, 4]) s.ticketPrs.link({ ticketKey: "T-1", url: `https://github.com/org/app/pull/${n}`, slug: "org/app", repoId: s.repoId, number: n, headBranch: "t-1", state: "open", source: "branch", linkedAt: 1 });
+    for (const p of s.ticketPrs.byTicket("T-1")) s.ticketPrs.update(p.id, { checkedAt: 1, baseBranch: "main" });
+    vi.mocked(s.d.prHead).mockImplementation(async (_cwd, u) => ({
+      1: head({ crossRepo: true, headOwner: "me" }), 2: head({ headOwner: "org" }), 3: head({ crossRepo: true, headOwner: "bob" }), 4: head({ crossRepo: true, headOwner: null }),
+    })[Number(u.split("/").pop()) as 1 | 2 | 3 | 4]);
+    const r = await s.w.openPrs("T-1");
+    expect(r.closable.map((p) => p.number)).toEqual([1]);
+    expect(r.unclosable.map((u) => [u.number, u.kind]).sort()).toEqual([[2, "not_own_branch"], [3, "not_own_branch"], [4, "not_own_branch"]]);
+  });
+
+  it("with no slug for the ticket's repo it compares with the PR's repo owner; with no slug at all it does not close (BTL-270 review)", async () => {
+    const s = setup({ slugs: { "/r/app": null } });
+    s.link(1, "t-1");
+    expect((await s.w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
+    const none = setup({ slugs: { "/r/app": null } });
+    none.link(1, "t-1");
+    const rows = none.ticketPrs.byTicket("T-1").map((p) => ({ ...p, slug: null as unknown as string }));
+    none.d.ticketPrs = { byTicket: () => rows, byUrl: (u) => none.ticketPrs.byUrl(u) };
+    const r = await none.w.openPrs("T-1");
+    expect(r.closable).toEqual([]);
+    expect(r.unclosable).toEqual([{ url: url(1), number: 1, kind: "not_own_branch" }]);
+  });
+
+  it("a gh too old for the head fields is unverified with an upgrade hint", async () => {
+    const s = setup({ heads: { 1: { error: 'Unknown JSON field: "headRepositoryOwner"', ghTooOld: true } } });
+    s.link(1, "t-1");
+    const r = await s.w.openPrs("T-1");
+    expect(r.unclosable).toEqual([{ url: url(1), number: 1, kind: "unverified", error: M().ticketCloseGhTooOld('Unknown JSON field: "headRepositoryOwner"') }]);
+    expect(M().ticketCloseGhTooOld("x")).toMatch(/gh/);
+  });
+
+  it("one ticket in two repos with the same branch name: each repo's PR is the ticket's own, neither makes the other shared_branch; another ticket's same name only blocks its own repo", async () => {
+    const s = setup({ ticketBranch: "develop", slugs: { "/r/app": "o/app", "/r/web": "o/web" } });
+    const web = s.tickets.addRepo({ ticketKey: "T-1", repoPath: "/r/web", workMode: "branch", worktreePath: null, branch: "develop", createdAt: 1 });
+    s.link(1, "develop");
+    const { pr } = s.ticketPrs.link({ ticketKey: "T-1", url: "https://github.com/o/web/pull/2", slug: "o/web", repoId: web, number: 2, headBranch: "develop", state: "open", source: "branch", linkedAt: 1 });
+    s.ticketPrs.update(pr.id, { checkedAt: 1, baseBranch: "main" });
+    vi.mocked(s.d.prHead).mockImplementation(async () => head({ headBranch: "develop" }));
+    expect((await s.w.openPrs("T-1")).closable.map((p) => p.number).sort()).toEqual([1, 2]);
+    // 另一个 ticket 在 web 仓库也用过 develop：只拦 web 的 PR，app 的不受影响。
+    insertTicket(s.tickets, { key: "T-7", title: null, repoPath: "/r/web", workMode: "branch", worktreePath: null, branch: "develop", status: "in_review", statusManual: null, createdAt: 1, archivedAt: null });
+    const r = await s.w.openPrs("T-1");
+    expect(r.closable.map((p) => p.number)).toEqual([1]);
+    expect(r.unclosable).toEqual([{ url: "https://github.com/o/web/pull/2", number: 2, kind: "shared_branch", ticket: "T-7" }]);
+  });
+
+  it("with onlyPrs it reads and checks only the named PRs (BTL-270 review)", async () => {
+    const s = setup();
+    for (const n of [1, 2, 3]) s.link(n, "t-1");
+    const r = await s.w.openPrs("T-1", new Set([url(2)]));
+    expect(r.closable.map((p) => p.number)).toEqual([2]);
+    expect(r.unclosable).toEqual([]);
+    expect(vi.mocked(s.d.prHead).mock.calls.map((c) => c[1])).toEqual([url(2)]);
+  });
+
+  it("reads the default branches of several repos at once", async () => {
+    let inFlight = 0;
+    let most = 0;
+    const s = setup({
+      defaultBranch: async () => {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight--;
+        return "main";
+      },
+    });
+    s.link(1, "t-1");
+    const t2 = s.tickets.listRepos("T-2")[0].id;
+    const { pr } = s.ticketPrs.link({ ticketKey: "T-1", url: url(2), slug: "o/app", repoId: t2, number: 2, headBranch: "t-2", state: "open", source: "branch", linkedAt: 1 });
+    s.ticketPrs.update(pr.id, { checkedAt: 1, baseBranch: "main" });
+    await s.w.openPrs("T-1");
+    expect(s.d.defaultBranch).toHaveBeenCalledTimes(2);
+    expect(most).toBe(2);
   });
 
   it("a PR also linked to another ticket is not closed for it, even when that ticket is closed (reopening it would want the PR back)", async () => {

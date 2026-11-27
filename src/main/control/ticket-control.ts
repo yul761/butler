@@ -95,11 +95,11 @@ export class TicketControl {
       // 要关 PR 却没点名（BTL-270 审查）：什么都没做，回能关的清单，让它带 pr_urls 再来。
       if (!r.ok && r.error === "pick_prs") {
         return ok({
-          ticket: r.ticket, status: this.status(r.ticket), closed: false, closablePrs: r.closable, prErrors: r.prErrors,
-          note: M().ctlClosePickPrs(r.closable.length, r.prErrors.length),
+          ticket: r.ticket, status: this.status(r.ticket), closed: r.alreadyClosed, closablePrs: r.closable, prErrors: r.prErrors,
+          note: M().ctlClosePickPrs(r.closable.length, r.prErrors.length, r.alreadyClosed),
         });
       }
-      // 原因由 parseControlRequest 保证不空：失败是已经关着（第一次的原因留着），或者 ticket 刚被删掉。
+      // 原因由 parseControlRequest 保证不空：失败是已经关着、又没有剩下能关的 PR（第一次的原因留着），或者 ticket 刚被删掉。
       if (!r.ok) return fail(r.error === "already_closed" ? M().ctlTicketAlreadyClosed(t.key) : M().ctlNoTicket(req.ticket));
       // 点名了、却不是这个 ticket 开着的 PR（关掉了的、别的 ticket 的、写错了的）：没碰，单独列出来。
       const seen = new Set([...r.closedPrs, ...r.prErrors.map((e) => e.url)].map(prUrlKey));
@@ -111,7 +111,7 @@ export class TicketControl {
         r.sessionErrors.length > 0 && M().ctlCloseSessionErrors(r.sessionErrors.length),
       ].filter((x): x is string => typeof x === "string");
       return ok({
-        ticket: r.ticket, status: r.reopenedMeanwhile ? this.status(r.ticket) : "closed", ignoredFollowups: r.ignoredFollowups,
+        ticket: r.ticket, status: r.reopenedMeanwhile ? this.status(r.ticket) : "closed", ignoredFollowups: r.ignoredFollowups, ...(r.alreadyClosed && { alreadyClosed: true }),
         closedPrs: r.closedPrs, prErrors: r.prErrors, endedSessions: r.endedSessions, sessionErrors: r.sessionErrors,
         ...(notOpen.length > 0 && { notOpenPrs: notOpen }),
         ...(notes.length > 0 && { note: notes.join(" ") }),
