@@ -151,7 +151,7 @@ export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer])
 export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   // 只读
   IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsArchived, IPC.featuresList, IPC.featuresArchived, IPC.shipherdView,
-  IPC.messagesList, IPC.metricsView, IPC.sessionsUnclaimed, IPC.usageSummary, IPC.ptySnapshot, IPC.ptySince, IPC.healthGet, IPC.dialogPickDir, IPC.diagSnapshot, IPC.diagExport,
+  IPC.messagesList, IPC.metricsView, IPC.sessionsUnclaimed, IPC.sessionsUnclaimedCount, IPC.usageSummary, IPC.ptySnapshot, IPC.ptySince, IPC.healthGet, IPC.dialogPickDir, IPC.diagSnapshot, IPC.diagExport,
   // 发送反馈（BTL-254）：开浏览器、存诊断，不推动工作
   IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,
   // 终端里点链接（BTL-257）：开浏览器，不推动工作

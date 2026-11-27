@@ -11,7 +11,7 @@ import type { AttemptResult, ExternalDetail } from "../external/actions";
 import { withRepoLock } from "../tickets/repo-lock";
 import { applyTips, deferText, deleteBackups, type ApplyLayer } from "./apply";
 import {
-  behind, fetchRemote, gitVersion, hasFixups, isAncestor, pushBranch, remoteFor, remoteTip, revParse, runGit, subjects, supportsUpdateRefs, worktreeBranches,
+  behind, fetchRemote, gitVersion, hasFixups, isAncestor, pushBranch, refTips, remoteFor, remoteTip, revParse, runGit, subjects, supportsUpdateRefs, worktreeBranches,
 } from "./git-stack";
 import * as gh from "./gh-stack";
 import { bottomBody, dependsLine, draftBody, draftTitle, overviewBody, stripPrefix, T, withDependsLine, withoutDependsLine, type GraphLayer } from "./pr-text";
@@ -137,6 +137,9 @@ function conflictInputs(key: string): string {
   return `${p[0]}:${p[3] ?? ""}`;
 }
 
+/** ref（完整名字）现在指向的提交，没有为 null。 */
+type TipOf = (ref: string) => Promise<string | null>;
+
 export class StackService {
   private readonly running = new Set<number>();
   /** 等某个栈跑完的（onMerged 碰上 tick 正在跑时）。 */
@@ -152,6 +155,12 @@ export class StackService {
   private ticking = false;
   /** 每个栈上次试 autosquash 时各层的顶端。 */
   private readonly autosquashTried = new Map<number, string>();
+  /** behindCache 是按哪一对（栈底顶端、trunk）算的（BTL-275）：两头都没动就不再起 git。 */
+  private readonly behindOf = new Map<number, string>();
+  /** 一段提交（仓库、base..tip）里有没有 fixup 提交：提交不会变，答案也不会变（BTL-275：原来每分钟每层一个 git log）。 */
+  private readonly fixupsOf = new Map<string, boolean>();
+  /** 上一次 tick 末尾界面能看到的栈状态（BTL-275）：没变就不发 onChange（原来每分钟一次 data notify，整个界面重取）。 */
+  private lastSeen: string | null = null;
 
   constructor(private readonly d: StackServiceDeps) {}
 
@@ -814,9 +823,11 @@ export class StackService {
         for (const s0 of list) {
           const s = this.d.repo.get(s0.id)!;
           const p = this.policyOf(s);
-          await this.updateBehind(s).catch((e) => this.d.log(`stacks: behind for stack ${s.id}`, e));
+          // 各层和 trunk 的顶端一次读（BTL-275），updateBehind、dueTrigger 共用；它们之间不动 ref。
+          const tipOf = await this.tipsOf(s).catch((e) => (this.d.log(`stacks: tips for stack ${s.id}`, e), undefined));
+          await this.updateBehind(s, tipOf).catch((e) => this.d.log(`stacks: behind for stack ${s.id}`, e));
           if (!p.autoRebase) continue;
-          const trigger = await this.dueTrigger(s, p, fetched);
+          const trigger = await this.dueTrigger(s, p, fetched, tipOf);
           if (trigger) {
             if (trigger === "daily") this.d.repo.updateStack(s.id, { lastDailyAt: now });
             await this.run(s, trigger);
@@ -826,7 +837,12 @@ export class StackService {
           await this.retryPending(this.d.repo.get(s.id)!, p);
         }
       }
-      this.changed();
+      // 界面看得到的栈状态（栈、层、最近的 run、落后多少、提醒）真变了才发；run 等自己改了东西的地方照旧当场发。
+      const seen = this.visibleState();
+      if (seen !== this.lastSeen) {
+        this.lastSeen = seen;
+        this.changed();
+      }
     } finally {
       this.ticking = false;
     }
@@ -850,15 +866,16 @@ export class StackService {
     }
   }
 
-  private async dueTrigger(s: StackRow, p: StackPolicy, fetched: boolean): Promise<StackTrigger | null> {
+  /** 一个 ref 现在指向的提交。tick 里传一次读好的（tipsOf），别处默认现查。 */
+  private async dueTrigger(s: StackRow, p: StackPolicy, fetched: boolean, tipOf: TipOf = (ref) => revParse(s.repoPath, ref)): Promise<StackTrigger | null> {
     const open = this.d.repo.layers(s.id).filter((l) => l.state !== "merged");
     if (open.length === 0) return null;
     for (const l of open) {
-      const tip = await revParse(s.repoPath, `refs/heads/${l.branch}`);
+      const tip = await tipOf(`refs/heads/${l.branch}`);
       if (tip && tip !== l.tipSha) return "layer_commits";
     }
     if (p.rebaseOnMainUpdate && (fetched || s.trunkSha === null)) {
-      const trunk = await remoteTip(s.repoPath, s.remote, s.trunk);
+      const trunk = await tipOf(`refs/remotes/${s.remote}/${s.trunk}`);
       if (trunk && trunk !== s.trunkSha) return "main_updated";
     }
     // 栈底合并的那次 run 推迟过或失败过：重新跑（回滚的不自动重来，等人看）
@@ -877,7 +894,7 @@ export class StackService {
     for (const l of open) {
       if (!l.tipSha || !l.baseSha) continue;
       if (l.prUrl && this.d.awaitingCheck?.(l.prUrl)) return;
-      if (await hasFixups(s.repoPath, l.baseSha, l.tipSha).catch(() => false)) any = true;
+      if (await this.hasFixupsCached(s.repoPath, l.baseSha, l.tipSha)) any = true;
     }
     if (!any) return;
     // 同样的顶端试过一次（比如 fixup 的目标不在这一段里，结果是 noop）就不再每分钟重试
@@ -956,15 +973,53 @@ export class StackService {
     if (r.code === 0) this.d.log(`stacks: enabled rerere in ${repoPath}`);
   }
 
-  private async updateBehind(s: StackRow): Promise<void> {
+  private async updateBehind(s: StackRow, tipOf: TipOf = (ref) => revParse(s.repoPath, ref)): Promise<void> {
     const bottom = this.d.repo.layers(s.id).find((l) => l.state !== "merged");
-    const trunk = await remoteTip(s.repoPath, s.remote, s.trunk);
-    const tip = bottom ? await revParse(s.repoPath, `refs/heads/${bottom.branch}`) : null;
+    const trunk = await tipOf(`refs/remotes/${s.remote}/${s.trunk}`);
+    const tip = bottom ? await tipOf(`refs/heads/${bottom.branch}`) : null;
     if (!bottom || !trunk || !tip) {
       this.behindCache.delete(s.id);
+      this.behindOf.delete(s.id);
       return;
     }
+    const key = `${tip}..${trunk}`;
+    if (this.behindOf.get(s.id) === key && this.behindCache.has(s.id)) return;
+    this.behindOf.delete(s.id);
     this.behindCache.set(s.id, await behind(s.repoPath, tip, trunk));
+    this.behindOf.set(s.id, key);
+  }
+
+  /** 栈里没合并的各层和 trunk 的顶端，一个 git 读完（BTL-275）。 */
+  private async tipsOf(s: StackRow): Promise<TipOf> {
+    const refs = [
+      ...this.d.repo.layers(s.id).filter((l) => l.state !== "merged").map((l) => `refs/heads/${l.branch}`),
+      `refs/remotes/${s.remote}/${s.trunk}`,
+    ];
+    const tips = await refTips(s.repoPath, refs);
+    return async (ref) => (refs.includes(ref) ? (tips.get(ref) ?? null) : revParse(s.repoPath, ref));
+  }
+
+  private async hasFixupsCached(repoPath: string, base: string, tip: string): Promise<boolean> {
+    const key = `${repoPath}\0${base}..${tip}`;
+    const hit = this.fixupsOf.get(key);
+    if (hit !== undefined) return hit;
+    let v: boolean;
+    try {
+      v = await hasFixups(repoPath, base, tip);
+    } catch {
+      return false; // 出错不记，下次再试
+    }
+    if (this.fixupsOf.size >= 1000) this.fixupsOf.clear();
+    this.fixupsOf.set(key, v);
+    return v;
+  }
+
+  /** 界面（view、notices）从栈服务读到的全部状态，序列化成一串，用来判断这次 tick 有没有让它变。 */
+  private visibleState(): string {
+    return JSON.stringify([
+      this.d.repo.list().map((s) => [s, this.d.repo.layers(s.id), this.d.repo.lastRun(s.id), this.d.repo.lastRestorable(s.id), this.behindCache.get(s.id) ?? null]),
+      this.notices(),
+    ]);
   }
 
   /** checkSchedule 每次调：今天已经跑过就什么都不做。 */

@@ -224,6 +224,7 @@ import { watcherGuideLines } from "./procs/watcher-policy";
 import { createProcServices, type ProcServices } from "./procs/proc-services";
 import { platformKill } from "./procs/orphans";
 import { readProcTable } from "./procs/proc-table";
+import { procTreeFrom } from "./sessions/proc-tree";
 import { MemorySamplesRepo } from "./db/memory-samples-repo";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
@@ -1400,6 +1401,8 @@ async function bootstrap(): Promise<void> {
   const activityMonitor = new ActivityMonitor({
     sessions, tickets, features, pty,
     transcriptFile: (id) => transcriptLocator.find(id),
+    // 子孙进程的 CPU 从和内存采样共用的进程表里读（BTL-275）：原来每个 session 每次探测各起一个 ps。
+    procTree: procTreeFrom(() => (procs ? procs.table() : readProcTable(process.platform))),
     judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。

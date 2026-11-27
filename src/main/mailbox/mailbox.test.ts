@@ -8,7 +8,7 @@ import { SessionMessagesRepo } from "../db/session-messages-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
-import { AGE_NOTE_MS, Mailbox, MESSAGE_KEEP_MS, REPLY_WAIT_MS, TAKEN_STALE_MS } from "./mailbox";
+import { AGE_NOTE_MS, Mailbox, MESSAGE_KEEP_MS, PRUNE_EVERY_MS, REPLY_WAIT_MS, TAKEN_STALE_MS } from "./mailbox";
 
 const flushPromises = () => new Promise((r) => setTimeout(r, 0));
 
@@ -493,6 +493,26 @@ describe("Mailbox", () => {
     await flushPromises();
     await w.mb.flush("t1");
     expect(w.deliveredMsgs).toEqual([{ id: a.id, via: "input" }, { id: b.id, via: "input" }]);
+  });
+});
+
+describe("pruning old messages (BTL-275)", () => {
+  it("deletes at most once every PRUNE_EVERY_MS instead of on every 10 s tick, and still deletes what is old", async () => {
+    const w = world();
+    w.add("t1", false);
+    const prune = vi.spyOn(w.repo, "prune");
+    await w.mb.tick();
+    expect(prune).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 5; i++) {
+      w.tick(10_000);
+      await w.mb.tick();
+    }
+    expect(prune).toHaveBeenCalledTimes(1);
+    w.mb.send(msg("t1", "old"));
+    w.tick(MESSAGE_KEEP_MS + PRUNE_EVERY_MS);
+    await w.mb.tick();
+    expect(prune).toHaveBeenCalledTimes(2);
+    expect(w.repo.recent({ sessions: ["t1"] }, 10)).toEqual([]);
   });
 });
 

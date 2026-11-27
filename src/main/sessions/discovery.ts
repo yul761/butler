@@ -297,7 +297,7 @@ export class TranscriptLocator {
 
   /** cwd 推出的那个目录里的记录文件，在就返回。 */
   private hinted(sessionId: string): string | null {
-    let cwd: string | null = null;
+    let cwd: string | null;
     try {
       cwd = this.o.cwdOf?.(sessionId) ?? null;
     } catch {

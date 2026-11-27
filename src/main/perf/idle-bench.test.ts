@@ -8,9 +8,9 @@ import { openDatabase } from "../db/database";
 import { SessionsRepo } from "../db/sessions-repo";
 import { UsageRepo } from "../db/usage-repo";
 import { RepoIdentity } from "../lessons/repo-identity";
-import { readProcTable } from "../procs/proc-table";
+import { readProcTable, sharedProcTable } from "../procs/proc-table";
 import { TranscriptLocator } from "../sessions/discovery";
-import { sampleProcTree } from "../sessions/proc-tree";
+import { procTreeFrom, sampleProcTree } from "../sessions/proc-tree";
 import { makeRepo, tempDir } from "../test-utils";
 import { UsageScanner } from "../usage/usage-scanner";
 
@@ -114,5 +114,13 @@ describe.skipIf(!bench)("idle bench (BTL-275)", () => {
     for (let i = 0; i < n; i++) await readProcTable();
     const table = (performance.now() - t0) / n;
     out(`ps: activity probe ${probe.toFixed(1)} ms, memory monitor table ${table.toFixed(1)} ms per read`);
+    // 一分钟里：内存采样一次 + 5 个在跑后台命令的 session 各探测一次。原来 6 个 ps，共用表以后 1 个。
+    let reads = 0;
+    const shared = sharedProcTable(() => (reads++, readProcTable()), { ttlMs: 5000, now: Date.now });
+    const sampler = procTreeFrom(shared);
+    t0 = performance.now();
+    await shared();
+    for (let i = 0; i < 5; i++) await sampler(process.pid, ["x"]);
+    out(`ps: one memory sample + 5 activity probes with the shared table: ${reads} ps run(s), ${(performance.now() - t0).toFixed(1)} ms (separately: 1 table + 5 probes = ${(table + 5 * probe).toFixed(1)} ms)`);
   });
 });
