@@ -8,12 +8,14 @@ const env = { SHIPHERD_SESSION: "s1" };
 
 function fs(files: Record<string, string> = {}, platform: NodeJS.Platform = "linux") {
   const f = new Map(Object.entries(files));
+  // hook 用 path.join 拼文件名：在 Windows 上跑测试时是反斜杠，键统一成正斜杠再存取。
+  const k = (p: string) => p.replace(/\\/g, "/");
   const d: DripDeps = {
-    read: (p) => f.get(p) ?? null,
-    append: (p, t) => f.set(p, (f.get(p) ?? "") + t),
-    remove: (p) => void f.delete(p),
-    exists: (p) => f.has(p),
-    lock: (p) => (f.has(p) ? false : (f.set(p, ""), true)),
+    read: (p) => f.get(k(p)) ?? null,
+    append: (p, t) => f.set(k(p), (f.get(k(p)) ?? "") + t),
+    remove: (p) => void f.delete(k(p)),
+    exists: (p) => f.has(k(p)),
+    lock: (p) => (f.has(k(p)) ? false : (f.set(k(p), ""), true)),
     sleep: () => {},
     platform,
   };
