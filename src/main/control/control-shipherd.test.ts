@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionMessagesRepo } from "../db/session-messages-repo";
 import { Mailbox, type AwaitingUser } from "../mailbox/mailbox";
-import { M } from "../strings";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import { MemoryAdmission } from "../sessions/memory-admission";
 import type { ControlHandlerDeps } from "./control-handler";
