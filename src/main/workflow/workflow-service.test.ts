@@ -9,7 +9,7 @@ import { WorkflowRepo } from "../db/workflow-repo";
 import { setLang } from "../i18n";
 import { memDb } from "../test-utils";
 import type { BotReviewResult } from "./bot-review";
-import { NO_CI_GRACE_MS, WorkflowService } from "./workflow-service";
+import { NO_CI_GRACE_MS, splitBotRounds, WorkflowService } from "./workflow-service";
 
 afterEach(() => setLang("zh"));
 
@@ -270,6 +270,25 @@ describe("WorkflowService: gate", () => {
     expect(await t.svc.prCreate({ ...req, repoPath: "/r/a/" })).toBeNull();
   });
 
+  it("a repo it can't tell apart: every repo of the ticket on that branch must be clean, not the first one", async () => {
+    // 同一 ticket 两个仓库用同名分支，只有 A 的预审 clean；从 B 开 PR、目录又认不出（cd "$WT" && gh pr create --head …）时要拦下
+    const b = "feature/X-1";
+    const t = setup({ tickets: [ticket("X-1", [repoRow(1, "X-1", "/r/a", b), repoRow(2, "X-1", "/r/b", b)])] });
+    t.svc.setLayer({ kind: "global" }, { steps: ["implement", "pre_review", "open_pr", "merge"] });
+    t.heads.set(`/r/a-wt|${b}`, "a1");
+    t.heads.set(`/r/b-wt|${b}`, "b1");
+    t.preReviews.push({ id: 1, target: { repoSlug: "o/a", branch: b, headSha: "a1" }, verdict: "clean" });
+    const unknown = { ticketKey: "X-1", repoPath: null, dir: null, branch: b, draft: false };
+    expect(await t.svc.prCreate(unknown)).toContain("还没通过预审");
+    // 认得出是 A：A 的预审放行 A
+    expect(await t.svc.prCreate({ ...unknown, repoPath: "/r/a", dir: "/r/a-wt" })).toBeNull();
+    // 认得出是 B：A 的预审不能放行 B
+    expect(await t.svc.prCreate({ ...unknown, repoPath: "/r/b", dir: "/r/b-wt" })).toContain("还没通过预审");
+    // 两个都 clean 了，认不出仓库也放行
+    t.preReviews.push({ id: 2, target: { repoSlug: "o/b", branch: b, headSha: "b1" }, verdict: "clean" });
+    expect(await t.svc.prCreate(unknown)).toBeNull();
+  });
+
   it("a user-merged workflow blocks every session, the coordinator included", () => {
     const t = setup();
     t.svc.setLayer({ kind: "global" }, presetWorkflow("strict"));
@@ -373,6 +392,39 @@ describe("WorkflowService: bot review", () => {
     expect(t.svc.view("X-1").current).toBe("merge");
   });
 
+  it("the last round's review landing just before the next request isn't taken as the new round's answer", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, headSha: "s1" }));
+    await t.svc.evaluate("X-1");
+    // 第 1 轮的 review 很晚才到：离第 2 轮请求不到 60 秒
+    t.tick(5 * 60_000);
+    t.events.push(ev({ kind: "review", at: t.now(), data: { id: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 8, reviewId: 7, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    t.svc.markStep("X-1", "address_comments", null);
+    t.prs[0].headSha = "s2";
+    t.tick(20_000);
+    await t.svc.evaluate("X-1");
+    expect(t.bot.calls).toBe(2);
+    // 第 1 轮 review 的行内评论晚到（在第 2 轮请求之后），仍算第 1 轮的
+    t.tick(1000);
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 9, reviewId: 7, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    const [r1, r2] = t.repo.botRequests("X-1");
+    expect(r2.round).toBe(2);
+    expect(r2.reviewedAt).toBeNull();
+    expect(r1.reviewComments).toBe(2);
+    expect(t.svc.view("X-1").current).toBe("re_review");
+    // 第 2 轮真的回来了
+    t.tick(1000);
+    t.events.push(ev({ kind: "review", at: t.now(), data: { id: 10, who: "copilot", body: "no comments" } }));
+    t.events.push(ev({ kind: "comment", at: t.now(), data: { id: 11, reviewId: 10, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.repo.botRequests("X-1")[1].reviewedAt).toBe(t.now());
+    expect(t.repo.botRequests("X-1")[1].reviewComments).toBe(1);
+  });
+
   it("a first round with no comments skips addressing and re-review", async () => {
     const t = setup();
     t.svc.setLayer({ kind: "global" }, botFlow);
@@ -471,5 +523,30 @@ describe("WorkflowService: guide", () => {
     expect(g).toContain("补充说明：别改版本号");
     expect(g.at(-1)).toBe("现在是「写代码」。");
     expect(t.svc.guideLines("NOPE-1")).toEqual([]);
+  });
+});
+
+describe("splitBotRounds (BTL-273)", () => {
+  const bot = (kind: "review" | "comment", at: number, data: Record<string, unknown>) => ev({ kind, at, data: { who: "copilot", ...data } });
+
+  it("a review within the slack before the next request belongs to the round that had no answer yet", () => {
+    const [r1, r2] = splitBotRounds([0, 100_000], [bot("review", 70_000, { id: 1 })]);
+    expect(r1.map((e) => e.data.id)).toEqual([1]);
+    expect(r2).toEqual([]);
+  });
+
+  it("once the earlier round was answered, a review just before the next request (review on push) is the next round's", () => {
+    const [r1, r2] = splitBotRounds([0, 600_000], [bot("review", 10_000, { id: 1 }), bot("review", 590_000, { id: 2 })]);
+    expect(r1.map((e) => e.data.id)).toEqual([1]);
+    expect(r2.map((e) => e.data.id)).toEqual([2]);
+  });
+
+  it("inline comments follow their review across round boundaries; humans are left out", () => {
+    const [r1, r2] = splitBotRounds(
+      [0, 600_000],
+      [bot("review", 10_000, { id: 1 }), bot("comment", 700_000, { id: 5, reviewId: 1 }), bot("comment", 700_000, { id: 6, reviewId: 2 }), ev({ kind: "review", at: 700_000, data: { id: 3, who: "human" } })],
+    );
+    expect(r1.map((e) => e.data.id)).toEqual([1, 5]);
+    expect(r2.map((e) => e.data.id)).toEqual([6]);
   });
 });

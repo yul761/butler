@@ -1,6 +1,6 @@
 import type { AutomationLevel } from "../../shared/automation";
 import type { PreReviewVerdict, ReviewTarget } from "../../shared/prereview";
-import type { Session, Ticket } from "../../shared/types";
+import type { Session, Ticket, TicketRepo } from "../../shared/types";
 import {
   botOf, hasStep, maxRoundsOf, mergeByOf, parseWorkflow, pendingBefore, presetOf, progressOf, scopeKey, stepOf,
   type MergeBy, type ReviewBot, type TicketWorkflowView, type Workflow, type WorkflowLayerView, type WorkflowProblem, type WorkflowScope, type WorkflowStep,
@@ -231,9 +231,17 @@ export class WorkflowService {
     return this.d.prs.byTicket(ticketKey).filter((p) => p.repoId !== null && p.state !== "closed");
   }
 
-  /** bot 的 review / 评论（谁是 bot 按 PR 监视记下的 who，和评论闭环同一个判断 reviewerKind）。 */
-  private botEvents(events: StageEvent[], prId: number, since: number): StageEvent[] {
-    return events.filter((e) => e.prId === prId && (e.kind === "review" || e.kind === "comment") && e.data.who === "copilot" && e.at >= since - RESPONSE_SLACK_MS);
+  /** 每一轮各自的 bot 回复（按 PR 分组、按轮次排好），key 是请求的 id。见 splitBotRounds。 */
+  private botEventsByRound(reqs: BotRequest[], events: StageEvent[]): Map<number, StageEvent[]> {
+    const byPr = new Map<number, BotRequest[]>();
+    for (const r of reqs) (byPr.get(r.prId) ?? byPr.set(r.prId, []).get(r.prId)!).push(r);
+    const out = new Map<number, StageEvent[]>();
+    for (const [prId, list] of byPr) {
+      list.sort((a, b) => a.round - b.round);
+      const split = splitBotRounds(list.map((r) => r.requestedAt), events.filter((e) => e.prId === prId));
+      list.forEach((r, i) => out.set(r.id, split[i]));
+    }
+    return out;
   }
 
   /**
@@ -241,9 +249,8 @@ export class WorkflowService {
    * 只有 review、还没看到它的行内评论时不定：PR 监视拉行内评论可能失败了，这时当成 0 条会把「处理意见」误判成做完，
    * 要等 confirmBots 用 gh 数过（数不到就一直不定）。已经定了的，后来又看到更多行内评论（晚到的）就把条数往上改。
    */
-  private settleBot(req: BotRequest, events: StageEvent[]): BotRequest {
+  private settleBot(req: BotRequest, ev: StageEvent[]): BotRequest {
     if (req.status === "requesting") return req;
-    const ev = this.botEvents(events, req.prId, req.requestedAt);
     const inline = ev.filter((e) => e.kind === "comment" && e.data.reviewId != null).length;
     if (req.reviewedAt !== null) {
       if (inline > (req.reviewComments ?? 0) && this.d.repo.raiseBotComments(req.id, inline)) return { ...req, reviewComments: inline };
@@ -261,11 +268,12 @@ export class WorkflowService {
   private async confirmBots(t: Ticket): Promise<void> {
     const open = this.prsOf(t.key).filter((p) => p.state === "open");
     if (open.length === 0) return;
-    const events = this.d.stages.forTicket(t.key);
-    for (const req of this.d.repo.botRequests(t.key)) {
+    const reqs = this.d.repo.botRequests(t.key);
+    const byRound = this.botEventsByRound(reqs, this.d.stages.forTicket(t.key));
+    for (const req of reqs) {
       const pr = open.find((p) => p.id === req.prId);
       if (!pr || req.reviewedAt !== null || req.status === "requesting") continue;
-      const ev = this.botEvents(events, req.prId, req.requestedAt);
+      const ev = byRound.get(req.id) ?? [];
       const reviews = ev.filter((e) => e.kind === "review" && e.data.id != null);
       if (reviews.length === 0 || ev.some((e) => e.kind === "comment" && e.data.reviewId != null)) continue;
       const cwd = this.d.ghCwd(pr);
@@ -288,11 +296,10 @@ export class WorkflowService {
 
   /** 每个开着的 PR 的各轮请求（第 1 轮是 bot_review，后面是 re_review），已经对过回来没有。 */
   private rounds(ticketKey: string, prs: TicketPr[], events: StageEvent[]): Map<number, BotRequest[]> {
+    const reqs = this.d.repo.botRequests(ticketKey).filter((r) => prs.some((p) => p.id === r.prId));
+    const byRound = this.botEventsByRound(reqs, events);
     const byPr = new Map<number, BotRequest[]>();
-    for (const r of this.d.repo.botRequests(ticketKey)) {
-      if (!prs.some((p) => p.id === r.prId)) continue;
-      (byPr.get(r.prId) ?? byPr.set(r.prId, []).get(r.prId)!).push(this.settleBot(r, events));
-    }
+    for (const r of reqs) (byPr.get(r.prId) ?? byPr.set(r.prId, []).get(r.prId)!).push(this.settleBot(r, byRound.get(r.id) ?? []));
     for (const list of byPr.values()) list.sort((a, b) => a.round - b.round);
     return byPr;
   }
@@ -676,17 +683,31 @@ export class WorkflowService {
     return null;
   }
 
-  /** 要开 PR 的这个提交有没有 clean 的预审。仓库认不出时用 ticket 的仓库里分支对得上的那个。 */
+  /**
+   * 要开 PR 的这个提交有没有 clean 的预审。仓库认得出就只看它；认不出（比如目录是 shell 变量）时，ticket 里分支对得上的仓库
+   * 每一个都要 clean：多仓库 ticket 的几个仓库可能用同名分支，不能拿一个仓库的预审放行另一个仓库开 PR。
+   */
   private async preReviewAtHead(t: Ticket, i: { repoPath: string | null; dir: string | null; branch: string | null }): Promise<boolean> {
-    const repo =
-      (i.repoPath !== null ? t.repos.find((r) => samePath(r.repoPath, i.repoPath as string) && (i.branch === null || r.branch === i.branch)) : null) ??
-      (i.repoPath === null ? (i.branch !== null ? t.repos.find((r) => r.branch === i.branch) : t.repos.length === 1 ? t.repos[0] : null) : null) ??
-      null;
-    if (!repo) return false;
+    const repoPath = i.repoPath;
+    const candidates =
+      repoPath !== null
+        ? t.repos.filter((r) => samePath(r.repoPath, repoPath) && (i.branch === null || r.branch === i.branch)).slice(0, 1)
+        : i.branch !== null
+          ? t.repos.filter((r) => r.branch === i.branch)
+          : t.repos.length === 1
+            ? t.repos
+            : [];
+    if (candidates.length === 0) return false;
+    // 命令给的目录只有在认得出是哪个仓库时才用；同名分支的几个仓库各自用自己的 checkout。
+    const useDir = candidates.length === 1 ? i.dir : null;
+    for (const repo of candidates) if (!(await this.cleanAtHead(repo, i.branch ?? repo.branch, useDir))) return false;
+    return true;
+  }
+
+  private async cleanAtHead(repo: TicketRepo, branch: string, dirHint: string | null): Promise<boolean> {
     const slug = this.d.slugOf(repo.repoPath);
-    const branch = i.branch ?? repo.branch;
-    const dir = i.dir ?? (repo.workMode === "worktree" && repo.worktreePath ? repo.worktreePath : repo.repoPath);
     if (!slug) return false;
+    const dir = dirHint ?? (repo.workMode === "worktree" && repo.worktreePath ? repo.worktreePath : repo.repoPath);
     const sha = await this.d.headSha(dir, branch);
     if (!sha) return false;
     return this.d.preReviews.latestFor({ repoSlug: slug, branch, headSha: sha })?.verdict === "clean";
@@ -709,4 +730,46 @@ export class WorkflowService {
     const pending = pendingBefore(w, "merge", have);
     return pending.length > 0 ? WF().mergePending(pending) : null;
   }
+}
+
+/**
+ * 把一个 PR 上 bot 的 review / 评论分给各轮请求（requestedAt 按轮次排好）。谁是 bot 按 PR 监视记下的 who，和评论闭环同一个判断 reviewerKind。
+ * - 每轮从「请求前 RESPONSE_SLACK_MS」算起（请求的时间是 gh 返回的时间，bot 可能更早就回了），但不早于上一轮的终点。
+ * - 上一轮的终点：它在下一轮请求前 slack 之外已经有回复，就到「下一轮请求前 slack」为止（之后的算下一轮，比如 push 后自动 review）；
+ *   没有的话到下一轮请求为止（请求前 slack 内才回的，是上一轮的回复，不能算成新一轮回来了）。
+ * - 行内评论跟着它的 review 走：review 分在哪轮，评论就算哪轮的（晚到的评论不会被算进后面一轮）。
+ */
+export function splitBotRounds(requestedAt: number[], events: StageEvent[]): StageEvent[][] {
+  const bot = events.filter((e) => (e.kind === "review" || e.kind === "comment") && e.data.who === "copilot").sort((a, b) => a.at - b.at);
+  const reviewOf = (e: StageEvent): string | null => (e.kind === "comment" && e.data.reviewId != null ? String(e.data.reviewId) : null);
+  const ends: number[] = [];
+  const starts: number[] = [];
+  for (let i = 0; i < requestedAt.length; i++) {
+    const start = Math.max(requestedAt[i] - RESPONSE_SLACK_MS, i > 0 ? ends[i - 1] : -Infinity);
+    starts.push(start);
+    if (i === requestedAt.length - 1) {
+      ends.push(Infinity);
+      break;
+    }
+    const zone = Math.max(start, requestedAt[i + 1] - RESPONSE_SLACK_MS);
+    const answeredBefore = bot.some((e) => e.at >= start && e.at < zone);
+    ends.push(answeredBefore ? zone : Math.max(start, requestedAt[i + 1]));
+  }
+  const roundOf = (at: number): number => {
+    for (let i = 0; i < starts.length; i++) if (at >= starts[i] && at < ends[i]) return i;
+    return -1;
+  };
+  const out: StageEvent[][] = requestedAt.map(() => []);
+  const reviewRound = new Map<string, number>();
+  for (const e of bot) {
+    if (e.kind !== "review" || e.data.id == null) continue;
+    const i = roundOf(e.at);
+    if (i >= 0) reviewRound.set(String(e.data.id), i);
+  }
+  for (const e of bot) {
+    const rid = reviewOf(e);
+    const i = rid !== null && reviewRound.has(rid) ? reviewRound.get(rid)! : roundOf(e.at);
+    if (i >= 0) out[i].push(e);
+  }
+  return out;
 }
