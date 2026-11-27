@@ -76,7 +76,7 @@ export interface StackServiceDeps {
   trunkBusy(repoPath: string, trunk: string, ignore: string[]): boolean;
   /** 工作流 I：这个 PR 有送进 session、还没核对的评论。 */
   awaitingCheck?(prUrl: string): boolean;
-  /** 把一段话送进这一层的 session（ticket 的这个仓库、这个分支）；true = 递进去了。 */
+  /** 把一段话送进这一层的 session（ticket 的这个仓库、这个分支）；true = 递进去了。同一层新的一条换掉还没送的旧的。 */
   deliver(to: { ticketKey: string; ticketRepoId: number | null; branch: string }, text: string): Promise<boolean>;
   /** 撤回还排在信箱里没送的那条冲突（BTL-278：层收回来了、冲突没了，旧的 rebase 指令不能再送进去）。 */
   withdraw?(to: { ticketKey: string; branch: string }): void;
@@ -183,6 +183,8 @@ export class StackService {
   private ticking = false;
   /** 每个栈上次试 autosquash 时各层的顶端。 */
   private readonly autosquashTried = new Map<number, string>();
+  /** 每个信箱 ref（ticket:分支）开始递送了几次冲突：递完发现过时时，期间有更新的递送就不撤（信箱里那条是它的）。 */
+  private readonly deliverSeq = new Map<string, number>();
   /** behindCache 是按哪一对（栈底顶端、trunk）算的（BTL-275）：两头都没动就不再起 git。 */
   private readonly behindOf = new Map<number, string>();
   /** 一段提交（仓库、base..tip）里有没有 fixup 提交：提交不会变，答案也不会变（BTL-275：原来每分钟每层一个 git log）。 */
@@ -738,6 +740,9 @@ export class StackService {
     // 这次 run 已经不是最近一次（之后又跑过）：它的冲突过时了，不送
     if (this.d.repo.lastRun(stack.id)?.id !== runId) return;
     const to = { ticketKey: layer.ticketKey, ticketRepoId: layer.ticketRepoId, branch: layer.branch };
+    const ref = `${to.ticketKey}:${to.branch}`;
+    const seq = (this.deliverSeq.get(ref) ?? 0) + 1;
+    this.deliverSeq.set(ref, seq);
     let ok = false;
     try {
       ok = await this.d.deliver(to, text);
@@ -750,6 +755,8 @@ export class StackService {
     const fresh = this.d.repo.run(runId);
     const latest = this.d.repo.lastRun(stack.id);
     if (!fresh || fresh.outcome !== "conflict" || latest?.id !== runId) {
+      // 等的时候又有一次递送开始了：同一个 ref 的那条换掉了这条，撤回会撤掉它的；它回来时自己核对
+      if (this.deliverSeq.get(ref) !== seq) return;
       this.d.withdraw?.(to);
       if (latest && latest.id !== runId && latest.outcome === "conflict" && latest.detail.conflict?.branch === c.branch && latest.detail.delivered) {
         await this.deliverConflict(stack, latest.id);
@@ -1123,9 +1130,11 @@ export class StackService {
 
   /** 上一次失败后要等多久再试：同样的输入、同样的原因连着失败了 n 次，等 FAILED_RETRY_MS·2^(n-1)，最多一天。 */
   private failedRetryMs(stackId: number, lr: RunRow): number {
+    // 原因里带着这次 run 的临时目录（run-<id>）：去掉编号再比，不然每次都像新原因
+    const why = (r: RunRow): string | null => r.reason?.replace(/run-\d+/g, "run-") ?? null;
     let streak = 0;
     for (const r of this.d.repo.runs(stackId, 8)) {
-      if (r.outcome !== "failed" || r.reason !== lr.reason || r.detail.inputs !== lr.detail.inputs) break;
+      if (r.outcome !== "failed" || why(r) !== why(lr) || r.detail.inputs !== lr.detail.inputs) break;
       streak++;
     }
     return Math.min(FAILED_RETRY_MAX_MS, FAILED_RETRY_MS * 2 ** Math.max(0, streak - 1));

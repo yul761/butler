@@ -994,6 +994,21 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.delivered).toHaveLength(1);
   });
 
+  it("asks before handing a conflict over when a ready layer below it is rewritten", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    const id = await defineAll(w);
+    expect(w.repoT.layers(id)[0]).toMatchObject({ state: "ready", prNumber: 1 });
+    // main 动了：a 被挪到新 main 上（要改写），b 冲突
+    w.pushMain("b.txt", "main's b\n");
+    const remote = w.remoteTips(BRANCHES);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm", detail: { confirm: { why: "ready_pr" } } });
+    expect(w.repoT.lastRun(id)!.detail.confirm!.branches).toContain("a");
+    expect(w.delivered).toEqual([]);
+    expect(w.remoteTips(BRANCHES)).toEqual(remote);
+  });
+
   it("hands a conflict to its session when the ready layer below it is not rewritten", async () => {
     const w = world({ policy: { dailyRebase: false } });
     openPr(1, "a", "main", false);
@@ -1043,6 +1058,47 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     await w.svc.tick();
     expect(w.repoT.lastRun(id)!.id).toBe(last);
     w.advance(60 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+  });
+
+  it("caps the back-off at a day, and starts over at an hour when the failure changes", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    g(w.repo, "fetch", "-q", "origin");
+    const stack = w.repoT.get(id)!;
+    const inputs = await (w.svc as unknown as { inputsOf(s: typeof stack): Promise<string> }).inputsOf(stack);
+    const fail = (reason: string): number => {
+      const r = w.repoT.startRun(id, "main_updated", "update_refs");
+      w.repoT.finishRun(r, { outcome: "failed", reason, detail: { inputs } });
+      return r;
+    };
+    // 同一个原因连着 8 次（2^7 小时远超一天）：等满一天就重试；原因里的 run 目录号不同也算同一个原因
+    for (let n = 0; n < 8; n++) fail(`git worktree add failed: /tmp/work/run-${100 + n} already exists`);
+    let last = w.repoT.lastRun(id)!.id;
+    w.advance(23 * 3600_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)!.id).toBe(last);
+    w.advance(3600_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    // 换了原因：从一小时重新算
+    w.pushMain("y.txt", "y\n");
+    g(w.repo, "fetch", "-q", "origin");
+    // 和上面一样让下一次 tick 去对 trunk（fetch 已经手动做过）
+    w.repoT.updateStack(id, { trunkSha: null });
+    const s2 = w.repoT.get(id)!;
+    const inputs2 = await (w.svc as unknown as { inputsOf(s: typeof s2): Promise<string> }).inputsOf(s2);
+    for (const reason of ["git rebase timed out", "git rebase timed out", "conflict markers left in a.txt"]) {
+      const r = w.repoT.startRun(id, "main_updated", "update_refs");
+      w.repoT.finishRun(r, { outcome: "failed", reason, detail: { inputs: inputs2 } });
+    }
+    last = w.repoT.lastRun(id)!.id;
+    w.advance(59 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)!.id).toBe(last);
+    w.advance(2 * 60_000);
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
   });
@@ -1157,6 +1213,65 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.repoT.run(old.id)!.detail.delivered).toBeFalsy();
     expect(w.repoT.lastRun(id)!.id).toBe(newer);
     expect(w.repoT.layers(id)[1]!.conflictKey).toBe(old.detail.conflict!.key);
+  });
+
+  it("does not withdraw a newer delivery that started while a stale one was still being delivered", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    vi.mocked(w.deps.deliver).mockResolvedValueOnce(false);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    const old = w.repoT.lastRun(id)!;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let newer = 0;
+    let second: Promise<void> | null = null;
+    let secondStarted!: () => void;
+    const started = new Promise<void>((r) => (secondStarted = r));
+    // A 递送途中：同一层又冲突了一次（B），B 也开始递送、排进信箱换掉 A；A 先回来，B 后回来
+    vi.mocked(w.deps.deliver)
+      .mockImplementationOnce(async (to, text) => {
+        w.delivered.push({ ticketKey: to.ticketKey, text });
+        newer = w.repoT.startRun(id, "manual", "update_refs");
+        w.repoT.finishRun(newer, { outcome: "conflict", reason: old.reason, detail: { ...old.detail, delivered: false } });
+        second = w.svc.sessionStopped("B");
+        await started;
+        return true;
+      })
+      .mockImplementationOnce(async (to, text) => {
+        w.delivered.push({ ticketKey: to.ticketKey, text });
+        secondStarted();
+        await gate;
+        return true;
+      });
+    await w.svc.sessionStopped("B");
+    release();
+    await second;
+    expect(w.withdrawn).toEqual([]);
+    expect(w.delivered).toHaveLength(2);
+    expect(w.repoT.run(old.id)!.detail.delivered).toBeFalsy();
+    expect(w.repoT.run(newer)!.detail.delivered).toBe(true);
+    expect(w.repoT.layers(id)[1]!.conflictKey).toBe(old.detail.conflict!.key);
+  });
+
+  it("without a remote, or when git can't read it, an unreadable PR list without a slug is: no PRs / unreadable", async () => {
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    vi.mocked(gh.openPrs).mockResolvedValue(null);
+    try {
+      // 栈记的 remote 在仓库里没配：确定不在 GitHub 上，当作没有 PR
+      const w = world({ policy: { dailyRebase: false } });
+      w.deps.slugOf = async () => null;
+      const id = await defineAll(w);
+      w.repoT.updateStack(id, { remote: "nowhere" });
+      const svc = w.svc as unknown as { notGithub(s: unknown): Promise<boolean> };
+      expect(await svc.notGithub(w.repoT.get(id)!)).toBe(true);
+      // git 出错（配置文件坏了）：不知道，当作读不到
+      writeFileSync(join(w.repo, ".git", "config"), "[remote \"origin\"\n\turl = broken\n");
+      expect(await svc.notGithub({ ...w.repoT.get(id)!, remote: "origin" })).toBe(false);
+    } finally {
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+    }
   });
 
   it("hands a conflict over once: no rerun every tick, the session's own moves are not triggers, an unrelated trunk change does not resend it", async () => {
