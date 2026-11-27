@@ -134,7 +134,8 @@ export class TermScreen {
 
   /**
    * 当前这一屏，每行一个字符串（行尾空白去掉）。dropDim：暗色（SGR 2）的字换成空格——claude 空输入框里的灰色提示
-   * （Try "…"、建议的下一句）是暗色画的，看输入框是不是真的空着时用（BTL-269）。
+   * （Try "…"、建议的下一句）是暗色画的，看输入框是不是真的空着时用（BTL-269）。光标停在提示第一个字上时那个字是反色、
+   * 不是暗色：反色的字后面紧跟着暗色的字，也当提示换成空格。按画法认，不按字认：用户自己打的 Try "…" 照样是字。
    */
   lines(o: { dropDim?: boolean } = {}): string[] {
     if (this.disposed) return [];
@@ -150,7 +151,9 @@ export class TermScreen {
         for (let x = 0; x < line.length; x++) {
           const cell = line.getCell(x);
           if (!cell || cell.getWidth() === 0) continue;
-          text += cell.isDim() ? " ".repeat(cell.getWidth()) : cell.getChars() || " ";
+          const next = line.getCell(x + cell.getWidth());
+          const hint = cell.isDim() || (cell.isInverse() && next !== undefined && next.isDim() && next.getChars() !== "");
+          text += hint ? " ".repeat(cell.getWidth()) : cell.getChars() || " ";
         }
         out.push(text.trimEnd());
       }
@@ -269,16 +272,14 @@ export function workingOnScreen(lines: string[]): boolean {
 }
 
 /** 空输入框里 claude 画的提示：Try "…"。 */
-const PLACEHOLDER = /^Try\s+["“]/;
-
 /**
- * 输入框画着、里面是空的（只有灰色提示也算空）：true；画着、里面有字：false；没画输入框：null。
- * 灰色提示要传 dropDim 读出来的那一屏才去得掉；Try "…" 这种按字认。
+ * 输入框画着、里面是空的：true；画着、里面有字：false；没画输入框：null。
+ * 要传 dropDim 读出来的那一屏：灰色提示（Try "…"、建议的下一句）按画法去掉。不按字认提示：用户自己打的 Try "…" 是草稿（PR #108 review）。
  */
 export function inputBoxEmpty(lines: string[]): boolean | null {
   const text = inputBoxText(lines);
   if (text === null) return null;
-  return text === "" || PLACEHOLDER.test(text);
+  return text === "";
 }
 
 /** 输入框上面的那部分屏幕（对话的内容），不含输入框和下面会刷新的状态栏；没画输入框返回 null。 */

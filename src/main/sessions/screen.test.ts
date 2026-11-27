@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";
-import { dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen, workingOnScreen } from "./screen";
+import { aboveInputBox, dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen, workingOnScreen } from "./screen";
 
 const RULE = "─".repeat(120);
 
@@ -40,10 +40,21 @@ class EagerScreen {
   resize(cols: number, rows: number) {
     this.term.write("", () => this.term.resize(cols, rows));
   }
-  async lines(): Promise<string[]> {
+  async lines(o: { dropDim?: boolean } = {}): Promise<string[]> {
     await new Promise<void>((r) => this.term.write("", r));
     const b = this.term.buffer.active;
-    return Array.from({ length: this.term.rows }, (_, i) => b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
+    return Array.from({ length: this.term.rows }, (_, i) => {
+      const line = b.getLine(b.viewportY + i);
+      if (!line) return "";
+      if (!o.dropDim) return line.translateToString(true);
+      let text = "";
+      for (let x = 0; x < line.length; x++) {
+        const cell = line.getCell(x);
+        if (!cell || cell.getWidth() === 0) continue;
+        text += cell.isDim() ? " ".repeat(cell.getWidth()) : cell.getChars() || " ";
+      }
+      return text.trimEnd();
+    });
   }
 }
 
@@ -123,6 +134,33 @@ describe("TermScreen lazy parsing (BTL-277)", () => {
         }
       }
       expect(lazy.lines()).toEqual(await eager.lines());
+      lazy.dispose();
+    }
+  });
+
+  it("BTL-269 reads (dim dropped, empty box, content above the box, spinner) match parsing every chunk, at any point", async () => {
+    const rule = `\x1b[38;2;136;136;136m${"─".repeat(50)}\x1b[39m`;
+    for (let seed = 1; seed <= 4; seed++) {
+      const lazy = new TermScreen(60, 12);
+      const eager = new EagerScreen(60, 12);
+      // claude 的几种样子交替出现：转圈在干活、停着的空输入框（暗色的建议下一句）、输入框里有用户的字。
+      const frames = tuiStream(seed, 60).map((f, i) =>
+        i % 3 === 0 ? `\x1b[2J\x1b[H⏺ done ${i}\r\n${rule}\r\n❯ \x1b[2mrun the tests\x1b[22m\r\n${rule}\r\n  ctx ${i}%`
+          : i % 3 === 1 ? `\x1b[2J\x1b[H⏺ done ${i}\r\n${rule}\r\n❯ half typed\r\n${rule}` : f);
+      let rnd = seed * 17;
+      for (const c of chop(frames.join(""), seed)) {
+        lazy.write(c);
+        eager.write(c);
+        rnd = (rnd * 1103515245 + 12345) % 2147483648;
+        if (rnd % 9 !== 0) continue;
+        const want = await eager.lines({ dropDim: true });
+        const got = lazy.lines({ dropDim: true });
+        expect(got).toEqual(want);
+        expect(inputBoxEmpty(got)).toBe(inputBoxEmpty(want));
+        expect(aboveInputBox(got)).toEqual(aboveInputBox(want));
+        expect(workingOnScreen(got)).toBe(workingOnScreen(want));
+        expect(lazy.lines()).toEqual(await eager.lines());
+      }
       lazy.dispose();
     }
   });
@@ -215,9 +253,9 @@ describe("workingOnScreen / inputBoxEmpty", () => {
     expect(workingOnScreen(["⏺ done", RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(false);
   });
 
-  it("an empty box or one with only the placeholder is empty; text is not; no box is null", () => {
+  it("an empty box is empty; text is not, even text that reads like the placeholder; no box is null", () => {
+    expect(inputBoxEmpty([RULE, '❯ Try "the other approach"', RULE])).toBe(false);
     expect(inputBoxEmpty(["⏺ done", RULE, "❯ ", RULE])).toBe(true);
-    expect(inputBoxEmpty([RULE, '❯ Try "fix lint errors"', RULE])).toBe(true);
     expect(inputBoxEmpty([RULE, "❯ 帮我看看", RULE])).toBe(false);
     expect(inputBoxEmpty([RULE, " ❯ 1. Yes", " 2. No"])).toBeNull();
   });
@@ -231,6 +269,21 @@ describe("workingOnScreen / inputBoxEmpty", () => {
     s.write("\x1b[2;3Hreal");
     await s.flush();
     expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(false);
+    s.dispose();
+  });
+
+  it("the placeholder with the cursor on its first letter (inverse T, dim rest) is empty; the user's own Try \"…\" is not (PR #108 review)", () => {
+    const rule = "─".repeat(40);
+    const s = new TermScreen(40, 4);
+    s.write(`${rule}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry "fix lint errors"\x1b[22m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(true);
+    // 用户打的同样的字（光标在行尾，反色的空格）：是字，不是提示。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ Try "the other approach"\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: true }))).toBe('Try "the other approach"');
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(false);
+    // 光标停在用户的字中间（反色的字后面是普通的字）：照样是字。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ ab\x1b[7mc\x1b[27md\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: true }))).toBe("abcd");
     s.dispose();
   });
 });

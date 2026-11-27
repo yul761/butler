@@ -745,6 +745,23 @@ describe("PtyManager draft: clearing keys and the screen (BTL-269 C)", () => {
     expect(mgr.hasDraft("t1")).toBe(false);
   });
 
+  it("a draft the user typed that reads like the placeholder (Try \"…\") is kept after they pause (PR #108 review)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", 'Try "the other approach"');
+    spawned[0].pty.emit(`${RULE}\r\n❯ Try "the other approach"\x1b[7m \x1b[27m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    // claude 画的提示（光标在第一个字上：反色的 T，后面是暗色）才算空：那时草稿清掉。
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry "fix lint errors"\x1b[22m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
   it("text in the box counts as a draft even when the count missed it", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);

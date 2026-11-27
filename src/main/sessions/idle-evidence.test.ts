@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HealedTurns, IDLE_QUIET_MS, IdleEvidence } from "./idle-evidence";
+import { SCREEN_PENDING_LIMIT, TermScreen } from "./screen";
 
 const RULE = "─".repeat(80);
 const idle = ["⏺ 做完了。", "", RULE, "❯ ", RULE, "  ? for shortcuts"];
@@ -37,6 +38,40 @@ describe("IdleEvidence (BTL-269 B)", () => {
     expect(check().idle).toBe(true);
   });
 
+  it("reads the screen as of now with lazy parsing (BTL-277): output written since the last read counts, even past the pending limit", () => {
+    const s = new TermScreen(60, 10);
+    const w = { now: 1_000_000, out: 0 };
+    const e = new IdleEvidence({ screen: () => s.lines({ dropDim: true }), lastOutputAt: () => w.out, transcriptGrewAt: () => null, now: () => w.now });
+    const write = (d: string) => {
+      s.write(d);
+      w.out = w.now;
+    };
+    const rule = "─".repeat(50);
+    const box = `${rule}\r\n❯ \r\n${rule}\r\n  ? for shortcuts`;
+    write(`\x1b[2J\x1b[H⏺ 做完了。\r\n${box}`);
+    w.now += IDLE_QUIET_MS;
+    expect(e.check("h", "t").idle).toBe(true);
+    // 又开始干活：转圈那一行写进来了，还没人解析过。读屏幕时当场解析，看到的是这一刻的屏幕，不是上一次读的。
+    write(`\x1b[2J\x1b[H✻ Thinking… (1s · esc to interrupt)\r\n${box}`);
+    expect(s.pending()).toBeGreaterThan(0);
+    expect(e.check("h", "t")).toEqual({ idle: false, working: true, looksIdle: false });
+    // 转圈一直刷，攒过了上限（当场解析过几次），最后一帧又停着：看到的是最后一帧，安静从它画出来起重新算。
+    let more = "";
+    for (let i = 0; more.length <= SCREEN_PENDING_LIMIT * 2; i++) more += `\x1b[1;1H\x1b[2K✻ Thinking… (${i}s · esc to interrupt)`;
+    write(more);
+    write(`\x1b[2J\x1b[H⏺ 又做完了。\r\n${box}`);
+    expect(e.check("h", "t")).toEqual({ idle: false, working: false, looksIdle: true });
+    w.now += IDLE_QUIET_MS;
+    expect(e.check("h", "t").idle).toBe(true);
+    s.dispose();
+  });
+
+  it("a screen that could not be read (parse failed, terminal gone) is never idle", () => {
+    const { w, check } = world([]);
+    w.now += 10 * 60_000;
+    expect(check()).toEqual({ idle: false, working: false, looksIdle: false });
+  });
+
   it("a spinner line is working, not idle", () => {
     const { w, check } = world(["✻ Thinking… (3s · esc to interrupt)", ...idle]);
     w.now += 60_000;
@@ -56,10 +91,12 @@ describe("IdleEvidence (BTL-269 B)", () => {
     }
   });
 
-  it("the suggestion shown in the box (already blanked as dim) and Try \"…\" count as empty", () => {
-    const { w, check } = world([RULE, "❯ Try \"fix the failing test\"", RULE]);
+  it("the suggestion shown in the box (already blanked as dim) counts as empty; text that reads like the placeholder is the user's (PR #108 review)", () => {
+    const { w, check } = world([RULE, "❯ ", RULE]);
     w.now += 60_000;
     expect(check().idle).toBe(true);
+    w.lines = [RULE, "❯ Try \"the other approach\"", RULE];
+    expect(check()).toEqual({ idle: false, working: false, looksIdle: false });
   });
 
   it("a status line that keeps the terminal busy: the content above the box unchanged for 45 s still counts as quiet; a change starts over", () => {
