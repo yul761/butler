@@ -1,0 +1,148 @@
+import { describe, expect, it } from "vitest";
+import { locate, resetLessonDrip, runLessonDrip, type DripDeps } from "./lessons";
+import { lessonsHookCommand, lessonsResetCommand, type DripManifest } from "../src/shared/lesson-drip";
+import { LESSON_DRIP_LIMIT } from "../src/shared/lessons";
+
+const ROOT = "/data/lesson-drip";
+const env = { SHIPHERD_SESSION: "s1" };
+
+function fs(files: Record<string, string> = {}, platform: NodeJS.Platform = "linux") {
+  const f = new Map(Object.entries(files));
+  const d: DripDeps = {
+    read: (p) => f.get(p) ?? null,
+    append: (p, t) => f.set(p, (f.get(p) ?? "") + t),
+    rename: (a, b) => {
+      const v = f.get(a);
+      if (v === undefined) throw new Error("ENOENT");
+      f.delete(a);
+      f.set(b, v);
+    },
+    remove: (p) => void f.delete(p),
+    exists: (p) => f.has(p),
+    platform,
+  };
+  return { f, d };
+}
+
+const lesson = (id: number, slug: string, globs: string[] = [], text = `rule ${id}`, extra: Partial<DripManifest["lessons"][number]> = {}) => ({
+  id, label: slug, text, why: "", globs, lang: null, slugs: [slug], ...extra,
+});
+
+// 两个仓库的 worktree 里有同名的相对路径（同一个 ticket 的两个仓库用同名分支）。
+const manifest = (lessons: DripManifest["lessons"]): string =>
+  JSON.stringify({
+    v: 1, lang: "en",
+    roots: [{ slug: "acme/web", dirs: ["/wt/web", "/repos/web"] }, { slug: "acme/api", dirs: ["/wt/api"] }],
+    lessons,
+  } satisfies DripManifest);
+
+const edit = (file: string, extra: Record<string, unknown> = {}) => JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: file }, ...extra });
+const ctx = (out: string): string => (JSON.parse(out) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+
+describe("runLessonDrip", () => {
+  it("sends the full text of lessons whose scope matches the edited file, once per session", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web", ["src/db/**"], "Re-read in the write transaction"), lesson(2, "acme/web", ["docs/**"])]) });
+    const run = runLessonDrip(edit("/wt/web/src/db/repo.ts"), env, ROOT, d);
+    expect(ctx(run.out)).toContain("#1 [acme/web] Re-read in the write transaction");
+    expect(ctx(run.out)).toContain("src/db/repo.ts");
+    expect(ctx(run.out)).not.toContain("#2");
+    run.commit();
+    expect(f.get(`${ROOT}/s1.sent`)).toBe("1\n");
+    expect(runLessonDrip(edit("/wt/web/src/db/other.ts"), env, ROOT, d).out).toBe("");
+  });
+
+  it("an edit in one repo never sends the other repo's lessons, even for the same relative path", () => {
+    const { d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web", ["src/**"]), lesson(2, "acme/api", ["src/**"])]) });
+    const web = runLessonDrip(edit("/wt/web/src/a.ts"), env, ROOT, d);
+    expect(ctx(web.out)).toContain("#1");
+    expect(ctx(web.out)).not.toContain("#2");
+    const api = runLessonDrip(edit("/wt/api/src/a.ts"), env, ROOT, d);
+    expect(ctx(api.out)).toContain("#2");
+    expect(ctx(api.out)).not.toContain("#1");
+  });
+
+  it("sends a product lesson in every repo of the session that belongs to the product", () => {
+    const { d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(5, "shop", [], "plain names", { slugs: ["acme/web", "acme/api"] })]) });
+    expect(ctx(runLessonDrip(edit("/wt/api/x.ts"), env, ROOT, d).out)).toContain("#5 [shop] plain names");
+  });
+
+  it("sends unscoped lessons on the first edit, and ignores files outside every repo", () => {
+    const { d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(3, "acme/web")]) });
+    expect(runLessonDrip(edit("/elsewhere/x.ts"), env, ROOT, d).out).toBe("");
+    expect(runLessonDrip(edit("/wt/website/x.ts"), env, ROOT, d).out).toBe("");
+    expect(ctx(runLessonDrip(edit("/repos/web/x.ts"), env, ROOT, d).out)).toContain("#3");
+  });
+
+  it("respects scopeLang", () => {
+    const { d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(4, "acme/web", [], "sql rule", { lang: "sql" })]) });
+    expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).toBe("");
+    expect(ctx(runLessonDrip(edit("/wt/web/m/001.sql"), env, ROOT, d).out)).toContain("#4");
+  });
+
+  it("keeps what does not fit for the next edit, and renames the manifest once everything was sent", () => {
+    const long = "x".repeat(LESSON_DRIP_LIMIT - 500);
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web", [], long), lesson(2, "acme/web", [], long)]) });
+    const first = runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d);
+    expect(ctx(first.out)).toContain("#1");
+    expect(ctx(first.out)).not.toContain("#2");
+    first.commit();
+    expect(f.has(`${ROOT}/s1.json`)).toBe(true);
+    const second = runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d);
+    expect(ctx(second.out)).toContain("#2");
+    second.commit();
+    expect(f.has(`${ROOT}/s1.json`)).toBe(false);
+    expect(f.has(`${ROOT}/s1.json.all`)).toBe(true);
+  });
+
+  it("does not mark anything sent when stdout was not written (no commit)", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web")]) });
+    expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).not.toBe("");
+    expect(f.has(`${ROOT}/s1.sent`)).toBe(false);
+    expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).not.toBe("");
+  });
+
+  it("a subagent gets the lessons for its edit but the main session still gets them later", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web")]) });
+    const sub = runLessonDrip(edit("/wt/web/a.ts", { agent_id: "ag/1" }), env, ROOT, d);
+    expect(ctx(sub.out)).toContain("#1");
+    sub.commit();
+    expect(f.get(`${ROOT}/s1.ag_1.sent`)).toBe("1\n");
+    expect(runLessonDrip(edit("/wt/web/b.ts", { agent_id: "ag/1" }), env, ROOT, d).out).toBe("");
+    expect(ctx(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out)).toContain("#1");
+  });
+
+  it("handles NotebookEdit, ignores other tools, sessions without an id and broken input", () => {
+    const { d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web")]) });
+    expect(ctx(runLessonDrip(JSON.stringify({ tool_name: "NotebookEdit", tool_input: { notebook_path: "/wt/web/n.ipynb" } }), env, ROOT, d).out)).toContain("#1");
+    expect(runLessonDrip(JSON.stringify({ tool_name: "Read", tool_input: { file_path: "/wt/web/a.ts" } }), env, ROOT, d).out).toBe("");
+    expect(runLessonDrip(edit("/wt/web/a.ts"), {}, ROOT, d).out).toBe("");
+    expect(runLessonDrip("not json", env, ROOT, d).out).toBe("");
+    expect(runLessonDrip(edit("/wt/web/a.ts"), { SHIPHERD_SESSION: "nobody" }, ROOT, d).out).toBe("");
+  });
+
+  it("matches Windows paths without caring about case or slashes", () => {
+    const m: DripManifest = { v: 1, lang: "zh", roots: [{ slug: "acme/web", dirs: ["C:\\wt\\web"] }], lessons: [] };
+    expect(locate("c:\\WT\\web\\src\\A.ts", m, "win32")).toEqual({ slug: "acme/web", rel: "src/A.ts" });
+    expect(locate("/wt/web2/a", { ...m, roots: [{ slug: "x", dirs: ["/wt/web"] }] }, "linux")).toBeNull();
+    // 嵌套目录：最长的优先
+    expect(locate("/a/b/c.ts", { ...m, roots: [{ slug: "outer", dirs: ["/a"] }, { slug: "inner", dirs: ["/a/b"] }] }, "linux")).toEqual({ slug: "inner", rel: "c.ts" });
+  });
+});
+
+describe("resetLessonDrip", () => {
+  it("forgets what was sent and puts a finished manifest back", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json.all`]: manifest([lesson(1, "acme/web")]), [`${ROOT}/s1.sent`]: "1\n" });
+    resetLessonDrip(env, ROOT, d);
+    expect(f.has(`${ROOT}/s1.sent`)).toBe(false);
+    expect(f.has(`${ROOT}/s1.json`)).toBe(true);
+    expect(ctx(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out)).toContain("#1");
+  });
+});
+
+describe("hook commands", () => {
+  it("only starts the hook when this session has a manifest", () => {
+    expect(lessonsHookCommand('"/h"', "/d/x", "darwin")).toBe('[ ! -f "/d/x/${SHIPHERD_SESSION:-_}.json" ] || exec "/h" lessons "/d/x"');
+    expect(lessonsHookCommand('"C:/h"', "C:\\d\\x", "win32")).toContain('"C:/d/x/${SHIPHERD_SESSION:-_}.json"');
+    expect(lessonsResetCommand('"/h"', "/d/x", "linux")).toBe('[ -z "${SHIPHERD_SESSION:-}" ] || exec "/h" lessons-reset "/d/x"');
+  });
+});

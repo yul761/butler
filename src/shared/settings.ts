@@ -68,6 +68,7 @@ export const EDITABLE_SETTINGS = [
   "lessonsAutoAdmit",
   "lessonsPrinciples",
   "lessonsCoreGuide",
+  "lessonsMergeAuto",
   "bgWindow",
   "bgHours",
   "bgIdleMinutes",

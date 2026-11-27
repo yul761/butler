@@ -18,7 +18,7 @@ const src = { prNumber: 1, url: "https://github.com/acme/web/pull/1", slug: "acm
 // path.join 在 Windows 上用反斜杠：比较前先统一成 /。
 const posix = (p: string): string => p.replace(/\\/g, "/");
 
-const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: string) => boolean } = {}) => {
+const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: string) => boolean; deps?: Partial<ConstructorParameters<typeof LessonsService>[0]> } = {}) => {
   const given = over.exists;
   const exists = given ? (p: string) => given(posix(p)) : (p: string) => !posix(p).startsWith("/none") || !posix(p).endsWith(".git");
   const db = memDb();
@@ -47,6 +47,7 @@ const setup = (over: { paths?: string[]; groups?: string[][]; exists?: (p: strin
     repoGroups: () => over.groups ?? [],
     exists,
     ghAvailable: () => true, openExternal, now: () => 100, notify,
+    ...over.deps,
   });
   svc.state();
   const add = (slug: string, text = "t") => repo.addLesson({ scope: { kind: "repo", slug }, text, why: "w", at: 1, source: src });
@@ -125,7 +126,7 @@ describe("LessonsService.state", () => {
     expect(spyA).not.toHaveBeenCalled();
   });
 
-  it("reports queued/failed, overflow and hides rejected lessons", () => {
+  it("reports queued/failed, how each lesson gets to a session, and hides rejected lessons", () => {
     const { svc, repo, add } = setup();
     for (let i = 0; i < 35; i++) repo.setStatus(add("acme/web", `l${i}`), "confirmed", 2);
     const rej = add("acme/web", "no");
@@ -134,12 +135,30 @@ describe("LessonsService.state", () => {
     const a = repo.take(1)!;
     repo.finish(a.id, "failed", 2, "boom");
     const web = svc.state().repos.find((r) => r.slug === "acme/web")!;
-    expect(web.overflow).toBe(5);
+    // 35 条短规矩全文都装得下（按大小，不再按 30 条截）。
+    expect(web.delivery).toEqual({ full: 35, principle: 0, index: 0, drip: 0, check: 0 });
+    expect(web.overBudget).toBe(false);
+    expect(Object.values(svc.state().delivery).every((m) => m === "full")).toBe(true);
     expect(web.failed).toBe(1);
     expect(web.queued).toBe(2);
     const s = svc.state();
     expect(s.lessons).toHaveLength(35);
     expect(s.lessons.some((l) => l.id === rej)).toBe(false);
+    expect(s.delivery[rej]).toBeUndefined();
+  });
+
+  it("uses the session guide options: converted lessons show as checks, over budget lessons as index or drip", () => {
+    const { repo, add, svc } = setup({ deps: { guideOptions: () => ({ fullBudget: 60 }) } });
+    const ids = Array.from({ length: 5 }, (_, i) => add("acme/web", `rule number ${i}`));
+    for (const id of ids) repo.setStatus(id, "confirmed", 2);
+    repo.setFields(ids[0], { checkability: "converted" }, 3);
+    const s = svc.state();
+    const web = s.repos.find((r) => r.slug === "acme/web")!;
+    expect(web.delivery.check).toBe(1);
+    expect(web.delivery.full).toBeGreaterThan(0);
+    expect(web.delivery.full + web.delivery.index + web.delivery.drip).toBe(4);
+    expect(web.overBudget).toBe(true);
+    expect(s.delivery[ids[0]]).toBe("check");
   });
 
   it("suggests products from repo groups mapped to slugs", () => {
@@ -509,5 +528,26 @@ describe("LessonsService enrich (workstream D)", () => {
 
   it("without an enricher the action is not available", async () => {
     expect(await setup().svc.act({ op: "enrich" })).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("passes merge proposals through, and refuses to start a second search while one runs (BTL-274)", async () => {
+    let running = false;
+    const calls: unknown[] = [];
+    const proposal = { id: 3, scope: { kind: "repo" as const, slug: "acme/web" }, ids: [1, 2], text: "t", why: "w", reason: "similar" as const, createdAt: 1 };
+    const merges = {
+      pending: () => [proposal], running: () => running, failed: () => 2, auto: () => true,
+      accept: (id: number) => (calls.push(["accept", id]), { ok: true as const }),
+      dismiss: (id: number) => (calls.push(["dismiss", id]), { ok: true as const }),
+      suggest: (slug?: string) => void calls.push(["suggest", slug]),
+    };
+    const { svc } = setup({ deps: { merges } });
+    expect(svc.state()).toMatchObject({ mergeProposals: [proposal], mergeAuto: true, mergeRunning: false, mergeFailed: 2 });
+    expect(await svc.act({ op: "acceptMerge", id: 3 })).toEqual({ ok: true });
+    expect(await svc.act({ op: "dismissMerge", id: 3 })).toEqual({ ok: true });
+    expect(await svc.act({ op: "suggestMerges", slug: "acme/web" })).toEqual({ ok: true });
+    running = true;
+    expect(await svc.act({ op: "suggestMerges" })).toEqual({ ok: false, reason: "busy" });
+    expect(calls).toEqual([["accept", 3], ["dismiss", 3], ["suggest", "acme/web"]]);
+    expect(await setup().svc.act({ op: "acceptMerge", id: 3 })).toEqual({ ok: false, reason: "not_found" });
   });
 });

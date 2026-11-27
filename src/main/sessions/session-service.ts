@@ -94,7 +94,11 @@ export interface SessionServiceDeps {
   /** Shipherd 的 session 说明文件（--append-system-prompt-file）；不给或返回 null 时不加。 */
   /** repoPaths：这个 session 涉及的仓库路径，用来挑要送进去的规矩。 */
   /** ticketKey：给了时按它所在 epic 的自动化档位决定预审那段（BTL-247）。 */
-  guidePath?: (kind: GuideKind, repoPaths: string[], ticketKey?: string) => string | null;
+  /**
+   * session 说明的路径。session：这次开的终端 id 和它能改到的目录（worktree、仓库本身）：说明里写不下全文的规矩，
+   * 主进程按它写一份补送清单，编辑时 hook 补送（BTL-274）。
+   */
+  guidePath?: (kind: GuideKind, repoPaths: string[], ticketKey?: string, session?: { termId: string; editDirs: string[] }) => string | null;
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
   /** epic 里的 feature（BTL-246，内部叫 block）；不给 FeatureView 里 blocks 是空的。 */
@@ -147,6 +151,8 @@ interface WorkspaceTarget {
   guideKind: GuideKind;
   /** 送规矩用的仓库路径（只有修复 session 非空）。 */
   guideRepoPaths: string[];
+  /** 这个 session 会改到的目录（编辑时补送规矩用，BTL-274）；只有修复 session 有。 */
+  editDirs?: string[];
   /** 新建 session 时这一行的角色。 */
   row: Pick<NewSession, "coordinator" | "featureId" | "fixesSession" | "shipherd" | "lessonRunId"> & { model?: SessionModel | null };
 }
@@ -236,7 +242,9 @@ export class SessionService {
     const settingsPath = this.configPath(ticket.key, () => this.d.mcpSettings?.([cwd, ...ticket.repos.map((r) => r.repoPath)], termId) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
     // ticket 总控去掉了（BTL-246）：以前的 ticket 总控从「隐藏的 session」里恢复时，按普通 ticket session 开（工具、说明都是 ticket 的）。
     // 传 ticket.key：预审那段按它所在 epic 的自动化档位（BTL-247）。
-    const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.("ticket", ticket.repos.map((r) => r.repoPath), ticket.key) ?? null, claudePath, launch.viaCmd, "session guide");
+    const guidePath = this.configPath(ticket.key, () => this.d.guidePath?.("ticket", ticket.repos.map((r) => r.repoPath), ticket.key, {
+      termId, editDirs: [cwd, ...ticket.repos.flatMap((r) => [this.d.ticketService.workDir(r), r.repoPath])],
+    }) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs: string[] = [];
     let args: string[];
     let model: SessionModel | null | undefined;
@@ -567,21 +575,25 @@ export class SessionService {
     // 恢复时 from 里没有 fixes，从这一行记的 fixesSession 看它是不是修复 session。
     const fixes = from.fixes ?? from.head?.fixesSession ?? undefined;
     let guideRepoPaths: string[] = [];
+    let editDirs: string[] | undefined;
+    const dirs = this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r)));
     if (fixes) {
       // 被修的 session 有 ticket 就用那个 ticket 的仓库，否则用 feature 的。
       const stuck = this.d.sessions.head(fixes);
       const ticket = stuck?.ticketKey ? this.d.tickets.get(stuck.ticketKey) : null;
       guideRepoPaths = (ticket ?? feature).repos.map((r) => r.repoPath);
+      editDirs = ticket ? ticket.repos.flatMap((r) => [this.d.ticketService.workDir(r), r.repoPath]) : [...dirs, ...guideRepoPaths];
     }
     return this.startInWorkspace({
       label: `feature ${feature.id}`,
       workspace: this.d.ticketService.featureWorkspaceDir(feature.id),
       repoPaths: feature.repos.map((r) => r.repoPath),
       // feature 下未归档 ticket 的仓库工作目录。
-      dirs: this.d.tickets.listByFeature(feature.id).flatMap((t) => t.repos.map((r) => this.d.ticketService.workDir(r))),
+      dirs,
       mcpConfig: (termId) => this.d.featureMcpConfig?.(feature.id, termId) ?? null,
       guideKind: fixes ? "ticket" : "coordinator",
       guideRepoPaths,
+      editDirs,
       row: { coordinator: !fixes, featureId: feature.id, fixesSession: fixes ?? null, model: fixes ? "sonnet" : null },
     }, claude, from.head ?? null);
   }
@@ -594,7 +606,7 @@ export class SessionService {
     const termId = head ? head.id : this.d.newId();
     const mcpConfigPath = this.configPath(target.label, () => target.mcpConfig(termId), claudePath, launch.viaCmd);
     const settingsPath = this.configPath(target.label, () => this.d.mcpSettings?.([cwd, ...target.repoPaths], termId) ?? null, claudePath, launch.viaCmd, "MCP approval settings");
-    const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind, target.guideRepoPaths) ?? null, claudePath, launch.viaCmd, "session guide");
+    const guidePath = this.configPath(target.label, () => this.d.guidePath?.(target.guideKind, target.guideRepoPaths, undefined, { termId, editDirs: target.editDirs ?? [] }) ?? null, claudePath, launch.viaCmd, "session guide");
     const addDirs = this.workspaceAddDirs(target, claudePath, launch.viaCmd);
     let args: string[];
     let model: SessionModel | null | undefined;

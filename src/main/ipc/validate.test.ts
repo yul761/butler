@@ -160,6 +160,16 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
   });
 });
 
+describe("merge proposal actions (BTL-274)", () => {
+  it("validate the proposal id and the optional slug", () => {
+    expect(lessonActionArg({ op: "acceptMerge", id: 3 })).toEqual({ op: "acceptMerge", id: 3 });
+    expect(lessonActionArg({ op: "dismissMerge", id: 3 })).toEqual({ op: "dismissMerge", id: 3 });
+    expect(lessonActionArg({ op: "suggestMerges" })).toEqual({ op: "suggestMerges" });
+    expect(lessonActionArg({ op: "suggestMerges", slug: "acme/web" })).toEqual({ op: "suggestMerges", slug: "acme/web" });
+    for (const bad of [{ op: "acceptMerge", id: "3" }, { op: "dismissMerge" }, { op: "suggestMerges", slug: 5 }]) expect(() => lessonActionArg(bad)).toThrow();
+  });
+});
+
 describe("bulk lesson actions", () => {
   it("validate the verb, the target and the batch id", () => {
     expect(lessonActionArg({ op: "bulk", verb: "confirm", target: { filter: { slug: "acme/web", status: ["pending"] } } })).toEqual({

@@ -4,6 +4,15 @@ import { join } from "node:path";
 import type { Lang } from "../../shared/i18n";
 import type { SessionLesson } from "../../shared/lessons";
 
+/** 说明里写不下全文的规矩（BTL-274）：索引一行，全文在旁边的文件里、也能用 lessons 工具查，编辑匹配的文件时 hook 补送。 */
+export interface GuideIndex {
+  rows: { id: number; label: string; title: string; globs: string[]; lang: string | null }[];
+  /** 索引也放不下的条数。 */
+  more: number;
+  /** 所有没写全文的规矩（全文文件用）。 */
+  rest: { id: number; label: string; text: string; why: string; globs: string[]; lang: string | null }[];
+}
+
 /**
  * ticket：ticket session 和修复 session；coordinator：feature 总控；shipherd：Shipherd 总控（BTL-190 第 5 点），只看不建。lessons：复盘分析 session（看一次复盘运行），没有 Shipherd 的 MCP 工具，也不会被换新。
  */
@@ -115,6 +124,14 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
 export interface GuideOptions {
   /** 原则的案例文件（有原则行时）。 */
   casesFile?: string;
+  /** 写不下全文的规矩（BTL-274）。 */
+  index?: GuideIndex;
+  /** 没写全文的规矩的全文文件（有 index 时 writeSessionGuide 写）。 */
+  restFile?: string;
+  /** 这个 session 有 lessons 工具（ticket session 有，修复 session 没有 Shipherd 的 MCP）。 */
+  lessonsTool?: boolean;
+  /** 编辑时补送的 hook 装着（没装时不写「会补送」，否则是假话）。 */
+  drip?: boolean;
   /** 有自动预审（G）时才写「开 PR 之前会自动跑一次预审」；没有时不写，否则是假话。 */
   preReview?: boolean;
   /** 仓库相关的几行（WS-M I 的 watcher 规定），放在最后。 */
@@ -133,9 +150,15 @@ function profileSection(lang: Lang, kind: GuideKind, profile: string): string | 
   return `${head}\n\n${profile.trim()}`;
 }
 
-/** 用户确认过的规矩，只给 ticket session 和修复 session。 */
+const scopeText = (zh: boolean, globs: readonly string[], lang: string | null): string => {
+  const parts = [...(globs.length ? [globs.join(", ")] : []), ...(lang ? [lang] : [])];
+  return parts.length ? (zh ? `（范围：${parts.join(" · ")}）` : ` (scope: ${parts.join(" · ")})`) : zh ? "（整个仓库）" : " (whole repo)";
+};
+
+/** 用户确认过的规矩，只给 ticket session 和修复 session。全文写不下的列成索引（BTL-274）：一条都不静默丢。 */
 function lessonsSection(lang: Lang, kind: GuideKind, lessons: SessionLesson[], opts: GuideOptions): string | null {
-  if (kind !== "ticket" || lessons.length === 0) return null;
+  const index = opts.index && (opts.index.rows.length > 0 || opts.index.more > 0) ? opts.index : null;
+  if (kind !== "ticket" || (lessons.length === 0 && !index)) return null;
   const zh = lang === "zh";
   const head = zh
     ? "下面是从这个仓库以前的 review 里总结出来、用户确认过的规矩。写代码时就照着做；做自我 review 时逐条对照，在 report 里写明对照的结果（哪几条相关、有没有违反、改了什么）。"
@@ -148,6 +171,19 @@ function lessonsSection(lang: Lang, kind: GuideKind, lessons: SessionLesson[], o
         ? `带案例数的是原则：和你在做的事相关时，读 ${opts.casesFile} 里它的案例（这个仓库以前被指出过的具体规矩）。`
         : `Lines with a case count are principles: when one is relevant to what you are doing, read its cases (the specific rules this repo was given in earlier reviews) in ${opts.casesFile}.`,
     );
+  if (index) {
+    const where = [
+      ...(opts.lessonsTool ? [zh ? "用 lessons 工具查（传你要改的文件路径，或者关键词、#编号）" : "look them up with the lessons tool (pass the file paths you are about to change, or a keyword or #id)"] : []),
+      ...(opts.restFile ? [zh ? `读 ${opts.restFile}` : `read ${opts.restFile}`] : []),
+    ];
+    out.push(
+      zh
+        ? `还有 ${index.rows.length + index.more} 条规矩这里只列标题和适用范围。改到匹配范围的文件之前，先${where.join("，或者")}，拿到全文再动手。${opts.drip ? "编辑匹配的文件时 Shipherd 也会把全文补送给你。" : ""}`
+        : `${index.rows.length + index.more} more rules are listed here only by title and scope. Before you change a file in a matching scope, ${where.join(", or ")} to get the full text first.${opts.drip ? " Shipherd also sends the full text when you edit a matching file." : ""}`,
+    );
+    out.push(...index.rows.map((r) => `- #${r.id} [${r.label}] ${r.title}${scopeText(zh, r.globs, r.lang)}`));
+    if (index.more > 0) out.push(zh ? `- 还有 ${index.more} 条，用上面的办法查。` : `- ${index.more} more: look them up the same way.`);
+  }
   if (opts.preReview) out.push(zh ? "开 PR 之前会自动跑一次预审，对照的就是这些规矩。" : "A pre-review runs automatically before a PR is opened, against these same rules.");
   return out.join("\n");
 }
@@ -160,6 +196,13 @@ export function sessionGuide(lang: Lang, kind: GuideKind, lessons: SessionLesson
   if (p) parts.push(p);
   parts.push(...(opts.extra ?? []));
   return parts.join("\n\n") + "\n";
+}
+
+/** 没写全文的规矩的全文文件：每条一节，带编号和适用范围。 */
+export function restText(lang: Lang, rest: GuideIndex["rest"]): string {
+  const zh = lang === "zh";
+  const parts = rest.map((l) => [`## #${l.id} [${l.label}]${scopeText(zh, l.globs, l.lang)}`, l.text, ...(l.why.trim() ? [zh ? `原因：${l.why}` : `Why: ${l.why}`] : [])].join("\n"));
+  return `# ${zh ? "说明里只列了标题的规矩（全文）" : "Rules listed by title in the guide (full text)"}\n\n${parts.join("\n\n")}\n`;
 }
 
 /** 原则的案例文件：每个原则一节，下面是它的规矩。 */
@@ -191,15 +234,22 @@ const short = (text: string) => createHash("sha256").update(text).digest("hex").
  * lessons、extra 和仓库档案都为空：写 <mcpDir>/guide-<kind>-<lang>.md。不然写 guide-<kind>-<lang>-<内容 sha256 前 12 位>.md。内容没变就不重写，返回路径。
  * 有原则行时案例写进旁边的 lessons-cases-<内容 sha256 前 12 位>.md，说明里写它的路径。
  */
-export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], opts: Omit<GuideOptions, "casesFile"> = {}): string {
+export function writeSessionGuide(mcpDir: string, lang: Lang, kind: GuideKind, lessons: SessionLesson[] = [], opts: Omit<GuideOptions, "casesFile" | "restFile"> = {}): string {
   let casesFile: string | undefined;
+  let restFile: string | undefined;
   if (kind === "ticket" && lessons.some((l) => l.cases?.length)) {
     const cases = casesText(lang, lessons);
     casesFile = join(mcpDir, `lessons-cases-${short(cases)}.md`);
     writeIfChanged(mcpDir, casesFile, cases, true);
   }
-  const text = sessionGuide(lang, kind, lessons, { ...opts, casesFile });
-  const hash = lessons.length > 0 || (opts.extra?.length ?? 0) > 0 || (kind === "ticket" && !!opts.profile?.trim()) ? `-${short(text)}` : "";
+  if (kind === "ticket" && opts.index?.rest.length) {
+    const rest = restText(lang, opts.index.rest);
+    restFile = join(mcpDir, `lessons-rest-${short(rest)}.md`);
+    writeIfChanged(mcpDir, restFile, rest, true);
+  }
+  const text = sessionGuide(lang, kind, lessons, { ...opts, casesFile, restFile });
+  const hasIndex = kind === "ticket" && !!opts.index && (opts.index.rows.length > 0 || opts.index.more > 0);
+  const hash = lessons.length > 0 || hasIndex || (opts.extra?.length ?? 0) > 0 || (kind === "ticket" && !!opts.profile?.trim()) ? `-${short(text)}` : "";
   const file = join(mcpDir, `guide-${kind}-${lang}${hash}.md`);
   writeIfChanged(mcpDir, file, text, hash !== "");
   return file;
@@ -217,7 +267,7 @@ export function pruneSessionGuides(mcpDir: string, now: number): number {
   }
   let n = 0;
   for (const name of names) {
-    if (!/^guide-[a-z]+-[a-z]+-[0-9a-f]{12}\.md$/.test(name) && !/^lessons-cases-[0-9a-f]{12}\.md$/.test(name)) continue;
+    if (!/^guide-[a-z]+-[a-z]+-[0-9a-f]{12}\.md$/.test(name) && !/^lessons-(cases|rest)-[0-9a-f]{12}\.md$/.test(name)) continue;
     try {
       const file = join(mcpDir, name);
       if (now - statSync(file).mtimeMs <= GUIDE_MAX_AGE_MS) continue;

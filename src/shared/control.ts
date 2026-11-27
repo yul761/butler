@@ -90,7 +90,13 @@ export type TicketControlRequest =
   /** 开发 session 交完成证据（工作流 G）：参数原样带过来，主进程按 parseSubmitEvidence 验。 */
   | { v: 1; ticketKey: string; from: string | null; op: "submit_evidence"; evidence: Record<string, unknown> }
   /** 开发 session 取自己最近一次预审的结果（工作流 G）。只读。 */
-  | { v: 1; ticketKey: string; from: string | null; op: "pre_review_result" };
+  | { v: 1; ticketKey: string; from: string | null; op: "pre_review_result" }
+  /** 开发 session 查这个 ticket 的仓库的规矩全文（BTL-274）：按要改的文件（适用范围）、关键词或 #编号。只读。 */
+  | { v: 1; ticketKey: string; from: string | null; op: "lessons"; paths?: string[]; query?: string };
+
+/** lessons 工具一次最多带几个路径、关键词多长。 */
+export const LESSONS_TOOL_MAX_PATHS = 50;
+export const LESSONS_TOOL_MAX_QUERY = 200;
 
 /**
  * feature 的规划（features.brief；界面上叫 epic）在 feature 记忆的 handoff 里最多占这么多字符：规划优先，但总要给约定和进度留位置，
@@ -327,6 +333,12 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
   const base = { v: 1 as const, ticketKey: o.ticketKey, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
   if (o.op === "pre_review_result") return { ...base, op: "pre_review_result" };
+  if (o.op === "lessons") {
+    const paths = o.paths;
+    if (paths !== undefined && (!Array.isArray(paths) || paths.length > LESSONS_TOOL_MAX_PATHS || !paths.every((x) => typeof x === "string" && x.length > 0 && x.length <= 4096))) return null;
+    if (o.query !== undefined && (typeof o.query !== "string" || o.query.length > LESSONS_TOOL_MAX_QUERY)) return null;
+    return { ...base, op: "lessons", ...(paths !== undefined && { paths: paths as string[] }), ...(o.query !== undefined && { query: o.query as string }) };
+  }
   if (o.op === "submit_evidence") {
     const e = o.evidence;
     if (!e || typeof e !== "object" || Array.isArray(e)) return null;

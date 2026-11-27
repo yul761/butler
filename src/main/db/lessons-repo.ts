@@ -464,6 +464,10 @@ export class LessonsRepo {
     this.db.prepare(`UPDATE lessons SET text = ?, updated_at = ? WHERE id = ?`).run(text, now, id);
   }
 
+  setWhy(id: number, why: string, now: number): void {
+    this.db.prepare(`UPDATE lessons SET why = ?, updated_at = ? WHERE id = ?`).run(why, now, id);
+  }
+
   remove(id: number): void {
     this.db.prepare(`DELETE FROM lessons WHERE id = ?`).run(id);
   }

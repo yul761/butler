@@ -102,7 +102,11 @@ import { EpicArchiveRepo } from "./db/epic-archive-repo";
 import { FeaturesRepo } from "./db/features-repo";
 import { currentLang, onLangChange, setLang } from "./i18n";
 import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
-import { safeSessionLessons } from "./lessons/select";
+import { planForSlug, safeGuidePlan } from "./lessons/select";
+import { lookupLessons } from "./lessons/lookup";
+import { LessonMergeService, type MergeLayer } from "./lessons/merge";
+import { dripManifest, dripRoots, pruneDrip, writeDripManifest } from "./lessons/drip";
+import { lessonsHookCommand, lessonsResetCommand } from "../shared/lesson-drip";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
 import { ticketGlance } from "./tickets/ticket-glance";
@@ -286,7 +290,7 @@ import { LessonRunner } from "./lessons/lesson-runner";
 import { LessonsService } from "./lessons/lessons-service";
 import { LessonBatchService } from "./lessons/lesson-batches";
 import { BatchRecorder } from "./batches/batch-recorder";
-import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, lessonPrincipleAdapter, policyAdapter, principleAdapter, productAdapter, stackPolicyAdapter } from "./batches/table-adapter";
+import { baselineAdapter, baselineRuleAdapter, checkAdapter, lessonAdapter, lessonPrincipleAdapter, mergeProposalAdapter, policyAdapter, principleAdapter, productAdapter, stackPolicyAdapter } from "./batches/table-adapter";
 import { BaselineService } from "./baselines/baselines-service";
 import { LegacyScanService } from "./baselines/legacy-service";
 import { baselineWorkerRunner } from "./baselines/worker-host";
@@ -1011,7 +1015,7 @@ async function bootstrap(): Promise<void> {
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
   const lessonsRepo = new LessonsRepo(db);
   // 规矩、产品和准入策略的改动都记成可撤销的批次（契约 4.4）。
-  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), baselineRuleAdapter(db), baselineAdapter(db), stackPolicyAdapter(db)]);
+  const batchRecorder = new BatchRecorder(db, [lessonAdapter(db), productAdapter(db), policyAdapter(db), checkAdapter(db), principleAdapter(db), lessonPrincipleAdapter(db), mergeProposalAdapter(db), baselineRuleAdapter(db), baselineAdapter(db), stackPolicyAdapter(db)]);
   // 确定性检查（契约 4.5）：库里是三层的定义，hook 只读 Shipherd 写出来的快照（<SHIPHERD_HOME>/checks/snapshot.json）。
   // 检查、产品、设置、语言一变就重写快照（合并一小段时间里的改动）；内容没变不写。
   const checksService: ChecksService = new ChecksService({
@@ -1206,6 +1210,7 @@ async function bootstrap(): Promise<void> {
   const repoIdentity = new RepoIdentity();
   // 带 hash 的 session 说明文件每次规矩变了就多一份，启动时清掉 30 天没用过的。
   pruneSessionGuides(paths.mcp, Date.now());
+  pruneDrip(paths.lessonDrip, Date.now());
   const lessonRunner = new LessonRunner({
     repo: lessonsRepo, runs: lessonRuns, availability: lessonsGate, identity: repoIdentity, jobs,
     upgradeReady: () => routing.tierHealthy(routing.plan("lesson_analyze").route.tier as Tier),
@@ -1330,6 +1335,22 @@ async function bootstrap(): Promise<void> {
     calibrationAct: (a) => (a.op === "markCalibrated" ? { ok: true, calibratedAt: calibration.markCalibrated() } : calibration.mark(a.lessonId, a.mark, a.since)),
     regroupPrinciples,
   };
+  /** session 说明怎么挑规矩（BTL-274）：检查引擎开着、hook 装着时已转成检查的由检查管，不占说明的位置。 */
+  const guideLessonOptions = () => ({
+    principles: settings.get("lessonsPrinciples") === "1",
+    core: settings.get("lessonsCoreGuide") === "1",
+    checksActive: checksConfig(settings).enabled && health.hookBinCurrent() && existsSync(paths.hookBin),
+  });
+  /** 这一层所在的仓库里，有哪个单独开 session 时全文装不下（BTL-274）。 */
+  const layerOverBudget = (layer: MergeLayer): boolean => {
+    const slugs = layer.kind === "repo" ? [layer.slug] : (lessonsRepo.product(layer.productId)?.slugs ?? []);
+    return slugs.some((slug) => planForSlug(lessonsRepo, slug, guideLessonOptions()).overBudget);
+  };
+  // 合并相似规矩（BTL-274）：便宜档模型提建议，默认等你点一下；接受是一个能撤销的批次。
+  const lessonMerges = new LessonMergeService({
+    db, repo: lessonsRepo, recorder: batchRecorder, ctx: admissionCtx, now: Date.now, overBudget: layerOverBudget,
+    auto: () => settings.get("lessonsMergeAuto") === "1", onChanged: () => notify(), log: logger,
+  });
   // 复盘规矩页：仓库路径直接查表（已归档的 ticket、feature 不算）；归组建议按 ticket 和 feature 各算一组。
   const repoPathRows = <T extends { repo_path: string }>(sql: string): T[] => db.prepare(sql).all() as unknown as T[];
   const lessonsService = new LessonsService({
@@ -1356,6 +1377,16 @@ async function bootstrap(): Promise<void> {
       return [...groups.values()].map((g) => [...g]);
     },
     ghAvailable: () => ghAvailable(), openExternal: (url) => void shell.openExternal(url), now: Date.now, notify: () => notify(), log: logger,
+    guideOptions: guideLessonOptions,
+    merges: {
+      pending: () => lessonMerges.pending(),
+      running: () => lessonMerges.running(),
+      failed: () => lessonMerges.failed(),
+      auto: () => settings.get("lessonsMergeAuto") === "1",
+      accept: (id) => lessonMerges.accept(id),
+      dismiss: (id) => lessonMerges.dismiss(id),
+      suggest: (slug) => void lessonMerges.suggest(slug).catch((e: unknown) => logger("lessons: merge suggestion failed", e)),
+    },
     // writeRunFile 写不了会同步抛出：LessonsService 接住，记日志，返回 write_failed。sessionService 在下面才建好：调用时才用到。
     openRun: (d, repoPath) => {
       const file = writeRunFile(paths.lessonsWorkspace, d, currentLang());
@@ -1505,16 +1536,30 @@ async function bootstrap(): Promise<void> {
         profileRules,
         gateCommand: hookInstalled() ? hookCommand(paths.hookBin, process.platform) : undefined,
         mailboxCommand: hookInstalled() ? mailboxHookCommand(hookCommand(paths.hookBin, process.platform), paths.mailbox, process.platform) : undefined,
+        lessons: hookInstalled()
+          ? { command: lessonsHookCommand(hookCommand(paths.hookBin, process.platform), paths.lessonDrip, process.platform), resetCommand: lessonsResetCommand(hookCommand(paths.hookBin, process.platform), paths.lessonDrip, process.platform) }
+          : undefined,
         checks: cc.enabled ? { editTimeoutSec: cc.editTimeoutSec, pushTimeoutSec: cc.pushTimeoutSec } : undefined,
       });
     },
     checksAbsence,
-    guidePath: (kind, repoPaths, ticketKey) => {
-      const lessons = kind === "ticket"
-        ? safeSessionLessons(lessonsRepo, repoIdentity, repoPaths, logger, { principles: settings.get("lessonsPrinciples") === "1", core: settings.get("lessonsCoreGuide") === "1" })
-        : [];
+    guidePath: (kind, repoPaths, ticketKey, session) => {
+      // 规矩按大小装（BTL-274）：全文写得下的写全文，其余列索引、写进旁边的全文文件、编辑时补送；已转成检查的由检查管。
+      const plan = kind === "ticket" ? safeGuidePlan(lessonsRepo, repoIdentity, repoPaths, logger, guideLessonOptions()) : null;
+      const lessons = plan?.full ?? [];
+      if (session) {
+        try {
+          const m = plan && hookInstalled() ? dripManifest(lessonsRepo, plan, dripRoots(repoIdentity, session.editDirs), currentLang()) : null;
+          writeDripManifest(paths.lessonDrip, session.termId, m);
+        } catch (e) {
+          logger("lesson drip manifest not written", e);
+        }
+      }
       const preReview = kind === "ticket" && preReviewActive(ticketKey);
       return writeSessionGuide(paths.mcp, currentLang(), kind, lessons, {
+        index: plan ? { rows: plan.index, more: plan.indexMore, rest: plan.rest } : undefined,
+        lessonsTool: kind === "ticket" && !!ticketKey,
+        drip: hookInstalled(),
         // 预审（工作流 G）打开时：规矩段那句「PR 前会自动预审」，加上「完成前交证据」一段（按仓库档案列命令）。
         preReview,
         extra: [
@@ -1522,7 +1567,7 @@ async function bootstrap(): Promise<void> {
           ...(kind === "ticket" && preReview ? evidenceGuideLines(currentLang(), guideRepos(repoPaths)) : []),
           ...interruptGuideLines(currentLang(), kind, { choiceRule: settings.get("interruptChoiceRule") === "1", selfServe: settings.get("interruptSelfServe") === "1" }),
         ],
-        profile: kind === "ticket" ? sessionProfile(repoPaths, lessons.length > 0) : "",
+        profile: kind === "ticket" ? sessionProfile(repoPaths, lessons.length > 0 || (plan?.rest.length ?? 0) > 0) : "",
       });
     },
     featureMcpConfig,
@@ -1722,6 +1767,27 @@ async function bootstrap(): Promise<void> {
    */
   /** 度量的每日 gh 任务（ws-h）：要等 ticketPrs 建好，在下面赋值。 */
   let metricsGhJob: MetricsGhJob | null = null;
+  const lessonUpkeep = () => {
+    const now = Date.now();
+    const since = (key: "lessonsPrinciplesRegroupedAt" | "lessonsMergeSuggestedAt") => now - (Number(settings.get(key)) || 0);
+    const hourly = since("lessonsPrinciplesRegroupedAt") > 3600_000 || since("lessonsMergeSuggestedAt") > 3600_000;
+    if (!hourly || !bgScheduler.gate("lesson_admission").run) return;
+    let tight = false;
+    try {
+      tight = lessonsRepo.repos().some((r) => planForSlug(lessonsRepo, r.slug, guideLessonOptions()).overBudget);
+    } catch (e) {
+      logger("lessons: budget check failed", e);
+    }
+    const daily = 20 * 3600_000;
+    if ((tight || settings.get("lessonsPrinciples") === "1") && since("lessonsPrinciplesRegroupedAt") > (tight ? 3600_000 : daily)) {
+      settings.set("lessonsPrinciplesRegroupedAt", String(now));
+      void regroupPrinciples().catch((e: unknown) => logger("lessons: principles regroup failed", e));
+    }
+    if (since("lessonsMergeSuggestedAt") > (tight ? 3600_000 : daily) && !lessonMerges.running()) {
+      settings.set("lessonsMergeSuggestedAt", String(now));
+      void lessonMerges.suggest().catch((e: unknown) => logger("lessons: merge suggestion failed", e));
+    }
+  };
   const checkSchedule = (trigger: ScheduleTrigger) => {
     if (headlessAbort.signal.aborted) return Promise.resolve();
     void shipherdPatrol.check();
@@ -1730,12 +1796,9 @@ async function bootstrap(): Promise<void> {
     // 栈（工作流 K）：每分钟看一遍要不要 fetch、rebase；每天一次清备份、对总览。
     void stackService.tick().catch((e: unknown) => logger("stacks: tick failed", e));
     void stackService.dailyJob().catch((e: unknown) => logger("stacks: daily job failed", e));
-    // 原则每天重新分组一次（设置 lessonsPrinciples）；规矩没变时读缓存，不调模型。
-    // 走「规矩准入」的后台闸门：闸门关着这次不分，下一轮再看。
-    if (settings.get("lessonsPrinciples") === "1" && Date.now() - (Number(settings.get("lessonsPrinciplesRegroupedAt")) || 0) > 20 * 3600_000 && bgScheduler.gate("lesson_admission").run) {
-      settings.set("lessonsPrinciplesRegroupedAt", String(Date.now()));
-      void regroupPrinciples().catch((e: unknown) => logger("lessons: principles regroup failed", e));
-    }
+    // 原则重新分组、找相似规矩（BTL-274）：设置 lessonsPrinciples 开着时每天一次；有仓库单独开 session 全文装不下时，不管设置开没开，每小时看一次。
+    // 规矩没变时读缓存，不调模型。走「规矩准入」的后台闸门：闸门关着这次不做，下一轮再看。
+    lessonUpkeep();
     if (configBackups.tick()) notify();
     return scheduler.check(trigger);
   };
@@ -3820,6 +3883,11 @@ async function bootstrap(): Promise<void> {
         submit: (id, raw) => preReview.submitEvidence(id, raw),
         latest: (id) => preReview.latestForSession(id),
       },
+      // lessons 工具（BTL-274）：这个 ticket 的仓库的规矩全文；路径按 worktree 和主仓库目录对到仓库（同名分支也分得开）。
+      lessons: (t, q) => lookupLessons(
+        lessonsRepo, repoIdentity, t.repos.map((r) => r.repoPath),
+        dripRoots(repoIdentity, t.repos.flatMap((r) => [ticketService.workDir(r), r.repoPath])), q, guideLessonOptions(),
+      ),
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。不记成用户结束（BTL-256）。
       kill: (termId) => pty.kill(termId),
       // 后台恢复（BTL-256）：信箱已经调过同一个请求，这里拿到同一个结果；熔断压着的不恢复。

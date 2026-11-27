@@ -145,7 +145,7 @@ describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
       "mcp__shipherd-sessions__list_inbox", "mcp__shipherd-sessions__progress_overview", "mcp__shipherd-sessions__metrics_overview",
       "mcp__shipherd-sessions__list_stacks",
       "mcp__shipherd-sessions__reorder_features", "mcp__shipherd-sessions__set_ticket_feature",
-      "mcp__shipherd-sessions__submit_evidence", "mcp__shipherd-sessions__pre_review_result", "mcp__shipherd-sessions__pr_assessment",
+      "mcp__shipherd-sessions__submit_evidence", "mcp__shipherd-sessions__pre_review_result", "mcp__shipherd-sessions__pr_assessment", "mcp__shipherd-sessions__lessons",
     ]);
     // 会动别的终端或建东西的不在里面。
     for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_epic_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode"]) {

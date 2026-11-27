@@ -590,6 +590,14 @@ describe("projectMcpApprovalSettings: interactive sessions use the same approval
     expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, mailboxCommand: "MB" })!))).not.toContain("hooks");
   });
 
+  it("with the lessons drip, sends matching lessons after edits and resets on startup, clear and compact (BTL-274)", () => {
+    const s = setup();
+    const hooks = JSON.parse(readFileSync(projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: "/b/h", lessons: { command: "LD", resetCommand: "LR" } })!, "utf8")).hooks;
+    expect(hooks.PostToolUse.at(-1)).toEqual({ matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: "LD", timeout: 10 }] });
+    expect(hooks.SessionStart).toEqual([{ matcher: "startup|clear|compact", hooks: [{ type: "command", command: "LR", timeout: 10 }] }]);
+    expect(Object.keys(read(projectMcpApprovalSettings([s.repo], { ...s.p, lessons: { command: "LD", resetCommand: "LR" } })!))).not.toContain("hooks");
+  });
+
   it("with checks on, adds the edit check after Edit|Write|MultiEdit and the push check before Bash (contract 4.5)", () => {
     const s = setup();
     const hooks = JSON.parse(readFileSync(projectMcpApprovalSettings([s.repo], { ...s.p, gateCommand: "/b/h", checks: { editTimeoutSec: 8, pushTimeoutSec: 600 } })!, "utf8")).hooks;

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { MESSAGE_LIMIT, REASON_LIMIT } from "../src/shared/control";
 import {
-  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer,
+  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer, LESSONS_TOOL, LESSONS_TOOL_EN,
   type SessionsServerOptions,
 } from "./sessions-server";
 import { serveStdio } from "./stdio";
@@ -427,8 +427,29 @@ describe("ask_user and report for every Shipherd session (BTL-190 2+3)", () => {
       expect(await callTool(server, name, { session: "s", reason: "r" }), name).toMatchObject({ result: { isError: true } });
     }
     // ticket 的 session 只有这四个工具：没有总控的那一套。
-    expect((await tools(server)).map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "ask_user", "report"]);
+    expect((await tools(server)).map((t) => t.name)).toEqual(["submit_evidence", "pre_review_result", "lessons", "ask_user", "report"]);
     expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
+  });
+
+  it("a member looks up lessons by paths and query; bad arguments are refused before sending (BTL-274)", async () => {
+    const { server, answer, requestsDir } = setup(2000, { ticketKey: "P-1" });
+    const base = { v: 1, ticketKey: "P-1", from: "boss" };
+    const r = callTool(server, "lessons", { paths: ["src/db/repo.ts"], query: "#12" });
+    expect(await answer({ v: 1, ok: true, value: { lessons: [] } })).toEqual({ ...base, op: "lessons", paths: ["src/db/repo.ts"], query: "#12" });
+    await r;
+    const all = callTool(server, "lessons", {});
+    expect(await answer({ v: 1, ok: true, value: { lessons: [] } })).toEqual({ ...base, op: "lessons" });
+    await all;
+    for (const bad of [{ paths: "src" }, { paths: [""] }, { paths: Array.from({ length: 51 }, () => "a") }, { query: "x".repeat(201) }, { query: 3 }]) {
+      expect(await callTool(server, "lessons", bad), JSON.stringify(bad).slice(0, 40)).toMatchObject({ result: { isError: true } });
+    }
+    expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
+  });
+
+  it("describes the lessons tool in both languages, with the same schema shape", () => {
+    expect(LESSONS_TOOL.description).toMatch(/[\u4e00-\u9fff]/);
+    expect(/[一-鿿]/.test(JSON.stringify(LESSONS_TOOL_EN))).toBe(false);
+    expect(Object.keys(LESSONS_TOOL_EN.inputSchema.properties)).toEqual(Object.keys(LESSONS_TOOL.inputSchema.properties));
   });
 
   it("sends ask_user and report in each scope, dropping empty options and blank context, defaulting kind to progress", async () => {

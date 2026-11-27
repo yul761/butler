@@ -276,6 +276,7 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "lessonsAutoAdmit":
     case "lessonsPrinciples":
     case "lessonsCoreGuide":
+    case "lessonsMergeAuto":
     case "baselineAutoRescan":
     case "permissionProfiles":
     case "interruptChoiceRule":

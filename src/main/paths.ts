@@ -16,6 +16,8 @@ export interface ShipherdPaths {
   mcp: string;
   /** 信箱（BTL-245）的磁盘投影：每个开着、有消息在排队的终端一个 <SHIPHERD_SESSION> 目录。 */
   mailbox: string;
+  /** 编辑时补送规矩（BTL-274）的清单：每个开着的 session 一份 <SHIPHERD_SESSION>.json，加上已送记录 .sent。 */
+  lessonDrip: string;
   /** 孤儿清理（WS-M F）记下的 Shipherd 起过的进程：procs/owned.json。 */
   procsOwned: string;
   /** StateCore 的嵌入式存储目录（里面是 statecore.db）。 */
@@ -93,6 +95,7 @@ export function resolvePaths(
     logs: join(shipherdHome, "logs"),
     mcp: join(shipherdHome, "mcp"),
     mailbox: join(shipherdHome, "mailbox"),
+    lessonDrip: join(shipherdHome, "lesson-drip"),
     procsOwned: join(shipherdHome, "procs", "owned.json"),
     statecore: join(shipherdHome, "statecore"),
     workspaces: join(shipherdHome, "workspaces"),

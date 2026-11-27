@@ -8,7 +8,7 @@ import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
 const BACKUP_KEYS = ["configBackupIntervalDays", "configBackupKeep", "configExportReminderDays"] as const satisfies readonly EditableSettingKey[];
-const TOGGLE_KEYS = ["lessonsAutoAdmit", "lessonsPrinciples", "lessonsCoreGuide"] as const satisfies readonly EditableSettingKey[];
+const TOGGLE_KEYS = ["lessonsAutoAdmit", "lessonsPrinciples", "lessonsCoreGuide", "lessonsMergeAuto"] as const satisfies readonly EditableSettingKey[];
 
 /** 原则：现有几条，「现在归组」（一个可撤销的批次）。 */
 function Principles() {
