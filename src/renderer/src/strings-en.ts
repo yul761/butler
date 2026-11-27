@@ -2478,6 +2478,8 @@ export const EN: UiStrings = {
     note: "What this step needs (optional)",
     notes: "Notes for the whole workflow (optional)",
     noMerge: "There's no Merge step, so no session may merge; you merge it yourself.",
+    count: (n: number, max: number) => `${n} / ${max} characters`,
+    tooLong: (n: number, max: number) => `${n} / ${max} characters: too long to save. The workflow is sent to every session as is, so please shorten it.`,
     saved: "Saved.",
     unchanged: "Same as before, nothing changed.",
     strip: "Workflow",

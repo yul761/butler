@@ -535,11 +535,32 @@ export class MergeGate {
       }
     }
     if (repo !== null && dir !== null && branch === null) branch = await this.d.git.currentBranch(dir);
+    // `-R o/r`：PR 开在那个仓库，不是命令所在目录的仓库。同一个 ticket 的几个仓库可能用同名分支，按目录认会拿 A 的预审放行 B。
+    if (a.repo !== null) ({ repo, dir } = await this.prCreateRepo(a.repo, repo, dir));
     const ticketKey = repo !== null && branch !== null ? (this.ticketOf(repo, branch) ?? null) : req.ticket;
     if (ticketKey === null) return ALLOW;
     const reason = await wf.prCreate({ ticketKey, repoPath: repo, dir, branch, draft: a.draft, sessionId: req.session });
     if (reason === null || this.late(clock)) return ALLOW;
     return deny(reason);
+  }
+
+  /**
+   * `gh pr create -R <slug>` 的仓库：按 slug 找 ticket 用的主 checkout；找不到时看命令所在目录的仓库是不是它。都对不上就当认不出
+   * （repo 为 null），由流程按「分支对得上的仓库每个都要 clean」判断。命令目录只在就是这个仓库时才留给流程读 HEAD。
+   */
+  private async prCreateRepo(slug: string, cwdRepo: string | null, dir: string | null): Promise<{ repo: string | null; dir: string | null }> {
+    const found = this.d.repoOfSlug?.(slug) ?? null;
+    let repo: string | null = null;
+    if (found !== null) {
+      try {
+        repo = await this.repoAt(found.path, `the checkout of ${slug} is gone`);
+      } catch (e) {
+        if (!(e instanceof NotChecked)) throw e;
+      }
+    } else if (cwdRepo !== null && this.d.repoOfSlug?.(slug, cwdRepo)) {
+      repo = cwdRepo;
+    }
+    return { repo, dir: repo !== null && cwdRepo !== null && samePath(repo, cwdRepo) ? dir : null };
   }
 
   /** branch 属于哪个 ticket：feature 总控合并 PR 时请求里没有 ticket，只能按 branch 找。 */

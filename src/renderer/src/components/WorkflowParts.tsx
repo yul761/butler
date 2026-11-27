@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  MERGE_BY, REVIEW_BOTS, RE_REVIEW_MAX_ROUNDS, WORKFLOW_PRESETS, WORKFLOW_SCOPE_KINDS, presetOf, presetWorkflow, sameWorkflowScope,
+  MERGE_BY, NOTE_LIMIT, NOTES_LIMIT, REVIEW_BOTS, RE_REVIEW_MAX_ROUNDS, WORKFLOW_PRESETS, WORKFLOW_SCOPE_KINDS, presetOf, presetWorkflow, sameWorkflowScope,
   type FeatureWorkflowView, type TicketWorkflowView, type Workflow, type WorkflowLayerView, type WorkflowScope, type WorkflowScopeKind,
   type WorkflowSettingsView, type WorkflowStep, type WorkflowStepId, workflowWantsComments,
 } from "../../../shared/workflow";
@@ -123,6 +123,21 @@ function StepOptions({ step, onChange }: { step: WorkflowStep; onChange(p: Parti
   );
 }
 
+/**
+ * 要求和说明的字数：快到上限（八成）时显示字数，超了说明原因。不用 maxLength：粘贴超长的文字会被浏览器悄悄截掉后半段，
+ * 用户不知道；主进程 parseWorkflow 本来就会拒绝超长的，这里提前说、并禁用保存。
+ */
+function LengthHint({ text, max, testId }: { text: string; max: number; testId: string }) {
+  if (text.length < max * 0.8) return null;
+  const over = text.length > max;
+  const t = S.workflow;
+  return (
+    <span className={over ? "error workflow-length" : "muted workflow-length"} role={over ? "alert" : undefined} data-testid={testId} data-over={over}>
+      {over ? t.tooLong(text.length, max) : t.count(text.length, max)}
+    </span>
+  );
+}
+
 /** 一份流程的编辑器：从预设开始，加、移、删步骤，每一步的选项和要求，整体说明。保存交给调用方（主进程再验一次）。 */
 export function WorkflowEditor({ initial, busy, error, onSave, onCancel }: { initial: Workflow; busy: boolean; error: string | null; onSave(w: Workflow): void; onCancel(): void }) {
   const t = S.workflow;
@@ -130,6 +145,7 @@ export function WorkflowEditor({ initial, busy, error, onSave, onCancel }: { ini
   const [notes, setNotes] = useState(initial.notes);
   const preset = presetOf({ steps, notes: "" });
   const addable = addableSteps(steps);
+  const tooLong = notes.length > NOTES_LIMIT || steps.some((s) => (s.note ?? "").length > NOTE_LIMIT);
   return (
     <div className="workflow-editor" data-testid="workflow-editor">
       <div className="row">
@@ -146,7 +162,8 @@ export function WorkflowEditor({ initial, busy, error, onSave, onCancel }: { ini
           <li key={s.id} data-step={s.id}>
             <strong>{t.steps[s.id]}</strong>
             <StepOptions step={s} onChange={(p) => setSteps(setStepOption(steps, i, p))} />
-            <input className="workflow-note" placeholder={t.note} value={s.note ?? ""} maxLength={2000} onChange={(e) => setSteps(setStepOption(steps, i, { note: e.target.value }))} />
+            <input className="workflow-note" placeholder={t.note} value={s.note ?? ""} onChange={(e) => setSteps(setStepOption(steps, i, { note: e.target.value }))} />
+            <LengthHint text={s.note ?? ""} max={NOTE_LIMIT} testId="workflow-note-length" />
             <button className="icon" title={t.up} aria-label={t.up} disabled={i === 0} onClick={() => setSteps(moveStep(steps, i, -1))}>↑</button>
             <button className="icon" title={t.down} aria-label={t.down} disabled={i === steps.length - 1} onClick={() => setSteps(moveStep(steps, i, 1))}>↓</button>
             <button className="icon" title={t.remove} aria-label={t.remove} onClick={() => setSteps(removeStep(steps, i))}>×</button>
@@ -161,10 +178,11 @@ export function WorkflowEditor({ initial, busy, error, onSave, onCancel }: { ini
       )}
       {steps.length > 0 && !steps.some((s) => s.id === "merge") && <p className="muted" data-testid="workflow-no-merge">{t.noMerge}</p>}
       <WorkflowLoopNote workflow={{ steps, notes }} />
-      <textarea className="workflow-notes" placeholder={t.notes} value={notes} maxLength={4000} rows={2} onChange={(e) => setNotes(e.target.value)} />
+      <textarea className="workflow-notes" placeholder={t.notes} value={notes} rows={2} onChange={(e) => setNotes(e.target.value)} />
+      <LengthHint text={notes} max={NOTES_LIMIT} testId="workflow-notes-length" />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row">
-        <button className="primary" disabled={busy || steps.length === 0} data-testid="workflow-save" onClick={() => onSave({ steps, notes })}>{t.save}</button>
+        <button className="primary" disabled={busy || steps.length === 0 || tooLong} data-testid="workflow-save" onClick={() => onSave({ steps, notes })}>{t.save}</button>
         <button disabled={busy} onClick={onCancel}>{t.cancel}</button>
       </div>
     </div>

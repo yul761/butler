@@ -793,6 +793,41 @@ describe("MergeGate: workflow (BTL-273)", () => {
     expect(w.calls.prCreate).toHaveLength(1);
   });
 
+  it("gh pr create -R points at the other repo of the same ticket: that repo's pre-review decides, not this directory's", async () => {
+    // 同一 ticket 的 A、B 两个仓库用同名分支 dms-1，只有 A 的预审 clean。在 A 的目录里 `gh pr create -R org/b --head dms-1` 开的是 B 的 PR。
+    const other = copyRepo(makeScenarioRepo());
+    const calls: { repoPath: string | null; dir: string | null }[] = [];
+    let cleanRepo = "";
+    const workflow: NonNullable<MergeGateDeps["workflow"]> = {
+      anyWorkflow: () => true,
+      // 只有 A 的预审 clean；认不出仓库（repoPath 为 null）时 B 也要 clean，所以拦下
+      prCreate: async (i) => (calls.push({ repoPath: i.repoPath, dir: i.dir }), i.repoPath === cleanRepo ? null : "还没通过预审"),
+      merge: () => null,
+    };
+    const twoRepos = (a: string): Ticket[] => {
+      const t = ticket("X-1", a, "dms-1");
+      return [{ ...t, repos: [...t.repos, { ...t.repos[0], id: 1, repoPath: other }] }];
+    };
+    const slugs = (slug: string, cwdRepo?: string) => (cwdRepo === undefined && slug === "org/b" ? { path: other, remote: "origin" } : null);
+    const t = setup({ workflow, tickets: twoRepos, repoOfSlug: slugs });
+    cleanRepo = t.repoPath;
+    const pr = (repo: string | null) => ({ kind: "pr_create" as const, dir: null, head: "dms-1", draft: false, repo });
+    // 没写 -R：开在 A，A 的预审放行
+    expect(await t.ask(pr(null), { ticket: "X-1" })).toEqual({ v: 1, decision: "allow" });
+    // -R 指到 B：按 B 查，目录（A 的）不交给流程读 HEAD
+    expect(await t.ask(pr("org/b"), { ticket: "X-1" })).toEqual({ v: 1, decision: "deny", reason: "还没通过预审" });
+    expect(calls[1]).toEqual({ repoPath: other, dir: null });
+    // -R 的仓库本机找不到：认不出是哪个仓库，交给流程按「同名分支的仓库每个都要 clean」判断
+    expect(await t.ask(pr("org/nowhere"), { ticket: "X-1" })).toMatchObject({ decision: "deny" });
+    expect(calls[2]).toEqual({ repoPath: null, dir: null });
+    // -R 写的就是命令所在的仓库：照常按这个仓库和目录查
+    const here = setup({ workflow, tickets: twoRepos, repoOfSlug: (slug, cwdRepo) => (slug === "org/a" && cwdRepo !== undefined ? { path: cwdRepo, remote: "origin" } : null) });
+    cleanRepo = here.repoPath;
+    calls.length = 0;
+    expect(await here.ask(pr("org/a"), { ticket: "X-1" })).toEqual({ v: 1, decision: "allow" });
+    expect(calls).toEqual([{ repoPath: here.repoPath, dir: here.repoPath }]);
+  });
+
   it("checks the gh pr create that follows a HEAD push in the same command", async () => {
     const w = wf({ prCreate: "先别开 PR" });
     const t = setup({ workflow: w.workflow });

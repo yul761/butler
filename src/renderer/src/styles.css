@@ -767,3 +767,4 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 .workflow-step-options { display: inline-flex; gap: 8px; align-items: center; }
 .workflow-note { flex: 1; min-width: 160px; }
 .workflow-notes { width: 100%; }
+.workflow-length { font-size: 12px; }

@@ -2505,6 +2505,8 @@ const ZH = {
     note: "这一步的要求（可不填）",
     notes: "整体说明（可不填）",
     noMerge: "流程里没有「合并」这一步：session 都不能合，要你自己合。",
+    count: (n: number, max: number) => `${n} / ${max} 字`,
+    tooLong: (n: number, max: number) => `${n} / ${max} 字：太长了，存不了。流程会原样发给每个 session，请删短一点。`,
     saved: "存好了。",
     unchanged: "和原来一样，没改。",
     strip: "工作流程",

@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { presetWorkflow, type FeatureWorkflowView, type TicketWorkflowView, type WorkflowSettingsView as View } from "../../../shared/workflow";
+import { NOTE_LIMIT, NOTES_LIMIT, presetWorkflow, type Workflow, type FeatureWorkflowView, type TicketWorkflowView, type WorkflowSettingsView as View } from "../../../shared/workflow";
 import { S, setUiLang } from "../strings";
 import { FeatureWorkflowStrip, TicketWorkflowStrip, WorkflowEditor, WorkflowSettingsView } from "./WorkflowParts";
 
@@ -112,6 +112,28 @@ describe("workflow settings (BTL-273)", () => {
     expect(html).not.toContain('data-testid="workflow-no-merge"');
     const noMerge = renderToStaticMarkup(createElement(WorkflowEditor, { initial: { steps: [{ id: "implement" }, { id: "open_pr" }], notes: "" }, busy: false, error: null, onSave: () => {}, onCancel: () => {} }));
     expect(noMerge).toContain(S.workflow.noMerge);
+  });
+
+  it("over-long text is kept whole, says why, and can't be saved; it isn't cut off by maxLength", () => {
+    const render = (w: Workflow) => renderToStaticMarkup(createElement(WorkflowEditor, { initial: w, busy: false, error: null, onSave: () => {}, onCancel: () => {} }));
+    const saveDisabled = (html: string) => /<button[^>]*disabled=""[^>]*data-testid="workflow-save"/.test(html);
+    const longNotes = "说".repeat(NOTES_LIMIT) + "尾巴";
+    const notes = render({ steps: [{ id: "implement" }, { id: "merge" }], notes: longNotes });
+    expect(notes).not.toMatch(/maxlength/i);
+    expect(notes).toContain(`${longNotes}</textarea>`);
+    expect(notes).toContain(S.workflow.tooLong(NOTES_LIMIT + 2, NOTES_LIMIT));
+    expect(saveDisabled(notes)).toBe(true);
+    // 某一步的要求超长：同样整段留着、说明原因、存不了
+    const longNote = "x".repeat(NOTE_LIMIT + 1);
+    const step = render({ steps: [{ id: "implement", note: longNote }, { id: "merge" }], notes: "" });
+    expect(step).toContain(`value="${longNote}"`);
+    expect(step).toContain(S.workflow.tooLong(NOTE_LIMIT + 1, NOTE_LIMIT));
+    expect(saveDisabled(step)).toBe(true);
+    // 快到上限：显示字数，还能存；短的什么都不显示
+    const near = render({ steps: [{ id: "implement", note: "x".repeat(NOTE_LIMIT) }, { id: "merge" }], notes: "" });
+    expect(near).toContain(S.workflow.count(NOTE_LIMIT, NOTE_LIMIT));
+    expect(saveDisabled(near)).toBe(false);
+    expect(render({ steps: [{ id: "implement", note: "短" }, { id: "merge" }], notes: "" })).not.toContain("workflow-length");
   });
 });
 
