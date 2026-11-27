@@ -574,6 +574,7 @@ Some features let Shipherd leave something outside your machine on your behalf, 
 | Post review briefs | `externalPrBriefPost` | `0` (off) | Writing the review brief into the PR description after each pre-review. The "Post to PR" button works either way and is recorded in the audit log. |
 | Intake: ask on the tracker | `externalIntakeTrackerComment` | `0` (off) | Letting a session or the global control ask for missing information on the tracker ticket when [automatic intake](#automatic-intake) finds it incomplete. |
 | Intake: change ticket status | `externalIntakeTrackerStatus` | `0` (off) | Telling a session that automatic intake started to move its tracker ticket to In Progress first. |
+| Ask a bot to review | `externalPrReviewRequest` | `0` (off) | When a workflow reaches bot review, Shipherd asks Copilot to review or comments `@codex review` on the PR. When off, the session is reminded to ask itself. |
 
 Each switch is `1` or `0`.
 

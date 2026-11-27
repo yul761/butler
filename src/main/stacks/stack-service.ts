@@ -643,12 +643,17 @@ export class StackService {
           const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `retarget #${pr.number} to ${stack.trunk}` }, () => gh.prEditBase(repo, slug, pr.number, stack.trunk));
           if (!r.ran) return;
         }
-        // 工作流程还不让开成可以 review 的（没过预审、流程要先开 draft）：留着 draft，等过了下一轮再改。
-        if (pr.isDraft && gate.mode !== "open") return;
+        // 工作流程还不让开（比如预审排在开 PR 前面、这个提交没过）：留着 draft，等过了下一轮再改。
+        if (pr.isDraft && gate.mode === "blocked") return;
         let ready = !pr.isDraft;
         if (pr.isDraft) {
-          const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `mark #${pr.number} ready for review` }, () => gh.prReady(repo, slug, pr.number));
-          ready = r.ran;
+          if (gate.mode === "draft") {
+            // 流程要 PR 先是 draft：栈这边照样提升（去掉前缀、label，换描述），只是不改成可以 review，由 session 按流程去改。
+            ready = true;
+          } else {
+            const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `mark #${pr.number} ready for review` }, () => gh.prReady(repo, slug, pr.number));
+            ready = r.ran;
+          }
         }
         const title = stripPrefix(pr.title);
         if (title !== pr.title) await this.d.external.attempt("pr_title_edit", { scope, target: pr.url, summary: `drop the stack prefix`, payload: title }, () => gh.prEditTitle(repo, slug, pr.number, title));
@@ -674,14 +679,9 @@ export class StackService {
         gh.prCreate(repo, slug, { base: stack.trunk, head: layer.branch, title, body, draft: gate.mode === "draft", labels: [] }));
       if (!r.ran) return;
       brief?.posted(r.value.url);
-      if (gate.mode === "draft") {
-        // 流程要先开 draft：PR 号记下，层还是 draft，等 draft 被改成可以 review（session 或你自己）以后再提升。
-        this.d.repo.updateLayer(layer.id, { mode: "draft", state: "draft", prNumber: r.value.number, prUrl: r.value.url, draftSince: this.d.now() });
-        this.d.record?.("stack.pr_open", { kind: "create_draft" });
-        return;
-      }
+      // 流程要先开 draft 时 PR 是 draft，但它不是栈的 draft 层（没有前缀、不催）：层照样算提升好了，之后由 session 按流程改成可以 review。
       this.d.repo.updateLayer(layer.id, { state: "ready", mode: "branch", prNumber: r.value.number, prUrl: r.value.url, draftSince: null });
-      this.d.record?.("stack.pr_open", { kind: "create" });
+      this.d.record?.("stack.pr_open", { kind: gate.mode === "draft" ? "create_draft" : "create" });
     } catch (e) {
       this.d.log(`stacks: promoting ${layer.branch} failed`, e);
     }

@@ -419,7 +419,7 @@ describe("StackService and the ticket workflow (BTL-273 review 11)", () => {
     expect(w.repoT.layers(id).find((l) => l.branch === "b")).toMatchObject({ state: "ready" });
   });
 
-  it("opens it as a draft when the workflow wants a draft, and leaves the draft alone after", async () => {
+  it("opens it as a draft when the workflow wants a draft, without the stack's do-not-review prefix", async () => {
     const w = world();
     const id = await defineAll(w);
     gated(w, { now: { mode: "draft" } });
@@ -427,11 +427,29 @@ describe("StackService and the ticket workflow (BTL-273 review 11)", () => {
     await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
     const create = fake.calls.find((c) => c.fn === "prCreate")!.args[0] as CreatePr;
     expect(create).toMatchObject({ head: "b", draft: true });
+    expect(create.title).not.toMatch(/^\[stack/);
     const b = w.repoT.layers(id).find((l) => l.branch === "b")!;
-    expect(b).toMatchObject({ state: "draft", prNumber: expect.any(Number) });
+    expect(b).toMatchObject({ state: "ready", prNumber: expect.any(Number) });
     await w.svc.promoteBottom(w.repoT.get(id)!);
+    await w.svc.tick();
     expect(fake.calls.filter((c) => c.fn === "prReady")).toEqual([]);
     expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
+    expect(fake.calls.filter((c) => c.fn === "prEditTitle")).toEqual([]);
+  });
+
+  it("an existing stack draft loses its prefix but stays a draft when the workflow wants one", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const [la, lb] = w.repoT.layers(id);
+    fake.prs.set(1, { number: 1, url: "https://github.com/acme/app/pull/1", state: "OPEN", isDraft: false, title: "A", body: "", base: "main", head: "a", headSha: null, labels: [] });
+    w.repoT.updateLayer(la!.id, { prNumber: 1, prUrl: "https://github.com/acme/app/pull/1", state: "ready" });
+    expect(await w.svc.setLayerMode(lb!.id, "draft")).toEqual({ ok: true });
+    gated(w, { now: { mode: "draft" } });
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    expect(fake.prs.get(100)).toMatchObject({ isDraft: true, base: "main", labels: [], title: "B title b" });
+    expect(w.repoT.layer(lb!.id)).toMatchObject({ state: "ready" });
+    expect(fake.calls.filter((c) => c.fn === "prReady")).toEqual([]);
   });
 
   it("doesn't mark an existing draft ready before the workflow allows it", async () => {

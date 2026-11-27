@@ -574,6 +574,7 @@ Shipherd 能在你 review 之前先把一遍关。默认全是关着的或只读
 | 贴 review 简报 | `externalPrBriefPost` | `0`（关） | 每次预审完成后把 review 简报写进 PR 描述。「贴到 PR」按钮不受这个开关影响，照样记进审计。 |
 | 自动接活：到 tracker 提问 | `externalIntakeTrackerComment` | `0`（关） | [自动接活](#自动接活)发现 ticket 缺信息时，让 session 或全局总控在 tracker 的 ticket 上留言问。 |
 | 自动接活：改 ticket 状态 | `externalIntakeTrackerStatus` | `0`（关） | 自动接活开的 session 先把 tracker 上的 ticket 改成进行中。 |
+| 请 bot review | `externalPrReviewRequest` | `0`（关） | 工作流程走到 bot review 时，由 Shipherd 请 Copilot review，或在 PR 上评论 `@codex review`。关着时提醒 session 自己请。 |
 
 每个开关填 `1` 或 `0`。
 
