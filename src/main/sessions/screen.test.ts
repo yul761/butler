@@ -1,5 +1,6 @@
+import { Terminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";
-import { dialogOnScreen, inputBoxText, pasteInInputBox, permissionOnScreen, squash, TermScreen } from "./screen";
+import { dialogOnScreen, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen } from "./screen";
 
 const RULE = "─".repeat(120);
 
@@ -23,6 +24,166 @@ describe("TermScreen", () => {
     s.resize(40, 8);
     await s.flush();
     expect(s.lines()).toHaveLength(8);
+    s.dispose();
+  });
+});
+
+/** 原来的做法（BTL-277 之前）：每块输出马上交给 xterm 异步解析，改尺寸排在流里，看之前等它追上。拿它当对照。 */
+class EagerScreen {
+  readonly term: Terminal;
+  constructor(cols: number, rows: number) {
+    this.term = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true });
+  }
+  write(d: string) {
+    this.term.write(d);
+  }
+  resize(cols: number, rows: number) {
+    this.term.write("", () => this.term.resize(cols, rows));
+  }
+  async lines(): Promise<string[]> {
+    await new Promise<void>((r) => this.term.write("", r));
+    const b = this.term.buffer.active;
+    return Array.from({ length: this.term.rows }, (_, i) => b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
+  }
+}
+
+const SPIN = ["✻", "✶", "✳", "✢", "·"];
+/** 像 claude 的界面：同步输出包着的局部重画、光标跳列、颜色、输入框、权限确认、信任对话框、清屏、备用屏幕。 */
+function tuiStream(seed: number, frames: number): string[] {
+  let rnd = seed;
+  const next = (n: number) => {
+    rnd = (rnd * 1103515245 + 12345) % 2147483648;
+    return rnd % n;
+  };
+  const rule = (w: number) => `\x1b[38;2;136;136;136m${"─".repeat(w)}\x1b[39m`;
+  const out: string[] = [];
+  for (let f = 0; f < frames; f++) {
+    const k = next(20);
+    let frame: string;
+    if (k === 0) frame = `\x1b[2J\x1b[H\x1b[2GQuick\x1b[8Gsafety\x1b[15Gcheck\r\n\x1b[2G\x1b[38;2;177;185;249m❯\x1b[4GNo,\x1b[8Gexit\x1b[39m\r\n\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\x1b[22Gfolder\r\n\x1b[2GEnter\x1b[8Gto\x1b[11Gconfirm`;
+    else if (k === 1) frame = `\x1b[6A\x1b[J${rule(60)}\r\n Bash command\r\n   echo ${f}\r\n Do\x1b[5Gyou\x1b[9Gwant\x1b[14Gto\x1b[17Gproceed?\r\n ❯ 1. Yes\r\n   2. No`;
+    else if (k === 2) frame = `\x1b[?1049h\x1b[H\x1b[2Jfull screen menu ${f}\x1b[?1049l`;
+    else {
+      const typed = "abcdefghij".slice(0, next(10));
+      frame = `\x1b[?2026h\r\x1b[4A\x1b[2K\x1b[38;2;215;119;87m${SPIN[f % SPIN.length]}\x1b[39m\x1b[3GThinking…\x1b[14G(${f}s\x1b[19G·\x1b[21Gesc\x1b[25Gto\x1b[28Ginterrupt)\r\n\x1b[2K${rule(60)}\r\n\x1b[2K❯\x1b[3G${typed}\r\n\x1b[2K${rule(60)}\r\n\x1b[2K  ⏵⏵ auto mode on\x1b[?2026l`;
+      if (next(4) === 0) frame = `⏺ line ${f} of the answer, 中文也有\r\n` + frame;
+    }
+    out.push(frame);
+  }
+  return out;
+}
+
+/** 按随机位置切块（会切在控制序列和多字节字符中间，pty 也会这样）。 */
+function chop(s: string, seed: number): string[] {
+  let rnd = seed;
+  const out: string[] = [];
+  let i = 0;
+  while (i < s.length) {
+    rnd = (rnd * 1103515245 + 12345) % 2147483648;
+    const n = 1 + (rnd % 40);
+    out.push(s.slice(i, i + n));
+    i += n;
+  }
+  return out;
+}
+
+describe("TermScreen lazy parsing (BTL-277)", () => {
+  it("parses nothing until someone looks at the screen", () => {
+    const s = new TermScreen(40, 4);
+    s.write("hello");
+    s.write(" world");
+    expect(s.pending()).toBe(11);
+    expect(s.lines()[0]).toBe("hello world");
+    expect(s.pending()).toBe(0);
+    s.dispose();
+  });
+
+  it("reads exactly what parsing every chunk as it came would show, at any point, across resizes", async () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const lazy = new TermScreen(60, 12);
+      const eager = new EagerScreen(60, 12);
+      const chunks = chop(tuiStream(seed, 120).join(""), seed);
+      let rnd = seed * 31;
+      for (const c of chunks) {
+        lazy.write(c);
+        eager.write(c);
+        rnd = (rnd * 1103515245 + 12345) % 2147483648;
+        if (rnd % 50 === 0) {
+          const cols = 40 + (rnd % 40), rows = 8 + (rnd % 10);
+          lazy.resize(cols, rows);
+          eager.resize(cols, rows);
+        }
+        if (rnd % 7 === 0) {
+          const want = await eager.lines();
+          const got = lazy.lines();
+          expect(got).toEqual(want);
+          expect(dialogOnScreen(got)).toBe(dialogOnScreen(want));
+          expect(permissionOnScreen(got)).toBe(permissionOnScreen(want));
+          expect(inputBoxText(got)).toBe(inputBoxText(want));
+        }
+      }
+      expect(lazy.lines()).toEqual(await eager.lines());
+      lazy.dispose();
+    }
+  });
+
+  it("drops what piled up past the limit and rebuilds from the replay tail when asked", () => {
+    let tail = "";
+    const s = new TermScreen(60, 10, () => tail);
+    const spin = tuiStream(5, 4000).filter((f) => f.includes("Thinking")).join("");
+    expect(spin.length).toBeGreaterThan(SCREEN_PENDING_LIMIT);
+    s.write(spin);
+    expect(s.pending()).toBe(0);
+    s.resize(50, 9);
+    // 回放缓冲里是最后一段：画着一个权限确认。
+    tail = `\x1b[2J\x1b[H${"─".repeat(50)}\r\n Bash command\r\n Do you want to proceed?\r\n ❯ 1. Yes`;
+    const lines = s.lines();
+    expect(lines).toHaveLength(9);
+    expect(lines[0]).toBe("─".repeat(50));
+    expect(permissionOnScreen(lines)).toBe(true);
+    // 重建完以后接着懒解析新来的输出。
+    s.write("\x1b[2J\x1b[Hready");
+    expect(s.pending()).toBeGreaterThan(0);
+    expect(s.lines()[0]).toBe("ready");
+    s.dispose();
+  });
+
+  it("a rebuild starts from a clean parser even when the last read stopped inside an escape sequence", () => {
+    // 上一次读停在两块 pty 输出之间，正好切开了一个标题（OSC）或者一个 CSI；之后的输出没解析就整段丢了。
+    for (const cut of ["\x1b]0;✳ Work", "\x1b[3", "\x1bP1$r", "\x1b"]) {
+      let tail = "";
+      const s = new TermScreen(40, 4, () => tail);
+      s.write(`before\r\n${cut}`);
+      expect(s.lines()[0]).toBe("before");
+      s.write("y".repeat(SCREEN_PENDING_LIMIT + 1));
+      tail = "hello\r\nworld no bel";
+      expect(s.lines().slice(0, 2), JSON.stringify(cut)).toEqual(["hello", "world no bel"]);
+      s.dispose();
+    }
+  });
+
+  it("a parse that throws leaves the screen to be rebuilt from the tail on the next read", () => {
+    const s = new TermScreen(20, 2, () => "\x1b[2J\x1b[Hfrom tail");
+    s.write("first");
+    const core = (s as unknown as { core: { writeSync(d: string): void } }).core;
+    const real = core.writeSync.bind(core);
+    let fail = true;
+    core.writeSync = (d: string) => {
+      if (fail) {
+        fail = false;
+        throw new Error("boom");
+      }
+      real(d);
+    };
+    expect(() => s.lines()).toThrow("boom");
+    expect(s.lines()[0]).toBe("from tail");
+    s.dispose();
+  });
+
+  it("keeps piling up without a tail (nothing to rebuild from)", () => {
+    const s = new TermScreen(20, 2);
+    s.write("x".repeat(SCREEN_PENDING_LIMIT + 10));
+    expect(s.pending()).toBe(SCREEN_PENDING_LIMIT + 10);
     s.dispose();
   });
 });

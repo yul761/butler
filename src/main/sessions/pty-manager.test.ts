@@ -557,6 +557,54 @@ describe("PtyManager.screenNeedsUser", () => {
   });
 });
 
+describe("PtyManager screen reads (BTL-277 lazy parsing)", () => {
+  const RULE = "─".repeat(120);
+  const spinner = (n: number) => `\x1b[?2026h\r\x1b[3A\x1b[2K✻ Thinking… (${n}s)\r\n\x1b[2K${RULE}\r\n\x1b[2K❯ \r\n\x1b[2K${RULE}\x1b[?2026l`;
+
+  it("answers without waiting for parsing: what was written is on the screen the moment it is read", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("Bash command\r\nDo you want to proceed?\r\n ❯ 1. Yes");
+    // 不 await screenSettled：读的时候同步解析完。
+    expect(mgr.permissionShowing("t1")).toBe(true);
+    spawned[0].pty.emit(`\x1b[2J\x1b[H${RULE}\r\n❯ 你好\r\n${RULE}\r\n  ? for shortcuts`);
+    expect(mgr.permissionShowing("t1")).toBe(false);
+    expect(mgr.startupDialogShowing("t1")).toBe(false);
+    expect(mgr.screenLines("t1")[1]).toBe("❯ 你好");
+  });
+
+  it("still finds a prompt drawn after more output than the screen keeps unparsed (rebuilt from the replay buffer)", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    let n = 0;
+    let written = 0;
+    while (written < 600 * 1024) {
+      const f = spinner(n++);
+      written += f.length;
+      spawned[0].pty.emit(f);
+    }
+    spawned[0].pty.emit(`\x1b[4A\x1b[J${RULE}\r\n Bash command\r\n Do you want to proceed?\r\n ❯ 1. Yes`);
+    expect(mgr.permissionShowing("t1")).toBe(true);
+    expect(mgr.screenNeedsUser("t1")).toBe(true);
+    spawned[0].pty.emit(`\x1b[4A\x1b[J${RULE}\r\n❯ draft\r\n${RULE}\r\n`);
+    expect(mgr.permissionShowing("t1")).toBe(false);
+  });
+
+  it("rebuilding the screen leaves the replay buffer alone: a renderer that fell behind still gets just the missing part", () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit("start\r\n");
+    const { mark } = mgr.snapshotAt("t1");
+    // 比屏幕排队的上限多、比回放缓冲（上限加余量）少：缓冲还留着 mark 之后的全部。
+    const line = `${"z".repeat(98)}\r\n`;
+    let more = "";
+    while (more.length < 290 * 1024) more += line;
+    spawned[0].pty.emit(more);
+    expect(mgr.permissionShowing("t1")).toBe(false);
+    expect(mgr.since("t1", mark)?.data).toBe(more);
+  });
+});
+
 describe("trimBuffer", () => {
   it("keeps short buffers and cuts long ones at a line boundary", () => {
     expect(trimBuffer("abc")).toBe("abc");

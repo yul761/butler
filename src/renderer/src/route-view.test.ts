@@ -61,6 +61,8 @@ describe("App wiring: every way into a ticket page checks the ticket is still th
   });
   it("no onOpenTicket or onGo goes straight to setRoute", () => {
     expect(props.filter((p) => p.includes("setRoute"))).toEqual([]);
-    for (const p of props) expect(p, p).toMatch(/^onOpenTicket \(key\) => openTicket\(key\)$|^onGo go$/);
+    // openTicketOnly 是 useCallback 包的 (key) => openTicket(key)（BTL-277：给 memo 的卡片、行一个稳定的回调）。
+    for (const p of props) expect(p, p).toMatch(/^onOpenTicket \(key\) => openTicket\(key\)$|^onOpenTicket openTicketOnly$|^onGo go$/);
+    expect(app).toMatch(/const openTicketOnly = useCallback\(\(key: string\) => openTicket\(key\), \[openTicket\]\);/);
   });
 });

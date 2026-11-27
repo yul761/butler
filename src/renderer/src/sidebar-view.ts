@@ -32,3 +32,13 @@ export function scopeDots(items: TurnItem[]): Map<string, Dot> {
 }
 
 export const youBadge = (n: number): string => (n > 99 ? "99+" : String(n));
+
+/** 两份点的内容一样（BTL-277）：一样就留着旧的 Map，memo 的侧栏不跟着重画。 */
+export function sameDots(a: Map<string, Dot>, b: Map<string, Dot>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, d] of a) {
+    const o = b.get(k);
+    if (!o || o.tone !== d.tone || o.you !== d.you) return false;
+  }
+  return true;
+}

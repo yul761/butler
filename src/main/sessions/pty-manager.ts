@@ -221,6 +221,16 @@ function replay(t: Term): string {
   return modePrefix(t.cutModes) + kept;
 }
 
+/** 和 replay 一样的内容，但不动缓冲（重建主进程的屏幕时用：读屏幕不该让渲染进程的 since 补不上）。 */
+function screenTail(t: Term): string {
+  const joined = t.chunks.join("");
+  const kept = trimBuffer(joined);
+  if (kept.length === joined.length) return modePrefix(t.cutModes) + kept;
+  const modes = new Map(t.cutModes);
+  recordModes(modes, joined.slice(0, joined.length - kept.length));
+  return modePrefix(modes) + kept;
+}
+
 export class PtyManager {
   private readonly terms = new Map<string, Term>();
   /** 已退出终端的回放内容（模式已经补在前面）。 */
@@ -250,7 +260,8 @@ export class PtyManager {
     const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
     const term: Term = {
       proc, chunks: [], chunkLen: 0, written: 0, epoch: nextEpoch++, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
-      screen: new TermScreen(cols, rows), submittedAt: 0, held: null,
+      // 屏幕攒太多没解析时用回放缓冲重建（BTL-277）：和渲染进程挂终端时重放的是同一份。
+      screen: new TermScreen(cols, rows, () => screenTail(term)), submittedAt: 0, held: null,
     };
     this.terms.set(termId, term);
     proc.onData((data) => {

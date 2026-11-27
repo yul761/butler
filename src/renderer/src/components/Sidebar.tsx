@@ -10,10 +10,14 @@ import { useStateRefetch } from "./useStateRefetch";
 // 侧栏（UI 重做第 2 层，spec §5.3）：轮到你、全部工作的树、总控、「Shipherd 自己」一组、防休眠。
 // 树里每个节点的点只表示谁该动（第 1 层的 turn:board 算出来，App 传进 dots）。
 
+/** 侧栏只用到名字（BTL-277：App 传名字的投影，session 的活动变了侧栏不跟着重画）。 */
+export type SidebarTicket = Pick<TicketView, "key" | "title">;
+export type SidebarFeature = Pick<FeatureView, "id" | "name"> & { tickets: SidebarTicket[] };
+
 interface Props {
   /** 单独的 ticket（feature 下的 ticket 在 features 里）。 */
-  tickets: TicketView[];
-  features: FeatureView[];
+  tickets: SidebarTicket[];
+  features: SidebarFeature[];
   /** 轮到你的件数；null = 还没取到过。0 和 null 都不显示徽标。 */
   youCount: number | null;
   /** dotKey(kind, id) → 点；没有的节点不画点。 */
@@ -45,18 +49,8 @@ function DotMark({ dot }: { dot: Dot | null }) {
 export const Sidebar = memo(function Sidebar({ tickets, features, youCount, dots, route, onNavigate, keepAwake, onKeepAwake }: Props) {
   const lessonsPending = useStateRefetch("lessons-pending", api.lessonsPending) ?? 0;
   const badge = youCount !== null && youCount > 0 ? youCount : 0;
-  const ticketButton = (t: TicketView) => (
-    <button
-      key={t.key}
-      className={cls("ticket", route.page === "ticket" && route.key === t.key)}
-      title={t.title ? `${t.key} ${t.title}` : t.key}
-      onClick={() => onNavigate({ page: "ticket", key: t.key })}
-    >
-      <span className="key">{t.key}</span>
-      {t.title && <span className="title">{t.title}</span>}
-      <DotMark dot={dots.get(dotKey("ticket", t.key)) ?? null} />
-    </button>
-  );
+  const activeKey = route.page === "ticket" ? route.key : null;
+  const activeFeature = route.page === "feature" ? route.id : null;
   const allActive = route.page === "all" || route.page === "unclaimed" || route.page === "archived";
   return (
     <nav className="sidebar">
@@ -78,9 +72,9 @@ export const Sidebar = memo(function Sidebar({ tickets, features, youCount, dots
       <button className={cls("nav all", allActive)} onClick={() => onNavigate({ page: "all" })}>{S.allWork}</button>
       <div className="ticket-groups">
         {features.map((f) => (
-          <FeatureGroup key={f.id} feature={f} route={route} onNavigate={onNavigate} ticketButton={ticketButton} dots={dots} />
+          <FeatureGroup key={f.id} feature={f} activeKey={activeKey} active={activeFeature === f.id} onNavigate={onNavigate} dots={dots} />
         ))}
-        {tickets.map(ticketButton)}
+        {tickets.map((t) => <TicketButton key={t.key} ticket={t} active={activeKey === t.key} dot={dots.get(dotKey("ticket", t.key)) ?? null} onNavigate={onNavigate} />)}
       </div>
       <button className={cls("nav shipherd", route.page === "shipherd")} onClick={() => onNavigate({ page: "shipherd" })}>{S.shipherdNav}</button>
       <h3 className="nav-group">{S.selfGroup}</h3>
@@ -98,11 +92,28 @@ export const Sidebar = memo(function Sidebar({ tickets, features, youCount, dots
   );
 });
 
+/** 侧栏里的一个 ticket。memo（BTL-277）：只有它自己的名字、点、选中状态变了才重画。 */
+const TicketButton = memo(function TicketButton({ ticket: t, active, dot, onNavigate }: { ticket: SidebarTicket; active: boolean; dot: Dot | null; onNavigate: (r: Route) => void }) {
+  return (
+    <button
+      className={cls("ticket", active)}
+      title={t.title ? `${t.key} ${t.title}` : t.key}
+      onClick={() => onNavigate({ page: "ticket", key: t.key })}
+    >
+      <span className="key">{t.key}</span>
+      {t.title && <span className="title">{t.title}</span>}
+      <DotMark dot={dot} />
+    </button>
+  );
+});
+
 interface FeatureGroupProps {
-  feature: FeatureView;
-  route: Route;
+  feature: SidebarFeature;
+  /** 正在看的 ticket（不在 ticket 页为 null）。 */
+  activeKey: string | null;
+  /** 正在看这个 feature 的页面。 */
+  active: boolean;
   onNavigate: (r: Route) => void;
-  ticketButton: (t: TicketView) => React.ReactNode;
   dots: Map<string, Dot>;
 }
 
@@ -140,19 +151,23 @@ function GroupRow({ name, count, collapsed, onToggle, active, onOpen, dot }: Gro
   );
 }
 
-/** 侧栏里的一个 feature，下面列它的 ticket。 */
-function FeatureGroup({ feature: f, route, onNavigate, ticketButton, dots }: FeatureGroupProps) {
+/** 侧栏里的一个 feature，下面列它的 ticket。memo（BTL-277）：别的 feature 变了这一组不重画。 */
+const FeatureGroup = memo(function FeatureGroup({ feature: f, activeKey, active, onNavigate, dots }: FeatureGroupProps) {
   const [collapsed, toggle] = useCollapsed(`sidebar:${f.id}`);
   // 收起时正在看的那个 ticket 还留着，不然不知道自己在哪。
-  const shown = collapsed ? f.tickets.filter((t) => route.page === "ticket" && route.key === t.key) : f.tickets;
+  const shown = collapsed ? f.tickets.filter((t) => activeKey === t.key) : f.tickets;
   return (
     <div className="feature-group">
       <GroupRow
         name={f.name} count={f.tickets.length} collapsed={collapsed} onToggle={toggle}
-        active={route.page === "feature" && route.id === f.id} onOpen={() => onNavigate({ page: "feature", id: f.id })}
+        active={active} onOpen={() => onNavigate({ page: "feature", id: f.id })}
         dot={dots.get(dotKey("feature", f.id)) ?? null}
       />
-      {shown.length > 0 && <div className="feature-tickets">{shown.map(ticketButton)}</div>}
+      {shown.length > 0 && (
+        <div className="feature-tickets">
+          {shown.map((t) => <TicketButton key={t.key} ticket={t} active={activeKey === t.key} dot={dots.get(dotKey("ticket", t.key)) ?? null} onNavigate={onNavigate} />)}
+        </div>
+      )}
     </div>
   );
-}
+});

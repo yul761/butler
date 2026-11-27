@@ -1,6 +1,6 @@
 // 首页「轮到你」（UI 重做第 2 层，spec §5.3）：标题和一句概况、要你动手的卡片、各个 feature 的小表、
 // 折起来的「进行中」和「运行情况」。数据都来自第 1 层的 turn:board，这里只排版。
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import type { NowView } from "../../../shared/types";
 import type { Route } from "../App";
 import {
@@ -13,7 +13,8 @@ import { RunRow } from "./ScopeParts";
 import { TurnCard, type TurnCardProps } from "./TurnCard";
 import type { TurnBoardState } from "./useTurnBoard";
 import { useCollapsed } from "./useCollapsed";
-import type { TurnBoard } from "../../../shared/turn";
+import { useKeepSame } from "./useKeepSame";
+import type { ScopeTurnRow, TurnBoard } from "../../../shared/turn";
 
 export interface HomeBodyProps {
   board: TurnBoard | null;
@@ -105,25 +106,31 @@ function Scopes({ board, onGo }: { board: TurnBoard; onGo: (r: Route) => void })
   return (
     <section className="home-scopes">
       <h3>{S.hm.scopesHeading}</h3>
-      {shown.map((row) => (
-        <div key={`${row.kind}:${row.id}`} className="home-scope" data-testid={`home-scope-${row.kind}-${row.id}`}>
-          <button className="name" title={row.name} onClick={() => onGo(scopeRoute(row))}>{row.name}</button>
-          <span className="line muted">{scopeLine(row, S)}</span>
-          <div className="turn-bar">
-            {barSegments(row.bar, row.total).map((s) => <i key={s.tone} className={`turn-${s.tone}`} style={{ width: `${s.pct}%` }} />)}
-          </div>
-          <span className="who">{row.youCount > 0 && <span className="turn-tag turn-ask">{S.hm.whoYou(row.youCount)}</span>}</span>
-        </div>
-      ))}
+      {shown.map((row) => <ScopeRow key={`${row.kind}:${row.id}`} row={row} onGo={onGo} />)}
       {hidden > 0 && <button className="link" onClick={() => onGo({ page: "all" })}>{S.hm.scopeMore(board.scopes.length)}</button>}
     </section>
   );
 }
 
+/** 首页 feature 小表的一行。memo（BTL-277）：board 按结构留旧引用，别的 feature 变了这一行不重画。 */
+const ScopeRow = memo(function ScopeRow({ row, onGo }: { row: ScopeTurnRow; onGo: (r: Route) => void }) {
+  return (
+    <div className="home-scope" data-testid={`home-scope-${row.kind}-${row.id}`}>
+      <button className="name" title={row.name} onClick={() => onGo(scopeRoute(row))}>{row.name}</button>
+      <span className="line muted">{scopeLine(row, S)}</span>
+      <div className="turn-bar">
+        {barSegments(row.bar, row.total).map((s) => <i key={s.tone} className={`turn-${s.tone}`} style={{ width: `${s.pct}%` }} />)}
+      </div>
+      <span className="who">{row.youCount > 0 && <span className="turn-tag turn-ask">{S.hm.whoYou(row.youCount)}</span>}</span>
+    </div>
+  );
+});
+
 function Running({ board, now, onOpenTicket }: { board: TurnBoard; now: number; onOpenTicket: (key: string) => void }) {
   // 这个记号在存储里的意思是「展开了」，默认收起。
   const [open, toggle] = useCollapsed("home:running");
-  const rows = runningRows(board.items, S, now);
+  // 每次重算出新的行对象：内容没变就留旧的，memo 的 RunRow 才命中。
+  const rows = useKeepSame(runningRows(board.items, S, now));
   return (
     <section className="home-running">
       <h3><GroupToggle open={open} onToggle={toggle}>{S.hm.running(rows.length)}</GroupToggle></h3>
