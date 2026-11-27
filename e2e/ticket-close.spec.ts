@@ -2,7 +2,7 @@ import { REASON_LIMIT } from "../src/shared/control";
 import { S } from "../src/renderer/src/strings";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, makeGitRepo, test, newButton, type FakeGhFixture } from "./fixtures";
+import { completeWizard, expect, FAKE_GH_ORIGIN, ghCalls, ghReadPr, makeGitRepo, test, newButton, type FakeGhFixture } from "./fixtures";
 
 // BTL-270：ticket 不做了就关掉，和「完成」分开；原因必填，关了以后横幅写着原因，能重新打开。
 test("close a ticket with a reason, see why it is closed, then reopen it", async ({ makeSandbox, launch }) => {
@@ -76,8 +76,8 @@ test("when a PR fails to close, the dialog stays open with the reason and retryi
   await page.getByRole("button", { name: S.create, exact: true }).click();
   await expect(page.getByRole("heading", { name: "E2E-12", exact: true })).toBeVisible();
 
-  // 等 PR 读过（gh pr view 跑过、gh 调用停下来），它才是能关的 PR。
-  await expect.poll(() => ghCalls(s).some((a) => a[0] === "pr" && a[1] === "view"), { timeout: 60_000 }).toBe(true);
+  // 等 PR 读过（gh pr view 或批量读跑过、gh 调用停下来），它才是能关的 PR。
+  await expect.poll(() => ghReadPr(s, url), { timeout: 60_000 }).toBe(true);
   let last = -1;
   await expect.poll(() => { const n = ghCalls(s).length; const same = n === last; last = n; return same; }, { timeout: 30_000, intervals: [2000] }).toBe(true);
 
