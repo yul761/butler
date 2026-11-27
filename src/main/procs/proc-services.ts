@@ -8,7 +8,7 @@ import { MemoryMonitor, sampleIntervalMs, type AppMetric, type MonitorSample } f
 import { MemoryRefresh } from "./memory-refresh";
 import { OrphanSweeper, platformKill } from "./orphans";
 import { platformBackend, PriorityManager } from "./priority";
-import { procTableReader, sharedProcTable, type ProcTable, type RunCommand } from "./proc-table";
+import { procTableReader, sharedProcTable, type RunCommand, type TimedProcTable } from "./proc-table";
 import { readSystemMemory } from "./system-memory";
 
 /**
@@ -48,7 +48,7 @@ export interface ProcServices {
   priority: PriorityManager;
   orphans: OrphanSweeper;
   /** 最多 5 秒旧的整张进程表，和内存采样共用（BTL-275）：活动探测从这里读子孙进程的 CPU。要杀进程的地方别用它。 */
-  table(): Promise<ProcTable | null>;
+  table(): Promise<TimedProcTable | null>;
   /** 渲染进程报的终端可见性。出现在屏幕上时那棵树马上恢复优先级。 */
   terminalVisible(termId: string, visible: boolean): void;
   /** claude 收下一条输入（UserPromptSubmit）或者用户在终端里打字：马上恢复优先级。 */
@@ -88,7 +88,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
       }),
     appMetrics: d.appMetrics,
     mainPid: process.pid,
-    readTable: table,
+    readTable: () => table().then((t) => t?.table ?? null),
     readSystem: () => readSystemMemory(platform),
     enabled: () => memoryMonitorOn(d.settings) || backgroundPriorityOn(d.settings) || orphanCleanupOn(d.settings) || !!d.sampleNeeded?.(),
     recordOn: () => memoryMonitorOn(d.settings),

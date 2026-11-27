@@ -109,7 +109,9 @@ describe("RepoIdentity", () => {
       const asyncGit = vi.fn(async () => {
         throw new Error("timeout");
       });
-      const id = new RepoIdentity({ git, asyncGit, exists: (p) => !p.startsWith("/gone") && !p.startsWith("/plain/") });
+      // Windows 上 join 拼出反斜杠：比之前统一成 /。
+      const slash = (p: string) => p.replace(/\\/g, "/");
+      const id = new RepoIdentity({ git, asyncGit, exists: (p) => !slash(p).startsWith("/gone") && !slash(p).startsWith("/plain/") });
       await id.warm(["/slow", "/gone", "/plain"]);
       expect(asyncGit).toHaveBeenCalledTimes(1);
       expect(id.slugOf("/slow")).toBe("acme/later");

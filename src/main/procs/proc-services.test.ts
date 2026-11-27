@@ -65,7 +65,7 @@ describe("the shared process table (BTL-275)", () => {
   it("asking whether a background shell is still alive reads a fresh table: a shared one may predate the shell, and 'gone' is never re-asked", async () => {
     const before = new Map([[100, { pid: 100, ppid: 1, rssKb: 1, cpuMs: 1000, start: "s", args: "claude" }]]);
     const after = new Map([...before, [101, { pid: 101, ppid: 100, rssKb: 1, cpuMs: 0, start: "s", args: "/bin/zsh -c npm run dev" }]]);
-    const probe = procTreeFrom(async () => before, "darwin", async () => after);
+    const probe = procTreeFrom(async () => ({ at: 0, table: before }), "darwin", async () => ({ at: 1, table: after }));
     expect(await probe(100, ["npm run dev"])).toEqual({ cpuMs: 0, liveShell: true });
   });
 
@@ -73,12 +73,33 @@ describe("the shared process table (BTL-275)", () => {
     const shared = new Map([[100, { pid: 100, ppid: 1, rssKb: 1, cpuMs: 1000, start: "s", args: "claude" }], [101, { pid: 101, ppid: 100, rssKb: 1, cpuMs: 10, start: "s", args: "node" }]]);
     const later = new Map([...shared, [101, { pid: 101, ppid: 100, rssKb: 1, cpuMs: 900, start: "s", args: "node" }]]);
     let fresh = 0;
-    const probe = procTreeFrom(async () => shared, "darwin", async () => (fresh++, later));
+    const probe = procTreeFrom(async () => ({ at: 0, table: shared }), "darwin", async () => (fresh++, { at: 1, table: later }));
     expect((await probe(100, [])).cpuMs).toBe(10);
     expect((await probe(100, [])).cpuMs).toBe(900);
     expect(fresh).toBe(1);
     expect((await probe(200, [])).cpuMs).toBe(0);
     expect(fresh).toBe(1);
+  });
+
+  it("a third probe within the shared table's life does not go back to the older shared table (the CPU reading would go backwards)", async () => {
+    const cpu = (ms: number) => new Map([[100, { pid: 100, ppid: 1, rssKb: 1, cpuMs: 0, start: "s", args: "claude" }], [101, { pid: 101, ppid: 100, rssKb: 1, cpuMs: ms, start: "s", args: "node" }]]);
+    const s0 = { at: 0, table: cpu(10) };
+    let t = 1000;
+    const freshReads: number[] = [];
+    const probe = procTreeFrom(async () => s0, "darwin", async () => {
+      t += 1000;
+      freshReads.push(t);
+      return { at: t, table: cpu(t) };
+    });
+    const readings = [];
+    for (let i = 0; i < 3; i++) readings.push((await probe(100, [])).cpuMs!);
+    expect(readings).toEqual([10, 2000, 3000]);
+    expect(freshReads).toHaveLength(2);
+    // 共用表换成更新的一张以后照旧用它，不现读
+    const s1 = { at: 10_000, table: cpu(5000) };
+    const probe2 = procTreeFrom(async () => s1, "darwin", async () => (freshReads.push(-1), null));
+    expect((await probe2(100, [])).cpuMs).toBe(5000);
+    expect(freshReads).toHaveLength(2);
   });
 
   it("on Windows the activity probe still does not start PowerShell", async () => {

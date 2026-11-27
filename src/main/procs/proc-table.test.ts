@@ -67,12 +67,14 @@ describe("sharedProcTable (BTL-275): one ps for the activity probe and the memor
     const [a, b] = [shared(), shared()];
     gate.release!();
     expect(await a).toBe(await b);
+    expect((await a)?.at).toBe(0);
     expect(reads).toBe(1);
     t = 4999;
     expect(await shared()).toBe(await a);
     t = 5000;
     const c = await shared();
     expect(c).not.toBe(await a);
+    expect(c?.at).toBe(5000);
     expect(reads).toBe(2);
     fail = true;
     t = 20_000;

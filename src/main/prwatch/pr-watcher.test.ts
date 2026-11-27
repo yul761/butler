@@ -947,6 +947,28 @@ describe("PrWatcher: branches", () => {
     expect(s.w.statusOf("BTL-1")).toEqual([expect.objectContaining({ prId: null, readError: true, ci: "passing" })]);
   });
 
+  it("a branch read that recovers while the branch has an open PR notifies (the stack tick no longer refreshes every minute, BTL-275)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.link();
+    s.gh.prStatus.mockResolvedValue(pr());
+    await s.w.check();
+    // 分支检查上次列 PR 失败了；之后一次强制检查（分支有开着的 PR 时只有强制的才查）列成功
+    s.branches.upsert({ repoId: s.repoId, ticketKey: "BTL-1", branch: "b", ci: "unknown", headSha: null, failed: [], readError: true, checkedAt: s.now() });
+    s.gh.prsForBranch.mockResolvedValue([listed(7)]);
+    s.deps.notify.mockClear();
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prsForBranch).toHaveBeenCalled();
+    expect(s.branches.get(s.repoId)).toMatchObject({ readError: false });
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+    // 再强制查一次还是好的：没变，不通知
+    s.deps.notify.mockClear();
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.deps.notify).not.toHaveBeenCalled();
+  });
+
   it("an open PR Shipherd gave up reading still counts as the branch's open PR: the branch check stays paused", async () => {
     const s = setup();
     const row = s.link();

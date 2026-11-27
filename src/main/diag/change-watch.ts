@@ -20,3 +20,34 @@ export function changeWatcher(read: () => unknown, changed: () => void): () => v
     last = now;
   };
 }
+
+/** 兜底刷新的间隔（BTL-275 审查）：有的写入没发 notify，原来靠栈 tick 每分钟一次盖住；现在最多 10 分钟一次。 */
+export const BACKSTOP_REFRESH_MS = 10 * 60_000;
+
+/**
+ * 每分钟一次的检查（BTL-275）：「现在」页的提醒变了、本地日期变了（看板的「今天合并」按 dayStart 算，过了午夜要翻篇）、
+ * 离上次发已经过了 backstopMs，任何一个满足就发一次 notify（一次检查最多一次）。
+ * notify 走 Invalidator：窗口藏着时照旧攒着，回来时补发，所以这里不看窗口。
+ */
+export function minuteRefresh(d: {
+  notices: () => unknown;
+  day: () => string;
+  now: () => number;
+  notify: () => void;
+  backstopMs?: number;
+}): () => void {
+  const backstopMs = d.backstopMs ?? BACKSTOP_REFRESH_MS;
+  let due = false;
+  const notices = changeWatcher(d.notices, () => (due = true));
+  const day = changeWatcher(d.day, () => (due = true));
+  let last = d.now();
+  return () => {
+    due = false;
+    notices();
+    day();
+    const t = d.now();
+    if (!due && t - last < backstopMs) return;
+    last = t;
+    d.notify();
+  };
+}

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { isSafeRule } from "../permissions/classify";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { renameWithRetrySync } from "../util/fs-retry";
 import { GIT_SAFE_ARGS, gitBinary } from "../util/git-path";
@@ -72,11 +72,31 @@ function readJson(file: string, log: ProjectMcpPaths["log"], o: { repo: boolean 
   return undefined;
 }
 
-/** 文件的版本：设备、inode、大小、修改和变更时间（纳秒）。读不到（不存在等）为 null。 */
-function fileVersion(file: string): string | null {
+/**
+ * 修改时间离现在这么近的文件不缓存（BTL-275 审查）：mtime 只精确到秒的文件系统（HFS+、网络盘）上，
+ * 同一秒里原地改了、大小又没变，版本看不出来。
+ */
+export const RECENT_WRITE_MS = 2_000;
+
+/**
+ * 文件的版本：设备、inode、大小、修改和变更时间（纳秒）。读不到（不存在等）为 null；
+ * 修改时间离现在不到 RECENT_WRITE_MS 的也是 null（当作没法缓存）。
+ */
+function fileVersion(file: string, now = Date.now()): string | null {
   try {
     const st = statSync(file, { bigint: true });
+    if (now - Number(st.mtimeMs) < RECENT_WRITE_MS) return null;
     return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 文件或目录是哪一个（设备 + inode），不看内容和修改时间。读不到为 null。 */
+function identity(path: string): string | null {
+  try {
+    const st = statSync(path, { bigint: true });
+    return `${st.dev}:${st.ino}`;
   } catch {
     return null;
   }
@@ -190,17 +210,42 @@ function approvals(cwd: string, claudeJson: Json | undefined, p: ProjectMcpPaths
 }
 
 /**
- * 主目录按 cwd 缓存（BTL-275：每开一个 session 都起一次 git）。只缓存 cwd 下面就有 .git 的（主目录或 worktree 的根），
- * 而且只在 cwd/.git 没变时用：worktree 删了、同一个路径换成别的仓库的 worktree，.git 文件就换了，要重新问 git，
- * 不能把上一个仓库的批准带过来。git 失败的不缓存。
+ * cwd/.git 是哪一个：目录看身份（git 操作时 .git 下老在建删 index.lock，目录的修改时间一直变）；
+ * worktree 的 .git 文件看完整版本，并读出它指向的 gitdir（<主目录>/.git/worktrees/<名字>）。读不到为 null。
  */
-const mainCache = new Map<string, { version: string; main: string | undefined }>();
+function gitLink(cwd: string): { version: string; gitdir: string | null } | null {
+  const dotGit = join(cwd, ".git");
+  try {
+    const st = statSync(dotGit, { bigint: true });
+    if (st.isDirectory()) return { version: `dir:${st.dev}:${st.ino}`, gitdir: null };
+    const version = fileVersion(dotGit);
+    if (version === null) return null;
+    const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"));
+    return { version: `file:${version}`, gitdir: m ? resolve(cwd, m[1]!.trim()) : null };
+  } catch {
+    return null;
+  }
+}
+
+/** 把 cwd 和主目录连起来的那几个目录现在是不是还是原来那些：主目录的 .git、worktree 的 gitdir。有一个不在就是 null。 */
+function linkGuard(main: string | undefined, gitdir: string | null): string | null {
+  const parts = [main === undefined ? "-" : identity(join(main, ".git")), gitdir === null ? "-" : identity(gitdir)];
+  return parts.includes(null) ? null : parts.join("|");
+}
+
+/**
+ * 主目录按 cwd 缓存（BTL-275：每开一个 session 都起一次 git）。只缓存 cwd 下面就有 .git 的（主目录或 worktree 的根），
+ * 命中要同时满足：cwd/.git 没变（worktree 删了、同一个路径换成别的仓库的 worktree，.git 文件就换了）；
+ * 主目录的 .git 和 worktree 指向的 gitdir 都还在、还是原来那个（主目录被挪走、原路径换成别的仓库时，
+ * 不能把那个仓库的批准带过来，要重新问 git，这时 git 会失败，只看 cwd 自己的批准）。git 失败的不缓存。
+ */
+const mainCache = new Map<string, { version: string; guard: string; main: string | undefined }>();
 
 /** cwd 所在仓库的主目录（主 worktree）：--git-common-dir 的上一级。不在 git 仓库里、bare 仓库、git 失败时返回 undefined。 */
 function mainCheckout(cwd: string): string | undefined {
-  const version = fileVersion(join(cwd, ".git"));
+  const link = gitLink(cwd);
   const hit = mainCache.get(cwd);
-  if (version !== null && hit?.version === version) return hit.main;
+  if (link !== null && hit?.version === link.version && linkGuard(hit.main, link.gitdir) === hit.guard) return hit.main;
   const r = git(cwd, ["rev-parse", "--git-common-dir"]);
   const out = r.stdout.trim();
   if (r.status !== 0 || !out) {
@@ -209,9 +254,12 @@ function mainCheckout(cwd: string): string | undefined {
   }
   const common = resolve(cwd, out);
   const main = basename(common) === ".git" ? dirname(common) : undefined;
-  if (version !== null) {
+  const guard = link === null ? null : linkGuard(main, link.gitdir);
+  if (link !== null && guard !== null) {
     if (mainCache.size >= 500) mainCache.clear();
-    mainCache.set(cwd, { version, main });
+    mainCache.set(cwd, { version: link.version, guard, main });
+  } else {
+    mainCache.delete(cwd);
   }
   return main;
 }

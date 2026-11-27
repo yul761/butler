@@ -554,8 +554,9 @@ export class PrWatcher {
     // 新链接的行 checked_at 为 0，下一轮的 PR 读取马上读它（R12）。
     if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repoId, repoPath: t.repoPath, branch: t.branch }, list, "branch") > 0) marks.changed = true;
     if (list.some((b) => b.state === "OPEN")) {
-      // CI 由 PR 的读取接手。
+      // CI 由 PR 的读取接手。读失败的标记清掉了、或者第一次有这一行：界面上的「读不到」要跟着消失（BTL-275：栈 tick 不再每分钟兜底刷新）。
       this.d.branches.upsert({ ...base, ...kept, readError: false, checkedAt: now });
+      if (!prev || prev.readError) marks.changed = true;
     } else {
       // branchRuns 的 null 也可能是这个分支还没有 run：不当作读失败，留着上一次的。
       const runs = await this.gh(() => this.d.gh.branchRuns(t.cwd, t.branch, PR_GH_TIMEOUT_MS));

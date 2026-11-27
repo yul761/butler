@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { parseCpuTime, type ProcTable } from "../procs/proc-table";
+import { parseCpuTime, type ProcTable, type TimedProcTable } from "../procs/proc-table";
 
 export interface ProcEntry {
   ppid: number;
@@ -128,22 +128,24 @@ export function sampleFromTable(rootPid: number, commands: string[], table: Proc
 /**
  * 活动监控的 procTree：只看 CPU 时从共用的进程表里读；win32 上照旧不读（原来就不读，这里不为它多起 PowerShell）。
  * 两种情况现读（fresh）：要看后台命令的 shell 还在不在（共用的表可能是 shell 起来之前读的，判成「没了」以后就不再问，会一直错）；
- * 同一个 session 上次拿到的就是这张表（CPU 增量会是 0，看着像没在动）。
+ * 共用的表不比这个 session 上次用的那张新（同一张表 CPU 增量是 0，看着像没在动；更旧的表 CPU 读数会倒退）。
+ * 每个 session 只记上次那张表的读表时间，不留整张表。
  */
 export function procTreeFrom(
-  shared: () => Promise<ProcTable | null>,
+  shared: () => Promise<TimedProcTable | null>,
   platform: NodeJS.Platform = process.platform,
-  fresh: () => Promise<ProcTable | null> = shared,
+  fresh: () => Promise<TimedProcTable | null> = shared,
 ): (rootPid: number, commands: string[]) => Promise<ProcSample> {
-  const lastTable = new Map<number, ProcTable>();
+  const lastAt = new Map<number, number>();
   return async (rootPid, commands) => {
     if (platform === "win32") return { cpuMs: null, liveShell: null };
-    let table = commands.length ? null : await shared().catch(() => null);
-    if (!table || lastTable.get(rootPid) === table) table = await fresh().catch(() => null);
-    if (table) {
-      if (lastTable.size >= 200) lastTable.clear();
-      lastTable.set(rootPid, table);
+    const prev = lastAt.get(rootPid);
+    let got = commands.length ? null : await shared().catch(() => null);
+    if (!got || (prev !== undefined && got.at <= prev)) got = await fresh().catch(() => null);
+    if (got) {
+      if (lastAt.size >= 500 && !lastAt.has(rootPid)) lastAt.clear();
+      lastAt.set(rootPid, got.at);
     }
-    return sampleFromTable(rootPid, commands, table);
+    return sampleFromTable(rootPid, commands, got?.table ?? null);
   };
 }

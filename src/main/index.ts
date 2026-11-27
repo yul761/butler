@@ -223,9 +223,9 @@ import { registryTier } from "./routing/router";
 import { watcherGuideLines } from "./procs/watcher-policy";
 import { createProcServices, type ProcServices } from "./procs/proc-services";
 import { platformKill } from "./procs/orphans";
-import { readProcTable } from "./procs/proc-table";
+import { readProcTable, timedProcTable } from "./procs/proc-table";
 import { procTreeFrom } from "./sessions/proc-tree";
-import { changeWatcher } from "./diag/change-watch";
+import { minuteRefresh } from "./diag/change-watch";
 import { MemorySamplesRepo } from "./db/memory-samples-repo";
 import { runSmoke } from "./smoke";
 import { M } from "./strings";
@@ -1403,7 +1403,10 @@ async function bootstrap(): Promise<void> {
     sessions, tickets, features, pty,
     transcriptFile: (id) => transcriptLocator.find(id),
     // 子孙进程的 CPU 从和内存采样共用的进程表里读（BTL-275）：原来每个 session 每次探测各起一个 ps。
-    procTree: procTreeFrom(() => (procs ? procs.table() : readProcTable(process.platform)), process.platform, () => readProcTable(process.platform)),
+    procTree: (() => {
+      const freshTable = timedProcTable(() => readProcTable(process.platform), Date.now);
+      return procTreeFrom(() => (procs ? procs.table() : freshTable()), process.platform, freshTable);
+    })(),
     judge: (input) => judgeStuck(judgeDeps, input, input.sessionId ? (sessions.head(input.sessionId)?.ticketKey ?? null) : null),
     // 活动变了：先看停下来的 session 有没有新回复要判断、有没有该自动换新的，再刷新界面。
     // 换新自己的 notify 只发 stateChanged（不回到这里），所以 autoCheck → notify 不会再回到 autoCheck。
@@ -3952,11 +3955,13 @@ async function bootstrap(): Promise<void> {
   });
   // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
   if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
-  // 「现在」页的提醒有的只按时间出现（comment loop 超过 30 分钟没送到等），没有自己的 notify：每分钟看一次，变了才发（BTL-275，原来靠栈 tick 每分钟无条件发）。
-  const noticesWatch = changeWatcher(currentNotices, () => notify()); // 现在就记基线（启动时的提醒），第一次定时检查和它比
+  // 原来栈 tick 每分钟无条件发一次 data notify，顺带盖住了好几样（BTL-275 去掉了它）：每分钟看一次，
+  // 「现在」页只按时间出现的提醒（comment loop 超过 30 分钟没送到等）变了、本地日期变了（看板的「今天合并」过午夜翻篇）就发；
+  // 另外 10 分钟兜底发一次，盖住漏发 notify 的写入。基线现在就记（启动时的状态）。窗口藏着时 notify 照旧攒着。
+  const refreshTick = minuteRefresh({ notices: currentNotices, day: () => localDate(Date.now()), now: Date.now, notify: () => notify() });
   const scheduleTimer = setInterval(() => {
     void checkSchedule("tick");
-    noticesWatch();
+    refreshTick();
   }, TICK_MS);
   // e2e 用：栈的 tick 另外按 SHIPHERD_STACKS_TICK_MS 跑（不用等整分钟的 schedule；没设时不跑）。
   const stacksTickMs = Number(process.env.SHIPHERD_STACKS_TICK_MS) || 0;

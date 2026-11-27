@@ -145,21 +145,36 @@ export function procTableReader(platform: NodeJS.Platform, log: (msg: string) =>
   };
 }
 
+/** 一张进程表和开始读它的时间（BTL-275）：读者据此判断这张表比自己上次用的新还是旧。 */
+export interface TimedProcTable {
+  at: number;
+  table: ProcTable;
+}
+
+/** 每次现读，带上开始读的时间。读失败为 null。 */
+export function timedProcTable(read: () => Promise<ProcTable | null>, now: () => number): () => Promise<TimedProcTable | null> {
+  return async () => {
+    const at = now();
+    const table = await read();
+    return table ? { at, table } : null;
+  };
+}
+
 /**
  * 一张最多 ttlMs 旧的进程表，给只看个大概的读者共用（BTL-275）：内存采样每分钟一次，活动探测每个在跑后台命令的 session 各一次，
  * 原来各起各的 ps。正在读的那次大家等同一个结果；读失败（null）不留，下一个读者重读。
  * 孤儿清理、休眠要杀进程，要现读的表，不用这个。
  */
-export function sharedProcTable(read: () => Promise<ProcTable | null>, o: { ttlMs: number; now: () => number }): () => Promise<ProcTable | null> {
-  let kept: { at: number; table: ProcTable } | null = null;
-  let inFlight: Promise<ProcTable | null> | null = null;
+export function sharedProcTable(read: () => Promise<ProcTable | null>, o: { ttlMs: number; now: () => number }): () => Promise<TimedProcTable | null> {
+  let kept: TimedProcTable | null = null;
+  let inFlight: Promise<TimedProcTable | null> | null = null;
   return () => {
     const at = o.now();
-    if (kept && at - kept.at < o.ttlMs) return Promise.resolve(kept.table);
+    if (kept && at - kept.at < o.ttlMs) return Promise.resolve(kept);
     inFlight ??= read()
       .then((table) => {
         kept = table ? { at, table } : null;
-        return table;
+        return kept;
       })
       .finally(() => (inFlight = null));
     return inFlight;
