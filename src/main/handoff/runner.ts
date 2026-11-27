@@ -65,11 +65,14 @@ export class HandoffRunner {
     return this.once(ticketKey, () => this.full(ticketKey, "manual"));
   }
 
-  /** 早间快速刷新：只查 in_review / merged_pending_followup 的 PR 和 tracker 状态。 */
+  /**
+   * 早间快速刷新：只查 in_review / merged_pending_followup / needs_decision 的 PR 和 tracker 状态。
+   * 等决定的也查：关掉的 PR 在 GitHub 网页上重开了、另开了一个，早报才不会还说要你决定（BTL-270 审查）。
+   */
   refreshForBrief(): Promise<BatchResult> {
     const keys = this.d.tickets
       .list()
-      .filter((t) => ["in_review", "merged_pending_followup"].includes(effectiveStatus(t)))
+      .filter((t) => ["in_review", "merged_pending_followup", "needs_decision"].includes(effectiveStatus(t)))
       .map((t) => t.key);
     return this.batch(keys, (key) => this.refresh(key));
   }

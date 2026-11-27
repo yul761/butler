@@ -249,6 +249,20 @@ describe("HandoffRunner", () => {
     expect(sessions.listByTicket("A-1").find((s) => !s.dismissed)?.id).toBe("s-A-1");
   });
 
+  it("the morning refresh also covers tickets in needs_decision, not active or closed ones (BTL-270 review)", async () => {
+    const { runner, addTicket, tickets, setRespond } = setup();
+    addTicket("A-1");
+    addTicket("B-2");
+    addTicket("C-3");
+    tickets.setStatus("A-1", "needs_decision", NOW);
+    tickets.setStatus("B-2", "active", NOW);
+    tickets.setStatus("C-3", "needs_decision", NOW);
+    tickets.setStatusManual("C-3", "closed", NOW);
+    setRespond(async () => ok({ status: "in_review", pr: { number: 9, url: "u", state: "open", review: "pending" }, jira: null }));
+    const batch = await runner.refreshForBrief();
+    expect(batch.outcomes.map((o) => o.ticketKey)).toEqual(["A-1"]);
+  });
+
   it("refreshes in_review and merged tickets without resuming and keeps the rest of the last handoff", async () => {
     const { runner, addTicket, tickets, calls, handoffs, ingest, setRespond } = setup();
     addTicket("A-1");

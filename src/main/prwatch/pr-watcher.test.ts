@@ -14,7 +14,7 @@ import { PrLinker } from "./pr-links";
 import { derivePrStages } from "./pr-stages";
 import { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX } from "./pr-schedule";
 import {
-  CI_LOG_LINES, CI_LOG_RETRY_MAX_MS, CI_LOG_RETRY_MS, CI_LOG_TRIES_MAX, MERGED_RECENT_MS, PR_BATCH_FULL_MAX, PR_BATCH_TIMEOUT_MS, PR_FULL_REFRESH_LOW_MS, PR_FULL_REFRESH_MS,
+  CI_LOG_LINES, CI_LOG_RETRY_MAX_MS, CI_LOG_RETRY_MS, CI_LOG_TRIES_MAX, DECIDING_REREAD_MS, MERGED_RECENT_MS, REOPEN_PROBE_MS, PR_BATCH_FULL_MAX, PR_BATCH_TIMEOUT_MS, PR_FULL_REFRESH_LOW_MS, PR_FULL_REFRESH_MS,
   PR_GH_TIMEOUT_MS, PR_RATE_LOW,
   prStatusChanged, PrWatcher, type PrWatcherDeps,
 } from "./pr-watcher";
@@ -993,6 +993,111 @@ describe("PrWatcher: branches", () => {
     }
   });
 
+  // BTL-270 审查（必须修 A）：列表说开着、行是放弃读了的（或认定不存在的）closed：不要求重读，分支也不被一秒一次地列下去。
+  it("a resting closed row the branch list shows open does not make the branch be listed every second", async () => {
+    vi.useFakeTimers();
+    for (const kind of ["gone", "resting"] as const) {
+      const s = setup();
+      const row = s.link();
+      s.gh.prStatus.mockResolvedValue(pr({ state: "CLOSED" }));
+      s.gh.prsForBranch.mockResolvedValue([listed(7, { state: "CLOSED" })]);
+      await s.w.check();
+      s.prs.update(row.id, kind === "gone" ? { readGoneAt: s.now() } : { readFailures: PR_READ_GIVE_UP + 1, readRetryAt: s.now() + PR_READ_RETRY_MS });
+      const reads = s.gh.prStatus.mock.calls.length;
+      s.gh.prStatus.mockResolvedValue(pr());
+      s.gh.prsForBranch.mockResolvedValue([listed(7)]);
+      s.advance(5 * 60_000);
+      const lists = s.gh.prsForBranch.mock.calls.length;
+      await s.w.check();
+      // 推进好多轮（每秒一轮）：最多是这一轮自己列的那一次。
+      for (let i = 0; i < 20; i++) {
+        s.advance(1000);
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      expect(s.gh.prsForBranch.mock.calls.length - lists).toBeLessThanOrEqual(1);
+      expect(s.gh.prStatus.mock.calls.length).toBe(reads);
+      expect(s.prs.get(row.id)?.state).toBe("closed");
+    }
+  });
+
+  it("a closed row the list shows open but that still reads closed is asked for again at most every few minutes", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ state: "CLOSED" }));
+    s.gh.prsForBranch.mockResolvedValue([listed(7, { state: "CLOSED" })]);
+    await s.w.check();
+    // 列表说开着，gh pr view 还说关着（GitHub 那边没同步）：重读一次，之后 REOPEN_PROBE_MS 之内不再要求。
+    s.gh.prsForBranch.mockResolvedValue([listed(7)]);
+    s.advance(5 * 60_000);
+    const reads = s.gh.prStatus.mock.calls.length;
+    const lists = s.gh.prsForBranch.mock.calls.length;
+    await s.w.check();
+    for (let i = 0; i < 30; i++) {
+      s.advance(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(s.gh.prStatus.mock.calls.length - reads).toBe(1);
+    expect(s.gh.prsForBranch.mock.calls.length - lists).toBeLessThanOrEqual(2);
+    expect(s.prs.get(row.id)?.state).toBe("closed");
+    // 过了 REOPEN_PROBE_MS、到了下一次分支检查：再要求一次，这次读到开着了。
+    s.gh.prStatus.mockResolvedValue(pr());
+    s.advance(REOPEN_PROBE_MS);
+    await s.w.check();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.prs.get(row.id)?.state).toBe("open");
+  });
+
+  // BTL-270 审查（必须修 B）：不在 ticket 分支上的 PR（handoff 里写的、别的分支），全关了以后 ticket 在等决定；网页上重开了要看得到。
+  it("re-reads the closed PRs of a ticket in needs_decision every half hour, on any branch, and not those of other tickets", async () => {
+    const s = setup();
+    s.addTicket("BTL-2");
+    const other = s.addRepo("BTL-2", "lib", "c");
+    const row = s.link({ url: url(40), number: 40, headBranch: "elsewhere", source: "handoff" });
+    const quiet = s.prs.link({ ticketKey: "BTL-2", url: url(41, "lib"), slug: "o/lib", repoId: other, number: 41, headBranch: "elsewhere", state: "open", source: "handoff", linkedAt: s.now() }).pr;
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(40) ? 40 : 41, url: u, state: "CLOSED", headBranch: "elsewhere" }));
+    await s.w.check();
+    expect(s.prs.get(row.id)?.state).toBe("closed");
+    expect(s.prs.get(quiet.id)?.state).toBe("closed");
+    s.tickets.setStatus("BTL-1", "needs_decision", s.now());
+    const readsOf = (u: string) => s.gh.prStatus.mock.calls.filter((c) => c[1] === u).length;
+    const r40 = readsOf(url(40));
+    const r41 = readsOf(url(41, "lib"));
+    // 第一轮读一次（还没读过），之后半小时之内不再读。
+    s.advance(15_000);
+    await s.w.check();
+    expect(readsOf(url(40))).toBe(r40 + 1);
+    for (let i = 0; i < 10; i++) {
+      s.advance(60_000);
+      await s.w.check();
+    }
+    expect(readsOf(url(40))).toBe(r40 + 1);
+    // 网页上重开了：到了半小时读到，回到开着。别的 ticket（不在等决定）关掉的行一直不读。
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(40) ? 40 : 41, url: u, state: u === url(40) ? "OPEN" : "CLOSED", headBranch: "elsewhere" }));
+    s.advance(DECIDING_REREAD_MS);
+    await s.w.check();
+    expect(readsOf(url(40))).toBe(r40 + 2);
+    expect(s.prs.get(row.id)?.state).toBe("open");
+    expect(readsOf(url(41, "lib"))).toBe(r41);
+  });
+
+  it("the half-hourly re-read of a ticket in needs_decision leaves resting and gone rows alone", async () => {
+    for (const kind of ["gone", "resting"] as const) {
+      const s = setup();
+      const row = s.link({ url: url(40), number: 40, headBranch: "elsewhere", source: "handoff" });
+      s.gh.prStatus.mockResolvedValue(pr({ number: 40, url: url(40), state: "CLOSED", headBranch: "elsewhere" }));
+      await s.w.check();
+      s.prs.update(row.id, kind === "gone" ? { readGoneAt: s.now() } : { readFailures: PR_READ_GIVE_UP + 1, readRetryAt: s.now() + 4 * DECIDING_REREAD_MS });
+      s.tickets.setStatus("BTL-1", "needs_decision", s.now());
+      const reads = s.gh.prStatus.mock.calls.length;
+      for (let i = 0; i < 3; i++) {
+        s.advance(DECIDING_REREAD_MS);
+        await s.w.check();
+      }
+      expect(s.gh.prStatus.mock.calls.length).toBe(reads);
+    }
+  });
+
   it("does not check a branch that has an open PR; the PR read takes over its CI", async () => {
     const s = setup();
     s.gh.prsForBranch.mockResolvedValue([listed(7)]);
@@ -1444,6 +1549,78 @@ describe("PrWatcher: branches a session pushed (workstream W)", () => {
     s.advance(10 * 60_000);
     await s.w.check();
     expect(owned()).toBe(before + 1);
+  });
+});
+
+describe("PrWatcher: owned branches of a ticket in needs_decision (BTL-270 review)", () => {
+  it("keeps listing an owned branch whose PR was closed after the push, every half hour, and re-reads a PR reopened on GitHub", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "feat/wt", sessionId: "s1", dir: "/wt/a", at: s.now() });
+    let state: "OPEN" | "CLOSED" = "OPEN";
+    s.gh.prsForBranch.mockImplementation(async (_cwd, branch) => (branch === "feat/wt" ? [listed(34, { headRefName: "feat/wt", state })] : []));
+    s.gh.prStatus.mockImplementation(async () => pr({ number: 34, url: url(34), headBranch: "feat/wt", state }));
+    await s.w.check();
+    const row = s.prs.byTicket("BTL-1").find((p) => p.number === 34)!;
+    s.advance(15_000);
+    await s.w.check();
+    state = "CLOSED";
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.prs.get(row.id)?.state).toBe("closed");
+    const owned = () => s.gh.prsForBranch.mock.calls.filter((c) => c[1] === "feat/wt").length;
+    // 不在等决定：推送后关掉的就是这次推送的 PR，不再列。
+    let before = owned();
+    s.advance(DECIDING_REREAD_MS);
+    await s.w.check();
+    expect(owned()).toBe(before);
+    // 等决定：半小时列一次，不是每 5 分钟。
+    s.tickets.setStatus("BTL-1", "needs_decision", s.now());
+    s.advance(DECIDING_REREAD_MS);
+    await s.w.check();
+    before = owned();
+    expect(before).toBeGreaterThan(0);
+    for (let i = 0; i < 5; i++) {
+      s.advance(5 * 60_000);
+      await s.w.check();
+    }
+    expect(owned()).toBe(before);
+    // 同一个分支上另开了一个：下一次列出来就链接上（关掉的行的低频重读找不到新的 PR）。
+    s.gh.prsForBranch.mockImplementation(async (_cwd, branch) =>
+      branch === "feat/wt" ? [listed(34, { headRefName: "feat/wt", state: "CLOSED" }), listed(35, { headRefName: "feat/wt", createdAt: s.now() })] : []);
+    s.advance(DECIDING_REREAD_MS);
+    await s.w.check();
+    expect(owned()).toBe(before + 1);
+    expect(s.prs.byTicket("BTL-1").find((p) => p.number === 35)).toMatchObject({ headBranch: "feat/wt", state: "open" });
+    // 网页上重开了：列表说开着，马上要求重读，回到开着。
+    state = "OPEN";
+    s.advance(DECIDING_REREAD_MS);
+    await s.w.check();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.prs.get(row.id)?.state).toBe("open");
+  });
+
+  it("an owned branch's PR shown open again is re-read from the listing alone (no half-hourly re-read due yet)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "feat/wt", sessionId: "s1", dir: "/wt/a", at: s.now() });
+    let state: "OPEN" | "CLOSED" = "CLOSED";
+    s.gh.prsForBranch.mockImplementation(async (_cwd, branch) => (branch === "feat/wt" ? [listed(34, { headRefName: "feat/wt", state, createdAt: s.now() })] : []));
+    s.gh.prStatus.mockImplementation(async () => pr({ number: 34, url: url(34), headBranch: "feat/wt", state }));
+    s.tickets.setStatus("BTL-1", "needs_decision", s.now());
+    await s.w.check();
+    s.advance(15_000);
+    await s.w.check();
+    const row = s.prs.byTicket("BTL-1").find((p) => p.number === 34)!;
+    expect(s.prs.get(row.id)?.state).toBe("closed");
+    const reads = s.gh.prStatus.mock.calls.length;
+    // 分支列表先看到重开（列的节奏和低频重读错开）：靠列表触发的那一次重读读回来。
+    state = "OPEN";
+    s.w.soon(s.repoId);
+    await s.w.check();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus.mock.calls.length).toBe(reads + 1);
+    expect(s.prs.get(row.id)?.state).toBe("open");
   });
 });
 
