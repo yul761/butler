@@ -66,6 +66,10 @@ function verdictSummary(v: PreReviewView) {
 
 const queueItem = (x: PreReviewQueueItem) => ({ ...preReviewField(x), ticket: x.ticketKey, pr: x.prNumber, prUrl: x.prUrl });
 
+/** 已经在排队、在跑的（同一份代码再排一次只会多花额度、或者跟在跑的那次撞上）。 */
+const inFlight = (b: PreReviewBadge | undefined): b is PreReviewBadge & { id: number } =>
+  b !== undefined && b.id !== null && (b.state === "running" || b.state === "queued" || b.state === "paused");
+
 export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewScope, req: PreReviewControlOp): ControlResult {
   if (!o) return fail(M().ctlPreReviewUnavailable);
   const m = M();
@@ -112,26 +116,40 @@ export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewSc
       });
     }
     case "pre_review_run": {
-      if (!scope.canAct) return fail(m.ctlInboxNotYours);
+      if (!scope.canAct) return fail(m.ctlPreReviewNotCoordinator);
       const t = resolve(req);
       if ("error" in t) return fail(t.error);
       if ("pr" in t) {
         if (t.pr.state !== "open") return fail(m.ctlPreReviewPrClosed(t.pr.url));
+        const cur = o.status.forPrs([t.pr.id]).get(t.pr.id);
+        if (inFlight(cur) && cur.headSha === t.pr.headSha) return ok({ queued: [{ ...placed(cur.id), pr: t.pr.url, already: true }], note: m.ctlPreReviewAlreadyNote });
         const id = o.manual(t.pr);
         return id === null ? fail(m.ctlPreReviewNoHead(t.pr.url)) : ok({ queued: [{ ...placed(id), pr: t.pr.url }], note: m.ctlPreReviewQueuedNote });
       }
       // ticket：每个开着的 PR 各排一次；还没有 PR 的仓库、分支按最近一次预审的那份代码再排。
-      const open = o.prsOf(t.ticket).filter((p) => p.state === "open" && p.headSha && p.headBranch);
+      // 有过 PR 的分支（合了、关了）不再重跑：那是旧代码。已经在排、在跑的同一份代码不再排第二次，照实报上来。
+      const prs = o.prsOf(t.ticket);
+      const open = prs.filter((p) => p.state === "open" && p.headSha && p.headBranch);
       const queued: object[] = [];
+      const prBadges = o.status.forPrs(open.map((p) => p.id));
       for (const pr of open) {
+        const cur = prBadges.get(pr.id);
+        if (inFlight(cur) && cur.headSha === pr.headSha) {
+          queued.push({ ...placed(cur.id), pr: pr.url, already: true });
+          continue;
+        }
         const id = o.manual(pr);
         if (id !== null) queued.push({ ...placed(id), pr: pr.url });
       }
-      const covered = new Set(open.map((p) => `${p.slug}\0${p.headBranch}`));
+      const covered = new Set(prs.filter((p) => p.headBranch).map((p) => `${p.slug}\0${p.headBranch}`));
       const s = o.status.forTickets([t.ticket]).get(t.ticket);
       for (const it of s?.items ?? []) {
         if (it.id === null || !it.repoSlug || !it.branch || covered.has(`${it.repoSlug}\0${it.branch}`)) continue;
         covered.add(`${it.repoSlug}\0${it.branch}`);
+        if (inFlight(it)) {
+          queued.push({ ...placed(it.id), repo: it.repoSlug, branch: it.branch, already: true });
+          continue;
+        }
         const id = o.rerun(it.id);
         if (id !== null) queued.push({ ...placed(id), repo: it.repoSlug, branch: it.branch });
       }
@@ -140,17 +158,20 @@ export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewSc
     case "pre_review_queue": {
       const id = req.cancel ?? req.front;
       if (id !== undefined) {
-        if (!scope.canAct) return fail(m.ctlInboxNotYours);
+        if (!scope.canAct) return fail(m.ctlPreReviewNotCoordinator);
         const key = o.ticketOf(id);
         if (key === undefined || !scope.owns(key)) return fail(m.ctlPreReviewNoSuch(id));
         const r = req.cancel !== undefined ? o.cancel(id) : o.moveToFront(id);
         if (!r.ok) return fail(m.ctlPreReviewActFailed(r.reason));
       }
+      // epic 总控只看到自己 epic 的条目；position 还是整条队列里的第几，另给全队的条数（别的 epic 排在前面也看得出）。
       const q = o.status.queue();
+      const mine = (x: PreReviewQueueItem) => scope.owns(x.ticketKey);
       return ok({
         ...(id !== undefined && { done: req.cancel !== undefined ? "cancelled" : "moved_to_front", id }),
         concurrency: q.concurrency, stopped: q.stopped ? { reason: q.stopped.reason, until: iso(q.stopped.until) } : null,
-        running: q.running.map(queueItem), queued: q.queued.map(queueItem),
+        total: { running: q.running.length, queued: q.queued.length },
+        running: q.running.filter(mine).map(queueItem), queued: q.queued.filter(mine).map(queueItem),
       });
     }
   }

@@ -86,7 +86,7 @@ export type StackControlOp =
 
 /**
  * 预审（BTL-271）：epic 总控和 Shipherd 总控都有。ticket、pr 给且只给一个（pr 是 ticket_prs 的 id 或 PR 链接）。
- * epic 总控只能看、只能动自己 epic 里的 ticket 和 PR；Shipherd 总控不限。pre_review_queue 的 cancel、front 是预审 id，最多给一个。
+ * epic 总控只能看、只能动自己 epic 里的 ticket 和 PR；Shipherd 总控不限。pre_review_queue 的 cancel、front 是预审 id，最多给一个；epic 总控的队列只列自己 epic 的条目（position 是全队的第几，total 是全队条数）。
  */
 export type PreReviewRef = { ticket: string; pr?: undefined } | { pr: string; ticket?: undefined };
 export type PreReviewControlOp =

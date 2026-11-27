@@ -38,6 +38,8 @@ export interface PreReviewStatusDeps {
   lockKey?(cwd: string | null): string | null;
   /** PR 的编号和链接（队列页显示）；不认识为 null。 */
   pr(prId: number): { number: number; url: string } | null;
+  /** session 的整条接替链（自己和 /clear、换新之前的旧 id；SessionsRepo.chainOf）。预审记的是交证据时的 id，换新后靠它找回来。 */
+  chainOf?(sessionId: string): string[];
   now(): number;
 }
 
@@ -101,11 +103,12 @@ export class PreReviewStatusService {
       violations: violationCount(b.violations, b.checks),
     };
     const prev = last && last.id !== b.id ? { state: finishedState(last), id: last.id, violations: violationCount(last.violations, last.checks), headSha: last.target.headSha, finishedAt: last.finishedAt } : null;
-    if (b.status === "running" || (b.status === "queued" && s.running.has(b.id))) {
+    // 任务的状态比行准：行停在 running 而任务已经放回队列（上次退出时没来得及改行）时，按排队算。
+    if (s.running.has(b.id) || (b.status === "running" && !s.queued.has(b.id))) {
       const job = s.running.get(b.id);
       return { ...base, state: "running", startedAt: b.startedAt ?? job?.startedAt ?? null, last: prev };
     }
-    if (b.status === "queued") {
+    if (b.status === "queued" || b.status === "running") {
       const q = s.queued.get(b.id) ?? null;
       const gate = s.ticketGate(b.ticketKey);
       const reason = asReason(s.global) ?? asReason(gate);
@@ -156,7 +159,13 @@ export class PreReviewStatusService {
   /** session 最近一次预审（session 列表把「等 CI」和「预审中」分开）。没有的不在结果里。 */
   forSessions(ids: readonly string[]): Map<string, PreReviewBadge> {
     if (ids.length === 0) return new Map();
-    return this.urgentBy("session", ids, (b) => b.sessionId ?? "");
+    // 换新过的 session：旧 id 上的预审也算它的（交证据时记的是旧 id）。
+    const headOf = new Map<string, string>();
+    for (const id of ids) {
+      for (const old of this.d.chainOf?.(id) ?? [id]) if (!headOf.has(old)) headOf.set(old, id);
+      if (!headOf.has(id)) headOf.set(id, id);
+    }
+    return this.urgentBy("session", [...headOf.keys()], (b) => headOf.get(b.sessionId ?? "") ?? (b.sessionId ?? ""));
   }
 
   /** PR 最近一次预审。没有的不在结果里。 */

@@ -370,4 +370,34 @@ describe("pre-review visibility and queue actions (BTL-271)", () => {
     expect(s.service.moveToFront(r.preReviewId)).toEqual({ ok: false, reason: "not_queued" });
     expect(s.service.moveToFront(12345)).toEqual({ ok: false, reason: "not_found" });
   });
+
+  it("startup sweep: a row left running whose job went back to the queue is queued again with no start time, and can move to the front", () => {
+    const s = setup();
+    const target = { repoSlug: "o/app", branch: "feat/x", headSha: SHA };
+    const mk = (jobId: number | null) => {
+      const id = s.repo.insert({ ticketKey: "T-1", sessionId: "s1", target, cwd: "/w", base: null, prId: null, trigger: "evidence", createdAt: 1 });
+      s.repo.update(id, { status: "running", startedAt: 500, jobId });
+      return id;
+    };
+    // 上次退出时：任务被 resetRunning 放回排队、行没来得及改；一条任务还在跑（这次启动刚取走）；一条任务没了。
+    const requeued = mk(7);
+    const live = mk(8);
+    const gone = mk(9);
+    const before = s.changes();
+    s.service.sweep((jobId) => (jobId === 7 ? "queued" : jobId === 8 ? "running" : null));
+    expect(s.repo.get(requeued)).toMatchObject({ status: "queued", startedAt: null });
+    expect(s.repo.get(live)).toMatchObject({ status: "running", startedAt: 500 });
+    expect(s.repo.get(gone)).toMatchObject({ status: "failed", verdict: "error", detail: "interrupted" });
+    expect(s.changes()).toBeGreaterThan(before);
+    expect(s.service.moveToFront(requeued)).toEqual({ ok: true });
+    expect(s.fronted).toEqual([7]);
+  });
+
+  it("moveToFront goes by the job even while the row still says running (the queue refuses a job that really runs)", () => {
+    const s = setup();
+    const id = s.repo.insert({ ticketKey: "T-1", sessionId: "s1", target: { repoSlug: "o/app", branch: "feat/x", headSha: SHA }, cwd: "/w", base: null, prId: null, trigger: "evidence", createdAt: 1 });
+    s.repo.update(id, { status: "running", startedAt: 500, jobId: 3 });
+    expect(s.service.moveToFront(id)).toEqual({ ok: true });
+    expect(s.fronted).toEqual([3]);
+  });
 });

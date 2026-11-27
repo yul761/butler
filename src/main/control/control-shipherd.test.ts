@@ -1,3 +1,4 @@
+import { M } from "../strings";
 import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import type { ShipherdControlRequest, ControlResult } from "../../shared/control";
@@ -532,10 +533,13 @@ function fakePreReview() {
   const b = (o: Partial<PreReviewBadge> & { ticketKey: string }): PreReviewBadge => ({ ...noPreReview(o.ticketKey), ...o });
   const running = b({ ticketKey: "BTL-1", state: "running", id: 11, sessionId: "c1", prId: 1, repoSlug: "o/app", branch: "b-BTL-1", headSha: "a".repeat(40), startedAt: 5_000, trigger: "evidence" });
   const lib = b({ ticketKey: "BTL-1", state: "clean", id: 12, repoSlug: "o/lib", branch: "b-BTL-1", headSha: "c".repeat(40), finishedAt: 4_000 });
+  // o/old 的 PR 3 已经关了：那是旧代码，不再重跑。o/wip 没有 PR、已经在排队：不再排第二次。
+  const old = b({ ticketKey: "BTL-1", state: "clean", id: 13, repoSlug: "o/old", branch: "b-BTL-1", headSha: "f".repeat(40), finishedAt: 2_000 });
+  const wip = b({ ticketKey: "BTL-1", state: "queued", id: 14, position: 2, repoSlug: "o/wip", branch: "b-BTL-1", headSha: "9".repeat(40), enqueuedAt: 6_500 });
   const viol = b({ ticketKey: "BTL-2", state: "violations", id: 5, violations: 2, repoSlug: "o/doc", branch: "b-BTL-2", headSha: "b".repeat(40), finishedAt: 3_000 });
   const queued = b({ ticketKey: "BTL-2", state: "queued", id: 6, position: 1, repoSlug: "o/doc", branch: "b-BTL-2", headSha: "d".repeat(40), enqueuedAt: 6_000 });
   const status = new Map<string, PreReviewTicketStatus>([
-    ["BTL-1", { ticketKey: "BTL-1", overall: running, items: [running, lib] }],
+    ["BTL-1", { ticketKey: "BTL-1", overall: running, items: [running, lib, old, wip] }],
     ["BTL-2", { ticketKey: "BTL-2", overall: viol, items: [viol] }],
   ]);
   const pr = (id: number, ticketKey: string, slug: string, headBranch: string, state: TicketPr["state"] = "open") =>
@@ -573,7 +577,7 @@ describe("pre-review for both coordinators (BTL-271)", () => {
     const t = setup({ preReviewOps: ops, assessment: true });
     const list = value<{ key: string; preReview: { state: string; violations: number; items?: unknown[] } }[]>(await t.call({ op: "list_tickets" }));
     expect(Object.fromEntries(list.map((x) => [x.key, x.preReview.state]))).toEqual({ "BTL-1": "running", "BTL-2": "violations", "BTL-3": "none" });
-    expect(list.find((x) => x.key === "BTL-1")!.preReview.items).toHaveLength(2);
+    expect(list.find((x) => x.key === "BTL-1")!.preReview.items).toHaveLength(4);
     expect(list.find((x) => x.key === "BTL-2")!.preReview).toMatchObject({ violations: 2, headSha: "b".repeat(12) });
     const sessions = value<{ id: string; preReview: { state: string; startedAt: string } | null }[]>(await t.call({ op: "list_sessions" }));
     expect(sessions.find((s) => s.id === "c1")!.preReview).toMatchObject({ state: "running", startedAt: new Date(5_000).toISOString() });
@@ -599,14 +603,25 @@ describe("pre-review for both coordinators (BTL-271)", () => {
     const { ops, calls } = fakePreReview();
     const t = setup({ preReviewOps: ops });
     const r = value<{ queued: { id: number; position: number; reason: string | null; pr?: string; repo?: string }[] }>(await t.call({ op: "pre_review_run", ticket: "BTL-1" }));
-    // PR 1 开着（o/app），PR 3 关了；o/lib 没有 PR，按最近一次（id 12）再排。o/app 已经有 PR，不再 rerun。
+    // PR 1 开着（o/app）；o/lib 没有 PR，按最近一次（id 12）再排。o/app 已经有 PR，不再 rerun；
+    // o/old 的 PR 3 关了，那条分支不重跑；o/wip 已经在排队，照实报上来、不排第二次。
     expect(calls).toEqual(["manual:1", "rerun:12"]);
     expect(r.queued).toEqual([
       expect.objectContaining({ id: 101, position: 2, ahead: 1, reason: "cost", pr: "https://github.com/o/app/pull/1" }),
       expect.objectContaining({ id: 212, repo: "o/lib", branch: "b-BTL-1" }),
+      expect.objectContaining({ id: 14, repo: "o/wip", branch: "b-BTL-1", already: true }),
     ]);
     expect(err(await t.call({ op: "pre_review_run", pr: "3" }))).not.toBe("");
     expect(calls).toHaveLength(2);
+  });
+
+  it("Shipherd control: pre_review_run on a PR whose current head is already running reports that run instead of queuing a second", async () => {
+    const { ops, calls } = fakePreReview();
+    ops.status.forPrs = (ids) => new Map(ids.map((id) => [id, { ...noPreReview("BTL-1"), state: "running", id: 11, prId: id, headSha: "e".repeat(40) } as PreReviewBadge]));
+    const t = setup({ preReviewOps: ops });
+    const r = value<{ queued: { id: number; already?: boolean }[] }>(await t.call({ op: "pre_review_run", pr: "1" }));
+    expect(r.queued).toEqual([expect.objectContaining({ id: 11, already: true })]);
+    expect(calls).toEqual([]);
   });
 
   it("Shipherd control: running, cancelling and moving need the open Shipherd control itself; looking does not", async () => {
@@ -637,8 +652,12 @@ describe("pre-review for both coordinators (BTL-271)", () => {
     expect(err(await epic({ op: "pre_review_queue", cancel: 6 }))).not.toBe("");
     // 不是这个 epic 的总控（修复 session）不能动；看可以。
     expect(err(await epic({ op: "pre_review_run", pr: "1" }, "fx"))).not.toBe("");
-    expect(err(await epic({ op: "pre_review_queue", cancel: 11 }, "fx"))).not.toBe("");
-    expect(value<{ queued: unknown[] }>(await epic({ op: "pre_review_queue" }, "fx")).queued).toHaveLength(1);
+    expect(err(await epic({ op: "pre_review_queue", cancel: 11 }, "fx"))).toBe(M().ctlPreReviewNotCoordinator);
+    // 队列只列自己 epic 的条目（BTL-2 的 6 是 docs 的），total 是全队的条数。
+    const q = value<{ running: { id: number }[]; queued: unknown[]; total: { running: number; queued: number } }>(await epic({ op: "pre_review_queue" }, "fx"));
+    expect(q.running.map((x) => x.id)).toEqual([11]);
+    expect(q.queued).toEqual([]);
+    expect(q.total).toEqual({ running: 1, queued: 1 });
     expect(calls).toEqual([]);
     expect(value<{ queued: { id: number }[] }>(await epic({ op: "pre_review_run", pr: "1" })).queued.map((q) => q.id)).toEqual([101]);
     expect(value<{ done: string }>(await epic({ op: "pre_review_queue", cancel: 11 })).done).toBe("cancelled");

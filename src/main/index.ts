@@ -2601,6 +2601,7 @@ async function bootstrap(): Promise<void> {
       const pr = ticketPrs.get(id);
       return pr ? { number: pr.number, url: pr.url } : null;
     },
+    chainOf: (id) => sessions.chainOf(id),
     now: Date.now,
   });
   const preReview = new PreReviewService({
@@ -4033,7 +4034,7 @@ async function bootstrap(): Promise<void> {
   // 预审（工作流 G）：上次没跑完、任务已经不在了的收尾；review 效果补上漏掉的已合并 PR。
   preReview.sweep((jobId) => {
     const j = bgRepo.get(jobId);
-    return j !== null && (j.state === "queued" || j.state === "running");
+    return j !== null && (j.state === "queued" || j.state === "running") ? j.state : null;
   });
   void preReview.flush().catch((e: unknown) => logger("pre-review: flush failed", e));
   void reviewCollector.backfill().catch((e: unknown) => logger("review effect: backfill failed", e));

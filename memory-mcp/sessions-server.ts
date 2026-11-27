@@ -453,7 +453,7 @@ export const PRE_REVIEW_TOOLS = [
   {
     name: "pre_review_run",
     description:
-      "让 Shipherd 重新预审一个 ticket 或 PR（和 ticket 页的「重新预审」一样，开关关着也跑）：PR 对着它现在的 head；ticket 的每个开着的 PR 各排一次，还没 PR 的仓库按最近一次预审的那份代码再排。" +
+      "让 Shipherd 重新预审一个 ticket 或 PR（和 ticket 页的「重新预审」一样，开关关着也跑）：PR 对着它现在的 head；ticket 的每个开着的 PR 各排一次，从没开过 PR 的仓库、分支按最近一次预审的那份代码再排（PR 合了、关了的分支不再跑）。已经在排、在跑的同一份代码不再排第二次，返回里 already = true。" +
       "证据沿用最近一次交的。返回排上的每一次（id、position 第几、reason 队列为什么停着）；结果会送给交证据的 session，用 pre_review_status 看。会花额度。",
     inputSchema: { type: "object", properties: PRE_REVIEW_REF, additionalProperties: false },
   },
@@ -461,7 +461,7 @@ export const PRE_REVIEW_TOOLS = [
     name: "pre_review_queue",
     description:
       "看预审队列：在跑的（running：ticket、PR、触发方式 trigger 是 evidence 交证据 / pr 开 PR / manual 手动、startedAt 开跑时间）、排队的（queued：按真正开跑的顺序，position、enqueuedAt 排上的时间、" +
-      "waiting 说在等什么：concurrency 并发满了、worktree 同一个 worktree 的上一次还在跑）、并发数（concurrency）和整个队列为什么停着（stopped，没停为 null）。" +
+      "waiting 说在等什么：concurrency 并发满了、worktree 同一个 worktree 的上一次还在跑）、并发数（concurrency）和整个队列为什么停着（stopped，没停为 null）。epic 总控只列自己 epic 的条目，position 仍是整条队列里的第几，total 是全队在跑、排队的条数。" +
       "cancel 给一个预审 id 就把它取消（排队的直接撤掉，在跑的停下、结果不要）；front 给一个排队的预审 id 就把它提到最前。两者最多给一个，不给只看。",
     inputSchema: {
       type: "object",
@@ -485,7 +485,7 @@ export const PRE_REVIEW_TOOLS_EN = [
   {
     ...PRE_REVIEW_TOOLS[1],
     description:
-      "Have Shipherd pre-review a ticket or PR again (the same as Re-run on the ticket page; it runs even when pre-review is switched off): a PR at its current head; a ticket gets one run per open PR, and repos with no PR yet are re-run on the code of their latest pre-review. " +
+      "Have Shipherd pre-review a ticket or PR again (the same as Re-run on the ticket page; it runs even when pre-review is switched off): a PR at its current head; a ticket gets one run per open PR, and a repo and branch that never had a PR is re-run on the code of its latest pre-review (branches whose PR was merged or closed are skipped). Code that is already queued or running is not queued twice; those come back with already = true. " +
       "The latest evidence is reused. Returns each run it queued (id, position in line, reason the queue is stopped); the result goes to the session that submitted evidence, and pre_review_status shows it. It spends quota.",
     inputSchema: { ...PRE_REVIEW_TOOLS[1].inputSchema, properties: PRE_REVIEW_REF_EN },
   },
@@ -493,7 +493,7 @@ export const PRE_REVIEW_TOOLS_EN = [
     ...PRE_REVIEW_TOOLS[2],
     description:
       "Look at the pre-review queue: what is running (running: ticket, PR, trigger (evidence, pr or manual), startedAt), what is queued (queued: in the order they will start, with position, enqueuedAt and " +
-      "waiting, what it waits for: concurrency (all slots busy) or worktree (the previous run in the same worktree is still going)), the concurrency, and why the whole queue is stopped (stopped, null when it is not). " +
+      "waiting, what it waits for: concurrency (all slots busy) or worktree (the previous run in the same worktree is still going)), the concurrency, and why the whole queue is stopped (stopped, null when it is not). An epic coordinator only sees its own epic's items; position is still the place in the whole queue, and total counts everything running and queued. " +
       "cancel with a pre-review id cancels it (a queued one is dropped; a running one is stopped and its result thrown away); front with a queued pre-review id moves it to the front. Give at most one; give neither to just look.",
     inputSchema: {
       ...PRE_REVIEW_TOOLS[2].inputSchema,

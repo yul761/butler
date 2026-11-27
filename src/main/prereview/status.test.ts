@@ -22,6 +22,7 @@ function setup() {
   const gates: { global: BgGate; tickets: Map<string, BgGate> } = { global: { run: true }, tickets: new Map() };
   const held = new Set<string>();
   let concurrency = 2;
+  const chains = new Map<string, string[]>();
   const status = new PreReviewStatusService({
     repo,
     jobs: { queued: () => jobs.queued("pre_review"), running: () => jobs.runningOf("pre_review") },
@@ -30,6 +31,7 @@ function setup() {
     heldLocks: () => held,
     lockKey: (cwd) => cwd,
     pr: (id) => ({ number: id * 10, url: `https://github.com/o/app/pull/${id * 10}` }),
+    chainOf: (id) => chains.get(id) ?? [id],
     now: () => now,
   });
   /** 排一次预审：行 + 任务，和 PreReviewService.enqueue 一样。 */
@@ -50,7 +52,7 @@ function setup() {
     repo.update(id, { status: o.verdict === "error" ? "failed" : "done", verdict: o.verdict, violations: o.violations ?? [], finishedAt: now });
     jobs.finish(jobId, "done", now);
   };
-  return { db, repo, jobs, status, enqueue, start, finish, gates, held, setNow: (t: number) => (now = t), setConcurrency: (n: number) => (concurrency = n) };
+  return { db, repo, jobs, status, enqueue, start, finish, gates, held, chains, setNow: (t: number) => (now = t), setConcurrency: (n: number) => (concurrency = n) };
 }
 
 describe("PreReviewStatusService (BTL-271)", () => {
@@ -185,5 +187,31 @@ describe("PreReviewStatusService (BTL-271)", () => {
     expect(q.stopped).toBeNull();
     expect(t.status.placeOf(c.id)).toEqual({ position: 2, ahead: 1, running: 1, reason: null, waiting: null });
     expect(t.status.placeOf(a.id)).toBeNull();
+  });
+
+  it("a row left running after a restart whose job is back in the queue shows queued or paused, matching the queue page", () => {
+    const t = setup();
+    t.setNow(20_000);
+    const a = t.enqueue({ ticket: "T-1" });
+    t.start(a.id);
+    // 退出：任务被放回排队（resetRunning），行还停在 running。
+    t.jobs.resetRunning();
+    t.setNow(90_000);
+    expect(t.status.preReviewStatusFor("T-1").overall).toMatchObject({ state: "queued", position: 1, id: a.id });
+    t.gates.global = { run: false, reason: "manual", until: null };
+    expect(t.status.preReviewStatusFor("T-1").overall).toMatchObject({ state: "paused", reason: "manual" });
+    const q = t.status.queue();
+    expect(q.running).toEqual([]);
+    expect(q.queued.map((x) => [x.id, x.state])).toEqual([[a.id, "paused"]]);
+  });
+
+  it("a refreshed session keeps the pre-review its old id submitted", () => {
+    const t = setup();
+    const a = t.enqueue({ ticket: "T-1", session: "old" });
+    t.start(a.id);
+    t.chains.set("new", ["new", "old"]);
+    expect(t.status.forSessions(["new"])).toEqual(new Map([["new", expect.objectContaining({ state: "running", id: a.id })]]));
+    // 没换新的照旧；同一次查询里旧 id 归新 id，不重复出现。
+    expect([...t.status.forSessions(["new", "s9"]).keys()]).toEqual(["new"]);
   });
 });

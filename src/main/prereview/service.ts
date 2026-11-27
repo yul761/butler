@@ -202,7 +202,8 @@ export class PreReviewService {
   moveToFront(id: number): PreReviewQueueActResult {
     const row = this.d.repo.get(id);
     if (!row) return { ok: false, reason: "not_found" };
-    if (row.status !== "queued" || row.jobId === null) return { ok: false, reason: "not_queued" };
+    // 行可能还停在 running（任务已经放回队列）：能不能插队看任务（BackgroundQueue.moveToFront 只认排队的）。
+    if ((row.status !== "queued" && row.status !== "running") || row.jobId === null) return { ok: false, reason: "not_queued" };
     if (!this.d.queue.moveToFront?.(row.jobId)) return { ok: false, reason: "not_queued" };
     this.d.log(`pre-review ${id}: moved to the front of the queue`);
     this.d.changed();
@@ -319,11 +320,25 @@ export class PreReviewService {
     }
   }
 
-  /** 启动时：上次没跑完、任务已经不在了的（队列会把在跑的放回去；这里只收尾没有任务的）。 */
-  sweep(jobAlive: (jobId: number) => boolean): void {
+  /**
+   * 启动时：上次没跑完的。任务已经不在了的记失败；任务被队列放回排队、行还停在 running 的（退出时 runner 没来得及改），
+   * 行也放回 queued、清掉开跑时间，徽标、插队和队列页才对得上。jobState 是任务现在的状态，没有任务为 null。
+   */
+  sweep(jobState: (jobId: number) => "queued" | "running" | null): void {
+    let changed = false;
     for (const row of this.d.repo.stale(this.d.now())) {
-      if (row.jobId !== null && jobAlive(row.jobId)) continue;
+      const state = row.jobId !== null ? jobState(row.jobId) : null;
+      if (state === "running") continue;
+      if (state === "queued") {
+        if (row.status === "running") {
+          this.d.repo.update(row.id, { status: "queued", startedAt: null });
+          changed = true;
+        }
+        continue;
+      }
       this.d.repo.update(row.id, { status: "failed", verdict: "error", detail: "interrupted", finishedAt: this.d.now() });
+      changed = true;
     }
+    if (changed) this.d.changed();
   }
 }
