@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import {
-  BLOCK_DESCRIPTION_LIMIT, BLOCK_NAME_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, MAX_CREATE_REPOS, parseControlRequest, OPTION_LIMIT, OPTIONS_MAX,
+  BLOCK_DESCRIPTION_LIMIT, BLOCK_NAME_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, LESSONS_TOOL_MAX_PATHS, LESSONS_TOOL_MAX_QUERY, MAX_CREATE_REPOS, parseControlRequest, OPTION_LIMIT, OPTIONS_MAX,
   MAX_STACK_LAYERS, MESSAGE_LIMIT, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind, type SessionCapacity,
 } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
@@ -285,8 +285,39 @@ export const PRE_REVIEW_RESULT_TOOL_EN = {
     "The result is usually sent to you; use this when it did not arrive or you want every violation. Read-only.",
 } as const;
 
-export const MEMBER_TOOLS = [SUBMIT_EVIDENCE_TOOL, PRE_REVIEW_RESULT_TOOL] as const;
-export const MEMBER_TOOLS_EN = [SUBMIT_EVIDENCE_TOOL_EN, PRE_REVIEW_RESULT_TOOL_EN] as const;
+/** 查规矩全文（BTL-274）：session 说明里只列了标题的、归进原则的，都在这里查得到。 */
+export const LESSONS_TOOL = {
+  name: "lessons",
+  description:
+    "查这个 ticket 的仓库里用户确认过的规矩全文（含原因、适用范围、送达方式和原则的案例）。session 说明里只列了标题的规矩，改到它适用范围里的文件之前先用它查。" +
+    "paths 给你要改的文件（相对仓库根或绝对路径），只返回适用于这些文件的；query 按关键词或 #编号查；都不给时返回全部。只读。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      paths: { type: "array", items: { type: "string" }, maxItems: 50, description: "可选：你要改的文件路径，只返回适用于它们的规矩" },
+      query: { type: "string", maxLength: 200, description: "可选：关键词，或 #编号（比如 #42）" },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const LESSONS_TOOL_EN = {
+  ...LESSONS_TOOL,
+  description:
+    "Look up the full text of the rules the user confirmed for this ticket's repos (with why, scope, how each one reaches the session, and the cases of principles). " +
+    "For a rule the session guide lists only by title, look it up here before you change a file in its scope. " +
+    "paths: the files you are about to change (relative to the repo root, or absolute); only rules that apply to them come back. query: a keyword or #id. Neither: all of them. Read-only.",
+  inputSchema: {
+    ...LESSONS_TOOL.inputSchema,
+    properties: {
+      paths: { type: "array", items: { type: "string" }, maxItems: 50, description: "optional: the file paths you are about to change; only rules that apply to them come back" },
+      query: { type: "string", maxLength: 200, description: "optional: a keyword, or #id (like #42)" },
+    },
+  },
+} as const;
+
+export const MEMBER_TOOLS = [SUBMIT_EVIDENCE_TOOL, PRE_REVIEW_RESULT_TOOL, LESSONS_TOOL] as const;
+export const MEMBER_TOOLS_EN = [SUBMIT_EVIDENCE_TOOL_EN, PRE_REVIEW_RESULT_TOOL_EN, LESSONS_TOOL_EN] as const;
 
 /** start_session 的 model 参数（两种总控共用）：档位或模型名，主进程按模型路由选实际的模型。 */
 const MODEL_PROP = {
@@ -964,6 +995,7 @@ const TEXT = {
     needEvidence: "submit_evidence 至少要一条成形的检查（name 或 command、result 是 pass 或 fail）、验收条件或没跑的说明",
     needPr: "pr_assessment 需要参数 pr：list_prs 里的 prId，或者 PR 的链接",
     noTool: (t: string) => `没有这个工具：${t}`,
+    badLessonsArgs: "lessons 的 paths 要是最多 50 个非空字符串，query 最多 200 个字符",
     capacity: (c: SessionCapacity) =>
       c.canStart === null
         ? "现在还能再开的 session：读不到内存，不限。"
@@ -1004,6 +1036,7 @@ const TEXT = {
     needEvidence: "submit_evidence needs at least one well-formed check (name or command, result pass or fail), acceptance criterion or not-run note",
     needPr: "pr_assessment needs a pr argument: a prId from list_prs or the PR's URL",
     noTool: (t: string) => `No such tool: ${t}`,
+    badLessonsArgs: "lessons takes paths as up to 50 non-empty strings and query as at most 200 characters",
     capacity: (c: SessionCapacity) =>
       c.canStart === null
         ? "Sessions you can still start: memory could not be read, no limit."
@@ -1116,6 +1149,15 @@ export class SessionsServer {
     switch (tool) {
       case "pre_review_result":
         return { ...base, op: "pre_review_result" };
+      case "lessons": {
+        const paths = args.paths;
+        if (paths !== undefined && (!Array.isArray(paths) || paths.length > LESSONS_TOOL_MAX_PATHS || !paths.every((x) => typeof x === "string" && x.length > 0 && x.length <= 4096))) {
+          return toolError(this.text.badLessonsArgs);
+        }
+        const query = args.query;
+        if (query !== undefined && (typeof query !== "string" || query.length > LESSONS_TOOL_MAX_QUERY)) return toolError(this.text.badLessonsArgs);
+        return { ...base, op: "lessons", ...(paths !== undefined && { paths: paths as string[] }), ...(query !== undefined && query !== "" && { query }) };
+      }
       case "submit_evidence": {
         const evidence = parseSubmitEvidence(args);
         return evidence ? { ...base, op: "submit_evidence", evidence: { ...evidence } } : toolError(this.text.needEvidence);

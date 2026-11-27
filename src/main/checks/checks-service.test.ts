@@ -71,6 +71,35 @@ describe("ChecksService", () => {
     expect(svc.save({ kind: "product", productId: 99 }, null, fp("x"))).toEqual({ ok: false, reason: "not_found" });
   });
 
+  it("enforcedLessonIds: only lessons whose check is on, enforcing and blocking in that repo after overrides (BTL-274)", () => {
+    const { svc, lessons } = setup();
+    const shop = lessons.createProduct("shop", ["acme/web", "acme/api"], 1);
+    const mk = (text: string, scope: Parameters<LessonsRepo["addLesson"]>[0]["scope"]) => {
+      const id = lessons.addLesson({ scope, text, why: "", at: 1, source: { prNumber: 1, url: null, slug: "acme/web", runId: null } });
+      lessons.setStatus(id, "confirmed", 1);
+      return id;
+    };
+    const web = { kind: "repo", slug: "acme/web" } as const;
+    const [a, b, c, d, w] = ["a", "b", "c", "d", "w"].map((t) => mk(t, web));
+    const save = (scope: Parameters<ChecksService["save"]>[0], lessonId: number, over: Partial<CheckInput> = {}) =>
+      (svc.save(scope, null, fp(`p${lessonId}`, over), { lessonId }) as { id: number }).id;
+    save(web, a);
+    save(web, b, { enabled: false });
+    save(web, c, { mode: "shadow" });
+    save(web, w, { severity: "warn" });
+    svc.repo.remove(save(web, d));
+    expect([...svc.enforcedLessonIds("acme/web")]).toEqual([a]);
+    // 产品层在拦，api 仓库把它改成 shadow：只在 web 里算由检查管。
+    const p = mk("p", { kind: "product", productId: shop });
+    const key = svc.repo.get(save({ kind: "product", productId: shop }, p))!.key;
+    expect(svc.override({ kind: "repo", slug: "acme/api" }, key, { mode: "shadow" }).ok).toBe(true);
+    expect(svc.enforcedLessonIds("acme/web").has(p)).toBe(true);
+    expect(svc.enforcedLessonIds("acme/api").has(p)).toBe(false);
+    // 关掉也一样。
+    expect(svc.override({ kind: "repo", slug: "acme/web" }, key, { enabled: false }).ok).toBe(true);
+    expect(svc.enforcedLessonIds("acme/web").has(p)).toBe(false);
+  });
+
   it("resolves global → product → repo, a narrower row with the same key overrides", () => {
     const { svc, lessons } = setup();
     const shop = lessons.createProduct("shop", ["acme/web"], 1);

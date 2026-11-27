@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Lesson, LessonAction, LessonRepoView, LessonsState } from "../../../shared/lessons";
+import { LESSON_DELIVERIES, type Lesson, type LessonAction, type LessonRepoView, type LessonsState } from "../../../shared/lessons";
 import { api } from "../api";
 import { reportError } from "../errors";
 import { queueBarButtons, queueBarText, sourceLabel, TONE_PILL } from "../lesson-runs-view";
@@ -22,6 +22,7 @@ import { CalibrationPanel } from "./CalibrationPanel";
 import { ScoreParts } from "./ScoreParts";
 import { GroupToggle } from "./HomeMore";
 import { PendingLessons } from "./PendingLessons";
+import { LessonDelivery } from "./LessonDelivery";
 import { useCollapsed } from "./useCollapsed";
 
 const formatTime = (ms: number) => new Date(ms).toLocaleString([], { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -227,7 +228,7 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
             <button data-testid={`lessons-remove-${productId}-${r.slug}`} onClick={() => void act(key, { op: "removeFromProduct", id: productId, slug: r.slug })}>{S.lessonsRemoveRepo}</button>
           )}
         </div>
-        {r.overflow > 0 && <p className="muted lessons-overflow">{S.lessonsOverflow(r.overflow)}</p>}
+        {LESSON_DELIVERIES.some((d) => r.delivery[d] > 0) && <p className="muted lessons-delivery-line" data-testid={`lessons-delivery-line-${suffix}`}>{S.lessonsDeliveryLine(r.delivery)}</p>}
         {err(key)}
       </li>
     );
@@ -449,6 +450,11 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
                 {l.status === "disabled" && <span className="pill none">{S.lessonsDisabledTag}</span>}
               </label>
               <LessonTags tags={lessonTags(l, S)} />
+              {l.status === "confirmed" && s.delivery[l.id] && (
+                <span className={`pill${s.delivery[l.id] === "full" || s.delivery[l.id] === "check" ? " approved" : ""}`} data-testid={`lesson-delivery-${l.id}`} title={S.lessonDeliveryTitle[s.delivery[l.id]]}>
+                  {S.lessonDelivery[s.delivery[l.id]]}
+                </span>
+              )}
               <ScoreParts lesson={l} />
               <p className="muted">{S.lessonsHits(l.hits)} · {S.lessonsLastSeen(formatTime(l.lastSeenAt))}</p>
               {sources(l)}
@@ -498,6 +504,7 @@ export function LessonsPage({ onOpenSession, tab: initialTab }: { onOpenSession(
         </p>
       )}
       <PendingLessons s={s} act={act} error={(k) => errors[k]} />
+      <LessonDelivery s={s} act={act} error={(k) => errors[k]} makeCheck={(l) => void makeCheck(l)} drafting={drafting} note={(id) => draftNote[id]} />
       <section className="lessons-advanced" data-testid="lessons-advanced">
         <h3><GroupToggle open={!advancedCollapsed} onToggle={toggleAdvanced}>{S.lessonsAdvanced}</GroupToggle></h3>
         {!advancedCollapsed && advanced()}

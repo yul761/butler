@@ -74,6 +74,8 @@ export interface ControlHandlerDeps {
     submit(sessionId: string, raw: unknown): Promise<{ ok: boolean; message: string }>;
     latest(sessionId: string): PreReviewView | null;
   };
+  /** lessons 工具（BTL-274）：这个 ticket 的仓库的规矩全文。不给就拒绝。 */
+  lessons?: (t: Ticket, q: { paths?: string[]; query?: string; cwd?: string }) => unknown;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   /**
@@ -519,6 +521,20 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     return r.ok ? ok({ note: r.message }) : fail(r.message);
   };
 
+  /** lessons 工具（BTL-274）：调用的必须是这个 ticket 的 session（和预审一样核对 from）。只读。 */
+  const lessonsRequest = (req: Extract<ControlRequest, { op: "lessons" }>, t: Ticket): ControlResult => {
+    if (!d.lessons) return fail(M().ctlLessonsUnavailable);
+    const h = req.from ? d.sessions.head(req.from) : null;
+    if (!h) return fail(M().ctlInboxNoSession);
+    if (h.ticketKey !== t.key) return fail(M().ctlInboxNotYours);
+    try {
+      return ok(d.lessons(t, { paths: req.paths, query: req.query, cwd: h.cwd }));
+    } catch (e) {
+      d.log?.("control: lessons lookup failed", e);
+      return fail(M().ctlLessonsUnavailable);
+    }
+  };
+
   // Shipherd 总控（BTL-190 第 5 点）。
   const shipherdRequest = shipherdControl(d, { sessionActivity, refreshSession, listedActivity, lastReply });
 
@@ -528,6 +544,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if ("featureId" in req) return featureRequest(req);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
+    if (req.op === "lessons") return lessonsRequest(req, t);
     return preReviewRequest(req, t);
   };
 }

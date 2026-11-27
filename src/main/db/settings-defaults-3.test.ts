@@ -19,7 +19,7 @@ describe("3.0.0 defaults: nothing new acts on its own", () => {
   it("keeps every new master switch off", () => {
     for (const key of [
       "routingAutoSwitch", "backgroundPriority", "hibernateEnabled", "memoryPressureEnabled", "sharedMcp",
-      "refreshMemoryMb", "preReviewEnabled", "lessonsAutoAdmit", "lessonsPrinciples", "lessonsCoreGuide",
+      "refreshMemoryMb", "preReviewEnabled", "lessonsAutoAdmit", "lessonsPrinciples", "lessonsCoreGuide", "lessonsMergeAuto",
       "interruptChoiceRule", "interruptChoiceDefaults", "interruptSelfServe", "notifyDetails", "configBackupIntervalDays",
       "sessionMaxRunning", "showOutsideSessions", "autoResumeAfterRestart",
     ] as const) expect(SETTING_DEFAULTS[key], key).toBe("0");

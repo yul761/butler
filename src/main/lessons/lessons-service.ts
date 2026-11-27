@@ -13,7 +13,8 @@ import { isAllowedGithubUrl } from "../util/github-url";
 import type { OpenSessionResult } from "../../shared/types";
 import type { LessonRunner } from "./lesson-runner";
 import type { RepoIdentity } from "./repo-identity";
-import { overflowFor, productSuggestions } from "./select";
+import { deliveryCounts, planForSlug, productSuggestions, type GuideLessonOptions } from "./select";
+import type { LessonDelivery, LessonMergeProposal } from "../../shared/lessons";
 import type { LessonBatchService } from "./lesson-batches";
 
 export interface LessonsServiceDeps {
@@ -41,7 +42,23 @@ export interface LessonsServiceDeps {
   log?: (msg: string, err?: unknown) => void;
   now: () => number;
   notify: () => void;
+  /** session 说明怎么挑规矩（和开 session 时用同一份设置），规矩页按它显示每条怎么送到（BTL-274）。 */
+  guideOptions?: () => GuideLessonOptions;
+  /** 合并相似规矩的建议（BTL-274）；没有时页面不显示。 */
+  merges?: {
+    pending(): LessonMergeProposal[];
+    running(): boolean;
+    /** 上一次没问成的块数。 */
+    failed(): number;
+    auto(): boolean;
+    accept(id: number): LessonActResult;
+    dismiss(id: number): LessonActResult;
+    suggest(slug?: string): void;
+  };
 }
+
+/** 送法从好到差：产品规矩在几个仓库里送法不同时，页面显示最差的那种。 */
+const DELIVERY_RANK: Record<LessonDelivery, number> = { full: 0, check: 1, principle: 2, index: 3, drip: 4 };
 
 export type { LessonActResult };
 
@@ -120,16 +137,24 @@ export class LessonsService {
       changed = true;
     }
     if (changed) rows = repo.repos();
+    const opts = this.d.guideOptions?.() ?? {};
+    const delivery: Record<number, LessonDelivery> = {};
     const repos: LessonRepoView[] = rows
-      .map((r) => ({
-        slug: r.slug,
-        localPath: r.localPath,
-        lastAnalyzedAt: r.lastAnalyzedAt,
-        analyzedCount: r.analyzedCount,
-        ...repo.queueCounts(r.slug),
-        backfilled: r.backfilledAt !== null,
-        overflow: overflowFor(repo, r.slug),
-      }))
+      .map((r) => {
+        // 单独开这个仓库的 session 时每条怎么送到（和开 session 时同一套算法、同一份设置）。
+        const plan = planForSlug(repo, r.slug, opts);
+        for (const [id, mode] of plan.modes) if (delivery[id] === undefined || DELIVERY_RANK[mode] > DELIVERY_RANK[delivery[id]]) delivery[id] = mode;
+        return {
+          slug: r.slug,
+          localPath: r.localPath,
+          lastAnalyzedAt: r.lastAnalyzedAt,
+          analyzedCount: r.analyzedCount,
+          ...repo.queueCounts(r.slug),
+          backfilled: r.backfilledAt !== null,
+          delivery: deliveryCounts(plan),
+          overBudget: plan.overBudget,
+        };
+      })
       .sort((a, b) => a.slug.localeCompare(b.slug));
     const products = repo.products();
     const groups = this.d.repoGroups().map((g) => g.flatMap((p) => identity.slugOf(p) ?? []));
@@ -142,6 +167,11 @@ export class LessonsService {
       ghAvailable: this.d.ghAvailable(),
       queue: this.queueView(),
       enrich: { needing: this.d.enricher?.needing().length ?? 0, running: this.d.enricher?.running() ?? false },
+      delivery,
+      mergeProposals: this.d.merges?.pending() ?? [],
+      mergeAuto: this.d.merges?.auto() ?? false,
+      mergeRunning: this.d.merges?.running() ?? false,
+      mergeFailed: this.d.merges?.failed() ?? 0,
     };
   }
 
@@ -247,6 +277,15 @@ export class LessonsService {
         return this.d.batches.deleteOne(a.id);
       case "merge":
         return this.d.batches.mergeOne(a.keepId, a.dropId, a.text);
+      case "acceptMerge":
+        return this.d.merges ? this.d.merges.accept(a.id) : NOT_FOUND;
+      case "dismissMerge":
+        return this.d.merges ? this.d.merges.dismiss(a.id) : NOT_FOUND;
+      case "suggestMerges":
+        if (!this.d.merges) return NOT_FOUND;
+        if (this.d.merges.running()) return { ok: false, reason: "busy" };
+        this.d.merges.suggest(a.slug);
+        return { ok: true };
       case "createProduct":
         if (repo.products().some((p: LessonProductView) => p.name === a.name)) return { ok: false, reason: "name_taken" };
         repo.createProduct(a.name, a.slugs, now);

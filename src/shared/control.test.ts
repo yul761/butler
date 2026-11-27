@@ -11,6 +11,16 @@ describe("parseControlRequest", () => {
     expect(parseControlRequest({ v: 1, ticketKey: "P-1", from: null, op: "start_session", repo: "api", task: "写接口" })).toBeNull();
   });
 
+  it("accepts a ticket session's lessons lookup and refuses malformed paths or query (BTL-274)", () => {
+    const base = { v: 1, ticketKey: "P-1", from: "s1", op: "lessons" };
+    expect(parseControlRequest({ ...base, paths: ["a.ts"], query: "x" })).toEqual({ ...base, paths: ["a.ts"], query: "x" });
+    expect(parseControlRequest(base)).toEqual(base);
+    for (const bad of [{ paths: "a" }, { paths: [1] }, { paths: [""] }, { paths: Array.from({ length: 51 }, () => "a") }, { query: "q".repeat(201) }, { query: 1 }]) {
+      expect(parseControlRequest({ ...base, ...bad })).toBeNull();
+    }
+    expect(parseControlRequest({ v: 1, featureId: 1, from: "s1", op: "lessons" })).toBeNull();
+  });
+
   it("rejects other versions, operations and malformed fields", () => {
     for (const bad of [
       null, "x", { v: 2, featureId: 7, op: "list_repos" }, { v: 1, op: "list_repos" }, { v: 1, ticketKey: "P-1", op: "send_keys" },

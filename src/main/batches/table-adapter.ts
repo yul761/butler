@@ -150,6 +150,15 @@ export const principleAdapter = (db: Db): EntityAdapter =>
     describe: (s) => ({ label: String(s.text ?? ""), state: s.scope_kind === "product" ? `product #${String(s.product_id)}` : `repo ${String(s.repo_slug)}` }),
   });
 
+/** 合并相似规矩的建议（BTL-274）：接受时和规矩一起记，撤销后建议回到待处理。 */
+export const mergeProposalAdapter = (db: Db): EntityAdapter =>
+  tableAdapter(db, {
+    entity: "lesson_merge",
+    table: "lesson_merge_proposals",
+    stampColumn: "batch_id",
+    describe: (s) => ({ label: String(s.text ?? ""), state: String(s.status ?? "") }),
+  });
+
 /** 规矩归到的原则（只有 principle_id 一列）：原则重新分组的批次里记这个，不记整条规矩。 */
 export const lessonPrincipleAdapter = (db: Db): EntityAdapter => ({
   entity: "lesson_principle",

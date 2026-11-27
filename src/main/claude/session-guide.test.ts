@@ -220,3 +220,50 @@ describe("session guide: principles and pre-review (workstream D)", () => {
     for (const f of [file, cases]) expect(existsSync(f)).toBe(true);
   });
 });
+
+describe("session guide: the lessons index (BTL-274)", () => {
+  const index = {
+    rows: [{ id: 7, label: "acme/web", title: "Re-read in the write transaction", globs: ["src/main/**"], lang: "ts" }, { id: 9, label: "shop", title: "Name things plainly", globs: [], lang: null }],
+    more: 3,
+    rest: [
+      { id: 7, label: "acme/web", text: "Re-read in the write transaction. Fill only empty fields.", why: "a race lost edits", globs: ["src/main/**"], lang: "ts" },
+      { id: 9, label: "shop", text: "Name things plainly.", why: "", globs: [], lang: null },
+    ],
+  };
+
+  it("lists the lessons that did not fit by id, title and scope, and says to look them up before touching that scope", () => {
+    for (const lang of ["zh", "en"] as const) {
+      const dir = tempDir();
+      const text = readFileSync(writeSessionGuide(dir, lang, "ticket", [{ id: 1, label: "acme/web", text: "use tabs" }], { index, lessonsTool: true, drip: true }), "utf8");
+      expect(text).toContain("- [acme/web] use tabs");
+      expect(text).toContain(lang === "zh" ? "- #7 [acme/web] Re-read in the write transaction（范围：src/main/** · ts）" : "- #7 [acme/web] Re-read in the write transaction (scope: src/main/** · ts)");
+      expect(text).toContain(lang === "zh" ? "- #9 [shop] Name things plainly（整个仓库）" : "- #9 [shop] Name things plainly (whole repo)");
+      expect(text).toContain(lang === "zh" ? "还有 5 条规矩" : "5 more rules");
+      expect(text).toContain(lang === "zh" ? "用 lessons 工具查" : "lessons tool");
+      expect(text).toContain(lang === "zh" ? "- 还有 3 条" : "- 3 more");
+      expect(text).toContain(lang === "zh" ? "补送" : "Shipherd also sends the full text");
+      const rest = /(\S+lessons-rest-[0-9a-f]{12}\.md)/.exec(text)?.[1];
+      expect(rest).toBeDefined();
+      const body = readFileSync(rest!, "utf8");
+      expect(body).toContain("Re-read in the write transaction. Fill only empty fields.");
+      expect(body).toContain("#9 [shop]");
+    }
+  });
+
+  it("writes the section even when no lesson fits in full, and leaves out the tool and the drip when the session has neither", () => {
+    const text = sessionGuide("en", "ticket", [], { index, restFile: "/x/lessons-rest-0123456789ab.md" });
+    expect(text).toContain("- #7 [acme/web]");
+    expect(text).toContain("matching scope, read /x/lessons-rest-0123456789ab.md to get");
+    expect(text).not.toContain("lessons tool");
+    expect(text).not.toContain("Shipherd also sends");
+    expect(sessionGuide("en", "coordinator", [], { index })).not.toContain("#7");
+  });
+
+  it("prunes old rest files with the guides", () => {
+    const dir = tempDir();
+    const f = join(dir, "lessons-rest-0123456789ab.md");
+    writeFileSync(f, "x");
+    utimesSync(f, 1, 1);
+    expect(pruneSessionGuides(dir, Date.now())).toBe(1);
+  });
+});

@@ -138,6 +138,10 @@ export const SETTING_DEFAULTS = {
   lessonsPrinciples: "0",
   /** 工作流 D：session 说明最多保留 10 条核心规矩：1 开 0 关。 */
   lessonsCoreGuide: "0",
+  /** BTL-274：模型找到的「合并相似规矩」建议直接接受（批次照样能撤销）：1 开 0 关（默认要你点一下）。 */
+  lessonsMergeAuto: "0",
+  /** BTL-274：上一次找相似规矩的时间（毫秒）。不在设置页上。 */
+  lessonsMergeSuggestedAt: "",
   /** 校准页「标为已校准」的时间（毫秒，字符串）；空 = 没校准过（策略页显示「未校准的默认值」）。不在设置页上。 */
   admissionCalibratedAt: "",
   /** 原则上一次每日重新分组的时间（毫秒）；重启以后也不会当天再分一次。 */

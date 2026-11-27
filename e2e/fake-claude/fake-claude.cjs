@@ -40,6 +40,7 @@
 //     需要你的判断（schema 里有 needs_user）：回复是 /fake-ask 的问话就说需要你（理由是那句问话），别的都失败退出（Shipherd 当作不需要你）；
 //     FAKE_CLAUDE_JUDGE_DELAY_MS 设了就等这么久才失败（像真的 Haiku 要判断几秒）。
 //     规矩补填（schema 里有 enriched）：每条规矩补上 globs ["src/**"]，正文提到 console 的算 checkable；运行记录记一行 lesson enrich <条数>；
+//     合并相似规矩（schema 里有 merges）：给的几条（两条以上）合成一条「合并：<第一条>」；运行记录记一行 lesson merge <条数>；
 //     规矩准入（schema 里有 groups / conflicts / clarity / classified / reviews / principles）：没有重复和冲突、都清楚、
 //       提到 console 的算 checkable、抽查都通过、不归原则；运行记录记一行 admission <键> <条数>；
 //     review 经验的分析（schema 里有 findings）：每次重新读 FAKE_CLAUDE_LESSONS_FILE 里的模式，运行记录记一行 lessons <模式>：
@@ -353,6 +354,14 @@ function headless() {
         : { checkable: true, reason: "fake: a pattern is enough", check: { type: "forbidden_pattern", name: "no console.log", params: { pattern: "console\\.log\\(" }, globs: ["src/**"], severity: "block", message: "Use the logger instead." } };
       log(`check draft ${draft.checkable}`);
       process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `draft-${Date.now()}`, result: JSON.stringify(draft), structured_output: draft, permission_denials: [], total_cost_usd: 0 })}\n`);
+      return;
+    }
+    if (props.merges) {
+      // 合并相似规矩（lesson_merge，BTL-274）：给的几条合成一条，文字是「合并：」加第一条。
+      const lines = [...input.matchAll(/^#(\d+) \((.*?)\) (.*)$/gm)];
+      const out = { merges: lines.length >= 2 ? [{ ids: lines.map((m) => Number(m[1])), text: `合并：${lines[0][3]}`, why: "fake merge" }] : [] };
+      log(`lesson merge ${lines.length}`);
+      process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `merge-${Date.now()}`, result: JSON.stringify(out), structured_output: out, permission_denials: [], total_cost_usd: 0 })}\n`);
       return;
     }
     // 规矩准入的几步（工作流 D）：没有重复、没有冲突、都清楚、提到 console 的能写成检查、抽查都通过、不归原则。

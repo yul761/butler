@@ -117,6 +117,7 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   lessonsAutoAdmit: adv("lessons"),
   lessonsPrinciples: adv("lessons"),
   lessonsCoreGuide: adv("lessons"),
+  lessonsMergeAuto: adv("lessons"),
   configBackupIntervalDays: adv("lessons"),
   configBackupKeep: adv("lessons"),
   configExportReminderDays: adv("lessons"),

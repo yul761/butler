@@ -28,7 +28,7 @@ async function setup(opts: {
   factory?: PtyFactory;
   mcpConfig?: (ticketKey: string, opts: { featureId: number | null }) => string | null;
   mcpSettings?: (dirs: string[]) => string | null;
-  guidePath?: (kind: GuideKind, repoPaths: string[]) => string | null;
+  guidePath?: (kind: GuideKind, repoPaths: string[], ticketKey?: string, session?: { termId: string; editDirs: string[] }) => string | null;
   syncMemory?: (ticketKey: string) => void;
   dirBusy?: (repo: TicketRepo) => Promise<{ ticket: string; branch: string } | null>;
   platform?: NodeJS.Platform;
@@ -208,6 +208,14 @@ describe("SessionService.open", () => {
     const { service, ticket } = await setup({ guidePath: (kind, paths) => (asked.push([kind, paths]), null) });
     await service.open({ ticketKey: "PROJ-1" });
     expect(asked).toEqual([["ticket", ticket.repos.map((r) => r.repoPath)]]);
+  });
+
+  it("tells the guide the terminal id and the dirs the session edits in, so lessons can drip on edit (BTL-274)", async () => {
+    const asked: ({ termId: string; editDirs: string[] } | undefined)[] = [];
+    const { service, ticket, repo } = await setup({ workMode: "worktree", guidePath: (_k, _p, _t, s) => (asked.push(s), null) });
+    await service.open({ ticketKey: "PROJ-1" });
+    expect(asked[0]?.termId).toBe("new-1");
+    expect(asked[0]?.editDirs).toEqual(expect.arrayContaining([ticket.repos[0].worktreePath, repo]));
   });
 
   it("passes the .mcp.json approval settings, asked with the session's folder and the repo roots", async () => {

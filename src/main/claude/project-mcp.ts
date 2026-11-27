@@ -404,6 +404,8 @@ export function projectMcpApprovalSettings(
     gateCommand?: string; allowTools?: readonly string[]; checks?: { editTimeoutSec: number; pushTimeoutSec: number };
     /** 信箱（BTL-245）的 hook 命令（mailboxHookCommand）：每次工具调用之后跑，信箱为空时只是一次 test。要有 gateCommand 才挂。 */
     mailboxCommand?: string;
+    /** 编辑时补送规矩（BTL-274）：lessonsHookCommand 和 lessonsResetCommand。要有 gateCommand 才挂。 */
+    lessons?: { command: string; resetCommand: string };
     /** 权限档案（ws-j）确认过的只读规则：再过一遍 isSafeRule，排在 allowTools 后面。 */
     profileRules?: readonly string[];
   },
@@ -430,7 +432,7 @@ export function projectMcpApprovalSettings(
       // 推送和开 PR 另记一组（工作流 W：分支是谁的，CI 结论按它递）：不带 gate，hook 只为 git push / gh pr create 写信封。
       const ship = { matcher: "Bash", hooks: [{ type: "command", command: p.gateCommand, timeout: 10 }] };
       // 失败的也要：`git push && gh pr create` 里 gh 失败了只有 PostToolUseFailure，推送却成功了。
-      const hooks = { PreToolUse: group as unknown[], PostToolUse: [...group, skill, agent, ship] as unknown[], PostToolUseFailure: [...group, ship] as unknown[] };
+      const hooks: Record<string, unknown[]> = { PreToolUse: group, PostToolUse: [...group, skill, agent, ship], PostToolUseFailure: [...group, ship] };
       // 信箱（BTL-245）：工具调用的间隙把排队的消息送进去（matcher 为空 = 所有工具，MCP 工具也算）；失败的工具调用之后也送。
       // 约定广播：存进 feature 记忆的 remember 写一个信封，主进程推给同一个 feature 里开着的其他 session。
       if (p.mailboxCommand) {
@@ -441,6 +443,12 @@ export function projectMcpApprovalSettings(
       if (p.checks) {
         hooks.PreToolUse = [...group, { matcher: "Bash", hooks: [{ type: "command", command: `${p.gateCommand} check-push --budget-ms ${p.checks.pushTimeoutSec * 1000}`, timeout: p.checks.pushTimeoutSec + 30 }] }];
         hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit", hooks: [{ type: "command", command: `${p.gateCommand} check --budget-ms ${p.checks.editTimeoutSec * 1000}`, timeout: p.checks.editTimeoutSec + 3 }] });
+      }
+      // 编辑时补送规矩（BTL-274）：改了文件以后送匹配的、说明里没写全文的规矩；清单不在时只是一次 test。
+      // 上下文清掉（clear、compact）或者全新开始时已送记录作废，之后的编辑重新补送。
+      if (p.lessons) {
+        hooks.PostToolUse.push({ matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: p.lessons.command, timeout: 10 }] });
+        hooks.SessionStart = [{ matcher: "startup|clear|compact", hooks: [{ type: "command", command: p.lessons.resetCommand, timeout: 10 }] }];
       }
       content.hooks = hooks;
     }

@@ -30,6 +30,8 @@ export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "reorder_features", "set_ticket_feature",
   // 工作流 G：交证据（只在 Shipherd 里排一次预审）、取预审结果、看一个 PR 的评估。
   "submit_evidence", "pre_review_result", "pr_assessment",
+  // BTL-274：查规矩全文（只读）。
+  "lessons",
 ].map((tool) => `mcp__${SESSIONS_SERVER}__${tool}`);
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Shipherd 自己的 Electron（process.execPath），script 是 bundle。 */

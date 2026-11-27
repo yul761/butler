@@ -1633,4 +1633,23 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX sessions_feature ON sessions(feature_id, ticket_key) WHERE feature_id IS NOT NULL;
   CREATE INDEX branch_watch_ticket ON branch_watch(ticket_key);
   `,
+  // 60（BTL-274）：合并相似规矩的建议。lesson_ids 是 JSON 数组；input_hash 是提建议时这些规矩（id、正文、原因、范围）的指纹：
+  // 接受时规矩改过就作废（stale），拒绝过的同一组同一指纹不再提。status：pending / accepted / dismissed / stale。batch_id 是接受时的批次。
+  `
+  CREATE TABLE lesson_merge_proposals (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL,
+    repo_slug TEXT,
+    product_id INTEGER,
+    lesson_ids TEXT NOT NULL,
+    text TEXT NOT NULL,
+    why TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    batch_id INTEGER);
+  CREATE INDEX lesson_merge_proposals_status ON lesson_merge_proposals(status);
+  `,
 ];

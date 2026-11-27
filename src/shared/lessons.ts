@@ -1,7 +1,26 @@
 import type { LessonsPauseReason } from "./availability";
 
-/** 每个 session 最多送进去的规矩条数。 */
-export const MAX_SESSION_LESSONS = 30;
+/**
+ * session 说明里规矩全文最多占多少字符（BTL-274：按大小，不按条数）。装不下的写进索引、编辑时补送、lessons 工具能查到全文，
+ * 一条都不会静默丢。中文大约一个字一个 token，8000 字符和以前 30 条差不多。
+ */
+export const GUIDE_FULL_BUDGET = 8000;
+/** 索引（装不下全文的规矩，一行标题 + 适用范围）最多占多少字符；再多的只写条数，用 lessons 工具查。 */
+export const GUIDE_INDEX_BUDGET = 3000;
+/** 索引里标题最多几个字符。 */
+export const INDEX_TITLE_MAX = 60;
+/** 编辑时补送（hook 的 additionalContext）一次最多这么多字符；放不下的等下一次编辑。和信箱的上限（9000）分开算，两段加起来也在 Claude Code 的 10,000 以内时最好，所以留小一点。 */
+export const LESSON_DRIP_LIMIT = 6000;
+
+/**
+ * 一条已确认的规矩怎么到 session（BTL-274）：
+ * full 全文写在说明里；principle 归进一条原则（说明里是原则那一行，案例在旁边的文件里），编辑匹配的文件时也补送全文；
+ * index 说明里一行标题和范围（没限定范围的规矩，第一次编辑时补送全文）；drip 编辑匹配的文件时补送全文（也列在索引里，放得下的话）；
+ * check 已转成检查，编辑和 push 时由检查强制，不占说明的位置。每一条都还能用 lessons 工具查全文。
+ */
+export type LessonDelivery = "full" | "principle" | "index" | "drip" | "check";
+export const LESSON_DELIVERIES: readonly LessonDelivery[] = ["full", "principle", "index", "drip", "check"];
+export type LessonDeliveryCounts = Record<LessonDelivery, number>;
 
 /** 运行记录和 headless 失败 message 的字符上限（两处共用）。 */
 export const RUN_MESSAGE_MAX = 4000;
@@ -189,8 +208,10 @@ export interface LessonRepoView {
   skipped: number;
   cancelled: number;
   backfilled: boolean;
-  /** 单独开这个仓库的 session 时，有几条已确认的送不进去。 */
-  overflow: number;
+  /** 单独开这个仓库的 session 时，已确认的规矩各有几条按哪种方式送到（BTL-274）。 */
+  delivery: LessonDeliveryCounts;
+  /** 全文装不下（有规矩只能走索引或补送）：这时页面建议合并。 */
+  overBudget: boolean;
 }
 
 /** 没有 origin remote 或解析不出 slug 的仓库路径，页面上说明原因。 */
@@ -221,6 +242,29 @@ export interface LessonsState {
   queue: LessonQueueView;
   /** 还没补过范围、类型和可检查性的规矩（工作流 D 的补填）；running：正在后台补。 */
   enrich: { needing: number; running: boolean };
+  /** 每条已确认的规矩（id）单独开它所在仓库的 session 时怎么送到（BTL-274）。产品规矩取它各仓库里最差的那种。 */
+  delivery: Record<number, LessonDelivery>;
+  /** 待确认的「合并相似规矩」建议（BTL-274）。 */
+  mergeProposals: LessonMergeProposal[];
+  /** 合并建议是不是自动接受（设置 lessonsMergeAuto）。 */
+  mergeAuto: boolean;
+  /** 正在后台找相似规矩。 */
+  mergeRunning: boolean;
+  /** 上一次找相似规矩时没问成的块数（失败、超时）：不是 0 时页面说一句，重启后为 0。 */
+  mergeFailed: number;
+}
+
+/** 模型给出的一条「把这几条相似规矩合成一条」的建议（BTL-274）。接受时记成一个可撤销的批次。 */
+export interface LessonMergeProposal {
+  id: number;
+  scope: LessonScope;
+  /** 要合并的规矩（至少两条）；接受时保留出现次数最多的那条，其余合进去。 */
+  ids: number[];
+  text: string;
+  why: string;
+  /** 为什么提：over_budget 这个范围全文装不下；similar 有明显相似的规矩。 */
+  reason: "over_budget" | "similar";
+  createdAt: number;
 }
 
 /** 准入、范围、评分这些字段都还没填时的样子（迁移后的默认值）。 */
@@ -253,6 +297,11 @@ export type LessonAction =
   | { op: "setDisabled"; id: number; disabled: boolean }
   | { op: "delete"; id: number }
   | { op: "merge"; keepId: number; dropId: number; text: string }
+  /** 接受一条合并建议（BTL-274）：建议依据的规矩变了时返回 stale，什么都不改。 */
+  | { op: "acceptMerge"; id: number }
+  | { op: "dismissMerge"; id: number }
+  /** 现在就找一遍相似规矩（slug 不给时找全部）。 */
+  | { op: "suggestMerges"; slug?: string }
   | { op: "createProduct"; name: string; slugs: string[] }
   | { op: "deleteProduct"; id: number }
   | { op: "addToProduct"; id: number; slug: string }
@@ -275,6 +324,8 @@ export type LessonActResult =
 
 /** 送进 session 说明的一行。label 是仓库 slug 或产品名。 */
 export interface SessionLesson {
+  /** 规矩的 id（原则行没有）。 */
+  id?: number;
   label: string;
   text: string;
   /** 这一行是一个原则（工作流 D）：属于它的规矩，写进旁边的案例文件，说明里只写条数。 */

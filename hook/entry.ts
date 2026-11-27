@@ -5,6 +5,7 @@ import { realGateDeps, runGate } from "./gate";
 import { writeSync } from "node:fs";
 import { runReadonly } from "./readonly";
 import { mailboxEnvelope, runMailbox } from "./mailbox";
+import { resetLessonDrip, runLessonDrip } from "./lessons";
 
 // 设计文档 4.3：任何异常都以退出码 0 静默结束，绝不阻塞 Claude Code。
 // 例外：readonly 模式出错必须拒绝（见 readonlyAnswer），所以这里同步写出 deny 再退出。
@@ -73,6 +74,18 @@ async function mailboxAnswer(): Promise<void> {
   }
 }
 
+/** lessons：编辑以后补送匹配的规矩全文（BTL-274）。stdout 写完才记成已送。 */
+async function lessonsAnswer(): Promise<void> {
+  const run = runLessonDrip(await readStdin(), process.env, process.argv[3] ?? "");
+  if (!run.out) return;
+  try {
+    const ok = await new Promise<boolean>((resolve) => process.stdout.write(run.out, (err) => resolve(!err)));
+    if (ok) run.commit();
+  } finally {
+    run.release();
+  }
+}
+
 const mode = process.argv[2];
 const opts = parseCheckArgs(process.argv.slice(3));
 // gate：合并闸门；check：编辑后的确定性检查；check-push：push 前的检查（契约 4.5）；其余照旧写收件箱。
@@ -83,6 +96,10 @@ const job =
       ? readonlyAnswer()
       : mode === "mailbox"
       ? mailboxAnswer()
+      : mode === "lessons"
+      ? lessonsAnswer()
+      : mode === "lessons-reset"
+      ? Promise.resolve(resetLessonDrip(process.env, process.argv[3] ?? ""))
       : mode === "check"
       ? answer((s) => runCheck(s, process.env, realCheckDeps, opts))
       : mode === "check-push"

@@ -387,6 +387,12 @@ export function lessonActionArg(v: unknown): LessonAction {
       return { op: "delete", id: lessonIdArg(o.id) };
     case "merge":
       return { op: "merge", keepId: lessonIdArg(o.keepId), dropId: lessonIdArg(o.dropId), text: lessonTextArg(o.text) };
+    case "acceptMerge":
+      return { op: "acceptMerge", id: lessonIdArg(o.id) };
+    case "dismissMerge":
+      return { op: "dismissMerge", id: lessonIdArg(o.id) };
+    case "suggestMerges":
+      return o.slug === undefined ? { op: "suggestMerges" } : { op: "suggestMerges", slug: lessonSlugArg(o.slug) };
     case "createProduct": {
       if (!Array.isArray(o.slugs) || o.slugs.length > 100) throw new Error("invalid lesson action");
       return { op: "createProduct", name: lessonTextArg(o.name), slugs: o.slugs.map(lessonSlugArg) };

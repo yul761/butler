@@ -403,7 +403,11 @@ p.inbox-reports { margin: 2px 0; }
 .lessons-repo.selected > .lessons-row .lessons-select, .lessons-select.selected { border-color: var(--accent); }
 .lessons-product { margin: 8px 0; }
 .lessons-product-name { font-weight: 600; }
-.lessons-overflow, .lessons-error { margin: 2px 0 4px; }
+.lessons-delivery-line, .lessons-error { margin: 2px 0 4px; }
+.lessons-delivery { margin: 12px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.lessons-delivery-rows { list-style: none; margin: 4px 0; padding: 0; }
+.lessons-delivery-rows li { margin: 2px 0; overflow-wrap: anywhere; }
+.lessons-merge-proposals .lesson ul { margin: 4px 0; padding-left: 18px; }
 .lessons-unknown { margin: 10px 0; padding-left: 18px; }
 /* BTL-244：复盘规矩页默认的待确认列表和默认收起的「高级」。 */
 .lessons-pending-all h3 .count, .ticket-home-status h3 .count { margin-left: 6px; color: var(--muted); }
