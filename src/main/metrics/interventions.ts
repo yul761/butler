@@ -142,10 +142,12 @@ export const MANUAL_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.turnSendToAgent,
   // 对话 tab（UI 重做第 5 层）：把分叉的结论、输入框里的话送进开发 session，推动工作；被挡下（ok: false）不算。
   IPC.forkSendConclusion, IPC.convSend,
+  // 信箱（BTL-269）：「现在送进去」是用户亲手把卡着的消息推进去。
+  IPC.messagesDeliverNow,
 ]);
 
 /** 记成别的人介入的通道（不再算手动触发）：卡片上回答是 needs_you_answer。 */
-export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer]);
+export const COUNTED_ELSEWHERE: ReadonlySet<string> = new Set([IPC.inboxAnswer, IPC.inboxBehalf]);
 
 /** 不算人介入：只读的、配置和整理（搭环境，不是推动一次工作）。 */
 export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
@@ -220,6 +222,8 @@ const shortString = (v: unknown): string | undefined => (typeof v === "string" &
 export function noOpResult(channel: string, result: unknown): boolean {
   if (channel === IPC.sessionsWake) return result !== "woken";
   if (channel === IPC.loopCommentsAct) return result === null || result === undefined;
+  // 「现在送进去」没送进去（草稿、确认框挡着）：什么都没推动。
+  if (channel === IPC.messagesDeliverNow) return !(result as { delivered?: unknown } | null)?.delivered;
   return !!result && typeof result === "object" && (result as { ok?: unknown }).ok === false;
 }
 

@@ -5,6 +5,15 @@ import { SessionMessagesRepo } from "./session-messages-repo";
 const base = { kind: "report" as const, fromSession: "a", toSession: "c", featureId: 1, body: "hi", queuedAt: 10 };
 
 describe("SessionMessagesRepo", () => {
+  it("clears why it was blocked once it is delivered (review suggestion 4)", () => {
+    const repo = new SessionMessagesRepo(memDb());
+    repo.enqueue({ ...base, id: "m1", kind: "instruction", expectsReply: true, interrupt: false, meta: null });
+    repo.setBlocked(["m1"], "needs_you", 15);
+    expect(repo.get("m1")).toMatchObject({ blockedReason: "needs_you", blockedSince: 15 });
+    repo.delivered("m1", { at: 20, via: "input", toSession: "c", baseReplyId: null });
+    expect(repo.get("m1")).toMatchObject({ status: "delivered", blockedReason: null, blockedSince: null });
+  });
+
   it("queues, delivers and records a reply; each step only moves forward", () => {
     const repo = new SessionMessagesRepo(memDb());
     repo.enqueue({ ...base, id: "m1", kind: "instruction", expectsReply: true, interrupt: true, meta: { items: [1, 2] } });

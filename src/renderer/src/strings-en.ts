@@ -18,7 +18,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
@@ -563,6 +563,13 @@ export const EN: UiStrings = {
     return title === null ? `Answer ${what} in the terminal` : `"${title}" is waiting for you to answer ${what} in the terminal`;
   },
   activityStartup: "Waiting for you to answer a startup prompt",
+  noticeBehalf: (by: string, question: string, answer: string, title: string | null) => `Answered by the coordinator${title === null ? "" : ` in "${title}"`}: it asked "${question}" and ${by} answered for you: ${answer}`,
+  noticeBehalfCorrect: "Change the answer",
+  noticeBehalfSend: "Send",
+  noticeBehalfCancel: "Cancel",
+  noticeBehalfSent: "Queued in its mailbox as a correction.",
+  noticeBehalfGone: "This one can no longer be changed (it may have just been handled).",
+  noticeBehalfTooLong: (n: number) => `At most ${n} characters; nothing is cut off, so shorten it and send again.`,
   noticeCiUndelivered: (what: string, minutes: number, why: string) => `CI result not delivered: ${what}, waiting ${minutes} min (${why})`,
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n} (${branch})`,
   ciWhatBranch: (key: string, branch: string) => `${key} branch ${branch}`,
@@ -2506,5 +2513,32 @@ export const EN: UiStrings = {
     actFailed: { not_found: "That pre-review is gone; it may have just finished.", not_queued: "It is no longer queued.", failed: "That did not work. Try again." },
     concurrencyLabel: "Pre-reviews at the same time",
     concurrencyHint: "2 by default. One worktree only runs one at a time, so they never get in each other's way.",
+  },
+  /** Mailbox (BTL-269): why a queued message has not got in yet, and Deliver now. */
+  mailboxBlocked: {
+    reason: {
+      turn: "its turn is still running",
+      unsure: "the record says it is working but the screen shows it stopped; Shipherd is confirming",
+      refreshing: "it is being refreshed",
+      auto_input: "Shipherd is typing in an earlier batch",
+      screen: "a prompt on its screen is waiting for you",
+      needs_you: "it is waiting for you to answer a question",
+      judging: "it just stopped and Shipherd is checking whether it is asking you something",
+      typing: "you just typed in its terminal",
+      draft: "its input box has text you have not sent",
+      closed: "its terminal is closed",
+      hibernated: "it is hibernating",
+      cost_paused: "the cost breaker paused it",
+      deliver_failed: "Shipherd tried to type it in but its input box never became ready",
+    } as Record<MailboxBlockReason, string>,
+    line: (why: string, since: string | null) => `Queued: ${why}${since ? ` (since ${since})` : ""}`,
+    button: "Deliver now",
+    title: "Type it in now, even if it is waiting for your answer or you just typed. It still waits if the screen shows it working, the input box has unsent text, or a prompt is on screen.",
+    sending: "Sending…",
+    delivered: "Delivered",
+    notNow: (why: string) => `Not delivered: ${why}`,
+    delivering: "Shipherd is typing it in; give it a few seconds",
+    gone: "This message is no longer queued",
+    failed: "Not delivered; Shipherd tries again every 10 seconds",
   },
 };

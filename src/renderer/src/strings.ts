@@ -26,7 +26,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -573,6 +573,13 @@ const ZH = {
     return title === null ? `在终端里${what}` : `「${title}」在终端里等你${what}`;
   },
   activityStartup: "等你回答启动询问",
+  noticeBehalf: (by: string, question: string, answer: string, title: string | null) => `总控已代答${title === null ? "" : `「${title}」`}：问的是『${question}』，${by}替你答的是：${answer}`,
+  noticeBehalfCorrect: "改答案",
+  noticeBehalfSend: "送进去",
+  noticeBehalfCancel: "取消",
+  noticeBehalfSent: "已经作为更正排进它的信箱。",
+  noticeBehalfGone: "这一条已经不能改了（可能刚处理过）。",
+  noticeBehalfTooLong: (n: number) => `最多 ${n} 个字，超出的不会截掉，请缩短后再送。`,
   noticeCiUndelivered: (what: string, minutes: number, why: string) => `CI 结果未能送达：${what}，已等 ${minutes} 分钟（${why}）`,
   ciWhatPr: (key: string, n: number, branch: string) => `${key} PR #${n}（${branch}）`,
   ciWhatBranch: (key: string, branch: string) => `${key} 分支 ${branch}`,
@@ -2533,6 +2540,33 @@ const ZH = {
     actFailed: { not_found: "找不到这次预审了，可能刚做完。", not_queued: "它已经不在排队了。", failed: "没做成，再试一次。" } as Record<"not_found" | "not_queued" | "failed", string>,
     concurrencyLabel: "同时最多预审几个",
     concurrencyHint: "默认 2 个。同一个 worktree 一次只跑一个，不会互相干扰。",
+  },
+  /** 信箱（BTL-269）：排着的消息为什么还没送到，和「现在送进去」。 */
+  mailboxBlocked: {
+    reason: {
+      turn: "它这一轮还在干活",
+      unsure: "记录说它在干活，屏幕上看已经停了，Shipherd 在确认",
+      refreshing: "它正在换新",
+      auto_input: "Shipherd 正在往里送前一批消息",
+      screen: "它屏幕上有确认框在等你点",
+      needs_you: "它在等你回答问题",
+      judging: "它刚停下，Shipherd 在判断它是不是在问你问题",
+      typing: "你刚在它的终端里打过字",
+      draft: "它的输入框里有你没发出去的字",
+      closed: "它的终端关着",
+      hibernated: "它在休眠",
+      cost_paused: "它被花费熔断暂停了",
+      deliver_failed: "Shipherd 往里输入时没等到它的输入框就绪",
+    } as Record<MailboxBlockReason, string>,
+    line: (why: string, since: string | null) => `排队中：${why}${since ? `（从 ${since} 起）` : ""}`,
+    button: "现在送进去",
+    title: "不管它是不是在等你回答、你刚是不是打过字，直接输入进去。屏幕上看得出它还在干活、输入框里有没发出去的字、屏幕上有确认框时照样不送。",
+    sending: "正在送…",
+    delivered: "送进去了",
+    notNow: (why: string) => `没送进去：${why}`,
+    delivering: "Shipherd 正在往里送，稍等几秒",
+    gone: "这条已经不在排队了",
+    failed: "没送进去，Shipherd 每 10 秒会再试",
   },
 };
 

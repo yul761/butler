@@ -62,6 +62,8 @@ describe("noticeNeedsYou", () => {
     const intake = (state: string) => ({ kind: "intake", item: { state } }) as unknown as NowNotice;
     expect(noticeNeedsYou(intake("needs_decision"))).toBe(true);
     expect(noticeNeedsYou(intake("queued"))).toBe(false);
+    // 总控已代答（BTL-269 A2）：只是告诉你一声，可以改，但不算等你。
+    expect(noticeNeedsYou({ kind: "behalf_answered", askId: 1, question: "q", answer: "a", by: "c", at: 0, target: { page: "shipherd", sessionId: null }, title: null })).toBe(false);
   });
 });
 

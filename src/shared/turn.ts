@@ -154,6 +154,7 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "routing":
     case "check_promoted":
     case "check_demoted":
+    case "behalf_answered": // 总控已经替你答了（BTL-269 A2）：给你看一眼、可以改，不是非你不可。
       return false;
   }
 }

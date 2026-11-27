@@ -5,6 +5,15 @@ export const SCREEN_PENDING_LIMIT = 64 * 1024;
 
 type Step = { data: string } | { cols: number; rows: number };
 
+/**
+ * lines 怎么处理暗色（SGR 2）的字：
+ * - true：都换成空格（灰色提示、建议的下一句）；光标领着的提示（反色的字后面跟暗色的字）也换掉。
+ * - "dictation"：暗色字后面紧跟着光标（反色的一格，中间只隔暗色字或空格子）才读出来，别的暗色字照样换成空格。
+ *   语音听写还没定下来的字是暗色的，光标在它后面（PR #108 review 存疑 i）。终端失焦时 claude 的提示整段是暗色、前后都没有光标，
+ *   不能当成字（PR #108 第三轮 review）。光标领着的提示照样换掉。
+ */
+export type DimMode = boolean | "dictation";
+
 /** xterm 的同步解析入口（公开 API 只有异步的 write）：没有它就退回原来的做法，每块输出马上交给 xterm 异步解析。 */
 interface SyncCore {
   writeSync(data: string): void;
@@ -36,6 +45,10 @@ export class TermScreen {
   private rebuild: { cols: number; rows: number } | null = null;
   private cols: number;
   private rows: number;
+  /** 屏幕内容可能变了就加一：写进输出、改尺寸、要重建。lines 的缓存按这个认新旧。 */
+  private version = 0;
+  /** 上一次读出来的一屏，按 dropDim 分开存，带当时的 version（PR #108 review 建议 5）。 */
+  private readonly cache = new Map<string, { version: number; lines: string[] }>();
 
   constructor(cols: number, rows: number, private readonly tail?: () => string) {
     this.cols = cols;
@@ -47,6 +60,7 @@ export class TermScreen {
 
   write(data: string): void {
     if (this.disposed || data === "") return;
+    this.version++;
     if (!this.core) {
       this.term.write(data);
       return;
@@ -72,6 +86,7 @@ export class TermScreen {
     if (this.disposed || cols <= 0 || rows <= 0) return;
     this.cols = cols;
     this.rows = rows;
+    this.version++;
     if (!this.core) {
       // xterm 在解析完前面那一段、开始下一段之前调回调，正好落在流里的这个位置。
       this.term.write("", () => {
@@ -94,6 +109,7 @@ export class TermScreen {
         this.pendingChars = 0;
         this.rebuild = { cols: this.cols, rows: this.rows };
       }
+      this.version++;
       throw e;
     }
   }
@@ -132,13 +148,70 @@ export class TermScreen {
     flushRun();
   }
 
-  /** 当前这一屏，每行一个字符串（行尾空白去掉）。 */
-  lines(): string[] {
+  /**
+   * 当前这一屏，每行一个字符串（行尾空白去掉）。dropDim：暗色（SGR 2）的字换成空格——claude 空输入框里的灰色提示
+   * （Try "…"、建议的下一句）是暗色画的，看输入框是不是真的空着时用（BTL-269）。光标停在提示第一个字上时那个字是反色、
+   * 不是暗色：反色的字后面紧跟着暗色的字，也当提示换成空格。按画法认，不按字认：用户自己打的 Try "…" 照样是字。
+   */
+  lines(o: { dropDim?: DimMode } = {}): string[] {
     if (this.disposed) return [];
     this.catchUp();
+    const mode = o.dropDim ?? false;
+    const key = String(mode);
+    // 屏幕没变（没有新输出、没改尺寸、没重建）就用上次读的，不再一格一格读。没有同步解析时 xterm 自己在后台解析，认不出新旧，不缓存。
+    // version 在 catchUp 之后取：catchUp 出错要重建时会加一。
+    const hit = this.core ? this.cache.get(key) : undefined;
+    if (hit && hit.version === this.version && this.steps.length === 0 && !this.rebuild) return hit.lines.slice();
+    const version = this.version;
+    const out = this.read(mode);
+    if (this.core) this.cache.set(key, { version, lines: out });
+    return out.slice();
+  }
+
+  private read(mode: DimMode): string[] {
     const b = this.term.buffer.active;
+    // 每格都复用这一个对象，不每格新建（PR #108 review 建议 5）。
+    const cell = b.getNullCell();
     const out: string[] = [];
-    for (let i = 0; i < this.term.rows; i++) out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
+    for (let i = 0; i < this.term.rows; i++) {
+      const line = b.getLine(b.viewportY + i);
+      if (!line) out.push("");
+      else if (!mode) out.push(line.translateToString(true));
+      else {
+        // 先把这一行的格子读出来（听写要往后看光标在不在暗色字后面）。
+        const cells: { chars: string; w: number; dim: boolean; inverse: boolean; blank: boolean }[] = [];
+        for (let x = 0; x < line.length; x++) {
+          if (!line.getCell(x, cell)) continue;
+          const w = cell.getWidth();
+          if (w === 0) continue;
+          const chars = cell.getChars();
+          cells.push({ chars, w, dim: cell.isDim() !== 0 && chars !== "", inverse: cell.isInverse() !== 0, blank: (chars || " ").trim() === "" });
+        }
+        // 光标领着的提示：反色的一格后面紧跟着暗色的字。
+        const leads = cells.map((c, i) => c.inverse && cells[i + 1]?.dim === true);
+        // 听写：暗色字往后（跳过暗色字和空格子）碰到的第一格是光标（反色、不领着提示）。从右往左算。
+        const trailed: boolean[] = new Array<boolean>(cells.length).fill(false);
+        if (mode === "dictation") {
+          let cursorAfter = false;
+          for (let i = cells.length - 1; i >= 0; i--) {
+            const c = cells[i];
+            trailed[i] = cursorAfter;
+            if (c.inverse) cursorAfter = !leads[i];
+            else if (!c.dim && !c.blank) cursorAfter = false;
+          }
+        }
+        let text = "";
+        // 光标领着的提示：从反色的那一格开始，到下一个不是暗色的字为止（词之间光标跳过去的空格子不算断开）。
+        let led = false;
+        cells.forEach((c, i) => {
+          if (leads[i]) led = true;
+          else if (!c.dim && !c.blank) led = false;
+          const hint = leads[i] || (c.dim && (led || !trailed[i]));
+          text += hint ? " ".repeat(c.w) : c.chars || " ";
+        });
+        out.push(text.trimEnd());
+      }
+    }
     return out;
   }
 
@@ -228,8 +301,44 @@ export function dialogOnScreen(lines: string[]): boolean {
   return hasAny(lines, DIALOG_MARKERS);
 }
 
+/** 选择框的第一个选项：「❯ 1. Yes」「1. Yes, and auto-accept edits」。 */
+const FIRST_OPTION = /^(?:[❯>]\s*)?1[.)]\s*\S/;
+
+/**
+ * 权限确认、退出计划模式的提示：问题下面紧跟着编号的选项（claude 一定画「1. Yes」这一行）。
+ * 只看提示区（同 promptArea），并且问题那一行之后要有第一个选项：回复里引用了「Would you like to proceed?」、
+ * 输入框又没认出来（底部提示多、改了样式）时不算（BTL-269 D：这样会一直挡住往空闲 session 里送消息）。
+ */
 export function permissionOnScreen(lines: string[]): boolean {
-  return hasAny(lines, PERMISSION_MARKERS);
+  if (inputBox(lines)) return false;
+  let last = -1;
+  lines.forEach((l, i) => {
+    if (isRule(l)) last = i;
+  });
+  const area = lines.slice(last + 1);
+  const ask = area.findIndex((l) => PERMISSION_MARKERS.some((m) => squash(l).includes(m)));
+  return ask >= 0 && area.slice(ask + 1).some((l) => FIRST_OPTION.test(l.trim()));
+}
+
+/** 这一轮还在跑：claude 在转圈的那一行写着「esc to interrupt」。 */
+export function workingOnScreen(lines: string[]): boolean {
+  return lines.some((l) => squash(l).includes("esctointerrupt"));
+}
+
+/**
+ * 输入框画着、里面是空的：true；画着、里面有字：false；没画输入框：null。
+ * 要传 dropDim 读出来的那一屏：灰色提示（Try "…"、建议的下一句）按画法去掉。不按字认提示：用户自己打的 Try "…" 是草稿（PR #108 review）。
+ */
+export function inputBoxEmpty(lines: string[]): boolean | null {
+  const text = inputBoxText(lines);
+  if (text === null) return null;
+  return text === "";
+}
+
+/** 输入框上面的那部分屏幕（对话的内容），不含输入框和下面会刷新的状态栏；没画输入框返回 null。 */
+export function aboveInputBox(lines: string[]): string[] | null {
+  const box = inputBox(lines);
+  return box ? lines.slice(0, box.top) : null;
 }
 
 /**

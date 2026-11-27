@@ -1,6 +1,7 @@
 // Shipherd 要你点一下的那条提醒（从「现在」页原样搬出，UI 重做第 2 层）：一句话加原来的按钮。testid 保持 now-notice-*。
 import { useState } from "react";
 import type { NowNotice, NowTarget } from "../../../shared/types";
+import { CONTEXT_LIMIT } from "../../../shared/control";
 import { api } from "../api";
 import { ciReasonText, noticeText, openCommentsNotice, type NoticeAction } from "../availability-view";
 import { btError } from "../backtest-view";
@@ -18,12 +19,30 @@ export { noticeKey };
 export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; now: number; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const { text, actions } = noticeText(n, S, now);
   // 权限确认（第 1 层补的 approval）的按钮叫「去看看」，落到那个 session 的终端。
-  const label: Record<NoticeAction, string> = { resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: n.kind === "approval" ? S.hm.act.look : S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen, undo: S.bt.undo, checks: S.bt.open, dismiss: S.bt.dismiss,
+  const label: Record<NoticeAction, string> = { correct: S.noticeBehalfCorrect, resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: n.kind === "approval" ? S.hm.act.look : S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen, undo: S.bt.undo, checks: S.bt.open, dismiss: S.bt.dismiss,
     intake: S.ik.noticeOpen, intakeStart: S.ik.actions.start, intakeSkip: S.ik.actions.skip, intakeParallel: S.ik.actions.allowParallel,
   };
   // 重发的结果（CI 结果未能送达）：送到了提醒会在下一次刷新时消失，没送到写上为什么。
   const [result, setResult] = useState<string | null>(null);
+  // 改总控代答的答案（BTL-269 A2）：打开一个输入框，送进去当作更正。
+  const [draft, setDraft] = useState<string | null>(null);
+  const sendCorrection = (): void => {
+    if (n.kind !== "behalf_answered" || draft === null || !draft.trim()) return;
+    // 超长不截（输入框已经限了长度，这里再拦一次）：说清楚为什么没送。
+    if (draft.length > CONTEXT_LIMIT) return setResult(S.noticeBehalfTooLong(CONTEXT_LIMIT));
+    setResult(null);
+    void api.inboxBehalf({ op: "correct", id: n.askId, text: draft }).then((ok) => {
+      setResult(ok ? S.noticeBehalfSent : S.noticeBehalfGone);
+      if (ok) setDraft(null);
+    }, reportError);
+  };
   const run = (a: NoticeAction): void => {
+    if (n.kind === "behalf_answered") {
+      if (a === "correct") setDraft(draft ?? n.answer);
+      else if (a === "dismiss") void api.inboxBehalf({ op: "dismiss", id: n.askId }).catch(reportError);
+      else if (a === "open") onOpen(n.target);
+      return;
+    }
     if (a === "resume" || a === "retry") void api.availabilityAct({ op: "resumeLessons" }).catch(reportError);
     else if (a === "health") onGo({ page: "settings", section: "health" });
     else if (a === "lessons") onGo({ page: "lessons" });
@@ -58,6 +77,13 @@ export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; no
     <div className="notice" data-testid={`now-notice-${n.kind}`}>
       <p>{text}</p>
       {result && <p className="muted" data-testid="now-notice-result">{result}</p>}
+      {draft !== null && (
+        <div className="actions" data-testid="now-notice-behalf-edit">
+          <textarea value={draft} maxLength={CONTEXT_LIMIT} rows={3} onChange={(e) => setDraft(e.target.value)} data-testid="now-notice-behalf-text" />
+          <button className="primary" disabled={!draft.trim()} onClick={sendCorrection} data-testid="now-notice-behalf-send">{S.noticeBehalfSend}</button>
+          <button onClick={() => setDraft(null)} data-testid="now-notice-behalf-cancel">{S.noticeBehalfCancel}</button>
+        </div>
+      )}
       <div className="actions">
         {actions.map((a) => <button key={a} data-testid={`now-notice-${n.kind}-${a}`} className={a === "raise" ? "primary" : undefined} onClick={() => run(a)}>{label[a]}</button>)}
       </div>

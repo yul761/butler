@@ -166,6 +166,8 @@ export const IPC = {
   inboxList: "inbox:list",
   /** 在卡片上回答一条「待你决定」：记下答案，等提问的 session 停下来送进去。 */
   inboxAnswer: "inbox:answer",
+  /** 「总控已代答」提醒（BTL-269 A2）：改答案（当作更正送进 session）或者知道了。 */
+  inboxBehalf: "inbox:behalf",
   followupsList: "followups:list",
   followupsSetStatus: "followups:setStatus",
   handoffsList: "handoffs:list",
@@ -260,6 +262,8 @@ export const IPC = {
   updateOpenRelease: "update:openRelease",
   /** 应用菜单点了要界面做的事（BTL-253 / 254）：参数是 AppMenuAction。 */
   appMenu: "app:menu",
+  /** 信箱（BTL-269）：用户在消息列表里点「现在送进去」：参数是消息 id，返回 DeliverNowResult。 */
+  messagesDeliverNow: "messages:deliverNow",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -274,7 +278,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.mergeEvents, IPC.prWatchList, IPC.prStages, IPC.prOpen, IPC.linkOpen, IPC.lessonsState, IPC.lessonsAct, IPC.lessonsRuns, IPC.lessonsRun, IPC.lessonsPending,
   IPC.lessonsBatches, IPC.lessonsBatch, IPC.policiesGet, IPC.policiesSet, IPC.checksView, IPC.checksHits, IPC.checksAct, IPC.checksDraft,
   IPC.baselinesView, IPC.baselinesAct, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyAct, IPC.legacyViolations, IPC.checkExportList, IPC.checkExportAct, IPC.backtestView, IPC.backtestAct, IPC.configStatus, IPC.configExport, IPC.configImportPreview, IPC.configImportRetarget, IPC.admissionState, IPC.wizardEstimate, IPC.wizardAct, IPC.calibrationSample, IPC.calibrationStats, IPC.calibrationAct, IPC.principlesRegroup,
-  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.costView, IPC.costSet, IPC.costResume, IPC.costBreakers, IPC.backgroundStatus, IPC.backgroundAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.turnBoard, IPC.turnSendToAgent, IPC.turnHomeOpened, IPC.inboxList, IPC.inboxAnswer,
+  IPC.configImportApply, IPC.configBackupNow, IPC.configOpenBackups, IPC.availabilityGet, IPC.availabilityAct, IPC.ciResend, IPC.routingView, IPC.routingAct, IPC.costView, IPC.costSet, IPC.costResume, IPC.costBreakers, IPC.backgroundStatus, IPC.backgroundAct, IPC.sessionsSwitchModel, IPC.sessionsDismissLimit, IPC.sessionsLimits, IPC.nowView, IPC.turnBoard, IPC.turnSendToAgent, IPC.turnHomeOpened, IPC.inboxList, IPC.inboxAnswer, IPC.inboxBehalf,
   IPC.followupsList, IPC.followupsSetStatus, IPC.handoffsList, IPC.handoffsRun, IPC.jobsRunNightly,
   IPC.settingsGet, IPC.settingsSet, IPC.settingsReset, IPC.settingsDetectTrackerTools, IPC.settingsFeaturePolicy, IPC.settingsPolicyPatch,
   IPC.externalAuditList,
@@ -291,6 +295,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease,
   IPC.diagSnapshot, IPC.diagExport,
   IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,
+  IPC.messagesDeliverNow,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];

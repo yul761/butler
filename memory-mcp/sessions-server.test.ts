@@ -159,7 +159,11 @@ describe("shipherd-sessions for a feature coordinator (design 2026-10-26)", () =
     const call = server.handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "send_message", arguments: { session: "c1", text: "停一下", interrupt: true } } });
     expect(await answer({ v: 1, ok: true, value: { queued: true } })).toEqual({ v: 1, featureId: 7, from: "boss", op: "send_message", session: "c1", text: "停一下", interrupt: true });
     await call;
-    for (const args of [{ session: "c1" }, { text: "x" }, { session: "c1", text: "x", interrupt: "yes" }]) {
+    // answers（BTL-269 A2）：问题 id 或 true 原样带上；别的值不发。
+    const withAnswers = server.handle({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "send_message", arguments: { session: "c1", text: "B", answers: 12 } } });
+    expect(await answer({ v: 1, ok: true, value: { queued: true } })).toMatchObject({ op: "send_message", answers: 12 });
+    await withAnswers;
+    for (const args of [{ session: "c1" }, { text: "x" }, { session: "c1", text: "x", interrupt: "yes" }, { session: "c1", text: "x", answers: 0 }, { session: "c1", text: "x", answers: false }, { session: "c1", text: "x", answers: "12" }]) {
       const bad = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "send_message", arguments: args } })) as { result: { isError?: boolean } };
       expect(bad.result.isError).toBe(true);
     }
@@ -514,7 +518,7 @@ describe("shipherd-sessions for the Shipherd 总控 (BTL-190 5)", () => {
     const send = SHIPHERD_TOOLS.find((t) => t.name === "send_message")!;
     expect(send.description).toContain("epic 总控");
     expect(send.inputSchema).toMatchObject({ required: ["text"] });
-    expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "epic", "text", "interrupt"]);
+    expect(Object.keys(send.inputSchema.properties)).toEqual(["session", "epic", "text", "interrupt", "answers"]);
     // 中英文的参数一样。
     for (const [i, t] of SHIPHERD_TOOLS.entries()) expect(Object.keys(SHIPHERD_TOOLS_EN[i].inputSchema.properties ?? {}), t.name).toEqual(Object.keys(t.inputSchema.properties ?? {}));
   });

@@ -643,6 +643,269 @@ describe("nextDraftLength", () => {
   });
 });
 
+describe("nextDraftLength: clearing keys (BTL-269 C)", () => {
+  it("Esc Esc clears, Ctrl-W and Option-Backspace delete one word", () => {
+    expect(nextDraftLength(5, "\x1b\x1b")).toBe(0);
+    expect(nextDraftLength(0, "\x1b\x1b[A")).toBe(0);
+    // Alt+方向键（有的终端发 \x1b\x1b[A）不是 Esc Esc，不清空。
+    expect(nextDraftLength(5, "\x1b\x1b[A")).toBe(5);
+    expect(nextDraftLength(5, "\x1b\x1bOB")).toBe(5);
+  });
+});
+
+describe("PtyManager draft: clearing keys and the screen (BTL-269 C)", () => {
+  // 只假 Date：xterm 解析屏幕用真的定时器。
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+  afterEach(() => vi.useRealTimers());
+  const later = (ms: number) => vi.setSystemTime(Date.now() + ms);
+  const RULE = "─".repeat(120);
+
+  it("two separate Esc presses clear the draft; a slow second Esc does not", () => {
+    const { mgr } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "hello");
+    mgr.write("t1", "\x1b");
+    later(300);
+    mgr.write("t1", "\x1b");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", "again");
+    mgr.write("t1", "\x1b");
+    later(3000);
+    mgr.write("t1", "\x1b");
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+
+  it("Ctrl-W and Option-Backspace delete words: the last word gone leaves no draft", () => {
+    const { mgr } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "fix it");
+    mgr.write("t1", "\x17");
+    expect(mgr.hasDraft("t1")).toBe(true);
+    mgr.write("t1", "\x17");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", "go");
+    mgr.write("t1", "\x1b\x7f");
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("a stale count is dropped once the screen shows an empty input box (keys we can't follow: Ctrl-K, history edits)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit(`${RULE}\r\n❯ draft\r\n${RULE}`);
+    mgr.write("t1", "draft");
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    mgr.write("t1", "\x01\x0b"); // Ctrl-A, Ctrl-K: the box is empty now, the count does not know
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    // 刚按过键：屏幕可能还没跟上，先按计数。
+    expect(mgr.hasDraft("t1")).toBe(true);
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    // 灰色的建议不算草稿。
+    spawned[0].pty.emit("\x1b[2;3H\x1b[2mrun the tests\x1b[22m");
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("deliver pastes when only the status line below the box keeps redrawing: the content above it is stable", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.markStarted("t1");
+    const draw = (n: number) => spawned[0].pty.emit("\x1b[2J\x1b[H" + `● done\r\n${RULE}\r\n❯ \r\n${RULE}\r\n  ctx ${n}%`);
+    draw(0);
+    await mgr.screenSettled("t1");
+    const p = mgr.deliver("t1", "hi", { idleMs: 800, screenStableMs: 1000 });
+    for (let i = 1; i <= 8 && spawned[0].pty.written.length === 0; i++) {
+      later(300);
+      draw(i);
+      await mgr.screenSettled("t1");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(spawned[0].pty.written[0]).toBe("\x1b[200~hi\x1b[201~");
+    mgr.kill("t1");
+    await p;
+  });
+
+  it("text in the box the user did not type is not their draft: Shipherd's unsubmitted paste, claude's suggested next line", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    // 没打过字：输入框里的字（不是暗色的建议、也不是用户打的）不当草稿。
+    spawned[0].pty.emit(`${RULE}\r\n❯ \x1b[38;2;153;153;153mrun the tests\x1b[39m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    // 用户打字、回车提交了：之后输入框里出现的字也不算。
+    mgr.write("t1", "go\r");
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ leftover paste\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("a draft the user typed that reads like the placeholder (Try \"…\") is kept after they pause (PR #108 review)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", 'Try "the other approach"');
+    spawned[0].pty.emit(`${RULE}\r\n❯ Try "the other approach"\x1b[7m \x1b[27m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    // claude 画的提示（光标在第一个字上：反色的 T，后面是暗色）才算空：那时草稿清掉。
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry "fix lint errors"\x1b[22m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("text in the box counts as a draft even when the count missed it", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "x");
+    mgr.write("t1", "\x1b");
+    mgr.write("t1", "\x1b"); // 计数清零了（以为是 Esc Esc），屏幕上其实还有字
+    spawned[0].pty.emit(`${RULE}\r\n❯ x\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+});
+
+describe("PtyManager draft: multi-line drafts, dictation, NO_COLOR (PR #108 review)", () => {
+  // 只假 Date：xterm 解析屏幕用真的定时器。
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+  afterEach(() => vi.useRealTimers());
+  const later = (ms: number) => vi.setSystemTime(Date.now() + ms);
+  const RULE = "─".repeat(120);
+  const twoLineBox = `\x1b[2J\x1b[H${RULE}\r\n❯ first line\r\n  \x1b[7m \x1b[27m\r\n${RULE}`;
+
+  for (const [name, newline] of [
+    ["\\ then Enter", ["\\", "\r"]],
+    ["\\ and Enter in one write", ["\\\r"]],
+    ["Option+Enter (\\x1b\\r)", ["\x1b\r"]],
+  ] as const) {
+    it(`${name} is a new line, not a submit: the draft is kept for 60 s`, async () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      mgr.write("t1", "first line");
+      for (const d of newline) mgr.write("t1", d);
+      expect(mgr.hasDraft("t1")).toBe(true);
+      spawned[0].pty.emit(twoLineBox);
+      await mgr.screenSettled("t1");
+      later(60_000);
+      expect(mgr.hasDraft("t1")).toBe(true);
+    });
+  }
+
+  it("Enter that left the same text in the box (a newline key we don't know) keeps it as the draft", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "first line");
+    mgr.write("t1", "\r");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    spawned[0].pty.emit(twoLineBox);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    // 真的提交了（UserPromptSubmit 来了、输入框空了）：之后出现的字不算。
+    mgr.write("t1", "\x15");
+    mgr.write("t1", "go\r");
+    mgr.markSubmitted("t1");
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ go on\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("dictated text (all dim, cursor after it) is not an empty box once the user has pressed a key", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    const dictating = "\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[2mplease fix the\x1b[22m\x1b[7m \x1b[27m\r\n${RULE}`;
+    // 用户没碰过：暗色的字是 claude 建议的下一句，输入框算空。
+    spawned[0].pty.emit(dictating);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    // 按了听写键（打了一个字又删掉）：同样的暗色字算用户的草稿。
+    mgr.write("t1", "x\x7f");
+    spawned[0].pty.emit(dictating);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(false);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    // claude 的提示（光标领着的暗色字）照样算空。
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry\x1b[22m\x1b[5C\x1b[2m"fix lint errors"\x1b[22m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  // PR #108 第三轮 review：按过键以后切走（终端失焦，xterm 写 \x1b[O），claude 2.1.332 把提示整段画成暗色、前面没有光标。
+  // 这不是听写的字：输入框是空的，过多久都不当草稿，信箱照常能送。
+  const unfocusedPlaceholder = "\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[2mTry\x1b[22m\x1b[1C\x1b[2m"fix lint errors"\x1b[22m\r\n${RULE}`;
+  for (const [name, keys] of [
+    ["Esc", ["\x1b"]],
+    ["Shift+Tab", ["\x1b[Z"]],
+    ["an arrow key", ["\x1b[A"]],
+    ["Ctrl+C", ["\x03"]],
+    ["typing then deleting it all", ["ab", "\x7f", "\x7f"]],
+    ["Esc Esc (clear the box)", ["x", "\x1b", "\x1b"]],
+  ] as const) {
+    it(`after ${name} and switching away, the all-dim unfocused placeholder is an empty box, not a draft`, async () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      for (const k of keys) mgr.write("t1", k);
+      // 焦点报告（claude 开着 1004）：终端自己发的，不算用户输入。
+      mgr.write("t1", "\x1b[O");
+      spawned[0].pty.emit(unfocusedPlaceholder);
+      await mgr.screenSettled("t1");
+      later(60 * 60_000);
+      expect(mgr.inputBoxEmpty("t1")).toBe(true);
+      expect(mgr.hasDraft("t1")).toBe(false);
+      later(60 * 60_000);
+      expect(mgr.hasDraft("t1")).toBe(false);
+      // 切回来（有焦点，光标领着的提示）也一样。
+      mgr.write("t1", "\x1b[I");
+      spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry\x1b[22m\x1b[1C\x1b[2m"fix lint errors"\x1b[22m\r\n${RULE}`);
+      await mgr.screenSettled("t1");
+      later(60_000);
+      expect(mgr.hasDraft("t1")).toBe(false);
+    });
+  }
+
+  it("dictation while focused is still a draft after a key press; the unfocused placeholder after it is not", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "\x1b");
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[2mplease fix the\x1b[22m\x1b[7m \x1b[27m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+
+  it("NO_COLOR: an undimmed Try \"…\" is an empty box until the user types; their own Try \"…\" is a draft", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit(`${RULE}\r\n❯ \x1b[7mT\x1b[27mry "fix lint errors"\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(true);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", 'Try "the other approach"');
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ Try "the other approach"\x1b[7m \x1b[27m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.inputBoxEmpty("t1")).toBe(false);
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+});
+
 describe("PtyManager.hasDraft", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

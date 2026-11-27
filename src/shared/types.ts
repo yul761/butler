@@ -645,7 +645,12 @@ export type NowNotice =
   /** 强制的检查被自动降回影子（batchId 有值，可撤销），或者只标了待复查（flagged）。 */
   | { kind: "check_demoted"; eventId: number; batchId: number | null; names: string[]; reason: "bypassed" | "no_reduction" | null; flagged: boolean; at: number }
   /** 自动接活（工作流 N）：拿不准、缺信息、没映射到仓库、开不成、同路径冲突在排队。每个 ticket 一条。 */
-  | { kind: "intake"; item: IntakeNoticeInfo };
+  | { kind: "intake"; item: IntakeNoticeInfo }
+  /**
+   * 总控替你回答了一个 ask_user（BTL-269 A2）：问题、总控写的答案、是谁答的。可以改答案（当作更正送进那个 session）、打开、知道了。
+   * 每个提问一条，点了知道了或者改过就不再出现。
+   */
+  | { kind: "behalf_answered"; askId: number; question: string; answer: string; by: string; at: number; target: NowTarget; title: string | null };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */
@@ -695,7 +700,27 @@ export interface MessageView {
   deliveredAt: string | null;
   reply: string | null;
   repliedAt: string | null;
+  /** 还在排队时，上一次试着送被什么挡住、从什么时候开始（BTL-269）；没挡过、送到了为 null。 */
+  blocked: { reason: MailboxBlockReason; since: string | null } | null;
 }
 
 /** messages:list 的范围：Shipherd 总控的，或者一个 feature 的。 */
 export type MessageScope = { shipherd: true } | { featureId: number };
+
+/**
+ * 排着的消息为什么还没送到（BTL-269）：turn 在干活；unsure 记录说在干活、屏幕看着停了，在确认；refreshing 在换新；
+ * auto_input 别的自动输入正在往里送；screen 屏幕上有确认框；needs_you 在等用户回答；typing 用户刚打过字；draft 输入框里有没发出去的字；
+ * closed / hibernated 终端关着、休眠着；cost_paused 成本熔断暂停了。
+ */
+export type MailboxBlockReason =
+  | "turn" | "unsure" | "refreshing" | "auto_input" | "screen" | "needs_you" | "typing" | "draft" | "closed" | "hibernated" | "cost_paused"
+  /** 刚停下，「需要你」还没判断完（BTL-269 A1）：不知道它是不是在问用户，先不送，也不当作在等用户。 */
+  | "judging"
+  /** guard 放行了，往里贴的时候没成（等输入框超时）。 */
+  | "deliver_failed";
+
+/** messages:deliverNow 的结果（BTL-269）：送进去了；没送进去时的原因（delivering 正在送、gone 消息已经不在排队了）。 */
+export interface DeliverNowResult {
+  delivered: boolean;
+  reason: MailboxBlockReason | "delivering" | "gone" | null;
+}

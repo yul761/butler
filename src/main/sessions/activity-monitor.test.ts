@@ -652,7 +652,7 @@ describe("ActivityMonitor stuck detection", () => {
     const h = harness();
     h.openSession("s1");
     h.busy("s1");
-    h.screens.set("s1", "Do you want to proceed?");
+    h.screens.set("s1", "Do you want to proceed?\n ❯ 1. Yes");
     await h.checks(5);
     expect(h.judgeCalls).toEqual([]);
     expect(h.monitor.get("s1")?.kind).toBe("approval");
@@ -1090,7 +1090,7 @@ describe("ActivityMonitor stuck detection", () => {
     h.openSession("s1");
     h.busy("s1");
     await h.checks(3);
-    h.screens.set("s1", "Do you want to proceed?");
+    h.screens.set("s1", "Do you want to proceed?\n ❯ 1. Yes");
     await h.beat();
     h.judgeResults[0]({ stuck: false, reason: "", action: "" });
     await flush();
@@ -1126,7 +1126,7 @@ describe("ActivityMonitor stuck detection", () => {
     for (let i = 0; i < 17; i++) await h.beat();
     h.judgeResults[0]({ stuck: false, reason: "", action: "" });
     await flush();
-    h.screens.set("s1", "Do you want to proceed?");
+    h.screens.set("s1", "Do you want to proceed?\n ❯ 1. Yes");
     await h.beat();
     h.screens.set("s1", "running");
     await h.checks(3);
@@ -1217,7 +1217,7 @@ describe("ActivityMonitor stuck detection", () => {
     await h.checks(3);
     h.judgeResults[0]({ stuck: true, reason: "r", action: "a" });
     await flush();
-    h.screens.set("s1", "Do you want to proceed?");
+    h.screens.set("s1", "Do you want to proceed?\n ❯ 1. Yes");
     await h.beat();
     expect(h.monitor.get("s1")).toMatchObject({ kind: "approval", stuck: false });
   });
@@ -1427,7 +1427,7 @@ describe("ActivityMonitor stuck detection", () => {
     h.openSession("s1");
     h.busy("s1");
     await h.checks(3);
-    h.screens.set("s1", "Do you want to proceed?");
+    h.screens.set("s1", "Do you want to proceed?\n ❯ 1. Yes");
     await h.beat();
     h.judgeResults[0]({ stuck: true, reason: "r", action: "a" });
     await flush();

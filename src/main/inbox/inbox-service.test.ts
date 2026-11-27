@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { M } from "../strings";
 import type { Session, Ticket } from "../../shared/types";
 import { InboxRepo } from "../db/inbox-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
@@ -62,6 +63,10 @@ function setup(o: {
     deliver: (t, text, recheck) => deliver(t, text, recheck),
     canInterrupt: () => false, interrupt: () => {}, interruptRecheck: () => () => true,
     lastReply: () => null, nameOf: (id) => id ?? "Shipherd", typing: (h, phase) => inboxRef?.shipherdTyping(h, phase),
+    // 和 index.ts 一样接上（BTL-269 A2）：coord 是总控，它在等的是还没答的 ask_user。
+    fromController: (m) => m.fromSession === "coord",
+    awaitingUser: (h) => ({ asks: inboxRef?.unansweredAsks(h) ?? [], text: null }),
+    coordinatorAnswered: (h, x) => inboxRef?.coordinatorAnswered(h, x),
     notify: () => {}, now: () => state.now, log: () => {},
   });
   const inbox = new InboxService({
@@ -177,6 +182,111 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(deliver.mock.calls.at(-1)?.[1]).toContain("『b』，用户的回答：queued");
     expect(repo.get(b)?.status).toBe("answered");
     expect(inbox.hasPendingDecision("s2")).toBe(false);
+  });
+
+  it("marks only the named questions of that session, asked before the message was queued, as answered by its coordinator (BTL-269 A2)", () => {
+    const s = session("s1");
+    const t = session("t1");
+    const { inbox, repo, replace, state } = setup({ sessions: [s, t] });
+    const a = inbox.ask(s, { question: "a" });
+    const b = inbox.ask(s, { question: "b" });
+    state.answerGate = { ok: false, block: "typing" };
+    inbox.answer(b, "from the card");
+    const c = inbox.ask(t, { question: "c" });
+    state.now = 2_000;
+    const late = inbox.ask(s, { question: "asked after the message" });
+    replace("s1", session("s2"));
+    expect(inbox.unansweredAsks("s2").map((x) => x.id)).toEqual([a, late]);
+    // c 是别的 session 的，b 卡片上答过了，late 是那条消息排进来之后才问的：都不动。
+    inbox.coordinatorAnswered("s2", { asks: [a, b, c, late], answer: "go with A", by: "the coordinator", queuedAt: 1_500 });
+    expect(repo.get(a)).toMatchObject({ status: "answered", answer: "go with A", behalfBy: "the coordinator", behalfSeenAt: null });
+    expect(repo.get(b)).toMatchObject({ status: "pending", answer: "from the card", behalfBy: null });
+    expect(repo.get(c)?.status).toBe("pending");
+    expect(repo.get(late)?.status).toBe("pending");
+    expect(inbox.hasPendingDecision("t1")).toBe(true);
+  });
+
+  it("shows an 'answered by the coordinator' notice with the answer; a change goes in as a correction and the notice goes away (BTL-269 A2)", async () => {
+    const s = session("s1", { ticketKey: "BTL-1" });
+    const { inbox, repo, deliver } = setup({ sessions: [s], tickets: [ticket("BTL-1", 3)] });
+    const a = inbox.ask(s, { question: "A or B?" });
+    inbox.coordinatorAnswered("s1", { asks: [a], answer: "A", by: "the coordinator", queuedAt: 5_000 });
+    const [n] = inbox.behalfNotices(() => "Login");
+    expect(n).toMatchObject({ kind: "behalf_answered", askId: a, question: "A or B?", answer: "A", by: "the coordinator", title: "Login", target: { page: "ticket", key: "BTL-1", sessionId: "s1" } });
+    // 卡片已经不算未决：不再挡别的自动输入。
+    expect(inbox.hasPendingDecision("s1")).toBe(false);
+    expect(inbox.correctBehalf(a, "  B, actually ")).toBe(true);
+    await settle();
+    const text = deliver.mock.calls.at(-1)![1];
+    expect(text).toContain(M().inboxCorrection("A or B?", "A", "B, actually"));
+    expect(inbox.behalfNotices(() => null)).toEqual([]);
+    expect(repo.get(a)?.behalfSeenAt).not.toBeNull();
+    // 更正的送达不会把条目改回别的状态。
+    expect(repo.get(a)).toMatchObject({ status: "answered", answer: "A" });
+  });
+
+  it("end to end: a coordinator message without answers leaves the card alone; with answers it closes the card with the coordinator's words (BTL-269 A2)", async () => {
+    const s = session("s1");
+    const { inbox, repo, deliver, state, mailbox } = setup({ sessions: [s, session("coord")] });
+    const a = inbox.ask(s, { question: "A or B?" });
+    state.reportGate = { ok: false, block: "needs_you" };
+    state.now = 2_000;
+    mailbox.send({ kind: "instruction", from: "coord", to: "s1", featureId: null, body: "FYI the API changed" });
+    await inbox.flush();
+    expect(deliver.mock.calls.at(-1)![1]).toContain(M().mailboxNotAnAnswer);
+    expect(repo.get(a)).toMatchObject({ status: "pending", answer: null });
+    mailbox.send({ kind: "instruction", from: "coord", to: "s1", featureId: null, body: "[from coord] B", meta: { answers: a, text: "B" } });
+    await inbox.flush();
+    expect(deliver.mock.calls.at(-1)![1]).toContain(M().mailboxAnswersQuestion("A or B?"));
+    expect(repo.get(a)).toMatchObject({ status: "answered", answer: "B", behalfBy: "coord" });
+    expect(inbox.behalfNotices(() => null).map((n) => n.askId)).toEqual([a]);
+  });
+
+  it("a correction goes in once: correcting again, or after dismissing, sends nothing more; a correction that failed to queue can be retried (PR #108 review 3, suggestion 1)", async () => {
+    const s = session("s1");
+    const { inbox, repo, deliver, mailbox } = setup({ sessions: [s] });
+    const a = inbox.ask(s, { question: "A or B?" });
+    const b = inbox.ask(s, { question: "C or D?" });
+    inbox.coordinatorAnswered("s1", { asks: [a, b], answer: "A", by: "coord", queuedAt: 5_000 });
+    expect(inbox.correctBehalf(a, "B")).toBe(true);
+    await settle();
+    expect(inbox.correctBehalf(a, "B again")).toBe(false);
+    await settle();
+    const corrections = () => deliver.mock.calls.filter((c) => String(c[1]).includes("A or B?")).length;
+    expect(corrections()).toBe(1);
+    // 先点知道了，再改：也不送。
+    expect(inbox.dismissBehalf(b)).toBe(true);
+    expect(inbox.correctBehalf(b, "D")).toBe(false);
+    await settle();
+    expect(deliver.mock.calls.filter((c) => String(c[1]).includes("C or D?"))).toHaveLength(0);
+    // 排不进信箱：提醒放回去，可以再试一次。
+    const c = inbox.ask(s, { question: "E or F?" });
+    inbox.coordinatorAnswered("s1", { asks: [c], answer: "E", by: "coord", queuedAt: 5_000 });
+    const send = vi.spyOn(mailbox, "send").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    expect(inbox.correctBehalf(c, "F")).toBe(false);
+    expect(repo.get(c)?.behalfSeenAt).toBeNull();
+    expect(inbox.behalfNotices(() => null).map((n) => n.askId)).toEqual([c]);
+    send.mockRestore();
+    expect(inbox.correctBehalf(c, "F")).toBe(true);
+    expect(inbox.behalfNotices(() => null)).toEqual([]);
+  });
+
+  it("dismissing the notice keeps the coordinator's answer; questions the user answered get no notice and cannot be corrected this way (BTL-269 A2)", () => {
+    const s = session("s1");
+    const { inbox, repo } = setup({ sessions: [s] });
+    const a = inbox.ask(s, { question: "a" });
+    const b = inbox.ask(s, { question: "b" });
+    inbox.coordinatorAnswered("s1", { asks: [a], answer: "x", by: "c", queuedAt: 5_000 });
+    inbox.promptSubmitted("s1");
+    expect(repo.get(b)?.status).toBe("answered");
+    expect(inbox.behalfNotices(() => null).map((n) => n.askId)).toEqual([a]);
+    expect(inbox.correctBehalf(b, "y")).toBe(false);
+    expect(inbox.dismissBehalf(a)).toBe(true);
+    expect(inbox.dismissBehalf(a)).toBe(false);
+    expect(inbox.behalfNotices(() => null)).toEqual([]);
+    expect(repo.get(a)).toMatchObject({ status: "answered", answer: "x" });
   });
 
   it("ignores the UserPromptSubmit of Shipherd's own /handoff and resume message while the session is being refreshed", () => {

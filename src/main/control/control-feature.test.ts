@@ -14,7 +14,8 @@ import { fakePtyFactory, makeRepo, memDb, tempDir } from "../test-utils";
 import { FeatureService } from "../tickets/feature-service";
 import { TicketService } from "../tickets/ticket-service";
 import { controlHandler, type ControlHandlerDeps } from "./control-handler";
-import type { SendInput } from "../mailbox/mailbox";
+import type { AwaitingUser, SendInput } from "../mailbox/mailbox";
+import { M } from "../strings";
 import { StackControl, type StackControlDeps } from "./stack-control";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -57,10 +58,22 @@ async function setup(opts: {
   const logs: string[] = [];
   const refreshed: string[] = [];
   const mailed: SendInput[] = [];
+  const trace: string[] = [];
+  /** 它在等用户回答什么（BTL-269 A2）：head id → awaitingUser。 */
+  const awaiting = new Map<string, AwaitingUser>();
+  const pendingMail = new Map<string, { queued: number; oldestQueuedAt: string; blockedBy: "turn" | null; blockedSince: string | null; note: string }>();
   const mailbox = {
     send: (x: SendInput) => (mailed.push(x), { id: `m${mailed.length}`, state: opts.mailState ?? ("busy" as const) }),
     opened: async () => true,
     views: () => [],
+    outcome: async () => {
+      trace.push("outcome");
+      const st = opts.mailState ?? "busy";
+      return st === "idle"
+        ? { delivery: "delivered" as const, blockedBy: null, blockedSince: null, note: "送进去了。" }
+        : { delivery: "queued" as const, blockedBy: st === "busy" ? ("turn" as const) : ("closed" as const), blockedSince: null, note: "排着。" };
+    },
+    pendingView: (id: string) => pendingMail.get(id) ?? null,
   };
   const handle = controlHandler({
     mailbox,
@@ -73,6 +86,7 @@ async function setup(opts: {
     kill: (termId) => void killed.push(termId),
     screenNeedsUser: (termId) => needsUser.has(termId),
     lastReply: (id) => replies.get(id) ?? null,
+    awaitingUser: (id) => awaiting.get(id) ?? null,
     ...(opts.stacks && { stacks: opts.stacks({ tickets, features }) }),
     ...(opts.resume && { resume: opts.resume }),
     ...(opts.wakeState && { wakeState: opts.wakeState }),
@@ -90,7 +104,7 @@ async function setup(opts: {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, blocks, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed };
+  return { handle, blocks, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed, pendingMail, trace, awaiting };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -274,6 +288,21 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(await handle({ ...base, op: "session_activity", session: c.termId })).toMatchObject({ ok: true });
   });
 
+  it("shows what is waiting in a session's mailbox and why, in list_sessions and session_activity (BTL-269)", async () => {
+    const { handle, base, sessionService, feature, pendingMail } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, from: c.termId, op: "start_session", ticket: "DMS-1", task: "a" });
+    const id = child.ok ? (child.value as { sessionId: string }).sessionId : "";
+    const view = { queued: 2, oldestQueuedAt: "2026-11-26T00:00:00.000Z", blockedBy: "turn" as const, blockedSince: "2026-11-26T00:00:05.000Z", note: "排着：它这一轮还在干活" };
+    pendingMail.set(id, view);
+    const listed = await handle({ ...base, op: "list_sessions" });
+    const rows = (listed.ok ? listed.value : []) as { id: string; mailbox: unknown }[];
+    expect(rows.find((x) => x.id === id)!.mailbox).toEqual(view);
+    expect(rows.find((x) => x.id === c.termId)!.mailbox).toBeNull();
+    expect(await handle({ ...base, op: "session_activity", session: id })).toMatchObject({ ok: true, value: { mailbox: view } });
+  });
+
   it("lists a fix session with the session it fixes, and lets the coordinator read one in its own feature", async () => {
     const { handle, base, sessions, sessionService, feature, other, activities } = await setup();
     const c = await sessionService.openFeature({ featureId: feature.id });
@@ -329,6 +358,51 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     sessions.insertIfAbsent({ id: "kid-new", ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy(kid, "kid-new");
     expect(await handle({ ...from, op: "send_message", session: kid, text: "y" })).toMatchObject({ ok: true, value: { sessionId: "kid-new" } });
+  });
+
+  it("send_message tells the coordinator what the session waits on the user for; answers marks it as an answer, a stale id is refused (BTL-269 A2)", async () => {
+    const { handle, base, sessionService, feature, mailed, awaiting } = await setup({ mailState: "idle" });
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!child.ok) throw new Error(child.error);
+    const kid = (child.value as { sessionId: string }).sessionId;
+    awaiting.set(kid, { asks: [{ id: 12, question: "A or B?", at: 5 }], text: null });
+    const from = { ...base, from: c.termId };
+    const waiting = { questions: [{ id: 12, question: "A or B?", askedAt: new Date(5).toISOString() }], reason: null, note: M().ctlWaitingOnUser([{ id: 12, question: "A or B?" }], null) };
+    // list_sessions、session_activity 看得到它在等哪个问题。
+    const rows = await handle({ ...base, op: "list_sessions" });
+    expect(rows).toMatchObject({ ok: true });
+    expect(JSON.stringify(rows)).toContain('"waiting_on_user":{"questions":[{"id":12');
+    expect(await handle({ ...base, op: "session_activity", session: kid })).toMatchObject({ ok: true, value: { waiting_on_user: waiting } });
+    // 不带 answers：照样发，note 说清楚这条不算回答，meta 里没有 answers。
+    const plain = await handle({ ...from, op: "send_message", session: kid, text: "FYI" });
+    expect(plain).toMatchObject({ ok: true, value: { delivery: "delivered", waiting_on_user: waiting, note: expect.stringContaining(waiting.note) } });
+    expect(mailed.at(-1)!.meta).toBeUndefined();
+    // 带了 answers：meta 里记下 answers 和原文。
+    const answered = await handle({ ...from, op: "send_message", session: kid, text: "B", answers: 12 });
+    expect(answered).toMatchObject({ ok: true });
+    expect(mailed.at(-1)!.meta).toEqual({ answers: 12, text: "B" });
+    expect((answered as { value: { note: string } }).value.note).not.toContain(waiting.note);
+    // 不是它还没答的提问：不发，说清楚。
+    const n = mailed.length;
+    expect(await handle({ ...from, op: "send_message", session: kid, text: "B", answers: 99 })).toEqual({ v: 1, ok: false, error: M().ctlNotPendingAsk(99) });
+    expect(mailed).toHaveLength(n);
+    // true：它现在等着的那个，交给信箱按排进来的时间认。
+    expect(await handle({ ...from, op: "send_message", session: kid, text: "B", answers: true })).toMatchObject({ ok: true });
+    expect(mailed.at(-1)!.meta).toEqual({ answers: true, text: "B" });
+  });
+
+  it("send_message lets the control inbox move on before it waits for the delivery attempt (BTL-269)", async () => {
+    const { handle, base, sessionService, feature, trace } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!child.ok) throw new Error(child.error);
+    const kid = (child.value as { sessionId: string }).sessionId;
+    const r = await handle({ ...base, from: c.termId, op: "send_message", session: kid, text: "x" }, { release: () => trace.push("release") });
+    expect(r.ok).toBe(true);
+    expect(trace).toEqual(["release", "outcome"]);
   });
 
   it("send_message to a closed session says whether Shipherd is resuming it, waiting for memory, or the user ended it (BTL-256)", async () => {

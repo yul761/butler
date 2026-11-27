@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, utimesSync } from "node:fs";
+import { M } from "../strings";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import { SessionMessagesRepo } from "../db/session-messages-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
-import { AGE_NOTE_MS, Mailbox, MESSAGE_KEEP_MS, PRUNE_EVERY_MS, REPLY_WAIT_MS, TAKEN_STALE_MS } from "./mailbox";
+import { AGE_NOTE_MS, type AwaitingUser, Mailbox, MESSAGE_KEEP_MS, PRUNE_EVERY_MS, REPLY_WAIT_MS, STUCK_RECEIPT_MS, STUCK_TURN_RECEIPT_MS, TAKEN_STALE_MS } from "./mailbox";
 
 const flushPromises = () => new Promise((r) => setTimeout(r, 0));
 
@@ -29,6 +30,20 @@ function world() {
   const woken: string[] = [];
   const deliveredMsgs: { id: string; via: string | null }[] = [];
   const held = new Set<string>();
+  /** head -> 它的总控（fromController 认的发件人）。 */
+  const controllerOf = new Map<string, string>();
+  /** head -> 挡住它的 busy 细分（不在里面的按 turn）。 */
+  const busyReason = new Map<string, "turn" | "unsure">();
+  const typing = new Set<string>();
+  const drafts = new Set<string>();
+  const logs: string[] = [];
+  /** coordinatorAnswered 的调用：head 加上那几个 ask_user、答案、谁答的、那条消息排进来的时间。 */
+  const coordinatorAnswered: ({ head: string } & { asks: number[]; answer: string; by: string; queuedAt: number })[] = [];
+  /**
+   * needsYou 里的 session 在等用户回答什么（awaitingUser）：没设的当作用文字问了一个问题（时间 0，早于所有消息）；
+   * 设成 null 是刚停下、还没判断完（A1）。
+   */
+  const awaiting = new Map<string, AwaitingUser | null>();
   const head = (id: string): Session | null => {
     let s = sessions.get(id);
     while (s?.replacedBy) s = sessions.get(s.replacedBy);
@@ -39,7 +54,12 @@ function world() {
     for (const [t, sid] of terms) if ((head(sid)?.id ?? sid) === h) return t;
     return null;
   };
+  /** 等输入框的那段时间里发生的事（测试用）：deliver 调 recheck 之前跑一次。 */
+  const whileWaiting: { run: (() => void) | null } = { run: null };
   const deliver = vi.fn(async (term: string, text: string, recheck: () => boolean): Promise<DeliverResult> => {
+    const run = whileWaiting.run;
+    whileWaiting.run = null;
+    run?.();
     if (!recheck()) return "blocked";
     delivered.push({ term, text });
     return deliverResult;
@@ -50,10 +70,15 @@ function world() {
       const t = termOf(id);
       if (t === null) return { ok: false, block: "closed" };
       const h = head(id)!;
-      if (!h.waitingForInput || blocked.has(h.id)) return { ok: false, block: "busy" };
-      if (!o.answer && needsYou.has(h.id)) return { ok: false, block: "needs_you" };
+      // 和真的 guard 一样：force 只跳过「看着停了、还没安静够久」（unsure），屏幕上看得出在干活（turn）照样挡。
+      const busy = busyReason.get(h.id) ?? "turn";
+      if ((!h.waitingForInput || blocked.has(h.id)) && !(o.force && busy === "unsure")) return { ok: false, block: "busy", busy };
+      if (!o.force && !o.answer && needsYou.has(h.id)) return { ok: false, block: "needs_you" };
+      if (!o.force && typing.has(h.id)) return { ok: false, block: "typing" };
+      if (drafts.has(h.id)) return { ok: false, block: "draft" };
       return { ok: true, termId: t, headId: h.id };
     },
+    fromController: (m, h) => controllerOf.get(h) === m.fromSession,
     recheckAfter: () => () => true,
     deliver,
     canInterrupt: () => true,
@@ -62,13 +87,15 @@ function world() {
     lastReply: (id) => replies.get(head(id)?.id ?? id) ?? null,
     nameOf: (id) => (id === null ? "Shipherd" : `S(${id})`),
     typing: (h, phase) => typed.push(`${h}:${phase}`),
+    coordinatorAnswered: (h, o) => coordinatorAnswered.push({ head: h, ...o }),
+    awaitingUser: (h) => (!needsYou.has(h) ? null : awaiting.has(h) ? awaiting.get(h)! : { asks: [], text: { reason: "asked in text", at: 0 } }),
     wake: (h) => woken.push(h),
     delivered: (m) => deliveredMsgs.push({ id: m.id, via: m.via }),
     held: (h) => held.has(h),
     featureOf: (h) => (h === "t9" ? 9 : null),
     notify: () => {},
     now: () => now,
-    log: () => {},
+    log: (m) => logs.push(m),
   });
   const add = (id: string, waiting: boolean, open = true) => {
     sessions.set(id, { id, waitingForInput: waiting });
@@ -77,6 +104,7 @@ function world() {
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
     root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, deliveredMsgs, held, add, dirFiles,
+    controllerOf, busyReason, typing, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -531,5 +559,426 @@ describe.skipIf(process.env.SHIPHERD_PERF_BENCH !== "1")("idle tick bench (BTL-2
       await w.mb.tick();
     }
     console.log(`[idle-bench] mailbox tick: ${((performance.now() - t0) / n).toFixed(2)} ms per tick, ${prune.mock.calls.length} prune DELETEs in ${n} ticks (10 min)`);
+  });
+});
+
+describe("Mailbox: getting into an idle session (BTL-269)", () => {
+  it("deliver now of the coordinator's answer (answers: true) while it needs you says it answers the question, and closes it", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 5, question: "which one?", at: w.now() - 1 }], text: null });
+    w.controllerOf.set("t1", "coord");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "[wrapped] pick 2", meta: { answers: true, text: "pick 2" } });
+    await flushPromises();
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
+    expect(w.delivered[0].text).toContain(M().mailboxAnswersQuestion("which one?"));
+    expect(w.coordinatorAnswered).toEqual([{ head: "t1", asks: [5], answer: "pick 2", by: "S(coord)", queuedAt: w.repo.get(id)!.queuedAt }]);
+  });
+
+  it("A1: deliver now while it only just stopped (not judged yet) goes in as a plain message: no answer note, nothing marked answered", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", null);
+    w.controllerOf.set("t1", "coord");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "pick 2", meta: { answers: true, text: "pick 2" } });
+    await flushPromises();
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
+    expect(w.delivered[0].text).not.toContain(M().mailboxNotAnAnswer);
+    expect(w.delivered[0].text).not.toContain("替用户答");
+    expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("A1: right after a stop, before the verdict, the coordinator's message waits as 'judging' and is not taken as an answer; once judged it goes in", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", null);
+    w.controllerOf.set("t1", "coord");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "pick 2", meta: { answers: true, text: "pick 2" } });
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    expect(w.repo.get(id)!.blockedReason).toBe("judging");
+    expect(w.coordinatorAnswered).toEqual([]);
+    // 判断完：不需要你。下一次 tick 当普通消息送，不加说明、也不去结束什么。
+    w.needsYou.delete("t1");
+    await w.mb.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain("pick 2");
+    expect(w.delivered[0].text).not.toContain(M().mailboxNotAnAnswer);
+    expect(w.coordinatorAnswered).toEqual([]);
+    expect(w.repo.get(id)!.blockedReason).toBeNull();
+  });
+
+  it("A1: while it is still being judged, what the user typed in the conversation tab still goes in; only the coordinator's waits", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.controllerOf.set("t1", "coord");
+    w.busyReason.set("t1", "unsure");
+    const c = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "coord says", meta: { answers: true, text: "coord says" } });
+    w.mb.send({ kind: "user", from: null, to: "t1", featureId: null, body: "user says" });
+    await flushPromises();
+    w.busyReason.delete("t1");
+    w.setWaiting("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", null);
+    await w.mb.flush("t1");
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain("user says");
+    expect(w.delivered[0].text).not.toContain("coord says");
+    expect(w.repo.get(c.id)!.blockedReason).toBe("judging");
+    expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("A2: a message queued before the question was asked never counts as its answer, even with answers: true", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.controllerOf.set("t1", "coord");
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "old plan", meta: { answers: true, text: "old plan" } });
+    await flushPromises();
+    w.tick(1000);
+    // 之后它停下来问了一个问题。
+    w.setWaiting("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 7, question: "A or B?", at: w.now() }], text: { reason: "asks A or B", at: w.now() } });
+    await w.mb.flush("t1");
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain(M().mailboxNotAnAnswer);
+    expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("A2: if the user answers on the card while Shipherd waits for the input box, the 'answering for the user' note is not typed in; it goes in later without it (review 3, suggestion 2)", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 5, question: "which one?", at: w.now() - 1 }], text: null });
+    w.controllerOf.set("t1", "coord");
+    w.whileWaiting.run = () => {
+      // 用户在卡片上答了：不再是没答的提问；「需要你」也解除了（卡片的回答会直接送）。
+      w.awaiting.set("t1", { asks: [], text: null });
+      w.needsYou.delete("t1");
+    };
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "pick 2", meta: { answers: true, text: "pick 2" } });
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    expect(w.repo.get(id)!.status).toBe("queued");
+    expect(w.coordinatorAnswered).toEqual([]);
+    await w.mb.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain("pick 2");
+    expect(w.delivered[0].text).not.toContain(M().mailboxAnswersQuestion("which one?"));
+    expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("A2: answers with an id closes only that question", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 5, question: "first?", at: w.now() - 2 }, { id: 6, question: "second?", at: w.now() - 1 }], text: null });
+    w.controllerOf.set("t1", "coord");
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "B", meta: { answers: 6, text: "B" } });
+    await flushPromises();
+    expect(w.delivered[0].text).toContain(M().mailboxAnswersQuestion("second?"));
+    expect(w.delivered[0].text).not.toContain("first?");
+    expect(w.coordinatorAnswered.map((c) => c.asks)).toEqual([[6]]);
+  });
+
+  it("waits 10 minutes, not 2, before a receipt when the only reason is that the turn is still running", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", true);
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "x" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+    expect(w.delivered).toEqual([]);
+    w.tick(STUCK_TURN_RECEIPT_MS);
+    await w.mb.tick();
+    expect(w.delivered.map((d) => d.term)).toEqual(["coord"]);
+  });
+
+  it("records that typing it in timed out instead of keeping an older reason", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.mb.send(msg("t1", "x"));
+    await flushPromises();
+    expect(w.repo.queued()[0].blockedReason).toBe("turn");
+    w.setWaiting("t1", true);
+    w.failDeliver("timeout");
+    await w.mb.flush("t1");
+    expect(w.repo.queued()[0].blockedReason).toBe("deliver_failed");
+  });
+
+  it("A: a coordinator instruction that fails to go in does not close the question", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 5, question: "q", at: w.now() - 1 }], text: null });
+    w.controllerOf.set("t1", "coord");
+    w.failDeliver("timeout");
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "pick option 2", meta: { answers: true, text: "pick option 2" } });
+    await flushPromises();
+    expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("A: the user's own words while it needs you do not mark the question as answered by the coordinator", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.controllerOf.set("t1", "coord");
+    w.mb.send({ kind: "user", from: null, to: "t1", featureId: 1, body: "my answer" });
+    await flushPromises();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("A: the session's own coordinator gets in while it needs you, with a note; someone else's instruction still waits", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.controllerOf.set("t1", "coord");
+    w.mb.send({ kind: "instruction", from: "other", to: "t1", featureId: 1, body: "not yours" });
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    expect(w.repo.queued()[0]).toMatchObject({ blockedReason: "needs_you" });
+    expect(w.coordinatorAnswered).toEqual([]);
+    // A2：没带 answers 的照样送进去，但注明不是回答，提问留给用户。
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "unrelated note" });
+    await flushPromises();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain(M().mailboxNotAnAnswer);
+    expect(w.coordinatorAnswered).toEqual([]);
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "pick option 2", meta: { answers: true, text: "pick option 2" } });
+    await flushPromises();
+    // 只送总控这一条（守卫看的是实际送的这一批），注明是在替用户回答；别人的那条接着等。
+    expect(w.delivered).toHaveLength(2);
+    expect(w.delivered[1].text).toContain("pick option 2");
+    expect(w.delivered[1].text).toContain(M().mailboxAnswersQuestion("asked in text"));
+    expect(w.delivered[1].text).not.toContain("not yours");
+    expect(w.repo.queued().map((m) => m.body)).toEqual(["not yours"]);
+    expect(w.repo.queued()[0].blockedReason).toBe("needs_you");
+    // 用文字问的（没有 ask_user）：没有卡片要结束。
+    expect(w.coordinatorAnswered).toEqual([]);
+    // 不需要你的时候不加说明。
+    w.needsYou.delete("t1");
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "next" });
+    await flushPromises();
+    expect(w.delivered.at(-1)!.text).not.toContain(M().mailboxNotAnAnswer);
+    expect(w.delivered.at(-1)!.text).not.toContain("替用户答");
+  });
+
+  it("records why a message is blocked and since when; the reason changes only when it really changes, and each change is logged", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    const { id } = w.mb.send(msg("t1", "hello"));
+    await flushPromises();
+    const first = w.repo.get(id)!;
+    expect(first).toMatchObject({ blockedReason: "unsure", blockedSince: w.now() });
+    expect(w.logs.filter((l) => l.includes("blocked (unsure)"))).toHaveLength(1);
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedSince).toBe(first.blockedSince);
+    expect(w.logs.filter((l) => l.includes("blocked (unsure)"))).toHaveLength(1);
+    w.busyReason.set("t1", "turn");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ blockedReason: "turn", blockedSince: w.now() });
+    expect(w.mb.pendingFor("t1")).toMatchObject({ queued: 1, reason: "turn", since: w.now() });
+    expect(w.mb.views({ featureId: 1 }, [])[0].blocked).toEqual({ reason: "turn", since: new Date(w.now()).toISOString() });
+    // 关着的终端也记原因。
+    w.terms.delete("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedReason).toBe("closed");
+  });
+
+  it("settle says delivered when it went in, and queued with the reason when it did not", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.add("t2", false);
+    const a = w.mb.send(msg("t1", "go"));
+    expect(await w.mb.settle(a.id, 1000)).toMatchObject({ delivery: "delivered" });
+    const b = w.mb.send(msg("t2", "wait"));
+    const r = await w.mb.settle(b.id, 1000);
+    expect(r).toEqual({ delivery: "queued", reason: "turn", since: w.now() });
+    expect(Mailbox.note(r, w.now())).not.toContain("下一次调用工具时就会读到");
+    expect(Mailbox.note(r, w.now())).toContain("它这一轮还在干活");
+    expect(Mailbox.note({ delivery: "queued", reason: "unsure", since: w.now() - 3 * 60_000 }, w.now())).toContain("3 分钟");
+  });
+
+  it("tells the sender once when its message has been stuck for 2 minutes (not for typing or a draft), and withdraws the receipt once it goes in", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", false);
+    w.busyReason.set("t1", "unsure");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "do it" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS - 1000);
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+    w.tick(2000);
+    await w.mb.tick();
+    const receipts = w.repo.queued().filter((m) => m.toSession === "coord");
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({ kind: "reply", fromSession: null });
+    expect(receipts[0].body).toContain(id);
+    expect(receipts[0].body).toContain("屏幕上看已经停了");
+    // 只发一次：stuck_receipt_at 在库里，换一个 Mailbox（重启）也不重发。
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toHaveLength(1);
+    expect(w.repo.get(id)!.stuckReceiptAt).not.toBeNull();
+    // 送进去了：还排着的回执过时了，撤回。
+    w.setWaiting("t1", true);
+    w.busyReason.delete("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.status).toBe("delivered");
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+  });
+
+  it("withdraws the stuck receipt when the message goes in after the target was refreshed (its head changed while the receipt waited)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", false);
+    w.busyReason.set("t1", "unsure");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "do it" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toHaveLength(1);
+    // 目标换新：head 变成 t1b（终端还是同一个）。
+    w.sessions.set("t1b", { id: "t1b", waitingForInput: true });
+    w.sessions.get("t1")!.replacedBy = "t1b";
+    w.busyReason.delete("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.status).toBe("delivered");
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+  });
+
+  it("when the reason changes, the queued receipt with the old reason is withdrawn and a receipt with the new reason replaces it", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", false);
+    w.busyReason.set("t1", "unsure");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "do it" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    const [old] = w.repo.queued().filter((m) => m.toSession === "coord");
+    expect(old.body).toContain("屏幕上看已经停了");
+    // 终端关了：原因从 unsure 变成 closed。新原因从现在算（blockedSince），2 分钟后才发新的回执。
+    w.terms.delete("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedReason).toBe("closed");
+    expect(w.repo.get(old.id)).toBeNull();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    const receipts = w.repo.queued().filter((m) => m.toSession === "coord");
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].body).not.toContain("屏幕上看已经停了");
+    expect(receipts[0].body).toContain(M().mailboxBlocked.closed);
+    // 原因换成用户在打字：旧回执撤回，不再发新的（打字不发回执）。
+    w.terms.set("t1", "t1");
+    w.busyReason.delete("t1");
+    w.setWaiting("t1", true);
+    w.typing.add("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedReason).toBe("typing");
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+  });
+
+  it("a later stuck message from the same sender is merged into the receipt still queued, not swapped for it (review suggestion 2)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", false);
+    w.busyReason.set("t1", "unsure");
+    const a = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "first" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toHaveLength(1);
+    const b = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "second" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    const receipts = w.repo.queued().filter((m) => m.toSession === "coord");
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].body).toContain(a.id);
+    expect(receipts[0].body).toContain(b.id);
+    expect((receipts[0].meta as { ids: string[] }).ids.sort()).toEqual([a.id, b.id].sort());
+    // 一条送进去了，回执里只剩另一条还卡着的不会被当成全部送到。
+    expect(w.repo.get(a.id)!.stuckReceiptAt).not.toBeNull();
+    expect(w.repo.get(b.id)!.stuckReceiptAt).not.toBeNull();
+  });
+
+  it("times the stuck receipt from when the current reason started, not from when it was queued (review suggestion 3)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", false);
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "x" });
+    await flushPromises();
+    w.tick(STUCK_TURN_RECEIPT_MS - 60_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedReason).toBe("turn");
+    // 这一轮跑完了，屏幕上看停了、正在确认：从现在开始算 2 分钟，不因为排了 9 分钟马上发。
+    w.busyReason.set("t1", "unsure");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedReason).toBe("unsure");
+    w.tick(STUCK_RECEIPT_MS - 1000);
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+    w.tick(2000);
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toHaveLength(1);
+  });
+
+  it("no stuck receipt while the user is typing or has a draft, nor for Shipherd's own notices", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.add("coord", false);
+    w.typing.add("t1");
+    w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "do it" });
+    w.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI failed" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    expect(w.repo.queued()[0].blockedReason).toBe("typing");
+    w.typing.delete("t1");
+    w.drafts.add("t1");
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    expect(w.repo.queued()[0].blockedReason).toBe("draft");
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+  });
+
+  it("deliver now skips 'unsure', 'needs you' and typing, puts that message first, but still stops for a draft", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.needsYou.add("t1");
+    w.typing.add("t1");
+    w.mb.send(msg("t1", "first"));
+    const { id } = w.mb.send(msg("t1", "the one"));
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    // 屏幕上看得出还在干活：马上说 turn，不去等输入框（等也贴不进去，hook 下一次工具调用时送）。
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: false, reason: "turn" });
+    expect(w.deliver).not.toHaveBeenCalled();
+    w.busyReason.set("t1", "unsure");
+    w.drafts.add("t1");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: false, reason: "draft" });
+    expect(w.delivered).toEqual([]);
+    w.drafts.delete("t1");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
+    expect(w.delivered).toHaveLength(1);
+    const text = w.delivered[0].text;
+    expect(text.indexOf("the one")).toBeLessThan(text.indexOf("first"));
+    // 它在等你回答：从别人那里来的指示不注明「总控在回答」。
+    expect(text).not.toContain("总控代答");
+    expect(w.repo.queued()).toEqual([]);
+    expect(await w.mb.deliverNow("nope")).toEqual({ delivered: false, reason: "gone" });
   });
 });

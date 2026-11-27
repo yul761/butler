@@ -89,8 +89,8 @@ import { featureCommandFollowup, FeatureSummaryRunner } from "./handoff/feature-
 import { ingestHandoff, rederiveTicketStatus, type IngestInput } from "./handoff/ingest";
 import { cleanupIfMerged } from "./tickets/worktree-cleanup";
 import { FeatureHandoffsRepo } from "./db/feature-handoffs-repo";
-import { SessionMessagesRepo } from "./db/session-messages-repo";
-import { Mailbox, MAILBOX_BODY_LIMIT } from "./mailbox/mailbox";
+import { SessionMessagesRepo, type SessionMessage } from "./db/session-messages-repo";
+import { Mailbox, MAILBOX_BODY_LIMIT, type AwaitingUser } from "./mailbox/mailbox";
 import { broadcastConvention } from "./mailbox/broadcast";
 import { sessionName } from "./mailbox/names";
 import { ExternalAuditRepo } from "./db/external-audit-repo";
@@ -195,7 +195,9 @@ import { execText } from "./util/exec";
 import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
-import { onTurnEndedWithoutStop } from "./sessions/turn-end";
+import { markTurnEndedWithoutStop, onTurnEndedWithoutStop } from "./sessions/turn-end";
+import { HealedTurns, IdleEvidence } from "./sessions/idle-evidence";
+import { isControllerOf } from "./mailbox/controller";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
 import { TurnService } from "./turn/turn-service";
@@ -845,6 +847,7 @@ async function bootstrap(): Promise<void> {
       terminalMeter.forget(id);
       // 信箱（BTL-245）：hook 已经写出去的记成送达，排着的留在库里，等下次打开再送；投影删掉。
       mailbox.termExited(id);
+      idleEvidence.forget(id);
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
       const exitedHead = sessions.head(id);
       const exitedTicket = exitedHead?.ticketKey ?? null;
@@ -1408,13 +1411,15 @@ async function bootstrap(): Promise<void> {
   /** 休眠前最后一次看到的样子：休眠的 session 照样留在「需要你」里（活动监视只看开着的终端）。 */
   const needsYouFrozen = new Map<string, NeedsYouHead>();
   /** 开着终端的 Shipherd session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
+  /** 靠屏幕证据校正成停着的（BTL-269 B）：「需要你」照样判断它最后那条回复。 */
+  const healedTurns = new HealedTurns();
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
     for (const termId of pty.openIds()) {
       const h = sessions.head(termId);
       // 复盘分析 session 只是用户来问问题的，不判断需要你。
       if (!h || h.origin !== "shipherd" || h.lessonRunId !== null || heads.has(h.id)) continue;
-      heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
+      heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: healedTurns.kindFor(h.id, h.waitingForInput, activityMonitor.get(h.id)?.kind ?? null), reply: activityMonitor.lastReplyOf(h.id) });
     }
     const hibernated = new Set(hibernatedHeads().map((h) => h.id));
     for (const id of [...needsYouFrozen.keys()]) if (!hibernated.has(id) || heads.has(id)) needsYouFrozen.delete(id);
@@ -1882,6 +1887,19 @@ async function bootstrap(): Promise<void> {
     const head = sessions.head(sessionId)?.id;
     return head ? (pty.openIds().find((t) => sessions.head(t)?.id === head) ?? null) : null;
   };
+  // BTL-269 B：记录说在干活（Stop hook 没来、transcript 没写结束）、屏幕上看已经停着的，凭屏幕、输出、transcript 的证据放行。
+  const idleEvidence = new IdleEvidence({
+    screen: (termId) => pty.screenLines(termId, { dropDim: true }),
+    // 输入框空不空和草稿保护同一个判断（听写的暗字、NO_COLOR 的提示，审查疑点 i/ii）。
+    boxEmpty: (termId, lines) => pty.inputBoxEmpty(termId, lines),
+    lastOutputAt: (termId) => pty.lastOutputAt(termId),
+    // 活动还没读到（刚打开）就当 transcript 刚动过：不知道它在干什么不放行。
+    transcriptGrewAt: (headId) => {
+      const a = activityMonitor.get(headId);
+      return a === null ? Date.now() : a.lastOutputAt;
+    },
+    now: Date.now,
+  });
   // 所有自动输入共用的一道检查（计划 13）：停着等输入、屏幕上没有要回答的、用户没在打字、没有草稿才贴。
   const guardDeps: DeliveryGuardDeps = {
     // 成本熔断暂停着的不往里递，也不为了递东西叫醒它（工作流 L）。
@@ -1898,14 +1916,36 @@ async function bootstrap(): Promise<void> {
       void hibernator.wake(id, "delivery");
       return true;
     },
+    idle: (headId, termId) => idleEvidence.check(headId, termId),
+    // 凭证据放行：记成在等输入（和没有 Stop 的轮次结束一样），通知界面；停下的后续（sessionStopped）放到这次检查之后，
+    // 免得在 guard 里面又开始往同一个终端送别的。
+    healed: (headId) => {
+      if (!markTurnEndedWithoutStop(sessions, headId, Date.now())) return;
+      healedTurns.add(headId);
+      logger(`delivery: ${headId} looked stopped on screen for a while though no Stop came; marking it waiting for input`);
+      notify("data");
+      setTimeout(() => sessionStopped(headId), 0);
+    },
     now: Date.now,
   };
   // 合并通知和 CI 结果用的：在等用户回答的 session 不往里贴东西（计划 14），「需要你」还没判断完的也先不贴（I1），
   // 正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
+  /** 自动输入眼里的「需要你」：判断出来需要你、还没判断完，或者有未决的 ask_user。inboxService 在下面才建好：回调里才用到。 */
+  const deliveryNeedsYouOf = (id: string): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id);
+  /**
+   * 它在等用户回答什么（BTL-269 A1/A2）：未答的 ask_user、判断出来的「需要你」（理由和那条回复的时间）。
+   * 只是刚停下、还没判断完（undecided）、也没有未答 ask_user 的返回 null：不知道它是不是在问用户，总控的消息不当作回答。
+   */
+  const awaitingUserOf = (head: string): AwaitingUser | null => {
+    const asks = inboxService.unansweredAsks(head);
+    const reason = needsYou.reasonOf(head);
+    if (asks.length === 0 && reason === null && needsYou.undecided(head)) return null;
+    return { asks, text: reason === null ? null : { reason, at: activityMonitor.lastReplyOf(head)?.at ?? null } };
+  };
   const deliveryGuard = new DeliveryGuard({
     ...guardDeps,
     // 有未决 ask_user 的也算在等用户（BTL-190 第 2+3 点）。inboxService 在下面才建好：回调里才用到。
-    needsYou: (id): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id),
+    needsYou: (id): boolean => deliveryNeedsYouOf(id),
     refreshing: (id) => refresher.isRefreshing(id),
   });
   // 成本熔断（工作流 L，设计 addendum 第 4 节）。上限经三层配置；没设上限时什么都不做。
@@ -2115,6 +2155,15 @@ async function bootstrap(): Promise<void> {
   const mailboxName = (id: string | null): string =>
     sessionName({ head: (x) => sessions.head(x), featureName: (f) => features.get(f)?.name ?? null }, id);
   const messagesRepo = new SessionMessagesRepo(db);
+  /** 这条消息是收件人自己的总控发的（BTL-269 A：「需要你」时也送进去）。 */
+  const mailboxFromController = (m: SessionMessage, headId: string): boolean => {
+    const from = m.fromSession === null ? null : sessions.head(m.fromSession);
+    const to = sessions.head(headId);
+    // 和 featureSend 同一个判断、同一份数据：epic 没归档、ticket 是 listByFeature 列出来的。
+    const ownKeys = (featureId: number): Set<string> | null =>
+      features.get(featureId)?.archivedAt === null ? new Set(tickets.listByFeature(featureId).map((t) => t.key)) : null;
+    return !!from && !!to && isControllerOf(from, to, ownKeys);
+  };
   /** 这个 head 有别的 session 发来、还排着的消息（约定广播不算）。 */
   const hasSessionMail = (headId: string): boolean =>
     messagesRepo.queued().some((m) => m.fromSession !== null && m.kind !== "convention" && (sessions.head(m.toSession)?.id ?? m.toSession) === headId);
@@ -2124,8 +2173,10 @@ async function bootstrap(): Promise<void> {
     head: (id) => sessions.head(id),
     termOf: gateTerm,
     openTerms: () => pty.openIds(),
-    check: (id, o) => (o.answer ? answerGuard : deliveryGuard).check(id),
-    recheckAfter: (id, passed, o) => (o.answer ? answerGuard : deliveryGuard).recheckAfter(id, passed),
+    check: (id, o) => (o.answer ? answerGuard : deliveryGuard).check(id, { force: o.force }),
+    recheckAfter: (id, passed, o) => (o.answer ? answerGuard : deliveryGuard).recheckAfter(id, passed, { force: o.force }),
+    fromController: (m, headId) => mailboxFromController(m, headId),
+    hibernated: (id) => isHibernated(id),
     deliver: (termId, text, recheck) => pty.deliver(termId, text, { singleLine: process.platform === "win32", timeoutMs: 60_000, recheck }),
     // 叫停：在忙、屏幕上没有要用户回答的、用户 30 秒内没打字、没有草稿、没在换新、没被熔断压着、没有别的自动输入正在进去。
     canInterrupt: (termId) => {
@@ -2149,6 +2200,8 @@ async function bootstrap(): Promise<void> {
     },
     nameOf: mailboxName,
     typing: (h, phase) => inboxService.shipherdTyping(h, phase),
+    coordinatorAnswered: (h, o) => inboxService.coordinatorAnswered(h, o),
+    awaitingUser: (h) => awaitingUserOf(h),
     // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；真关了的、总控管的在后台恢复（BTL-256）。熔断压着的不叫。
     // 真关了的只为别的 session 发来的消息恢复（总控的指示、汇报……）：CI、合并这类 Shipherd 自己的通知排着等下次打开，
     // 免得总控刚 end_session 的 session 被下一条通知又拉起来。
@@ -3387,6 +3440,7 @@ async function bootstrap(): Promise<void> {
     ...stackNotices(stackService.notices()),
     ...backtest.notices(),
     ...intakeNotices(intake.notices()),
+    ...inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
   ];
   // 请你 review 的 PR（UI 重做第 1 层，计划 R9）：gh search 的结果整体替换进 review_requests。
   const reviewRequests = new ReviewRequestsRepo(db);
@@ -3616,6 +3670,7 @@ async function bootstrap(): Promise<void> {
     externalAudit,
     metrics: (days) => metricsView(days),
     messages: (scope) => mailbox.views(scope, sessions.listShipherd().map((x) => x.id)),
+    deliverNow: (id) => mailbox.deliverNow(id),
     usage: usageRepo, sessions,
     refreshSession: (id) => {
       const refused = startRefresh(refresher, id, "manual", logger);
@@ -3903,6 +3958,7 @@ async function bootstrap(): Promise<void> {
       activityOutput: (id) => activityMonitor.output(id),
       refresher,
       lastReply: (id) => activityMonitor.lastReply(id),
+      awaitingUser: (id) => awaitingUserOf(sessions.head(id)?.id ?? id),
       inbox: inboxService,
       mailbox,
       // Shipherd 总控（BTL-190 第 5 点）的只读数据。
@@ -4082,6 +4138,8 @@ async function bootstrap(): Promise<void> {
   powerMonitor.on("resume", () => {
     // 睡着的时间不算闲置（BTL-190 第 8 点）：不然一开盖子所有 session 一起被关。
     sessionCleanup.resumed();
+    // 「凭屏幕证据当它停着」也一样（BTL-269 B）：不然醒来第一次检查就把睡着的时间当成安静，马上往里送。
+    idleEvidence.resumed();
     void checkSchedule("resume");
   });
   powerMonitor.on("unlock-screen", () => void checkSchedule("unlock"));

@@ -38,7 +38,7 @@ import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicySe
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr, type TicketView, type FeatureView,
+  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type DeliverNowResult, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr, type TicketView, type FeatureView,
 } from "../../shared/types";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
@@ -87,9 +87,9 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openShipherdArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg, preReviewStatusArg, preReviewQueueActionArg } from "./validate";
+  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg, preReviewStatusArg, preReviewQueueActionArg, messageIdArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -238,7 +238,7 @@ export interface IpcDeps {
   /** 重发一条递不出去的 CI 结论（工作流 W）。 */
   ciResend: (item: CiItemRef) => Promise<string>;
   /** 「待你决定」和汇报（BTL-190 第 2+3 点）。 */
-  inbox: Pick<InboxService, "view" | "answer" | "reportsPage">;
+  inbox: Pick<InboxService, "view" | "answer" | "reportsPage" | "correctBehalf" | "dismissBehalf">;
   /** 界面上的“换新”按钮（计划 16）：马上回答，换新在后台跑。 */
   refreshSession: (sessionId: string) => RefreshSessionResult;
   /** 「清理闲置」按钮（BTL-190 第 8 点）：把这些 session 里闲置的关掉，返回开始关的个数（关闭在后台跑）。 */
@@ -260,6 +260,8 @@ export interface IpcDeps {
   /** Shipherd 页"回复"tab（ws-b）。 */
   /** 信箱（BTL-245）的消息：Shipherd 总控的或一个 feature 的。 */
   messages: (scope: MessageScope) => MessageView[];
+  /** 用户点「现在送进去」（BTL-269）：不看在干活、需要你、刚打过字，草稿、确认框照样挡。 */
+  deliverNow: (id: string) => Promise<DeliverNowResult>;
   memory: Pick<MemoryService, "view" | "why">;
   /** 对话另存（UI 重做第 4 层）：只读。 */
   conv: Pick<ConversationStore, "list" | "search">;
@@ -438,6 +440,11 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.shipherdView, () => d.sessionService.shipherdView());
   handle(IPC.messagesList, (raw: unknown): MessageView[] => d.messages(messageScopeArg(raw)));
+  handle(IPC.messagesDeliverNow, async (raw: unknown): Promise<DeliverNowResult> => {
+    const r = await d.deliverNow(messageIdArg(raw));
+    d.notify();
+    return r;
+  });
   handle(IPC.metricsView, (raw: unknown): MetricsOverview => d.metrics(typeof raw === "number" ? raw : undefined));
   handle(IPC.shipherdOpenSession, async (raw: unknown) => {
     const r = await d.sessionService.openShipherd(openShipherdArg(raw));
@@ -810,6 +817,10 @@ export function registerIpc(d: IpcDeps): void {
   // 答了由 InboxService 自己 notify。
   handle(IPC.inboxList, (raw: unknown): InboxView => d.inbox.view(inboxScopeArg(raw)));
   handle(IPC.inboxAnswer, (id: unknown, text: unknown): boolean => d.inbox.answer(inboxIdArg(id), inboxAnswerArg(text)));
+  handle(IPC.inboxBehalf, (v: unknown): boolean => {
+    const a = inboxBehalfArg(v);
+    return a.op === "correct" ? d.inbox.correctBehalf(a.id, a.text) : d.inbox.dismissBehalf(a.id);
+  });
   handle(IPC.inboxReports, (scope: unknown, o: unknown) => d.inbox.reportsPage(inboxScopeArg(scope), reportsPageArg(o)));
 
   handle(IPC.followupsList, (ticketKey: string) => d.followups.listByTicket(ticketKey));

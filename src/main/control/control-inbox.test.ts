@@ -44,6 +44,55 @@ describe("ControlInbox", () => {
     expect(seen.map((r) => r.op)).toEqual(["list_repos", "list_sessions"]);
   });
 
+  it("lets later requests through while a released request is still waiting, then writes its result (BTL-269)", async () => {
+    const { requestsDir, resultsDir, put, result } = setup();
+    let finish!: () => void;
+    const waiting = new Promise<void>((r) => (finish = r));
+    const order: string[] = [];
+    const inbox = new ControlInbox({
+      requestsDir, resultsDir,
+      handle: async (req, meta) => {
+        if (req.op === "send_message") {
+          meta.release();
+          await waiting;
+          order.push("send_message done");
+          return { v: 1, ok: true, value: "sent" };
+        }
+        order.push(req.op);
+        return { v: 1, ok: true, value: req.op };
+      },
+    });
+    put(id(1), { v: 1, featureId: 7, from: null, op: "send_message", session: "s", text: "hi" });
+    put(id(2), { v: 1, featureId: 7, op: "list_repos" });
+    expect(await inbox.drain()).toBe(2);
+    expect(order).toEqual(["list_repos"]);
+    expect(result(id(2))).toEqual({ v: 1, ok: true, value: "list_repos" });
+    expect(existsSync(join(resultsDir, `${id(1)}.json`))).toBe(false);
+    finish();
+    await inbox.settled();
+    expect(order).toEqual(["list_repos", "send_message done"]);
+    expect(result(id(1))).toEqual({ v: 1, ok: true, value: "sent" });
+  });
+
+  it("still runs requests one at a time when nobody releases", async () => {
+    const { requestsDir, resultsDir, put } = setup();
+    let running = 0;
+    let most = 0;
+    const inbox = new ControlInbox({
+      requestsDir, resultsDir,
+      handle: async (req) => {
+        most = Math.max(most, ++running);
+        await new Promise((r) => setTimeout(r, 5));
+        running--;
+        return { v: 1, ok: true, value: req.op };
+      },
+    });
+    put(id(1), { v: 1, featureId: 7, op: "list_repos" });
+    put(id(2), { v: 1, featureId: 7, op: "list_repos" });
+    expect(await inbox.drain()).toBe(2);
+    expect(most).toBe(1);
+  });
+
   it("answers a start_session with a malformed model as a bad request and never hands it to the handler", async () => {
     const { inbox, put, result, seen } = setup();
     put(id(1), { v: 1, featureId: 7, op: "start_session", ticket: "A-1", repo: "api", task: "x", model: "bad name!" });

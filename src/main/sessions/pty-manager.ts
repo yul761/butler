@@ -1,5 +1,5 @@
 import type { SpawnSpec } from "../claude/spawn";
-import { dialogOnScreen, pasteInInputBox, permissionOnScreen, TermScreen } from "./screen";
+import { aboveInputBox, dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, squash, TermScreen, type DimMode } from "./screen";
 
 export interface PtyProcess {
   readonly pid: number;
@@ -47,8 +47,20 @@ interface Term {
   started: boolean;
   /** 用户上一次往这个终端写东西（渲染进程的按键，经 write）的时间；0 = 还没有。deliver、prefill 自己的写入不算。 */
   lastUserInputAt: number;
-  /** 输入框里还没发出去的可见字符数（见 nextDraftLength）；0 = 没有草稿。 */
-  draftLen: number;
+  /** 输入框里还没发出去的文字（按键推算，见 nextDraft）；"" = 没有草稿。hasDraft 还会拿屏幕上的输入框校正它。 */
+  draft: string;
+  /**
+   * 用户上一次提交（回车）或屏幕上看到空输入框以后，又往里打过字（BTL-269 review）。只有这时屏幕上输入框里的字才可能是用户的：
+   * Shipherd 自己贴进去没提交成的、claude 画的建议下一句都不是用户的草稿。
+   */
+  typedSinceEmpty: boolean;
+  /**
+   * 用户上一次回车提交之前输入框里的字；屏幕确认了（输入框空了、UserPromptSubmit 来了、之后又打了字）就是 null。
+   * 回车之后屏幕上输入框里还是这些字：那次回车没提交（我们认不得的换行键），还是用户的草稿（PR #108 review 建议 1）。
+   */
+  submittedDraft: string | null;
+  /** 上一次单独按 Esc（data 就是一个 \x1b）的时间；0 = 没有。隔得近的两次单独的 Esc 和 Esc Esc 一样清空输入框。 */
+  lastEscAt: number;
   /** 终端打开（新开或恢复）的时间（R36：刚打开的终端不自动换新）。 */
   openedAt: number;
   /** 当前这一屏（BTL-190 第 9 点）：对话框、权限确认、输入框都看它，不看输出流的末尾。 */
@@ -68,34 +80,92 @@ export function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g, "");
 }
 
+/** 删掉最后一个词（Ctrl+W、Option+Backspace）：先去掉末尾的空白，再去掉末尾连着的非空白。 */
+function dropWord(text: string): string {
+  return text.replace(/\s+$/, "").replace(/\S+$/, "");
+}
+
 /**
- * 输入框草稿长度的下一个值：current 是之前的长度，data 是这次写进终端的字节。
+ * 输入框草稿的下一个值：current 是之前的文字，data 是这次写进终端的字节。
  * 鼠标上报、焦点事件、方向键等 ESC 序列不算；bracketed paste 的标记去掉但内容计入；
- * 回车（\\r）、Ctrl+C、Ctrl+U 清零，单独的 \\n 算换行加 1，退格减 1，其他控制字符忽略，可见字符加 1。
+ * 回车（\r）、Ctrl+C、Ctrl+U、Esc Esc 清空，Ctrl+W、Option+Backspace 删掉一个词，单独的 \n、「\」后面的回车、Option+Enter（\x1b\r）
+ * 算换行，退格删一个字，其他控制字符忽略。
+ * 方向键挪光标、Ctrl+K 这类跟不上的编辑，由 hasDraft 拿屏幕上的输入框校正（BTL-269 C）。
  */
-export function nextDraftLength(current: number, data: string): number {
-  let n = current;
+export function nextDraft(current: string, data: string): string {
+  return scanDraft(current, data).text;
+}
+
+/**
+ * nextDraft 的全部结果：submitted = data 里有真的提交（回车，不是 `\` 后面的回车、Option+Enter 这种换行）；
+ * typedAfter = 最后一次提交之后还有输入；before = 最后一次提交之前输入框里的字（看屏幕确认那次回车真提交了没有，见 submittedDraft）。
+ */
+export function scanDraft(current: string, data: string): { text: string; submitted: boolean; typedAfter: boolean; before: string } {
+  let chars = [...current];
+  let submitted = false;
+  let typedAfter = false;
+  let before = "";
   // bracketed paste 里的内容整段计入（换行也算一个，粘贴的多行文本留在输入框里）；其余部分逐字符处理。
   // eslint-disable-next-line no-control-regex
   const parts = data.split(/\x1b\[200~([\s\S]*?)(?:\x1b\[201~|$)/);
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 1) {
-      n += [...parts[i]].length;
+      chars.push(...parts[i]);
+      if (submitted && parts[i] !== "") typedAfter = true;
       continue;
     }
+    // 先认 Option+Backspace（\x1b\x7f）和 Esc Esc，免得被当成 ESC 序列去掉：换成 Ctrl+W、Ctrl+U。
+    // 第二个 Esc 后面跟着 [ 或 O 的是 Alt+方向键这类（\x1b\x1b[A），不是 Esc Esc。
     // CSI 参数含 <（SGR 鼠标上报），SS3 带一个字符（\x1bOA），所以不直接用 stripAnsi；其余形状同它。
-    // eslint-disable-next-line no-control-regex
-    const text = parts[i].replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bO.|\x1b[@-Z\\-_]/g, "");
+    // Option+Enter（\x1b\r）在 claude 的输入框里是换行，不是提交。
+    const text = parts[i]
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\r/g, "\n")
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\x7f/g, "\x17")
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\x1b(?![[O])/g, "\x15")
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bO.|\x1b[@-Z\\-_]/g, "");
     for (const ch of text) {
-      if (ch === "\r" || ch === "\x03" || ch === "\x15") n = 0;
-      else if (ch === "\x7f" || ch === "\b") n = Math.max(0, n - 1);
-      else if (ch === "\n") n += 1; // Ctrl+J：在输入框里换行，不提交
+      if (submitted) typedAfter = true;
+      // 「\」后面回车：claude 去掉那个 \、换一行，不提交。
+      if (ch === "\r" && chars.at(-1) === "\\") {
+        chars.pop();
+        chars.push("\n");
+      } else if (ch === "\r") {
+        before = chars.join("");
+        submitted = true;
+        typedAfter = false;
+        chars = [];
+      } else if (ch === "\x03" || ch === "\x15") chars = [];
+      else if (ch === "\x7f" || ch === "\b") chars.pop();
+      else if (ch === "\x17") chars = [...dropWord(chars.join(""))];
+      else if (ch === "\n") chars.push("\n"); // Ctrl+J：在输入框里换行，不提交
       else if (ch < " ") continue;
-      else n += 1;
+      else chars.push(ch);
     }
   }
-  return n;
+  return { text: chars.join(""), submitted, typedAfter, before };
 }
+
+/** 只看长度的旧接口：nextDraft 的字数。 */
+export function nextDraftLength(current: number, data: string): number {
+  return [...nextDraft("x".repeat(current), data)].length;
+}
+
+/** NO_COLOR 时 claude 空输入框里的提示（不是暗色）：只在用户没打过字时按字认（PR #108 review 存疑 ii）。 */
+const PLAIN_PLACEHOLDER = /^Try\s+["“]/;
+/** 整段就是 claude 的提示（Try "…"）：听写读法读出来的是这个，也不当字（终端失焦时提示整段暗色，PR #108 第三轮 review）。 */
+const WHOLE_PLACEHOLDER = /^Try\s+["“][^"”]*["”]$/;
+
+/** 两次单独的 Esc 隔多久以内算一次 Esc Esc（claude 清空输入框）。 */
+const ESC_ESC_MS = 1000;
+/** 用户停手多久、终端输出停了多久以后，才拿屏幕上的输入框校正草稿：刚按的键、刚画的屏幕可能还没对上。 */
+const DRAFT_SCREEN_QUIET_MS = 5000;
+const DRAFT_OUTPUT_QUIET_MS = 1000;
+/** deliver：输出一直不停（状态栏在刷新）时，输入框以上的内容这么久没变也算输入框就绪。 */
+const SCREEN_STABLE_MS = 2000;
 
 /**
  * 终端自己发出的报告（xterm 回答程序的查询、上报焦点和鼠标）：焦点 \x1b[I / \x1b[O、光标位置 CPR、设备属性 DA、
@@ -111,6 +181,8 @@ export function isUserInput(data: string): boolean {
 
 export interface DeliverOptions {
   /** 输出安静多久算输入框就绪。 */
+  /** 输出不停时，输入框以上的内容多久没变算就绪（默认 SCREEN_STABLE_MS，不少于 idleMs）。 */
+  screenStableMs?: number;
   idleMs?: number;
   /** 等 SessionStart 最多多久（没装 hook 时之后只靠安静 + 对话框检查）。 */
   startWaitMs?: number;
@@ -259,7 +331,7 @@ export class PtyManager {
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
     const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
     const term: Term = {
-      proc, chunks: [], chunkLen: 0, written: 0, epoch: nextEpoch++, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
+      proc, chunks: [], chunkLen: 0, written: 0, epoch: nextEpoch++, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draft: "", typedSinceEmpty: false, submittedDraft: null, lastEscAt: 0, openedAt: this.now(),
       // 屏幕解析抛错时用回放缓冲重建（BTL-277）：和渲染进程挂终端时重放的是同一份。
       screen: new TermScreen(cols, rows, () => screenTail(term)), submittedAt: 0, held: null,
     };
@@ -313,12 +385,12 @@ export class PtyManager {
     return permissionOnScreen(this.screenLines(termId));
   }
 
-  /** 当前这一屏的文字；终端不在了返回空数组。 */
-  screenLines(termId: string): string[] {
+  /** 当前这一屏的文字；终端不在了返回空数组。dropDim：暗色的字（输入框里的灰色提示）换成空格（BTL-269）。 */
+  screenLines(termId: string, o: { dropDim?: DimMode } = {}): string[] {
     const t = this.terms.get(termId);
     if (!t) return [];
     try {
-      return t.screen.lines();
+      return t.screen.lines(o);
     } catch (e) {
       this.log(`pty ${termId}: reading the screen failed`, e);
       return [];
@@ -335,8 +407,25 @@ export class PtyManager {
     const t = this.terms.get(termId);
     if (t) {
       const user = isUserInput(data);
-      if (user) t.lastUserInputAt = this.now();
-      t.draftLen = nextDraftLength(t.draftLen, data);
+      const now = this.now();
+      const s = scanDraft(t.draft, data);
+      if (user) {
+        t.lastUserInputAt = now;
+        // 回车提交了：输入框又空了。只算最后一次提交后面还有没有打字；`\` 后面的回车、Option+Enter 是换行，不算提交。
+        t.typedSinceEmpty = !s.submitted || s.typedAfter;
+        // 提交前的字记下来：之后屏幕上输入框里还是这些字，就是那次回车没提交（checkDraftOnScreen）。
+        t.submittedDraft = s.submitted && !s.typedAfter && s.before !== "" ? s.before : null;
+      }
+      if (data === "\x1b") {
+        // 单独的 Esc：和上一次单独的 Esc 隔得近，就是 Esc Esc（claude 清空输入框）。
+        if (t.lastEscAt > 0 && now - t.lastEscAt <= ESC_ESC_MS) {
+          t.draft = "";
+          t.lastEscAt = 0;
+        } else t.lastEscAt = now;
+      } else {
+        if (user) t.lastEscAt = 0;
+        t.draft = s.text;
+      }
       if (user && t.held) {
         t.held.push(data);
         return;
@@ -357,7 +446,76 @@ export class PtyManager {
 
   /** 用户最后一次回车之后有没有打过可见字符（还没发出去）。Shipherd 的 prefill 也算草稿；deliver 不算。终端不在了返回 false。 */
   hasDraft(termId: string): boolean {
-    return (this.terms.get(termId)?.draftLen ?? 0) > 0;
+    const t = this.terms.get(termId);
+    if (!t) return false;
+    this.checkDraftOnScreen(termId, t);
+    return t.draft !== "";
+  }
+
+  /**
+   * 拿屏幕上的输入框校正按键推算的草稿（BTL-269 C）：用户停手、输出也停了一会儿，屏幕上画着空输入框（灰色提示不算字），
+   * 草稿就清掉（方向键、Ctrl+K、历史记录这些按键跟不上）；输入框里有字、推算却是空的，而且用户提交以后又打过字，就当有草稿
+   * （不能把用户的字一起提交）。用户没打过字时输入框里的字不是用户的（Shipherd 没提交成的粘贴、claude 的建议下一句），不当草稿。
+   * 没画输入框（对话框、菜单、还没画出来）不动。
+   */
+  private checkDraftOnScreen(termId: string, t: Term): void {
+    const now = this.now();
+    if (t.lastUserInputAt > 0 && now - t.lastUserInputAt < DRAFT_SCREEN_QUIET_MS) return;
+    if (t.lastOutputAt > 0 && now - t.lastOutputAt < DRAFT_OUTPUT_QUIET_MS) return;
+    const box = this.boxState(termId, t);
+    if (box.empty === true) {
+      t.typedSinceEmpty = false;
+      t.submittedDraft = null;
+      if (t.draft !== "") {
+        this.log(`pty ${termId}: the input box is empty on screen; dropping a stale draft of ${[...t.draft].length} chars`);
+        t.draft = "";
+      }
+    } else if (box.empty === false && t.draft === "") {
+      // 回车以后输入框里还是回车前的那些字：那次回车没提交（换行键我们没认出来），是用户的草稿。
+      if (!t.typedSinceEmpty && t.submittedDraft !== null && squash(box.text).startsWith(squash(t.submittedDraft))) {
+        this.log(`pty ${termId}: the input box still shows what was there before Enter; keeping it as the user's draft`);
+        t.typedSinceEmpty = true;
+      }
+      t.submittedDraft = null;
+      if (t.typedSinceEmpty) t.draft = box.text;
+    }
+  }
+
+  /**
+   * 输入框空不空（BTL-269）：true 空、false 有字、null 没画输入框或读不出。lines 是 dropDim 读出来的一屏，不给就自己读。
+   * 灰色提示按画法去掉（见 TermScreen.lines），另外照顾两种画法（PR #108 review）：
+   * - 用户打过字以后，输入框里暗色的字后面紧跟着光标（语音听写还没定下来的字）：不当空。整段暗色、没有光标的
+   *   （终端失焦时的提示）和整段是 Try "…" 的照样当空。
+   * - 用户没打过字，输入框里是不带颜色的 Try "…"（NO_COLOR 时提示不是暗色）：当空。用户打过字时不按字认（C1）。
+   * 终端不在了返回 null。
+   */
+  inputBoxEmpty(termId: string, lines?: string[]): boolean | null {
+    const t = this.terms.get(termId);
+    return t ? this.boxState(termId, t, lines).empty : null;
+  }
+
+  /** inputBoxEmpty 加上输入框里算用户的那些字（听写中的暗色字也算）。 */
+  private boxState(termId: string, t: Term, given?: string[]): { empty: boolean | null; text: string } {
+    try {
+      const lines = given ?? t.screen.lines({ dropDim: true });
+      const empty = inputBoxEmpty(lines);
+      const text = inputBoxText(lines) ?? "";
+      if (empty === true && t.typedSinceEmpty) {
+        // 听写：暗色字后面紧跟着光标才算（screen.ts 的 "dictation"）。失焦时的提示没有光标，读出来是空的。
+        const dictated = (inputBoxText(t.screen.lines({ dropDim: "dictation" })) ?? "").trim();
+        if (dictated !== "" && !WHOLE_PLACEHOLDER.test(dictated)) return { empty: false, text: dictated };
+      }
+      if (empty === false && !t.typedSinceEmpty && PLAIN_PLACEHOLDER.test(text)) return { empty: true, text: "" };
+      return { empty, text };
+    } catch (e) {
+      this.log(`pty ${termId}: reading the screen failed`, e);
+      return { empty: null, text: "" };
+    }
+  }
+
+  /** 终端最后一次输出的时间；还没输出过、终端不在了返回 0。 */
+  lastOutputAt(termId: string): number {
+    return this.terms.get(termId)?.lastOutputAt ?? 0;
   }
 
   /** 用户上一次在这个终端里输入的时间；没输入过、终端不在了返回 0。往里贴通知前看它，免得把用户打了一半的话一起提交。 */
@@ -469,7 +627,10 @@ export class PtyManager {
   /** 这个终端的 claude 收下了一条输入（UserPromptSubmit hook）：deliver 回车以后等的就是它。 */
   markSubmitted(termId: string): void {
     const t = this.terms.get(termId);
-    if (t) t.submittedAt = this.now();
+    if (!t) return;
+    t.submittedAt = this.now();
+    // 来了 UserPromptSubmit：那次回车是真的提交了。
+    t.submittedDraft = null;
   }
 
   /**
@@ -503,14 +664,25 @@ export class PtyManager {
 
   private async deliverOnce(termId: string, text: string, o: DeliverOptions): Promise<DeliverResult> {
     const idleMs = o.idleMs ?? 800;
+    const stableMs = Math.max(idleMs, o.screenStableMs ?? SCREEN_STABLE_MS);
     const start = this.now();
     let budgetFrom = start;
+    /** 输入框以上的内容和从什么时候起没变（null = 没画输入框）。 */
+    let shown = null as { key: string; since: number } | null;
     for (;;) {
       const t = this.terms.get(termId);
       if (!t || t.exited) return "exited";
       const now = this.now();
       const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
-      const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
+      let idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
+      if (!idle && started && t.lastOutputAt > 0) {
+        // 输出一直不停，但只是输入框下面的状态栏在刷新（BTL-269 review）：输入框以上的内容 stableMs 没变也算就绪。
+        const above = aboveInputBox(this.screenLines(termId));
+        const key = above === null ? null : above.join("\n");
+        if (key === null) shown = null;
+        else if (shown?.key !== key) shown = { key, since: now };
+        else if (now - shown.since >= stableMs) idle = true;
+      }
       const dialog = (started && idle) || o.waitOutDialogs ? dialogOnScreen(this.screenLines(termId)) : false;
       if (dialog && o.waitOutDialogs) budgetFrom = now;
       if (started && idle && !dialog) {
@@ -593,7 +765,9 @@ export class PtyManager {
       const now = this.now();
       if (t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs) {
         this.guard(termId, "prefill write", () => t.proc.write(text));
-        t.draftLen = nextDraftLength(t.draftLen, text);
+        t.draft = nextDraft(t.draft, text);
+        // 输入框里有了这些字：按字认提示（NO_COLOR 的 Try "…"）的规矩不能把它当空。
+        if (t.draft !== "") t.typedSinceEmpty = true;
         return true;
       }
       if (now - start >= timeoutMs) return false;

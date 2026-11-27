@@ -8,7 +8,7 @@ import { MESSAGE_LIMIT, sanitizeTask, TASK_LIMIT } from "../../shared/control";
 import {
   DONE_SUFFIX, MAIN_SUFFIX, MSG_SUFFIX, messageFileName, messageIdOf, TAKEN_SUFFIX, type MailboxFile,
 } from "../../shared/mailbox";
-import type { MessageKind, MessageScope, MessageView, Session } from "../../shared/types";
+import type { MailboxBlockReason, MessageKind, MessageScope, MessageView, Session } from "../../shared/types";
 import type { NewSessionMessage, SessionMessage, SessionMessagesRepo } from "../db/session-messages-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
@@ -26,6 +26,51 @@ export const TAKEN_STALE_MS = 60_000;
 export const MAIN_STALE_MS = 5 * 60_000;
 /** 排队超过这么久才送到的，正文前注明是多久之前发的。 */
 export const AGE_NOTE_MS = 10 * 60_000;
+/** 总控发的消息排了这么久还没送到（原因不是用户在打字、有草稿）：给它发一条回执说明原因（BTL-269）。 */
+export const STUCK_RECEIPT_MS = 2 * 60_000;
+/** 只是这一轮还在干活（turn）的等更久才回执：跑几分钟的工具很正常，不为一句「还没送到」叫醒总控。 */
+export const STUCK_TURN_RECEIPT_MS = 10 * 60_000;
+/** send_message 最多等这么久看消息送没送到，再如实返回（MCP 请求 60 秒超时，留足余量）。 */
+export const SETTLE_MS = 15_000;
+/** 用户在打字、有草稿：这时不发「还没送到」的回执，等用户。 */
+const USER_REASONS: ReadonlySet<MailboxBlockReason> = new Set(["typing", "draft"]);
+/** 卡这么久的回执 ref：同一对（发件人、收件人）只排一条，送到前按 ref 换成最新的。 */
+const stuckRef = (to: string, from: string): string => `stuck:${to}:${from}`;
+/** 「还没送到」回执说的是哪几条（回执 meta 里存的原消息 id）。 */
+const receiptIds = (m: SessionMessage): string[] => {
+  const ids = (m.meta as { ids?: unknown } | null)?.ids;
+  return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
+};
+
+/**
+ * 它在等用户回答什么（BTL-269 A2）：还没答的 ask_user（id、问题、提问时间），和「需要你」判断出来、用文字问的那条回复（理由、回复时间）。
+ * 只是刚停下、还没判断完的不算（undecided）：那时返回 null。
+ */
+export interface AwaitingUser {
+  asks: { id: number; question: string; at: number }[];
+  text: { reason: string; at: number | null } | null;
+}
+
+/** 总控的指示带的 meta（BTL-269 A2）：answers 是 send_message 的 answers（问题 id，或 true = 它现在等着的那个），text 是总控写的原文。 */
+export interface InstructionMeta {
+  answers?: number | true;
+  text?: string;
+}
+
+/**
+ * 这条总控的指示替用户回答了哪几个提问（BTL-269 A2）：只认明确带了 answers 的，而且只认在它排进来之前就问了的提问；
+ * 提问之前就排着的旧消息永远不算。answers 是 id 时只认那一个；true 时认排进来之前问的全部，没有 ask_user 时认用文字问的那条。
+ * 不算回答返回 null；算回答时 asks 是要记成总控代答的 ask_user（文字提问时为空）。
+ */
+export function answeredBy(m: Pick<SessionMessage, "queuedAt" | "meta">, waiting: AwaitingUser | null): { asks: number[]; question: string } | null {
+  const answers = (m.meta as InstructionMeta | null)?.answers;
+  if (!waiting || (answers !== true && typeof answers !== "number")) return null;
+  const before = waiting.asks.filter((a) => a.at < m.queuedAt && (answers === true || a.id === answers));
+  if (before.length > 0) return { asks: before.map((a) => a.id), question: before.map((a) => a.question).join(" / ") };
+  if (answers === true && waiting.asks.length === 0 && waiting.text && waiting.text.at !== null && waiting.text.at < m.queuedAt) return { asks: [], question: waiting.text.reason };
+  return null;
+}
+
 /** 列表里最多几条。 */
 export const RECENT_MESSAGES = 30;
 /** 直接输入一次最多这么多字符；第一条总要送。 */
@@ -66,8 +111,16 @@ export interface MailboxDeps {
   /** 现在开着的终端。 */
   openTerms(): string[];
   /** 直接输入前的 guard。answer：这一批里有 ask_user 的回答、换新以后的「接着做」或用户自己的话，不看「需要你」（它等的就是这些）。 */
-  check(sessionId: string, o: { answer: boolean }): DeliveryCheck;
-  recheckAfter(sessionId: string, passed: { termId: string }, o: { answer: boolean }): () => boolean;
+  /** force：用户点了「现在送进去」（DeliveryGuard.check 的 force）。 */
+  check(sessionId: string, o: { answer: boolean; force?: boolean }): DeliveryCheck;
+  recheckAfter(sessionId: string, passed: { termId: string }, o: { answer: boolean; force?: boolean }): () => boolean;
+  /**
+   * 这条消息是收件人自己的总控发的指示（epic 总控发给自己 epic 里的 session、全局总控发给 epic 总控）：「需要你」时也送进去，
+   * 注明是总控在回答（BTL-269 A）。没接时都不算。
+   */
+  fromController?(m: SessionMessage, headId: string): boolean;
+  /** 这个 session（head）休眠着（终端是 Shipherd 为了省内存关的）。没接时都算关着。 */
+  hibernated?(headId: string): boolean;
   deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
   /** 叫停：现在能不能按 Esc（在忙、屏幕上没有要用户回答的对话框、用户没在打字、没有草稿）。 */
   canInterrupt(termId: string): boolean;
@@ -83,6 +136,16 @@ export interface MailboxDeps {
    * 不算用户在终端里答了提问（InboxService.shipherdTyping）。
    */
   typing?(headId: string, phase: "start" | "sent" | "failed"): void;
+  /**
+   * 它在等用户回答什么（BTL-269 A1/A2）：判断出来需要你、或者有未答的 ask_user。只是刚停下、还没判断完的返回 null：
+   * guard 照样挡（needs_you），但这时不当作它在等用户，总控的消息也接着等判断完。没接时都当 null。
+   */
+  awaitingUser?(headId: string): AwaitingUser | null;
+  /**
+   * 带了 answers 的总控指示送进去了（BTL-269 A2）：这几个 ask_user 记成总控代答（只认 queuedAt 之后还没答的），
+   * 答案是总控写的原文，by 是总控的名字。
+   */
+  coordinatorAnswered?(headId: string, o: { asks: number[]; answer: string; by: string; queuedAt: number }): void;
   /**
    * 目标没开着终端、排着的不只是约定广播：休眠着的就叫它醒（醒来停下时 stopped 再送）；真关了的什么都不做，下次打开再送。
    * 约定广播不为它叫醒谁。
@@ -142,6 +205,8 @@ export class Mailbox {
   private readonly stoppedAt = new Map<string, number>();
   /** 排队时间严格递增：同一毫秒排的几条也按排的顺序送（磁盘上的文件名按它排序）。 */
   private lastQueuedAt = 0;
+  /** send 之后马上那一次送的尝试，按消息 id：settle 等它（BTL-269）。 */
+  private readonly attempts = new Map<string, Promise<unknown>>();
 
   constructor(private readonly d: MailboxDeps) {
     this.fs = d.fs ?? realMailboxFs;
@@ -176,15 +241,90 @@ export class Mailbox {
     }
     const term = this.d.termOf(to);
     const state: TargetState = term === null ? "closed" : this.d.head(term)?.waitingForInput ? "idle" : "busy";
+    let attempt: Promise<unknown> | null = null;
     if (input.interrupt && term !== null && state === "busy" && this.d.canInterrupt(term)) {
       this.interrupting.add(id);
-      void this.interruptAndSend(to, term, id);
+      attempt = this.interruptAndSend(to, term, id);
     } else if (!input.hold) {
       if (term !== null) this.syncTerm(term);
-      void this.flush(to);
+      attempt = this.flush(to);
+    }
+    if (attempt) {
+      this.attempts.set(id, attempt);
+      const done = () => {
+        if (this.attempts.get(id) === attempt) this.attempts.delete(id);
+      };
+      attempt.then(done, done);
     }
     this.d.notify();
     return { id, state };
+  }
+
+  /**
+   * 等 send 之后那一次尝试（最多 capMs），如实说这条现在怎么样了（BTL-269）：送到了；还在排队，挡住它的原因和开始的时间；
+   * delivering 是正在往里贴（deliver 在等输入框）。消息不在了（撤回、清理）也算 queued、原因 null。
+   */
+  async settle(
+    id: string,
+    capMs = SETTLE_MS,
+  ): Promise<{ delivery: "delivered"; at: number | null } | { delivery: "queued"; reason: MailboxBlockReason | "delivering" | null; since: number | null }> {
+    const attempt = this.attempts.get(id);
+    if (attempt) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([attempt.catch(() => undefined), new Promise<void>((r) => (timer = setTimeout(r, capMs)))]);
+      clearTimeout(timer);
+    }
+    const m = this.d.repo.get(id);
+    if (m && m.status !== "queued") return { delivery: "delivered", at: m.deliveredAt };
+    if (this.inFlight.has(id) || this.interrupting.has(id)) return { delivery: "queued", reason: "delivering", since: null };
+    return { delivery: "queued", reason: m?.blockedReason ?? null, since: m?.blockedSince ?? null };
+  }
+
+  /**
+   * 给 send_message 的返回（BTL-269）：settle 之后的结果，加上给人看的一句话。delivery 是 delivered 或 queued；
+   * queued 时 blockedBy 是挡住它的原因（delivering = 正在往里贴；null = 还没试过），blockedSince 是这个原因开始的时间。
+   */
+  async outcome(id: string, capMs = SETTLE_MS): Promise<{ delivery: "delivered" | "queued"; blockedBy: MailboxBlockReason | "delivering" | null; blockedSince: string | null; note: string }> {
+    const r = await this.settle(id, capMs);
+    const note = Mailbox.note(r, this.d.now());
+    if (r.delivery === "delivered") return { delivery: "delivered", blockedBy: null, blockedSince: null, note };
+    return { delivery: "queued", blockedBy: r.reason, blockedSince: iso(r.since), note };
+  }
+
+  /**
+   * 排给这个 session（任何一个 id）、还没送到的：几条、最早那条排了多久、挡住它的原因（BTL-269：list_sessions、session_activity 里显示）。
+   * 一条都没有返回 null。
+   */
+  pendingFor(sessionId: string): { queued: number; oldestQueuedAt: number; reason: MailboxBlockReason | null; since: number | null } | null {
+    const mine = this.d.repo.queued().filter((m) => this.headOf(m.toSession) === this.headOf(sessionId));
+    if (mine.length === 0) return null;
+    const first = mine.reduce((a, b) => (b.queuedAt < a.queuedAt ? b : a));
+    const blocked = mine.find((m) => m.blockedReason !== null) ?? first;
+    return { queued: mine.length, oldestQueuedAt: first.queuedAt, reason: blocked.blockedReason, since: blocked.blockedSince };
+  }
+
+  /** 给 list_sessions、session_activity 的一项（BTL-269）：几条在排队、挡住的原因和开始时间、一句话；没有在排队的为 null。 */
+  pendingView(sessionId: string): { queued: number; oldestQueuedAt: string; blockedBy: MailboxBlockReason | null; blockedSince: string | null; note: string } | null {
+    const p = this.pendingFor(sessionId);
+    if (!p) return null;
+    const note = Mailbox.note({ delivery: "queued", reason: p.reason, since: p.since }, this.d.now());
+    return { queued: p.queued, oldestQueuedAt: new Date(p.oldestQueuedAt).toISOString(), blockedBy: p.reason, blockedSince: iso(p.since), note };
+  }
+
+
+  /** 记下挡住这几条的原因（只记变了的），变了就写日志、通知界面。 */
+  private block(head: string, list: SessionMessage[], reason: MailboxBlockReason): void {
+    if (list.length === 0) return;
+    const changed = this.d.repo.setBlocked(list.map((m) => m.id), reason, this.d.now());
+    if (changed.length === 0) return;
+    this.d.log(`mailbox: ${head} blocked (${reason}): ${changed.length} message(s) waiting`);
+    // 原因变了：还排着的回执说的是旧原因和旧 ETA，撤回；这几条按现在的原因重新算回执（下一次 tick）。
+    for (const receipt of this.queuedStuckReceipts(new Set(changed))) {
+      this.withdraw(receipt.ref!);
+      this.d.repo.clearStuckReceipt(receiptIds(receipt));
+      this.d.log(`mailbox: ${head}: the reason changed to ${reason}; withdrew the stale stuck receipt ${receipt.id}`);
+    }
+    this.d.notify();
   }
 
   /** 还在排队、ref 以 prefix: 开头的那些 ref。 */
@@ -201,6 +341,7 @@ export class Mailbox {
       this.dropFile(term, m.id);
       this.syncTerm(term);
     }
+    this.settleStuckReceipts(m.id);
     this.d.notify();
   }
 
@@ -377,6 +518,7 @@ export class Mailbox {
     } catch (e) {
       this.d.log(`mailbox: delivered callback for ${m.id} failed`, e);
     }
+    this.settleStuckReceipts(m.id);
     // 送达的记账晚于对方停下来（假 claude、很短的一轮）：马上补查一次回复。
     if (m.expectsReply && (this.stoppedAt.get(target) ?? -Infinity) >= at) {
       void this.checkReplies(target).catch((e: unknown) => this.d.log(`mailbox: late reply check for ${target} failed`, e));
@@ -389,7 +531,7 @@ export class Mailbox {
    * 用户在对话 tab 里说的话（kind user）不和 Shipherd 的消息合在一起：开头是 user 的这一批只要接着的 user，原样输入，
    * 不加信箱开头，对话里照旧是「你：」；开头不是 user 的这一批碰到 user 就停（BTL-248）。
    */
-  private batch(list: SessionMessage[]): { text: string; ids: SessionMessage[] } {
+  private batch(list: SessionMessage[], head: string, waiting: AwaitingUser | null = null): { text: string; ids: SessionMessage[] } {
     // 换新以后的「接着做」单独原样输入：它是新上下文的第一句话。
     if (list[0]?.kind === "refresh") return { text: sanitizeTask(list[0].body), ids: [list[0]] };
     const user = list[0]?.kind === "user";
@@ -398,14 +540,35 @@ export class Mailbox {
     let size = 0;
     for (const m of list) {
       if ((m.kind === "user") !== user) break;
-      const part = user ? m.body : this.render(m);
+      const part = user ? m.body : this.withAnswerNote(m, head, waiting);
       if (ids.length > 0 && size + part.length > INPUT_LIMIT) break;
       parts.push(part);
       ids.push(m);
       size += part.length + 8;
     }
     if (user) return { text: sanitizeTask(parts.join("\n\n")), ids };
-    return { text: sanitizeTask([M().mailboxIntro.replace("{n}", String(ids.length)), ...parts].join("\n\n---\n\n")), ids };
+    const intro = M().mailboxIntro.replace("{n}", String(ids.length));
+    return { text: sanitizeTask([intro, ...parts].join("\n\n---\n\n")), ids };
+  }
+
+  /**
+   * 它在等用户回答时送进去的总控指示（BTL-269 A2），每一条前面注明：明确替用户回答了（answeredBy）的说是回答；
+   * 别的说不是回答、问题还在等用户。不在等用户、不是自己的总控发的不加。
+   */
+  private withAnswerNote(m: SessionMessage, head: string, waiting: AwaitingUser | null): string {
+    const text = this.render(m);
+    if (!waiting || !this.fromController(m, head)) return text;
+    const a = answeredBy(m, waiting);
+    return `${a ? M().mailboxAnswersQuestion(a.question) : M().mailboxNotAnAnswer}\n${text}`;
+  }
+
+  private awaiting(head: string): AwaitingUser | null {
+    try {
+      return this.d.awaitingUser?.(head) ?? null;
+    } catch (e) {
+      this.d.log(`mailbox: awaitingUser for ${head} failed`, e);
+      return null;
+    }
   }
 
   /** 认领要直接输入的消息：磁盘上的 .json 改成 .main；被 hook 拿走了的（.taken / .done）不送。 */
@@ -458,25 +621,86 @@ export class Mailbox {
     const head = this.headOf(sessionId);
     const term = this.d.termOf(head);
     if (term === null) {
-      if (this.d.wake && this.queuedFor(head).some((m) => m.kind !== "convention")) this.d.wake(head);
+      const queued = this.queuedFor(head);
+      this.block(head, queued, this.d.hibernated?.(head) ? "hibernated" : "closed");
+      if (this.d.wake && queued.some((m) => m.kind !== "convention")) this.d.wake(head);
       return;
     }
-    if (this.inputting.has(term)) return;
     const queued = this.queuedFor(head).filter((m) => !this.interrupting.has(m.id));
     if (queued.length === 0) return;
+    if (this.inputting.has(term)) {
+      // 正在往里贴前一批：这些没在那一批里，等它那一轮的工具调用（hook）或者停下来。
+      this.block(head, queued.filter((m) => !this.inFlight.has(m.id)), "auto_input");
+      return;
+    }
     // ask_user 的回答、换新以后的「接着做」不看「需要你」：session 等的就是它们。
     let answer = queued.some((m) => m.kind === "answer" || m.kind === "refresh");
     let list = queued;
     let gate = this.d.check(head, { answer });
+    let waiting: AwaitingUser | null = null;
+    /** 没进这一批的等什么：needs_you，或者还在判断（judging）。 */
+    let held: MailboxBlockReason | null = null;
     if (!gate.ok && gate.block === "needs_you") {
-      // 用户自己在对话 tab 里说的话也不看：它就是用户在回答。只送这些，Shipherd 的别的消息接着等。
-      list = queued.filter((m) => m.kind === "user");
-      if (list.length === 0) return;
+      waiting = this.awaiting(head);
+      // 只是刚停下、还没判断完（BTL-269 A1）：不知道它是不是在问用户，总控的也不送、不当作在代答，判断完下一次 tick 再看。
+      held = waiting === null ? "judging" : "needs_you";
+      // 用户自己在对话 tab 里说的话不看这个：它就是用户在回答。
+      // 判断完、确实在等用户时，自己的总控发来的指示也送（BTL-269 A2），每一条注明是不是在替用户回答。Shipherd 的别的消息接着等。
+      list = queued.filter((m) => m.kind === "user" || (waiting !== null && this.fromController(m, head)));
+      if (list.length === 0) {
+        this.block(head, queued, held);
+        return;
+      }
       answer = true;
       gate = this.d.check(head, { answer });
     }
-    if (!gate.ok) return;
-    await this.input(head, gate.termId, list, this.d.recheckAfter(head, gate, { answer }));
+    if (!gate.ok) {
+      this.block(head, queued, gate.block === "busy" ? (gate.busy ?? "turn") : gate.block);
+      return;
+    }
+    if (held) this.block(head, queued.filter((m) => !list.includes(m)), held);
+    await this.input(head, gate.termId, list, this.d.recheckAfter(head, gate, { answer }), undefined, undefined, waiting);
+  }
+
+  private fromController(m: SessionMessage, head: string): boolean {
+    if (m.fromSession === null || !EXPECTS_REPLY.has(m.kind)) return false;
+    try {
+      return this.d.fromController?.(m, head) === true;
+    } catch (e) {
+      this.d.log(`mailbox: fromController for ${m.id} failed`, e);
+      return false;
+    }
+  }
+
+  /**
+   * 用户在界面上点了「现在送进去」（BTL-269）：不等它停下、不看「需要你」和刚打过字，这一条排在最前、连同其他排着的一起贴进去。
+   * 确认框、草稿、换新、熔断、终端关着照样挡：返回挡住的原因。
+   */
+  async deliverNow(id: string): Promise<{ delivered: boolean; reason: MailboxBlockReason | "delivering" | "gone" | null }> {
+    const m = this.d.repo.get(id);
+    if (!m) return { delivered: false, reason: "gone" };
+    if (m.status !== "queued") return { delivered: true, reason: null };
+    const head = this.headOf(m.toSession);
+    const term = this.d.termOf(head);
+    if (term === null) {
+      await this.flush(head);
+      return { delivered: false, reason: this.d.hibernated?.(head) ? "hibernated" : "closed" };
+    }
+    if (this.inputting.has(term)) return { delivered: false, reason: this.inFlight.has(id) ? "delivering" : "auto_input" };
+    const o = { answer: true, force: true };
+    const gate = this.d.check(head, o);
+    if (!gate.ok) {
+      const reason = gate.block === "busy" ? (gate.busy ?? "turn") : gate.block;
+      this.block(head, [m], reason);
+      return { delivered: false, reason };
+    }
+    this.d.log(`mailbox: ${head}: the user asked to deliver ${id} now`);
+    const queued = this.queuedFor(head).filter((x) => !this.interrupting.has(x.id));
+    // 它在等用户回答时，总控的指示照样注明是不是在替用户回答（和 flush 一样）；只是还没判断完的不加注明。
+    await this.input(head, gate.termId, queued, this.d.recheckAfter(head, gate, o), id, undefined, this.awaiting(head));
+    const after = this.d.repo.get(id);
+    if (after && after.status !== "queued") return { delivered: true, reason: null };
+    return { delivered: false, reason: after?.blockedReason ?? null };
   }
 
   /**
@@ -491,7 +715,7 @@ export class Mailbox {
 
   private async input(
     head: string, term: string, queued: SessionMessage[], recheck: () => boolean, forced?: string,
-    submit?: (termId: string, text: string) => Promise<DeliverResult>,
+    submit?: (termId: string, text: string) => Promise<DeliverResult>, waiting: AwaitingUser | null = null,
   ): Promise<boolean> {
     this.inputting.add(term);
     const sent = new Set<string>();
@@ -505,12 +729,23 @@ export class Mailbox {
       for (const m of claimed.mine) this.inFlight.add(m.id);
       // 叫停的那一条排在最前，一定在这一批里。
       const list = forced ? [...claimed.mine.filter((m) => m.id === forced), ...claimed.mine.filter((m) => m.id !== forced)] : claimed.mine;
-      const { text, ids } = this.batch(list);
+      const { text, ids } = this.batch(list, head, waiting);
+      // 这一批里注明了「替用户回答」的那些提问（PR #108 第三轮 review 建议 2）：等输入框的时候（最多 1 分钟）用户可能自己在卡片上
+      // 答了。贴进去之前再看一次，有一个已经不在等了就这次不送，留着排队，下一次按新的状态重新写注明。
+      const noteAsks = ids.flatMap((m) => (this.fromController(m, head) ? (answeredBy(m, waiting)?.asks ?? []) : []));
+      const stillAsked = (): boolean => {
+        if (noteAsks.length === 0) return true;
+        const open = new Set((this.awaiting(head)?.asks ?? []).map((a) => a.id));
+        const ok = noteAsks.every((id) => open.has(id));
+        if (!ok) this.d.log(`mailbox: ${head} no longer waits on question ${noteAsks.join(", ")}; not typing in an answer note that is out of date`);
+        return ok;
+      };
+      const check = (): boolean => stillAsked() && recheck();
       const at = this.d.now();
       // 用户自己的话不算 Shipherd 输入的：它的 UserPromptSubmit 照样算用户在终端里回答了。
       const typing = ids[0]?.kind === "user" ? undefined : this.d.typing;
       typing?.(head, "start");
-      const result = await (submit ? submit(term, text) : this.d.deliver(term, text, recheck)).catch((e: unknown) => {
+      const result = await (submit ? (stillAsked() ? submit(term, text) : Promise.resolve<DeliverResult>("blocked")) : this.d.deliver(term, text, check)).catch((e: unknown) => {
         // 抛了也要收尾，不然那个 session 下一次 UserPromptSubmit 一直被当成 Shipherd 的。
         typing?.(head, "failed");
         throw e;
@@ -518,6 +753,8 @@ export class Mailbox {
       typing?.(head, result === "sent" ? "sent" : "failed");
       if (result !== "sent") {
         this.d.log(`mailbox: input to ${head}: ${result}`);
+        // 没等到输入框（BTL-269）：如实记下来，别留着之前的原因（比如还说「在干活」）。recheck 没过、终端退出的下一次检查会记真正的原因。
+        if (result === "timeout") this.block(head, claimed.mine, "deliver_failed");
         return false;
       }
       for (const m of ids) {
@@ -525,6 +762,17 @@ export class Mailbox {
         const now = this.d.repo.get(m.id);
         if (now && revOf(now) !== revOf(m)) continue;
         if (this.markDelivered(m, "input", at)) sent.add(m.id);
+      }
+      // 明确替用户回答了的（BTL-269 A2）：那几个提问记成总控代答。看的是实际送进去的这一批。
+      for (const m of ids) {
+        const a = sent.has(m.id) && this.fromController(m, head) ? answeredBy(m, waiting) : null;
+        if (!a || a.asks.length === 0) continue;
+        try {
+          const meta = m.meta as InstructionMeta | null;
+          this.d.coordinatorAnswered?.(head, { asks: a.asks, answer: typeof meta?.text === "string" ? meta.text : m.body, by: this.d.nameOf(m.fromSession), queuedAt: m.queuedAt });
+        } catch (e) {
+          this.d.log(`mailbox: coordinatorAnswered for ${head} failed`, e);
+        }
       }
       this.d.notify();
       return true;
@@ -613,9 +861,79 @@ export class Mailbox {
       }
       const heads = new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)));
       for (const h of heads) await this.flush(h);
+      this.stuckReceipts();
     } catch (e) {
       this.d.log("mailbox: tick failed", e);
     }
+  }
+
+  /**
+   * 总控发的消息排了 STUCK_RECEIPT_MS 还没送到、原因不是用户在打字或有草稿：给发件的总控回一条，说明卡在哪、什么时候能送（BTL-269）。
+   * 每条消息只算一次（stuck_receipt_at 存在库里，重启也不重发）；同一对发件人、收件人合成一条。
+   */
+  private stuckReceipts(): void {
+    const now = this.d.now();
+    const stuck = this.d.repo.queued().filter(
+      // 从现在这个原因开始的时间算（blockedSince），不从排队算：刚从「在干活」变成「在确认」的不马上发回执、紧接着又撤回。
+      (m) => m.fromSession !== null && EXPECTS_REPLY.has(m.kind) && m.stuckReceiptAt === null && m.blockedReason !== null
+        && now - (m.blockedSince ?? m.queuedAt) >= (m.blockedReason === "turn" ? STUCK_TURN_RECEIPT_MS : STUCK_RECEIPT_MS)
+        && !USER_REASONS.has(m.blockedReason) && !this.inFlight.has(m.id),
+    );
+    const groups = new Map<string, SessionMessage[]>();
+    for (const m of stuck) {
+      const key = `${this.headOf(m.toSession)}\n${m.fromSession}`;
+      groups.set(key, [...(groups.get(key) ?? []), m]);
+    }
+    for (const fresh of groups.values()) {
+      const to = this.headOf(fresh[0].toSession);
+      const from = fresh[0].fromSession!;
+      // 同一对已经有一条回执排着（之前卡住的几条）：合进同一条，不能用新的这几条把它说的那几条顶掉（审查建议 2）。
+      const earlier = this.d.repo.queuedByRef(stuckRef(to, from));
+      const freshIds = new Set(fresh.map((m) => m.id));
+      const carried = earlier
+        ? receiptIds(earlier).filter((id) => !freshIds.has(id)).map((id) => this.d.repo.get(id)).filter((m): m is SessionMessage => m?.status === "queued")
+        : [];
+      const list = [...carried, ...fresh];
+      // 回执只说这一组里最近的原因（它们排给同一个 session，挡住的原因一样）。
+      const reason = list.reduce((a, b) => ((b.blockedSince ?? 0) > (a.blockedSince ?? 0) ? b : a)).blockedReason!;
+      const minutes = Math.max(1, Math.round((now - Math.min(...list.map((m) => m.queuedAt))) / 60_000));
+      try {
+        this.send({
+          kind: "reply", from: null, to: from, featureId: list[0].featureId, ref: stuckRef(to, from), meta: { ids: list.map((m) => m.id) },
+          body: M().mailboxStuckReceipt(this.d.nameOf(to), list.map((m) => m.id), minutes, M().mailboxBlocked[reason], M().mailboxEta[reason]),
+        });
+        this.d.repo.setStuckReceipt(fresh.map((m) => m.id), now);
+        this.d.log(`mailbox: ${list.length} message(s) from ${from} to ${to} stuck ${minutes} min (${reason}); told the sender`);
+      } catch (e) {
+        this.d.log(`mailbox: stuck receipt to ${from} failed`, e);
+      }
+    }
+  }
+
+  /**
+   * 还排着、说到了这几条的「还没送到」回执。按回执 meta 里存的原消息 id 找，不按现在的 head 拼 ref：
+   * 目标在回执排队期间换新了（head 变了），照样找得到。
+   */
+  private queuedStuckReceipts(ids: Set<string>): SessionMessage[] {
+    return this.d.repo.queued().filter((m) => m.ref?.startsWith("stuck:") === true && receiptIds(m).some((id) => ids.has(id)));
+  }
+
+  /** 这一条不排了（送到了、撤回了）：说到它的回执里的消息都不排了，回执就过时了，撤回（仓库规则 8）。 */
+  private settleStuckReceipts(id: string): void {
+    for (const receipt of this.queuedStuckReceipts(new Set([id]))) {
+      if (receiptIds(receipt).some((x) => this.d.repo.get(x)?.status === "queued")) continue;
+      this.withdraw(receipt.ref!);
+    }
+  }
+
+  /** 给 send_message、list_sessions 用的一句话：送到了，或者为什么还没送到、什么时候能送到。 */
+  static note(r: { delivery: "delivered" } | { delivery: "queued"; reason: MailboxBlockReason | "delivering" | null; since: number | null }, now: number): string {
+    const m = M();
+    if (r.delivery === "delivered") return m.mailboxDelivered;
+    if (r.reason === "delivering") return m.mailboxDelivering;
+    if (r.reason === null) return m.mailboxQueuedUnknown;
+    const minutes = r.since === null ? 0 : Math.floor((now - r.since) / 60_000);
+    return m.mailboxQueued(m.mailboxBlocked[r.reason], m.mailboxEta[r.reason], minutes);
   }
 
   // ---- 界面 ----
@@ -626,6 +944,7 @@ export class Mailbox {
     return rows.map((x) => ({
       id: x.id, kind: x.kind, from: this.d.nameOf(x.fromSession), to: this.d.nameOf(x.toSession), toSession: x.toSession, status: x.status, via: x.via,
       interrupt: x.interrupt, text: x.body, queuedAt: new Date(x.queuedAt).toISOString(), deliveredAt: iso(x.deliveredAt), reply: x.replyText, repliedAt: iso(x.repliedAt),
+      blocked: x.status === "queued" && x.blockedReason !== null ? { reason: x.blockedReason, since: iso(x.blockedSince) } : null,
     }));
   }
 }

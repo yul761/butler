@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/headless";
-import { describe, expect, it } from "vitest";
-import { dialogOnScreen, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen } from "./screen";
+import { describe, expect, it, vi } from "vitest";
+import { aboveInputBox, dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen, workingOnScreen } from "./screen";
 
 const RULE = "─".repeat(120);
 
@@ -40,10 +40,21 @@ class EagerScreen {
   resize(cols: number, rows: number) {
     this.term.write("", () => this.term.resize(cols, rows));
   }
-  async lines(): Promise<string[]> {
+  async lines(o: { dropDim?: boolean } = {}): Promise<string[]> {
     await new Promise<void>((r) => this.term.write("", r));
     const b = this.term.buffer.active;
-    return Array.from({ length: this.term.rows }, (_, i) => b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
+    return Array.from({ length: this.term.rows }, (_, i) => {
+      const line = b.getLine(b.viewportY + i);
+      if (!line) return "";
+      if (!o.dropDim) return line.translateToString(true);
+      let text = "";
+      for (let x = 0; x < line.length; x++) {
+        const cell = line.getCell(x);
+        if (!cell || cell.getWidth() === 0) continue;
+        text += cell.isDim() ? " ".repeat(cell.getWidth()) : cell.getChars() || " ";
+      }
+      return text.trimEnd();
+    });
   }
 }
 
@@ -127,6 +138,33 @@ describe("TermScreen lazy parsing (BTL-277)", () => {
     }
   });
 
+  it("BTL-269 reads (dim dropped, empty box, content above the box, spinner) match parsing every chunk, at any point", async () => {
+    const rule = `\x1b[38;2;136;136;136m${"─".repeat(50)}\x1b[39m`;
+    for (let seed = 1; seed <= 4; seed++) {
+      const lazy = new TermScreen(60, 12);
+      const eager = new EagerScreen(60, 12);
+      // claude 的几种样子交替出现：转圈在干活、停着的空输入框（暗色的建议下一句）、输入框里有用户的字。
+      const frames = tuiStream(seed, 60).map((f, i) =>
+        i % 3 === 0 ? `\x1b[2J\x1b[H⏺ done ${i}\r\n${rule}\r\n❯ \x1b[2mrun the tests\x1b[22m\r\n${rule}\r\n  ctx ${i}%`
+          : i % 3 === 1 ? `\x1b[2J\x1b[H⏺ done ${i}\r\n${rule}\r\n❯ half typed\r\n${rule}` : f);
+      let rnd = seed * 17;
+      for (const c of chop(frames.join(""), seed)) {
+        lazy.write(c);
+        eager.write(c);
+        rnd = (rnd * 1103515245 + 12345) % 2147483648;
+        if (rnd % 9 !== 0) continue;
+        const want = await eager.lines({ dropDim: true });
+        const got = lazy.lines({ dropDim: true });
+        expect(got).toEqual(want);
+        expect(inputBoxEmpty(got)).toBe(inputBoxEmpty(want));
+        expect(aboveInputBox(got)).toEqual(aboveInputBox(want));
+        expect(workingOnScreen(got)).toBe(workingOnScreen(want));
+        expect(lazy.lines()).toEqual(await eager.lines());
+      }
+      lazy.dispose();
+    }
+  });
+
   it("parses on the spot past the limit instead of dropping: a prompt drawn earlier stays on screen (PR #101 review)", () => {
     const s = new TermScreen(60, 10, () => "\x1b[2J\x1b[Hfrom tail");
     s.write(`\x1b[2J\x1b[H${"─".repeat(50)}\r\n Bash command\r\n Do you want to proceed?\r\n ❯ 1. Yes`);
@@ -188,11 +226,65 @@ describe("dialogOnScreen / permissionOnScreen", () => {
 
   it("finds permission prompts only", () => {
     expect(permissionOnScreen(["Bash command", "Do you want to proceed?", " ❯ 1. Yes"])).toBe(true);
-    expect(permissionOnScreen(["Do  you want to make this edit to a.ts?"])).toBe(true);
-    expect(permissionOnScreen(["Would you like to proceed?"])).toBe(true);
-    expect(permissionOnScreen(["Do you want to create foo.ts?"])).toBe(true);
+    expect(permissionOnScreen(["Do  you want to make this edit to a.ts?", " ❯ 1. Yes", "   2. Yes, allow all edits", "   3. No"])).toBe(true);
+    expect(permissionOnScreen([RULE, " Ready to code?", " Would you like to proceed?", "", " ❯ 1. Yes, and auto-accept edits", "   2. No, keep planning"])).toBe(true);
+    expect(permissionOnScreen(["Do you want to create foo.ts?", "> 1) Yes"])).toBe(true);
     expect(permissionOnScreen(["building..."])).toBe(false);
     expect(permissionOnScreen([" Do you trust the files in this folder?"])).toBe(false);
+  });
+});
+
+describe("permissionOnScreen (BTL-269 D: a quoted question is not a prompt)", () => {
+  it("needs a numbered first option after the question", () => {
+    // 回复里引用了这句话、输入框没认出来（底部提示多了一行）：没有选项，不算确认框。
+    const reply = ["⏺ 计划写好了。Would you like to proceed? 你看一下再说。", "", RULE, "❯ ", RULE, "  ⏵⏵ auto mode on", "  ctx 40%", "  model opus", "  branch x", "  extra"];
+    expect(inputBoxText(reply)).toBeNull();
+    expect(permissionOnScreen(reply)).toBe(false);
+    expect(permissionOnScreen(["Would you like to proceed?"])).toBe(false);
+    expect(permissionOnScreen(["Do you want to proceed?", "  1 file changed"])).toBe(false);
+    // 选项在问题上面（上一段对话里的列表）也不算。
+    expect(permissionOnScreen(["1. first step", "Do you want to proceed?"])).toBe(false);
+  });
+});
+
+describe("workingOnScreen / inputBoxEmpty", () => {
+  it("sees the spinner line of a running turn", () => {
+    expect(workingOnScreen(["✻ Thinking… (12s · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    expect(workingOnScreen(["⏺ done", RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(false);
+  });
+
+  it("an empty box is empty; text is not, even text that reads like the placeholder; no box is null", () => {
+    expect(inputBoxEmpty([RULE, '❯ Try "the other approach"', RULE])).toBe(false);
+    expect(inputBoxEmpty(["⏺ done", RULE, "❯ ", RULE])).toBe(true);
+    expect(inputBoxEmpty([RULE, "❯ 帮我看看", RULE])).toBe(false);
+    expect(inputBoxEmpty([RULE, " ❯ 1. Yes", " 2. No"])).toBeNull();
+  });
+
+  it("dropDim removes the grey suggestion so the box reads empty", async () => {
+    const s = new TermScreen(40, 4);
+    s.write(`${"─".repeat(40)}\r\n❯ \x1b[2mrun the tests\x1b[22m\r\n${"─".repeat(40)}`);
+    await s.flush();
+    expect(inputBoxEmpty(s.lines())).toBe(false);
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(true);
+    s.write("\x1b[2;3Hreal");
+    await s.flush();
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(false);
+    s.dispose();
+  });
+
+  it("the placeholder with the cursor on its first letter (inverse T, dim rest) is empty; the user's own Try \"…\" is not (PR #108 review)", () => {
+    const rule = "─".repeat(40);
+    const s = new TermScreen(40, 4);
+    s.write(`${rule}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry "fix lint errors"\x1b[22m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(true);
+    // 用户打的同样的字（光标在行尾，反色的空格）：是字，不是提示。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ Try "the other approach"\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: true }))).toBe('Try "the other approach"');
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(false);
+    // 光标停在用户的字中间（反色的字后面是普通的字）：照样是字。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ ab\x1b[7mc\x1b[27md\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: true }))).toBe("abcd");
+    s.dispose();
   });
 });
 
@@ -217,5 +309,103 @@ describe("inputBoxText / pasteInInputBox", () => {
 
   it("squash lowercases and drops all whitespace", () => {
     expect(squash(" Yes,  I\ttrust\nthis ")).toBe("yes,itrustthis");
+  });
+
+  it("dictation keeps dim text only when the cursor follows it; the placeholder, focused or not, is still dropped (PR #108 review)", () => {
+    const rule = "─".repeat(40);
+    const s = new TermScreen(40, 4);
+    s.write(`${rule}\r\n❯ \x1b[2mplease fix\x1b[22m\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(true);
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("please fix");
+    // 听写的词之间光标跳过去（没画的空格子）：整段还是听写的字。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[2mplease\x1b[22m\x1b[1C\x1b[2mfix\x1b[22m\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("please fix");
+    // 用户打的字后面接着听写：两段都读出来。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ fix \x1b[2mthe title\x1b[22m\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("fix the title");
+    // 有焦点时的提示：光标领着，词之间光标跳过去（没画的空格子）：整段还是提示。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry\x1b[22m\x1b[2C\x1b[2m"fix lint"\x1b[22m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: "dictation" }))).toBe(true);
+    // 失焦时的提示（claude 2.1.332：整段暗色、没有光标）：也是提示（PR #108 第三轮 review）。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[2mTry\x1b[22m\x1b[1C\x1b[2m"fix lint"\x1b[22m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: "dictation" }))).toBe(true);
+    // 暗色字后面是用户的字、不是光标：暗色字不算。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[2mhint\x1b[22m x\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("x");
+    s.dispose();
+  });
+});
+
+describe("TermScreen.lines cache (PR #108 review suggestion 5)", () => {
+  /** 一格一格读的入口（xterm 的 IBufferLine.getCell）上的计数。 */
+  function spyCells(s: TermScreen) {
+    const line = (s as unknown as { term: Terminal }).term.buffer.active.getLine(0)!;
+    return vi.spyOn(Object.getPrototypeOf(line) as { getCell: (...a: unknown[]) => unknown }, "getCell");
+  }
+
+  it("an unchanged screen is not read cell by cell again; new output, resize and the dropDim mode each read afresh", () => {
+    const s = new TermScreen(40, 4);
+    s.write(`${RULE.slice(0, 40)}\r\n❯ \x1b[2mhint\x1b[22m\r\n${RULE.slice(0, 40)}`);
+    const spy = spyCells(s);
+    try {
+      const first = s.lines({ dropDim: true });
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      spy.mockClear();
+      expect(s.lines({ dropDim: true })).toEqual(first);
+      expect(spy).not.toHaveBeenCalled();
+      // 别的模式不拿这份缓存。
+      expect(s.lines({ dropDim: "dictation" })[1]).toBe("❯");
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      // 调用方改了返回的数组，缓存不跟着变。
+      first[1] = "changed";
+      expect(s.lines({ dropDim: true })[1]).toBe("❯");
+      // 新的输出（还在排队、没解析）：读到新的内容。
+      spy.mockClear();
+      s.write("\x1b[2;3Hreal");
+      expect(s.lines({ dropDim: true })[1]).toBe("❯ real");
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      // 改尺寸：按新尺寸读。
+      s.resize(40, 6);
+      expect(s.lines({ dropDim: true })).toHaveLength(6);
+      expect(s.lines()).toHaveLength(6);
+    } finally {
+      spy.mockRestore();
+      s.dispose();
+    }
+  });
+
+  it("each cell read reuses the same cell objects", () => {
+    const s = new TermScreen(40, 2);
+    s.write("abc\x1b[7md\x1b[27m\x1b[2mef\x1b[22m");
+    const spy = spyCells(s);
+    try {
+      expect(s.lines({ dropDim: true })[0]).toBe("abc");
+      const targets = new Set(spy.mock.calls.map((c) => c[1]));
+      expect(targets.has(undefined)).toBe(false);
+      expect(targets.size).toBe(1);
+    } finally {
+      spy.mockRestore();
+      s.dispose();
+    }
+  });
+
+  it("a rebuild after a parse error is read afresh, not from the cache", () => {
+    const s = new TermScreen(20, 2, () => "\x1b[2J\x1b[Hfrom tail");
+    s.write("first");
+    expect(s.lines()[0]).toBe("first");
+    const core = (s as unknown as { core: { writeSync(d: string): void } }).core;
+    const real = core.writeSync.bind(core);
+    let fail = true;
+    core.writeSync = (d: string) => {
+      if (fail) {
+        fail = false;
+        throw new Error("boom");
+      }
+      real(d);
+    };
+    s.write("second");
+    expect(() => s.lines()).toThrow("boom");
+    expect(s.lines()[0]).toBe("from tail");
+    s.dispose();
   });
 });

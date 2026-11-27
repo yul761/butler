@@ -1,6 +1,6 @@
 import type { Lang } from "../shared/i18n";
 import { formatDuration } from "../shared/text";
-import type { InboxRole, RefreshRefusal } from "../shared/types";
+import type { InboxRole, MailboxBlockReason, RefreshRefusal } from "../shared/types";
 import type { UpdateFailReason } from "../shared/update";
 import { currentLang } from "./i18n";
 
@@ -369,13 +369,12 @@ const ZH = {
   mailboxUser: "用户在 Shipherd 的对话 tab 里对你说：",
   mailboxInstruction: (from: string, text: string, interrupt: boolean) => `【${from}${interrupt ? " · 叫停" : ""}】${text}`,
   mailboxConvention: (who: string, text: string) => `【约定 · ${who}】${who} 刚存进 epic 记忆的一条约定（同一个 epic 里的 session 都要知道）：\n${text}`,
-  mailboxSendNote: (state: "busy" | "idle" | "closed"): string =>
-    state === "busy"
-      ? "消息排进了它的信箱：它正在干活，下一次调用工具时就会读到（不用等它停下来）。"
-      : state === "idle"
-        ? "消息排进了它的信箱：它停着，Shipherd 马上把消息输入进去。"
-        : "消息排进了它的信箱：它的终端关着，下次打开时第一件事就是读这条。",
   mailboxReplyNote: "它读到之后这一轮的最后一段回复会以【回复】自动送回给你（带同一个 requestId）。",
+  ctlWaitingOnUser: (asks: { id: number; question: string }[], reason: string | null) =>
+    asks.length > 0
+      ? `它在等用户回答：${asks.map((a) => `『${a.question}』（id ${a.id}）`).join("、")}。要替用户回答就在 send_message 里带 answers（这个 id）；不带的不算回答，提问留给用户。`
+      : `它在等用户回答：${reason ?? ""}。要替用户回答就在 send_message 里带 answers: true；不带的不算回答。`,
+  ctlNotPendingAsk: (id: number) => `${id} 不是它现在还没答的提问（看 list_sessions 的 waiting_on_user；用户可能已经答了）。没发出去。`,
   // BTL-256：给关着的 session 发消息时在后台恢复它。
   mailboxWakeNote: (wake: "resuming" | "waiting_memory" | "ended_by_user" | "resume_failed" | "not_managed" | "hibernated", error?: string): string =>
     wake === "resuming"
@@ -716,6 +715,47 @@ const ZH = {
     notifyOff: "推送通知的开关关着（设置 → 对外动作）",
     notifySummary: (event: string, n: number) => `推送通知：${event} × ${n}`,
   },
+  // BTL-269：信箱里的消息为什么还没送到、什么时候能送到。
+  mailboxAnswersQuestion: (question: string) => `（你在等用户回答『${question}』。下面这条是你的总控替用户答的，当作那个问题的回答。用户要是另有想法，会再告诉你。）`,
+  mailboxNotAnAnswer: "（你在等用户回答问题。下面这条是你的总控发来的，但不是对那个提问的回答，问题还在等用户。）",
+  inboxCorrection: (question: string, coordinator: string, answer: string) =>
+    `【用户更正】你问的『${question}』，之前总控替用户答的是：${coordinator}\n用户自己的回答：${answer}\n以用户的回答为准。`,
+  mailboxBlocked: {
+    turn: "它这一轮还在干活",
+    unsure: "记录说它在干活，屏幕上看已经停了，Shipherd 在确认",
+    refreshing: "它正在换新",
+    auto_input: "Shipherd 正在往里送前一批消息",
+    screen: "它屏幕上有确认框在等用户点",
+    needs_you: "它在等用户回答问题",
+    judging: "它刚停下，Shipherd 在判断它是不是在问用户问题",
+    typing: "用户刚在它的终端里打过字",
+    draft: "它的输入框里有用户没发出去的字",
+    closed: "它的终端关着",
+    hibernated: "它在休眠",
+    cost_paused: "它被花费熔断暂停了",
+    deliver_failed: "Shipherd 往里输入时没等到它的输入框就绪",
+  } as Record<MailboxBlockReason, string>,
+  mailboxEta: {
+    turn: "它下一次调用工具、或者这一轮结束时送到",
+    unsure: "Shipherd 每 10 秒看一次，确认它真的停了（大约 1 分钟）就送进去",
+    refreshing: "换新做完以后送到",
+    auto_input: "前一批送完，它下一次调用工具或者停下来时送到",
+    screen: "用户点完确认框以后送到",
+    needs_you: "用户回答或者处理完以后送到",
+    judging: "判断完（一般几秒到几十秒）就送；它要是在问用户，就等用户",
+    typing: "用户停手 30 秒以后送到",
+    draft: "用户发出或者清空输入框以后送到",
+    closed: "它下次打开时送到",
+    hibernated: "叫醒以后送到",
+    cost_paused: "用户在界面上点「继续」以后送到",
+    deliver_failed: "Shipherd 每 10 秒会再试，它下一次调用工具时也会读到",
+  } as Record<MailboxBlockReason, string>,
+  mailboxDelivered: "消息已经送进去了。",
+  mailboxDelivering: "Shipherd 正在把消息输入进去（在等它的输入框就绪），一般几秒钟。",
+  mailboxQueuedUnknown: "消息排进了它的信箱，还没送到。Shipherd 每 10 秒会再试。",
+  mailboxQueued: (why: string, eta: string, minutes: number) => `消息排在它的信箱里，还没送到：${why}${minutes > 0 ? `（已经 ${minutes} 分钟）` : ""}。${eta}。`,
+  mailboxStuckReceipt: (name: string, ids: string[], minutes: number, why: string, eta: string) =>
+    `【回执】你发给 ${name} 的消息 ${ids.join("、")} 排了 ${minutes} 分钟还没送到：${why}。${eta}。不用重发；急的话请用户在消息列表里点「现在送进去」。`,
 };
 
 export type MainStrings = typeof ZH;
@@ -1031,13 +1071,12 @@ const EN: MainStrings = {
   mailboxUser: "The user said this to you in Shipherd's conversation tab:",
   mailboxInstruction: (from: string, text: string, interrupt: boolean) => `[${from}${interrupt ? " · interrupt" : ""}] ${text}`,
   mailboxConvention: (who: string, text: string) => `[Convention · ${who}] ${who} just saved a convention to the epic memory (every session in this epic should know it):\n${text}`,
-  mailboxSendNote: (state: "busy" | "idle" | "closed"): string =>
-    state === "busy"
-      ? "The message is in its mailbox. It is working and will read it at its next tool call (no need to wait for it to stop)."
-      : state === "idle"
-        ? "The message is in its mailbox. It is stopped, so Shipherd is typing the message in now."
-        : "The message is in its mailbox. Its terminal is closed; reading this message is the first thing it does when it opens.",
   mailboxReplyNote: "The last reply it writes in the turn after reading it comes back to you automatically as [Reply] with the same requestId.",
+  ctlWaitingOnUser: (asks: { id: number; question: string }[], reason: string | null) =>
+    asks.length > 0
+      ? `It is waiting for the user to answer: ${asks.map((a) => `"${a.question}" (id ${a.id})`).join(", ")}. To answer for the user, pass answers (that id) to send_message; without it the message is not an answer and the question stays with the user. `
+      : `It is waiting for the user to answer: ${reason ?? ""}. To answer for the user, pass answers: true to send_message; without it the message is not an answer. `,
+  ctlNotPendingAsk: (id: number) => `${id} is not a question it is still waiting on (see waiting_on_user in list_sessions; the user may have answered it). Nothing was sent.`,
   mailboxWakeNote: (wake: "resuming" | "waiting_memory" | "ended_by_user" | "resume_failed" | "not_managed" | "hibernated", error?: string): string =>
     wake === "resuming"
       ? "Its terminal is closed. Shipherd is resuming it in the background (continuing its conversation) and types the message in as soon as it is up; you get a [Receipt] when it is delivered."
@@ -1367,6 +1406,47 @@ const EN: MainStrings = {
     notifyOff: "Push notifications are off (Settings → Outward actions)",
     notifySummary: (event: string, n: number) => `Push notification: ${event} × ${n}`,
   },
+  // BTL-269: why a queued message has not gone in yet, and when it will.
+  mailboxAnswersQuestion: (question: string) => `(You are waiting for the user to answer "${question}". The next message is your coordinator answering for the user; take it as the answer. If the user thinks otherwise they will tell you.)`,
+  mailboxNotAnAnswer: "(You are waiting for the user to answer a question. The next message is from your coordinator, but it is not an answer to that question; the question is still waiting for the user.)",
+  inboxCorrection: (question: string, coordinator: string, answer: string) =>
+    `[User correction] You asked "${question}". Your coordinator answered for the user: ${coordinator}\nThe user's own answer: ${answer}\nGo with the user's answer.`,
+  mailboxBlocked: {
+    turn: "it is still working on this turn",
+    unsure: "the record says it is working but the screen shows it stopped; Shipherd is confirming",
+    refreshing: "it is being refreshed",
+    auto_input: "Shipherd is typing an earlier batch into it",
+    screen: "a confirmation prompt on its screen is waiting for the user",
+    needs_you: "it is waiting for the user to answer a question",
+    judging: "it just stopped and Shipherd is checking whether it is asking the user something",
+    typing: "the user just typed in its terminal",
+    draft: "its input box has text the user has not sent",
+    closed: "its terminal is closed",
+    hibernated: "it is hibernating",
+    cost_paused: "the cost breaker paused it",
+    deliver_failed: "Shipherd tried to type it in but its input box never became ready",
+  } as Record<MailboxBlockReason, string>,
+  mailboxEta: {
+    turn: "It goes in at its next tool call or when this turn ends",
+    unsure: "Shipherd checks every 10 seconds and types it in once it is sure the session stopped (about a minute)",
+    refreshing: "It goes in once the refresh is done",
+    auto_input: "It goes in after that batch, at its next tool call or when it stops",
+    screen: "It goes in once the user answers the prompt",
+    needs_you: "It goes in once the user answers or deals with it",
+    judging: "It goes in once that check is done (seconds to tens of seconds); if it is asking the user, it waits for the user",
+    typing: "It goes in 30 seconds after the user stops typing",
+    draft: "It goes in once the user sends or clears the input box",
+    closed: "It goes in the next time it opens",
+    hibernated: "It goes in once it is awake",
+    cost_paused: "It goes in once the user clicks Continue",
+    deliver_failed: "Shipherd retries every 10 seconds; it also reads it at its next tool call",
+  } as Record<MailboxBlockReason, string>,
+  mailboxDelivered: "The message has gone in.",
+  mailboxDelivering: "Shipherd is typing the message in (waiting for its input box), usually a few seconds.",
+  mailboxQueuedUnknown: "The message is in its mailbox and has not gone in yet. Shipherd retries every 10 seconds.",
+  mailboxQueued: (why: string, eta: string, minutes: number) => `The message is queued in its mailbox and has not gone in yet: ${why}${minutes > 0 ? ` (for ${minutes} min)` : ""}. ${eta}.`,
+  mailboxStuckReceipt: (name: string, ids: string[], minutes: number, why: string, eta: string) =>
+    `[Receipt] Your message ${ids.join(", ")} to ${name} has been queued for ${minutes} min and has not gone in: ${why}. ${eta}. No need to resend; if it is urgent, ask the user to click "Deliver now" in the message list.`,
 };
 
 export const MAIN_STRINGS: Record<Lang, MainStrings> = { zh: ZH, en: EN };

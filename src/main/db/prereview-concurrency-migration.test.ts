@@ -51,8 +51,10 @@ describe("pre-review concurrency migration (BTL-271)", () => {
     db.prepare(`INSERT INTO lesson_merge_proposals (scope_kind, lesson_ids, text, reason, input_hash, created_at)
       VALUES ('repo', '[1,2]', 't', 'r', 'h', 1)`).run();
 
-    expect(migrate(db)).toBe(61);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 61 });
+    // migrate 一直升到最后一个迁移；后合的 PR 会往后加，这里只要求升过了 61。
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect(MIGRATIONS.length).toBeGreaterThanOrEqual(61);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: MIGRATIONS.length });
     const cols = (db.prepare("PRAGMA table_info(pre_reviews)").all() as { name: string }[]).map((c) => c.name);
     expect(cols).toContain("started_at");
     expect(db.prepare("SELECT ticket_key, head_sha, status, verdict, created_at, finished_at, started_at FROM pre_reviews").all())

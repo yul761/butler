@@ -17,6 +17,31 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE name = 'inbox_items'`).get()).toBeTruthy();
   });
 
+  it("answers on behalf only a pending, unanswered decision asked before the message; tracks whether the user has seen it (BTL-269 A2)", () => {
+    const repo = new InboxRepo(memDb());
+    const early = repo.addDecision({ ...owner("s1"), question: "a", options: [], context: null, createdAt: 10 });
+    const late = repo.addDecision({ ...owner("s1"), question: "b", options: [], context: null, createdAt: 30 });
+    const carded = repo.addDecision({ ...owner("s1"), question: "c", options: [], context: null, createdAt: 10 });
+    repo.setAnswer(carded, "from the card");
+    const o = { answer: "go", by: "coord", before: 20, at: 40 };
+    expect(repo.answerOnBehalf(early, o)).toBe(true);
+    expect(repo.answerOnBehalf(late, o)).toBe(false);
+    expect(repo.answerOnBehalf(carded, o)).toBe(false);
+    expect(repo.answerOnBehalf(early, o)).toBe(false);
+    expect(repo.get(early)).toMatchObject({ status: "answered", answer: "go", behalfBy: "coord", behalfSeenAt: null, resolvedAt: 40 });
+    expect(repo.get(late)).toMatchObject({ status: "pending", behalfBy: null });
+    expect(repo.unseenBehalf().map((x) => x.id)).toEqual([early]);
+    expect(repo.seeBehalf(late, 50)).toBe(false);
+    expect(repo.seeBehalf(early, 50)).toBe(true);
+    expect(repo.seeBehalf(early, 60)).toBe(false);
+    expect(repo.unseenBehalf()).toEqual([]);
+    expect(repo.get(early)?.behalfSeenAt).toBe(50);
+    // 撤回只撤那一次记下的。
+    expect(repo.unseeBehalf(early, 49)).toBe(false);
+    expect(repo.unseeBehalf(early, 50)).toBe(true);
+    expect(repo.get(early)?.behalfSeenAt).toBeNull();
+  });
+
   it("stores a decision with options and context, records an answer without resolving, then resolves once", () => {
     const repo = new InboxRepo(memDb());
     const id = repo.addDecision({ ...owner("s1", { ticketKey: "BTL-1", featureId: 3 }), question: "Which?", options: ["A", "B"], context: "ctx", createdAt: 10 });

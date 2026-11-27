@@ -10,7 +10,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
 import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 describe("memory IPC arguments", () => {
@@ -131,6 +131,13 @@ describe("inbox IPC arguments (BTL-190 2+3)", () => {
     for (const bad of [0, -1, 1.5, "5", null]) expect(() => inboxIdArg(bad)).toThrow();
     expect(inboxAnswerArg("用 A")).toBe("用 A");
     for (const bad of ["", "   ", 3, null, "x".repeat(4001)]) expect(() => inboxAnswerArg(bad)).toThrow();
+    // 「总控已代答」的改答案（BTL-269 A2）：超长直接拒绝，不截。
+    expect(inboxBehalfArg({ op: "correct", id: 3, text: "B" })).toEqual({ op: "correct", id: 3, text: "B" });
+    expect(inboxBehalfArg({ op: "correct", id: 3, text: "x".repeat(4000) })).toEqual({ op: "correct", id: 3, text: "x".repeat(4000) });
+    expect(inboxBehalfArg({ op: "dismiss", id: 3 })).toEqual({ op: "dismiss", id: 3 });
+    for (const bad of [null, {}, { op: "correct", id: 3, text: "x".repeat(4001) }, { op: "correct", id: 3, text: " " }, { op: "dismiss", id: 0 }, { op: "drop", id: 3 }]) {
+      expect(() => inboxBehalfArg(bad), JSON.stringify(bad).slice(0, 60)).toThrow();
+    }
     expect(inboxScopeArg({ featureId: 2 })).toEqual({ featureId: 2 });
     expect(messageScopeArg({ shipherd: true })).toEqual({ shipherd: true });
     expect(messageScopeArg({ featureId: 4 })).toEqual({ featureId: 4 });

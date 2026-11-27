@@ -60,8 +60,8 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
     kind !== "coordinator"
       ? null
       : lang === "zh"
-        ? "要给子 session 改任务、告诉它接口变了，用 shipherd-sessions 的 send_message：消息排进它的信箱，它在忙也会在下一次调用工具时读到，不用等它停下；真要它马上停手才带 interrupt: true。"
-        : "To change a child session's task or tell it an interface changed, use send_message from shipherd-sessions: the message goes into its mailbox and a busy session reads it at its next tool call, so you do not wait for it to stop; pass interrupt: true only when it really has to stop now.",
+        ? "要给子 session 改任务、告诉它接口变了，用 shipherd-sessions 的 send_message：消息排进它的信箱，它在忙一般在下一次调用工具时读到，不用等它停下。返回值如实说送到了没有：delivery 是 queued 时 blockedBy 是没送到的原因，note 说大概什么时候送到；排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发回执，不用重发。真要它马上停手才带 interrupt: true。"
+        : "To change a child session's task or tell it an interface changed, use send_message from shipherd-sessions: the message goes into its mailbox and a busy session usually reads it at its next tool call, so you do not wait for it to stop. The result says honestly whether it got in: when delivery is queued, blockedBy is why and note says roughly when it will; if it is still waiting after 2 minutes (10 if its turn is simply still running) you get a receipt, so do not resend. Pass interrupt: true only when it really has to stop now.",
   // 全局总控（内部叫 Shipherd 总控，BTL-190 第 5 点）：看全部，不建不删；跨 epic 协调用 send_message。
   (lang, kind) =>
     kind !== "shipherd"
@@ -69,13 +69,13 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
         ? "你是全局总控：全局只有一个，看得到所有 epic、ticket、PR 和 session（list_epics、list_features、list_tickets、list_prs、list_sessions、session_activity、list_inbox）；要整体进度、每个 PR 轮到谁，先用 progress_overview，一次就够；用户问 Shipherd 的效果（PR 周期、评论、人介入、花费，和 Shipherd 之前比）时用 metrics_overview。" +
           "一个 epic（对应一个 Jira epic）有一个 epic 总控、一个工作区和一份共享记忆；epic 里可以分几个 feature，每个 feature 只是一组 ticket 和一个顺序，没有自己的总控（list_features 看）。" +
-          "除了栈（见下）你不能建、删、结束任何东西；要哪个 epic 做什么，用 send_message 发给它的总控（epic 填名字或 id），消息排进它的信箱，它在忙也照样送到（下一次调用工具时读到），终端关着时 Shipherd 会接着它最近的对话打开再发。" +
+          "除了栈（见下）你不能建、删、结束任何东西；要哪个 epic 做什么，用 send_message 发给它的总控（epic 填名字或 id），消息排进它的信箱，它在忙也照样送到（一般在下一次调用工具时读到；返回值的 delivery 说送到了没有，没送到时 blockedBy 说原因），终端关着时 Shipherd 会接着它最近的对话打开再发。" +
           "它这一轮做完时的回复会以【回复】自动送回给你，不用轮询。epic 汇总过时（list_epics 的 stale）时用 refresh_epic_summary 在后台重新生成。" +
           "list_inbox 里未决的提问已经摆在用户面前，不要再问一遍；需要用户自己做的事（合 PR、回答问题、处理红了的 CI）用 ask_user 列出来，然后结束这一轮。" +
           "report 只存下来，不会送给任何人。"
         : "You are Shipherd's global control: there is only one, and it sees every epic, ticket, PR and session (list_epics, list_features, list_tickets, list_prs, list_sessions, session_activity, list_inbox); for the overall progress and whose turn each PR is, start with progress_overview, one call is enough; when the user asks how well Shipherd is doing (PR cycle time, comments, human interventions, cost, compared with before Shipherd), use metrics_overview. " +
           "An epic (one Jira epic) has one epic coordinator, one workspace and one shared memory; an epic can be split into features, and each feature is only a set of tickets and an order, with no coordinator of its own (see list_features). " +
-          "Apart from stacks (below) you cannot create, delete or end anything; when an epic needs to do something, tell its coordinator with send_message (epic by name or id). The message goes into its mailbox and reaches it even while it is busy (at its next tool call); if its terminal is closed, Shipherd reopens its latest conversation and sends it. " +
+          "Apart from stacks (below) you cannot create, delete or end anything; when an epic needs to do something, tell its coordinator with send_message (epic by name or id). The message goes into its mailbox and reaches it even while it is busy (usually at its next tool call; delivery in the result says whether it got in, and blockedBy says why not); if its terminal is closed, Shipherd reopens its latest conversation and sends it. " +
           "Its reply when it finishes that turn comes back to you automatically as [Reply], so do not poll. When an epic summary is stale (stale in list_epics), regenerate it in the background with refresh_epic_summary. " +
           "Pending questions in list_inbox are already in front of the user, so do not ask them again; list what the user has to do themselves (merge PRs, answer questions, deal with failing CI) with ask_user, then end your turn. " +
           "report is only stored and is not sent to anyone.",

@@ -14,7 +14,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionMessagesRepo } from "../db/session-messages-repo";
-import { Mailbox } from "../mailbox/mailbox";
+import { Mailbox, type AwaitingUser } from "../mailbox/mailbox";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import { MemoryAdmission } from "../sessions/memory-admission";
 import type { ControlHandlerDeps } from "./control-handler";
@@ -103,6 +103,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
     stuck: [], stacks: [], groups: { byLabel: [], byPrefix: [] }, featureGroups: [], freshness: { generatedAt: 0, prsCheckedOldest: null, prsCheckedNewest: null, readErrors: 0, unread: 0, summaryOldest: null } } satisfies ProgressView;
   const summaryState = { running: new Set<number>(), stale: new Set<number>(), prStatusAt: new Map<number, number>(), refreshed: [] as number[] };
   const asked: string[] = [];
+  const awaiting = new Map<string, AwaitingUser>();
   const handle = controlHandler({
     tickets, sessions, features, blocks,
     ticketService: { workDir: (r: { worktreePath: string | null; repoPath: string }) => r.worktreePath ?? r.repoPath } as never,
@@ -117,6 +118,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
     activity: (id) => activities.get(id) ?? null,
     activityOutput: async () => "out",
     lastReply: (id) => (id === "fc" ? "等你定" : null),
+    awaitingUser: (id) => awaiting.get(id) ?? null,
     inbox: { ask: (s) => (asked.push(s.id), 7), report: () => ({ id: 8, queued: false, noCoordinator: false }) },
     kill: () => {},
     screenNeedsUser: () => false,
@@ -155,7 +157,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
   const base = { v: 1 as const, shipherd: true as const, from: "bt" };
   const call = (req: Record<string, unknown>) => handle({ ...base, ...req } as ShipherdControlRequest);
   return {
-    handle, call, base, checkout, docs, payment, cart, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
+    awaiting, handle, call, base, checkout, docs, payment, cart, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
     prs, replies, mailbox, repo, interrupts, progressCalls, metricsCalls, summaryState, setNow: (t: number) => (now = t),
   };
 }
@@ -344,9 +346,35 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const PREFIX = "Shipherd 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：";
 
 describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
+  it("send_message releases the control inbox before waiting for the attempt, and still reports it (BTL-269)", async () => {
+    const { handle, base } = setup();
+    let released = 0;
+    const r = await handle({ ...base, op: "send_message", session: "fc", text: "x" } as ShipherdControlRequest, { release: () => void released++ });
+    expect(released).toBe(1);
+    expect(value(r)).toMatchObject({ delivery: "delivered" });
+  });
+
+  it("send_message shows what the epic coordinator waits on the user for; answers is passed on, a question it is not waiting on is refused (BTL-269 A2)", async () => {
+    const { call, awaiting, repo, delivered } = setup();
+    awaiting.set("fc", { asks: [{ id: 4, question: "合吗？", at: 1 }], text: null });
+    const note = M().ctlWaitingOnUser([{ id: 4, question: "合吗？" }], null);
+    const plain = value<{ waiting_on_user: { questions: { id: number }[] }; note: string; requestId: string }>(await call({ op: "send_message", session: "fc", text: "顺便说一下" }));
+    expect(plain.waiting_on_user.questions.map((q) => q.id)).toEqual([4]);
+    expect(plain.note).toContain(note);
+    expect(repo.get(plain.requestId)?.meta).toBeNull();
+    expect(await call({ op: "send_message", session: "fc", text: "合", answers: 9 })).toEqual({ v: 1, ok: false, error: M().ctlNotPendingAsk(9) });
+    const n = delivered.length;
+    const yes = value<{ note: string; requestId: string }>(await call({ op: "send_message", session: "fc", text: "合", answers: 4 }));
+    expect(yes.note).not.toContain(note);
+    expect(repo.get(yes.requestId)?.meta).toEqual({ answers: 4, text: "合" });
+    await tick();
+    expect(delivered.length).toBeGreaterThan(n);
+  });
+
   it("queues a message for an epic coordinator; the mailbox types it in with a prefix (BTL-245)", async () => {
     const { call, delivered } = setup();
-    expect(value(await call({ op: "send_message", session: "fc", text: "接口改了" }))).toMatchObject({ queued: true, sessionId: "fc" });
+    // 停着的：等这一次尝试，如实说送到了（BTL-269）。
+    expect(value(await call({ op: "send_message", session: "fc", text: "接口改了" }))).toMatchObject({ queued: false, delivery: "delivered", sessionId: "fc", note: expect.stringContaining("送进去了") });
     await tick();
     expect(delivered.map(([t]) => t)).toEqual(["fc"]);
     expect(delivered[0][1]).toContain(`${PREFIX}\n接口改了`);
@@ -375,6 +403,9 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
     setGuard(() => ({ ok: false, block: "busy" }));
     const out = value<{ requestId: string; note: string }>(await call({ op: "send_message", epic: "checkout", text: "t" }));
     expect(out.note).toContain("信箱");
+    // 挡住的原因如实返回（BTL-269），不再承诺「下一次调用工具时」。
+    expect(out).toMatchObject({ queued: true, delivery: "queued", blockedBy: "turn" });
+    expect(out.note).not.toContain("下一次调用工具时就会读到");
     await tick();
     expect(delivered).toEqual([]);
     expect(repo.get(out.requestId)?.status).toBe("queued");
@@ -386,7 +417,8 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
   it("interrupt presses Esc on a busy target first, then types the message in (BTL-245)", async () => {
     const { call, delivered, interrupts, setGuard } = setup();
     setGuard(() => ({ ok: false, block: "busy" }));
-    expect(value(await call({ op: "send_message", session: "fc", text: "停一下", interrupt: true }))).toMatchObject({ queued: true, state: "busy" });
+    // 叫停：按 Esc 以后照样送进去了。
+    expect(value(await call({ op: "send_message", session: "fc", text: "停一下", interrupt: true }))).toMatchObject({ delivery: "delivered", state: "busy" });
     await tick();
     expect(interrupts).toEqual(["fc"]);
     expect(delivered[0][1]).toContain("停一下");
@@ -447,8 +479,8 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
 
   it("takes an epic by name or id and sends to its running coordinator", async () => {
     const { call, delivered, opened, checkout } = setup();
-    expect(value(await call({ op: "send_message", epic: "Checkout", text: "a" }))).toMatchObject({ queued: true, sessionId: "fc" });
-    expect(value(await call({ op: "send_message", epic: String(checkout), text: "b" }))).toMatchObject({ queued: true, sessionId: "fc" });
+    expect(value(await call({ op: "send_message", epic: "Checkout", text: "a" }))).toMatchObject({ delivery: "delivered", sessionId: "fc" });
+    expect(value(await call({ op: "send_message", epic: String(checkout), text: "b" }))).toMatchObject({ delivery: "delivered", sessionId: "fc" });
     await tick();
     expect(delivered.map(([id]) => id)).toContain("fc");
     expect(opened).toEqual([]);
