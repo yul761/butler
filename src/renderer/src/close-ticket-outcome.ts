@@ -50,31 +50,56 @@ export const retryableInPreview = (preview: ClosePreview | null): ClosePrError[]
 export const pickableInPreview = (preview: ClosePreview | null): number => (preview?.closable.length ?? 0) + retryableInPreview(preview).length;
 
 /**
- * 打开关闭框以后别人（总控）先关了这个 ticket（BTL-270 审查）：提交时提示这次只关了勾的 PR。「关掉剩下的 PR」框本来就是关着的，不提示；
- * 关的时候又被重新打开了的，提示的是重新打开。
+ * 打开关闭框以后别人（总控）先关了这个 ticket（BTL-270 审查）：提交时提示一句，按这次实际做了什么说（ClosedMeanwhile）。
+ * 「关掉剩下的 PR」框本来就是关着的，不提示；关的时候又被重新打开了的，提示的是重新打开。不是这种情况是 null。
+ * prs：关了勾的 PR；sessions：结束了 session；both：两样都做了；nothing：什么都没做（没勾，或者勾了的都没处理成，下面会列出来）。
  */
-export const closedMeanwhile = (r: CloseLeftoversResult, rest: boolean): boolean => !rest && r.alreadyClosed === true && !r.reopenedMeanwhile;
+export type ClosedMeanwhile = "prs" | "sessions" | "both" | "nothing";
+export function closedMeanwhile(r: CloseLeftoversResult, rest: boolean): ClosedMeanwhile | null {
+  if (rest || r.alreadyClosed !== true || r.reopenedMeanwhile) return null;
+  const prs = r.closedPrs.length > 0;
+  const sessions = r.endedSessions.length > 0;
+  return prs && sessions ? "both" : prs ? "prs" : sessions ? "sessions" : "nothing";
+}
 
 /** 关着的 ticket 页上「关掉剩下的 PR」看的数记多久：预览要跑 gh（每个能关的 PR 一次），不每次打开 ticket 页都跑。 */
 export const REST_PREVIEW_TTL_MS = 2 * 60_000;
 
 /**
- * 每个 ticket 最近一次预览出的能勾的数（BTL-270 审查）：TTL 内再打开 ticket 页直接用；关闭框关上以后（可能关掉了 PR）drop 掉重新预览。
+ * 每个 ticket 最近一次预览出的能勾的数（BTL-270 审查）：TTL 内再打开 ticket 页直接用。
+ * stamp 是预览时这个 ticket 开着的 PR（restStamp）：总控关了 PR、PR 在网页上被关了，stamp 就对不上，不再用。
+ * 关闭框关上以后（可能关掉了 PR）、ticket 被重新打开时 drop 掉。预览要等 gh：开始时记下 begin() 的代数，
+ * 回来时代数变了（中间 drop 过）就不写，免得晚到的旧结果又写回去。
  */
 export function restPreviewCache(now: () => number = Date.now) {
-  const seen = new Map<string, { at: number; n: number }>();
+  const seen = new Map<string, { at: number; n: number; stamp: string }>();
+  const gens = new Map<string, number>();
   return {
-    get(key: string): number | undefined {
+    get(key: string, stamp: string): number | undefined {
       const e = seen.get(key);
-      return e && now() - e.at < REST_PREVIEW_TTL_MS ? e.n : undefined;
+      return e && e.stamp === stamp && now() - e.at < REST_PREVIEW_TTL_MS ? e.n : undefined;
     },
-    set(key: string, n: number): void {
-      seen.set(key, { at: now(), n });
+    /** 开始一次预览：返回现在的代数，回来时交给 set。 */
+    begin(key: string): number {
+      return gens.get(key) ?? 0;
+    },
+    /** 写下预览出的数；gen 是 begin() 给的，之后 drop 过就不写（返回 false）。 */
+    set(key: string, n: number, stamp: string, gen: number): boolean {
+      if ((gens.get(key) ?? 0) !== gen) return false;
+      seen.set(key, { at: now(), n, stamp });
+      return true;
     },
     drop(key: string): void {
       seen.delete(key);
+      gens.set(key, (gens.get(key) ?? 0) + 1);
     },
   };
+}
+
+/** 一个 ticket 现在开着的 PR（后台监视的记录，不跑 gh）：restPreviewCache 的 stamp。还没读到是 null。 */
+export function restStamp(watched: readonly { ticketKey: string; url: string | null; state: string | null }[] | null, key: string): string | null {
+  if (watched === null) return null;
+  return watched.filter((p) => p.ticketKey === key && p.url !== null && p.state === "open").map((p) => p.url!).sort().join("\n");
 }
 
 export const restPreviews = restPreviewCache();

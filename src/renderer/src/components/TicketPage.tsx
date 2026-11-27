@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Turn } from "../../../shared/turn";
 import { MANUAL_TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
-import { pickableInPreview, restPreviews } from "../close-ticket-outcome";
+import { pickableInPreview, restPreviews, restStamp } from "../close-ticket-outcome";
 import { reportError } from "../errors";
 import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
@@ -84,35 +84,14 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
 
   const statusValue = ticket.statusManual ?? "auto";
   const closed = ticket.statusManual === "closed";
-  // 关着的 ticket 还有开着的、能关的（或核对失败、可以再试的）自己的 PR：给一个「关掉剩下的 PR」入口（BTL-270 审查），打开同一个勾选框。
-  // 预览要跑 gh：同一个 ticket 短时间里再打开页面用记下的数（restPreviews）；对话框关上以后丢掉重新看（restSeq）。
-  const [restLeft, setRestLeft] = useState(0);
+  // 关着的 ticket 还有开着的、能关的（或核对失败、可以再试的）自己的 PR：给一个「关掉剩下的 PR」入口（BTL-270 审查），打开同一个勾选框（CloseRestButton）。
+  // 对话框关上以后丢掉记下的数重新看（restSeq）。
   const [restSeq, setRestSeq] = useState(0);
   const [closingRest, setClosingRest] = useState(false);
+  // 重新打开了：记下的数作废（再关上时 PR 可能已经不一样了），路上的预览回来也不写。
   useEffect(() => {
-    if (!closed) {
-      setRestLeft(0);
-      return;
-    }
-    const hit = restPreviews.get(ticket.key);
-    if (hit !== undefined) {
-      setRestLeft(hit);
-      return;
-    }
-    let live = true;
-    const key = ticket.key;
-    api.closePreview(key).then(
-      (p) => {
-        const n = pickableInPreview(p);
-        restPreviews.set(key, n);
-        if (live) setRestLeft(n);
-      },
-      () => live && setRestLeft(0),
-    );
-    return () => {
-      live = false;
-    };
-  }, [ticket.key, closed, restSeq]);
+    if (!closed) restPreviews.drop(ticket.key);
+  }, [ticket.key, closed]);
   const reopen = () => api.reopenTicket(ticket.key).then((r) => setNotice(S.tc.reopened(r.restoredFollowups)), reportError);
 
   return (
@@ -132,7 +111,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
         {closed
           ? <button className="ticket-reopen" onClick={() => void reopen()}>{S.tc.reopen}</button>
           : <button className="ticket-close" onClick={() => { setNotice(null); setClosing(true); }}>{S.tc.close}</button>}
-        {closed && restLeft > 0 && <button className="ticket-close-rest" onClick={() => { setNotice(null); setClosingRest(true); }}>{S.tc.closeRest}</button>}
+        {closed && <CloseRestButton key={ticket.key} ticketKey={ticket.key} seq={restSeq} onOpen={() => { setNotice(null); setClosingRest(true); }} />}
         <button onClick={() => setEditingTitle(true)}>{S.editTitle}</button>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
@@ -219,4 +198,38 @@ function SideTerminal({ ticket, term, sessionId, onGoTab }: { ticket: TicketView
       />
     </div>
   );
+}
+
+/**
+ * 关着的 ticket 页上的「关掉剩下的 PR」（BTL-270 审查）：还有能勾的才显示。预览要跑 gh：同一个 ticket 短时间里再打开页面用记下的数（restPreviews）。
+ * 记下的数配着当时开着的 PR（restStamp，后台监视的记录，不跑 gh）：总控关了 PR、PR 在网页上被关了，对不上就重新预览。
+ * 只在关着的 ticket 上挂：开着的 ticket 不读监视列表。seq 变了（对话框关上了）重新看。
+ */
+function CloseRestButton({ ticketKey, seq, onOpen }: { ticketKey: string; seq: number; onOpen: () => void }) {
+  const watched = useStateRefetch(`rest-watch:${ticketKey}`, () => api.prWatchList());
+  const stamp = restStamp(watched, ticketKey);
+  const [left, setLeft] = useState(0);
+  useEffect(() => {
+    if (stamp === null) return;
+    const hit = restPreviews.get(ticketKey, stamp);
+    if (hit !== undefined) {
+      setLeft(hit);
+      return;
+    }
+    let live = true;
+    const gen = restPreviews.begin(ticketKey);
+    api.closePreview(ticketKey).then(
+      (p) => {
+        const n = pickableInPreview(p);
+        // 预览路上 drop 过（对话框关上了、ticket 被重新打开了）：这个结果是旧的，不写进缓存。
+        restPreviews.set(ticketKey, n, stamp, gen);
+        if (live) setLeft(n);
+      },
+      () => live && setLeft(0),
+    );
+    return () => {
+      live = false;
+    };
+  }, [ticketKey, seq, stamp]);
+  return left > 0 ? <button className="ticket-close-rest" onClick={onOpen}>{S.tc.closeRest}</button> : null;
 }

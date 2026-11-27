@@ -81,7 +81,9 @@ export function closeWiring(d: CloseWiringDeps): Pick<TicketCloseDeps, "openPrs"
           return [repoId, names];
         })),
       );
-      // 是不是同一个仓库：按 slug 比（同一个仓库的两个 clone、worktree 路径不同），哪边的 slug 读不到再按路径比。
+      // 是不是同一个仓库：按 slug 比（同一个仓库的两个 clone、worktree 路径不同）。路径一样就是同一个。
+      // 路径不同、哪边的 slug 读不到（clone 删了、盘没挂、git 超时）、或者那边的仓库行没了：不知道是不是同一个仓库，当作同一个（BTL-270 审查）——
+      // 宁可报 shared_branch 不关，也不去关一个可能是别的 ticket 的 PR。已知限制：这时会误报关不了，用户去 GitHub 上手动关。
       // slug 先异步读好（warm），判断时只查读好的：没读的当作读不到。
       const slugs = new Map<string, Promise<string | null>>();
       const known = new Map<string, string | null>();
@@ -101,10 +103,10 @@ export function closeWiring(d: CloseWiringDeps): Pick<TicketCloseDeps, "openPrs"
       const slugAt = (path: string) => known.get(path) ?? null;
       await Promise.all(rows.filter((r) => r.state === "open" && r.repoId !== null && r.headBranch !== null).map((r) => warmBranch(r.repoId!, r.headBranch!)));
       const sameRepo = (a: string, b: string | null): boolean => {
-        if (b === null) return false;
+        if (b === a) return true;
         const sa = slugAt(a);
-        const sb = slugAt(b);
-        return sa !== null && sb !== null ? sa === sb : a === b;
+        const sb = b === null ? null : slugAt(b);
+        return sa === null || sb === null || sa === sb;
       };
       // 同一个仓库里别的 ticket 也用过的分支名（develop 这种）：不知道这个 PR 是谁的，不替它关，报出是哪个 ticket（shared_branch）。
       // ticket_repos 的 id 是每个 ticket 一行，所以按仓库比，不同仓库的同名分支不算。

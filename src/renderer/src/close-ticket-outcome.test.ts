@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closedMeanwhile, closeOutcome, closePrsRequest, pickableInPreview, REST_PREVIEW_TTL_MS, restPreviewCache, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
+import { closedMeanwhile, closeOutcome, closePrsRequest, pickableInPreview, REST_PREVIEW_TTL_MS, restPreviewCache, restStamp, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
 
 const base: CloseLeftoversResult = { closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
 
@@ -86,24 +86,52 @@ describe("the closed ticket page's remaining-PR count and the closed-meanwhile n
   it("keeps a ticket's count for a short while, then reads again; drop forgets it at once", () => {
     let t = 0;
     const c = restPreviewCache(() => t);
-    expect(c.get("T-1")).toBeUndefined();
-    c.set("T-1", 2);
+    expect(c.get("T-1", "a")).toBeUndefined();
+    expect(c.set("T-1", 2, "a", c.begin("T-1"))).toBe(true);
     t = REST_PREVIEW_TTL_MS - 1;
-    expect(c.get("T-1")).toBe(2);
-    expect(c.get("T-2")).toBeUndefined();
+    expect(c.get("T-1", "a")).toBe(2);
+    expect(c.get("T-2", "a")).toBeUndefined();
     t = REST_PREVIEW_TTL_MS;
-    expect(c.get("T-1")).toBeUndefined();
-    c.set("T-1", 0);
-    expect(c.get("T-1")).toBe(0);
+    expect(c.get("T-1", "a")).toBeUndefined();
+    c.set("T-1", 0, "a", c.begin("T-1"));
+    expect(c.get("T-1", "a")).toBe(0);
     c.drop("T-1");
-    expect(c.get("T-1")).toBeUndefined();
+    expect(c.get("T-1", "a")).toBeUndefined();
   });
 
-  it("says the ticket had just been closed only for the close dialog, and not when it was reopened meanwhile", () => {
+  it("a preview that comes back after a drop is not written; a count taken with other open PRs is not used (BTL-270 review)", () => {
+    const c = restPreviewCache(() => 0);
+    // 预览开始后对话框关上了（drop）：晚到的旧结果不写。
+    const gen = c.begin("T-1");
+    c.drop("T-1");
+    expect(c.set("T-1", 3, "a", gen)).toBe(false);
+    expect(c.get("T-1", "a")).toBeUndefined();
+    // drop 之后开始的照常写；别的 ticket 的代数不受影响。
+    expect(c.set("T-1", 1, "a", c.begin("T-1"))).toBe(true);
+    expect(c.get("T-1", "a")).toBe(1);
+    const other = c.begin("T-2");
+    c.drop("T-1");
+    expect(c.set("T-2", 4, "b", other)).toBe(true);
+    // 总控关了一个 PR：开着的 PR 变了，stamp 对不上，不用记下的数。
+    expect(c.get("T-2", "b2")).toBeUndefined();
+  });
+
+  it("stamps a ticket by its open PRs from the watch list, in any order; not loaded yet is null", () => {
+    const w = (ticketKey: string, n: number, state: "open" | "closed" | "merged" | null) => ({ ticketKey, url: n ? `u${n}` : null, state });
+    expect(restStamp(null, "T-1")).toBeNull();
+    const a = restStamp([w("T-1", 2, "open"), w("T-1", 1, "open"), w("T-2", 3, "open"), w("T-1", 4, "closed"), w("T-1", 0, null)], "T-1");
+    expect(a).toBe(restStamp([w("T-1", 1, "open"), w("T-1", 2, "open")], "T-1"));
+    expect(restStamp([w("T-1", 1, "open"), w("T-1", 2, "closed")], "T-1")).not.toBe(a);
+  });
+
+  it("says the ticket had just been closed only for the close dialog, by what this submit did, and not when it was reopened meanwhile (BTL-270 review)", () => {
     const r = { closedPrs: ["u"], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
-    expect(closedMeanwhile({ ...r, alreadyClosed: true }, false)).toBe(true);
-    expect(closedMeanwhile({ ...r, alreadyClosed: true }, true)).toBe(false);
-    expect(closedMeanwhile(r, false)).toBe(false);
-    expect(closedMeanwhile({ ...r, alreadyClosed: true, reopenedMeanwhile: true }, false)).toBe(false);
+    expect(closedMeanwhile({ ...r, alreadyClosed: true }, false)).toBe("prs");
+    expect(closedMeanwhile({ ...r, closedPrs: [], endedSessions: ["s"], alreadyClosed: true }, false)).toBe("sessions");
+    expect(closedMeanwhile({ ...r, endedSessions: ["s"], alreadyClosed: true }, false)).toBe("both");
+    expect(closedMeanwhile({ ...r, closedPrs: [], alreadyClosed: true }, false)).toBe("nothing");
+    expect(closedMeanwhile({ ...r, alreadyClosed: true }, true)).toBeNull();
+    expect(closedMeanwhile(r, false)).toBeNull();
+    expect(closedMeanwhile({ ...r, alreadyClosed: true, reopenedMeanwhile: true }, false)).toBeNull();
   });
 });

@@ -749,7 +749,12 @@ export const EN: UiStrings = {
     retry: "Retry the rest",
     leaveIt: "Leave it",
     reopenedMeanwhile: "It was reopened while closing, so the remaining PRs stay open and no sessions were ended",
-    closedMeanwhile: "This ticket had just been closed (its close reason stays the first one), so only the PRs you ticked were closed",
+    closedMeanwhile: {
+      prs: "This ticket had just been closed (its close reason stays the first one), so only the PRs you ticked were closed",
+      sessions: "This ticket had just been closed (its close reason stays the first one), so only its sessions were ended",
+      both: "This ticket had just been closed (its close reason stays the first one), so only the PRs you ticked were closed and its sessions ended",
+      nothing: "This ticket had just been closed (its close reason stays the first one); nothing more for you to do",
+    },
   },
   noSessions: "No sessions yet. Click “New session” to start.",
   resume: "Resume",

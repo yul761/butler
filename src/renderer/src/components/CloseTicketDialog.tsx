@@ -62,8 +62,9 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
 
   function settle(r: CloseLeftoversResult) {
     const o = closeOutcome(r);
-    // 打开关闭框以后别人（总控）先关了这个 ticket：这次只关了勾的 PR（评论用这里填的原因），关闭的原因、来源还是第一次的。
-    if (closedMeanwhile(r, rest)) onNotice?.(S.tc.closedMeanwhile);
+    // 打开关闭框以后别人（总控）先关了这个 ticket：按这次实际做了什么提示（PR 评论用这里填的原因），关闭的原因、来源还是第一次的。
+    const meanwhile = closedMeanwhile(r, rest);
+    if (meanwhile) onNotice?.(S.tc.closedMeanwhile[meanwhile]);
     if (!o.done) {
       setLeft({ prErrors: o.prErrors, sessionErrors: o.sessionErrors });
       return;

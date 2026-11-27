@@ -250,9 +250,13 @@ const pickPrs = (key: string, open: OpenPrs, alreadyClosed: boolean): CloseResul
  * 总控、路由没点名（prUrls）就回 pick_prs。没点名、也没有能关的 PR（能关的和核对失败、可以再试的都没有）、也不结束 session 时回 already_closed；
  * 点名了的照样回 ok，关不了的（not_own_branch、shared_branch 这些）和第一次关时一样写在 prErrors 里。
  * 读 PR 要等 gh：等完重新看一眼，被重新打开了就什么都不做，按 reopenedMeanwhile 回。
+ * 用户（关闭框）打开框以后别人先关了、这次什么都没勾：不算出错，回一个什么都没做的 ok（alreadyClosed），界面提示刚被关了、没有要再做的。
  */
 async function closeRemaining(d: TicketCloseDeps, key: string, reason: string, o: CloseOptions): Promise<CloseResult> {
-  if (!o.closePrs && !o.endSessions) return { ok: false, error: "already_closed", checkedPrs: false };
+  if (!o.closePrs && !o.endSessions) {
+    if (o.source === "user") return { ok: true, ticket: key, ignoredFollowups: 0, closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false, alreadyClosed: true };
+    return { ok: false, error: "already_closed", checkedPrs: false };
+  }
   const onlyPrs = o.prUrls && new Set(o.prUrls.map(prUrlKey));
   const unnamed = o.source !== "user" && o.prUrls === undefined;
   let known: OpenPrs | undefined;

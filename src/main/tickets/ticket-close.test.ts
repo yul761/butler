@@ -318,6 +318,34 @@ describe("closeTicket on a ticket that is already closed (closing the PRs left o
     }
   });
 
+  it("the ticket is gone after its PRs are read: no_ticket, nothing closed (BTL-270 review)", async () => {
+    let gone = false;
+    const { d, tickets, calls } = setup({
+      openPrs: async () => {
+        gone = true;
+        return { closable: [pr(1)], unclosable: [] };
+      },
+    });
+    tickets.close("T-1", { at: 50, reason: "需求变了", source: "user" });
+    const get = tickets.get.bind(tickets);
+    vi.spyOn(tickets, "get").mockImplementation((k: string) => (gone ? null : get(k)));
+    calls.length = 0;
+    expect(await closeTicket(d, "T-1", { reason: "x", source: "coordinator", closePrs: true, prUrls: [pr(1).url] })).toEqual({ ok: false, error: "no_ticket" });
+    expect(calls.filter((c) => c.startsWith("close ") || c.startsWith("end "))).toEqual([]);
+  });
+
+  it("the user's close dialog on a ticket closed meanwhile with nothing ticked: an ok that did nothing, not already_closed; other sources still get already_closed (BTL-270 review)", async () => {
+    const { d, tickets, calls } = setup({ prs: [pr(1)], sessions: [{ id: "s1", termId: "s1", hibernated: false }] });
+    tickets.close("T-1", { at: 50, reason: "需求变了", source: "coordinator" });
+    calls.length = 0;
+    expect(await closeTicket(d, "T-1", { reason: "我也不做了", source: "user", closePrs: false, prUrls: [], endSessions: false })).toEqual({
+      ok: true, ticket: "T-1", ignoredFollowups: 0, closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false, alreadyClosed: true,
+    });
+    expect(calls).toEqual([]);
+    expect(tickets.get("T-1")!.closure).toEqual({ at: 50, reason: "需求变了", source: "coordinator" });
+    expect(await closeTicket(d, "T-1", { reason: "x", source: "routing" })).toEqual({ ok: false, error: "already_closed", checkedPrs: false });
+  });
+
   it("the user's close dialog on a ticket a coordinator closed meanwhile closes the ticked PRs with the reason the user wrote; the close keeps the coordinator's reason", async () => {
     const reasons: string[] = [];
     const { d, tickets } = setup({ prs: [pr(1)], closePr: async (_p, reason) => (reasons.push(reason), "closed") });

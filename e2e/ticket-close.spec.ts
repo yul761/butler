@@ -210,11 +210,32 @@ test("closing from the dialog after someone else closed the ticket closes only t
   await expect(page.locator(".ticket-closed-banner")).toContainText(S.tc.banner("别人先关了"));
   await dialog.getByRole("button", { name: S.tc.confirm, exact: true }).click();
   await expect(page.locator("form.close-ticket")).toHaveCount(0);
-  await expect(page.getByText(S.tc.closedMeanwhile)).toBeVisible();
+  await expect(page.getByText(S.tc.closedMeanwhile.prs)).toBeVisible();
   const closes = ghCalls(s).filter((a) => a[0] === "pr" && a[1] === "close");
   expect(closes).toHaveLength(1);
   expect(closes[0][2]).toBe("46");
   expect(closes[0].join(" ")).toContain("我这边也不做了");
   // 关闭的原因还是先关的那次。
+  await expect(page.locator(".ticket-closed-banner")).toContainText(S.tc.banner("别人先关了"));
+});
+
+// BTL-270 审查（第三轮）：打开关闭框以后 ticket 被别人先关了，这次什么都没勾：不报「已经关了」的错，提示刚被关了、没有要再做的。
+test("submitting the close dialog with nothing ticked after someone else closed the ticket just says so, without an error", async ({ makeSandbox, launch }) => {
+  const s = makeSandbox();
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  await (await newButton(page, "newTicket")).click();
+  await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-15");
+  await page.getByRole("button", { name: S.create, exact: true }).click();
+  await expect(page.getByRole("heading", { name: "E2E-15", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: S.tc.close, exact: true }).click();
+  const dialog = page.locator("form.close-ticket");
+  await dialog.getByRole("textbox").fill("我这边也不做了");
+  await page.evaluate(() => (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<unknown> } }).shipherd.invoke("tickets:close", "E2E-15", { reason: "别人先关了", closePrs: false, endSessions: false }));
+  await expect(page.locator(".ticket-closed-banner")).toContainText(S.tc.banner("别人先关了"));
+  await dialog.getByRole("button", { name: S.tc.confirm, exact: true }).click();
+  await expect(page.locator("form.close-ticket")).toHaveCount(0);
+  await expect(page.getByText(S.tc.closedMeanwhile.nothing)).toBeVisible();
   await expect(page.locator(".ticket-closed-banner")).toContainText(S.tc.banner("别人先关了"));
 });

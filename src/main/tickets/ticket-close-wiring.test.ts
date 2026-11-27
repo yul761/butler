@@ -201,15 +201,15 @@ describe("closeWiring.openPrs", () => {
     ]));
     expect(r.unclosable).toHaveLength(2);
     expect(M().ticketClosePrWhy("shared_branch", "T-4")).toContain("T-4");
-    // 别的仓库的同名分支不算。
-    const other = setup({ ticketBranch: "develop" });
+    // 别的仓库（slug 不同）的同名分支不算。
+    const other = setup({ ticketBranch: "develop", slugs: { "/r/app": "o/app", "/r/other": "o/other" } });
     other.link(1, "develop");
     insertTicket(other.tickets, { key: "T-3", title: null, repoPath: "/r/other", workMode: "branch", worktreePath: null, branch: "develop", status: "in_review", statusManual: null, createdAt: 1, archivedAt: null });
     other.branchOwners.record({ ticketKey: "T-3", repoId: other.tickets.listRepos("T-3")[0].id, branch: "develop", sessionId: "s3", dir: "/wt3", at: 1 });
     expect((await other.w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
   });
 
-  it("compares repos by slug: another clone of the same repo is the same repo, a different slug is not; with no slug on either side it falls back to the path", async () => {
+  it("compares repos by slug: another clone of the same repo is the same repo, a different slug is not; a slug it can't read on either side counts as the same repo (BTL-270 review)", async () => {
     const make = (slugs: Record<string, string | null>) => {
       const s = setup({ ticketBranch: "develop", slugs });
       s.link(1, "develop");
@@ -219,9 +219,11 @@ describe("closeWiring.openPrs", () => {
     const same = await make({ "/r/app": "o/app", "/clone/app": "o/app" }).w.openPrs("T-1");
     expect(same.unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-5" }]);
     expect((await make({ "/r/app": "o/app", "/clone/app": "o/other" }).w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
-    // 一边读不到 slug：按路径比，路径不同就不算。
-    expect((await make({ "/r/app": "o/app", "/clone/app": null }).w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
-    // 同一个路径两边都读不到 slug：按路径比，算同一个仓库。
+    // 路径不同、一边读不到 slug（clone 删了、git 超时）：不知道是不是同一个仓库，当作同一个，报 shared_branch 不关（已知限制：可能误报）。
+    for (const slugs of [{ "/r/app": "o/app", "/clone/app": null }, { "/r/app": null, "/clone/app": "o/app" }, { "/r/app": null, "/clone/app": null }]) {
+      expect((await make(slugs).w.openPrs("T-1")).unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-5" }]);
+    }
+    // 同一个路径两边都读不到 slug：算同一个仓库。
     const s = setup({ ticketBranch: "develop", slugs: { "/r/app": null } });
     s.link(1, "develop");
     insertTicket(s.tickets, { key: "T-6", title: null, repoPath: "/r/app", workMode: "branch", worktreePath: null, branch: "develop", status: "in_review", statusManual: null, createdAt: 1, archivedAt: null });
@@ -288,6 +290,27 @@ describe("closeWiring.openPrs", () => {
     const r = await s.w.openPrs("T-1");
     expect(r.closable).toEqual([]);
     expect(r.unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-2" }]);
+  });
+
+  it("judges shared_branch on the live head against another clone: the other ticket's pushed branch is recorded under a different clone path, read only for the live head (BTL-270 review)", async () => {
+    const make = (cloneSlug: string) => {
+      const s = setup({ slugs: { "/r/app": "o/app", "/clone/app": cloneSlug } });
+      // T-1 自己推过 feat/wt；T-2 在另一个 clone 里（仓库分支是 t-2b，不叫 feat/wt），也推过 feat/wt：只有 branchOwners 记着它。
+      const clone = s.tickets.addRepo({ ticketKey: "T-2", repoPath: "/clone/app", workMode: "branch", worktreePath: null, branch: "t-2b", createdAt: 1 });
+      s.branchOwners.record({ ticketKey: "T-1", repoId: s.repoId, branch: "feat/wt", sessionId: "s", dir: "/wt", at: 1 });
+      s.branchOwners.record({ ticketKey: "T-2", repoId: clone, branch: "feat/wt", sessionId: "s2", dir: "/clone/wt2", at: 1 });
+      // 行里记的是 t-1（预先只读 t-1 牵涉的路径），GitHub 上实际的 head 是 feat/wt：/clone/app 的 slug 只在核对实时 head 时才读。
+      s.link(1, "t-1");
+      vi.mocked(s.d.prHead).mockImplementation(async () => head({ headBranch: "feat/wt" }));
+      return s;
+    };
+    const same = await make("o/app").w.openPrs("T-1");
+    expect(same.closable).toEqual([]);
+    expect(same.unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-2" }]);
+    // 那个 clone 其实是别的仓库：读到了它的 slug 才知道，能关（没去读就当作读不到，会误报 shared_branch）。
+    const other = make("o/other");
+    expect((await other.w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
+    expect(vi.mocked(other.d.slugOf).mock.calls.map((c) => c[0])).toContain("/clone/app");
   });
 
   it("a cross-repo head must sit in the repo named like the origin, not just under its owner; a head repo name it can't read is not closed (BTL-270 review)", async () => {
