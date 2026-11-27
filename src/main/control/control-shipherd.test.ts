@@ -18,9 +18,12 @@ import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import { MemoryAdmission } from "../sessions/memory-admission";
 import type { ControlHandlerDeps } from "./control-handler";
 import { controlHandler } from "./control-handler";
+import type { PreReviewOps } from "./prereview-control";
+import type { TicketPr } from "../db/ticket-prs-repo";
+import { noPreReview, type PreReviewBadge, type PreReviewQueueItem, type PreReviewTicketStatus, type PreReviewView } from "../../shared/prereview";
 
 /** Shipherd 总控（BTL-190 第 5 点）：三个 feature（一个归档了）、四个 ticket（一个归档了）和各种 session。 */
-function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"]; assessment?: boolean } = {}) {
+function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"]; assessment?: boolean; preReviewOps?: PreReviewOps } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -120,6 +123,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
     notify: () => {},
     admission: o.admission,
     stacks: o.stacks,
+    preReviewOps: o.preReviewOps,
     ...(o.shipherdDeps !== false && {
       shipherd: {
         featureRows: () => rows,
@@ -134,7 +138,10 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
         ...(o.assessment && {
           assessment: {
             summaries: (ids: number[]) => new Map(ids.filter((id) => id === 1).map((id) => [id, { risk: "high" as const, ready: false, missing: [{ key: "evidence" as const, state: "fail" as const, detail: "missing test output" }] }])),
-            view: (ref: string) => (ref === "1" || ref === "https://x/12" ? ({ prId: 1, url: "https://x/12" } as never) : null),
+            // prId 1 是 BTL-1（checkout）的，2 是 BTL-3（不在 epic 里）的。
+            view: (ref: string, keep?: (key: string) => boolean) =>
+              (ref === "1" || ref === "https://x/12") && (!keep || keep("BTL-1")) ? ({ prId: 1, url: "https://x/12" } as never)
+                : ref === "2" && (!keep || keep("BTL-3")) ? ({ prId: 2, url: "https://x/4" } as never) : null,
           },
         }),
         summaries: {
@@ -516,5 +523,147 @@ describe("Shipherd 总控 ask_user and report (BTL-190 5)", () => {
     expect(value(await call({ op: "report", text: "巡检完了", kind: "done" }))).toMatchObject({ id: 8 });
     expect(err(await call({ op: "ask_user", question: "q", from: "fc" }))).toBeTruthy();
     expect(asked).toEqual(["bt"]);
+  });
+});
+
+/** 预审的数据（BTL-271）：BTL-1（checkout）在跑，BTL-2（docs）有 2 条违规、还有一个排着，BTL-3 没预审过。 */
+function fakePreReview() {
+  const calls: string[] = [];
+  const b = (o: Partial<PreReviewBadge> & { ticketKey: string }): PreReviewBadge => ({ ...noPreReview(o.ticketKey), ...o });
+  const running = b({ ticketKey: "BTL-1", state: "running", id: 11, sessionId: "c1", prId: 1, repoSlug: "o/app", branch: "b-BTL-1", headSha: "a".repeat(40), startedAt: 5_000, trigger: "evidence" });
+  const lib = b({ ticketKey: "BTL-1", state: "clean", id: 12, repoSlug: "o/lib", branch: "b-BTL-1", headSha: "c".repeat(40), finishedAt: 4_000 });
+  const viol = b({ ticketKey: "BTL-2", state: "violations", id: 5, violations: 2, repoSlug: "o/doc", branch: "b-BTL-2", headSha: "b".repeat(40), finishedAt: 3_000 });
+  const queued = b({ ticketKey: "BTL-2", state: "queued", id: 6, position: 1, repoSlug: "o/doc", branch: "b-BTL-2", headSha: "d".repeat(40), enqueuedAt: 6_000 });
+  const status = new Map<string, PreReviewTicketStatus>([
+    ["BTL-1", { ticketKey: "BTL-1", overall: running, items: [running, lib] }],
+    ["BTL-2", { ticketKey: "BTL-2", overall: viol, items: [viol] }],
+  ]);
+  const pr = (id: number, ticketKey: string, slug: string, headBranch: string, state: TicketPr["state"] = "open") =>
+    ({ id, ticketKey, url: `https://github.com/${slug}/pull/${id}`, slug, number: id * 10, headBranch, headSha: "e".repeat(40), state }) as TicketPr;
+  const prs = [pr(1, "BTL-1", "o/app", "b-BTL-1"), pr(2, "BTL-2", "o/doc", "b-BTL-2"), pr(3, "BTL-1", "o/old", "b-BTL-1", "closed")];
+  const item = (x: PreReviewBadge): PreReviewQueueItem => ({ ...x, id: x.id!, jobId: x.id! + 100, prNumber: null, prUrl: null });
+  const ops: PreReviewOps = {
+    status: {
+      forTickets: (keys) => new Map(keys.map((k) => [k, status.get(k) ?? { ticketKey: k, overall: noPreReview(k), items: [] }])),
+      forSessions: (ids) => new Map(ids.filter((id) => id === "c1").map((id) => [id, running])),
+      forPrs: (ids) => new Map(ids.filter((id) => id === 1).map((id) => [id, running])),
+      history: (by) => ("ticketKey" in by && by.ticketKey === "BTL-2" ? [queued, viol] : []),
+      queue: () => ({ running: [item(running)], queued: [item(queued)], concurrency: 2, stopped: null }),
+      placeOf: (id) => (id >= 100 ? { position: 2, ahead: 1, running: 1, reason: "cost", waiting: null } : null),
+    } as PreReviewOps["status"],
+    view: (id) =>
+      id === 5
+        ? ({ id: 5, verdict: "violations", status: "done", target: { repoSlug: "o/doc", branch: "b-BTL-2", headSha: "b".repeat(40) }, summary: "两处", detail: null, finishedAt: 3_000,
+            violations: [{ severity: "must", file: "a.ts", line: 3, what: "没带仓库", fix: "" }], checks: null, missingEvidence: [{ detail: "没有截图" }] } as unknown as PreReviewView)
+        : null,
+    findPrs: (ref) => prs.filter((p) => String(p.id) === ref || p.url === ref),
+    prsOf: (key) => prs.filter((p) => p.ticketKey === key),
+    manual: (p) => (calls.push(`manual:${p.id}`), 100 + p.id),
+    rerun: (id) => (calls.push(`rerun:${id}`), 200 + id),
+    cancel: (id) => (calls.push(`cancel:${id}`), { ok: true }),
+    moveToFront: (id) => (calls.push(`front:${id}`), id === 6 ? { ok: true } : { ok: false, reason: "not_queued" }),
+    ticketOf: (id) => (id === 11 ? "BTL-1" : id === 6 || id === 5 ? "BTL-2" : undefined),
+  };
+  return { ops, calls };
+}
+
+describe("pre-review for both coordinators (BTL-271)", () => {
+  it("Shipherd control: list_tickets, list_sessions and list_prs carry preReview, so waiting on CI and pre-reviewing differ", async () => {
+    const { ops } = fakePreReview();
+    const t = setup({ preReviewOps: ops, assessment: true });
+    const list = value<{ key: string; preReview: { state: string; violations: number; items?: unknown[] } }[]>(await t.call({ op: "list_tickets" }));
+    expect(Object.fromEntries(list.map((x) => [x.key, x.preReview.state]))).toEqual({ "BTL-1": "running", "BTL-2": "violations", "BTL-3": "none" });
+    expect(list.find((x) => x.key === "BTL-1")!.preReview.items).toHaveLength(2);
+    expect(list.find((x) => x.key === "BTL-2")!.preReview).toMatchObject({ violations: 2, headSha: "b".repeat(12) });
+    const sessions = value<{ id: string; preReview: { state: string; startedAt: string } | null }[]>(await t.call({ op: "list_sessions" }));
+    expect(sessions.find((s) => s.id === "c1")!.preReview).toMatchObject({ state: "running", startedAt: new Date(5_000).toISOString() });
+    expect(sessions.find((s) => s.id === "fc")!.preReview).toBeNull();
+    const prs = value<{ prId: number | null; preReview?: { state: string } | null }[]>(await t.call({ op: "list_prs" }));
+    expect(prs.find((p) => p.prId === 1)!.preReview).toMatchObject({ state: "running" });
+    expect(prs.find((p) => p.prId === 2)!.preReview).toBeNull();
+  });
+
+  it("Shipherd control: pre_review_status gives the latest verdict's gist and the history; unknown tickets and PRs fail", async () => {
+    const t = setup({ preReviewOps: fakePreReview().ops });
+    const s = value<{ preReview: { state: string }; latest: { violations: { file: string }[]; missingEvidence: string[] }; history: { id: number }[] }>(await t.call({ op: "pre_review_status", ticket: "btl-2" }));
+    expect(s.preReview.state).toBe("violations");
+    expect(s.latest).toMatchObject({ id: 5, verdict: "violations", violations: [{ file: "a.ts", line: 3, what: "没带仓库" }], missingEvidence: ["没有截图"] });
+    expect(s.history.map((h) => h.id)).toEqual([6, 5]);
+    const p = value<{ ticket: string; pr: { prId: number }; preReview: { state: string }; latest: null }>(await t.call({ op: "pre_review_status", pr: "1" }));
+    expect(p).toMatchObject({ ticket: "BTL-1", pr: { prId: 1, number: 10 }, preReview: { state: "running" }, latest: null });
+    expect(err(await t.call({ op: "pre_review_status", ticket: "NOPE-1" }))).toContain("NOPE-1");
+    expect(err(await t.call({ op: "pre_review_status", pr: "99" }))).not.toBe("");
+  });
+
+  it("Shipherd control: pre_review_run uses the same manual entry as the ticket page, a ticket gets one run per open PR and a rerun for repos without one", async () => {
+    const { ops, calls } = fakePreReview();
+    const t = setup({ preReviewOps: ops });
+    const r = value<{ queued: { id: number; position: number; reason: string | null; pr?: string; repo?: string }[] }>(await t.call({ op: "pre_review_run", ticket: "BTL-1" }));
+    // PR 1 开着（o/app），PR 3 关了；o/lib 没有 PR，按最近一次（id 12）再排。o/app 已经有 PR，不再 rerun。
+    expect(calls).toEqual(["manual:1", "rerun:12"]);
+    expect(r.queued).toEqual([
+      expect.objectContaining({ id: 101, position: 2, ahead: 1, reason: "cost", pr: "https://github.com/o/app/pull/1" }),
+      expect.objectContaining({ id: 212, repo: "o/lib", branch: "b-BTL-1" }),
+    ]);
+    expect(err(await t.call({ op: "pre_review_run", pr: "3" }))).not.toBe("");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("Shipherd control: running, cancelling and moving need the open Shipherd control itself; looking does not", async () => {
+    const { ops, calls } = fakePreReview();
+    const t = setup({ preReviewOps: ops });
+    t.open.delete("bt");
+    expect(err(await t.call({ op: "pre_review_run", pr: "1" }))).not.toBe("");
+    expect(err(await t.call({ op: "pre_review_queue", cancel: 11 }))).not.toBe("");
+    expect(calls).toEqual([]);
+    const q = value<{ running: { id: number; ticket: string }[]; queued: { id: number; position: number }[]; concurrency: number; stopped: null }>(await t.call({ op: "pre_review_queue" }));
+    expect(q).toMatchObject({ concurrency: 2, stopped: null, running: [{ id: 11, ticket: "BTL-1" }], queued: [{ id: 6, position: 1 }] });
+    t.open.add("bt");
+    expect(value<{ done: string }>(await t.call({ op: "pre_review_queue", front: 6 })).done).toBe("moved_to_front");
+    expect(err(await t.call({ op: "pre_review_queue", front: 11 }))).not.toBe("");
+    expect(err(await t.call({ op: "pre_review_queue", cancel: 77 }))).not.toBe("");
+    expect(calls).toEqual(["front:6", "front:11"]);
+  });
+
+  it("epic control sees and acts only on its own epic: other epics' tickets, PRs and queue items are refused", async () => {
+    const { ops, calls } = fakePreReview();
+    const t = setup({ preReviewOps: ops, assessment: true });
+    const epic = (req: Record<string, unknown>, from = "fc") => t.handle({ v: 1, featureId: t.checkout, from, ...req } as never);
+    // BTL-1 是 checkout 的；BTL-2 是 docs 的。
+    expect(value<{ preReview: { state: string } }>(await epic({ op: "pre_review_status", ticket: "BTL-1" })).preReview.state).toBe("running");
+    expect(err(await epic({ op: "pre_review_status", ticket: "BTL-2" }))).toContain("BTL-2");
+    expect(err(await epic({ op: "pre_review_status", pr: "2" }))).not.toBe("");
+    expect(err(await epic({ op: "pre_review_run", ticket: "BTL-2" }))).not.toBe("");
+    expect(err(await epic({ op: "pre_review_queue", cancel: 6 }))).not.toBe("");
+    // 不是这个 epic 的总控（修复 session）不能动；看可以。
+    expect(err(await epic({ op: "pre_review_run", pr: "1" }, "fx"))).not.toBe("");
+    expect(err(await epic({ op: "pre_review_queue", cancel: 11 }, "fx"))).not.toBe("");
+    expect(value<{ queued: unknown[] }>(await epic({ op: "pre_review_queue" }, "fx")).queued).toHaveLength(1);
+    expect(calls).toEqual([]);
+    expect(value<{ queued: { id: number }[] }>(await epic({ op: "pre_review_run", pr: "1" })).queued.map((q) => q.id)).toEqual([101]);
+    expect(value<{ done: string }>(await epic({ op: "pre_review_queue", cancel: 11 })).done).toBe("cancelled");
+    expect(calls).toEqual(["manual:1", "cancel:11"]);
+  });
+
+  it("epic control: list_tickets and list_sessions carry preReview; list_prs and pr_assessment only cover the epic's PRs", async () => {
+    const t = setup({ preReviewOps: fakePreReview().ops, assessment: true });
+    const epic = (req: Record<string, unknown>) => t.handle({ v: 1, featureId: t.checkout, from: "fc", ...req } as never);
+    const tickets = value<{ key: string; preReview: { state: string } }[]>(await epic({ op: "list_tickets" }));
+    expect(tickets.map((x) => [x.key, x.preReview.state])).toEqual([["BTL-1", "running"]]);
+    const sessions = value<{ id: string; preReview: { state: string } | null }[]>(await epic({ op: "list_sessions" }));
+    expect(sessions.find((s) => s.id === "c1")!.preReview).toMatchObject({ state: "running" });
+    expect(sessions.find((s) => s.id === "fc")!.preReview).toBeNull();
+    const prs = value<{ ticket: string; preReview?: unknown }[]>(await epic({ op: "list_prs" }));
+    expect(prs.map((p) => p.ticket)).toEqual(["BTL-1"]);
+    expect(prs[0].preReview).toMatchObject({ state: "running" });
+    expect(value<{ prId: number }>(await epic({ op: "pr_assessment", pr: "1" })).prId).toBe(1);
+    expect(err(await epic({ op: "pr_assessment", pr: "2" }))).not.toBe("");
+  });
+
+  it("without the pre-review service the tools say it is unavailable and lists have no preReview", async () => {
+    const t = setup();
+    expect(err(await t.call({ op: "pre_review_queue" }))).not.toBe("");
+    const list = value<object[]>(await t.call({ op: "list_tickets" }));
+    expect(list[0]).not.toHaveProperty("preReview");
   });
 });

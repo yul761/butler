@@ -21,7 +21,9 @@ import type { BatchDetail, BatchView } from "../../shared/batches";
 import type { AdmissionPolicyOverrides, AdmissionPolicyView, PolicyScope } from "../../shared/admission-policy";
 import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
 import type { PrPolicyOverrides, PrPolicyView, PrScope } from "../../shared/pr-policy";
-import type { ReviewActResult, ReviewQueueItem, TicketAssessmentView } from "../../shared/prereview";
+import type {
+  PreReviewQueueAction, PreReviewQueueActResult, PreReviewQueueView, PreReviewStatusBatch, PreReviewStatusRequest, ReviewActResult, ReviewQueueItem, TicketAssessmentView,
+} from "../../shared/prereview";
 import type { ReviewEffectView } from "../../shared/review-effect";
 import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportRequest, ExportResult, ImportApplyRequest, ImportApplyResult, ImportPreviewResult, StarterTarget } from "../../shared/config-io";
@@ -215,6 +217,10 @@ export const api = {
   prPolicySet: (scope: PrScope, overrides: PrPolicyOverrides) => call<void>(IPC.prPolicySet, { scope, overrides }),
   reviewEffect: (days?: number) => call<ReviewEffectView>(IPC.reviewEffect, days ?? 30),
   reviewQueue: () => call<ReviewQueueItem[]>(IPC.reviewQueue),
+  /** 预审看得见（BTL-271）：一批 ticket / session / PR 的徽标一次要。 */
+  preReviewStatus: (req: PreReviewStatusRequest) => call<PreReviewStatusBatch>(IPC.preReviewStatus, req),
+  preReviewQueue: () => call<PreReviewQueueView>(IPC.preReviewQueue),
+  preReviewQueueAct: (a: PreReviewQueueAction) => call<PreReviewQueueActResult>(IPC.preReviewQueueAct, a),
   checksView: (scope: CheckScope) => call<ChecksView>(IPC.checksView, scope),
   checksHits: (key: string) => call<CheckHitView[]>(IPC.checksHits, key),
   checksAct: (a: ChecksAction) => call<ChecksActResult>(IPC.checksAct, a),

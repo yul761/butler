@@ -167,6 +167,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.forkAsk, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.inboxReports,
   IPC.clipboardRead, IPC.loopPolicyGet, IPC.loopCommentsList, IPC.loopFlakyList, IPC.loopEffect,
   IPC.prAssessment, IPC.prPolicyGet, IPC.reviewEffect, IPC.reviewQueue,
+  // 预审徽标和队列（BTL-271）：只读；取消、插队只是排预审的先后（和 backgroundAct 一样），不推动开发。
+  IPC.preReviewStatus, IPC.preReviewQueue, IPC.preReviewQueueAct,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,
   IPC.interruptsState, IPC.profilesGet, IPC.turnBoard,
   // 切到首页时的补查：和打开页面一样不算推动工作

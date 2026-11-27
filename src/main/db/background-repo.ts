@@ -16,11 +16,13 @@ export interface BgJob {
   attempts: number;
   error: string | null;
   enqueuedAt: number;
+  /** 最近一次被取走开跑的时间；没跑过为 null。 */
+  startedAt: number | null;
 }
 
 interface Row {
   id: number; kind: string; payload: string; state: BgJobState; checkpoint: string | null; priority: number; ticket_key: string | null;
-  dedupe_key: string | null; not_before: number | null; attempts: number; error: string | null; enqueued_at: number;
+  dedupe_key: string | null; not_before: number | null; attempts: number; error: string | null; enqueued_at: number; started_at: number | null;
 }
 
 const parse = (t: string | null): unknown => {
@@ -35,8 +37,11 @@ const parse = (t: string | null): unknown => {
 const toJob = (r: Row): BgJob => ({
   id: Number(r.id), kind: r.kind as BgKind, payload: parse(r.payload), state: r.state, checkpoint: parse(r.checkpoint), priority: Number(r.priority),
   ticketKey: r.ticket_key, dedupeKey: r.dedupe_key, notBefore: r.not_before === null ? null : Number(r.not_before), attempts: Number(r.attempts),
-  error: r.error, enqueuedAt: Number(r.enqueued_at),
+  error: r.error, enqueuedAt: Number(r.enqueued_at), startedAt: r.started_at === null || r.started_at === undefined ? null : Number(r.started_at),
 });
+
+/** take 取的顺序：优先级高的在前，同优先级先排的在前。queued() 和「提到最前」都按这个。 */
+const TAKE_ORDER = "ORDER BY priority DESC, id";
 
 /** 通用后台队列（工作流 L）：在库里，退出重开后接着跑；检查点跟着行走。 */
 export class BackgroundRepo {
@@ -69,8 +74,38 @@ export class BackgroundRepo {
     return r ? toJob(r) : null;
   }
 
-  /** 这一种里下一个可以跑的（allowTicket 说这个 ticket 的能不能跑），标成 running、次数加一。 */
-  take(kind: BgKind, now: number, allowTicket: (ticketKey: string) => boolean): BgJob | null {
+  /** 这一种里排队的，按 take 取的顺序（延后着的也在里面）。 */
+  queued(kind: BgKind, limit = 500): BgJob[] {
+    const rows = this.db.prepare(`SELECT * FROM background_jobs WHERE kind = ? AND state = 'queued' ${TAKE_ORDER} LIMIT ?`).all(kind, limit) as unknown as Row[];
+    return rows.map(toJob);
+  }
+
+  /** 这一种里在跑的。 */
+  runningOf(kind: BgKind): BgJob[] {
+    const rows = this.db.prepare(`SELECT * FROM background_jobs WHERE kind = ? AND state = 'running' ORDER BY started_at, id`).all(kind) as unknown as Row[];
+    return rows.map(toJob);
+  }
+
+  /**
+   * 排队的这一个提到同一种的最前面：优先级改成这一种排队里最高的加一，延后的也提前到现在。
+   * 不在排队（在跑、做完、不存在）返回 false。
+   */
+  moveToFront(id: number): boolean {
+    return withTransaction(this.db, () => {
+      const r = this.db.prepare(`SELECT kind FROM background_jobs WHERE id = ? AND state = 'queued'`).get(id) as { kind: string } | undefined;
+      if (!r) return false;
+      const top = this.db.prepare(`SELECT MAX(priority) AS p FROM background_jobs WHERE kind = ? AND state = 'queued' AND id != ?`).get(r.kind, id) as { p: number | null };
+      const p = top.p === null ? 0 : Number(top.p) + 1;
+      this.db.prepare(`UPDATE background_jobs SET priority = MAX(priority, ?), not_before = NULL WHERE id = ?`).run(p, id);
+      return true;
+    });
+  }
+
+  /**
+   * 这一种里下一个可以跑的（allowTicket 说这个 ticket 的能不能跑，allowJob 说这一个能不能跑：比如同一个 worktree 已经有一个在跑），
+   * 标成 running、次数加一。
+   */
+  take(kind: BgKind, now: number, allowTicket: (ticketKey: string) => boolean, allowJob?: (job: BgJob) => boolean): BgJob | null {
     return withTransaction(this.db, () => {
       // 一行一行看，找到第一个能跑的就停：不截前 N 行，不然前面一大串被熔断停住的 ticket 会把后面能跑的饿死。
       // 每个 ticket 只问一次。
@@ -85,17 +120,17 @@ export class BackgroundRepo {
       const rows = prepareUncached(
         this.db,
         `SELECT * FROM background_jobs WHERE state = 'queued' AND kind = ? AND (not_before IS NULL OR not_before <= ?)
-         ORDER BY priority DESC, id`,
+         ${TAKE_ORDER}`,
       ).iterate(kind, now) as Iterable<Row>;
       for (const x of rows) {
-        if (x.ticket_key === null || allowed(x.ticket_key)) {
+        if ((x.ticket_key === null || allowed(x.ticket_key)) && (!allowJob || allowJob(toJob(x)))) {
           r = x;
           break;
         }
       }
       if (!r) return null;
       this.db.prepare(`UPDATE background_jobs SET state = 'running', attempts = attempts + 1, started_at = ? WHERE id = ?`).run(now, r.id);
-      return { ...toJob(r), state: "running", attempts: Number(r.attempts) + 1 };
+      return { ...toJob(r), state: "running", attempts: Number(r.attempts) + 1, startedAt: now };
     });
   }
 

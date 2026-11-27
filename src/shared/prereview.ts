@@ -292,3 +292,132 @@ export function parseSubmitEvidence(raw: unknown): SubmitEvidenceArgs | null {
   const notes = cut(r.notes, L.notes).trim();
   return { checks, acceptance, ...(ui.length ? { ui } : {}), ...(notRun.length ? { notRun } : {}), ...(notes ? { notes } : {}) };
 }
+
+// ---------------------------------------------------------------- 预审状态和队列（BTL-271）：徽标、队列页、总控工具共用
+
+/**
+ * 一个 ticket、PR、session 现在的预审状态：没预审过、排队第 N、停着（闸门不放行）、预审中、通过、违反 N 条、出错。
+ * paused 也在排队，只是闸门（手动停、熔断、额度、内存）现在不放行。
+ */
+export const PRE_REVIEW_STATES = ["none", "queued", "paused", "running", "clean", "violations", "error"] as const;
+export type PreReviewState = (typeof PRE_REVIEW_STATES)[number];
+
+/** 预审停着的原因（后台闸门的 BgBlockReason）。 */
+export type PreReviewPauseReason = "manual" | "cost" | "quota" | "user_active" | "outside_hours" | "memory";
+
+/** 排着队但没轮到的原因：前面的占满了并发，或者同一个 worktree 已经有一个在跑。 */
+export type PreReviewWaiting = "concurrency" | "worktree";
+
+export interface PreReviewBadge {
+  state: PreReviewState;
+  /** 对着的那次预审；none 为 null。 */
+  id: number | null;
+  ticketKey: string | null;
+  sessionId: string | null;
+  repoSlug: string | null;
+  branch: string | null;
+  headSha: string | null;
+  prId: number | null;
+  trigger: PreReviewTrigger | null;
+  /** 排队第几（1 起，按真正取的顺序）；不在排队为 null。 */
+  position: number | null;
+  /** state = paused 时为什么停着。 */
+  reason: PreReviewPauseReason | null;
+  /** 停到什么时候（知道的话）。 */
+  until: number | null;
+  /** 排队、没停着时在等什么。 */
+  waiting: PreReviewWaiting | null;
+  enqueuedAt: number | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  /** 违规条数（规矩违规 + 挡合并的检查失败）。 */
+  violations: number;
+  /** 出错时的说明。 */
+  detail: string | null;
+  /** 最近一次做完的结论（排队、在跑时是上一次的；界面显示「上次违反 2 条」）。 */
+  last: { state: "clean" | "violations" | "error"; id: number; violations: number; headSha: string; finishedAt: number | null } | null;
+}
+
+/** 一个 ticket 的预审状态：每个（仓库, 分支）一条，overall 是最要紧的那一条（在跑 > 排队 > 违反 > 出错 > 通过）。 */
+export interface PreReviewTicketStatus {
+  ticketKey: string;
+  overall: PreReviewBadge;
+  items: PreReviewBadge[];
+}
+
+export interface PreReviewQueueItem extends PreReviewBadge {
+  id: number;
+  jobId: number | null;
+  prNumber: number | null;
+  prUrl: string | null;
+}
+
+export interface PreReviewQueueView {
+  running: PreReviewQueueItem[];
+  /** 按真正取的顺序。 */
+  queued: PreReviewQueueItem[];
+  /** 同时最多跑几个（设置 preReviewConcurrency）。 */
+  concurrency: number;
+  /** 整个队列为什么停着；没停为 null。 */
+  stopped: { reason: PreReviewPauseReason; until: number | null } | null;
+}
+
+/** 界面一次要的徽标（BTL-271）：一张列表的 ticket、session、PR 一起要，主进程一次查完。 */
+export interface PreReviewStatusRequest {
+  tickets?: string[];
+  sessions?: string[];
+  prs?: number[];
+}
+/** 和请求对应；没有预审的 session、PR 不在里面（ticket 都在，没预审过的 state = none）。 */
+export interface PreReviewStatusBatch {
+  tickets: Record<string, PreReviewTicketStatus>;
+  sessions: Record<string, PreReviewBadge>;
+  prs: Record<number, PreReviewBadge>;
+}
+/** 一次最多要多少个（超了 IPC 直接拒绝，不悄悄截断）。 */
+export const PRE_REVIEW_STATUS_MAX = 2000;
+
+/** 队列页、总控对一条预审做的：取消、提到最前。 */
+export type PreReviewQueueAction = { op: "cancel" | "front"; id: number };
+export type PreReviewQueueActResult = { ok: true } | { ok: false; reason: "not_found" | "not_queued" | "failed" };
+
+/** 预审并发数的范围（设置 preReviewConcurrency，默认 2）。 */
+export const PRE_REVIEW_CONCURRENCY = { min: 1, max: 8, default: 2 } as const;
+
+/** 违规条数：规矩违规加上挡合并（block 级、enforce）的检查失败。 */
+export function violationCount(violations: readonly Violation[], checks: CheckSummary | null): number {
+  const blocking = (checks?.failing ?? []).filter((f) => f.severity === "block" && f.mode === "enforce").length;
+  return violations.length + blocking;
+}
+
+const STATE_RANK: Record<PreReviewState, number> = { running: 6, queued: 5, paused: 5, violations: 4, error: 3, clean: 2, none: 0 };
+
+/** 一组里最要紧的那条：在跑 > 排队（靠前的）> 违反 > 出错 > 通过 > 没有；同级新的在前。 */
+export function mostUrgentBadge(items: readonly PreReviewBadge[]): PreReviewBadge | null {
+  let best: PreReviewBadge | null = null;
+  for (const b of items) {
+    if (!best) {
+      best = b;
+      continue;
+    }
+    const d = STATE_RANK[b.state] - STATE_RANK[best.state];
+    if (d > 0) best = b;
+    else if (d === 0) {
+      const pb = b.position ?? Infinity;
+      const pa = best.position ?? Infinity;
+      if (pb < pa || (pb === pa && (b.id ?? 0) > (best.id ?? 0))) best = b;
+    }
+  }
+  return best;
+}
+
+export const noPreReview = (ticketKey: string | null): PreReviewBadge => ({
+  state: "none", id: null, ticketKey, sessionId: null, repoSlug: null, branch: null, headSha: null, prId: null, trigger: null,
+  position: null, reason: null, until: null, waiting: null, enqueuedAt: null, startedAt: null, finishedAt: null, violations: 0, detail: null, last: null,
+});
+
+/** 设置里的预审并发数；不合法时用默认。 */
+export function readPreReviewConcurrency(raw: string | null | undefined): number {
+  const n = Number((raw ?? "").trim());
+  return Number.isInteger(n) && n >= PRE_REVIEW_CONCURRENCY.min && n <= PRE_REVIEW_CONCURRENCY.max ? n : PRE_REVIEW_CONCURRENCY.default;
+}

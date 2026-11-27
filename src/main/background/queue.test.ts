@@ -10,7 +10,7 @@ import { MemoryAdmission } from "../sessions/memory-admission";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-function setup(o: { db?: Db; settings?: Record<string, string>; idleSeconds?: number; hibernated?: Set<string>; admission?: SessionAdmission; cost?: Set<string> } = {}) {
+function setup(o: { db?: Db; settings?: Record<string, string>; idleSeconds?: number; hibernated?: Set<string>; admission?: SessionAdmission; cost?: Set<string>; concurrency?: (kind: string) => number | null } = {}) {
   const db = o.db ?? memDb();
   const settings: Record<string, string> = { bgWindow: "idle", bgYield: "interrupt", ...o.settings };
   const idle = fakeIdleSignal({ idleSeconds: o.idleSeconds ?? 0 });
@@ -24,7 +24,7 @@ function setup(o: { db?: Db; settings?: Record<string, string>; idleSeconds?: nu
   const repo = new BackgroundRepo(db);
   const queue = new BackgroundQueue({
     repo, scheduler, now: () => now, isHibernated: (id) => o.hibernated?.has(id) ?? false,
-    admission: () => o.admission ?? null, setTimer: () => 1, clearTimer: () => undefined,
+    admission: () => o.admission ?? null, setTimer: () => 1, clearTimer: () => undefined, concurrency: o.concurrency,
   });
   return { db, repo, queue, scheduler, idle, settings, cost };
 }
@@ -331,5 +331,95 @@ describe("background queue", () => {
     expect(t.queue.cancel(a)).toBe(true);
     expect(t.repo.get(a)?.state).toBe("cancelled");
     expect(t.queue.enqueue("backtest", {}, { dedupeKey: "pr-1" })).not.toBe(a);
+  });
+
+  describe("concurrency setting and lock keys (BTL-271)", () => {
+    /** 一直跑到 release 的任务：记下谁在跑。 */
+    function holder() {
+      const live = new Set<number>();
+      const releases = new Map<number, () => void>();
+      const handler: BgHandler = (ctx) =>
+        new Promise((resolve) => {
+          live.add(ctx.id);
+          releases.set(ctx.id, () => {
+            live.delete(ctx.id);
+            resolve({ done: true });
+          });
+        });
+      return { live, releases, handler };
+    }
+
+    it("runs as many pre-reviews at once as the setting says", async () => {
+      let n = 2;
+      const t = setup({ concurrency: (k) => (k === "pre_review" ? n : null) });
+      const h = holder();
+      t.queue.register("pre_review", h.handler);
+      t.queue.start();
+      const ids = [1, 2, 3].map((i) => t.queue.enqueue("pre_review", { i }));
+      await flush();
+      expect([...h.live]).toEqual([ids[0], ids[1]]);
+      n = 3;
+      t.queue.pump();
+      await flush();
+      expect(h.live.size).toBe(3);
+    });
+
+    it("falls back to the kind's default when the setting is missing or bad", () => {
+      const t = setup({ concurrency: () => 0 });
+      expect(t.queue.concurrencyOf("pre_review")).toBe(1);
+      const u = setup({ concurrency: () => null });
+      expect(u.queue.concurrencyOf("lesson_analyze")).toBe(2);
+    });
+
+    it("never runs two jobs with the same lock key at once, and skips past a held key", async () => {
+      const t = setup({ concurrency: () => 2 });
+      const h = holder();
+      t.queue.register("pre_review", h.handler, { lockKey: (j) => (j.payload as { cwd: string | null }).cwd });
+      t.queue.start();
+      const a1 = t.queue.enqueue("pre_review", { cwd: "/w/a" });
+      const a2 = t.queue.enqueue("pre_review", { cwd: "/w/a" });
+      const b = t.queue.enqueue("pre_review", { cwd: "/w/b" });
+      await flush();
+      // a2 和 a1 同一个 worktree：等着；后面 b 的不同目录照样跑。
+      expect([...h.live].sort()).toEqual([a1, b].sort());
+      expect(t.repo.get(a2)?.state).toBe("queued");
+      expect(t.queue.locksOf("pre_review")).toEqual(new Map([[a1, "/w/a"], [b, "/w/b"]]));
+      h.releases.get(a1)!();
+      await flush();
+      await flush();
+      expect(h.live.has(a2)).toBe(true);
+    });
+
+    it("runs jobs without a lock key side by side", async () => {
+      const t = setup({ concurrency: () => 2 });
+      const h = holder();
+      t.queue.register("pre_review", h.handler, { lockKey: () => null });
+      t.queue.start();
+      t.queue.enqueue("pre_review", {});
+      t.queue.enqueue("pre_review", {});
+      await flush();
+      expect(h.live.size).toBe(2);
+    });
+
+    it("moves a queued job to the front of take order", async () => {
+      const t = setup();
+      const h = holder();
+      t.queue.register("pre_review", h.handler);
+      t.queue.start();
+      const first = t.queue.enqueue("pre_review", {});
+      const a = t.queue.enqueue("pre_review", {});
+      const b = t.queue.enqueue("pre_review", {});
+      await flush();
+      expect(t.repo.queued("pre_review").map((j) => j.id)).toEqual([a, b]);
+      expect(t.queue.moveToFront(b)).toBe(true);
+      expect(t.repo.queued("pre_review").map((j) => j.id)).toEqual([b, a]);
+      // 在跑的不能提前
+      expect(t.queue.moveToFront(first)).toBe(false);
+      h.releases.get(first)!();
+      await flush();
+      await flush();
+      expect(h.live.has(b)).toBe(true);
+      expect(t.repo.get(b)?.startedAt).toBe(1_000_000);
+    });
   });
 });

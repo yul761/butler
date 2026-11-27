@@ -284,10 +284,32 @@ describe("parseControlRequest for the Shipherd 总控 (BTL-190 5)", () => {
       { ...base, op: "metrics_overview", days: 0 }, { ...base, op: "metrics_overview", days: 366 }, { ...base, op: "metrics_overview", days: 2.5 }, { ...base, op: "metrics_overview", days: "7" },
       { v: 1, shipherd: "yes", op: "list_epics" }, { v: 1, shipherd: false, op: "list_epics" },
       { ...base, epicId: 3, op: "list_epics" }, { ...base, featureId: 3, op: "list_epics" }, { ...base, ticketKey: "P-1", op: "list_epics" },
-      { v: 1, featureId: 3, op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },
+      { v: 1, ticketKey: "P-1", op: "list_prs" }, { v: 1, ticketKey: "P-1", op: "send_message", session: "s", text: "t" },
     ]) {
       expect(parseControlRequest(bad), JSON.stringify(bad).slice(0, 80)).toBeNull();
     }
+  });
+});
+
+describe("parseControlRequest for the pre-review tools (BTL-271)", () => {
+  it("accepts pre_review_status / run with exactly one of ticket and pr, and pre_review_queue with at most one action, at both levels", () => {
+    for (const base of [{ v: 1, featureId: 2 }, { v: 1, shipherd: true }] as const) {
+      expect(parseControlRequest({ ...base, op: "pre_review_status", ticket: "P-1" })).toEqual({ ...base, from: null, op: "pre_review_status", ticket: "P-1" });
+      expect(parseControlRequest({ ...base, op: "pre_review_run", pr: 12 })).toEqual({ ...base, from: null, op: "pre_review_run", pr: "12" });
+      expect(parseControlRequest({ ...base, op: "pre_review_run", pr: "https://github.com/o/r/pull/3" })).toEqual({ ...base, from: null, op: "pre_review_run", pr: "https://github.com/o/r/pull/3" });
+      expect(parseControlRequest({ ...base, op: "pre_review_queue" })).toEqual({ ...base, from: null, op: "pre_review_queue" });
+      expect(parseControlRequest({ ...base, op: "pre_review_queue", cancel: 4 })).toEqual({ ...base, from: null, op: "pre_review_queue", cancel: 4 });
+      expect(parseControlRequest({ ...base, op: "pre_review_queue", front: 5 })).toEqual({ ...base, from: null, op: "pre_review_queue", front: 5 });
+      for (const bad of [
+        { op: "pre_review_status" }, { op: "pre_review_status", ticket: "P-1", pr: "3" }, { op: "pre_review_status", ticket: " " }, { op: "pre_review_run", pr: -1 },
+        { op: "pre_review_run", pr: 2.5 }, { op: "pre_review_queue", cancel: 1, front: 2 }, { op: "pre_review_queue", cancel: 0 }, { op: "pre_review_queue", front: "3" },
+      ]) expect(parseControlRequest({ ...base, ...bad }), JSON.stringify(bad)).toBeNull();
+    }
+    // epic 总控也有 list_prs、pr_assessment；ticket session 没有。
+    expect(parseControlRequest({ v: 1, featureId: 2, op: "list_prs" })).toEqual({ v: 1, featureId: 2, from: null, op: "list_prs" });
+    expect(parseControlRequest({ v: 1, featureId: 2, op: "pr_assessment", pr: "7" })).toEqual({ v: 1, featureId: 2, from: null, op: "pr_assessment", pr: "7" });
+    expect(parseControlRequest({ v: 1, featureId: 2, op: "pr_assessment" })).toBeNull();
+    expect(parseControlRequest({ v: 1, ticketKey: "P-1", op: "pre_review_status", ticket: "P-1" })).toBeNull();
   });
 });
 

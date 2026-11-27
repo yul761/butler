@@ -24,6 +24,7 @@ import type { SettingsSection } from "../../shared/settings-layout";
 import type { Turn } from "../../shared/turn";
 import { createLiveStore, LiveStoreContext, selectAllTickets } from "./live-store";
 import { LiveAllWorkPage, LiveFeatureRoute, LiveHomePage, LiveNewTicketDialog, LiveSidebar, LiveTicketRoute, LiveUnclaimedPage } from "./components/live-pages";
+import { PreReviewQueuePage } from "./components/PreReviewQueuePage";
 
 export type Route =
   | { page: "home" }
@@ -45,6 +46,8 @@ export type Route =
   /** section：要看的那个 tab 或高级里的分组（首页的提醒跳来时用 health / routing）。 */
   | { page: "settings"; section?: SettingsSection; /** 每次从菜单打开都换一个：已经在设置页别的 tab 上也切过去。 */ nonce?: number }
   | { page: "audit" }
+  /** 预审队列（BTL-271）：侧栏的「预审 1 个进行中 · 2 个排队」点进来。 */
+  | { page: "prereview" }
   /** tab：从「现在」页的检查升降级提醒跳来时直接打开检查标签。 */
   | { page: "lessons"; tab?: "checks" };
 
@@ -256,6 +259,7 @@ export function App() {
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} />}
             {route.page === "settings" && <SettingsPage section={route.section} nonce={route.nonce} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
             {route.page === "audit" && <AuditPage />}
+            {route.page === "prereview" && <PreReviewQueuePage onOpenTicket={(key) => openTicket(key)} onOpenSettings={() => go({ page: "settings", section: "review", nonce: Date.now() })} />}
             {route.page === "lessons" && <LessonsPage tab={route.tab} onOpenSession={(id) => setRoute({ page: "shipherd", focusSession: id })} />}
           </>
         )}

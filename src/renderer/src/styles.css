@@ -153,6 +153,17 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .pill.changes { background: var(--pill-changes-bg); color: var(--pill-changes); }
 .pill.pending { background: var(--pill-pending-bg); color: var(--pill-pending); }
 .pill.none { background: rgba(128, 128, 128, 0.15); color: var(--muted); }
+/* 预审徽标（BTL-271）：用已有的几组底色和字色。 */
+.all-work-table .pill.prq, .home-run .pill.prq { margin: 0 6px; }
+.prq-list { margin: 4px 0 12px; padding-left: 20px; }
+.prq-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; }
+.prq-row .actions { margin-left: auto; display: flex; gap: 6px; }
+.sidebar .nav.prq-nav { font-size: 12px; }
+.pill.prq-muted { background: rgba(128, 128, 128, 0.15); color: var(--muted); }
+.pill.prq-info { background: var(--pill-merged-bg); color: var(--pill-merged); }
+.pill.prq-warn { background: var(--pill-pending-bg); color: var(--pill-pending); }
+.pill.prq-good { background: var(--pill-approved-bg); color: var(--pill-approved); }
+.pill.prq-bad { background: var(--pill-changes-bg); color: var(--pill-changes); }
 .sub-repos { display: flex; flex-wrap: wrap; gap: 8px; }
 .feature-link { margin: -4px 0 6px; }
 button.link { border: none; background: transparent; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; }

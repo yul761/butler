@@ -9,6 +9,7 @@ import { turnSentence } from "../turn-text";
 import { turnTone } from "../turn-tone";
 import { TurnCard, type TurnCardProps } from "./TurnCard";
 import type { TurnBoardState } from "./useTurnBoard";
+import { TicketPreReviewChip } from "./PreReviewChip";
 
 export function WhoTag({ turn }: { turn: Turn }) {
   return <span className={`who turn-tag turn-${turnTone(turn)}`}>{whoLabel(turn, S)}</span>;
@@ -27,7 +28,8 @@ export const RunRow = memo(function RunRow({ row, onOpenTicket }: { row: Running
     <button className="home-run" disabled={row.ticketKey === null} onClick={() => row.ticketKey !== null && onOpenTicket(row.ticketKey)}>
       <span className="key">{row.ticketKey ?? ""}</span>
       <span className={`turn-tag turn-${row.owner}`}>{row.who}</span>
-      <span className="sentence">{row.sentence}</span>
+      {/* 预审徽标放在那句话前面（一行是四格的网格；话长了被截掉的是话，不是徽标）：「等 CI」和「预审中」分得开。 */}
+      <span className="sentence">{row.ticketKey !== null && <TicketPreReviewChip ticketKey={row.ticketKey} hideNone />}{row.sentence}</span>
       <span className="age muted">{row.age}</span>
     </button>
   );
@@ -114,19 +116,20 @@ export function ScopeTicketTable(p: {
   return (
     <table className="ticket-table">
       <thead>
-        <tr><th>{S.lay.colTicket}</th><th>{S.lay.colWho}</th><th>{S.lay.colNow}</th><th>{S.lay.colPr}</th></tr>
+        <tr><th>{S.lay.colTicket}</th><th>{S.lay.colWho}</th><th>{S.lay.colNow}</th><th>{S.prq.col}</th><th>{S.lay.colPr}</th></tr>
       </thead>
       <tbody>
         {p.groups.map((g, n) => (
           <Fragment key={g.name ?? n}>
-            {g.name !== null && <tr className="group-row"><th colSpan={4}>{S.lay.groupHeader(g.name, g.merged, g.total)}</th></tr>}
-            {g.rows.length === 0 && <tr><td colSpan={4} className="muted">{S.lay.noTicketsInGroup}</td></tr>}
+            {g.name !== null && <tr className="group-row"><th colSpan={5}>{S.lay.groupHeader(g.name, g.merged, g.total)}</th></tr>}
+            {g.rows.length === 0 && <tr><td colSpan={5} className="muted">{S.lay.noTicketsInGroup}</td></tr>}
             {g.rows.map((r) => (
               // 点这一行哪儿都去 ticket 页；ticket 号是按钮，键盘 Tab 到它按回车也行（点击冒泡到这一行）。
               <tr key={r.key} onClick={() => p.onOpenTicket(r.key)}>
                 <td><button type="button" className="key">{r.key}</button>{r.title && <span className="muted"> {r.title}</span>}</td>
                 <td><WhoTag turn={r.turn} /></td>
                 <td>{turnSentence(r.turn, r.item, S)}{r.others > 0 && <span className="muted"> · {S.lay.morePrs(r.others)}</span>}</td>
+                <td><TicketPreReviewChip ticketKey={r.key} /></td>
                 <td>{r.prs.length === 0 ? "—" : r.prs.map((x) => x.tag).join(" ")}</td>
               </tr>
             ))}

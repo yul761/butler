@@ -207,7 +207,8 @@ import {
 } from "./settings/settings-values";
 import { evidenceGuideLines, type GuideRepo } from "./prereview/guide-lines";
 import { PreReviewService } from "./prereview/service";
-import { makePreReviewHandler } from "./prereview/runner";
+import { makePreReviewHandler, type PreReviewPayload } from "./prereview/runner";
+import { PreReviewStatusService, preReviewLockKey } from "./prereview/status";
 import { defaultBase, fromCompare, prDiff } from "./prereview/diff";
 import { relevantLessons } from "./prereview/lessons";
 import type { ExecRun } from "./prereview/model";
@@ -220,7 +221,7 @@ import { BriefService } from "./assess/brief-service";
 import { setStackBriefProvider, stackBriefProvider } from "./assess/stack-brief";
 import { ReviewEffectCollector } from "./review-effect/collector";
 import { reviewEffect } from "./review-effect/stats";
-import type { DiffFile, ReviewTarget } from "../shared/prereview";
+import { readPreReviewConcurrency, type DiffFile, type ReviewTarget } from "../shared/prereview";
 import type { RepoProfile } from "../shared/baselines";
 import type { CheckHitView } from "../shared/checks";
 import type { TicketPr } from "./db/ticket-prs-repo";
@@ -1010,7 +1011,11 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     logger("background: pruning finished jobs failed", e);
   }
-  const bgQueue = new BackgroundQueue({ repo: bgRepo, scheduler: bgScheduler, now: Date.now, isHibernated, admission: () => memoryAdmission, onChange: () => notify(), log: logger });
+  const bgQueue = new BackgroundQueue({
+    repo: bgRepo, scheduler: bgScheduler, now: Date.now, isHibernated, admission: () => memoryAdmission, onChange: () => notify(), log: logger,
+    // BTL-271：预审的并发数是设置（默认 2）；别的种类用 BACKGROUND_KINDS 里的。
+    concurrency: (kind) => (kind === "pre_review" ? readPreReviewConcurrency(settings.get("preReviewConcurrency")) : null),
+  });
   /** 复盘的闸门：没配置路由时就是账号级的可用状态；配置了只在 lesson_analyze 哪个模型都用不了时停。 */
   const lessonsGate = new RoutedLessonsGate({ availability, routing, now: Date.now });
   // 复盘规矩：合并的 PR 排队，用用户自己的 claude 分析（最多 2 个同时）。
@@ -2585,9 +2590,23 @@ async function bootstrap(): Promise<void> {
   /** 这份代码（仓库 + 分支）开着的 PR：交证据、预审取 diff 时用。 */
   const openPrFor = (ticketKey: string | null, target: ReviewTarget): TicketPr | null =>
     (ticketKey ? ticketPrs.byTicket(ticketKey) : ticketPrs.all()).find((p) => p.state === "open" && p.slug === target.repoSlug && p.headBranch === target.branch) ?? null;
+  // BTL-271：每个 ticket、PR、session 的预审状态和预审队列（徽标、队列页、总控工具；契约 [contract:prereview-status]）。
+  const preReviewStatus = new PreReviewStatusService({
+    repo: preReviewRepo,
+    jobs: { queued: () => bgRepo.queued("pre_review"), running: () => bgRepo.runningOf("pre_review") },
+    gate: (ticketKey) => bgScheduler.gate("pre_review", ticketKey ? { ticketKey } : undefined),
+    concurrency: () => bgQueue.concurrencyOf("pre_review"),
+    heldLocks: () => bgQueue.locksOf("pre_review").values(),
+    pr: (id) => {
+      const pr = ticketPrs.get(id);
+      return pr ? { number: pr.number, url: pr.url } : null;
+    },
+    now: Date.now,
+  });
   const preReview = new PreReviewService({
     repo: preReviewRepo,
     queue: bgQueue,
+    placeOf: (id) => preReviewStatus.placeOf(id),
     enabled: preReviewActive,
     place: (id) => {
       const s = sessions.get(id);
@@ -2695,9 +2714,16 @@ async function bootstrap(): Promise<void> {
     deliver: async (row) => {
       await preReview.deliver(row);
     },
+    changed: () => notify(),
     now: Date.now,
     log: logger,
-  }));
+  }), {
+    // 同一个 worktree 的预审一个接一个（复跑命令、查 HEAD 会互相干扰）；不同 worktree 的按并发数同时跑。
+    lockKey: (job) => {
+      const id = Number((job.payload as PreReviewPayload | null)?.preReviewId);
+      return preReviewLockKey(Number.isFinite(id) ? (preReviewRepo.get(id)?.cwd ?? null) : null);
+    },
+  });
   const reviewCollector = new ReviewEffectCollector({
     db,
     repo: reviewEffectRepo,
@@ -3443,6 +3469,8 @@ async function bootstrap(): Promise<void> {
     if (key === "checksEnabled" || key === "checksEditTimeoutSec" || key === "checksPushTimeoutSec" || key === "ticketPattern") checkSnapshots.schedule();
     // 后台调度的设置（工作流 L）：马上按新的时段、空闲、额度重算，该让路的让路。提醒线跟着路由阈值。
     if (key.startsWith("bg")) bgScheduler.tick();
+    // 预审并发数调大了：马上多取几个。
+    if (key === "preReviewConcurrency") bgQueue.pump();
     if (key === "routingThresholds" || key === "routingQuotas") costCheckSoon();
     // 打断减少的开关第一次打开：Effect 页前后对比从这里分界（ws-j）。
     if ((key === "interruptChoiceRule" || key === "interruptChoiceDefaults" || key === "interruptSelfServe") && settings.get(key) === "1") markInterruptEffective(Date.now());
@@ -3638,6 +3666,14 @@ async function bootstrap(): Promise<void> {
       policySet: (scope, overrides) => prPolicies.setLayer(scope, overrides),
       effect: (days) => reviewEffect(db, effectDays(days), Date.now()),
       queue: () => assessment.queue(),
+      preReviewStatus: (req) => ({
+        tickets: Object.fromEntries(preReviewStatus.forTickets(req.tickets ?? [])),
+        sessions: Object.fromEntries(preReviewStatus.forSessions(req.sessions ?? [])),
+        prs: Object.fromEntries(preReviewStatus.forPrs(req.prs ?? [])),
+      }),
+      preReviewQueue: () => preReviewStatus.queue(),
+      // 和总控的 pre_review_queue 同一个入口（PreReviewService.cancel / moveToFront）。
+      preReviewQueueAct: (a) => (a.op === "cancel" ? preReview.cancel(a.id) : preReview.moveToFront(a.id)),
     },
     checks: {
       act: (a) => checksService.act(a),
@@ -3839,6 +3875,15 @@ async function bootstrap(): Promise<void> {
 
 
   // 总控 session 开子 session 的请求（设计文档 2026-10-23 第二步）。
+  /** ticket_prs 的 id 或 PR 链接 → PR（同一个链接可能挂在几个 ticket 上）。 */
+  const prsByRef = (ref: string): TicketPr[] => {
+    const r = ref.trim();
+    if (/^\d+$/.test(r)) {
+      const pr = ticketPrs.get(Number(r));
+      return pr ? [pr] : [];
+    }
+    return ticketPrs.byUrl(r);
+  };
   const controlInbox = new ControlInbox({
     requestsDir: paths.controlRequests,
     resultsDir: paths.controlResults,
@@ -3870,9 +3915,9 @@ async function bootstrap(): Promise<void> {
         },
         assessment: {
           summaries: (ids) => assessRepo.summaries(ids),
-          view: (ref) => {
-            const id = /^\d+$/.test(ref.trim()) ? Number(ref.trim()) : null;
-            const pr = id !== null ? ticketPrs.get(id) : (ticketPrs.byUrl(ref.trim())[0] ?? null);
+          // epic 总控（keep）只认自己 epic 的 PR：同一个链接挂在几个 ticket 上时挑它自己的那个（BTL-271）。
+          view: (ref, keep) => {
+            const pr = prsByRef(ref).find((p) => !keep || keep(p.ticketKey)) ?? null;
             return pr ? assessment.view(pr) : null;
           },
         },
@@ -3886,6 +3931,25 @@ async function bootstrap(): Promise<void> {
         lessonsRepo, repoIdentity, t.repos.map((r) => r.repoPath),
         dripRoots(repoIdentity, t.repos.flatMap((r) => [ticketService.workDir(r), r.repoPath])), q, guideLessonOptions(),
       ),
+      // BTL-271：两级总控的 pre_review_status / pre_review_run / pre_review_queue 和列表里的 preReview。
+      preReviewOps: {
+        status: preReviewStatus,
+        view: (id) => {
+          const row = preReviewRepo.get(id);
+          return row ? preReview.view(row) : null;
+        },
+        findPrs: prsByRef,
+        prsOf: (key) => ticketPrs.byTicket(key),
+        // 和 ticket 页的「重新预审」（IPC review:run）同一个入口：排队、通知都在 manual 和队列里。
+        manual: (pr) => preReview.manual(pr),
+        rerun: (id) => preReview.rerun(id),
+        cancel: (id) => preReview.cancel(id),
+        moveToFront: (id) => preReview.moveToFront(id),
+        ticketOf: (id) => {
+          const row = preReviewRepo.get(id);
+          return row ? row.ticketKey : undefined;
+        },
+      },
       // 和界面上点 × 一样（IPC pty:kill）：只关终端，session 留在列表里。不记成用户结束（BTL-256）。
       kill: (termId) => pty.kill(termId),
       // 后台恢复（BTL-256）：信箱已经调过同一个请求，这里拿到同一个结果；熔断压着的不恢复。

@@ -386,7 +386,12 @@ function headless() {
     const reply = (tag, out) => process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: `${tag}-${Date.now()}`, result: JSON.stringify(out), structured_output: out, permission_denials: [], total_cost_usd: 0 })}\n`);
     if (props.violations) {
       log(`pre-review files=${(input.match(/^- \S+ \(\+\d+ -\d+\)$/gm) || []).length}`);
-      reply("prereview", { violations: [], summary: "Fake pre-review: no rule is broken." });
+      // FAKE_CLAUDE_PREREVIEW_GATE 那个文件在时先不回答（e2e 看「预审中」、侧栏指示和队列页，删掉文件再放行）。
+      const gate = process.env.FAKE_CLAUDE_PREREVIEW_GATE;
+      const held = () => gate !== undefined && fs.existsSync(gate);
+      const answer = () => (held() ? setTimeout(answer, 50) : reply("prereview", { violations: [], summary: "Fake pre-review: no rule is broken." }));
+      if (held()) log("pre-review held");
+      answer();
       return;
     }
     if (props.items && !props.summary) {

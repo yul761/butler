@@ -1,7 +1,7 @@
 import type { DevSendBlock, ForkRefusal } from "../../shared/fork";
 import type { BacktestSkipReason, CheckLifecycleReason, PromotionBlocker } from "../../shared/backtest";
 import type { PrPolicyGroup, PrPolicyKey } from "../../shared/pr-policy";
-import type { ConditionState, EvidenceKind, EvidenceVerified, PreReviewStatus, PreReviewTrigger, PreReviewVerdict, ReadinessKey, RiskLevel, RiskRule } from "../../shared/prereview";
+import type { ConditionState, EvidenceKind, EvidenceVerified, PreReviewPauseReason, PreReviewStatus, PreReviewTrigger, PreReviewVerdict, PreReviewWaiting, ReadinessKey, RiskLevel, RiskRule } from "../../shared/prereview";
 import type { LoopKeyView, LoopPolicyGroup, LoopPolicyKey } from "../../shared/loop-policy";
 import type { CommentCategory, CommentSource, CommentState, CommentVerified, CommentWho, FlakyKind } from "../../shared/loop";
 import type { AvailabilityView } from "../../shared/availability";
@@ -2492,6 +2492,45 @@ const ZH = {
   /** 终端里点的链接（BTL-257）。 */
   terminalLink: {
     refused: (url: string) => `这个链接不能打开（只开 http / https，链接里不能带用户名或密码）：${url}`,
+  },
+  /** 预审看得见（BTL-271）：徽标、预审队列页、侧栏的指示。 */
+  prq: {
+    col: "预审",
+    none: "未预审",
+    queued: (n: number | null) => (n ? `预审排队 #${n}` : "预审排队"),
+    paused: (reason: string) => `预审暂停 · ${reason}`,
+    running: (min: number) => (min < 1 ? "预审中" : `预审中 ${min} 分钟`),
+    clean: "预审通过",
+    violations: (n: number) => `预审违规 ${n} 条`,
+    error: "预审出错",
+    reason: { manual: "手动暂停", cost: "花费熔断", quota: "额度用完", memory: "内存不够", user_active: "你在用电脑", outside_hours: "不在工作时间" } as Record<PreReviewPauseReason, string>,
+    waiting: { concurrency: "前面的占满了并发", worktree: "同一个 worktree 的上一次还在跑" } as Record<PreReviewWaiting, string>,
+    trigger: { evidence: "交证据", pr: "开 PR", manual: "手动" } as Record<PreReviewTrigger, string>,
+    last: (what: string) => `上一次：${what}`,
+    until: (t: string) => `停到 ${t}`,
+    code: (repo: string, branch: string, sha: string) => `${repo} · ${branch} · ${sha}`,
+    sidebar: (running: number, queued: number) => [running > 0 ? `${running} 个进行中` : "", queued > 0 ? `${queued} 个排队` : ""].filter(Boolean).join(" · "),
+    sidebarLabel: "预审",
+    sidebarStopped: (reason: string) => `停着：${reason}`,
+    title: "预审队列",
+    intro: "正在预审的、排着队的，和队列为什么停着。排队的可以提到最前，也可以取消；取消以后要再预审，到 ticket 页点「重新预审」。",
+    runningTitle: "正在预审",
+    queuedTitle: "排队中",
+    empty: "现在没有预审在跑，也没有在排队的。",
+    noneQueued: "没有排队的。",
+    stopped: (reason: string) => `队列停着：${reason}。排着的不会开跑，等它恢复。`,
+    stoppedUntil: (reason: string, t: string) => `队列停着：${reason}，到 ${t}。排着的不会开跑。`,
+    concurrency: (n: number) => `同时最多预审 ${n} 个`,
+    changeConcurrency: "改并发数",
+    started: (t: string) => `${t} 开始`,
+    enqueued: (t: string) => `${t} 排上`,
+    cancel: "取消",
+    front: "提到最前",
+    cancelled: "取消了。",
+    fronted: "提到最前了。",
+    actFailed: { not_found: "找不到这次预审了，可能刚做完。", not_queued: "它已经不在排队了。", failed: "没做成，再试一次。" } as Record<"not_found" | "not_queued" | "failed", string>,
+    concurrencyLabel: "同时最多预审几个",
+    concurrencyHint: "默认 2 个。同一个 worktree 一次只跑一个，不会互相干扰。",
   },
 };
 

@@ -6,6 +6,7 @@ import { isAutomationLevel } from "../../shared/automation";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SETTING_DEFAULTS, type SettingsRepo } from "../db/settings-repo";
 import { M } from "../strings";
+import { PRE_REVIEW_CONCURRENCY } from "../../shared/prereview";
 import { NOTIFY_EVENTS, NOTIFY_FORMATS } from "../../shared/interrupts";
 import { INTAKE_SOURCES } from "../../shared/intake";
 import { isAbsolutePath, parseRepoMap } from "../intake/repo-map";
@@ -304,6 +305,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "hibernateIdleMinutes": {
       const t = value.trim();
       if (!HIBERNATE_MINUTES_RE.test(t) || (Number(t) !== 0 && Number(t) < MIN_HIBERNATE_MINUTES)) throw new SettingError(M().hibernateMinutes);
+      return String(Number(t));
+    }
+    case "preReviewConcurrency": {
+      const t = value.trim();
+      if (!/^\d{1,2}$/.test(t) || Number(t) < PRE_REVIEW_CONCURRENCY.min || Number(t) > PRE_REVIEW_CONCURRENCY.max) throw new SettingError(M().preReviewConcurrency);
       return String(Number(t));
     }
     case "memoryPressureFreePercent": {

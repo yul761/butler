@@ -12,11 +12,12 @@ import { M } from "../strings";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SessionModelChoice } from "../routing/routing-service";
 import type { TicketsRepo } from "../db/tickets-repo";
-import type { PreReviewView } from "../../shared/prereview";
+import { noPreReview, type PreReviewView } from "../../shared/prereview";
 import { resultForSession } from "../prereview/delivery";
 import { admitOrRefuse, type AdmissionGate } from "./admission";
 import type { StackControl } from "./stack-control";
-import { shipherdControl, type ShipherdControlDeps } from "./shipherd-control";
+import { ownersOf, prRows, shipherdControl, type ShipherdControlDeps } from "./shipherd-control";
+import { preReviewControl, preReviewField, ticketPreReviewField, type PreReviewOps } from "./prereview-control";
 import type { InboxService } from "../inbox/inbox-service";
 import type { DeliverResult } from "../sessions/pty-manager";
 import type { SessionService } from "../sessions/session-service";
@@ -76,6 +77,8 @@ export interface ControlHandlerDeps {
   };
   /** lessons 工具（BTL-274）：这个 ticket 的仓库的规矩全文。不给就拒绝。 */
   lessons?: (t: Ticket, q: { paths?: string[]; query?: string; cwd?: string }) => unknown;
+  /** 总控的预审工具和 list_tickets / list_sessions 的 preReview（BTL-271）；不给就没有。 */
+  preReviewOps?: PreReviewOps;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   /**
@@ -268,10 +271,13 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   /** 一个 feature 的 session：feature 级的（总控、修复）和它每个 ticket 的。修复 session 的 fixes 沿链走到现在的 id，和列表里的 id 对得上。 */
   const featureSessionRows = (f: Feature, own: Ticket[]) => {
     const fixes = (s: Session) => (s.fixesSession ? (d.sessions.head(s.fixesSession)?.id ?? s.fixesSession) : null);
-    return [
+    const rows = [
       ...visible(d.sessions.listByFeature(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null, fixes: fixes(s) })),
       ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s), ticket: t.key, fixes: null }))),
     ];
+    // BTL-271：「等 CI」和「预审中」分开：每个 session 最近一次预审。
+    const pre = d.preReviewOps?.status.forSessions(rows.map((r) => r.id)) ?? null;
+    return pre ? rows.map((r) => ({ ...r, preReview: pre.has(r.id) ? preReviewField(pre.get(r.id)!) : null })) : rows;
   };
 
   /**
@@ -434,10 +440,34 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "list_tickets") {
       const blockName = new Map((d.blocks?.list(f.id) ?? []).map((b) => [b.id, b.name]));
+      // BTL-271：每个 ticket 的预审状态，一次查完。
+      const pre = d.preReviewOps?.status.forTickets(own.map((t) => t.key)) ?? null;
       return ok(own.map((t) => ({
         key: t.key, title: t.title, status: effectiveStatus(t), feature: (t.blockId != null && blockName.get(t.blockId)) || null,
         repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
+        ...(pre && { preReview: ticketPreReviewField(pre.get(t.key) ?? { overall: noPreReview(t.key), items: [] }) }),
       })));
+    }
+
+    if (req.op === "pre_review_status" || req.op === "pre_review_run" || req.op === "pre_review_queue") {
+      // 只看、只动这个 epic 的；重跑、取消、插队要是这个 epic 开着的总控自己发的。
+      const keys = new Set(own.map((t) => t.key));
+      const h = req.from ? d.sessions.head(req.from) : null;
+      const canAct = !!h && h.featureId === f.id && h.coordinator && h.ticketKey === null && !!d.sessionService.termIdOf(h.id);
+      return preReviewControl(d.preReviewOps, { owns: (key) => key !== null && keys.has(key), known: (key) => !!d.tickets.get(key), canAct }, req);
+    }
+
+    // BTL-271：epic 总控也看得到自己 epic 的 PR 和一个 PR 的评估（和 Shipherd 总控同一份数据）。
+    if (req.op === "list_prs") {
+      if (!d.shipherd) return fail(M().ctlPreReviewUnavailable);
+      const keys = new Set(own.map((t) => t.key));
+      return ok(prRows(d, d.shipherd, ownersOf(d), (key) => keys.has(key)));
+    }
+    if (req.op === "pr_assessment") {
+      const a = d.shipherd?.assessment;
+      if (!a) return fail(M().ctlPreReviewUnavailable);
+      const v = a.view(req.pr, (key) => own.some((t) => t.key === key));
+      return v ? ok(v) : fail(M().ctlNoSuchPr(req.pr));
     }
 
     if (req.op === "list_repos") {

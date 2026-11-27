@@ -200,6 +200,10 @@ export const IPC = {
   prPolicySet: "review:policy:set",
   reviewEffect: "review:effect",
   reviewQueue: "review:queue",
+  /** 预审看得见（BTL-271）：一批 ticket / session / PR 的预审徽标、整个预审队列、队列上的取消和插队。 */
+  preReviewStatus: "prereview:status",
+  preReviewQueue: "prereview:queue",
+  preReviewQueueAct: "prereview:queueAct",
   /** 栈式 PR（工作流 K）。 */
   stacksList: "stacks:list",
   stacksRebase: "stacks:rebase",
@@ -279,6 +283,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.stacksList, IPC.stacksRebase, IPC.stacksLayerMode, IPC.stacksRestore, IPC.stacksRemove, IPC.stacksPolicyGet, IPC.stacksPolicySet, IPC.stacksPolicyLayers,
   IPC.intakeView, IPC.intakeEffect, IPC.intakePolicyGet, IPC.intakePolicySet, IPC.intakeClassify, IPC.intakePoll, IPC.intakeAct,
   IPC.prAssessment, IPC.preReviewRun, IPC.briefRegenerate, IPC.briefPost, IPC.prPolicyGet, IPC.prPolicySet, IPC.reviewEffect, IPC.reviewQueue,
+  IPC.preReviewStatus, IPC.preReviewQueue, IPC.preReviewQueueAct,
   IPC.memoryView, IPC.memoryWhy, IPC.memUsageHistory, IPC.convList, IPC.convSearch,
   IPC.forkAsk, IPC.forkSendConclusion, IPC.forkReaskFull, IPC.forkList, IPC.forkRemember, IPC.convSend, IPC.inboxReports,
   IPC.appAutostartGet, IPC.appAutostartSet, IPC.appKeepAwakeGet, IPC.appKeepAwakeSet, IPC.appLanguage, IPC.clipboardRead, IPC.clipboardWrite,

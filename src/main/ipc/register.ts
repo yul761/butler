@@ -27,7 +27,9 @@ export interface AdmissionFacade {
 }
 import type { LoopPolicyOverrides, LoopPolicyView, LoopScope } from "../../shared/loop-policy";
 import type { PrPolicyView, PrScope } from "../../shared/pr-policy";
-import type { ReviewActResult, ReviewQueueItem, TicketAssessmentView } from "../../shared/prereview";
+import type {
+  PreReviewQueueAction, PreReviewQueueActResult, PreReviewQueueView, PreReviewStatusBatch, PreReviewStatusRequest, ReviewActResult, ReviewQueueItem, TicketAssessmentView,
+} from "../../shared/prereview";
 import type { ReviewEffectView } from "../../shared/review-effect";
 import type { CommentAction, CommentItemView, FlakyAction, FlakyEntry, LoopEffect, PrCommentsView } from "../../shared/loop";
 import type { ConfigIoStatus, ExportResult, ImportApplyResult, ImportPreviewResult } from "../../shared/config-io";
@@ -87,7 +89,7 @@ import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../sh
 import {
   addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openShipherdArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
-  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg } from "./validate";
+  versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg, preReviewStatusArg, preReviewQueueActionArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
 import { M } from "../strings";
 import type { ClaudeAvailability } from "../claude/availability";
@@ -166,6 +168,10 @@ export interface IpcDeps {
     policySet(scope: PrScope, overrides: Record<string, unknown>): void;
     effect(days: unknown): ReviewEffectView;
     queue(): ReviewQueueItem[];
+    /** 预审看得见（BTL-271）：一批徽标、整个预审队列、取消和插队。 */
+    preReviewStatus(req: PreReviewStatusRequest): PreReviewStatusBatch;
+    preReviewQueue(): PreReviewQueueView;
+    preReviewQueueAct(a: PreReviewQueueAction): PreReviewQueueActResult;
   };
   /** 导入导出（契约 4.3）。 */
   configIo: ConfigIoFacade;
@@ -672,6 +678,14 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.reviewEffect, (raw: unknown): ReviewEffectView => d.review.effect(raw));
   handle(IPC.reviewQueue, (): ReviewQueueItem[] => d.review.queue());
+  handle(IPC.preReviewStatus, (raw: unknown): PreReviewStatusBatch => d.review.preReviewStatus(preReviewStatusArg(raw)));
+  handle(IPC.preReviewQueue, (): PreReviewQueueView => d.review.preReviewQueue());
+  // 和 review:run 一样：动完通知界面（队列的 onChange 也会通知，这里保证改顺序这种不经过队列状态变化的也刷新）。
+  handle(IPC.preReviewQueueAct, (raw: unknown): PreReviewQueueActResult => {
+    const r = d.review.preReviewQueueAct(preReviewQueueActionArg(raw));
+    d.notify();
+    return r;
+  });
   handle(IPC.checksView, (raw: unknown): ChecksView => d.checks.view(checkScopeArg(raw)));
   handle(IPC.checksHits, (raw: unknown): CheckHitView[] => d.checks.hits(checkKeyArg(raw)));
   handle(IPC.checksAct, (raw: unknown): ChecksActResult => {

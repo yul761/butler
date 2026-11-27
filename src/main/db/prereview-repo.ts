@@ -29,6 +29,8 @@ export interface PreReviewRow {
   deliveredAt: number | null;
   deliverTries: number;
   createdAt: number;
+  /** 这一次真正开跑的时间（runner 标 running 那一刻）；在排队、放回队列时为 null。 */
+  startedAt: number | null;
   finishedAt: number | null;
 }
 
@@ -47,7 +49,7 @@ export interface NewPreReview {
 export type PreReviewPatch = Partial<{
   status: PreReviewStatus; jobId: number | null; base: string | null; prId: number | null; files: DiffFile[]; lessonIds: number[];
   checks: CheckSummary | null; violations: Violation[]; summary: string | null; verdict: PreReviewVerdict | null; detail: string | null;
-  model: string | null; deliveredAt: number | null; deliverTries: number; finishedAt: number | null;
+  model: string | null; deliveredAt: number | null; deliverTries: number; startedAt: number | null; finishedAt: number | null;
 }>;
 
 export interface NewEvidence {
@@ -87,7 +89,7 @@ function toReview(r: Row): PreReviewRow {
     jobId: n(r.job_id), files: json<DiffFile[]>(r.files, []), lessonIds: json<number[]>(r.lessons, []),
     checks: "failing" in checks ? (checks as CheckSummary) : null, violations: json<Violation[]>(r.violations, []),
     summary: s(r.summary), verdict: (r.verdict as PreReviewVerdict | null) ?? null, detail: s(r.detail), model: s(r.model), notes: s(r.notes),
-    deliveredAt: n(r.delivered_at), deliverTries: Number(r.deliver_tries ?? 0), createdAt: Number(r.created_at), finishedAt: n(r.finished_at),
+    deliveredAt: n(r.delivered_at), deliverTries: Number(r.deliver_tries ?? 0), createdAt: Number(r.created_at), startedAt: n(r.started_at), finishedAt: n(r.finished_at),
   };
 }
 
@@ -108,7 +110,50 @@ const REVIEW_COLUMNS: Record<keyof PreReviewPatch, [string, (v: never) => unknow
   files: ["files", (v) => JSON.stringify(v)], lessonIds: ["lessons", (v) => JSON.stringify(v)],
   checks: ["checks", (v) => JSON.stringify(v ?? {})], violations: ["violations", (v) => JSON.stringify(v)],
   summary: ["summary", (v) => v], verdict: ["verdict", (v) => v], detail: ["detail", (v) => v], model: ["model", (v) => v],
-  deliveredAt: ["delivered_at", (v) => v], deliverTries: ["deliver_tries", (v) => v], finishedAt: ["finished_at", (v) => v],
+  deliveredAt: ["delivered_at", (v) => v], deliverTries: ["deliver_tries", (v) => v], startedAt: ["started_at", (v) => v], finishedAt: ["finished_at", (v) => v],
+};
+
+/** 状态徽标要的列（不读 files、lessons 这些大的 JSON）。 */
+const BRIEF_COLUMNS = `id, ticket_key, session_id, repo_slug, branch, head_sha, cwd, pr_id, "trigger", status, job_id, violations, checks, verdict, detail, created_at, started_at, finished_at`;
+
+/** 徽标、队列、总控工具用的一行预审（不带 diff 文件、规矩、证据）。 */
+export interface PreReviewBrief {
+  id: number;
+  ticketKey: string | null;
+  sessionId: string | null;
+  target: ReviewTarget;
+  cwd: string | null;
+  prId: number | null;
+  trigger: PreReviewTrigger;
+  status: PreReviewStatus;
+  jobId: number | null;
+  verdict: PreReviewVerdict | null;
+  violations: Violation[];
+  checks: CheckSummary | null;
+  detail: string | null;
+  createdAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
+function toBrief(r: Row): PreReviewBrief {
+  const checks = json<CheckSummary | Record<string, never>>(r.checks, {});
+  return {
+    id: Number(r.id), ticketKey: s(r.ticket_key), sessionId: s(r.session_id),
+    target: { repoSlug: String(r.repo_slug), branch: String(r.branch), headSha: String(r.head_sha) },
+    cwd: s(r.cwd), prId: n(r.pr_id), trigger: r.trigger as PreReviewTrigger, status: r.status as PreReviewStatus, jobId: n(r.job_id),
+    verdict: (r.verdict as PreReviewVerdict | null) ?? null, violations: json<Violation[]>(r.violations, []),
+    checks: "failing" in checks ? (checks as CheckSummary) : null, detail: s(r.detail),
+    createdAt: Number(r.created_at), startedAt: n(r.started_at), finishedAt: n(r.finished_at),
+  };
+}
+
+/** 按什么分组取「最近一次」：ticket 按（ticket, 仓库, 分支）——多仓库的 ticket 每个仓库各算各的；session、PR 按自己。 */
+export type PreReviewGroup = "ticket" | "session" | "pr";
+const GROUP_SQL: Record<PreReviewGroup, { col: string; by: string }> = {
+  ticket: { col: "ticket_key", by: "ticket_key, repo_slug, branch" },
+  session: { col: "session_id", by: "session_id" },
+  pr: { col: "pr_id", by: "pr_id" },
 };
 
 /** 预审和完成证据（工作流 G）。 */
@@ -175,6 +220,45 @@ export class PreReviewRepo {
         )
         .all(ticketKey) as Row[]
     ).map(toReview);
+  }
+
+  /**
+   * 每组最近一次没被作废（skipped：被新的取代、被取消）的预审、每组最近一次做完的（done / failed）、所有还在排队和在跑的。
+   * keys 是 ticket key、session id 或 PR id；一次查完一整张列表。
+   */
+  latestBy(group: PreReviewGroup, keys: readonly (string | number)[]): { latest: PreReviewBrief[]; finished: PreReviewBrief[]; active: PreReviewBrief[] } {
+    if (keys.length === 0) return { latest: [], finished: [], active: [] };
+    const g = GROUP_SQL[group];
+    const arg = JSON.stringify([...new Set(keys)]);
+    const pick = (where: string) =>
+      (
+        this.db
+          .prepare(
+            `SELECT ${BRIEF_COLUMNS} FROM pre_reviews WHERE id IN (
+               SELECT MAX(id) FROM pre_reviews WHERE ${g.col} IN (SELECT value FROM json_each(?)) AND ${where} GROUP BY ${g.by})
+             ORDER BY id DESC`,
+          )
+          .all(arg) as Row[]
+      ).map(toBrief);
+    // 还在排队、在跑的全都要（同一个分支上一个在跑、新的一个在排队：两个都得看得见）。
+    const active = (
+      this.db
+        .prepare(`SELECT ${BRIEF_COLUMNS} FROM pre_reviews WHERE ${g.col} IN (SELECT value FROM json_each(?)) AND status IN ('queued','running') ORDER BY id DESC LIMIT 500`)
+        .all(arg) as Row[]
+    ).map(toBrief);
+    return { latest: pick(`status != 'skipped'`), finished: pick(`status IN ('done','failed')`), active };
+  }
+
+  /** 这些 id 的（队列视图用）。 */
+  briefs(ids: readonly number[]): PreReviewBrief[] {
+    if (ids.length === 0) return [];
+    return (this.db.prepare(`SELECT ${BRIEF_COLUMNS} FROM pre_reviews WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(ids)])) as Row[]).map(toBrief);
+  }
+
+  /** 一个 ticket 或一个 PR 的预审历史，新的在前（总控的 pre_review_status）。被作废的也在里面。 */
+  history(by: { ticketKey: string } | { prId: number }, limit = 20): PreReviewBrief[] {
+    const [col, v] = "prId" in by ? ["pr_id", by.prId] : ["ticket_key", by.ticketKey];
+    return (this.db.prepare(`SELECT ${BRIEF_COLUMNS} FROM pre_reviews WHERE ${col} = ? ORDER BY id DESC LIMIT ?`).all(v, limit) as Row[]).map(toBrief);
   }
 
   latestForSession(sessionId: string): PreReviewRow | null {
