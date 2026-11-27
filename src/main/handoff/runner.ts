@@ -35,6 +35,8 @@ export interface HandoffRunnerDeps extends HeadlessExecDeps {
   transcriptMtime: (sessionId: string) => number | null;
   /** 设置 headlessProjectMcp 打开时调用：这个目录要额外挂的 --mcp-config 文件（计划 3 任务 5）。 */
   projectMcp?: (cwd: string) => string[];
+  /** ticket 链接的 PR（早间刷新挑等决定的 ticket 用）。 */
+  ticketPrs: { byTicket(key: string): { repoId: number | null; headBranch: string | null }[] };
 }
 
 type Exec = { ok: true; value: unknown; rawText: string } | { ok: false; outcome: HandoffOutcome };
@@ -68,11 +70,17 @@ export class HandoffRunner {
   /**
    * 早间快速刷新：只查 in_review / merged_pending_followup / needs_decision 的 PR 和 tracker 状态。
    * 等决定的也查：关掉的 PR 在 GitHub 网页上重开了、另开了一个，早报才不会还说要你决定（BTL-270 审查）。
+   * 但只查 ticket 主分支（ticket 仓库记的分支）上有 PR 的：刷新是一次模型调用，只看主分支；别的分支上的 PR
+   * PR 轮询每半小时读一次（DECIDING_REREAD_MS），不再花一次模型调用（BTL-270 审查，省用量）。
    */
   refreshForBrief(): Promise<BatchResult> {
+    const onMainBranch = (t: Ticket) => this.d.ticketPrs.byTicket(t.key).some((p) => t.repos.some((r) => r.id === p.repoId && r.branch === p.headBranch));
     const keys = this.d.tickets
       .list()
-      .filter((t) => ["in_review", "merged_pending_followup", "needs_decision"].includes(effectiveStatus(t)))
+      .filter((t) => {
+        const s = effectiveStatus(t);
+        return s === "in_review" || s === "merged_pending_followup" || (s === "needs_decision" && onMainBranch(t));
+      })
       .map((t) => t.key);
     return this.batch(keys, (key) => this.refresh(key));
   }

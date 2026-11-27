@@ -40,12 +40,17 @@ export function closeOutcome(r: CloseLeftoversResult): CloseOutcome {
   return { done: false, prErrors: r.prErrors, sessionErrors: r.sessionErrors };
 }
 
+/** 预览里关不了、但再试可能成的（关之前核对 head 失败）：也能勾，关的时候再核对一次（BTL-270 审查）。 */
+export const retryableInPreview = (preview: ClosePreview | null): ClosePrError[] =>
+  (preview?.unclosable ?? []).filter((p) => RETRYABLE_CLOSE_PR_ERRORS.includes(p.kind));
+
 /**
- * 关闭框提交时要关哪些 PR：只关勾了的、而且是这次列出来能关的。一个都没勾就不要求关 PR（BTL-270 审查）：
+ * 关闭框提交时要关哪些 PR：只关勾了的、而且是这次列出来能勾的（能关的，和核对失败、再试可能成的）。一个都没勾就不要求关 PR（BTL-270 审查）：
  * 关不了的那些预览里已经写明了原因，用户看过了，提交后不再当作「没处理完的」列一遍；只是没勾能关的，也不算没处理完。
+ * 勾了的才报：主进程只报点名了的这些（没勾的关不了的不算没处理完）。
  */
 export function closePrsRequest(preview: ClosePreview | null, picked: ReadonlySet<string>): { closePrs: boolean; prUrls: string[] } {
-  const prUrls = (preview?.closable ?? []).map((p) => p.url).filter((u) => picked.has(u));
+  const prUrls = [...(preview?.closable ?? []), ...retryableInPreview(preview)].map((p) => p.url).filter((u) => picked.has(u));
   return { closePrs: prUrls.length > 0, prUrls };
 }
 

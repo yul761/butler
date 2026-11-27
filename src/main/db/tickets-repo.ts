@@ -131,6 +131,12 @@ export class TicketsRepo {
     return row ? toRepo(row) : null;
   }
 
+  /** 用这个分支名的仓库行（任何 ticket，关了、归档了的也算）。按仓库比较由调用方做（repoPath）。 */
+  reposOnBranch(branch: string): TicketRepo[] {
+    const rows = this.db.prepare(`SELECT * FROM ticket_repos WHERE branch = ? ORDER BY id`).all(branch) as unknown as RepoRow[];
+    return rows.map(toRepo);
+  }
+
   listRepos(ticketKey: string): TicketRepo[] {
     const rows = this.db.prepare(`SELECT * FROM ticket_repos WHERE ticket_key = ? ORDER BY id`).all(ticketKey) as unknown as RepoRow[];
     return rows.map(toRepo);

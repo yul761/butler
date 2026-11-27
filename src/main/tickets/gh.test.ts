@@ -819,10 +819,14 @@ printf '%s' "$q" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",(
 
 // BTL-270 审查：关 PR 之前核对 head 在不在 fork 上。
 describe("parsePrHead", () => {
-  it("reads isCrossRepository, the head branch and whether it is open; anything malformed is null", () => {
-    expect(parsePrHead(JSON.stringify({ isCrossRepository: true, headRefName: "main", state: "OPEN" }))).toEqual({ crossRepo: true, headBranch: "main", open: true });
-    expect(parsePrHead(JSON.stringify({ isCrossRepository: false, headRefName: "t-1", state: "CLOSED" }))).toEqual({ crossRepo: false, headBranch: "t-1", open: false });
-    expect(parsePrHead(JSON.stringify({ headRefName: "t-1", state: "OPEN" }))).toBeNull();
+  it("reads the head owner, head and target branch, whether it is cross-repo and open; anything malformed is null", () => {
+    const pr = { isCrossRepository: true, headRepositoryOwner: { id: "x", login: "fork" }, headRefName: "main", baseRefName: "main", state: "OPEN" };
+    expect(parsePrHead(JSON.stringify(pr))).toEqual({ crossRepo: true, headOwner: "fork", headBranch: "main", baseBranch: "main", open: true });
+    expect(parsePrHead(JSON.stringify({ ...pr, isCrossRepository: false, headRefName: "t-1", state: "CLOSED" }))).toEqual({ crossRepo: false, headOwner: "fork", headBranch: "t-1", baseBranch: "main", open: false });
+    // head 仓库删了：owner 是 null（不是这个 ticket 的）。
+    expect(parsePrHead(JSON.stringify({ ...pr, headRepositoryOwner: null }))?.headOwner).toBeNull();
+    expect(parsePrHead(JSON.stringify({ headRefName: "t-1", baseRefName: "main", state: "OPEN" }))).toBeNull();
+    expect(parsePrHead(JSON.stringify({ ...pr, baseRefName: undefined }))).toBeNull();
     expect(parsePrHead("not json")).toBeNull();
     expect(parsePrHead(null)).toBeNull();
   });

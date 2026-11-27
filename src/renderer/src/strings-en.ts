@@ -736,7 +736,7 @@ export const EN: UiStrings = {
     leftPrs: (n: number) => (n === 1 ? "1 PR was not closed" : `${n} PRs were not closed`),
     leftSessions: (n: number) => (n === 1 ? "1 session was not ended" : `${n} sessions were not ended`),
     prKind: {
-      failed: "gh failed", skipped: "external actions are off", never_read: "not read yet", given_up: "can't be read",
+      failed: "gh failed", skipped: "external actions are off", unverified: "not checked", never_read: "not read yet", given_up: "can't be read",
       foreign: "not in a repo of this ticket", not_own_branch: "not this ticket's branch", shared: "another ticket uses it too",
     } as Record<ClosePrErrorKind, string>,
     nothingToRetry: "Retrying won't change the rest (gh didn't fail on them); handle them yourself.",

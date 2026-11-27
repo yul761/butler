@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { REASON_LIMIT } from "../../../shared/control";
 import type { Ticket } from "../../../shared/types";
 import { api } from "../api";
-import { closeOutcome, closePrsRequest, retryRequest, type CloseLeftoversResult, type ClosePreview, type ClosePrError } from "../close-ticket-outcome";
+import { closeOutcome, closePrsRequest, retryableInPreview, retryRequest, type CloseLeftoversResult, type ClosePreview, type ClosePrError } from "../close-ticket-outcome";
 import { S } from "../strings";
 
 type Leftovers = { prErrors: ClosePrError[]; sessionErrors: { id: string; error: string }[] };
@@ -88,6 +88,8 @@ export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticke
   }
 
   const again = left ? retryRequest(left) : null;
+  const retryable = retryableInPreview(preview);
+  const unclosable = (preview?.unclosable ?? []).filter((p) => !retryable.includes(p));
 
   function retry(e: FormEvent) {
     e.preventDefault();
@@ -155,11 +157,18 @@ export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticke
                   <input type="checkbox" checked={picked.has(p.url)} onChange={(e) => toggle(p.url, e.target.checked)} /> <code>{p.url}</code>
                 </label>
               ))}
+              {/* 核对失败的也能勾：关的时候再核对一次，还是失败就留在「没处理完的」里重试。 */}
+              {retryable.map((p) => (
+                <label key={p.url} className="check close-pr-unverified">
+                  <input type="checkbox" checked={picked.has(p.url)} onChange={(e) => toggle(p.url, e.target.checked)} /> <code>{p.url}</code>
+                  <div className="error">{p.error}</div>
+                </label>
+              ))}
               {picked.size > 0 && <p className="muted close-public-comment">{S.tc.publicComment}</p>}
-              {preview.unclosable.length > 0 && (
+              {unclosable.length > 0 && (
                 <>
-                  <p className="muted">{S.tc.unclosableTitle(preview.unclosable.length)}</p>
-                  <PrErrorList prs={preview.unclosable} />
+                  <p className="muted">{S.tc.unclosableTitle(unclosable.length)}</p>
+                  <PrErrorList prs={unclosable} />
                 </>
               )}
             </>

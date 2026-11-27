@@ -1600,6 +1600,25 @@ describe("PrWatcher: owned branches of a ticket in needs_decision (BTL-270 revie
     expect(s.prs.get(row.id)?.state).toBe("open");
   });
 
+  it("an owned branch with no PR at all is listed only every half hour while the ticket waits for a decision, not every 5 minutes (BTL-270 review)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.owners.record({ ticketKey: "BTL-1", repoId: s.repoId, branch: "feat/none", sessionId: "s1", dir: "/wt/a", at: s.now() });
+    s.gh.prsForBranch.mockImplementation(async () => []);
+    s.tickets.setStatus("BTL-1", "needs_decision", s.now());
+    const owned = () => s.gh.prsForBranch.mock.calls.filter((c) => c[1] === "feat/none").length;
+    await s.w.check();
+    expect(owned()).toBe(1);
+    for (let i = 0; i < 5; i++) {
+      s.advance(5 * 60_000);
+      await s.w.check();
+    }
+    expect(owned()).toBe(1);
+    s.advance(DECIDING_REREAD_MS - 25 * 60_000);
+    await s.w.check();
+    expect(owned()).toBe(2);
+  });
+
   it("an owned branch's PR shown open again is re-read from the listing alone (no half-hourly re-read due yet)", async () => {
     vi.useFakeTimers();
     const s = setup();

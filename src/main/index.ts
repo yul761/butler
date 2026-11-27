@@ -1683,6 +1683,8 @@ async function bootstrap(): Promise<void> {
   const costBase = (id: string) => transcriptCostBase(paths.claudeProjects, id);
   const runner = new HandoffRunner({
     tickets, sessions, handoffs, followups, settings, ingest,
+    // ticketPrs 在后面才建；早间刷新时早就有了。
+    ticketPrs: { byTicket: (key) => ticketPrs.byTicket(key) },
     dirs: (t) => ticketService.headlessDirs(t),
     run: runHeadless,
     ready: () => healthReady,

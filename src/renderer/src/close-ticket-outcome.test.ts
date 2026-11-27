@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeOutcome, closePrsRequest, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
+import { closeOutcome, closePrsRequest, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
 
 const base: CloseLeftoversResult = { closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
 
@@ -58,5 +58,20 @@ describe("closePrsRequest (what the close dialog asks to close)", () => {
     expect(closePrsRequest(null, new Set())).toEqual({ closePrs: false, prUrls: [] });
     // 不要求关 PR 时结果里没有 PR 的错误：直接算完成。
     expect(closeOutcome({ closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false })).toEqual({ done: true, reopenedMeanwhile: false });
+  });
+});
+
+// BTL-270 审查：关之前核对 head 失败的（unverified）可以重试：预览里能勾，关的时候再核对；没处理完的里面重试按钮能点。
+describe("PRs whose head check failed (unverified)", () => {
+  const unverified = { url: "https://github.com/o/r/pull/3", error: "关之前核对 PR 失败（timed out after 10s）", kind: "unverified" as const };
+  const preview = { closable: [], unclosable: [unverified, { url: "https://github.com/o/r/pull/9", error: "e", kind: "not_own_branch" as const }] };
+  it("can be ticked in the preview and are sent to be checked again; PRs that can't be closed can't", () => {
+    expect(retryableInPreview(preview)).toEqual([unverified]);
+    expect(closePrsRequest(preview, new Set([unverified.url, "https://github.com/o/r/pull/9"]))).toEqual({ closePrs: true, prUrls: [unverified.url] });
+  });
+  it("are not done after closing, and the retry sends them again", () => {
+    const o = closeOutcome({ closedPrs: [], prErrors: [unverified], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false });
+    expect(o).toEqual({ done: false, prErrors: [unverified], sessionErrors: [] });
+    expect(retryRequest({ prErrors: [unverified], sessionErrors: [] })).toEqual({ prUrls: [unverified.url], sessionIds: [] });
   });
 });

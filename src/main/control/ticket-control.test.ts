@@ -113,18 +113,22 @@ describe("TicketControl (BTL-270)", () => {
     expect(tickets.get("A-1")?.closure).toEqual({ at: 5, reason: "需求变了", source: "coordinator" });
   });
 
-  it("close_ticket lists what was closed and what was not, with a hint per reason; it never says to gh pr close a PR shared with an open ticket", async () => {
+  it("close_ticket lists what was closed and what was not among the named PRs, with a hint per reason; it never says to gh pr close a PR shared with a ticket or not checked", async () => {
     const { run } = setup({
       openPrs: () => ({
         closable: [1, 2].map((n) => ({ url: `https://github.com/o/r/pull/${n}`, number: n, slug: "o/r", cwd: "/r" })),
-        unclosable: [{ url: "https://github.com/o/r/pull/8", number: 8, kind: "shared", ticket: "A-2" }, { url: "https://github.com/o/r/pull/9", number: 9, kind: "not_own_branch" }],
+        unclosable: [
+          { url: "https://github.com/o/r/pull/8", number: 8, kind: "shared", ticket: "A-2" }, { url: "https://github.com/o/r/pull/9", number: 9, kind: "not_own_branch" },
+          { url: "https://github.com/o/r/pull/7", number: 7, kind: "not_own_branch" },
+        ],
       }),
       closePr: async (pr) => {
         if (pr.number === 2) throw new Error("gh: boom");
         return "closed";
       },
     });
-    const r = await run({ op: "close_ticket", ticket: "A-1", reason: "不做了", close_prs: true, pr_urls: [1, 2].map((n) => `https://github.com/o/r/pull/${n}`) });
+    // 没点名的 #7 不报（点名了才算这次要处理的）。
+    const r = await run({ op: "close_ticket", ticket: "A-1", reason: "不做了", close_prs: true, pr_urls: [1, 2, 8, 9].map((n) => `https://github.com/o/r/pull/${n}`) });
     expect(r).toMatchObject({
       ok: true,
       value: {
@@ -139,6 +143,8 @@ describe("TicketControl (BTL-270)", () => {
     expect(M().ctlClosePrErrors([{ kind: "shared", ticket: "A-2" }])).not.toContain("gh pr close");
     expect(M().ctlClosePrErrors([{ kind: "not_own_branch" }])).not.toContain("gh pr close");
     expect(M().ctlClosePrErrors([{ kind: "failed" }])).toContain("gh pr close");
+    // 核对失败的：明确说不要自己关（还不知道是不是这个 ticket 的），请用户重试。
+    expect(M().ctlClosePrErrors([{ kind: "unverified" }])).toContain("不要自己 gh pr close");
   });
 
   // BTL-270 审查（建议 2）：总控要关 PR 必须点名。

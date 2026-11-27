@@ -458,21 +458,32 @@ export async function prRead(cwd: string, ref: string, timeoutMs: number): Promi
 /** 关 PR 之前核对的：head 在不在 fork 上（isCrossRepository）、head 分支、还开着没有（BTL-270 审查）。 */
 export interface PrHead {
   crossRepo: boolean;
+  /** head 所在仓库的 owner（headRepositoryOwner.login）；head 仓库删了时是 null。 */
+  headOwner: string | null;
   headBranch: string;
+  /** PR 现在的目标分支（baseRefName）。 */
+  baseBranch: string;
   open: boolean;
 }
 
-/** gh pr view <ref> --json isCrossRepository,headRefName,state 的输出 → PrHead；不对就是 null。 */
+const PR_HEAD_FIELDS = "isCrossRepository,headRepositoryOwner,headRefName,baseRefName,state";
+
+/** gh pr view <ref> --json PR_HEAD_FIELDS 的输出 → PrHead；不对就是 null。 */
 export function parsePrHead(text: string | null): PrHead | null {
   const j = obj(parseJson(text));
-  if (!j || typeof j.isCrossRepository !== "boolean" || typeof j.headRefName !== "string" || typeof j.state !== "string") return null;
-  return { crossRepo: j.isCrossRepository, headBranch: j.headRefName, open: j.state === "OPEN" };
+  if (!j || typeof j.isCrossRepository !== "boolean" || typeof j.headRefName !== "string" || typeof j.baseRefName !== "string" || typeof j.state !== "string") return null;
+  const owner = obj(j.headRepositoryOwner)?.login;
+  return { crossRepo: j.isCrossRepository, headOwner: typeof owner === "string" && owner ? owner : null, headBranch: j.headRefName, baseBranch: j.baseRefName, open: j.state === "OPEN" };
 }
 
-/** 关 ticket 时核对一个 PR 的 head（fork 上的同名分支不是 ticket 自己的）。gh 失败、超时、输出不对都返回 null。 */
-export async function prHead(cwd: string, ref: string, timeoutMs: number): Promise<PrHead | null> {
-  const r = await runGhDetail(cwd, ["pr", "view", ref, "--json", "isCrossRepository,headRefName,state"], timeoutMs, 1024 * 1024);
-  return parsePrHead(r.stdout);
+/**
+ * 关 ticket 时实时核对一个 PR 的 head（BTL-270 审查）：head 在哪个 owner 下、分支名、目标分支、还开不开着。
+ * gh 失败、超时、输出不对时是 { error }（给人看的原因），调用方当作「核对失败、可以重试」。
+ */
+export async function prHead(cwd: string, ref: string, timeoutMs: number): Promise<PrHead | { error: string }> {
+  const r = await runGhDetail(cwd, ["pr", "view", ref, "--json", PR_HEAD_FIELDS], timeoutMs, 1024 * 1024);
+  if (r.stdout === null) return { error: ghErrorSummary(r, timeoutMs) };
+  return parsePrHead(r.stdout) ?? { error: "gh pr view returned unexpected output" };
 }
 
 /**

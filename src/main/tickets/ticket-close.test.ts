@@ -129,15 +129,44 @@ describe("closeTicket", () => {
     expect(calls).toEqual([]);
   });
 
-  it("closes only the PRs ticked in the dialog, and still reports every PR it can't close (BTL-270 review)", async () => {
+  it("closes only the PRs ticked in the dialog and reports only those: unticked PRs it can't close are not leftovers (BTL-270 review)", async () => {
     const prs: ClosablePr[] = [1, 2].map((n) => ({ url: `https://github.com/o/r/pull/${n}`, number: n, slug: "o/r", cwd: "/r" }));
     const { d, calls } = setup({ prs, unclosable: [{ url: "https://github.com/o/r/pull/9", number: 9, kind: "not_own_branch" }] });
     const r = await closeTicket(d, "T-1", { reason: "不做了", source: "user", closePrs: true, prUrls: ["https://github.com/O/R/pull/2/"] });
-    expect(r).toMatchObject({
-      ok: true, closedPrs: ["https://github.com/o/r/pull/2"],
-      prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "not_own_branch", error: M().ticketClosePrWhy("not_own_branch", null) }],
-    });
+    expect(r).toMatchObject({ ok: true, closedPrs: ["https://github.com/o/r/pull/2"], prErrors: [] });
     expect(calls).toEqual(["close https://github.com/o/r/pull/2", "rederive T-1", "refresh T-1"]);
+  });
+
+  it("a ticked PR that can't be closed by the time it is closed (became shared, or its head check failed) is still reported", async () => {
+    const { d } = setup({
+      prs: [],
+      unclosable: [
+        { url: "https://github.com/o/r/pull/2", number: 2, kind: "shared", ticket: "T-2" },
+        { url: "https://github.com/o/r/pull/3", number: 3, kind: "unverified", error: "关之前核对 PR 失败" },
+        { url: "https://github.com/o/r/pull/9", number: 9, kind: "not_own_branch" },
+      ],
+    });
+    const r = await closeTicket(d, "T-1", { reason: "不做了", source: "user", closePrs: true, prUrls: ["https://github.com/o/r/pull/2", "https://github.com/o/r/pull/3"] });
+    expect(r).toMatchObject({ ok: true, closedPrs: [], prErrors: [
+      { url: "https://github.com/o/r/pull/2", kind: "shared", ticket: "T-2", error: M().ticketClosePrWhy("shared", "T-2") },
+      { url: "https://github.com/o/r/pull/3", kind: "unverified", error: "关之前核对 PR 失败" },
+    ] });
+  });
+
+  it("a coordinator or routing close with nothing it could name closes the ticket at once and lists the PRs it can't close, reading them once (BTL-270 review)", async () => {
+    for (const source of ["coordinator", "routing"] as const) {
+      const { d, tickets, calls } = setup({ prs: [], unclosable: [{ url: "https://github.com/o/r/pull/9", number: 9, kind: "given_up" }] });
+      const reads = vi.spyOn(d, "openPrs");
+      const r = await closeTicket(d, "T-1", { reason: "不做了", source, closePrs: true });
+      expect(r).toMatchObject({ ok: true, closedPrs: [], prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "given_up" }] });
+      expect(tickets.get("T-1")?.statusManual).toBe("closed");
+      expect(calls.filter((c) => c.startsWith("close "))).toEqual([]);
+      expect(reads).toHaveBeenCalledTimes(1);
+    }
+    // 只有核对失败（可以重试、能点名）的：还是先回清单，让它点名。
+    const { d, tickets } = setup({ prs: [], unclosable: [{ url: "https://github.com/o/r/pull/3", number: 3, kind: "unverified", error: "e" }] });
+    expect(await closeTicket(d, "T-1", { reason: "不做了", source: "coordinator", closePrs: true })).toMatchObject({ ok: false, error: "pick_prs", closable: [] });
+    expect(tickets.get("T-1")?.statusManual).toBeNull();
   });
 
   it("a coordinator or routing close asking to close PRs without naming them does nothing and returns what could be closed (BTL-270 review)", async () => {
@@ -159,11 +188,11 @@ describe("closeTicket", () => {
     expect(calls[0]).toBe("close https://github.com/o/r/pull/1");
   });
 
-  it("with nothing ticked (prUrls empty) closes no PR, but still lists the open ones it can't close", async () => {
+  it("with nothing ticked (prUrls empty) closes no PR and reports none", async () => {
     const prs: ClosablePr[] = [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }];
     const { d, calls } = setup({ prs, unclosable: [{ url: "https://github.com/o/r/pull/9", number: 9, kind: "shared" }] });
     const r = await closeTicket(d, "T-1", { reason: "不做了", source: "user", closePrs: true, prUrls: [] });
-    expect(r).toMatchObject({ ok: true, closedPrs: [], prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "shared" }] });
+    expect(r).toMatchObject({ ok: true, closedPrs: [], prErrors: [] });
     expect(calls.filter((c) => c.startsWith("close "))).toEqual([]);
   });
 

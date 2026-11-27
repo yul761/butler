@@ -748,7 +748,7 @@ const ZH = {
     leftPrs: (n: number) => `${n} 个 PR 没关掉`,
     leftSessions: (n: number) => `${n} 个 session 没结束`,
     prKind: {
-      failed: "gh 出错", skipped: "对外动作开关关着", never_read: "还没读到", given_up: "读不到了",
+      failed: "gh 出错", skipped: "对外动作开关关着", unverified: "没核对上", never_read: "还没读到", given_up: "读不到了",
       foreign: "不在这个 ticket 的仓库里", not_own_branch: "不是这个 ticket 的分支", shared: "别的 ticket 也在用",
     } as Record<ClosePrErrorKind, string>,
     nothingToRetry: "剩下的再试也一样（不是 gh 出错），要自己处理。",

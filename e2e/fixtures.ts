@@ -71,8 +71,9 @@ export interface PrViewFixture extends BranchPrFixture {
   reviewRequests?: ({ login: string } | { slug: string })[];
   mergeable?: string;
   mergeStateStatus?: string;
-  /** 关 ticket 时核对 head 在不在 fork 上（BTL-270 审查）；没给时 Shipherd 读不到，当作还没读到、不关。 */
+  /** 关 ticket 时实时核对 head（BTL-270 审查）；没给时核对失败（unverified），不关。 */
   isCrossRepository?: boolean;
+  headRepositoryOwner?: { login: string } | null;
   /** 只给假 gh 的批量读（BTL-276）：列表实际有这么长（比给出来的多，批量读读不全）；gh pr view 不输出。 */
   fakeTotals?: { comments?: number; reviews?: number; labels?: number; reviewRequests?: number };
   /** 只给假 gh 的批量读：检查还有下一页。 */

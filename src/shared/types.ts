@@ -29,14 +29,17 @@ export interface TicketClosure {
 }
 /**
  * 关 ticket 时关不了的 PR 为什么关不了（BTL-270）：never_read 还没读过；given_up 放弃读了（一直读不到、或认定不存在）；
- * foreign 不在 ticket 的仓库里；not_own_branch head 分支不是这个 ticket 自己的分支；shared 也挂在别的没关的 ticket 上。
+ * foreign 不在 ticket 的仓库里；not_own_branch head 分支不是这个 ticket 自己的分支；shared 也挂在别的 ticket 上（关了的也算）。
  */
 export const UNCLOSABLE_PR_KINDS = ["never_read", "given_up", "foreign", "not_own_branch", "shared"] as const;
 export type UnclosablePrKind = (typeof UNCLOSABLE_PR_KINDS)[number];
-/** 关 ticket 时没关掉的 PR：failed 是 gh 失败，skipped 是对外动作开关关着，其余是关不了。 */
-export type ClosePrErrorKind = "failed" | "skipped" | UnclosablePrKind;
-/** 重试有意义的：gh 失败、开关关着。关不了的那几类再试也一样。 */
-export const RETRYABLE_CLOSE_PR_ERRORS: readonly ClosePrErrorKind[] = ["failed", "skipped"];
+/**
+ * 关 ticket 时没关掉的 PR：failed 是 gh 关失败，skipped 是对外动作开关关着，unverified 是关之前用 gh 实时核对 head 失败了
+ * （gh 出错、超时；没核对过不关，BTL-270 审查），其余是关不了。
+ */
+export type ClosePrErrorKind = "failed" | "skipped" | "unverified" | UnclosablePrKind;
+/** 重试有意义的：gh 失败、开关关着、核对失败。关不了的那几类再试也一样。 */
+export const RETRYABLE_CLOSE_PR_ERRORS: readonly ClosePrErrorKind[] = ["failed", "skipped", "unverified"];
 /** needsDecision 看的事实。status 是 PR 之前的状态（模型报的、或者存着的）；模型报的 closed 由调用方先当成 needs_decision。 */
 export interface DecisionFacts {
   status: TicketStatus;
