@@ -767,6 +767,7 @@ const ZH = {
       sessions: "这个 ticket 刚被关了（关闭原因还是第一次的），只结束了 session",
       both: "这个 ticket 刚被关了（关闭原因还是第一次的），只关了你勾的 PR、结束了 session",
       nothing: "这个 ticket 刚被关了（关闭原因还是第一次的），没有要你再做的",
+      failed: "这个 ticket 刚被关了（关闭原因还是第一次的），下面这些没处理成",
     },
   },
   noSessions: "还没有 session。点“新 session”开始。",

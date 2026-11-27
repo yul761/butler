@@ -178,7 +178,8 @@ export const api = {
   uninstallHooks: () => call<HealthReport>(IPC.healthUninstallHooks),
   pickDirectory: () => call<string | null>(IPC.dialogPickDir),
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
-  prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
+  /** 后台监视的 PR；给了 ticketKey 只取这一个 ticket 的（BTL-270 审查：ticket 页不全量扫）。 */
+  prWatchList: (ticketKey?: string) => call<WatchedPr[]>(IPC.prWatchList, ticketKey),
   prStages: (scope: PrStagesScope) => call<PrStagesTicket[]>(IPC.prStages, scope),
   prOpen: (url: string) => call<{ ok: true } | { ok: false; reason: "bad_url" }>(IPC.prOpen, url),
   /** 终端里点的链接（BTL-257）：主进程只放行 http / https，交给系统浏览器。 */

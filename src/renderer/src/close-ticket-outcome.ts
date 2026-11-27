@@ -52,11 +52,13 @@ export const pickableInPreview = (preview: ClosePreview | null): number => (prev
 /**
  * 打开关闭框以后别人（总控）先关了这个 ticket（BTL-270 审查）：提交时提示一句，按这次实际做了什么说（ClosedMeanwhile）。
  * 「关掉剩下的 PR」框本来就是关着的，不提示；关的时候又被重新打开了的，提示的是重新打开。不是这种情况是 null。
- * prs：关了勾的 PR；sessions：结束了 session；both：两样都做了；nothing：什么都没做（没勾，或者勾了的都没处理成，下面会列出来）。
+ * prs：关了勾的 PR；sessions：结束了 session；both：两样都做了；nothing：什么都没勾，没有要再做的；
+ * failed：有勾了的没处理成（下面的框里列出来、可以重试），不说「没有要你再做的」，也不说「只关了你勾的」。
  */
-export type ClosedMeanwhile = "prs" | "sessions" | "both" | "nothing";
+export type ClosedMeanwhile = "prs" | "sessions" | "both" | "nothing" | "failed";
 export function closedMeanwhile(r: CloseLeftoversResult, rest: boolean): ClosedMeanwhile | null {
   if (rest || r.alreadyClosed !== true || r.reopenedMeanwhile) return null;
+  if (r.prErrors.length > 0 || r.sessionErrors.length > 0) return "failed";
   const prs = r.closedPrs.length > 0;
   const sessions = r.endedSessions.length > 0;
   return prs && sessions ? "both" : prs ? "prs" : sessions ? "sessions" : "nothing";
@@ -65,15 +67,25 @@ export function closedMeanwhile(r: CloseLeftoversResult, rest: boolean): ClosedM
 /** 关着的 ticket 页上「关掉剩下的 PR」看的数记多久：预览要跑 gh（每个能关的 PR 一次），不每次打开 ticket 页都跑。 */
 export const REST_PREVIEW_TTL_MS = 2 * 60_000;
 
+/** 关闭框关掉了 PR 以后，最多等多久后台监视的记录跟上（stamp 里没有这些 PR 了）再预览：读不到也不一直等。 */
+export const REST_SETTLE_MS = 20_000;
+
 /**
  * 每个 ticket 最近一次预览出的能勾的数（BTL-270 审查）：TTL 内再打开 ticket 页直接用。
  * stamp 是预览时这个 ticket 开着的 PR（restStamp）：总控关了 PR、PR 在网页上被关了，stamp 就对不上，不再用。
- * 关闭框关上以后（可能关掉了 PR）、ticket 被重新打开时 drop 掉。预览要等 gh：开始时记下 begin() 的代数，
+ * 关闭框关上以后（settle）、ticket 被重新打开时 drop 掉。预览要等 gh：开始时记下 begin() 的代数，
  * 回来时代数变了（中间 drop 过）就不写，免得晚到的旧结果又写回去。
+ * 关闭框关掉了 PR（settle 给了链接）：后台监视的记录要过一会儿才跟上，stamp 会再变一次。这段时间里 waiting() 不为 0，
+ * 先不预览，等 stamp 里没有这些 PR 了（或者等到 REST_SETTLE_MS）再预览一次，不在 stamp 变前后各跑一次（BTL-270 审查）。
  */
 export function restPreviewCache(now: () => number = Date.now) {
   const seen = new Map<string, { at: number; n: number; stamp: string }>();
   const gens = new Map<string, number>();
+  const settling = new Map<string, { urls: string[]; until: number }>();
+  const drop = (key: string): void => {
+    seen.delete(key);
+    gens.set(key, (gens.get(key) ?? 0) + 1);
+  };
   return {
     get(key: string, stamp: string): number | undefined {
       const e = seen.get(key);
@@ -90,15 +102,37 @@ export function restPreviewCache(now: () => number = Date.now) {
       return true;
     },
     drop(key: string): void {
-      seen.delete(key);
-      gens.set(key, (gens.get(key) ?? 0) + 1);
+      settling.delete(key);
+      drop(key);
+    },
+    /** 关闭框关上了：drop，关掉了 PR 的（closedUrls）记下来，等监视记录跟上再预览（waiting）。 */
+    settle(key: string, closedUrls: readonly string[]): void {
+      drop(key);
+      if (closedUrls.length === 0) settling.delete(key);
+      else settling.set(key, { urls: [...closedUrls], until: now() + REST_SETTLE_MS });
+    },
+    /**
+     * 还要等多少毫秒再预览：stamp 里还有刚关掉的 PR、也没等到头时是剩下的时间，否则是 0（同时忘掉这次等待）。
+     * stamp 是 null（监视记录读不到）不等。
+     */
+    waiting(key: string, stamp: string | null): number {
+      const w = settling.get(key);
+      if (!w) return 0;
+      const left = w.until - now();
+      const open = stamp === null ? [] : stamp.split("\n");
+      if (left > 0 && w.urls.some((u) => open.includes(u))) return left;
+      settling.delete(key);
+      return 0;
     },
   };
 }
 
-/** 一个 ticket 现在开着的 PR（后台监视的记录，不跑 gh）：restPreviewCache 的 stamp。还没读到是 null。 */
-export function restStamp(watched: readonly { ticketKey: string; url: string | null; state: string | null }[] | null, key: string): string | null {
-  if (watched === null) return null;
+/**
+ * 一个 ticket 现在开着的 PR（后台监视的记录，不跑 gh）：restPreviewCache 的 stamp。
+ * 读不到（"failed"）是 null：照常预览，只是不缓存（对不上的时候发现不了）。还没读到的不在这里（调用方等着）。
+ */
+export function restStamp(watched: readonly { ticketKey: string; url: string | null; state: string | null }[] | "failed", key: string): string | null {
+  if (watched === "failed") return null;
   return watched.filter((p) => p.ticketKey === key && p.url !== null && p.state === "open").map((p) => p.url!).sort().join("\n");
 }
 

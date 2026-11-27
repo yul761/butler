@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closedMeanwhile, closeOutcome, closePrsRequest, pickableInPreview, REST_PREVIEW_TTL_MS, restPreviewCache, restStamp, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
+import { closedMeanwhile, closeOutcome, closePrsRequest, pickableInPreview, REST_PREVIEW_TTL_MS, REST_SETTLE_MS, restPreviewCache, restStamp, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
 
 const base: CloseLeftoversResult = { closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
 
@@ -116,9 +116,41 @@ describe("the closed ticket page's remaining-PR count and the closed-meanwhile n
     expect(c.get("T-2", "b2")).toBeUndefined();
   });
 
-  it("stamps a ticket by its open PRs from the watch list, in any order; not loaded yet is null", () => {
+  it("after the dialog closed PRs, waits for the watch list to drop them (or for REST_SETTLE_MS) before one preview (BTL-270 review)", () => {
+    let t = 0;
+    const c = restPreviewCache(() => t);
+    c.set("T-1", 2, "u1\nu2", c.begin("T-1"));
+    const gen = c.begin("T-1");
+    c.settle("T-1", ["u1"]);
+    // settle 也是 drop：记下的数和路上的预览都作废。
+    expect(c.get("T-1", "u1\nu2")).toBeUndefined();
+    expect(c.set("T-1", 2, "u1\nu2", gen)).toBe(false);
+    // 监视记录还没跟上：等着，给剩下的时间；别的 ticket 不等。
+    expect(c.waiting("T-1", "u1\nu2")).toBe(REST_SETTLE_MS);
+    expect(c.waiting("T-2", "u1\nu2")).toBe(0);
+    t = 5_000;
+    expect(c.waiting("T-1", "u1\nu2")).toBe(REST_SETTLE_MS - 5_000);
+    // 跟上了：不等，而且忘掉这次等待（之后别的 PR 再出现也不等）。
+    expect(c.waiting("T-1", "u2")).toBe(0);
+    expect(c.waiting("T-1", "u1\nu2")).toBe(0);
+    // 一直没跟上：等到头也照常预览。
+    c.settle("T-1", ["u2"]);
+    t += REST_SETTLE_MS;
+    expect(c.waiting("T-1", "u2")).toBe(0);
+    // 什么都没关、监视记录读不到、ticket 重新打开（drop）：都不等。
+    c.settle("T-1", []);
+    expect(c.waiting("T-1", "u2")).toBe(0);
+    c.settle("T-1", ["u2"]);
+    expect(c.waiting("T-1", null)).toBe(0);
+    c.settle("T-1", ["u2"]);
+    c.drop("T-1");
+    expect(c.waiting("T-1", "u2")).toBe(0);
+  });
+
+  it("stamps a ticket by its open PRs from the watch list, in any order; a failed read is null", () => {
     const w = (ticketKey: string, n: number, state: "open" | "closed" | "merged" | null) => ({ ticketKey, url: n ? `u${n}` : null, state });
-    expect(restStamp(null, "T-1")).toBeNull();
+    expect(restStamp("failed", "T-1")).toBeNull();
+    expect(restStamp([], "T-1")).toBe("");
     const a = restStamp([w("T-1", 2, "open"), w("T-1", 1, "open"), w("T-2", 3, "open"), w("T-1", 4, "closed"), w("T-1", 0, null)], "T-1");
     expect(a).toBe(restStamp([w("T-1", 1, "open"), w("T-1", 2, "open")], "T-1"));
     expect(restStamp([w("T-1", 1, "open"), w("T-1", 2, "closed")], "T-1")).not.toBe(a);
@@ -130,6 +162,11 @@ describe("the closed ticket page's remaining-PR count and the closed-meanwhile n
     expect(closedMeanwhile({ ...r, closedPrs: [], endedSessions: ["s"], alreadyClosed: true }, false)).toBe("sessions");
     expect(closedMeanwhile({ ...r, endedSessions: ["s"], alreadyClosed: true }, false)).toBe("both");
     expect(closedMeanwhile({ ...r, closedPrs: [], alreadyClosed: true }, false)).toBe("nothing");
+    // 勾了的有没处理成的（下面的框里列出来、可以重试）：不说「没有要你再做的」，也不说「只关了你勾的」。
+    const prError = { url: "u2", error: "boom", kind: "failed" as const };
+    expect(closedMeanwhile({ ...r, closedPrs: [], prErrors: [prError], alreadyClosed: true }, false)).toBe("failed");
+    expect(closedMeanwhile({ ...r, prErrors: [prError], alreadyClosed: true }, false)).toBe("failed");
+    expect(closedMeanwhile({ ...r, closedPrs: [], sessionErrors: [{ id: "s", error: "busy" }], alreadyClosed: true }, false)).toBe("failed");
     expect(closedMeanwhile({ ...r, alreadyClosed: true }, true)).toBeNull();
     expect(closedMeanwhile(r, false)).toBeNull();
     expect(closedMeanwhile({ ...r, alreadyClosed: true, reopenedMeanwhile: true }, false)).toBeNull();

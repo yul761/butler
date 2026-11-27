@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Turn } from "../../../shared/turn";
 import { MANUAL_TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
-import { pickableInPreview, restPreviews, restStamp } from "../close-ticket-outcome";
+import { restPreviews } from "../close-ticket-outcome";
 import { reportError } from "../errors";
 import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
@@ -18,6 +18,7 @@ import { TicketPrTab } from "./TicketPrTab";
 import { TerminalPane } from "./TerminalPane";
 import { TicketTerminalTab, useTicketTerminals, type TicketTerminals } from "./TicketTerminalTab";
 import { TitleDialog } from "./TitleDialog";
+import { CloseRestButton } from "./CloseRestButton";
 import { CloseTicketDialog } from "./CloseTicketDialog";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
@@ -85,7 +86,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const statusValue = ticket.statusManual ?? "auto";
   const closed = ticket.statusManual === "closed";
   // 关着的 ticket 还有开着的、能关的（或核对失败、可以再试的）自己的 PR：给一个「关掉剩下的 PR」入口（BTL-270 审查），打开同一个勾选框（CloseRestButton）。
-  // 对话框关上以后丢掉记下的数重新看（restSeq）。
+  // 对话框关上以后丢掉记下的数重新看（restSeq）；关掉了 PR 的等监视记录跟上再看（restPreviews.settle）。
   const [restSeq, setRestSeq] = useState(0);
   const [closingRest, setClosingRest] = useState(false);
   // 重新打开了：记下的数作废（再关上时 PR 可能已经不一样了），路上的预览回来也不写。
@@ -127,8 +128,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       )}
       {notice && <div className="muted ticket-notice">{notice}</div>}
       {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
-      {closing && <CloseTicketDialog ticket={ticket} onClose={() => { setClosing(false); restPreviews.drop(ticket.key); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
-      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={() => { setClosingRest(false); restPreviews.drop(ticket.key); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
+      {closing && <CloseTicketDialog ticket={ticket} onClose={(closedPrs) => { setClosing(false); restPreviews.settle(ticket.key, closedPrs); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
+      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={(closedPrs) => { setClosingRest(false); restPreviews.settle(ticket.key, closedPrs); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
 
       <PageTabs
         page={`ticket:${ticket.key}`}
@@ -198,38 +199,4 @@ function SideTerminal({ ticket, term, sessionId, onGoTab }: { ticket: TicketView
       />
     </div>
   );
-}
-
-/**
- * 关着的 ticket 页上的「关掉剩下的 PR」（BTL-270 审查）：还有能勾的才显示。预览要跑 gh：同一个 ticket 短时间里再打开页面用记下的数（restPreviews）。
- * 记下的数配着当时开着的 PR（restStamp，后台监视的记录，不跑 gh）：总控关了 PR、PR 在网页上被关了，对不上就重新预览。
- * 只在关着的 ticket 上挂：开着的 ticket 不读监视列表。seq 变了（对话框关上了）重新看。
- */
-function CloseRestButton({ ticketKey, seq, onOpen }: { ticketKey: string; seq: number; onOpen: () => void }) {
-  const watched = useStateRefetch(`rest-watch:${ticketKey}`, () => api.prWatchList());
-  const stamp = restStamp(watched, ticketKey);
-  const [left, setLeft] = useState(0);
-  useEffect(() => {
-    if (stamp === null) return;
-    const hit = restPreviews.get(ticketKey, stamp);
-    if (hit !== undefined) {
-      setLeft(hit);
-      return;
-    }
-    let live = true;
-    const gen = restPreviews.begin(ticketKey);
-    api.closePreview(ticketKey).then(
-      (p) => {
-        const n = pickableInPreview(p);
-        // 预览路上 drop 过（对话框关上了、ticket 被重新打开了）：这个结果是旧的，不写进缓存。
-        restPreviews.set(ticketKey, n, stamp, gen);
-        if (live) setLeft(n);
-      },
-      () => live && setLeft(0),
-    );
-    return () => {
-      live = false;
-    };
-  }, [ticketKey, seq, stamp]);
-  return left > 0 ? <button className="ticket-close-rest" onClick={onOpen}>{S.tc.closeRest}</button> : null;
 }

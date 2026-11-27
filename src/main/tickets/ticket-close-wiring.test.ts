@@ -313,6 +313,22 @@ describe("closeWiring.openPrs", () => {
     expect(vi.mocked(other.d.slugOf).mock.calls.map((c) => c[0])).toContain("/clone/app");
   });
 
+  it("a branch owner whose repo row is gone counts as the same repo: shared_branch, not closed (BTL-270 review)", async () => {
+    const s = setup({ slugs: { "/r/app": "o/app", "/clone/app": "o/other" } });
+    const clone = s.tickets.addRepo({ ticketKey: "T-2", repoPath: "/clone/app", workMode: "branch", worktreePath: null, branch: "t-2b", createdAt: 1 });
+    s.branchOwners.record({ ticketKey: "T-1", repoId: s.repoId, branch: "feat/wt", sessionId: "s", dir: "/wt", at: 1 });
+    s.branchOwners.record({ ticketKey: "T-2", repoId: clone, branch: "feat/wt", sessionId: "s2", dir: "/clone/wt2", at: 1 });
+    s.link(1, "feat/wt");
+    // 有仓库行时 /clone/app 是别的仓库（o/other），能关。
+    expect((await s.w.openPrs("T-1")).closable.map((p) => p.number)).toEqual([1]);
+    // 归属记录还在、它的仓库行读不到了（路径不知道，slug 也就无从读起）：不知道是不是同一个仓库，当作同一个，不关。
+    const getRepo = s.tickets.getRepo.bind(s.tickets);
+    vi.spyOn(s.tickets, "getRepo").mockImplementation((id) => (id === clone ? null : getRepo(id)));
+    const r = await s.w.openPrs("T-1");
+    expect(r.closable).toEqual([]);
+    expect(r.unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-2" }]);
+  });
+
   it("a cross-repo head must sit in the repo named like the origin, not just under its owner; a head repo name it can't read is not closed (BTL-270 review)", async () => {
     const s = setup({ slugs: { "/r/app": "me/app" } });
     for (const n of [1, 2, 3, 4]) s.link(n, "t-1");

@@ -754,6 +754,7 @@ export const EN: UiStrings = {
       sessions: "This ticket had just been closed (its close reason stays the first one), so only its sessions were ended",
       both: "This ticket had just been closed (its close reason stays the first one), so only the PRs you ticked were closed and its sessions ended",
       nothing: "This ticket had just been closed (its close reason stays the first one); nothing more for you to do",
+      failed: "This ticket had just been closed (its close reason stays the first one); the items below weren't done",
     },
   },
   noSessions: "No sessions yet. Click “New session” to start.",

@@ -121,7 +121,8 @@ export interface IpcDeps {
   settings: SettingsRepo;
   gateRepo: Pick<MergeGateRepo, "recentEvents">;
   /** PrWatcher 跟着的 PR 和 CI。 */
-  prWatchList: () => WatchedPr[];
+  /** 给了 ticketKey 只取这一个 ticket 的。 */
+  prWatchList: (ticketKey?: string) => WatchedPr[];
   /** PR 进度。 */
   prStages: Pick<PrStagesService, "view">;
   /** 在系统浏览器里打开 PR 链接：只开 ticket 链接过、主机允许的（openKnownPr）。 */
@@ -613,7 +614,7 @@ export function registerIpc(d: IpcDeps): void {
   // 「现在」页的“最近合并”：最近 7 天、最多 20 条。
   const recentMerges = (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20);
   handle(IPC.mergeEvents, recentMerges);
-  handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
+  handle(IPC.prWatchList, (raw: unknown): WatchedPr[] => d.prWatchList(raw === undefined ? undefined : ticketKeyArg(raw)));
   handle(IPC.prStages, (raw: unknown): PrStagesTicket[] => d.prStages.view(prStagesScopeArg(raw)));
   handle(IPC.prOpen, (raw: unknown): PrOpenResult => d.prOpen(prUrlArg(raw)));
   handle(IPC.linkOpen, (raw: unknown): LinkOpenResult => d.linkOpen(linkUrlArg(raw)));

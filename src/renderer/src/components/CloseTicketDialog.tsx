@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { REASON_LIMIT } from "../../../shared/control";
 import type { Ticket } from "../../../shared/types";
 import { api } from "../api";
@@ -27,8 +27,9 @@ function PrErrorList({ prs }: { prs: ClosePrError[] }) {
  * ticket 关上了但有 PR 没关掉、session 没结束时不算完成：对话框留着，逐条列出没处理完的和原因，可以重试剩下的（再试也一样的不重试），也可以就这样。
  * rest：ticket 已经关着，从 ticket 页的「关掉剩下的 PR」打开（BTL-270 审查）：同一个勾选框，不再要原因（评论写关闭时的原因），
  * 勾上的走重试（tickets:closeRetry，关之前同样核对），之后和关闭一样处理结果。
+ * onClose 带上这次（包括重试）真关掉了的 PR：ticket 页等监视记录跟上了再重新看「关掉剩下的 PR」（restPreviews.settle）。
  */
-export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: { ticket: Ticket; onClose: () => void; onNotice?: (text: string) => void; rest?: boolean }) {
+export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: { ticket: Ticket; onClose: (closedPrs: string[]) => void; onNotice?: (text: string) => void; rest?: boolean }) {
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<ClosePreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -37,6 +38,9 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [left, setLeft] = useState<Leftovers | null>(null);
+  /** 这个框里（关闭和每次重试）真关掉了的 PR。 */
+  const closed = useRef<string[]>([]);
+  const close = () => onClose([...closed.current]);
   const empty = reason.trim().length === 0;
   const tooLong = reason.length > REASON_LIMIT;
 
@@ -61,6 +65,7 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
   }
 
   function settle(r: CloseLeftoversResult) {
+    closed.current.push(...r.closedPrs);
     const o = closeOutcome(r);
     // 打开关闭框以后别人（总控）先关了这个 ticket：按这次实际做了什么提示（PR 评论用这里填的原因），关闭的原因、来源还是第一次的。
     const meanwhile = closedMeanwhile(r, rest);
@@ -70,7 +75,7 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
       return;
     }
     if (o.reopenedMeanwhile) onNotice?.(S.tc.reopenedMeanwhile);
-    onClose();
+    close();
   }
 
   async function run(fn: () => Promise<CloseLeftoversResult>) {
@@ -135,7 +140,7 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
           {!again && <p className="muted close-nothing-to-retry">{S.tc.nothingToRetry}</p>}
           {error && <p className="error">{error}</p>}
           <div className="actions">
-            <button type="button" onClick={onClose} disabled={busy}>{S.tc.leaveIt}</button>
+            <button type="button" onClick={close} disabled={busy}>{S.tc.leaveIt}</button>
             <button type="submit" className="primary" disabled={busy || !again}>{S.tc.retry}</button>
           </div>
         </form>
@@ -193,7 +198,7 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
         {!rest && <label className="check"><input type="checkbox" checked={endSessions} onChange={(e) => setEndSessions(e.target.checked)} /> {S.tc.endSessions}</label>}
         {error && <p className="error">{error}</p>}
         <div className="actions">
-          <button type="button" onClick={onClose}>{S.cancel}</button>
+          <button type="button" onClick={close}>{S.cancel}</button>
           {rest
             ? <button type="submit" className="primary" disabled={busy || closePrsRequest(preview, picked).prUrls.length === 0}>{S.tc.restConfirm}</button>
             : <button type="submit" className="primary" disabled={empty || busy || tooLong}>{S.tc.confirm}</button>}
