@@ -461,16 +461,10 @@ export const PRE_REVIEW_TOOLS = [
     name: "pre_review_queue",
     description:
       "看预审队列：在跑的（running：ticket、PR、触发方式 trigger 是 evidence 交证据 / pr 开 PR / manual 手动、startedAt 开跑时间）、排队的（queued：按真正开跑的顺序，position、enqueuedAt 排上的时间、" +
-      "waiting 说在等什么：concurrency 并发满了、worktree 同一个 worktree 的上一次还在跑）、并发数（concurrency）和整个队列为什么停着（stopped，没停为 null）。epic 总控只列自己 epic 的条目，position 仍是整条队列里的第几，total 是全队在跑、排队的条数。" +
-      "cancel 给一个预审 id 就把它取消（排队的直接撤掉，在跑的停下、结果不要）；front 给一个排队的预审 id 就把它提到最前。两者最多给一个，不给只看。",
-    inputSchema: {
-      type: "object",
-      properties: {
-        cancel: { type: "integer", minimum: 1, description: "可选：要取消的预审 id（running / queued 里的 id）" },
-        front: { type: "integer", minimum: 1, description: "可选：要提到最前的排队预审 id" },
-      },
-      additionalProperties: false,
-    },
+      "waiting 说在等什么：concurrency 并发满了、worktree 同一个 worktree 的上一次还在跑；position 只数前面真能先跑的，延后着、被熔断停住、等 worktree 的不算）、" +
+      "收尾中的（ending：cancelling 取消了正在中止、finishing 出了结论正在收尾，不算在跑的）、并发数（concurrency）和整个队列为什么停着（stopped，没停为 null）。epic 总控只列自己 epic 的条目，position 仍是整条队列里的第几，total 是全队在跑、排队的条数。" +
+      "只读；要取消、插队用 pre_review_queue_act。",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
 ] as const;
 
@@ -493,17 +487,45 @@ export const PRE_REVIEW_TOOLS_EN = [
     ...PRE_REVIEW_TOOLS[2],
     description:
       "Look at the pre-review queue: what is running (running: ticket, PR, trigger (evidence, pr or manual), startedAt), what is queued (queued: in the order they will start, with position, enqueuedAt and " +
-      "waiting, what it waits for: concurrency (all slots busy) or worktree (the previous run in the same worktree is still going)), the concurrency, and why the whole queue is stopped (stopped, null when it is not). An epic coordinator only sees its own epic's items; position is still the place in the whole queue, and total counts everything running and queued. " +
-      "cancel with a pre-review id cancels it (a queued one is dropped; a running one is stopped and its result thrown away); front with a queued pre-review id moves it to the front. Give at most one; give neither to just look.",
-    inputSchema: {
-      ...PRE_REVIEW_TOOLS[2].inputSchema,
-      properties: {
-        cancel: { type: "integer", minimum: 1, description: "optional: the pre-review id to cancel (an id in running or queued)" },
-        front: { type: "integer", minimum: 1, description: "optional: the queued pre-review id to move to the front" },
-      },
-    },
+      "waiting, what it waits for: concurrency (all slots busy) or worktree (the previous run in the same worktree is still going); position only counts runs ahead that can really start first, not ones delayed, stopped by the cost breaker or waiting for a worktree), " +
+      "what is winding down (ending: cancelling, cancelled and stopping, or finishing, verdict in and wrapping up; these do not count as running), the concurrency, and why the whole queue is stopped (stopped, null when it is not). An epic coordinator only sees its own epic's items; position is still the place in the whole queue, and total counts everything running and queued. " +
+      "Read only; to cancel or move one to the front, use pre_review_queue_act.",
+    inputSchema: PRE_REVIEW_TOOLS[2].inputSchema,
   },
 ] as const;
+
+/**
+ * 取消、插队一次预审（BTL-271）：会作废花了钱的预审，所以和只读的 pre_review_queue 分开，不在免确认的列表里。
+ * 两级总控都有，追加在工具表末尾。
+ */
+export const PRE_REVIEW_ACT_TOOL = {
+  name: "pre_review_queue_act",
+  description:
+    "取消一次预审，或者把排队的一次提到前面。cancel 给一个预审 id（pre_review_queue 里 running / queued 的 id）就取消它：排队的直接撤掉，在跑的停下、花掉的额度不退、结果不要，交证据的 session 会收到「不用等了」。" +
+    "front 给一个排队的预审 id 就提前它：epic 总控只排到自己 epic 的任务最前，越不过别的 epic；Shipherd 总控排到整条队列最前。两者给且只给一个。返回做了什么和之后的队列（和 pre_review_queue 一样）。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      cancel: { type: "integer", minimum: 1, description: "要取消的预审 id（running / queued 里的 id）；和 front 给一个" },
+      front: { type: "integer", minimum: 1, description: "要提前的排队预审 id；和 cancel 给一个" },
+    },
+    additionalProperties: false,
+  },
+} as const;
+
+export const PRE_REVIEW_ACT_TOOL_EN = {
+  ...PRE_REVIEW_ACT_TOOL,
+  description:
+    "Cancel a pre-review, or move a queued one forward. cancel with a pre-review id (an id in running or queued from pre_review_queue) cancels it: a queued one is dropped; a running one is stopped, the quota it spent is not refunded and its result is thrown away; the session that submitted evidence is told not to wait. " +
+    "front with a queued pre-review id moves it forward: an epic coordinator only moves it to the front of its own epic's runs and never past another epic's; the Shipherd coordinator moves it to the front of the whole queue. Give exactly one. Returns what was done and the queue afterwards (as pre_review_queue).",
+  inputSchema: {
+    ...PRE_REVIEW_ACT_TOOL.inputSchema,
+    properties: {
+      cancel: { type: "integer", minimum: 1, description: "the pre-review id to cancel (an id in running or queued); give this or front" },
+      front: { type: "integer", minimum: 1, description: "the queued pre-review id to move forward; give this or cancel" },
+    },
+  },
+} as const;
 
 export const FEATURE_TOOLS = [
   {
@@ -1115,7 +1137,8 @@ const TEXT = {
     needEvidence: "submit_evidence 至少要一条成形的检查（name 或 command、result 是 pass 或 fail）、验收条件或没跑的说明",
     needPr: "pr_assessment 需要参数 pr：list_prs 里的 prId，或者 PR 的链接",
     needPreReviewRef: (tool: string): string => `${tool} 要给 ticket（list_tickets 里的 key）或 pr（list_prs 里的 prId 或 PR 链接），只给一个`,
-    badQueueArgs: "pre_review_queue 的 cancel、front 是预审 id（正整数），最多给一个",
+    badQueueArgs: "pre_review_queue 只看队列，不带参数；取消、插队用 pre_review_queue_act",
+    badQueueActArgs: "pre_review_queue_act 要给 cancel 或 front 其中一个，值是预审 id（正整数）",
     noTool: (t: string) => `没有这个工具：${t}`,
     badLessonsArgs: "lessons 的 paths 要是最多 50 个非空字符串，query 最多 200 个字符",
     capacity: (c: SessionCapacity) =>
@@ -1158,7 +1181,8 @@ const TEXT = {
     needEvidence: "submit_evidence needs at least one well-formed check (name or command, result pass or fail), acceptance criterion or not-run note",
     needPr: "pr_assessment needs a pr argument: a prId from list_prs or the PR's URL",
     needPreReviewRef: (tool: string): string => `${tool} needs ticket (a key from list_tickets) or pr (a prId from list_prs or a PR URL), exactly one of them`,
-    badQueueArgs: "cancel and front for pre_review_queue are pre-review ids (positive whole numbers); give at most one",
+    badQueueArgs: "pre_review_queue only looks at the queue and takes no arguments; to cancel or move one forward, use pre_review_queue_act",
+    badQueueActArgs: "pre_review_queue_act needs exactly one of cancel and front, a pre-review id (a positive whole number)",
     noTool: (t: string) => `No such tool: ${t}`,
     badLessonsArgs: "lessons takes paths as up to 50 non-empty strings and query as at most 200 characters",
     capacity: (c: SessionCapacity) =>
@@ -1236,8 +1260,8 @@ export class SessionsServer {
     const scope = this.o.scope;
     const inbox = this.en ? INBOX_TOOLS_EN : INBOX_TOOLS;
     const stacks = this.en ? STACK_TOOLS_EN : STACK_TOOLS;
-    // 预审的三个工具（BTL-271）两级总控都有。
-    const preReview = this.en ? PRE_REVIEW_TOOLS_EN : PRE_REVIEW_TOOLS;
+    // 预审的工具（BTL-271）两级总控都有；取消、插队（pre_review_queue_act）是单独的一个，追加在最后。
+    const preReview = [...(this.en ? PRE_REVIEW_TOOLS_EN : PRE_REVIEW_TOOLS), this.en ? PRE_REVIEW_ACT_TOOL_EN : PRE_REVIEW_ACT_TOOL];
     if ("shipherd" in scope) return [...(this.en ? SHIPHERD_TOOLS_EN : SHIPHERD_TOOLS), ...stacks, ...inbox, ...preReview];
     if ("featureId" in scope) {
       return [...(this.en ? FEATURE_TOOLS_EN : FEATURE_TOOLS), this.en ? FEATURE_SEND_TOOL_EN : FEATURE_SEND_TOOL, ...stacks, ...inbox, ...(this.en ? FEATURE_PR_TOOLS_EN : FEATURE_PR_TOOLS), ...preReview];
@@ -1327,6 +1351,7 @@ export class SessionsServer {
       case "pre_review_status":
       case "pre_review_run":
       case "pre_review_queue":
+      case "pre_review_queue_act":
         return this.preReviewRequest(base, tool, args);
       case "metrics_overview": {
         const { days } = args;
@@ -1374,6 +1399,7 @@ export class SessionsServer {
       case "pre_review_status":
       case "pre_review_run":
       case "pre_review_queue":
+      case "pre_review_queue_act":
         return this.preReviewRequest(base, tool, args);
       case "send_message": {
         const { session, text, interrupt } = args;
@@ -1437,11 +1463,12 @@ export class SessionsServer {
     return typeof pr === "string" && pr.trim() && pr.length <= 500 ? ({ ...base, op: "pr_assessment", pr: pr.trim() } as ControlRequest) : toolError(this.text.needPr);
   }
 
-  /** 预审的三个工具（BTL-271）：参数规则和 Shipherd 那边同一份（preReviewOp），这里先查一遍，错了马上告诉总控。 */
+  /** 预审的四个工具（BTL-271）：参数规则和 Shipherd 那边同一份（preReviewOp），这里先查一遍，错了马上告诉总控。 */
   private preReviewRequest<B extends { v: 1; from: string | null } & ({ featureId: number } | { shipherd: true })>(
-    base: B, tool: "pre_review_status" | "pre_review_run" | "pre_review_queue", args: Record<string, unknown>,
+    base: B, tool: "pre_review_status" | "pre_review_run" | "pre_review_queue" | "pre_review_queue_act", args: Record<string, unknown>,
   ): ControlRequest | ToolError {
-    return (preReviewOp(base, { ...args, op: tool }) as ControlRequest | null) ?? toolError(tool === "pre_review_queue" ? this.text.badQueueArgs : this.text.needPreReviewRef(tool));
+    const bad = tool === "pre_review_queue" ? this.text.badQueueArgs : tool === "pre_review_queue_act" ? this.text.badQueueActArgs : this.text.needPreReviewRef(tool);
+    return (preReviewOp(base, { ...args, op: tool }) as ControlRequest | null) ?? toolError(bad);
   }
 
   /** 栈的四个工具（feature 总控、Shipherd 总控）：参数在这里先查一遍，Shipherd 那边还会再查。 */

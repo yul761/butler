@@ -2602,6 +2602,12 @@ async function bootstrap(): Promise<void> {
       return pr ? { number: pr.number, url: pr.url } : null;
     },
     chainOf: (id) => sessions.chainOf(id),
+    enabled: (key) => preReviewActive(key),
+    // ticket 各仓库现在的分支 + 开着的 PR 的分支；旧分支不参与 ticket 的 overall（BTL-271）。
+    currentBranches: (key) => [
+      ...tickets.listRepos(key).filter((r) => r.branch).map((r) => ({ slug: repoIdentity.slugOf(r.repoPath), branch: r.branch })),
+      ...ticketPrs.byTicket(key).filter((p) => p.state === "open" && p.headBranch).map((p) => ({ slug: p.slug, branch: p.headBranch! })),
+    ],
     now: Date.now,
   });
   const preReview = new PreReviewService({
@@ -3945,7 +3951,7 @@ async function bootstrap(): Promise<void> {
         manual: (pr) => preReview.manual(pr),
         rerun: (id) => preReview.rerun(id),
         cancel: (id) => preReview.cancel(id),
-        moveToFront: (id) => preReview.moveToFront(id),
+        moveToFront: (id, within) => preReview.moveToFront(id, within),
         ticketOf: (id) => {
           const row = preReviewRepo.get(id);
           return row ? row.ticketKey : undefined;

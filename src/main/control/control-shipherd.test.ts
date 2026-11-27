@@ -539,21 +539,25 @@ function fakePreReview() {
   const viol = b({ ticketKey: "BTL-2", state: "violations", id: 5, violations: 2, repoSlug: "o/doc", branch: "b-BTL-2", headSha: "b".repeat(40), finishedAt: 3_000 });
   const queued = b({ ticketKey: "BTL-2", state: "queued", id: 6, position: 1, repoSlug: "o/doc", branch: "b-BTL-2", headSha: "d".repeat(40), enqueuedAt: 6_000 });
   const status = new Map<string, PreReviewTicketStatus>([
-    ["BTL-1", { ticketKey: "BTL-1", overall: running, items: [running, lib, old, wip] }],
-    ["BTL-2", { ticketKey: "BTL-2", overall: viol, items: [viol] }],
+    ["BTL-1", { ticketKey: "BTL-1", overall: running, items: [running, lib, old, wip], enabled: true }],
+    ["BTL-2", { ticketKey: "BTL-2", overall: viol, items: [viol], enabled: true }],
   ]);
   const pr = (id: number, ticketKey: string, slug: string, headBranch: string, state: TicketPr["state"] = "open") =>
     ({ id, ticketKey, url: `https://github.com/${slug}/pull/${id}`, slug, number: id * 10, headBranch, headSha: "e".repeat(40), state }) as TicketPr;
   const prs = [pr(1, "BTL-1", "o/app", "b-BTL-1"), pr(2, "BTL-2", "o/doc", "b-BTL-2"), pr(3, "BTL-1", "o/old", "b-BTL-1", "closed")];
-  const item = (x: PreReviewBadge): PreReviewQueueItem => ({ ...x, id: x.id!, jobId: x.id! + 100, prNumber: null, prUrl: null });
+  const item = (x: PreReviewBadge): PreReviewQueueItem => ({ ...x, id: x.id!, jobId: x.id! + 100, prNumber: null, prUrl: null, ending: null });
+  const q = { running: [item(running)], ending: [] as PreReviewQueueItem[], queued: [item(queued), item({ ...wip, position: 1 })] };
+  /** 不是 ticket 现在的分支的（旧分支）。 */
+  const stale = new Set<string>();
   const ops: PreReviewOps = {
     status: {
       forTickets: (keys) => new Map(keys.map((k) => [k, status.get(k) ?? { ticketKey: k, overall: noPreReview(k), items: [] }])),
       forSessions: (ids) => new Map(ids.filter((id) => id === "c1").map((id) => [id, running])),
       forPrs: (ids) => new Map(ids.filter((id) => id === 1).map((id) => [id, running])),
       history: (by) => ("ticketKey" in by && by.ticketKey === "BTL-2" ? [queued, viol] : []),
-      queue: () => ({ running: [item(running)], queued: [item(queued)], concurrency: 2, stopped: null }),
+      queue: () => ({ ...q, concurrency: 2, stopped: null }),
       placeOf: (id) => (id >= 100 ? { position: 2, ahead: 1, running: 1, reason: "cost", waiting: null } : null),
+      isCurrentBranch: (_key, slug, branch) => !stale.has(`${slug}:${branch}`),
     } as PreReviewOps["status"],
     view: (id) =>
       id === 5
@@ -565,10 +569,10 @@ function fakePreReview() {
     manual: (p) => (calls.push(`manual:${p.id}`), 100 + p.id),
     rerun: (id) => (calls.push(`rerun:${id}`), 200 + id),
     cancel: (id) => (calls.push(`cancel:${id}`), { ok: true }),
-    moveToFront: (id) => (calls.push(`front:${id}`), id === 6 ? { ok: true } : { ok: false, reason: "not_queued" }),
-    ticketOf: (id) => (id === 11 ? "BTL-1" : id === 6 || id === 5 ? "BTL-2" : undefined),
+    moveToFront: (id, within) => (calls.push(`front:${id}:${within ? "epic" : "all"}`), id === 6 || id === 14 ? { ok: true } : { ok: false, reason: "not_queued" }),
+    ticketOf: (id) => (id === 11 || id === 14 || id === 15 ? "BTL-1" : id === 6 || id === 5 ? "BTL-2" : undefined),
   };
-  return { ops, calls };
+  return { ops, calls, q, item, b, stale };
 }
 
 describe("pre-review for both coordinators (BTL-271)", () => {
@@ -616,12 +620,35 @@ describe("pre-review for both coordinators (BTL-271)", () => {
   });
 
   it("Shipherd control: pre_review_run on a PR whose current head is already running reports that run instead of queuing a second", async () => {
-    const { ops, calls } = fakePreReview();
-    ops.status.forPrs = (ids) => new Map(ids.map((id) => [id, { ...noPreReview("BTL-1"), state: "running", id: 11, prId: id, headSha: "e".repeat(40) } as PreReviewBadge]));
+    const { ops, calls, q, item, b } = fakePreReview();
+    q.running = [item(b({ ticketKey: "BTL-1", state: "running", id: 11, prId: 1, repoSlug: "o/app", branch: "b-BTL-1", headSha: "e".repeat(40) }))];
     const t = setup({ preReviewOps: ops });
     const r = value<{ queued: { id: number; already?: boolean }[] }>(await t.call({ op: "pre_review_run", pr: "1" }));
     expect(r.queued).toEqual([expect.objectContaining({ id: 11, already: true })]);
     expect(calls).toEqual([]);
+  });
+
+  it("Shipherd control: pre_review_run finds the current head queued behind an older commit that is running, and does not supersede it", async () => {
+    const { ops, calls, q, item, b } = fakePreReview();
+    // 旧提交 A（id 11，head a…）在跑；PR 现在的 head（e…）交过证据、排着（id 15）。徽标上最要紧的是在跑的 A。
+    q.queued.push(item(b({ ticketKey: "BTL-1", state: "queued", id: 15, position: 2, prId: 1, repoSlug: "o/app", branch: "b-BTL-1", headSha: "e".repeat(40), trigger: "evidence" })));
+    const t = setup({ preReviewOps: ops });
+    const r = value<{ queued: { id: number; already?: boolean }[] }>(await t.call({ op: "pre_review_run", pr: "1" }));
+    // 认出排着的 15，不去作废它重排一次（作废会把 trigger 从 evidence 变成 manual，交证据的 session 就收不到失败）。
+    expect(r.queued).toEqual([expect.objectContaining({ id: 15, already: true })]);
+    const all = value<{ queued: { id: number; already?: boolean }[] }>(await t.call({ op: "pre_review_run", ticket: "BTL-1" }));
+    expect(all.queued[0]).toMatchObject({ id: 15, already: true });
+    expect(calls).toEqual(["rerun:12"]);
+  });
+
+  it("Shipherd control: a ticket-level pre_review_run skips branches that are no longer the ticket's", async () => {
+    const { ops, calls, stale } = fakePreReview();
+    // o/lib 的 b-BTL-1 已经不是 ticket 现在的分支、也没有开着的 PR：旧代码，不重跑。
+    stale.add("o/lib:b-BTL-1");
+    const t = setup({ preReviewOps: ops });
+    const r = value<{ queued: { id: number; repo?: string }[] }>(await t.call({ op: "pre_review_run", ticket: "BTL-1" }));
+    expect(calls).toEqual(["manual:1"]);
+    expect(r.queued.map((x) => x.repo ?? null)).toEqual([null, "o/wip"]);
   });
 
   it("Shipherd control: running, cancelling and moving need the open Shipherd control itself; looking does not", async () => {
@@ -629,15 +656,16 @@ describe("pre-review for both coordinators (BTL-271)", () => {
     const t = setup({ preReviewOps: ops });
     t.open.delete("bt");
     expect(err(await t.call({ op: "pre_review_run", pr: "1" }))).not.toBe("");
-    expect(err(await t.call({ op: "pre_review_queue", cancel: 11 }))).not.toBe("");
+    expect(err(await t.call({ op: "pre_review_queue_act", cancel: 11 }))).not.toBe("");
     expect(calls).toEqual([]);
     const q = value<{ running: { id: number; ticket: string }[]; queued: { id: number; position: number }[]; concurrency: number; stopped: null }>(await t.call({ op: "pre_review_queue" }));
-    expect(q).toMatchObject({ concurrency: 2, stopped: null, running: [{ id: 11, ticket: "BTL-1" }], queued: [{ id: 6, position: 1 }] });
+    expect(q).toMatchObject({ concurrency: 2, stopped: null, running: [{ id: 11, ticket: "BTL-1" }], queued: [{ id: 6, position: 1 }, { id: 14, position: 1 }] });
     t.open.add("bt");
-    expect(value<{ done: string }>(await t.call({ op: "pre_review_queue", front: 6 })).done).toBe("moved_to_front");
-    expect(err(await t.call({ op: "pre_review_queue", front: 11 }))).not.toBe("");
-    expect(err(await t.call({ op: "pre_review_queue", cancel: 77 }))).not.toBe("");
-    expect(calls).toEqual(["front:6", "front:11"]);
+    // Shipherd 总控插队排到全队最前（不给范围）。
+    expect(value<{ done: string; queued: unknown[] }>(await t.call({ op: "pre_review_queue_act", front: 6 }))).toMatchObject({ done: "moved_to_front", queued: [{ id: 6 }, { id: 14 }] });
+    expect(err(await t.call({ op: "pre_review_queue_act", front: 11 }))).not.toBe("");
+    expect(err(await t.call({ op: "pre_review_queue_act", cancel: 77 }))).not.toBe("");
+    expect(calls).toEqual(["front:6:all", "front:11:all"]);
   });
 
   it("epic control sees and acts only on its own epic: other epics' tickets, PRs and queue items are refused", async () => {
@@ -649,19 +677,21 @@ describe("pre-review for both coordinators (BTL-271)", () => {
     expect(err(await epic({ op: "pre_review_status", ticket: "BTL-2" }))).toContain("BTL-2");
     expect(err(await epic({ op: "pre_review_status", pr: "2" }))).not.toBe("");
     expect(err(await epic({ op: "pre_review_run", ticket: "BTL-2" }))).not.toBe("");
-    expect(err(await epic({ op: "pre_review_queue", cancel: 6 }))).not.toBe("");
+    expect(err(await epic({ op: "pre_review_queue_act", cancel: 6 }))).not.toBe("");
     // 不是这个 epic 的总控（修复 session）不能动；看可以。
     expect(err(await epic({ op: "pre_review_run", pr: "1" }, "fx"))).not.toBe("");
-    expect(err(await epic({ op: "pre_review_queue", cancel: 11 }, "fx"))).toBe(M().ctlPreReviewNotCoordinator);
+    expect(err(await epic({ op: "pre_review_queue_act", cancel: 11 }, "fx"))).toBe(M().ctlPreReviewNotCoordinator);
     // 队列只列自己 epic 的条目（BTL-2 的 6 是 docs 的），total 是全队的条数。
-    const q = value<{ running: { id: number }[]; queued: unknown[]; total: { running: number; queued: number } }>(await epic({ op: "pre_review_queue" }, "fx"));
+    const q = value<{ running: { id: number }[]; queued: { id: number }[]; total: { running: number; queued: number } }>(await epic({ op: "pre_review_queue" }, "fx"));
     expect(q.running.map((x) => x.id)).toEqual([11]);
-    expect(q.queued).toEqual([]);
-    expect(q.total).toEqual({ running: 1, queued: 1 });
+    expect(q.queued.map((x) => x.id)).toEqual([14]);
+    expect(q.total).toEqual({ running: 1, queued: 2 });
     expect(calls).toEqual([]);
     expect(value<{ queued: { id: number }[] }>(await epic({ op: "pre_review_run", pr: "1" })).queued.map((q) => q.id)).toEqual([101]);
-    expect(value<{ done: string }>(await epic({ op: "pre_review_queue", cancel: 11 })).done).toBe("cancelled");
-    expect(calls).toEqual(["manual:1", "cancel:11"]);
+    expect(value<{ done: string }>(await epic({ op: "pre_review_queue_act", cancel: 11 })).done).toBe("cancelled");
+    // epic 总控插队只排到自己 epic 的最前（带范围），越不过别的 epic。
+    expect(value<{ done: string }>(await epic({ op: "pre_review_queue_act", front: 14 })).done).toBe("moved_to_front");
+    expect(calls).toEqual(["manual:1", "cancel:11", "front:14:epic"]);
   });
 
   it("epic control: list_tickets and list_sessions carry preReview; list_prs and pr_assessment only cover the epic's PRs", async () => {

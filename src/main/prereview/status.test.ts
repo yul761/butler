@@ -23,6 +23,9 @@ function setup() {
   const held = new Set<string>();
   let concurrency = 2;
   const chains = new Map<string, string[]>();
+  /** ticket 现在的分支（不给的 ticket 算全部是）；预审关着的 ticket。 */
+  const current = new Map<string, { slug: string | null; branch: string }[]>();
+  const off = new Set<string>();
   const status = new PreReviewStatusService({
     repo,
     jobs: { queued: () => jobs.queued("pre_review"), running: () => jobs.runningOf("pre_review") },
@@ -32,6 +35,8 @@ function setup() {
     lockKey: (cwd) => cwd,
     pr: (id) => ({ number: id * 10, url: `https://github.com/o/app/pull/${id * 10}` }),
     chainOf: (id) => chains.get(id) ?? [id],
+    currentBranches: (key) => current.get(key) ?? [],
+    enabled: (key) => !off.has(key),
     now: () => now,
   });
   /** 排一次预审：行 + 任务，和 PreReviewService.enqueue 一样。 */
@@ -52,7 +57,7 @@ function setup() {
     repo.update(id, { status: o.verdict === "error" ? "failed" : "done", verdict: o.verdict, violations: o.violations ?? [], finishedAt: now });
     jobs.finish(jobId, "done", now);
   };
-  return { db, repo, jobs, status, enqueue, start, finish, gates, held, chains, setNow: (t: number) => (now = t), setConcurrency: (n: number) => (concurrency = n) };
+  return { db, repo, jobs, status, enqueue, start, finish, gates, held, chains, current, off, setNow: (t: number) => (now = t), setConcurrency: (n: number) => (concurrency = n) };
 }
 
 describe("PreReviewStatusService (BTL-271)", () => {
@@ -226,5 +231,80 @@ describe("PreReviewStatusService (BTL-271)", () => {
     expect(t.status.forSessions(["new"]).get("new")).toMatchObject({ state: "running", id: b.id, last: { state: "violations", id: a.id } });
     t.finish(b.id, job.id, { verdict: "clean" });
     expect(t.status.forSessions(["new"]).get("new")).toMatchObject({ state: "clean", id: b.id });
+  });
+
+  it("says whether pre-review is on for the ticket, so the UI can hide 'not reviewed' when it is off", () => {
+    const t = setup();
+    t.off.add("T-9");
+    expect(t.status.preReviewStatusFor("T-9")).toMatchObject({ overall: { state: "none" }, enabled: false });
+    expect(t.status.preReviewStatusFor("T-8").enabled).toBe(true);
+    expect(t.status.forTickets(["T-9", "T-8"]).get("T-9")!.enabled).toBe(false);
+  });
+
+  it("a cancelled or finished run whose job is still stopping is winding down, not running, and does not take a slot in the count", () => {
+    const t = setup();
+    const a = t.enqueue({ ticket: "T-1", cwd: "/w/1" });
+    const b = t.enqueue({ ticket: "T-2", cwd: "/w/2" });
+    const c = t.enqueue({ ticket: "T-3", cwd: "/w/3" });
+    t.start(a.id);
+    t.start(b.id);
+    t.start(c.id);
+    // 取消了：行已经 skipped，任务还在停（running）。另一个出了结论，任务还没收尾。
+    t.repo.update(a.id, { status: "skipped", finishedAt: 10_000 });
+    t.repo.update(b.id, { status: "done", verdict: "clean", violations: [], finishedAt: 10_000 });
+    const q = t.status.queue();
+    expect(q.running.map((x) => x.id)).toEqual([c.id]);
+    expect(q.ending.map((x) => [x.id, x.ending])).toEqual([[a.id, "cancelling"], [b.id, "finishing"]]);
+    expect(q.running.every((x) => x.ending === null)).toBe(true);
+  });
+
+  it("positions only count runs ahead that can really start first: not delayed, not stopped by a breaker, not waiting for a worktree", () => {
+    const t = setup();
+    const busy = t.enqueue({ ticket: "T-1", cwd: "/w/1" });
+    t.start(busy.id);
+    t.held.add("/w/1");
+    // 排在前面但开不了跑的三个：等 worktree、延后到将来、ticket 被熔断停住。
+    t.enqueue({ ticket: "T-1", cwd: "/w/1", head: sha("b") });
+    const later = t.enqueue({ ticket: "T-4", cwd: "/w/4" });
+    t.jobs.requeue(later.jobId, 999_999);
+    t.enqueue({ ticket: "T-2", cwd: "/w/2" });
+    t.gates.tickets.set("T-2", { run: false, reason: "cost", until: null });
+    const mine = t.enqueue({ ticket: "T-3", cwd: "/w/3" });
+    expect(t.status.preReviewStatusFor("T-3").overall).toMatchObject({ state: "queued", position: 1, id: mine.id });
+    expect(t.status.placeOf(mine.id)).toMatchObject({ position: 1, ahead: 0 });
+    // 延后的到点了，就算在前面。
+    t.setNow(1_000_000);
+    expect(t.status.preReviewStatusFor("T-3").overall.position).toBe(2);
+  });
+
+  it("a queued run does not carry the start time of an earlier attempt; only a running one has startedAt", () => {
+    const t = setup();
+    t.setNow(20_000);
+    const a = t.enqueue({ ticket: "T-1" });
+    t.start(a.id);
+    t.jobs.resetRunning();
+    t.setNow(90_000);
+    expect(t.status.queue().queued).toEqual([expect.objectContaining({ id: a.id, startedAt: null })]);
+    expect(t.status.preReviewStatusFor("T-1").overall).toMatchObject({ state: "queued", startedAt: null });
+  });
+
+  it("an old branch with no open PR that is no longer the ticket's does not decide the ticket's overall", () => {
+    const t = setup();
+    const old = t.enqueue({ ticket: "T-1", branch: "feat/old", head: sha("o") });
+    t.finish(old.id, t.start(old.id).id, { verdict: "violations", violations: [must("x")] });
+    const cur = t.enqueue({ ticket: "T-1", branch: "feat/x", head: sha("c") });
+    t.finish(cur.id, t.start(cur.id).id, { verdict: "clean" });
+    // 不知道现在的分支：全部参与（违反最要紧）。
+    expect(t.status.preReviewStatusFor("T-1").overall.state).toBe("violations");
+    t.current.set("T-1", [{ slug: "o/app", branch: "feat/x" }]);
+    const s = t.status.preReviewStatusFor("T-1");
+    expect(s.overall).toMatchObject({ state: "clean", id: cur.id });
+    // 旧分支照样列着。
+    expect(s.items.map((x) => x.branch).sort()).toEqual(["feat/old", "feat/x"]);
+    expect(t.status.isCurrentBranch("T-1", "o/app", "feat/old")).toBe(false);
+    expect(t.status.isCurrentBranch("T-1", "o/app", "feat/x")).toBe(true);
+    expect(t.status.isCurrentBranch("T-2", "o/app", "feat/old")).toBe(true);
+    // 同名分支在另一个仓库不算现在的（带仓库标识匹配）。
+    expect(t.status.isCurrentBranch("T-1", "o/lib", "feat/x")).toBe(false);
   });
 });

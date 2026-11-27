@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { MESSAGE_LIMIT, REASON_LIMIT } from "../src/shared/control";
 import {
-  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, FEATURE_PR_TOOLS, FEATURE_PR_TOOLS_EN, PRE_REVIEW_TOOLS, PRE_REVIEW_TOOLS_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer, LESSONS_TOOL, LESSONS_TOOL_EN,
+  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, FEATURE_PR_TOOLS, FEATURE_PR_TOOLS_EN, PRE_REVIEW_TOOLS, PRE_REVIEW_TOOLS_EN, PRE_REVIEW_ACT_TOOL, PRE_REVIEW_ACT_TOOL_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, SessionsServer, LESSONS_TOOL, LESSONS_TOOL_EN,
   type SessionsServerOptions,
 } from "./sessions-server";
 import { serveStdio } from "./stdio";
@@ -43,7 +43,7 @@ describe("shipherd-sessions MCP server", () => {
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
     expect(await server.handle({ jsonrpc: "2.0", id: 2, method: "ping" })).toEqual({ jsonrpc: "2.0", id: 2, result: {} });
     const list = (await server.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS]);
+    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL]);
     expect(await server.handle({ jsonrpc: "2.0", id: 4, method: "resources/list" })).toMatchObject({ id: 4, error: { code: -32601 } });
   });
 
@@ -138,9 +138,9 @@ describe("shipherd-sessions for a feature coordinator (design 2026-10-26)", () =
       "list_tickets", "list_repos", "create_ticket", "start_session", "list_sessions", "session_activity", "end_session", "refresh_session",
       "list_features", "create_feature", "reorder_features", "set_ticket_feature", "send_message",
       "list_stacks", "stack_define", "stack_rebase", "stack_layer_mode", "ask_user", "report",
-      "list_prs", "pr_assessment", "pre_review_status", "pre_review_run", "pre_review_queue",
+      "list_prs", "pr_assessment", "pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act",
     ]);
-    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS]);
+    expect(list.result.tools).toEqual([...FEATURE_TOOLS, FEATURE_SEND_TOOL, ...STACK_TOOLS, ...INBOX_TOOLS, ...FEATURE_PR_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL]);
     expect(FEATURE_TOOLS_EN.find((t) => t.name === "set_ticket_feature")!.inputSchema.properties.feature.type).toEqual(["string", "null"]);
     expect(FEATURE_SEND_TOOL_EN.inputSchema.required).toEqual(["session", "text"]);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(FEATURE_SEND_TOOL_EN))).toBe(false);
@@ -500,7 +500,7 @@ describe("shipherd-sessions for the Shipherd 总控 (BTL-190 5)", () => {
   const NAMES = ["list_epics", "list_tickets", "list_prs", "list_sessions", "session_activity", "list_inbox", "send_message", "refresh_session", "progress_overview", "refresh_epic_summary", "metrics_overview", "pr_assessment", "list_features"];
 
   it("lists only read tools, send_message and refresh_session, plus ask_user and report, in both languages", async () => {
-    expect(await tools(setup(2000, { shipherd: true }).server)).toEqual([...SHIPHERD_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS, ...PRE_REVIEW_TOOLS]);
+    expect(await tools(setup(2000, { shipherd: true }).server)).toEqual([...SHIPHERD_TOOLS, ...STACK_TOOLS, ...INBOX_TOOLS, ...PRE_REVIEW_TOOLS, PRE_REVIEW_ACT_TOOL]);
     expect(SHIPHERD_TOOLS.map((t) => t.name)).toEqual(NAMES);
     // 不建、不删、不结束；没有开 session 的工具（send_message 会接着关掉的终端）。
     for (const t of ["create_ticket", "start_session", "end_session"]) expect(NAMES).not.toContain(t);
@@ -509,7 +509,7 @@ describe("shipherd-sessions for the Shipherd 总控 (BTL-190 5)", () => {
       .toEqual(SHIPHERD_TOOLS.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []]));
     const en = await tools(setup(2000, { shipherd: true }, "en").server);
     expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
-    expect(en.map((t) => t.name)).toEqual([...NAMES, ...STACK_TOOLS.map((t) => t.name), "ask_user", "report", "pre_review_status", "pre_review_run", "pre_review_queue"]);
+    expect(en.map((t) => t.name)).toEqual([...NAMES, ...STACK_TOOLS.map((t) => t.name), "ask_user", "report", "pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act"]);
     // send_message 说清楚只能发给 epic 总控（BTL-246）。
     const send = SHIPHERD_TOOLS.find((t) => t.name === "send_message")!;
     expect(send.description).toContain("epic 总控");
@@ -624,17 +624,20 @@ describe("shipherd-sessions pre-review tools (BTL-271)", () => {
     return req;
   };
 
-  it("both levels have pre_review_status / run / queue, in zh and en with the same arguments; the epic level also has list_prs and pr_assessment", async () => {
+  it("both levels have pre_review_status / run / queue / queue_act, in zh and en with the same arguments; the epic level also has list_prs and pr_assessment", async () => {
     for (const scope of [{ featureId: 7 }, { shipherd: true }] as const) {
       const zh = (await tools(setup(2000, scope).server)).map((t) => t.name);
       const en = await tools(setup(2000, scope, "en").server);
-      expect(zh.slice(-3)).toEqual(["pre_review_status", "pre_review_run", "pre_review_queue"]);
+      // 取消、插队是单独的工具，追加在最后（只读的 pre_review_queue 不带参数）。
+      expect(zh.slice(-4)).toEqual(["pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act"]);
       expect(en.map((t) => t.name)).toEqual(zh);
       expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
     }
     expect(PRE_REVIEW_TOOLS_EN.map((t) => [t.name, Object.keys(t.inputSchema.properties)])).toEqual(PRE_REVIEW_TOOLS.map((t) => [t.name, Object.keys(t.inputSchema.properties)]));
     expect(FEATURE_PR_TOOLS_EN.map((t) => [t.name, "required" in t.inputSchema ? t.inputSchema.required : []])).toEqual([["list_prs", []], ["pr_assessment", ["pr"]]]);
-    for (const t of [...PRE_REVIEW_TOOLS, ...FEATURE_PR_TOOLS]) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
+    expect(Object.keys(PRE_REVIEW_ACT_TOOL_EN.inputSchema.properties)).toEqual(Object.keys(PRE_REVIEW_ACT_TOOL.inputSchema.properties));
+    expect(PRE_REVIEW_TOOLS.find((t) => t.name === "pre_review_queue")!.inputSchema.properties).toEqual({});
+    for (const t of [...PRE_REVIEW_TOOLS, ...FEATURE_PR_TOOLS, PRE_REVIEW_ACT_TOOL]) expect(t.description).toMatch(/[\u4e00-\u9fff]/);
     // list_tickets / list_sessions 说了 preReview。
     for (const tbl of [FEATURE_TOOLS, FEATURE_TOOLS_EN, SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN]) {
       for (const n of ["list_tickets", "list_sessions"]) expect((tbl as readonly { name: string; description: string }[]).find((t) => t.name === n)!.description, n).toContain("preReview");
@@ -644,14 +647,16 @@ describe("shipherd-sessions pre-review tools (BTL-271)", () => {
   it("sends the requests for both levels, turning a numeric pr into a string", async () => {
     expect(await call({ featureId: 7 }, "pre_review_status", { ticket: "A-1" })).toEqual({ v: 1, featureId: 7, from: "boss", op: "pre_review_status", ticket: "A-1" });
     expect(await call({ shipherd: true }, "pre_review_run", { pr: 3 })).toMatchObject({ v: 1, shipherd: true, op: "pre_review_run", pr: "3" });
-    expect(await call({ featureId: 7 }, "pre_review_queue", { cancel: 9 })).toMatchObject({ v: 1, featureId: 7, op: "pre_review_queue", cancel: 9 });
+    expect(await call({ featureId: 7 }, "pre_review_queue", {})).toMatchObject({ v: 1, featureId: 7, op: "pre_review_queue" });
+    expect(await call({ featureId: 7 }, "pre_review_queue_act", { cancel: 9 })).toMatchObject({ v: 1, featureId: 7, op: "pre_review_queue_act", cancel: 9 });
+    expect(await call({ shipherd: true }, "pre_review_queue_act", { front: 4 })).toMatchObject({ v: 1, shipherd: true, op: "pre_review_queue_act", front: 4 });
     expect(await call({ featureId: 7 }, "list_prs", {})).toEqual({ v: 1, featureId: 7, from: "boss", op: "list_prs" });
     expect(await call({ featureId: 7 }, "pr_assessment", { pr: 4 })).toEqual({ v: 1, featureId: 7, from: "boss", op: "pr_assessment", pr: "4" });
   });
 
   it("refuses bad arguments without sending anything, in the session's language", async () => {
     for (const lang of ["zh", "en"] as const) {
-      for (const [name, args] of [["pre_review_status", {}], ["pre_review_run", { ticket: "A-1", pr: "2" }], ["pre_review_queue", { cancel: 1, front: 2 }], ["pr_assessment", {}]] as const) {
+      for (const [name, args] of [["pre_review_status", {}], ["pre_review_run", { ticket: "A-1", pr: "2" }], ["pre_review_queue", { cancel: 1 }], ["pre_review_queue_act", {}], ["pre_review_queue_act", { cancel: 1, front: 2 }], ["pr_assessment", {}]] as const) {
         const { server, requestsDir } = setup(2000, { featureId: 7 }, lang);
         const r = (await callTool(server, name, args)) as { result: { isError?: boolean; content: { text: string }[] } };
         expect(r.result.isError, name).toBe(true);

@@ -32,7 +32,7 @@ export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "submit_evidence", "pre_review_result", "pr_assessment",
   // BTL-274：查规矩全文（只读）。
   "lessons",
-  // BTL-271：看一个 ticket / PR 的预审、看预审队列（带 cancel / front 时是取消或插队，都能用 pre_review_run 补回来）。
+  // BTL-271：看一个 ticket / PR 的预审、看预审队列（只读）。取消、插队（pre_review_queue_act）会作废花了钱的预审，要确认。
   "pre_review_status", "pre_review_queue",
 ].map((tool) => `mcp__${SESSIONS_SERVER}__${tool}`);
 

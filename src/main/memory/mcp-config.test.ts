@@ -149,7 +149,7 @@ describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
       "mcp__shipherd-sessions__pre_review_status", "mcp__shipherd-sessions__pre_review_queue",
     ]);
     // 会动别的终端或建东西的不在里面。
-    for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_epic_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode"]) {
+    for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_epic_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode", "pre_review_run", "pre_review_queue_act"]) {
       expect(SESSIONS_AUTO_ALLOW).not.toContain(`mcp__shipherd-sessions__${t}`);
     }
   });

@@ -2518,6 +2518,8 @@ const ZH = {
     queuedTitle: "排队中",
     empty: "现在没有预审在跑，也没有在排队的。",
     noneQueued: "没有排队的。",
+    endingTitle: "收尾中",
+    ending: { cancelling: "取消中", finishing: "收尾中" } as Record<"cancelling" | "finishing", string>,
     stopped: (reason: string) => `队列停着：${reason}。排着的不会开跑，等它恢复。`,
     stoppedUntil: (reason: string, t: string) => `队列停着：${reason}，到 ${t}。排着的不会开跑。`,
     concurrency: (n: number) => `同时最多预审 ${n} 个`,

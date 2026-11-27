@@ -4,8 +4,8 @@ import { preReviewChip, preReviewSidebarText, preReviewStoppedText } from "./pre
 import { STRINGS } from "./strings";
 
 const b = (o: Partial<PreReviewBadge>): PreReviewBadge => ({ ...noPreReview("T-1"), id: 1, repoSlug: "o/app", branch: "feat/x", headSha: "a".repeat(40), ...o });
-const item = (o: Partial<PreReviewQueueItem>): PreReviewQueueItem => ({ ...b(o), id: o.id ?? 1, jobId: 1, prNumber: null, prUrl: null, ...o });
-const q = (o: Partial<PreReviewQueueView>): PreReviewQueueView => ({ running: [], queued: [], concurrency: 2, stopped: null, ...o });
+const item = (o: Partial<PreReviewQueueItem>): PreReviewQueueItem => ({ ...b(o), id: o.id ?? 1, jobId: 1, prNumber: null, prUrl: null, ending: null, ...o });
+const q = (o: Partial<PreReviewQueueView>): PreReviewQueueView => ({ running: [], ending: [], queued: [], concurrency: 2, stopped: null, ...o });
 
 describe.each(["zh", "en"] as const)("pre-review chip text (%s, BTL-271)", (lang) => {
   const S = STRINGS[lang];

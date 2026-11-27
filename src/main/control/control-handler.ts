@@ -449,7 +449,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       })));
     }
 
-    if (req.op === "pre_review_status" || req.op === "pre_review_run" || req.op === "pre_review_queue") {
+    if (req.op === "pre_review_status" || req.op === "pre_review_run" || req.op === "pre_review_queue" || req.op === "pre_review_queue_act") {
       // 只看、只动这个 epic 的；重跑、取消、插队要是这个 epic 开着的总控自己发的。
       const keys = new Set(own.map((t) => t.key));
       const h = req.from ? d.sessions.head(req.from) : null;

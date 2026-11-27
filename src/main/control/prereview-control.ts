@@ -1,4 +1,4 @@
-// 总控的预审工具（BTL-271）：pre_review_status、pre_review_run、pre_review_queue，和 list_tickets / list_sessions 的 preReview 字段。
+// 总控的预审工具（BTL-271）：pre_review_status、pre_review_run、pre_review_queue（只读）、pre_review_queue_act（取消、插队），和 list_tickets / list_sessions 的 preReview 字段。
 // epic 总控和 Shipherd 总控共用这一份；epic 总控只能看、只能动自己 epic 里的 ticket 和 PR。
 import type { ControlResult, PreReviewControlOp } from "../../shared/control";
 import type { PreReviewBadge, PreReviewQueueActResult, PreReviewQueueItem, PreReviewView } from "../../shared/prereview";
@@ -7,7 +7,7 @@ import type { PreReviewStatusService } from "../prereview/status";
 import { M } from "../strings";
 
 export interface PreReviewOps {
-  status: Pick<PreReviewStatusService, "forTickets" | "forSessions" | "forPrs" | "history" | "queue" | "placeOf">;
+  status: Pick<PreReviewStatusService, "forTickets" | "forSessions" | "forPrs" | "history" | "queue" | "placeOf" | "isCurrentBranch">;
   /** 一次预审的完整视图（违规、证据缺口）；找不到为 null。 */
   view(preReviewId: number): PreReviewView | null;
   /** ticket_prs 的 id 或 PR 链接（同一个链接可能挂在几个 ticket 上）。 */
@@ -19,7 +19,8 @@ export interface PreReviewOps {
   /** 还没有 PR 的代码：对着这一次预审的同一份代码再排一次（PreReviewService.rerun）。 */
   rerun(preReviewId: number): number | null;
   cancel(preReviewId: number): PreReviewQueueActResult;
-  moveToFront(preReviewId: number): PreReviewQueueActResult;
+  /** within 给了时只排到这些 ticket 的任务最前（epic 总控越不过别的 epic）；不给排到全队最前。 */
+  moveToFront(preReviewId: number, within?: (ticketKey: string | null) => boolean): PreReviewQueueActResult;
   /** 一次预审属于哪个 ticket；没有这次预审为 undefined。 */
   ticketOf(preReviewId: number): string | null | undefined;
 }
@@ -31,6 +32,8 @@ export interface PreReviewScope {
   /** 这个作用域认得的 ticket（找不到时列给总控看）；Shipherd 总控是所有的。 */
   known(ticketKey: string): boolean;
   canAct: boolean;
+  /** Shipherd 总控：插队排到全队最前。epic 总控不给，只排到自己 epic 的最前。 */
+  whole?: boolean;
 }
 
 const ok = (value: unknown): ControlResult => ({ v: 1, ok: true, value });
@@ -66,9 +69,6 @@ function verdictSummary(v: PreReviewView) {
 
 const queueItem = (x: PreReviewQueueItem) => ({ ...preReviewField(x), ticket: x.ticketKey, pr: x.prNumber, prUrl: x.prUrl });
 
-/** 已经在排队、在跑的（同一份代码再排一次只会多花额度、或者跟在跑的那次撞上）。 */
-const inFlight = (b: PreReviewBadge | undefined): b is PreReviewBadge & { id: number } =>
-  b !== undefined && b.id !== null && (b.state === "running" || b.state === "queued" || b.state === "paused");
 
 export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewScope, req: PreReviewControlOp): ControlResult {
   if (!o) return fail(M().ctlPreReviewUnavailable);
@@ -93,9 +93,32 @@ export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewSc
   };
   const history = (by: { ticketKey: string } | { prId: number }) =>
     o.status.history(by).map((h) => ({ ...preReviewField(h), last: undefined }));
+  /**
+   * 这个 ticket 的这份代码（仓库、分支、提交）已经在排、在跑的那一次（同一份代码再排一次只会多花额度、或者把排着的那次作废）。
+   * 按整条队列找，不只看徽标上最要紧的那条：旧提交在跑、新提交在排时，排着的那次也要认出来。
+   */
+  const inFlight = (ticketKey: string | null, slug: string | null, branch: string | null, head: string | null): number | null => {
+    if (!slug || !branch || !head) return null;
+    const q = o.status.queue();
+    const hit = [...q.running, ...q.queued].find((x) => x.ticketKey === ticketKey && x.repoSlug === slug && x.branch === branch && x.headSha === head);
+    return hit?.id ?? null;
+  };
   const placed = (id: number) => {
     const p = o.status.placeOf(id);
     return { id, position: p?.position ?? null, ahead: p?.ahead ?? null, reason: p?.reason ?? null, waiting: p?.waiting ?? null };
+  };
+
+  /** epic 总控只看到自己 epic 的条目；position 还是整条队列里的第几，另给全队的条数（别的 epic 排在前面也看得出）。 */
+  const queueView = () => {
+    const q = o.status.queue();
+    const mine = (x: PreReviewQueueItem) => scope.owns(x.ticketKey);
+    return {
+      concurrency: q.concurrency, stopped: q.stopped ? { reason: q.stopped.reason, until: iso(q.stopped.until) } : null,
+      total: { running: q.running.length, queued: q.queued.length },
+      running: q.running.filter(mine).map(queueItem), queued: q.queued.filter(mine).map(queueItem),
+      // 取消了正在中止、出了结论正在收尾的：还占着任务，但不算在跑的。
+      ending: q.ending.filter(mine).map((x) => ({ ...queueItem(x), ending: x.ending })),
+    };
   };
 
   switch (req.op) {
@@ -121,21 +144,20 @@ export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewSc
       if ("error" in t) return fail(t.error);
       if ("pr" in t) {
         if (t.pr.state !== "open") return fail(m.ctlPreReviewPrClosed(t.pr.url));
-        const cur = o.status.forPrs([t.pr.id]).get(t.pr.id);
-        if (inFlight(cur) && cur.headSha === t.pr.headSha) return ok({ queued: [{ ...placed(cur.id), pr: t.pr.url, already: true }], note: m.ctlPreReviewAlreadyNote });
+        const cur = inFlight(t.pr.ticketKey, t.pr.slug, t.pr.headBranch, t.pr.headSha);
+        if (cur !== null) return ok({ queued: [{ ...placed(cur), pr: t.pr.url, already: true }], note: m.ctlPreReviewAlreadyNote });
         const id = o.manual(t.pr);
         return id === null ? fail(m.ctlPreReviewNoHead(t.pr.url)) : ok({ queued: [{ ...placed(id), pr: t.pr.url }], note: m.ctlPreReviewQueuedNote });
       }
       // ticket：每个开着的 PR 各排一次；还没有 PR 的仓库、分支按最近一次预审的那份代码再排。
-      // 有过 PR 的分支（合了、关了）不再重跑：那是旧代码。已经在排、在跑的同一份代码不再排第二次，照实报上来。
+      // 有过 PR 的分支（合了、关了）、不是 ticket 现在的分支不再重跑：那是旧代码。已经在排、在跑的同一份代码不再排第二次，照实报上来。
       const prs = o.prsOf(t.ticket);
       const open = prs.filter((p) => p.state === "open" && p.headSha && p.headBranch);
       const queued: object[] = [];
-      const prBadges = o.status.forPrs(open.map((p) => p.id));
       for (const pr of open) {
-        const cur = prBadges.get(pr.id);
-        if (inFlight(cur) && cur.headSha === pr.headSha) {
-          queued.push({ ...placed(cur.id), pr: pr.url, already: true });
+        const cur = inFlight(pr.ticketKey, pr.slug, pr.headBranch, pr.headSha);
+        if (cur !== null) {
+          queued.push({ ...placed(cur), pr: pr.url, already: true });
           continue;
         }
         const id = o.manual(pr);
@@ -146,8 +168,10 @@ export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewSc
       for (const it of s?.items ?? []) {
         if (it.id === null || !it.repoSlug || !it.branch || covered.has(`${it.repoSlug}\0${it.branch}`)) continue;
         covered.add(`${it.repoSlug}\0${it.branch}`);
-        if (inFlight(it)) {
-          queued.push({ ...placed(it.id), repo: it.repoSlug, branch: it.branch, already: true });
+        if (!o.status.isCurrentBranch(t.ticket, it.repoSlug, it.branch)) continue;
+        const cur = inFlight(t.ticket, it.repoSlug, it.branch, it.headSha);
+        if (cur !== null) {
+          queued.push({ ...placed(cur), repo: it.repoSlug, branch: it.branch, already: true });
           continue;
         }
         const id = o.rerun(it.id);
@@ -155,24 +179,17 @@ export function preReviewControl(o: PreReviewOps | undefined, scope: PreReviewSc
       }
       return queued.length > 0 ? ok({ queued, note: m.ctlPreReviewQueuedNote }) : fail(m.ctlPreReviewNothing(t.ticket));
     }
-    case "pre_review_queue": {
+    case "pre_review_queue":
+      return ok(queueView());
+    case "pre_review_queue_act": {
+      if (!scope.canAct) return fail(m.ctlPreReviewNotCoordinator);
       const id = req.cancel ?? req.front;
-      if (id !== undefined) {
-        if (!scope.canAct) return fail(m.ctlPreReviewNotCoordinator);
-        const key = o.ticketOf(id);
-        if (key === undefined || !scope.owns(key)) return fail(m.ctlPreReviewNoSuch(id));
-        const r = req.cancel !== undefined ? o.cancel(id) : o.moveToFront(id);
-        if (!r.ok) return fail(m.ctlPreReviewActFailed(r.reason));
-      }
-      // epic 总控只看到自己 epic 的条目；position 还是整条队列里的第几，另给全队的条数（别的 epic 排在前面也看得出）。
-      const q = o.status.queue();
-      const mine = (x: PreReviewQueueItem) => scope.owns(x.ticketKey);
-      return ok({
-        ...(id !== undefined && { done: req.cancel !== undefined ? "cancelled" : "moved_to_front", id }),
-        concurrency: q.concurrency, stopped: q.stopped ? { reason: q.stopped.reason, until: iso(q.stopped.until) } : null,
-        total: { running: q.running.length, queued: q.queued.length },
-        running: q.running.filter(mine).map(queueItem), queued: q.queued.filter(mine).map(queueItem),
-      });
+      const key = o.ticketOf(id);
+      if (key === undefined || !scope.owns(key)) return fail(m.ctlPreReviewNoSuch(id));
+      // epic 总控插队只排到自己 epic 的最前，越不过别的 epic；Shipherd 总控排到全队最前。
+      const r = req.cancel !== undefined ? o.cancel(id) : o.moveToFront(id, scope.whole ? undefined : (k) => scope.owns(k));
+      if (!r.ok) return fail(m.ctlPreReviewActFailed(r.reason));
+      return ok({ done: req.cancel !== undefined ? "cancelled" : "moved_to_front", id, ...queueView() });
     }
   }
 }

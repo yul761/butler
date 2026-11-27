@@ -196,6 +196,14 @@ export class PreReviewRepo {
     return r ? toReview(r) : null;
   }
 
+  /** 这个 ticket 对这份代码最近的一次预审（ticketKey 为 null 时找没有 ticket 的）。重跑沿用 session、证据时用：别的 ticket 的不算。 */
+  latestForTicket(ticketKey: string | null, t: ReviewTarget): PreReviewRow | null {
+    const r = this.db
+      .prepare(`SELECT * FROM pre_reviews WHERE ticket_key IS ? AND repo_slug = ? AND branch = ? AND head_sha = ? ORDER BY id DESC LIMIT 1`)
+      .get(ticketKey, t.repoSlug, t.branch, t.headSha) as Row | undefined;
+    return r ? toReview(r) : null;
+  }
+
   /** 这个分支最近的一次预审（任何提交）。 */
   latestForBranch(repoSlug: string, branch: string): PreReviewRow | null {
     const r = this.db

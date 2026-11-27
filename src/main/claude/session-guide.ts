@@ -125,9 +125,9 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       ? null
       : lang === "zh"
         ? "预审的状态在 list_tickets、list_sessions、list_prs 的 preReview 里（queued / paused / running 是在等预审，不是在等 CI）。" +
-          "用户问预审了没有、结果怎样，用 pre_review_status（ticket 或 pr）；要重新预审用 pre_review_run；预审排着不动时用 pre_review_queue 看谁在跑、谁在排、为什么停着。"
+          "用户问预审了没有、结果怎样，用 pre_review_status（ticket 或 pr）；要重新预审用 pre_review_run；预审排着不动时用 pre_review_queue 看谁在跑、谁在排、为什么停着；要取消或提前一次，用 pre_review_queue_act（会作废已经花了额度的预审，要用户确认）。"
         : "Pre-review state is in preReview on list_tickets, list_sessions and list_prs (queued, paused or running means it is waiting on pre-review, not on CI). " +
-          "When the user asks whether something was pre-reviewed or how it went, use pre_review_status (ticket or pr); to pre-review again, use pre_review_run; when pre-reviews are not moving, pre_review_queue shows what is running, what is queued and why it is stopped.",
+          "When the user asks whether something was pre-reviewed or how it went, use pre_review_status (ticket or pr); to pre-review again, use pre_review_run; when pre-reviews are not moving, pre_review_queue shows what is running, what is queued and why it is stopped; to cancel one or move it forward, use pre_review_queue_act (it throws away a pre-review that already spent quota, so the user confirms it).",
 ];
 
 export interface GuideOptions {

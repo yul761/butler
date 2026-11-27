@@ -38,13 +38,20 @@ export interface PreReviewStatusDeps {
   lockKey?(cwd: string | null): string | null;
   /** PR 的编号和链接（队列页显示）；不认识为 null。 */
   pr(prId: number): { number: number; url: string } | null;
+  /**
+   * 这个 ticket 现在的分支：ticket 各仓库的当前分支，加上开着的 PR 的分支。已经没有开着的 PR、也不是当前分支的旧分支
+   * 不参与 ticket 的 overall（不然旧分支上的「违反」一直压着）。不给、或返回空的，所有分支都参与。
+   */
+  currentBranches?(ticketKey: string): { slug: string | null; branch: string }[];
   /** session 的整条接替链（自己和 /clear、换新之前的旧 id；SessionsRepo.chainOf）。预审记的是交证据时的 id，换新后靠它找回来。 */
   chainOf?(sessionId: string): string[];
+  /** 这个 ticket 开着预审没有（epic 档位或全局设置）；不给算开着。 */
+  enabled?(ticketKey: string): boolean;
   now(): number;
 }
 
 interface Snapshot {
-  /** 预审 id → 排队的任务和第几（1 起）。 */
+  /** 预审 id → 排队的任务和第几（1 起）：前面只算真能先跑的（延后着的、ticket 被熔断停住的、等 worktree 锁的不算）。 */
   queued: Map<number, { job: BgJob; position: number }>;
   /** 预审 id → 在跑的任务。 */
   running: Map<number, BgJob>;
@@ -75,11 +82,6 @@ export class PreReviewStatusService {
 
   /** 一次读完队列：同一次刷新里所有徽标对着同一份队列。 */
   private snapshot(): Snapshot {
-    const queued = new Map<number, { job: BgJob; position: number }>();
-    this.d.jobs.queued().forEach((job, i) => {
-      const id = preReviewIdOf(job);
-      if (id !== null && !queued.has(id)) queued.set(id, { job, position: i + 1 });
-    });
     const running = new Map<number, BgJob>();
     for (const job of this.d.jobs.running()) {
       const id = preReviewIdOf(job);
@@ -87,15 +89,31 @@ export class PreReviewStatusService {
     }
     const gates = new Map<string, BgGate>();
     const global = this.d.gate(null);
-    return {
-      queued, running, global, held: new Set(this.d.heldLocks()), concurrency: Math.max(1, this.d.concurrency()),
-      ticketGate: (key) => {
-        if (!key) return global;
-        let g = gates.get(key);
-        if (!g) gates.set(key, (g = this.d.gate(key)));
-        return g;
-      },
+    const held = new Set(this.d.heldLocks());
+    const ticketGate = (key: string | null): BgGate => {
+      if (!key) return global;
+      let g = gates.get(key);
+      if (!g) gates.set(key, (g = this.d.gate(key)));
+      return g;
     };
+    const jobs = this.d.jobs.queued();
+    const cwdOf = new Map(this.d.repo.briefs(jobs.flatMap((j) => preReviewIdOf(j) ?? [])).map((b) => [b.id, b.cwd]));
+    const now = this.d.now();
+    // 和 BackgroundRepo.take 跳过的一样：延后到以后的、ticket 停着的、worktree 被在跑的占着的，轮到了也不会先跑，不算在前面。
+    const canGo = (job: BgJob, id: number | null): boolean => {
+      if (job.notBefore !== null && job.notBefore > now) return false;
+      if (job.ticketKey !== null && !ticketGate(job.ticketKey).run) return false;
+      const key = id !== null ? this.lockKey(cwdOf.get(id) ?? null) : null;
+      return key === null || !held.has(key);
+    };
+    const queued = new Map<number, { job: BgJob; position: number }>();
+    let ahead = 0;
+    for (const job of jobs) {
+      const id = preReviewIdOf(job);
+      if (id !== null && !queued.has(id)) queued.set(id, { job, position: ahead + 1 });
+      if (canGo(job, id)) ahead++;
+    }
+    return { queued, running, global, held, concurrency: Math.max(1, this.d.concurrency()), ticketGate };
   }
 
   private badge(b: PreReviewBrief, last: PreReviewBrief | null, s: Snapshot): PreReviewBadge {
@@ -117,7 +135,8 @@ export class PreReviewStatusService {
       const until = !s.global.run ? s.global.until : !gate.run ? gate.until : q?.job.notBefore && q.job.notBefore > this.d.now() ? q.job.notBefore : null;
       const key = this.lockKey(b.cwd);
       const waiting = reason ? null : key !== null && s.held.has(key) ? "worktree" : s.running.size >= s.concurrency ? "concurrency" : null;
-      return { ...base, state: reason ? "paused" : "queued", position: q?.position ?? null, reason, until, waiting, last: prev };
+      // 排队的没有开跑时间（放回队列的那次的不算）。
+      return { ...base, state: reason ? "paused" : "queued", startedAt: null, position: q?.position ?? null, reason, until, waiting, last: prev };
     }
     return { ...base, state: finishedState(b), last: null };
   }
@@ -134,9 +153,21 @@ export class PreReviewStatusService {
     return rows.map((b) => ({ latest: b, badge: this.badge(b, lastOf.get(groupKey(b)) ?? null, s) }));
   }
 
+  /** ticket 现在的（仓库, 分支）；不知道为 null（所有分支都算）。 */
+  private currentOf(ticketKey: string): Set<string> | null {
+    const list = this.d.currentBranches?.(ticketKey) ?? [];
+    return list.length > 0 ? new Set(list.map((c) => `${c.slug ?? ""}\0${c.branch}`)) : null;
+  }
+
+  /** 这个（仓库, 分支）是不是 ticket 现在的（总控按 ticket 重跑时，旧分支不重跑）。不知道时算是。 */
+  isCurrentBranch(ticketKey: string, slug: string, branch: string): boolean {
+    const current = this.currentOf(ticketKey);
+    return !current || current.has(`${slug}\0${branch}`);
+  }
+
   /** 一个 ticket 的预审状态（每个仓库、分支一条，overall 是最要紧的）。 */
   preReviewStatusFor(ticketKey: string): PreReviewTicketStatus {
-    return this.forTickets([ticketKey]).get(ticketKey) ?? { ticketKey, overall: noPreReview(ticketKey), items: [] };
+    return this.forTickets([ticketKey]).get(ticketKey) ?? { ticketKey, overall: noPreReview(ticketKey), items: [], enabled: this.d.enabled?.(ticketKey) ?? true };
   }
 
   /** 一整张列表的 ticket 一次查完。没预审过的也在里面（state = none）。 */
@@ -153,7 +184,10 @@ export class PreReviewStatusService {
     }
     for (const key of keys) {
       const items = by.get(key) ?? [];
-      out.set(key, { ticketKey: key, overall: mostUrgentBadge(items) ?? noPreReview(key), items });
+      const current = items.length > 0 ? this.currentOf(key) : null;
+      // 旧分支（没有开着的 PR、也不是 ticket 现在的分支）照样列在 items 里，但不参与 overall。
+      const counted = current ? items.filter((b) => current.has(`${b.repoSlug ?? ""}\0${b.branch ?? ""}`)) : items;
+      out.set(key, { ticketKey: key, overall: mostUrgentBadge(counted) ?? noPreReview(key), items, enabled: this.d.enabled?.(key) ?? true });
     }
     return out;
   }
@@ -210,19 +244,33 @@ export class PreReviewStatusService {
     const s = this.snapshot();
     const ids = [...s.running.keys(), ...s.queued.keys()];
     const rows = new Map(this.d.repo.briefs(ids).map((b) => [b.id, b]));
-    const item = (id: number, job: BgJob): PreReviewQueueItem | null => {
+    const item = (id: number, job: BgJob, ending: PreReviewQueueItem["ending"] = null): PreReviewQueueItem | null => {
       const b = rows.get(id);
       if (!b) return null;
       // 行和任务对不上时（刚放回队列、刚开跑），按任务现在的状态算。
       const status = job.state === "running" ? "running" : "queued";
       const badge = this.badge({ ...b, status }, null, s);
       const pr = b.prId !== null ? this.d.pr(b.prId) : null;
-      return { ...badge, id: b.id, jobId: job.id, startedAt: badge.startedAt ?? job.startedAt, prNumber: pr?.number ?? null, prUrl: pr?.url ?? null };
+      // 开跑时间只对在跑的用任务上的（排队的任务上的 started_at 是上一次开跑的）。
+      const startedAt = status === "running" ? (badge.startedAt ?? job.startedAt) : null;
+      return { ...badge, id: b.id, jobId: job.id, startedAt, prNumber: pr?.number ?? null, prUrl: pr?.url ?? null, ending };
     };
-    const running = [...s.running].flatMap(([id, job]) => item(id, job) ?? []);
-    const queued = [...s.queued].sort((a, b) => a[1].position - b[1].position).flatMap(([id, q]) => item(id, q.job) ?? []);
+    // 任务还在跑、行已经有了结局的（被取消了正在中止、出了结论正在收尾）：单列出来，不算在跑的，不占「预审中」。
+    const ended = (id: number): PreReviewQueueItem["ending"] => {
+      const st = rows.get(id)?.status;
+      return st === "skipped" ? "cancelling" : st === "done" || st === "failed" ? "finishing" : null;
+    };
+    const running: PreReviewQueueItem[] = [];
+    const ending: PreReviewQueueItem[] = [];
+    for (const [id, job] of s.running) {
+      const e = ended(id);
+      const it = item(id, job, e);
+      if (it) (e ? ending : running).push(it);
+    }
+    // s.queued 是按真正取的顺序放进去的（position 可能并列：前面等着的不算）。
+    const queued = [...s.queued].filter(([id]) => ended(id) === null).flatMap(([id, q]) => item(id, q.job) ?? []);
     const stopped = s.global.run ? null : { reason: s.global.reason, until: s.global.until };
-    return { running, queued, concurrency: s.concurrency, stopped };
+    return { running, ending, queued, concurrency: s.concurrency, stopped };
   }
 
   /** 这一次预审现在排第几、为什么停着（submit_evidence 的回复用）。不在排队返回 null。 */

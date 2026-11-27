@@ -233,6 +233,20 @@ describe("PreReviewService.onPrSeen", () => {
     const row = s.prs.link({ ticketKey: "T-1", url: "https://github.com/o/app/pull/4", slug: "o/app", repoId: null, number: 4, headBranch: "feat/x", state: "open", source: "branch", linkedAt: 1 }).pr;
     return { ...row, headSha: SHA, ...p };
   };
+  it("manual and rerun reuse this ticket's session and worktree, not those of another ticket on the same code", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    // 同一份代码后来又挂在另一个 epic 的 ticket T-2 上交过一次（更新的一行）。
+    const other = s.repo.insert({ ticketKey: "T-2", sessionId: "s-other", target: { repoSlug: "o/app", branch: "feat/x", headSha: SHA }, cwd: "/elsewhere", base: null, prId: null, trigger: "evidence", createdAt: 1500 });
+    expect(other).toBeGreaterThan(r.preReviewId);
+    const m = s.service.manual(pr(s))!;
+    expect(s.repo.get(m)).toMatchObject({ ticketKey: "T-1", sessionId: "s1", cwd: "/w" });
+    const again = s.service.rerun(r.preReviewId)!;
+    expect(s.repo.get(again)).toMatchObject({ ticketKey: "T-1", sessionId: "s1", cwd: "/w" });
+    // 证据也是这个 ticket 的那一次。
+    expect(s.repo.evidenceOf(again).map((e) => e.sessionId)).toEqual(["s1", "s1"]);
+  });
   it("attaches the PR to earlier work on the same commit and queues once per commit", async () => {
     const s = setup();
     const r = await s.service.submitEvidence("s1", evidence);

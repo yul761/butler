@@ -10,7 +10,7 @@ function setup() {
     fetch: async (req) => {
       calls.push(req);
       const out: PreReviewStatusBatch = { tickets: {}, sessions: {}, prs: {} };
-      for (const k of req.tickets ?? []) out.tickets[k] = { ticketKey: k, overall: { ...noPreReview(k), state: "queued", position: 1, id: 1 }, items: [] };
+      for (const k of req.tickets ?? []) out.tickets[k] = { ticketKey: k, overall: { ...noPreReview(k), state: "queued", position: 1, id: 1 }, items: [], enabled: true };
       for (const s of req.sessions ?? []) if (s === "s1") out.sessions[s] = { ...noPreReview("T-1"), state: "running", id: 2 };
       return out;
     },

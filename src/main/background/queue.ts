@@ -106,11 +106,11 @@ export class BackgroundQueue {
     return out;
   }
 
-  /** 排队的这一个提到最前面（预审队列的「提到最前」）。不在排队返回 false。 */
-  moveToFront(id: number): boolean {
+  /** 排队的这一个提到最前面（预审队列的「提到最前」）；within 给了时只提到这些 ticket 的最前。不在排队返回 false。 */
+  moveToFront(id: number, within?: (ticketKey: string | null) => boolean): boolean {
     let ok = false;
     try {
-      ok = this.d.repo.moveToFront(id);
+      ok = this.d.repo.moveToFront(id, within);
     } catch (e) {
       this.d.log?.(`background: moving #${id} to the front failed`, e);
     }

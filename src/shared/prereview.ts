@@ -343,6 +343,8 @@ export interface PreReviewTicketStatus {
   ticketKey: string;
   overall: PreReviewBadge;
   items: PreReviewBadge[];
+  /** 这个 ticket 现在开着预审没有（epic 档位或全局设置）。关着、又没预审过时界面不显示「未预审」。 */
+  enabled: boolean;
 }
 
 export interface PreReviewQueueItem extends PreReviewBadge {
@@ -350,10 +352,14 @@ export interface PreReviewQueueItem extends PreReviewBadge {
   jobId: number | null;
   prNumber: number | null;
   prUrl: string | null;
+  /** 任务还没停、行已经有结局：cancelling = 取消了正在中止，finishing = 出了结论正在收尾；其余为 null。 */
+  ending: "cancelling" | "finishing" | null;
 }
 
 export interface PreReviewQueueView {
   running: PreReviewQueueItem[];
+  /** 还占着任务、但已经有结局的（取消中、收尾中）：不算在跑的。 */
+  ending: PreReviewQueueItem[];
   /** 按真正取的顺序。 */
   queued: PreReviewQueueItem[];
   /** 同时最多跑几个（设置 preReviewConcurrency）。 */

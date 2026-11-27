@@ -51,13 +51,22 @@ export function PreReviewQueueBody(p: Props & { q: PreReviewQueueView; now: numb
       </p>
       {stopped && <p className="notice" role="status" data-testid="prereview-stopped">{stopped}</p>}
       {message && <p className={message.error ? "error" : "muted"} role="status" data-testid="prereview-queue-message">{message.text}</p>}
-      {q.running.length === 0 && q.queued.length === 0 ? <p className="muted" data-testid="prereview-queue-empty">{S.prq.empty}</p> : (
+      {q.running.length === 0 && q.queued.length === 0 && q.ending.length === 0 ? <p className="muted" data-testid="prereview-queue-empty">{S.prq.empty}</p> : (
         <>
           <h3>{S.prq.runningTitle}</h3>
           {q.running.length === 0 ? <p className="muted">—</p> : (
             <ul className="prq-list" data-testid="prereview-running">
               {q.running.map((x) => <Row key={x.id} x={x} now={p.now} onOpenTicket={p.onOpenTicket} />)}
             </ul>
+          )}
+          {q.ending.length > 0 && (
+            <>
+              {/* 取消了还没停下、出了结论还在收尾的：不算在跑的，也不能再取消、插队。 */}
+              <h3>{S.prq.endingTitle}</h3>
+              <ul className="prq-list" data-testid="prereview-ending">
+                {q.ending.map((x) => <Row key={x.id} x={x} now={p.now} onOpenTicket={p.onOpenTicket} />)}
+              </ul>
+            </>
           )}
           <h3>{S.prq.queuedTitle}</h3>
           {q.queued.length === 0 ? <p className="muted">{S.prq.noneQueued}</p> : (
@@ -78,11 +87,12 @@ export function PreReviewQueueBody(p: Props & { q: PreReviewQueueView; now: numb
 
 /** 一行：ticket、PR、怎么触发的、什么时候排上 / 开始、在等什么。 */
 function Row({ x, now, onOpenTicket, children }: { x: PreReviewQueueItem; now: number; onOpenTicket: (key: string) => void; children?: React.ReactNode }) {
-  const v = preReviewChip(x, now, S);
+  const chip = preReviewChip(x, now, S);
+  const v = x.ending ? { ...chip, label: S.prq.ending[x.ending], tone: "muted" as const } : chip;
   const when = x.state === "running" && x.startedAt ? S.prq.started(preReviewClock(x.startedAt)) : x.enqueuedAt ? S.prq.enqueued(preReviewClock(x.enqueuedAt)) : "";
   const where = [x.repoSlug, x.branch].filter(Boolean).join(" · ");
   return (
-    <li className="prq-row" data-testid={`prereview-item-${x.id}`} data-state={x.state}>
+    <li className="prq-row" data-testid={`prereview-item-${x.id}`} data-state={x.ending ?? x.state}>
       <span className={`pill prq prq-${v.tone}`} title={v.title || undefined}>{v.label}</span>
       {x.ticketKey ? <button className="key link" onClick={() => onOpenTicket(x.ticketKey!)}>{x.ticketKey}</button> : <span className="muted">—</span>}
       {x.prNumber !== null && (x.prUrl ? <a href={x.prUrl} target="_blank" rel="noreferrer">#{x.prNumber}</a> : <span>#{x.prNumber}</span>)}

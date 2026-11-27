@@ -401,6 +401,26 @@ describe("background queue", () => {
       expect(h.live.size).toBe(2);
     });
 
+    it("moving to the front within some tickets stays behind the others' jobs ahead (an epic cannot jump another epic)", () => {
+      const t = setup();
+      const at = (ticketKey: string, priority = 0) => t.repo.enqueue({ kind: "pre_review", payload: {}, ticketKey, priority, now: 1 });
+      const x1 = at("X-1", 1);
+      const x2 = at("X-2");
+      const e1 = at("E-1");
+      const x3 = at("X-3");
+      const e2 = at("E-2");
+      const mine = (k: string | null) => k?.startsWith("E-") ?? false;
+      expect(t.repo.moveToFront(e2, mine)).toBe(true);
+      // 自己 epic 的最前（E-1 前面），别的 epic 排在前面的（X-1、X-2）不动、顺序不变。
+      expect(t.repo.queued("pre_review").map((j) => j.id)).toEqual([x1, x2, e2, e1, x3]);
+      // 已经是自己 epic 的第一个：不动。
+      expect(t.repo.moveToFront(e2, mine)).toBe(true);
+      expect(t.repo.queued("pre_review").map((j) => j.id)).toEqual([x1, x2, e2, e1, x3]);
+      // 不给范围（Shipherd 总控、队列页）：全队最前。
+      expect(t.repo.moveToFront(x3)).toBe(true);
+      expect(t.repo.queued("pre_review").map((j) => j.id)).toEqual([x3, x1, x2, e2, e1]);
+    });
+
     it("moves a queued job to the front of take order", async () => {
       const t = setup();
       const h = holder();

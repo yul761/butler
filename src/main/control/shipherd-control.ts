@@ -297,8 +297,9 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       case "pre_review_status":
       case "pre_review_run":
       case "pre_review_queue":
-        // 全局总控不限 epic；重跑、取消、插队只接受开着的 Shipherd 总控自己发的（会花额度、动别人的队列）。
-        return preReviewControl(d.preReviewOps, { owns: () => true, known: (key) => !!d.tickets.get(key), canAct: fromOpenShipherd }, req);
+      case "pre_review_queue_act":
+        // 全局总控不限 epic，插队排到全队最前；重跑、取消、插队只接受开着的 Shipherd 总控自己发的（会花额度、动别人的队列）。
+        return preReviewControl(d.preReviewOps, { owns: () => true, known: (key) => !!d.tickets.get(key), canAct: fromOpenShipherd, whole: true }, req);
       case "pr_assessment": {
         if (!b.assessment) return fail(M().ctlPreReviewUnavailable);
         const v = b.assessment.view(req.pr);

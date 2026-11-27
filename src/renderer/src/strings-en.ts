@@ -2491,6 +2491,8 @@ export const EN: UiStrings = {
     queuedTitle: "Queued",
     empty: "Nothing is being pre-reviewed or waiting right now.",
     noneQueued: "Nothing is queued.",
+    endingTitle: "Winding down",
+    ending: { cancelling: "Cancelling", finishing: "Finishing" } as Record<"cancelling" | "finishing", string>,
     stopped: (reason: string) => `The queue is stopped: ${reason}. Queued ones will not start until it resumes.`,
     stoppedUntil: (reason: string, t: string) => `The queue is stopped: ${reason}, until ${t}. Queued ones will not start.`,
     concurrency: (n: number) => `Up to ${n} at a time`,

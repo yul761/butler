@@ -26,8 +26,8 @@ export interface PreReviewServiceDeps {
   queue: {
     enqueue(kind: "pre_review", payload: PreReviewPayload, o: { ticketKey?: string | null; dedupeKey?: string | null }): number;
     cancel(id: number): boolean;
-    /** 排队的任务提到最前（BTL-271 队列页）。 */
-    moveToFront?(id: number): boolean;
+    /** 排队的任务提到最前（BTL-271 队列页）；within 给了时只提到这些 ticket 的最前。 */
+    moveToFront?(id: number, within?: (ticketKey: string | null) => boolean): boolean;
   };
   /** 这一次预审现在排第几、为什么停着（PreReviewStatusService.placeOf）；submit_evidence 的回复里说。 */
   placeOf?(preReviewId: number): QueuePlace | null;
@@ -198,13 +198,13 @@ export class PreReviewService {
     return { ok: true };
   }
 
-  /** 队列页、总控把排队的一次预审提到最前。 */
-  moveToFront(id: number): PreReviewQueueActResult {
+  /** 队列页、总控把排队的一次预审提到最前；within 给了时只提到这些 ticket 的最前（epic 总控越不过别的 epic）。 */
+  moveToFront(id: number, within?: (ticketKey: string | null) => boolean): PreReviewQueueActResult {
     const row = this.d.repo.get(id);
     if (!row) return { ok: false, reason: "not_found" };
     // 行可能还停在 running（任务已经放回队列）：能不能插队看任务（BackgroundQueue.moveToFront 只认排队的）。
     if ((row.status !== "queued" && row.status !== "running") || row.jobId === null) return { ok: false, reason: "not_queued" };
-    if (!this.d.queue.moveToFront?.(row.jobId)) return { ok: false, reason: "not_queued" };
+    if (!this.d.queue.moveToFront?.(row.jobId, within)) return { ok: false, reason: "not_queued" };
     this.d.log(`pre-review ${id}: moved to the front of the queue`);
     this.d.changed();
     return { ok: true };
@@ -225,11 +225,14 @@ export class PreReviewService {
     return this.enqueue(this.blank({ ticketKey: pr.ticketKey, sessionId, target, cwd, base: pr.baseBranch, prId: pr.id, trigger: "pr" }), `pr:${pr.slug}:${pr.headBranch}:${pr.headSha}`);
   }
 
-  /** 页面、总控的「重新预审」：开关关着也能跑（用户亲手点的）。证据沿用这份代码最近一次交的。 */
+  /**
+   * 页面、总控的「重新预审」：开关关着也能跑（用户亲手点的）。证据、session 沿用这个 ticket 对这份代码最近一次交的
+   * （同一份代码挂在别的 ticket 上时不拿那边的：结果会送到别的 epic 的 session）。
+   */
   manual(pr: TicketPr): number | null {
     if (!pr.headSha || !pr.headBranch) return null;
     const target: ReviewTarget = { repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha };
-    const prev = this.d.repo.latestFor(target);
+    const prev = this.d.repo.latestForTicket(pr.ticketKey, target);
     const sessionId = prev?.sessionId ?? this.d.recipient(pr);
     const cwd = prev?.cwd ?? this.d.cwdOf(pr, sessionId);
     return this.again(prev, { ticketKey: pr.ticketKey, sessionId, target, cwd, base: pr.baseBranch, prId: pr.id }, `manual:${pr.id}`);
@@ -242,7 +245,7 @@ export class PreReviewService {
   rerun(preReviewId: number): number | null {
     const prev = this.d.repo.get(preReviewId);
     if (!prev) return null;
-    const latest = this.d.repo.latestFor(prev.target) ?? prev;
+    const latest = this.d.repo.latestForTicket(prev.ticketKey, prev.target) ?? prev;
     return this.again(latest, { ticketKey: prev.ticketKey, sessionId: latest.sessionId, target: prev.target, cwd: latest.cwd, base: latest.base, prId: latest.prId }, `manual:${prev.target.repoSlug}:${prev.target.branch}`);
   }
 

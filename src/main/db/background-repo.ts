@@ -88,15 +88,41 @@ export class BackgroundRepo {
 
   /**
    * 排队的这一个提到同一种的最前面：优先级改成这一种排队里最高的加一，延后的也提前到现在。
+   * within 给了时只提到这些 ticket 的任务最前（epic 总控插队越不过别的 epic）：排在那些任务里第一个前面、其余的顺序不变。
    * 不在排队（在跑、做完、不存在）返回 false。
    */
-  moveToFront(id: number): boolean {
+  moveToFront(id: number, within?: (ticketKey: string | null) => boolean): boolean {
     return withTransaction(this.db, () => {
-      const r = this.db.prepare(`SELECT kind FROM background_jobs WHERE id = ? AND state = 'queued'`).get(id) as { kind: string } | undefined;
+      const r = this.db.prepare(`SELECT kind, priority FROM background_jobs WHERE id = ? AND state = 'queued'`).get(id) as { kind: string; priority: number } | undefined;
       if (!r) return false;
-      const top = this.db.prepare(`SELECT MAX(priority) AS p FROM background_jobs WHERE kind = ? AND state = 'queued' AND id != ?`).get(r.kind, id) as { p: number | null };
-      const p = top.p === null ? 0 : Number(top.p) + 1;
-      this.db.prepare(`UPDATE background_jobs SET priority = MAX(priority, ?), not_before = NULL WHERE id = ?`).run(p, id);
+      if (!within) {
+        const top = this.db.prepare(`SELECT MAX(priority) AS p FROM background_jobs WHERE kind = ? AND state = 'queued' AND id != ?`).get(r.kind, id) as { p: number | null };
+        const p = top.p === null ? 0 : Number(top.p) + 1;
+        this.db.prepare(`UPDATE background_jobs SET priority = MAX(priority, ?), not_before = NULL WHERE id = ?`).run(p, id);
+        return true;
+      }
+      // 按 take 的顺序找范围里第一个（不是自己的）F：F 前面的（都不在范围里）整体加一保持原来的先后，自己放到 F 原来的优先级加一。
+      // 这样自己排在 F 前面、F 前面那些的后面。
+      const rows = prepareUncached(this.db, `SELECT id, ticket_key, priority FROM background_jobs WHERE kind = ? AND state = 'queued' ${TAKE_ORDER}`)
+        .all(r.kind) as { id: number; ticket_key: string | null; priority: number }[];
+      const ahead: number[] = [];
+      let first: { id: number; priority: number } | null = null;
+      for (const x of rows) {
+        if (Number(x.id) === id) break;
+        if (within(x.ticket_key)) {
+          first = { id: Number(x.id), priority: Number(x.priority) };
+          break;
+        }
+        ahead.push(Number(x.id));
+      }
+      if (!first) {
+        // 已经是范围里的第一个：只把延后的提前到现在。
+        this.db.prepare(`UPDATE background_jobs SET not_before = NULL WHERE id = ?`).run(id);
+        return true;
+      }
+      const bump = this.db.prepare(`UPDATE background_jobs SET priority = priority + 1 WHERE id = ?`);
+      for (const a of ahead) bump.run(a);
+      this.db.prepare(`UPDATE background_jobs SET priority = ?, not_before = NULL WHERE id = ?`).run(first.priority + 1, id);
       return true;
     });
   }

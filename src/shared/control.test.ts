@@ -292,17 +292,19 @@ describe("parseControlRequest for the Shipherd 总控 (BTL-190 5)", () => {
 });
 
 describe("parseControlRequest for the pre-review tools (BTL-271)", () => {
-  it("accepts pre_review_status / run with exactly one of ticket and pr, and pre_review_queue with at most one action, at both levels", () => {
+  it("accepts pre_review_status / run with exactly one of ticket and pr, a read-only pre_review_queue, and pre_review_queue_act with exactly one action, at both levels", () => {
     for (const base of [{ v: 1, featureId: 2 }, { v: 1, shipherd: true }] as const) {
       expect(parseControlRequest({ ...base, op: "pre_review_status", ticket: "P-1" })).toEqual({ ...base, from: null, op: "pre_review_status", ticket: "P-1" });
       expect(parseControlRequest({ ...base, op: "pre_review_run", pr: 12 })).toEqual({ ...base, from: null, op: "pre_review_run", pr: "12" });
       expect(parseControlRequest({ ...base, op: "pre_review_run", pr: "https://github.com/o/r/pull/3" })).toEqual({ ...base, from: null, op: "pre_review_run", pr: "https://github.com/o/r/pull/3" });
       expect(parseControlRequest({ ...base, op: "pre_review_queue" })).toEqual({ ...base, from: null, op: "pre_review_queue" });
-      expect(parseControlRequest({ ...base, op: "pre_review_queue", cancel: 4 })).toEqual({ ...base, from: null, op: "pre_review_queue", cancel: 4 });
-      expect(parseControlRequest({ ...base, op: "pre_review_queue", front: 5 })).toEqual({ ...base, from: null, op: "pre_review_queue", front: 5 });
+      expect(parseControlRequest({ ...base, op: "pre_review_queue_act", cancel: 4 })).toEqual({ ...base, from: null, op: "pre_review_queue_act", cancel: 4 });
+      expect(parseControlRequest({ ...base, op: "pre_review_queue_act", front: 5 })).toEqual({ ...base, from: null, op: "pre_review_queue_act", front: 5 });
       for (const bad of [
         { op: "pre_review_status" }, { op: "pre_review_status", ticket: "P-1", pr: "3" }, { op: "pre_review_status", ticket: " " }, { op: "pre_review_run", pr: -1 },
-        { op: "pre_review_run", pr: 2.5 }, { op: "pre_review_queue", cancel: 1, front: 2 }, { op: "pre_review_queue", cancel: 0 }, { op: "pre_review_queue", front: "3" },
+        { op: "pre_review_run", pr: 2.5 }, { op: "pre_review_queue_act", cancel: 1, front: 2 }, { op: "pre_review_queue_act", cancel: 0 }, { op: "pre_review_queue_act", front: "3" },
+        // 只读的 pre_review_queue 不收动作；动作没给也不行。
+        { op: "pre_review_queue", cancel: 4 }, { op: "pre_review_queue", front: 5 }, { op: "pre_review_queue_act" },
       ]) expect(parseControlRequest({ ...base, ...bad }), JSON.stringify(bad)).toBeNull();
     }
     // epic 总控也有 list_prs、pr_assessment；ticket session 没有。

@@ -1,5 +1,5 @@
 // 预审徽标（BTL-271）：ticket 卡片、列表、看板、session 行、ticket 页都用这一枚。
-import type { PreReviewBadge } from "../../../shared/prereview";
+import type { PreReviewBadge, PreReviewTicketStatus } from "../../../shared/prereview";
 import { preReviewChip } from "../prereview-view";
 import { S } from "../strings";
 import { usePreReviewPr, usePreReviewSession, usePreReviewTicket } from "./prereview-store";
@@ -27,13 +27,17 @@ export function PreReviewChip({ badge, hideNone, extra }: { badge: PreReviewBadg
   return badge.state === "running" ? <RunningChip badge={badge} extra={extra} /> : <Chip badge={badge} now={Date.now()} extra={extra} />;
 }
 
-/** 一个 ticket 的预审（最要紧的那条；几个仓库、分支时悬停列出其他的）。 */
+/** 一个 ticket 的预审（最要紧的那条；几个仓库、分支时悬停列出其他的）。预审关着时没预审过的不显示「未预审」。 */
 export function TicketPreReviewChip({ ticketKey, hideNone }: { ticketKey: string; hideNone?: boolean }) {
-  const s = usePreReviewTicket(ticketKey);
+  return <TicketChip status={usePreReviewTicket(ticketKey)} hideNone={hideNone} />;
+}
+
+/** TicketPreReviewChip 的显示部分（只吃 props，测试直接渲染它）。 */
+export function TicketChip({ status: s, hideNone }: { status: PreReviewTicketStatus | undefined; hideNone?: boolean }) {
   if (!s) return null;
   const others = s.items.filter((b) => b.id !== s.overall.id);
   const extra = others.map((b) => `${b.repoSlug ?? ""} ${b.branch ?? ""}: ${preReviewChip(b, Date.now(), S).label}`).join("\n");
-  return <PreReviewChip badge={s.overall} hideNone={hideNone} extra={extra || undefined} />;
+  return <PreReviewChip badge={s.overall} hideNone={hideNone || !s.enabled} extra={extra || undefined} />;
 }
 
 /** 一个 session 最近一次预审（「等 CI」和「预审中」分开）；没有不显示。 */
