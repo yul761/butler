@@ -39,4 +39,26 @@ describe("pre-review concurrency migration (BTL-271)", () => {
     migrate(saved);
     expect(concurrency(saved)).toBe("4");
   });
+
+  it("is migration 61, right after BTL-274's 60, and upgrades a database at 60 without touching its rows", () => {
+    // 合并顺序：#104（BTL-274）占 60，这一条排在它后面。从 main 现在的版本（60）升上来。
+    expect(M).toBe(60);
+    expect(MIGRATIONS[M - 1]).toContain("CREATE TABLE lesson_merge_proposals");
+    const db = before({ ticket: true });
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 60 });
+    db.prepare(`INSERT INTO pre_reviews (ticket_key, repo_slug, branch, head_sha, trigger, status, verdict, created_at, finished_at)
+      VALUES ('T-1', 'o/r', 'b', 'abc', 'evidence', 'done', 'clean', 5, 9)`).run();
+    db.prepare(`INSERT INTO lesson_merge_proposals (scope_kind, lesson_ids, text, reason, input_hash, created_at)
+      VALUES ('repo', '[1,2]', 't', 'r', 'h', 1)`).run();
+
+    expect(migrate(db)).toBe(61);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 61 });
+    const cols = (db.prepare("PRAGMA table_info(pre_reviews)").all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toContain("started_at");
+    expect(db.prepare("SELECT ticket_key, head_sha, status, verdict, created_at, finished_at, started_at FROM pre_reviews").all())
+      .toEqual([{ ticket_key: "T-1", head_sha: "abc", status: "done", verdict: "clean", created_at: 5, finished_at: 9, started_at: null }]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'pre_reviews_ticket'").all()).toHaveLength(1);
+    expect(db.prepare("SELECT count(*) AS n FROM lesson_merge_proposals").get()).toEqual({ n: 1 });
+    expect(concurrency(db)).toBe("1");
+  });
 });
