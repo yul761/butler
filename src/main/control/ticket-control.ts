@@ -91,9 +91,15 @@ export class TicketControl {
       const r = await this.d.close(t.key, o);
       // 原因由 parseControlRequest 保证不空，失败只会是 ticket 刚被删掉。
       if (!r.ok) return fail(M().ctlNoTicket(req.ticket));
+      const notes = [
+        r.reopenedMeanwhile && M().ctlCloseReopenedMeanwhile,
+        r.prErrors.length > 0 && M().ctlClosePrErrors(r.prErrors.length),
+        r.sessionErrors.length > 0 && M().ctlCloseSessionErrors(r.sessionErrors.length),
+      ].filter((x): x is string => typeof x === "string");
       return ok({
-        ticket: r.ticket, status: "closed", ignoredFollowups: r.ignoredFollowups, closedPrs: r.closedPrs, prErrors: r.prErrors, endedSessions: r.endedSessions,
-        ...(r.prErrors.length > 0 && { note: M().ctlClosePrErrors(r.prErrors.length) }),
+        ticket: r.ticket, status: r.reopenedMeanwhile ? this.status(r.ticket) : "closed", ignoredFollowups: r.ignoredFollowups,
+        closedPrs: r.closedPrs, prErrors: r.prErrors, endedSessions: r.endedSessions, sessionErrors: r.sessionErrors,
+        ...(notes.length > 0 && { note: notes.join(" ") }),
       });
     }
     if (req.op === "reopen_ticket") {
@@ -116,6 +122,8 @@ export class TicketControl {
       const fs = this.d.followups.listByTicket(t.key).filter((f) => req.all === true || unfinished(f));
       return ok([{ ticket: t.key, title: t.title, status: effectiveStatus(t), followups: fs.map(followupRow) }]);
     }
+    // 全部 ticket 连处理过的一起列太多了：all 只配 ticket 用，不悄悄忽略。
+    if (req.all === true) return fail(M().ctlFollowupsAllNeedsTicket);
     const own = this.scoped(scope);
     const known = new Map<string, Ticket | null>(own?.map((t) => [t.key, t]));
     const ticketOf = (key: string): Ticket | null => {

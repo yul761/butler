@@ -90,6 +90,12 @@ describe("prHandoff", () => {
     expect(out?.clearBlockers).toBe(true);
   });
 
+  it("every PR closed but the model said active (working again): left alone, like deriveStatus", () => {
+    const out = prHandoff("BTL-1", [row({ state: "closed", review: null })], { ...base(1, [pr()]), status: "active" });
+    expect(out?.status).toBe("active");
+    expect(out?.clearBlockers).toBe(false);
+  });
+
   it("a closed PR next to an open one keeps the status and the blockers", () => {
     const rows = [row({ state: "closed", review: null }), row({ id: 2, number: 8, url: "https://github.com/o/app/pull/8" })];
     const out = prHandoff("BTL-1", rows, { ...base(1, [pr()]), status: "blocked" });

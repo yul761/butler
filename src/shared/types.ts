@@ -19,8 +19,6 @@ export type TicketStatus = (typeof TICKET_STATUSES)[number];
 /** 手动能设的状态：needs_decision 只由 PR 推出来，手动设没有意义。 */
 export const MANUAL_TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done", "closed"] as const satisfies readonly TicketStatus[];
 export type ManualTicketStatus = (typeof MANUAL_TICKET_STATUSES)[number];
-/** 结束了的 ticket：做完了或者不做了（进度里不再算在进行中）。 */
-export const isFinishedStatus = (s: TicketStatus): boolean => s === "done" || s === "closed";
 /** 谁关的 ticket：用户在界面上、总控（close_ticket）、还是信息路由（BTL-272）。 */
 export const TICKET_CLOSE_SOURCES = ["user", "coordinator", "routing"] as const;
 export type TicketCloseSource = (typeof TICKET_CLOSE_SOURCES)[number];

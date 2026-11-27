@@ -11,6 +11,19 @@ export interface ClosablePr {
   cwd: string;
 }
 
+/** 关 ticket 时没关掉的 PR：skipped 是对外动作开关关着（总控、路由发起的才看开关）；unread 是还没读过、放弃读了或不在 ticket 仓库里，关不了。 */
+export interface PrCloseError {
+  url: string;
+  error: string;
+  kind: "failed" | "skipped" | "unread";
+}
+
+/** 这个 ticket 开着的 PR：能关的，和看着开着、但关不了的（没读过、放弃读了、不在 ticket 的仓库里），后者照样报告。 */
+export interface OpenPrs {
+  closable: ClosablePr[];
+  unclosable: { url: string; why: string }[];
+}
+
 /** ticket 的一个还在的 session（head）：终端开着（termId），或者休眠着。 */
 export interface LiveSession {
   id: string;
@@ -22,13 +35,17 @@ export interface TicketCloseDeps {
   tickets: Pick<TicketsRepo, "get" | "close" | "setStatusManual">;
   followups: Pick<FollowupsRepo, "ignoreForClose" | "restoreAfterReopen">;
   transaction<T>(fn: () => T): T;
-  /** 这个 ticket 开着的 PR（读过的、没放弃的、在 ticket 的仓库里的）。 */
-  openPrs(key: string): ClosablePr[];
-  closePr(pr: ClosablePr, comment: string): Promise<void>;
+  /** 这个 ticket 开着的 PR：能关的（读过的、没放弃的、在 ticket 的仓库里的），和关不了的。 */
+  openPrs(key: string): OpenPrs;
+  /** 关一个 PR：closed 关了；skipped 开关关着没跑（抛错是 gh 失败）。key 是审计里记的 ticket。 */
+  closePr(pr: ClosablePr, reason: string, o: { key: string; source: TicketCloseSource }): Promise<"closed" | "skipped">;
   /** 这个 ticket 开着终端或休眠着的 session。 */
   liveSessions(key: string): LiveSession[];
-  /** 关终端（休眠着的不再唤醒），记成用户结束的。 */
-  endSession(s: LiveSession): void;
+  /**
+   * 关终端（休眠着的不再唤醒），记成用户结束的。用户自己关的和点 × 一样直接关；总控、路由发起的和 end_session 一样，
+   * 正在干活、屏幕上有等用户回答的确认不关（返回原因）。
+   */
+  endSession(s: LiveSession, source: TicketCloseSource): { ok: true } | { ok: false; error: string };
   /** followup 变了以后重算自动状态（rederiveTicketStatus）。 */
   rederive(key: string): void;
   /** 马上重读这个 ticket 的 PR（prWatcher.soonTicket），不等下一轮轮询。 */
@@ -50,7 +67,12 @@ export interface CloseOptions {
 }
 
 export type CloseResult =
-  | { ok: true; ticket: string; ignoredFollowups: number; closedPrs: string[]; prErrors: { url: string; error: string }[]; endedSessions: string[] }
+  | {
+      ok: true; ticket: string; ignoredFollowups: number; closedPrs: string[]; prErrors: PrCloseError[]; endedSessions: string[];
+      sessionErrors: { id: string; error: string }[];
+      /** 关 PR 的时候有人重新打开了 ticket：后面的 PR 没关、session 没结束。 */
+      reopenedMeanwhile: boolean;
+    }
   | { ok: false; error: "no_ticket" | "empty_reason" };
 
 export type ReopenResult = { ok: true; ticket: string; restoredFollowups: number; status: TicketStatus } | { ok: false; error: "no_ticket" | "not_closed" };
@@ -59,7 +81,8 @@ const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
 
 /**
  * 关掉 ticket（BTL-270）：不做了，和 done（做完了）分开。手动状态写 closed，记下原因和来源；没做完的后续事项（open、snoozed）
- * 标成忽略、记下原来的状态（reopenTicket 还原）。要求了就关开着的 PR、结束 session：这两步失败不回滚关闭，结果里分项报告。
+ * 标成忽略、记下原来的状态（reopenTicket 还原）。要求了就关开着的 PR、结束 session：这两步失败不回滚关闭，结果里分项报告
+ * （没关成的 PR、关不了的 PR、没结束的 session 都列出来）。关 PR 时等 gh，每一步之前核对 ticket 还关着，被重新打开了就停。
  * 最后马上重读 PR、通知界面刷新。
  */
 export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptions): Promise<CloseResult> {
@@ -73,34 +96,48 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   d.log(`ticket ${key} closed by ${o.source}: ${reason}`);
   d.notify();
   const closedPrs: string[] = [];
-  const prErrors: { url: string; error: string }[] = [];
+  const prErrors: PrCloseError[] = [];
+  // 关 PR 要等 gh：每一步之前重新看一眼，等的时候有人重新打开了就停下，不去关一个又开着的 ticket 的 PR、结束它的 session。
+  const stillClosed = () => d.tickets.get(key)?.statusManual === "closed";
+  let reopenedMeanwhile = false;
   if (o.closePrs) {
-    for (const pr of d.openPrs(key)) {
+    const open = d.openPrs(key);
+    for (const u of open.unclosable) prErrors.push({ url: u.url, error: u.why, kind: "unread" });
+    for (const pr of open.closable) {
+      if (!stillClosed()) {
+        reopenedMeanwhile = true;
+        break;
+      }
       try {
-        await d.closePr(pr, reason);
-        closedPrs.push(pr.url);
+        if ((await d.closePr(pr, reason, { key, source: o.source })) === "closed") closedPrs.push(pr.url);
+        else prErrors.push({ url: pr.url, error: "external action switch is off", kind: "skipped" });
       } catch (e) {
-        prErrors.push({ url: pr.url, error: e instanceof Error ? e.message : String(e) });
+        prErrors.push({ url: pr.url, error: e instanceof Error ? e.message : String(e), kind: "failed" });
         d.log(`ticket ${key}: closing ${pr.url} failed`, e);
       }
     }
   }
   const endedSessions: string[] = [];
-  if (o.endSessions) {
+  const sessionErrors: { id: string; error: string }[] = [];
+  if (o.endSessions && !reopenedMeanwhile && stillClosed()) {
     for (const s of d.liveSessions(key)) {
       if (s.id === o.except) continue;
       try {
-        d.endSession(s);
-        endedSessions.push(s.id);
+        const r = d.endSession(s, o.source);
+        if (r.ok) endedSessions.push(s.id);
+        else sessionErrors.push({ id: s.id, error: r.error });
       } catch (e) {
+        sessionErrors.push({ id: s.id, error: e instanceof Error ? e.message : String(e) });
         d.log(`ticket ${key}: ending session ${s.id} failed`, e);
       }
     }
-  }
-  d.rederive(key);
+  } else if (o.endSessions) reopenedMeanwhile = true;
+  if (reopenedMeanwhile) d.log(`ticket ${key}: reopened while closing; stopped closing PRs and ending sessions`);
+  // 重新打开的那一路已经重算过状态了，这里不再用关着时的结果覆盖。
+  if (!reopenedMeanwhile) d.rederive(key);
   d.refreshPrs(key);
   d.notify();
-  return { ok: true, ticket: key, ignoredFollowups, closedPrs, prErrors, endedSessions };
+  return { ok: true, ticket: key, ignoredFollowups, closedPrs, prErrors, endedSessions, sessionErrors, reopenedMeanwhile };
 }
 
 /** 撤销关闭：回到自动状态，关闭时忽略的后续事项（之后没人动过的）还原。关掉的 PR、结束的 session 不会自己回来。 */

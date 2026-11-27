@@ -727,6 +727,8 @@ export const EN: UiStrings = {
     reopen: "Reopen",
     reopened: (n: number) => (n > 0 ? `Reopened; ${n} follow-ups are back` : "Reopened"),
     prErrors: (n: number) => `The ticket is closed, but ${n} PRs could not be closed; check the PR tab`,
+    sessionErrors: (n: number) => `${n} sessions are still working or waiting for you to confirm, so they were not ended`,
+    reopenedMeanwhile: "It was reopened while closing, so the remaining PRs stay open and no sessions were ended",
   },
   noSessions: "No sessions yet. Click “New session” to start.",
   resume: "Resume",

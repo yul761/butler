@@ -9,6 +9,7 @@ import type { BlocksRepo } from "../db/blocks-repo";
 import type { FeaturesRepo } from "../db/features-repo";
 import { currentLang } from "../i18n";
 import { M } from "../strings";
+import { endSessionRefusal } from "./end-guard";
 import type { SessionsRepo } from "../db/sessions-repo";
 import type { SessionModelChoice } from "../routing/routing-service";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -272,9 +273,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     }
     if (!termId) return fail(M().ctlSessionNotRunning(h.id));
     // 监控还没看到（刚开的终端）也当作在忙：看不准就不关。
-    const kind = d.activity?.(h.id)?.kind ?? null;
-    if ((kind !== "idle" && kind !== "waiting") || !h.waitingForInput) return fail(M().ctlSessionBusy(h.id, kind ?? "unknown"));
-    if (d.screenNeedsUser(termId)) return fail(M().ctlSessionNeedsUser(h.id));
+    const refusal = endSessionRefusal(h.id, { kind: d.activity?.(h.id)?.kind ?? null, waitingForInput: h.waitingForInput, screenNeedsUser: () => d.screenNeedsUser(termId) });
+    if (refusal) return fail(refusal);
     d.kill(termId);
     d.log?.(`end_session ${h.id} by ${req.from ?? "?"}: ${req.reason.replace(/\s+/g, " ").trim()}`);
     return ok({ ended: true });

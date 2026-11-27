@@ -315,12 +315,21 @@ export class PrWatcher {
     const goneUntil = now - PR_GONE_RETRY_MS;
     const needed = this.d.prs.needingRead(now, { includeGone: true });
     const ids = new Set(needed.map((r) => r.id));
-    for (const key of settled) for (const r of this.d.prs.byTicket(key)) if (!ids.has(r.id) && r.state !== "open") needed.push(r);
+    // gh pr reopen 之类以后（includeSettled）：合并 / 关掉的行也读一次。这些行不跟着强制重试放弃了的：认定不存在的照样一周一次（BTL-261）。
+    const settledIds = new Set<number>();
+    for (const key of settled) {
+      for (const r of this.d.prs.byTicket(key)) {
+        if (ids.has(r.id) || r.state === "open") continue;
+        needed.push(r);
+        settledIds.add(r.id);
+      }
+    }
+    const resting = (r: TicketPr) => (r.readRetryAt === null || r.readRetryAt <= now) && (r.readGoneAt === null || r.readGoneAt <= goneUntil);
     const rows = needed
       .filter(
         (r) =>
           (live.has(r.ticketKey) || r.checkedAt === 0) &&
-          (retryGivenUp(r.ticketKey, r.repoId) || ((r.readRetryAt === null || r.readRetryAt <= now) && (r.readGoneAt === null || r.readGoneAt <= goneUntil))),
+          (settledIds.has(r.id) ? resting(r) : retryGivenUp(r.ticketKey, r.repoId) || resting(r)),
       );
     const urls = new Set(rows.map((r) => r.url));
     for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);

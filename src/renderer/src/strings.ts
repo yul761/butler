@@ -739,6 +739,8 @@ const ZH = {
     reopen: "重新打开",
     reopened: (n: number) => (n > 0 ? `重新打开了，还原了 ${n} 条后续事项` : "重新打开了"),
     prErrors: (n: number) => `关了 ticket，但有 ${n} 个 PR 没关掉，去 PR 页看看`,
+    sessionErrors: (n: number) => `有 ${n} 个 session 还在干活或在等你确认，没结束`,
+    reopenedMeanwhile: "关的时候又被重新打开了，剩下的 PR 没关、session 没结束",
   },
   noSessions: "还没有 session。点“新 session”开始。",
   resume: "续接",

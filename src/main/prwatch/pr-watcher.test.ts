@@ -296,6 +296,24 @@ describe("PrWatcher: reading PRs", () => {
     expect(s.deps.notify).toHaveBeenCalled();
   });
 
+  it("includeSettled does not re-read a closed PR already found gone, or one given up, even when forced (BTL-261, BTL-270)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ state: "CLOSED" }));
+    await s.w.check();
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    s.prs.update(row.id, { readGoneAt: s.now() });
+    s.w.soonTicket("BTL-1", { includeSettled: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    s.w.soonTicket("BTL-1", { includeSettled: true, retryGivenUp: false });
+    await vi.advanceTimersByTimeAsync(1000);
+    s.prs.update(row.id, { readGoneAt: null, readFailures: PR_READ_GIVE_UP + 1, readRetryAt: s.now() + PR_READ_RETRY_MS });
+    s.w.soonTicket("BTL-1", { includeSettled: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+  });
+
   it("a forced refresh reads a given-up PR", async () => {
     vi.useFakeTimers();
     const s = setup();

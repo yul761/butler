@@ -104,7 +104,10 @@ export const api = {
   createTicket: (input: CreateTicketInput) => call<Ticket>(IPC.ticketsCreate, input),
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
   closeTicket: (key: string, o: { reason: string; closePrs: boolean; endSessions: boolean }) =>
-    call<{ ignoredFollowups: number; closedPrs: string[]; prErrors: { url: string; error: string }[]; endedSessions: string[] }>(IPC.ticketsClose, key, o),
+    call<{
+      ignoredFollowups: number; closedPrs: string[]; prErrors: { url: string; error: string; kind: "failed" | "skipped" | "unread" }[]; endedSessions: string[];
+      sessionErrors: { id: string; error: string }[]; reopenedMeanwhile: boolean;
+    }>(IPC.ticketsClose, key, o),
   reopenTicket: (key: string) => call<{ restoredFollowups: number; status: TicketStatus }>(IPC.ticketsReopen, key),
   archive: (key: string) => call<void>(IPC.ticketsArchive, key),
   switchBranch: (repoId: number) => call<void>(IPC.ticketsSwitchBranch, repoId),

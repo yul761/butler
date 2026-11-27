@@ -37,7 +37,8 @@ export function prHandoff(
   const anyOpen = prs.some((p) => p.state === "open");
   const promote = (base.status === "active" || base.status === "in_review" || base.status === "needs_decision") && !anyOpen && mergedSince;
   // BTL-270：PR 全都关了没合、也没有开着的，等人决定；旧的 blockers 是对着关掉的 PR 说的，一起清掉。
-  const decide = prs.length > 0 && prs.every((p) => p.state === "closed");
+  // 模型明确说 active（又开始干了）不改，和 deriveStatus 一致。
+  const decide = prs.length > 0 && prs.every((p) => p.state === "closed") && base.status !== "active";
   // 等决定时又有了开着的 PR（重开了、另开了一个）：回到 review。
   const reopened = base.status === "needs_decision" && anyOpen;
   const status = promote ? "done" : decide ? "needs_decision" : reopened ? "in_review" : base.status;

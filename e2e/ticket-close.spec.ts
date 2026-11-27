@@ -1,3 +1,4 @@
+import { REASON_LIMIT } from "../src/shared/control";
 import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, test, newButton } from "./fixtures";
 
@@ -21,6 +22,12 @@ test("close a ticket with a reason, see why it is closed, then reopen it", async
   const dialog = page.locator("form.close-ticket");
   await expect(dialog.getByRole("heading", { name: S.tc.title("E2E-9") })).toBeVisible();
   // 原因没填不能关。
+  await expect(dialog.getByRole("button", { name: S.tc.confirm, exact: true })).toBeDisabled();
+  // 超长的不截断：原文都在框里，提示超了，不让提交。
+  const long = "长".repeat(REASON_LIMIT + 1);
+  await dialog.getByRole("textbox").fill(long);
+  await expect(dialog.getByRole("textbox")).toHaveValue(long);
+  await expect(dialog.getByText(S.tc.reasonTooLong(REASON_LIMIT))).toBeVisible();
   await expect(dialog.getByRole("button", { name: S.tc.confirm, exact: true })).toBeDisabled();
   await dialog.getByRole("textbox").fill("需求变了，这个不做了");
   await dialog.getByRole("button", { name: S.tc.confirm, exact: true }).click();

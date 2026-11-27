@@ -268,6 +268,7 @@ import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
 import { StackService, type OwnedBranch } from "./stacks/stack-service";
 import { StackControl } from "./control/stack-control";
+import { endSessionRefusal } from "./control/end-guard";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
 import { closeTicket, reopenTicket, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
@@ -3196,9 +3197,10 @@ async function bootstrap(): Promise<void> {
       // 推送和开 PR 记下分支是谁的（工作流 W）。同样在 ignored 提前返回之前（PostToolUse）。
       void branchOwnership.handle(env).catch((e: unknown) => logger("branch owner: recording failed", e));
       // gh pr merge / close / reopen 跑完（BTL-270）：马上重读动到的 ticket 的 PR（关掉、合并了的也读，reopen 才看得到），不等下一轮轮询。
+      // 不重试放弃了的、认定不存在的（BTL-261）：跑一条 gh 命令不是用户点刷新。
       const prCmd = prStateFromEnvelope(env);
       if (prCmd) {
-        for (const key of ticketsForPrCommands(prCmd, prCommandDeps)) prWatcher.soonTicket(key, { includeSettled: true });
+        for (const key of ticketsForPrCommands(prCmd, prCommandDeps)) prWatcher.soonTicket(key, { includeSettled: true, retryGivenUp: false });
       }
       // 设计 / 自我 review 的 skill 调用记进 PR 进度。必须在 ignored 提前返回之前：PostToolUse 在 applyHookEnvelope 里恒为 ignored。
       const stageObs = stageEventFromHook(env, sessions);
@@ -3646,17 +3648,32 @@ async function bootstrap(): Promise<void> {
   const ticketCloseDeps: TicketCloseDeps = {
     tickets, followups,
     transaction: (fn) => withTransaction(db, fn),
-    // 读过、没放弃、在 ticket 自己仓库里的开着的 PR；关的时候在那个仓库的 gh 目录里跑。
-    openPrs: (key) =>
-      ticketPrs.byTicket(key)
-        .filter((p) => p.state === "open" && p.checkedAt > 0 && !prGivenUp(p) && p.repoId !== null)
-        .map((p) => ({ url: p.url, number: p.number, slug: p.slug, cwd: prGhDir(p) })),
-    // 用户（或总控替用户）明说要关的：照做，审计里记一笔（和 stacks 把草稿 PR 关掉记在同一类下）。
-    closePr: async (pr, reason) => {
-      const detail = { scope: { repoSlug: pr.slug }, target: pr.url, summary: `close #${pr.number} (ticket closed)`, payload: reason };
+    // 读过、没放弃、在 ticket 自己仓库里的开着的 PR 能关（在那个仓库的 gh 目录里跑）；其余看着开着的照样报出来，不当作关完了。
+    openPrs: (key) => {
+      const open = ticketPrs.byTicket(key).filter((p) => p.state === "open");
+      // 同一个 PR 也挂在别的还没关的 ticket 上：不替那个 ticket 关。
+      const sharedWith = (p: TicketPr) => ticketPrs.byUrl(p.url).map((r) => r.ticketKey).find((k) => k !== key && tickets.get(k)?.statusManual !== "closed") ?? null;
+      const why = (p: TicketPr) => {
+        if (p.checkedAt === 0) return "never read";
+        if (prGivenUp(p)) return "reading it was given up";
+        if (p.repoId === null) return "not in a repo of this ticket";
+        const other = sharedWith(p);
+        return other ? `also linked to ${other}` : null;
+      };
+      return {
+        closable: open.filter((p) => why(p) === null).map((p) => ({ url: p.url, number: p.number, slug: p.slug, cwd: prGhDir(p) })),
+        unclosable: open.flatMap((p) => { const w = why(p); return w ? [{ url: p.url, why: w }] : []; }),
+      };
+    },
+    // 用户在关闭框里勾了要关的：照做，审计里记一笔（和 stacks 关草稿 PR 同一类）。总控、路由发起的和别的对外动作一样看开关。
+    closePr: async (pr, reason, o) => {
+      const detail = { scope: { repoSlug: pr.slug, ticketKey: o.key }, target: pr.url, summary: `close #${pr.number} (ticket closed)`, payload: reason };
+      const run = () => prClose(pr.cwd, pr.slug, pr.number, M().ticketClosePrComment(reason));
+      if (o.source !== "user") return (await externalActions.attempt("pr_open", detail, run)).ran ? "closed" : "skipped";
       try {
-        await prClose(pr.cwd, pr.slug, pr.number, M().ticketClosePrComment(reason));
+        await run();
         externalActions.record("pr_open", { ...detail, outcome: "done" });
+        return "closed";
       } catch (e) {
         externalActions.record("pr_open", { ...detail, outcome: "failed", error: e instanceof Error ? e.message : String(e) });
         throw e;
@@ -3667,8 +3684,16 @@ async function bootstrap(): Promise<void> {
         .filter((s) => sessions.head(s.id)?.id === s.id)
         .map((s) => ({ id: s.id, termId: sessionService.termIdOf(s.id), hibernated: isHibernated(s.id) }))
         .filter((s) => s.termId !== null || s.hibernated),
-    // 和用户点 × 一样关终端，并记成用户结束的（不会被自动恢复）；休眠着的不再唤醒。
-    endSession: (s) => {
+    // 关终端并记成用户结束的（不会被自动恢复）；休眠着的不再唤醒。用户自己勾的和点 × 一样；
+    // 总控、路由发起的和 end_session 一样：正在干活、屏幕上有等用户回答的确认，不关。
+    endSession: (s, source) => {
+      if (s.termId && source !== "user") {
+        const termId = s.termId;
+        const refusal = endSessionRefusal(s.id, {
+          kind: activityMonitor.get(s.id)?.kind ?? null, waitingForInput: sessions.get(s.id)?.waitingForInput ?? false, screenNeedsUser: () => pty.screenNeedsUser(termId),
+        });
+        if (refusal) return { ok: false, error: refusal };
+      }
       sessions.setUserEnded(s.id, Date.now());
       if (s.termId) pty.kill(s.termId);
       else if (s.hibernated) {
@@ -3676,6 +3701,7 @@ async function bootstrap(): Promise<void> {
         const h = sessions.get(s.id);
         if (h?.waitingForInput) sessions.setWaiting(s.id, false, h.lastActivityAt ?? 0);
       }
+      return { ok: true };
     },
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, foreignPr }, key);

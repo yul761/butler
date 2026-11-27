@@ -25,7 +25,7 @@ export interface StatusContext {
  * 1. 任何一个 PR 还开着（h.prs、ctx.linkedOpen、remembered）：模型明确说 blocked 仍是 blocked，否则 in_review
  * 2. 模型认为 done / merged_pending_followup：还有未完成的 followup → merged_pending_followup，否则 done
  * 3. 模型说 in_review / needs_decision 且自己报的 PR 都合并了：同上
- * 4. 自己报的 PR 全被关闭（没合并），模型没明确说 active（又开始干了）；或者模型报 needs_decision / closed → needs_decision（BTL-270：
+ * 4. 自己报的 PR（没报就看记着的）全被关闭（没合并），模型没明确说 active（又开始干了）；或者模型报 needs_decision / closed → needs_decision（BTL-270：
  *    等人决定重开、另开还是关掉。之前的 blockers / blocked 不再沿用，也不悄悄变回 active。closed 只能手动关，见 closeTicket）
  * 5. 模型说 blocked，或列了阻塞原因 → blocked
  * 6. 其余沿用模型的 in_review，否则 active（模型说 active 加一个合并了的 PR 是连续几个 PR 的中间状态，仍是 active）
@@ -41,7 +41,9 @@ export function deriveStatus(h: StatusInput, openFollowups: number, ctx: StatusC
   if (h.status === "done" || h.status === "merged_pending_followup") return afterMerge;
   if ((h.status === "in_review" || h.status === "needs_decision") && pr?.state === "merged") return afterMerge;
   // 模型明确说 active（又开始干了）才不用决定；之前的 blockers 是对着关掉的 PR 说的，不再算。
-  if (h.status === "needs_decision" || h.status === "closed" || (pr?.state === "closed" && h.status !== "active")) return "needs_decision";
+  // 这次没报 PR（rederive 把 handoff 的 PR 都当记着的传进来）：看记着的 PR 是不是全关了，不然重算一次又回到旧的 blocked / in_review。
+  const settled = pr ?? combinedPr(kept(ctx.remembered));
+  if (h.status === "needs_decision" || h.status === "closed" || (settled?.state === "closed" && h.status !== "active")) return "needs_decision";
   if (h.status === "blocked" || h.blockers.length > 0) return "blocked";
   return h.status === "in_review" ? "in_review" : "active";
 }

@@ -152,6 +152,19 @@ describe("ingestHandoff", () => {
     expect(linked).toMatchObject({ status: "in_review" });
   });
 
+  it("rederive keeps needs_decision when the handoff's own PRs are all closed, even with old blockers (BTL-270)", () => {
+    const { deps, tickets } = setup();
+    const closedPr = { number: 7, url: "https://github.com/o/app/pull/7", state: "closed" as const, review: null };
+    for (const status of ["in_review", "blocked"] as const) {
+      ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ status, prs: [closedPr], blockers: ["reviewer 关了"] }) });
+      expect(tickets.get("PROJ-1")?.status).toBe("needs_decision");
+      expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("needs_decision");
+    }
+    // 模型明确说又开始干了：不用决定。
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ status: "active", prs: [closedPr] }) });
+    expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("active");
+  });
+
   it("rederive keeps done/mpf in sync with followups and leaves active alone", () => {
     const { deps, tickets, followups, tick } = setup();
     ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ status: "done", followups: [fu()] }) });

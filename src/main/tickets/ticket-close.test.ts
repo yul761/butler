@@ -4,13 +4,13 @@ import { withTransaction } from "../db/database";
 import { FollowupsRepo } from "../db/followups-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, memDb } from "../test-utils";
-import { closeTicket, reopenTicket, setTicketStatus, type ClosablePr, type LiveSession, type TicketCloseDeps } from "./ticket-close";
+import { closeTicket, reopenTicket, setTicketStatus, type ClosablePr, type LiveSession, type OpenPrs, type TicketCloseDeps } from "./ticket-close";
 
 const followup = (id: string, o: Partial<Followup> = {}): Followup => ({
   id, ticketKey: "T-1", kind: "doc", description: id, trigger: "none", dueDate: null, status: "open", snoozedUntil: null, source: "session", createdAt: 1, doneAt: null, ...o,
 });
 
-function setup(o: { prs?: ClosablePr[]; sessions?: LiveSession[]; closePr?: (pr: ClosablePr) => Promise<void> } = {}) {
+function setup(o: { prs?: ClosablePr[]; unclosable?: OpenPrs["unclosable"]; sessions?: LiveSession[]; closePr?: TicketCloseDeps["closePr"]; endSession?: TicketCloseDeps["endSession"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const followups = new FollowupsRepo(db);
@@ -22,10 +22,10 @@ function setup(o: { prs?: ClosablePr[]; sessions?: LiveSession[]; closePr?: (pr:
   const d: TicketCloseDeps = {
     tickets, followups,
     transaction: (fn) => withTransaction(db, fn),
-    openPrs: () => o.prs ?? [],
-    closePr: o.closePr ?? (async (pr) => void calls.push(`close ${pr.url}`)),
+    openPrs: () => ({ closable: o.prs ?? [], unclosable: o.unclosable ?? [] }),
+    closePr: o.closePr ?? (async (pr) => (calls.push(`close ${pr.url}`), "closed")),
     liveSessions: () => o.sessions ?? [],
-    endSession: (s) => void calls.push(`end ${s.id}`),
+    endSession: o.endSession ?? ((s) => (calls.push(`end ${s.id}`), { ok: true })),
     rederive: (k) => void calls.push(`rederive ${k}`),
     refreshPrs: (k) => void calls.push(`refresh ${k}`),
     notify: vi.fn(),
@@ -39,7 +39,7 @@ describe("closeTicket", () => {
   it("sets the manual status to closed with the reason and source, ignores what is left to do, and notifies", async () => {
     const { d, tickets, followups, calls } = setup();
     const r = await closeTicket(d, "T-1", { reason: "需求变了", source: "coordinator" });
-    expect(r).toEqual({ ok: true, ticket: "T-1", ignoredFollowups: 2, closedPrs: [], prErrors: [], endedSessions: [] });
+    expect(r).toEqual({ ok: true, ticket: "T-1", ignoredFollowups: 2, closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false });
     const t = tickets.get("T-1")!;
     expect(t.statusManual).toBe("closed");
     expect(t.closure).toEqual({ at: 100, reason: "需求变了", source: "coordinator" });
@@ -52,24 +52,67 @@ describe("closeTicket", () => {
     expect(calls).toEqual(["rederive T-1", "refresh T-1"]);
   });
 
-  it("closes the open PRs and ends the sessions when asked, and reports the PRs it could not close", async () => {
+  it("closes the open PRs and ends the sessions when asked, and reports every PR and session it could not close or end", async () => {
     const prs: ClosablePr[] = [
       { url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" },
       { url: "https://github.com/o/r/pull/2", number: 2, slug: "o/r", cwd: "/r" },
     ];
     const closed: string[] = [];
+    prs.push({ url: "https://github.com/o/r/pull/3", number: 3, slug: "o/r", cwd: "/r" });
+    const sources: string[] = [];
     const { d, calls } = setup({
       prs,
-      sessions: [{ id: "s1", termId: "s1", hibernated: false }, { id: "s2", termId: null, hibernated: true }, { id: "me", termId: "me", hibernated: false }],
-      closePr: async (pr) => {
+      unclosable: [{ url: "https://github.com/o/r/pull/9", why: "never read" }],
+      sessions: [{ id: "s1", termId: "s1", hibernated: false }, { id: "s2", termId: null, hibernated: true }, { id: "busy", termId: "busy", hibernated: false }, { id: "me", termId: "me", hibernated: false }],
+      closePr: async (pr, _reason, o) => {
+        sources.push(`${o.key}:${o.source}`);
         if (pr.number === 2) throw new Error("gh: not allowed");
+        if (pr.number === 3) return "skipped";
         closed.push(pr.url);
+        return "closed";
       },
+      endSession: (s) => (s.id === "busy" ? { ok: false, error: "working" } : (calls.push(`end ${s.id}`), { ok: true })),
     });
     const r = await closeTicket(d, "T-1", { reason: "不做了", source: "user", closePrs: true, endSessions: true, except: "me" });
-    expect(r).toMatchObject({ ok: true, closedPrs: ["https://github.com/o/r/pull/1"], prErrors: [{ url: "https://github.com/o/r/pull/2", error: "gh: not allowed" }], endedSessions: ["s1", "s2"] });
+    expect(r).toMatchObject({
+      ok: true, closedPrs: ["https://github.com/o/r/pull/1"],
+      prErrors: [
+        { url: "https://github.com/o/r/pull/9", error: "never read", kind: "unread" },
+        { url: "https://github.com/o/r/pull/2", error: "gh: not allowed", kind: "failed" },
+        { url: "https://github.com/o/r/pull/3", kind: "skipped" },
+      ],
+      endedSessions: ["s1", "s2"], sessionErrors: [{ id: "busy", error: "working" }], reopenedMeanwhile: false,
+    });
     expect(closed).toEqual(["https://github.com/o/r/pull/1"]);
+    expect(sources).toEqual(["T-1:user", "T-1:user", "T-1:user"]);
     expect(calls).toEqual(["end s1", "end s2", "rederive T-1", "refresh T-1"]);
+  });
+
+  it("stops closing PRs and does not end sessions when the ticket is reopened while gh is running", async () => {
+    const prs: ClosablePr[] = [1, 2].map((n) => ({ url: `https://github.com/o/r/pull/${n}`, number: n, slug: "o/r", cwd: "/r" }));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const closed: number[] = [];
+    const { d, calls, tickets } = setup({
+      prs,
+      sessions: [{ id: "s1", termId: "s1", hibernated: false }],
+      closePr: async (pr) => {
+        await gate;
+        closed.push(pr.number);
+        return "closed";
+      },
+    });
+    const pending = closeTicket(d, "T-1", { reason: "不做了", source: "coordinator", closePrs: true, endSessions: true });
+    await Promise.resolve();
+    // gh 还在跑：用户点了重新打开。
+    expect(reopenTicket(d, "T-1")).toMatchObject({ ok: true });
+    calls.length = 0;
+    release();
+    const r = await pending;
+    expect(r).toMatchObject({ ok: true, closedPrs: ["https://github.com/o/r/pull/1"], endedSessions: [], reopenedMeanwhile: true });
+    expect(closed).toEqual([1]);
+    expect(calls).toEqual(["refresh T-1"]);
+    expect(tickets.get("T-1")?.statusManual).toBeNull();
   });
 
   it("refuses an unknown ticket and an empty reason without writing anything", async () => {

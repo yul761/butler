@@ -34,8 +34,8 @@ function setup() {
   });
   const notify = vi.fn();
   const closeDeps: TicketCloseDeps = {
-    tickets, followups, transaction: (fn) => withTransaction(db, fn), openPrs: () => [], closePr: async () => {}, liveSessions: () => [],
-    endSession: () => {}, rederive, refreshPrs: () => {}, notify, now: () => 5, log: () => {},
+    tickets, followups, transaction: (fn) => withTransaction(db, fn), openPrs: () => ({ closable: [], unclosable: [] }), closePr: async () => "closed", liveSessions: () => [],
+    endSession: () => ({ ok: true }), rederive, refreshPrs: () => {}, notify, now: () => 5, log: () => {},
   };
   const control = new TicketControl({
     tickets, followups, close: (k, o) => closeTicket(closeDeps, k, o), reopen: (k) => reopenTicket(closeDeps, k),
@@ -57,6 +57,7 @@ describe("TicketControl (BTL-270)", () => {
     expect(all.ok && (all.value as { ticket: string }[]).map((g) => g.ticket)).toEqual(["A-1", "B-1"]);
     const one = await run({ op: "list_followups", ticket: "a-1", all: true });
     expect(one.ok && (one.value as { followups: { id: string }[] }[])[0].followups.map((f) => f.id)).toEqual(["a1", "a1done"]);
+    expect(await run({ op: "list_followups", all: true })).toMatchObject({ ok: false });
   });
 
   it("resolve_followup marks it, records the reason, and the ticket gets out of merged_pending_followup", async () => {
