@@ -311,15 +311,27 @@ describe("inputBoxText / pasteInInputBox", () => {
     expect(squash(" Yes,  I\ttrust\nthis ")).toBe("yes,itrustthis");
   });
 
-  it("cursorLed keeps dim text the cursor does not lead (dictation), and still drops the placeholder (PR #108 review)", () => {
+  it("dictation keeps dim text only when the cursor follows it; the placeholder, focused or not, is still dropped (PR #108 review)", () => {
     const rule = "─".repeat(40);
     const s = new TermScreen(40, 4);
     s.write(`${rule}\r\n❯ \x1b[2mplease fix\x1b[22m\x1b[7m \x1b[27m\r\n${rule}`);
     expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(true);
-    expect(inputBoxText(s.lines({ dropDim: "cursorLed" }))).toBe("please fix");
-    // 提示的词之间光标跳过去（没画的空格子）：整段还是提示。
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("please fix");
+    // 听写的词之间光标跳过去（没画的空格子）：整段还是听写的字。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[2mplease\x1b[22m\x1b[1C\x1b[2mfix\x1b[22m\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("please fix");
+    // 用户打的字后面接着听写：两段都读出来。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ fix \x1b[2mthe title\x1b[22m\x1b[7m \x1b[27m\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("fix the title");
+    // 有焦点时的提示：光标领着，词之间光标跳过去（没画的空格子）：整段还是提示。
     s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry\x1b[22m\x1b[2C\x1b[2m"fix lint"\x1b[22m\r\n${rule}`);
-    expect(inputBoxEmpty(s.lines({ dropDim: "cursorLed" }))).toBe(true);
+    expect(inputBoxEmpty(s.lines({ dropDim: "dictation" }))).toBe(true);
+    // 失焦时的提示（claude 2.1.332：整段暗色、没有光标）：也是提示（PR #108 第三轮 review）。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[2mTry\x1b[22m\x1b[1C\x1b[2m"fix lint"\x1b[22m\r\n${rule}`);
+    expect(inputBoxEmpty(s.lines({ dropDim: "dictation" }))).toBe(true);
+    // 暗色字后面是用户的字、不是光标：暗色字不算。
+    s.write(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[2mhint\x1b[22m x\r\n${rule}`);
+    expect(inputBoxText(s.lines({ dropDim: "dictation" }))).toBe("x");
     s.dispose();
   });
 });
@@ -342,7 +354,7 @@ describe("TermScreen.lines cache (PR #108 review suggestion 5)", () => {
       expect(s.lines({ dropDim: true })).toEqual(first);
       expect(spy).not.toHaveBeenCalled();
       // 别的模式不拿这份缓存。
-      expect(s.lines({ dropDim: "cursorLed" })[1]).toBe("❯ hint");
+      expect(s.lines({ dropDim: "dictation" })[1]).toBe("❯");
       expect(spy.mock.calls.length).toBeGreaterThan(0);
       // 调用方改了返回的数组，缓存不跟着变。
       first[1] = "changed";
@@ -370,7 +382,7 @@ describe("TermScreen.lines cache (PR #108 review suggestion 5)", () => {
       expect(s.lines({ dropDim: true })[0]).toBe("abc");
       const targets = new Set(spy.mock.calls.map((c) => c[1]));
       expect(targets.has(undefined)).toBe(false);
-      expect(targets.size).toBe(2);
+      expect(targets.size).toBe(1);
     } finally {
       spy.mockRestore();
       s.dispose();

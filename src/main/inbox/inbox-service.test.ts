@@ -242,6 +242,37 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(inbox.behalfNotices(() => null).map((n) => n.askId)).toEqual([a]);
   });
 
+  it("a correction goes in once: correcting again, or after dismissing, sends nothing more; a correction that failed to queue can be retried (PR #108 review 3, suggestion 1)", async () => {
+    const s = session("s1");
+    const { inbox, repo, deliver, mailbox } = setup({ sessions: [s] });
+    const a = inbox.ask(s, { question: "A or B?" });
+    const b = inbox.ask(s, { question: "C or D?" });
+    inbox.coordinatorAnswered("s1", { asks: [a, b], answer: "A", by: "coord", queuedAt: 5_000 });
+    expect(inbox.correctBehalf(a, "B")).toBe(true);
+    await settle();
+    expect(inbox.correctBehalf(a, "B again")).toBe(false);
+    await settle();
+    const corrections = () => deliver.mock.calls.filter((c) => String(c[1]).includes("A or B?")).length;
+    expect(corrections()).toBe(1);
+    // 先点知道了，再改：也不送。
+    expect(inbox.dismissBehalf(b)).toBe(true);
+    expect(inbox.correctBehalf(b, "D")).toBe(false);
+    await settle();
+    expect(deliver.mock.calls.filter((c) => String(c[1]).includes("C or D?"))).toHaveLength(0);
+    // 排不进信箱：提醒放回去，可以再试一次。
+    const c = inbox.ask(s, { question: "E or F?" });
+    inbox.coordinatorAnswered("s1", { asks: [c], answer: "E", by: "coord", queuedAt: 5_000 });
+    const send = vi.spyOn(mailbox, "send").mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    expect(inbox.correctBehalf(c, "F")).toBe(false);
+    expect(repo.get(c)?.behalfSeenAt).toBeNull();
+    expect(inbox.behalfNotices(() => null).map((n) => n.askId)).toEqual([c]);
+    send.mockRestore();
+    expect(inbox.correctBehalf(c, "F")).toBe(true);
+    expect(inbox.behalfNotices(() => null)).toEqual([]);
+  });
+
   it("dismissing the notice keeps the coordinator's answer; questions the user answered get no notice and cannot be corrected this way (BTL-269 A2)", () => {
     const s = session("s1");
     const { inbox, repo } = setup({ sessions: [s] });

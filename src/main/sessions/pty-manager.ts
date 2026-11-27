@@ -156,6 +156,8 @@ export function nextDraftLength(current: number, data: string): number {
 
 /** NO_COLOR 时 claude 空输入框里的提示（不是暗色）：只在用户没打过字时按字认（PR #108 review 存疑 ii）。 */
 const PLAIN_PLACEHOLDER = /^Try\s+["“]/;
+/** 整段就是 claude 的提示（Try "…"）：听写读法读出来的是这个，也不当字（终端失焦时提示整段暗色，PR #108 第三轮 review）。 */
+const WHOLE_PLACEHOLDER = /^Try\s+["“][^"”]*["”]$/;
 
 /** 两次单独的 Esc 隔多久以内算一次 Esc Esc（claude 清空输入框）。 */
 const ESC_ESC_MS = 1000;
@@ -482,7 +484,8 @@ export class PtyManager {
   /**
    * 输入框空不空（BTL-269）：true 空、false 有字、null 没画输入框或读不出。lines 是 dropDim 读出来的一屏，不给就自己读。
    * 灰色提示按画法去掉（见 TermScreen.lines），另外照顾两种画法（PR #108 review）：
-   * - 用户打过字以后，输入框里整段是暗色、却不是光标领着的提示（语音听写还没定下来的字）：不当空。
+   * - 用户打过字以后，输入框里暗色的字后面紧跟着光标（语音听写还没定下来的字）：不当空。整段暗色、没有光标的
+   *   （终端失焦时的提示）和整段是 Try "…" 的照样当空。
    * - 用户没打过字，输入框里是不带颜色的 Try "…"（NO_COLOR 时提示不是暗色）：当空。用户打过字时不按字认（C1）。
    * 终端不在了返回 null。
    */
@@ -498,8 +501,9 @@ export class PtyManager {
       const empty = inputBoxEmpty(lines);
       const text = inputBoxText(lines) ?? "";
       if (empty === true && t.typedSinceEmpty) {
-        const led = inputBoxText(t.screen.lines({ dropDim: "cursorLed" })) ?? "";
-        if (led !== "") return { empty: false, text: led };
+        // 听写：暗色字后面紧跟着光标才算（screen.ts 的 "dictation"）。失焦时的提示没有光标，读出来是空的。
+        const dictated = (inputBoxText(t.screen.lines({ dropDim: "dictation" })) ?? "").trim();
+        if (dictated !== "" && !WHOLE_PLACEHOLDER.test(dictated)) return { empty: false, text: dictated };
       }
       if (empty === false && !t.typedSinceEmpty && PLAIN_PLACEHOLDER.test(text)) return { empty: true, text: "" };
       return { empty, text };

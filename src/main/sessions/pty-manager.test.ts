@@ -846,6 +846,49 @@ describe("PtyManager draft: multi-line drafts, dictation, NO_COLOR (PR #108 revi
     expect(mgr.hasDraft("t1")).toBe(false);
   });
 
+  // PR #108 第三轮 review：按过键以后切走（终端失焦，xterm 写 \x1b[O），claude 2.1.332 把提示整段画成暗色、前面没有光标。
+  // 这不是听写的字：输入框是空的，过多久都不当草稿，信箱照常能送。
+  const unfocusedPlaceholder = "\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[2mTry\x1b[22m\x1b[1C\x1b[2m"fix lint errors"\x1b[22m\r\n${RULE}`;
+  for (const [name, keys] of [
+    ["Esc", ["\x1b"]],
+    ["Shift+Tab", ["\x1b[Z"]],
+    ["an arrow key", ["\x1b[A"]],
+    ["Ctrl+C", ["\x03"]],
+    ["typing then deleting it all", ["ab", "\x7f", "\x7f"]],
+    ["Esc Esc (clear the box)", ["x", "\x1b", "\x1b"]],
+  ] as const) {
+    it(`after ${name} and switching away, the all-dim unfocused placeholder is an empty box, not a draft`, async () => {
+      const { mgr, spawned } = setup();
+      mgr.open("t1", spec, opts);
+      for (const k of keys) mgr.write("t1", k);
+      // 焦点报告（claude 开着 1004）：终端自己发的，不算用户输入。
+      mgr.write("t1", "\x1b[O");
+      spawned[0].pty.emit(unfocusedPlaceholder);
+      await mgr.screenSettled("t1");
+      later(60 * 60_000);
+      expect(mgr.inputBoxEmpty("t1")).toBe(true);
+      expect(mgr.hasDraft("t1")).toBe(false);
+      later(60 * 60_000);
+      expect(mgr.hasDraft("t1")).toBe(false);
+      // 切回来（有焦点，光标领着的提示）也一样。
+      mgr.write("t1", "\x1b[I");
+      spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[7mT\x1b[27m\x1b[2mry\x1b[22m\x1b[1C\x1b[2m"fix lint errors"\x1b[22m\r\n${RULE}`);
+      await mgr.screenSettled("t1");
+      later(60_000);
+      expect(mgr.hasDraft("t1")).toBe(false);
+    });
+  }
+
+  it("dictation while focused is still a draft after a key press; the unfocused placeholder after it is not", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "\x1b");
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \x1b[2mplease fix the\x1b[22m\x1b[7m \x1b[27m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(60_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+
   it("NO_COLOR: an undimmed Try \"…\" is an empty box until the user types; their own Try \"…\" is a draft", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);

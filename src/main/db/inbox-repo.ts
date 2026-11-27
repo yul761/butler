@@ -196,6 +196,11 @@ export class InboxRepo {
     return Number(this.db.prepare(`UPDATE inbox_items SET behalf_seen_at = ? WHERE id = ? AND behalf_by IS NOT NULL AND behalf_seen_at IS NULL`).run(at, id).changes) > 0;
   }
 
+  /** 撤回 seeBehalf（更正没排进信箱）：只撤 at 那一次记下的，别的时候记的不动。 */
+  unseeBehalf(id: number, at: number): boolean {
+    return Number(this.db.prepare(`UPDATE inbox_items SET behalf_seen_at = NULL WHERE id = ? AND behalf_seen_at = ?`).run(id, at).changes) > 0;
+  }
+
   /** ticket、feature 归档时：这个范围里还未决的「待你决定」和汇报都记成 dismissed。返回结束了几条。 */
   dismissPending(scope: InboxArchiveScope, at: number): number {
     const w = "ticketKey" in scope ? { sql: "ticket_key = ?", arg: scope.ticketKey as string | number } : { sql: "feature_id = ?", arg: scope.featureId };

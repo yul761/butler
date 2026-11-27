@@ -36,6 +36,10 @@ describe("InboxRepo (BTL-190 2+3)", () => {
     expect(repo.seeBehalf(early, 60)).toBe(false);
     expect(repo.unseenBehalf()).toEqual([]);
     expect(repo.get(early)?.behalfSeenAt).toBe(50);
+    // 撤回只撤那一次记下的。
+    expect(repo.unseeBehalf(early, 49)).toBe(false);
+    expect(repo.unseeBehalf(early, 50)).toBe(true);
+    expect(repo.get(early)?.behalfSeenAt).toBeNull();
   });
 
   it("stores a decision with options and context, records an answer without resolving, then resolves once", () => {

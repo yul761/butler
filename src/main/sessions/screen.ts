@@ -8,9 +8,11 @@ type Step = { data: string } | { cols: number; rows: number };
 /**
  * lines 怎么处理暗色（SGR 2）的字：
  * - true：都换成空格（灰色提示、建议的下一句）；光标领着的提示（反色的字后面跟暗色的字）也换掉。
- * - "cursorLed"：只换光标领着的那一段提示，别的暗色字照样读出来（语音听写还没定下来的字是暗色的，光标在它后面：PR #108 review 存疑 i）。
+ * - "dictation"：暗色字后面紧跟着光标（反色的一格，中间只隔暗色字或空格子）才读出来，别的暗色字照样换成空格。
+ *   语音听写还没定下来的字是暗色的，光标在它后面（PR #108 review 存疑 i）。终端失焦时 claude 的提示整段是暗色、前后都没有光标，
+ *   不能当成字（PR #108 第三轮 review）。光标领着的提示照样换掉。
  */
-export type DimMode = boolean | "cursorLed";
+export type DimMode = boolean | "dictation";
 
 /** xterm 的同步解析入口（公开 API 只有异步的 write）：没有它就退回原来的做法，每块输出马上交给 xterm 异步解析。 */
 interface SyncCore {
@@ -168,28 +170,45 @@ export class TermScreen {
 
   private read(mode: DimMode): string[] {
     const b = this.term.buffer.active;
-    // 每格都复用这两个对象，不每格新建（PR #108 review 建议 5）。
+    // 每格都复用这一个对象，不每格新建（PR #108 review 建议 5）。
     const cell = b.getNullCell();
-    const next = b.getNullCell();
     const out: string[] = [];
     for (let i = 0; i < this.term.rows; i++) {
       const line = b.getLine(b.viewportY + i);
       if (!line) out.push("");
       else if (!mode) out.push(line.translateToString(true));
       else {
-        let text = "";
-        // 光标领着的提示：从反色的那一格开始，到下一个不是暗色的字为止（词之间光标跳过去的空格子不算断开）。
-        let led = false;
+        // 先把这一行的格子读出来（听写要往后看光标在不在暗色字后面）。
+        const cells: { chars: string; w: number; dim: boolean; inverse: boolean; blank: boolean }[] = [];
         for (let x = 0; x < line.length; x++) {
           if (!line.getCell(x, cell)) continue;
           const w = cell.getWidth();
           if (w === 0) continue;
-          const cursor = cell.isInverse() && line.getCell(x + w, next) !== undefined && next.isDim() && next.getChars() !== "";
-          if (cursor) led = true;
-          else if (!cell.isDim() && (cell.getChars() || " ").trim() !== "") led = false;
-          const hint = cursor || (cell.isDim() && (mode === true || led));
-          text += hint ? " ".repeat(w) : cell.getChars() || " ";
+          const chars = cell.getChars();
+          cells.push({ chars, w, dim: cell.isDim() !== 0 && chars !== "", inverse: cell.isInverse() !== 0, blank: (chars || " ").trim() === "" });
         }
+        // 光标领着的提示：反色的一格后面紧跟着暗色的字。
+        const leads = cells.map((c, i) => c.inverse && cells[i + 1]?.dim === true);
+        // 听写：暗色字往后（跳过暗色字和空格子）碰到的第一格是光标（反色、不领着提示）。从右往左算。
+        const trailed: boolean[] = new Array<boolean>(cells.length).fill(false);
+        if (mode === "dictation") {
+          let cursorAfter = false;
+          for (let i = cells.length - 1; i >= 0; i--) {
+            const c = cells[i];
+            trailed[i] = cursorAfter;
+            if (c.inverse) cursorAfter = !leads[i];
+            else if (!c.dim && !c.blank) cursorAfter = false;
+          }
+        }
+        let text = "";
+        // 光标领着的提示：从反色的那一格开始，到下一个不是暗色的字为止（词之间光标跳过去的空格子不算断开）。
+        let led = false;
+        cells.forEach((c, i) => {
+          if (leads[i]) led = true;
+          else if (!c.dim && !c.blank) led = false;
+          const hint = leads[i] || (c.dim && (led || !trailed[i]));
+          text += hint ? " ".repeat(c.w) : c.chars || " ";
+        });
         out.push(text.trimEnd());
       }
     }

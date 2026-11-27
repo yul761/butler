@@ -261,6 +261,9 @@ export class InboxService {
     const answer = text.trim();
     const x = this.d.repo.get(id);
     if (!answer || !x || x.kind !== "decision" || x.behalfBy === null || x.status !== "answered") return false;
+    // 先占住这条提醒（PR #108 第三轮 review 建议 1）：已经更正过、点过知道了的，seeBehalf 改不到行，不再送一条。
+    const at = this.d.now();
+    if (!this.d.repo.seeBehalf(id, at)) return false;
     const m = M();
     const prior = x.answer ?? "";
     let body = m.inboxCorrection(x.text, prior, answer);
@@ -272,9 +275,10 @@ export class InboxService {
       this.d.mailbox.send({ kind: "answer", from: null, to: this.headId(x.sessionId), featureId: x.featureId, body, ref: `correct:${id}`, meta: { answer } });
     } catch (e) {
       this.d.log(`inbox: queueing correction ${id} failed`, e);
+      // 没排进去：提醒放回去，用户可以再试。
+      this.d.repo.unseeBehalf(id, at);
       return false;
     }
-    this.d.repo.seeBehalf(id, this.d.now());
     this.recordAnswer(x, "card");
     this.d.notify();
     return true;

@@ -730,11 +730,22 @@ export class Mailbox {
       // 叫停的那一条排在最前，一定在这一批里。
       const list = forced ? [...claimed.mine.filter((m) => m.id === forced), ...claimed.mine.filter((m) => m.id !== forced)] : claimed.mine;
       const { text, ids } = this.batch(list, head, waiting);
+      // 这一批里注明了「替用户回答」的那些提问（PR #108 第三轮 review 建议 2）：等输入框的时候（最多 1 分钟）用户可能自己在卡片上
+      // 答了。贴进去之前再看一次，有一个已经不在等了就这次不送，留着排队，下一次按新的状态重新写注明。
+      const noteAsks = ids.flatMap((m) => (this.fromController(m, head) ? (answeredBy(m, waiting)?.asks ?? []) : []));
+      const stillAsked = (): boolean => {
+        if (noteAsks.length === 0) return true;
+        const open = new Set((this.awaiting(head)?.asks ?? []).map((a) => a.id));
+        const ok = noteAsks.every((id) => open.has(id));
+        if (!ok) this.d.log(`mailbox: ${head} no longer waits on question ${noteAsks.join(", ")}; not typing in an answer note that is out of date`);
+        return ok;
+      };
+      const check = (): boolean => stillAsked() && recheck();
       const at = this.d.now();
       // 用户自己的话不算 Shipherd 输入的：它的 UserPromptSubmit 照样算用户在终端里回答了。
       const typing = ids[0]?.kind === "user" ? undefined : this.d.typing;
       typing?.(head, "start");
-      const result = await (submit ? submit(term, text) : this.d.deliver(term, text, recheck)).catch((e: unknown) => {
+      const result = await (submit ? (stillAsked() ? submit(term, text) : Promise.resolve<DeliverResult>("blocked")) : this.d.deliver(term, text, check)).catch((e: unknown) => {
         // 抛了也要收尾，不然那个 session 下一次 UserPromptSubmit 一直被当成 Shipherd 的。
         typing?.(head, "failed");
         throw e;

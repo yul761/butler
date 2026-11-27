@@ -54,7 +54,12 @@ function world() {
     for (const [t, sid] of terms) if ((head(sid)?.id ?? sid) === h) return t;
     return null;
   };
+  /** 等输入框的那段时间里发生的事（测试用）：deliver 调 recheck 之前跑一次。 */
+  const whileWaiting: { run: (() => void) | null } = { run: null };
   const deliver = vi.fn(async (term: string, text: string, recheck: () => boolean): Promise<DeliverResult> => {
+    const run = whileWaiting.run;
+    whileWaiting.run = null;
+    run?.();
     if (!recheck()) return "blocked";
     delivered.push({ term, text });
     return deliverResult;
@@ -99,7 +104,7 @@ function world() {
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
     root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, deliveredMsgs, held, add, dirFiles,
-    controllerOf, busyReason, typing, drafts, logs, coordinatorAnswered, awaiting,
+    controllerOf, busyReason, typing, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -642,6 +647,29 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     await w.mb.flush("t1");
     expect(w.delivered).toHaveLength(1);
     expect(w.delivered[0].text).toContain(M().mailboxNotAnAnswer);
+    expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("A2: if the user answers on the card while Shipherd waits for the input box, the 'answering for the user' note is not typed in; it goes in later without it (review 3, suggestion 2)", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 5, question: "which one?", at: w.now() - 1 }], text: null });
+    w.controllerOf.set("t1", "coord");
+    w.whileWaiting.run = () => {
+      // 用户在卡片上答了：不再是没答的提问；「需要你」也解除了（卡片的回答会直接送）。
+      w.awaiting.set("t1", { asks: [], text: null });
+      w.needsYou.delete("t1");
+    };
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "pick 2", meta: { answers: true, text: "pick 2" } });
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    expect(w.repo.get(id)!.status).toBe("queued");
+    expect(w.coordinatorAnswered).toEqual([]);
+    await w.mb.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain("pick 2");
+    expect(w.delivered[0].text).not.toContain(M().mailboxAnswersQuestion("which one?"));
     expect(w.coordinatorAnswered).toEqual([]);
   });
 
