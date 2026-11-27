@@ -38,7 +38,7 @@ export class TranscriptTail implements TailSink {
   }
 
   async read(): Promise<{ state: TranscriptState; size: number }> {
-    const st = await this.hub.pump(this.file);
+    const st = await this.hub.pump(this.file, "activity");
     return { state: this.state, size: st ? st.size : this.lastSize };
   }
 

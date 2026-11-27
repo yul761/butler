@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PR_STAGES, type PrStageId } from "../src/shared/pr-stages";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, create, expect, FAKE_GH_ORIGIN, makeGitRepo, newTicket, openArchived, openPrStages, openTab, openTicketTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox, newButton } from "./fixtures";
+import { completeWizard, create, expect, FAKE_GH_ORIGIN, ghCalls, ghReadPr, makeGitRepo, newTicket, openArchived, openPrStages, openTab, openTicketTab, pageTab, terminalText, test, unsupportedGhCalls, type BranchPrFixture, type PrViewFixture, type Sandbox, newButton } from "./fixtures";
 
 /**
  * PR 进度（设计文档 2026-11-15 第 1 部分）：假 claude 里输入 /fake-skill，走真实的路径：
@@ -118,6 +118,8 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   const one = mergedPr(1, "feature/DMS-1", "2026-10-20T08:00:00Z", "2026-10-21T08:00:00Z");
   const two = mergedPr(2, "feature/DMS-1", "2026-10-22T08:00:00Z", "2026-10-23T08:00:00Z");
   const three = mergedPr(3, "other", "2026-10-24T08:00:00Z", "2026-10-25T08:00:00Z");
+  // #2 的评论比批量读一次能取的多（BTL-276）：批量读读不全，要退回 gh pr view 读它。
+  two.view.fakeTotals = { comments: 150 };
   const s = makeSandbox({
     gh: {
       branches: { "feature/DMS-1": [one.list, two.list] },
@@ -150,6 +152,11 @@ test("three PRs: two sequential on the branch and one on another branch linked b
   const merge = page.locator(".pr-stages .pr-repo").locator(".pr-cell").filter({ hasText: S.prStage.merge });
   await expect(merge).toHaveCount(3);
   for (let i = 0; i < 3; i++) await expect(merge.nth(i)).toHaveClass(/\bpr-done\b/);
+  // 批量读过；列表太长的 #2 另外用 gh pr view 读，读全了的 #1 不用。
+  const viewed = (url: string) => ghCalls(s).some((a) => a[0] === "pr" && a[1] === "view" && a[2]?.toLowerCase() === url.toLowerCase());
+  expect(ghReadPr(s, one.view.url)).toBe(true);
+  expect(viewed(two.view.url)).toBe(true);
+  expect(viewed(one.view.url)).toBe(false);
 
   // 4. feature 页「全部 ticket」：这个 ticket 一行，三个 PR 都列着。
   await page.locator(".feature-link").getByRole("button", { name: "app", exact: true }).click();

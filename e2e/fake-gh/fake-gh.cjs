@@ -7,8 +7,9 @@
 //   search prs --review-requested=@me --state=open …（UI 重做第 1 层，请你 review 的 PR）：reviewRequested，没有就是 []；
 //   pr list --head <分支> --state all …：branches[分支]，没有就是 []；
 //   pr list --state merged …（复盘的补录、每日拉取）：没有已合并的 PR（[]；带 --jq .[] 时就是没有输出）；
-//   pr view <链接或分支> --json …：prs[prUrlKey(参数)]，没有就退出 1（--json 的字段不筛，原样输出）；
-//   pr view <号> --json …（复盘分析）：prs 里链接以 /pull/<号> 结尾的第一项，没有就退出 1；
+//   pr view <链接或分支> --json …：prs[prUrlKey(参数)]（--json 的字段不筛，原样输出）。没有时和真 gh 一样退出 1：链接的仓库下一个 PR 都没有，
+//     报仓库解析不到；有这个仓库、没这个号，报 PR 解析不到（和批量读的错误一样）；分支报 no pull requests found；
+//   pr view <号> --json …（复盘分析）：prs 里链接以 /pull/<号> 结尾的第一项，没有就报 PR 解析不到、退出 1；
 //   pr create …：打印 fixture 的 created（新 PR 的链接，像真 gh 一样一行），没有就记 unsupported；
 //   run list --branch <分支> …：[]；
 //   api repos/{owner}/{repo}/pulls/<n>/comments 和 …/pulls/<n>/reviews：没有输出（行内评论、review 列表都是空的）；
@@ -30,9 +31,12 @@
 //       没有就和真 gh 一样打 HTTP 404 退出 1（还没发布过 release）；
 //   批量读 PR（BTL-276）：
 //     api graphql -f query=…p<号>: pullRequest(number: <号>)… -f owner=… -f name=…：每个别名从 prs 里找（链接以 /<owner>/<name>/pull/<号> 结尾），
-//       转成 GraphQL 节点（updatedAt 是那份 fixture 除了 CI、合并状态以外的指纹：和真 GitHub 一样，CI、合并状态变了 updatedAt 不变，
-//       要靠检查的 id / 结果看出来）；查询里有 allReviews: 时给全部字段。没有的 PR 和真 GitHub 一样：
-//       别名为 null、errors 里一条 NOT_FOUND，JSON 照打、退出 1；
+//       转成 GraphQL 节点（updatedAt 用 fixture 给的；没给就是那份 fixture 除了 CI、合并状态以外的指纹：和真 GitHub 一样，
+//       CI、合并状态变了 updatedAt 不变，要靠检查的 id / 结果看出来）；查询里有 allReviews: 时给全部字段。没有的 PR 和真 GitHub 一样：
+//       别名为 null、errors 里一条 NOT_FOUND，JSON 照打、退出 1；fixture 里一个 PR 都不在 <owner>/<name> 下：repository 为 null、
+//       errors 里一条 path ["repository"] 的 NOT_FOUND（仓库解析不到），退出 1。
+//       PR 的 fakeTotals（{comments, reviews, labels, reviewRequests} 的总数）和 fakeChecksHasNextPage：列表比给出来的长
+//       （totalCount 用它、检查有下一页），用来测「列表太长、批量读不全，退回 gh pr view」；这两个字段 pr view 不输出；
 //     api <路径> -i [-H If-None-Match: <etag>]（带 ETag 的 REST）：…/pulls/<n>/comments|reviews?per_page=100 是 []，…/actions/runs?… 是 {workflow_runs: []}；
 //       头里带 Etag（内容的指纹），If-None-Match 对上了回 304（头照打、退出 1），和真 gh 一样；
 //   仓库改名（BTL-261）：
@@ -103,25 +107,33 @@ const prNode = (pr, full) => {
   const rest = { ...pr };
   for (const k of ["statusCheckRollup", "mergeable", "mergeStateStatus"]) delete rest[k];
   const list = (v) => (Array.isArray(v) ? v : []);
+  const totals = pr.fakeTotals ?? {};
+  const total = (k, v) => (typeof totals[k] === "number" ? totals[k] : list(v).length);
+  const requested = list(pr.reviewRequests).map((x) => ({ requestedReviewer: { __typename: x.slug ? "Team" : "User", ...x } }));
   // check run 的 id：链接里的 job id，没有就按内容算一个（重跑换了结果 / 链接就换 id）。
   const idOf = (c) => Number(/\/job\/(\d+)/.exec(c.detailsUrl ?? "")?.[1] ?? parseInt(hash(c).slice(0, 8), 16));
   const ids = checks.map((c) => (c.__typename === "StatusContext" ? { __typename: "StatusContext", context: c.context, state: c.state } : { __typename: "CheckRun", databaseId: idOf(c), status: c.status, conclusion: c.conclusion ?? null }));
   const node = {
-    number: pr.number, url: pr.url, state: pr.state, updatedAt: `fake-${hash(rest)}`, headRefOid: pr.headRefOid, isDraft: pr.isDraft === true,
+    number: pr.number, url: pr.url, state: pr.state, updatedAt: pr.updatedAt ?? `fake-${hash(rest)}`, lastEditedAt: pr.lastEditedAt ?? null,
+    headRefOid: pr.headRefOid, headRefName: pr.headRefName ?? "", baseRefName: pr.baseRefName ?? null, title: pr.title ?? null, isDraft: pr.isDraft === true,
     reviewDecision: pr.reviewDecision ?? null, mergeable: pr.mergeable ?? null, mergeStateStatus: pr.mergeStateStatus ?? null,
-    comments: { totalCount: list(pr.comments).length }, reviews: { totalCount: list(pr.reviews).length },
+    comments: { totalCount: total("comments", pr.comments) }, reviews: { totalCount: total("reviews", pr.reviews) },
+    labelCount: { totalCount: total("labels", pr.labels) },
+    requested: { totalCount: total("reviewRequests", pr.reviewRequests), nodes: requested.slice(0, 20) },
+    recentComments: { nodes: list(pr.comments).slice(-20).map((c) => ({ id: c.id ?? null, lastEditedAt: c.lastEditedAt ?? null })) },
+    recentReviews: { nodes: list(pr.reviews).slice(-20).map((r) => ({ id: r.id ?? null, state: r.state ?? null, lastEditedAt: r.lastEditedAt ?? null })) },
     tip: { nodes: [{ commit: { statusCheckRollup: checks.length === 0 ? null : { state: rollupState, contexts: { totalCount: checks.length, nodes: ids } } } }] },
   };
   if (!full) return node;
   return {
-    ...node, headRefName: pr.headRefName ?? "", createdAt: pr.createdAt ?? null, mergedAt: pr.mergedAt ?? null, closedAt: pr.closedAt ?? null,
-    baseRefName: pr.baseRefName ?? null, title: pr.title ?? null, body: pr.body ?? null, author: pr.author ?? null,
-    labels: { totalCount: list(pr.labels).length, nodes: list(pr.labels) },
-    reviewRequests: { totalCount: list(pr.reviewRequests).length, nodes: list(pr.reviewRequests).map((x) => ({ requestedReviewer: { __typename: x.slug ? "Team" : "User", ...x } })) },
-    allReviews: { totalCount: list(pr.reviews).length, nodes: list(pr.reviews) },
-    allComments: { totalCount: list(pr.comments).length, nodes: list(pr.comments) },
+    ...node, createdAt: pr.createdAt ?? null, mergedAt: pr.mergedAt ?? null, closedAt: pr.closedAt ?? null,
+    body: pr.body ?? null, author: pr.author ?? null,
+    labels: { totalCount: total("labels", pr.labels), nodes: list(pr.labels) },
+    reviewRequests: { totalCount: total("reviewRequests", pr.reviewRequests), nodes: requested },
+    allReviews: { totalCount: total("reviews", pr.reviews), nodes: list(pr.reviews) },
+    allComments: { totalCount: total("comments", pr.comments), nodes: list(pr.comments) },
     commits: { nodes: list(pr.commits).map((c) => ({ commit: c })) },
-    head: { nodes: [{ commit: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false }, nodes: checks } } } }] },
+    head: { nodes: [{ commit: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: pr.fakeChecksHasNextPage === true }, nodes: checks } } } }] },
   };
 };
 
@@ -140,8 +152,16 @@ if (cmd === "--version") {
 } else if (cmd === "pr" && sub === "view" && ref !== undefined && !ref.startsWith("-") && args.includes("--json")) {
   const prs = fixture().prs;
   const pr = /^\d+$/.test(ref) ? Object.entries(prs).find(([url]) => url.endsWith(`/pull/${ref}`))?.[1] : prs[prUrlKey(ref)];
-  if (!pr) notFound(`no pull requests found for ${ref}`);
-  out(pr);
+  if (!pr) {
+    const link = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/pull\/(\d+)/i.exec(ref);
+    if (link && !Object.keys(prs).some((u) => u.includes(`/${link[1]}/${link[2]}/pull/`.toLowerCase()))) notFound(`GraphQL: Could not resolve to a Repository with the name '${link[1]}/${link[2]}'. (repository)`);
+    if (link || /^\d+$/.test(ref)) notFound(`GraphQL: Could not resolve to a PullRequest with the number of ${link ? link[3] : ref}. (repository.pullRequest)`);
+    notFound(`no pull requests found for branch "${ref}"`);
+  }
+  const shown = { ...pr };
+  delete shown.fakeTotals;
+  delete shown.fakeChecksHasNextPage;
+  out(shown);
 } else if (cmd === "pr" && sub === "create" && fixture().created) {
   process.stdout.write(`${fixture().created}\n`);
 } else if (cmd === "pr" && sub === "list" && flag("--head") === undefined && flag("--state") === "open") {
@@ -171,6 +191,10 @@ if (cmd === "--version") {
   const full = query.includes("allReviews:");
   const tail = `/${field("owner")}/${field("name")}/pull/`.toLowerCase();
   const prs = Object.entries(fixture().prs);
+  if (!prs.some(([url]) => url.includes(tail))) {
+    out({ data: { rateLimit: { cost: 1, remaining: 4999, resetAt: "2099-01-01T00:00:00Z" }, repository: null }, errors: [{ type: "NOT_FOUND", path: ["repository"], message: `Could not resolve to a Repository with the name '${field("owner")}/${field("name")}'.` }] });
+    process.exit(1);
+  }
   const repository = {};
   const errors = [];
   for (const m of query.matchAll(/p(\d+): pullRequest\(number: (\d+)\)/g)) {

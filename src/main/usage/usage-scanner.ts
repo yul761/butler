@@ -2,7 +2,7 @@ import { open, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { UsageRepo, UsageRow, UsageSource } from "../db/usage-repo";
 import { TranscriptHub, type TailLine, type TailSink, type TailStat } from "../sessions/transcript-hub";
-import { parseUsageLine, usageOfValue } from "./usage-parse";
+import { parseUsageLine, usageOfLongLine, usageOfValue } from "./usage-parse";
 
 export const USAGE_SCAN_MS = 30_000;
 export const USAGE_CHUNK_BYTES = 1024 * 1024;
@@ -110,7 +110,7 @@ export class UsageScanner {
       s = { file, sink, detach: this.hub.attach(file, "usage", sink) };
       this.sinks.set(sessionId, s);
     }
-    await this.hub.pump(file);
+    await this.hub.pump(file, "usage");
     s.sink.flush();
   }
 
@@ -197,8 +197,15 @@ class UsageSink implements TailSink {
 
   lines(lines: TailLine[], next: number, st: TailStat): void {
     for (const l of lines) {
+      if (l.skipped) {
+        // 超过 hub 单行上限的行（一大段工具结果）：整行不解析，从开头、结尾的片段里抠用量。
+        const turn = usageOfLongLine(l.head ?? "", l.tail ?? "");
+        if (turn) this.rows.push({ ...turn, sessionId: this.sessionId, agentId: null, source: "session", job: null });
+        this.log?.(`usage scan: ${this.file} has a ${l.end - l.start}-byte line at ${l.start}; ${turn ? `took its usage (${turn.messageId}) from its ends` : "found no usage in it"}`);
+        continue;
+      }
       // 先快速跳过不相关的行；要用的 JSON 由 hub 解析（别的消费者已经解析过就不再解析）
-      if (l.skipped || !l.text.includes('"usage"')) continue;
+      if (!l.text.includes('"usage"')) continue;
       const turn = usageOfValue(l.json());
       if (turn) this.rows.push({ ...turn, sessionId: this.sessionId, agentId: null, source: "session", job: null });
     }

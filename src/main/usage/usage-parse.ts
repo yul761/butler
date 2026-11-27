@@ -78,3 +78,67 @@ export function usageOfValue(obj: unknown): UsageTurn | null {
     context: counts.input + counts.cacheWrite5m + counts.cacheWrite1h + counts.cacheRead,
   };
 }
+
+/** 从 at（指向 "{"）起按括号配对找到这个 JSON 对象的结尾（跳过字符串里的括号）；配不上返回 null。 */
+function objectAt(text: string, at: number): string | null {
+  let depth = 0;
+  let str = false;
+  for (let i = at; i < text.length; i++) {
+    const c = text[i];
+    if (str) {
+      if (c === "\\") i++;
+      else if (c === '"') str = false;
+    } else if (c === '"') str = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return text.slice(at, i + 1);
+  }
+  return null;
+}
+
+function lastMatch(re: RegExp, ...texts: string[]): RegExpExecArray | null {
+  for (const t of texts) {
+    let last: RegExpExecArray | null = null;
+    for (const m of t.matchAll(re)) last = m;
+    if (last) return last;
+  }
+  return null;
+}
+
+/**
+ * 太长、没整行解析的 assistant 行（BTL-276：transcript 读取跳过超过 64MB 的行）：从开头、结尾的片段里抠出用量要的字段。
+ * Claude Code 写的行里 message 的 model、id 在 content 前面（开头），usage、requestId、type、timestamp 在 content 后面（结尾）；
+ * 字符串里的引号是转义过的，「"usage":{」这样的片段只会是真的字段。抠不出来返回 null。
+ */
+export function usageOfLongLine(head: string, tail: string): UsageTurn | null {
+  const isAssistant = /"type"\s*:\s*"assistant"/.test(tail) || /"type"\s*:\s*"assistant"/.test(head);
+  if (!isAssistant) return null;
+  const u = lastMatch(/"usage"\s*:\s*\{/g, tail, head);
+  if (!u) return null;
+  const src = u.input === tail ? tail : head;
+  const body = objectAt(src, u.index + u[0].length - 1);
+  if (!body) return null;
+  let usage: unknown;
+  try {
+    usage = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const str = (m: RegExpExecArray | null): string | undefined => {
+    try {
+      return m ? (JSON.parse(`"${m[1]}"`) as string) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const S = '"((?:[^"\\\\]|\\\\.)*)"';
+  // message.id：message 对象开头到 content 之前（Claude Code 写的是 {"model":…,"id":…,"type":"message",…,"content":[…]}；content 里 tool_use 的 id 不算）。
+  const msgAt = /"message"\s*:\s*\{/.exec(head);
+  let msgHead = msgAt ? head.slice(msgAt.index + msgAt[0].length) : "";
+  const contentAt = msgHead.search(/"content"\s*:/);
+  if (contentAt >= 0) msgHead = msgHead.slice(0, contentAt);
+  const id = str(new RegExp(`"id"\\s*:\\s*${S}`).exec(msgHead));
+  const requestId = str(lastMatch(new RegExp(`"requestId"\\s*:\\s*${S}`, "g"), tail, head));
+  const model = str(new RegExp(`"model"\\s*:\\s*${S}`).exec(head));
+  const timestamp = str(lastMatch(new RegExp(`"timestamp"\\s*:\\s*${S}`, "g"), tail, head));
+  return usageOfValue({ type: "assistant", requestId, timestamp, message: { id, model, usage } });
+}

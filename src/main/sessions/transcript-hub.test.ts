@@ -103,6 +103,20 @@ describe("TranscriptHub", () => {
     expect(seen.map((l) => (l.skipped ? "skipped" : l.text))).toEqual([row(0), "skipped", row(2)]);
   });
 
+  it("gives the start and the end of a skipped line", async () => {
+    const f = join(tempDir("hub-"), "t.jsonl");
+    const long = `{"a":1,${"y".repeat(200_000)},"z":2}`;
+    writeFileSync(f, `${long}\n${row(1)}\n`);
+    const hub = new TranscriptHub({ chunkBytes: 4096, maxLineBytes: 100_000 });
+    const seen: TailLine[] = [];
+    hub.attach(f, "a", { begin: () => ({ offset: 0 }), lines: (ls) => void seen.push(...ls) });
+    await hub.pump(f);
+    expect(seen[0]).toMatchObject({ skipped: true, start: 0, end: long.length + 1 });
+    expect(seen[0].head).toBe(long.slice(0, 64 * 1024));
+    expect(seen[0].tail).toBe(long.slice(-64 * 1024));
+    expect(seen[1].text).toBe(row(1));
+  });
+
   it("grows the window for a line longer than a chunk, splits on bytes and drops the \\r of CRLF", async () => {
     const f = join(tempDir("hub-"), "t.jsonl");
     const long = JSON.stringify({ text: "中文".repeat(300) });
@@ -137,10 +151,133 @@ describe("TranscriptHub", () => {
     const first = hub.pump(f);
     const second = hub.pump(f);
     const third = hub.pump(f);
-    expect(third).toBe(second);
     await Promise.all([first, second, third]);
     expect(a.ends).toHaveLength(2);
     expect(a.got).toHaveLength(1);
+  });
+
+  /** 每次让出事件循环都停住，release 放行当时停着的那些。 */
+  function gate() {
+    const waiting: (() => void)[] = [];
+    const yieldNow = () => new Promise<void>((r) => waiting.push(r));
+    const until = async (p: Promise<unknown>) => {
+      let done = false;
+      void p.then(() => (done = true));
+      for (let i = 0; i < 1000 && !done; i++) {
+        for (const r of waiting.splice(0)) r();
+        await new Promise((r) => setTimeout(r, 1));
+      }
+      expect(done).toBe(true);
+    };
+    return { yieldNow, until };
+  }
+
+  it("lets a reader near the end finish first while a reader far behind catches up, and reads it again without waiting for the catch-up", async () => {
+    const f = join(tempDir("hub-"), "t.jsonl");
+    const lines = Array.from({ length: 100 }, (_, i) => row(i));
+    writeFileSync(f, lines.map((l) => `${l}\n`).join(""));
+    const lastTwo = Buffer.byteLength(lines.slice(0, 98).map((l) => `${l}\n`).join(""));
+    const g = gate();
+    const hub = new TranscriptHub({ chunkBytes: 64, catchUpBytes: 200, yieldNow: g.yieldNow });
+    const conv = recorder(0);
+    const act = recorder(lastTwo);
+    hub.attach(f, "conv", conv.sink);
+    hub.attach(f, "activity", act.sink);
+
+    await g.until(hub.pump(f, "activity"));
+    expect(act.got.map((x) => (x.json as { i: number }).i)).toEqual([98, 99]);
+    expect(act.ends).toHaveLength(1);
+    // 对话还在从头补读。
+    expect(conv.ends).toHaveLength(0);
+    expect(conv.got.length).toBeLessThan(100);
+
+    // 补读还没完，活动又要读：另起一次读，不等补读。
+    appendFileSync(f, `${row(100)}\n`);
+    await g.until(hub.pump(f, "activity"));
+    expect(act.got.map((x) => (x.json as { i: number }).i)).toEqual([98, 99, 100]);
+    expect(act.ends).toHaveLength(2);
+    expect(conv.ends).toHaveLength(0);
+
+    // 补读完以后对话再读一次，拿到补读开始以后写的那行；每行只给一次。
+    await g.until(hub.pump(f));
+    expect(conv.got.map((x) => (x.json as { i: number }).i)).toEqual(Array.from({ length: 101 }, (_, i) => i));
+    expect(conv.ends).toHaveLength(2);
+    expect(act.got).toHaveLength(3);
+  });
+
+  it("does not hold a reader already at the end behind a reader catching up", async () => {
+    const f = join(tempDir("hub-"), "t.jsonl");
+    const text = Array.from({ length: 100 }, (_, i) => `${row(i)}\n`).join("");
+    writeFileSync(f, text);
+    const g = gate();
+    const hub = new TranscriptHub({ chunkBytes: 64, catchUpBytes: 200, yieldNow: g.yieldNow });
+    const conv = recorder(0);
+    const act = recorder(Buffer.byteLength(text));
+    hub.attach(f, "conv", conv.sink);
+    hub.attach(f, "activity", act.sink);
+    await g.until(hub.pump(f, "activity"));
+    expect(act.ends).toHaveLength(1);
+    expect(conv.ends).toHaveLength(0);
+    await g.until(hub.pump(f));
+    expect(conv.got).toHaveLength(100);
+  });
+
+  it("does not feed a key attached again until the reader it replaced has finished, so a shared cursor gets each line once", async () => {
+    const f = join(tempDir("hub-"), "t.jsonl");
+    writeFileSync(f, Array.from({ length: 200 }, (_, i) => `${row(i)}\n`).join(""));
+    const g = gate();
+    const hub = new TranscriptHub({ chunkBytes: 64, catchUpBytes: 200, yieldNow: g.yieldNow });
+    // 两个消费者共用一个游标（对话另存：临时挂的和 head 自己的都读写库里同一个游标）。
+    let cursor = 0;
+    const seen: number[] = [];
+    const shared = (): TailSink => ({
+      begin: () => ({ offset: cursor }),
+      lines: (ls, next) => {
+        for (const l of ls) seen.push((l.json() as { i: number }).i);
+        cursor = next;
+      },
+    });
+    const act = recorder(0);
+    hub.attach(f, "activity", act.sink);
+    const detach = hub.attach(f, "conv:h", shared());
+    const first = hub.pump(f, "conv:h");
+    for (let i = 0; i < 3; i++) await g.until(Promise.resolve());
+    detach();
+    hub.attach(f, "conv:h", shared());
+    const second = hub.pump(f, "conv:h");
+    await g.until(Promise.all([first, second]));
+    expect(seen).toEqual(Array.from({ length: 200 }, (_, i) => i));
+  });
+
+  it("waits for every reader, the one catching up included, when the pump names none", async () => {
+    const f = join(tempDir("hub-"), "t.jsonl");
+    const lines = Array.from({ length: 50 }, (_, i) => row(i));
+    writeFileSync(f, lines.map((l) => `${l}\n`).join(""));
+    const hub = new TranscriptHub({ chunkBytes: 64, catchUpBytes: 100 });
+    const conv = recorder(0);
+    const act = recorder(Buffer.byteLength(lines.slice(0, 49).map((l) => `${l}\n`).join("")));
+    hub.attach(f, "conv", conv.sink);
+    hub.attach(f, "activity", act.sink);
+    const st = await hub.pump(f);
+    expect(st?.size).toBeGreaterThan(0);
+    expect(conv.ends).toHaveLength(1);
+    expect(conv.got).toHaveLength(50);
+    expect(act.got).toHaveLength(1);
+  });
+
+  it("answers a pump waiting for one more read when its reader is detached mid-read", async () => {
+    const f = join(tempDir("hub-"), "t.jsonl");
+    writeFileSync(f, Array.from({ length: 20 }, (_, i) => `${row(i)}\n`).join(""));
+    const g = gate();
+    const hub = new TranscriptHub({ chunkBytes: 64, yieldNow: g.yieldNow });
+    const a = recorder(0);
+    const detach = hub.attach(f, "a", a.sink);
+    const first = hub.pump(f, "a");
+    const again = hub.pump(f, "a");
+    detach();
+    await g.until(Promise.all([first, again]));
+    expect(a.ends).toHaveLength(1);
+    expect(hub.sinkKeys(f)).toEqual([]);
   });
 
   it("returns null and tells the readers when the file is missing", async () => {

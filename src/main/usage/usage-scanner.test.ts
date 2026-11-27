@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, truncateSync, writeFileSync } from "node:fs"
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { UsageRepo } from "../db/usage-repo";
+import { TranscriptHub } from "../sessions/transcript-hub";
 import { memDb, tempDir } from "../test-utils";
 import { subagentsDir, USAGE_SCAN_MS, UsageScanner, usageScanMs } from "./usage-scanner";
 
@@ -130,6 +131,25 @@ describe("UsageScanner", () => {
     writeFileSync(file("s1"), line("a", "y".repeat(450)) + line("b"));
     await scanner.scanAll();
     expect(count("s1")).toBe(2);
+  });
+
+  it("keeps the usage of an assistant line over the reading limit and the lines after it, and logs it", async () => {
+    const dir = tempDir("shipherd-usage-");
+    const repo = new UsageRepo(memDb());
+    const logs: string[] = [];
+    const scanner = new UsageScanner({
+      repo, sessionIds: () => ["s1"], transcriptFile: (id) => join(dir, `${id}.jsonl`),
+      hub: new TranscriptHub({ chunkBytes: 64, maxLineBytes: 1000 }), log: (m) => void logs.push(m),
+    });
+    // 真实的写法：message 的第一个键是 model；同一个回复的另一行（另一个内容块）id 相同，只记一次。
+    const real = (pad: string) =>
+      JSON.stringify({ message: { model: "m", id: "long", type: "message", role: "assistant", content: [{ type: "text", text: pad }], usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3 } }, requestId: "req_long", type: "assistant", timestamp: "2026-11-06T00:00:00Z" }) + "\n";
+    writeFileSync(join(dir, "s1.jsonl"), line("a") + real("short") + real("z".repeat(5000)) + line("b"));
+    await scanner.scanAll();
+    const rows = repo.since(0);
+    expect(rows.map((r) => r.messageId).sort()).toEqual(["a", "b", "long"]);
+    expect(rows.find((r) => r.messageId === "long")).toMatchObject({ input: 1, output: 2, cacheRead: 3, model: "m" });
+    expect(logs.some((m) => /took its usage \(long\)/.test(m))).toBe(true);
   });
 
   it("records subagent files under the parent session", async () => {

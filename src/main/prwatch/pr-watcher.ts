@@ -3,7 +3,7 @@ import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
 import { PR_GONE_RETRY_MS, prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
-  GH_NOT_FOUND, latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLogDetail, type prBatch, type prRead, type prsForBranch, type reviewAuthors,
+  GH_NOT_FOUND, latestReviewers, prBatchable, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLogDetail, type prBatch, type prRead, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
 import { prUrlParts } from "../../shared/pr-url";
@@ -849,13 +849,13 @@ interface BatchGroup {
   byNumber: Map<number, PrPoll[]>;
 }
 
-/** 到期的 PR 按仓库分组（批量读用）；URL 认不出仓库的放进 rest，照原来一个个读。 */
+/** 到期的 PR 按仓库分组（批量读用）；URL 认不出仓库的、PR 号放不进 GraphQL 的（prBatchable）放进 rest，照原来一个个读。 */
 function batchGroups(due: PrPoll[]): { bySlug: Map<string, BatchGroup>; rest: PrPoll[] } {
   const bySlug = new Map<string, BatchGroup>();
   const rest: PrPoll[] = [];
   for (const p of due) {
     const parts = prUrlParts(p.url);
-    if (!parts) {
+    if (!parts || !prBatchable(parts.number)) {
       rest.push(p);
       continue;
     }

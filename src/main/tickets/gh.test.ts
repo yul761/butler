@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, prBatch, prBatchQuery, prBatchResult, GH_NOT_FOUND } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, ghApiGet, prBatch, prBatchable, PR_BATCH_CHUNK, prBatchQuery, prBatchResult, GH_NOT_FOUND } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -222,6 +222,38 @@ describe.skipIf(process.platform === "win32")("prStatus / branchRuns / failedLog
     const dir = fakeGh(`echo "$@" >> "$(dirname "$0")/args.txt"\nsleep 5`);
     expect(await reviewComments(dir, 5, 300)).toBeNull();
     expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n")).toEqual(["api repos/{owner}/{repo}/pulls/5/comments?per_page=100 -i"]);
+  });
+
+  it("reviewComments keeps no ETag for a first page that is exactly full, so the 101st comment on page two is still read (BTL-276)", async () => {
+    resetGhEtags();
+    const c = (id: number) => ({ id, user: { login: "a" }, body: `b${id}`, created_at: "2026-01-02T00:00:00Z" });
+    const page = Array.from({ length: 100 }, (_, i) => c(i + 1));
+    // 第一页一直是前 100 条、ETag 不变；带着它来就 304。--paginate 给全部（count 文件里的条数）。
+    const dir = fakeGh(`echo "$@" >> "$(dirname "$0")/args.txt"
+case "$*" in
+*'If-None-Match: "p1"'*) printf 'HTTP/2.0 304 Not Modified\nEtag: "p1"\n\n'; echo 'gh: HTTP 304' >&2; exit 1;;
+*reviews*-i*) printf 'HTTP/2.0 200 OK\nEtag: "r"\n\n[]'; exit 0;;
+*-i*) printf 'HTTP/2.0 200 OK\nEtag: "p1"\n\n'; cat "$(dirname "$0")/page.json"; exit 0;;
+*comments*--paginate*) cat "$(dirname "$0")/all.jsonl"; exit 0;;
+esac`);
+    writeFileSync(join(dir, "page.json"), JSON.stringify(page));
+    writeFileSync(join(dir, "all.jsonl"), page.map((x) => JSON.stringify(x)).join("\n"));
+    expect(await reviewComments(dir, 5, 5000)).toHaveLength(100);
+    writeFileSync(join(dir, "all.jsonl"), [...page, c(101)].map((x) => JSON.stringify(x)).join("\n"));
+    expect((await reviewComments(dir, 5, 5000))?.map((x) => x.id).at(-1)).toBe("101");
+    const calls = readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n").filter((l) => l.includes("/comments"));
+    expect(calls.some((l) => l.includes("If-None-Match"))).toBe(false);
+    expect(calls.filter((l) => l.includes("--paginate"))).toHaveLength(2);
+  });
+
+  it("ghApiGet answers a 304 from the cache with an empty stderr, so the 304 never shows up as a gh error (BTL-276)", async () => {
+    resetGhEtags();
+    const dir = fakeGh(`case "$*" in
+*'If-None-Match: "e9"'*) printf 'HTTP/2.0 304 Not Modified\nEtag: "e9"\n\n'; echo 'gh: HTTP 304' >&2; exit 1;;
+esac
+printf 'HTTP/2.0 200 OK\nEtag: "e9"\n\n[1,2]'`);
+    expect(await ghApiGet(dir, "repos/{owner}/{repo}/pulls/5/comments?per_page=100", 5000, 1 << 20, undefined, { perPage: 100 })).toEqual({ body: [1, 2], next: false, stderr: "" });
+    expect(await ghApiGet(dir, "repos/{owner}/{repo}/pulls/5/comments?per_page=100", 5000, 1 << 20, undefined, { perPage: 100 })).toEqual({ body: [1, 2], next: false, stderr: "" });
   });
 
   it("reviewComments reads one object per line, even when a body has brackets, quotes and newlines, and returns null if any line is bad", async () => {
@@ -651,12 +683,17 @@ describe("prBatch: one GraphQL call for all due PRs of a repo (BTL-276)", () => 
     } } } }],
   });
   const cheap = (n: number, o: Record<string, unknown> = {}) => ({
-    number: n, url: `https://github.com/o/app/pull/${n}`, state: "OPEN", updatedAt: "2026-11-20T00:00:00Z", headRefOid: "a1", isDraft: false,
+    number: n, url: `https://github.com/o/app/pull/${n}`, state: "OPEN", updatedAt: "2026-11-20T00:00:00Z", lastEditedAt: null, headRefOid: "a1",
+    headRefName: "feat", baseRefName: "main", title: "T", isDraft: false,
     reviewDecision: "REVIEW_REQUIRED", mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED", comments: { totalCount: 1 }, reviews: { totalCount: 1 },
+    labelCount: { totalCount: 1 },
+    requested: { totalCount: 2, nodes: [{ requestedReviewer: { __typename: "User", login: "bob" } }, { requestedReviewer: { __typename: "Team", slug: "core" } }] },
+    recentComments: { nodes: [{ id: "C1", lastEditedAt: null }] },
+    recentReviews: { nodes: [{ id: "R1", state: "APPROVED", lastEditedAt: null }] },
     tip: tip("PENDING", [[101, "IN_PROGRESS", null]]), ...o,
   });
   const full = (n: number, o: Record<string, unknown> = {}) => ({
-    ...cheap(n), headRefName: "feat", createdAt: "2026-11-19T00:00:00Z", mergedAt: null, closedAt: null, baseRefName: "main", title: "T", body: "B", author: { login: "me" },
+    ...cheap(n), createdAt: "2026-11-19T00:00:00Z", mergedAt: null, closedAt: null, body: "B", author: { login: "me" },
     labels: { totalCount: 1, nodes: [{ name: "ui" }] },
     reviewRequests: { totalCount: 2, nodes: [{ requestedReviewer: { __typename: "User", login: "bob" } }, { requestedReviewer: { __typename: "Team", slug: "core", name: "Core" } }] },
     allReviews: { totalCount: 1, nodes: [{ id: "R1", author: { login: "alice" }, state: "APPROVED", body: "", submittedAt: "2026-11-19T01:00:00Z" }] },
@@ -677,6 +714,8 @@ describe("prBatch: one GraphQL call for all due PRs of a repo (BTL-276)", () => 
     expect(q).toContain("p12: pullRequest(number: 12)");
     expect(q).toContain("rateLimit");
     expect(q).not.toContain("reviews(first");
+    for (const f of ["baseRefName", "headRefName", "title", "lastEditedAt", "labelCount: labels", "requested: reviewRequests(first: 20)", "recentComments: comments(last: 20)", "recentReviews: reviews(last: 20)"]) expect(q).toContain(f);
+    expect(() => prBatchQuery([2 ** 31], "cheap")).toThrow();
     expect(q).not.toMatch(/\bmutation\b/);
     expect(prBatchQuery([7], "full")).toContain("reviews(first: 100)");
   });
@@ -714,6 +753,16 @@ describe("prBatch: one GraphQL call for all due PRs of a repo (BTL-276)", () => 
     // 两个检查互换结果：失败的个数一样，指纹也不一样。
     expect(sig({ tip: tip("FAILURE", [[101, "COMPLETED", "FAILURE"], [102, "COMPLETED", "SUCCESS"]]) }))
       .not.toBe(sig({ tip: tip("FAILURE", [[101, "COMPLETED", "SUCCESS"], [102, "COMPLETED", "FAILURE"]]) }));
+    // 栈依赖 base、轮到谁看 review 请求：这些变了 updatedAt 不一定变。改名后链接变了，要全读一次才知道仓库搬了。
+    expect(sig({ baseRefName: "feature/x" })).not.toBe(base);
+    expect(sig({ headRefName: "feat2" })).not.toBe(base);
+    expect(sig({ title: "T2" })).not.toBe(base);
+    expect(sig({ url: "https://github.com/o/app2/pull/7" })).not.toBe(base);
+    expect(sig({ lastEditedAt: "2026-11-20T01:00:00Z" })).not.toBe(base);
+    expect(sig({ labelCount: { totalCount: 2 } })).not.toBe(base);
+    expect(sig({ requested: { totalCount: 2, nodes: [{ requestedReviewer: { __typename: "User", login: "carol" } }, { requestedReviewer: { __typename: "Team", slug: "core" } }] } })).not.toBe(base);
+    expect(sig({ recentComments: { nodes: [{ id: "C1", lastEditedAt: "2026-11-20T02:00:00Z" }] } })).not.toBe(base);
+    expect(sig({ recentReviews: { nodes: [{ id: "R1", state: "APPROVED", lastEditedAt: "2026-11-20T02:00:00Z" }] } })).not.toBe(base);
     // 检查的顺序不算。
     expect(sig({ tip: tip("FAILURE", [[101, "COMPLETED", "FAILURE"], [102, "COMPLETED", "SUCCESS"]]) }))
       .toBe(sig({ tip: tip("FAILURE", [[102, "COMPLETED", "SUCCESS"], [101, "COMPLETED", "FAILURE"]]) }));
@@ -745,5 +794,25 @@ describe("prBatch: one GraphQL call for all due PRs of a repo (BTL-276)", () => 
     expect(r?.prs.get(8)).toBe(GH_NOT_FOUND);
     expect(r?.prs.get(7)).toMatchObject({ pr: null });
     expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n")).toEqual(["api graphql ghe.example.com ghe.example.com/o/app", "owner=o", "name=app"]);
+  });
+
+  it.skipIf(process.platform === "win32")("splits a long list into calls of PR_BATCH_CHUNK, leaves out numbers GraphQL cannot take, and keeps the chunks that worked when one fails", async () => {
+    // 每次调用：查询里的别名数记一行；第二块失败。
+    const dir = fakeGh(`q=""; for a in "$@"; do case "$a" in query=*) q="$a";; esac; done
+n=$(printf '%s' "$q" | grep -o 'pullRequest(number' | wc -l | tr -d ' ')
+echo "$n" >> "$(dirname "$0")/calls.txt"
+c=$(wc -l < "$(dirname "$0")/calls.txt" | tr -d ' ')
+[ "$c" = 2 ] && exit 1
+printf '%s' "$q" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r={};for(const m of s.matchAll(/p(\\d+): pullRequest/g))r["p"+m[1]]=${JSON.stringify(cheap(0))};console.log(JSON.stringify({data:{rateLimit:{cost:1,remaining:4000,resetAt:null},repository:r}}))})'`);
+    const numbers = [...Array.from({ length: PR_BATCH_CHUNK * 2 + 5 }, (_, i) => i + 1), 0, 2 ** 31, 1.5];
+    const r = await prBatch(dir, "o/app", numbers, "cheap", 10_000);
+    expect(readFileSync(join(dir, "calls.txt"), "utf8").trim().split("\n")).toEqual([String(PR_BATCH_CHUNK), String(PR_BATCH_CHUNK), "5"]);
+    expect(r?.prs.has(1)).toBe(true);
+    expect(r?.prs.has(PR_BATCH_CHUNK + 1)).toBe(false);
+    expect(r?.prs.has(PR_BATCH_CHUNK * 2 + 1)).toBe(true);
+    for (const bad of [0, 2 ** 31, 1.5]) expect(r?.prs.has(bad)).toBe(false);
+    expect(r?.rate).toMatchObject({ remaining: 4000 });
+    expect([0, -1, 1.5, 2 ** 31, Number.NaN].some(prBatchable)).toBe(false);
+    expect(prBatchable(2 ** 31 - 1)).toBe(true);
   });
 });

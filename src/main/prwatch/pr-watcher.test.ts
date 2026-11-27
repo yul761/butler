@@ -1718,6 +1718,32 @@ describe("PrWatcher: batch-reading PRs with GraphQL (BTL-276)", () => {
     expect(onSlugMoved).toHaveBeenCalledWith("o/app", "o/app2");
   });
 
+  it("reports a renamed repo when only the URL changed since the last full read, through the cheap read (BTL-261)", async () => {
+    const onSlugMoved = vi.fn<(from: string, to: string) => void>();
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote, {}, { onSlugMoved });
+    s.link();
+    await s.w.check();
+    expect(onSlugMoved).not.toHaveBeenCalled();
+    remote.set(7, pr({ url: url(7, "app2") }));
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["cheap:7", "full:7"]);
+    expect(onSlugMoved).toHaveBeenCalledWith("o/app", "o/app2");
+  });
+
+  it("reads a PR whose number GraphQL cannot take on its own with gh pr view, not in the batch", async () => {
+    const big = 2 ** 31;
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote);
+    s.link();
+    s.link({ url: url(big), number: big });
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7"]);
+    expect(s.gh.prStatus).toHaveBeenCalledWith("/w/r/app", url(big), expect.any(Number));
+  });
+
   it("asks one batch per repo, and reads at most PR_BATCH_FULL_MAX PRs in full per call", async () => {
     const remote = new Map<number, PrStatus | "nf" | null>();
     const s = batched(remote);

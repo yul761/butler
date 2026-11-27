@@ -393,7 +393,7 @@ export class ConvIngester {
     }
     const detach = own?.file === file ? null : this.hub.attach(file, `conv:${id}`, this.sink(id, file));
     try {
-      await this.hub.pump(file);
+      await this.hub.pump(file, `conv:${id}`);
     } finally {
       detach?.();
     }
