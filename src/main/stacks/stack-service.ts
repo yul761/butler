@@ -829,6 +829,8 @@ export class StackService {
     this.d.repo.finishRun(runId, { outcome: "conflict", reason: `${res.branch}: ${res.files.join(", ")}`, detail });
     if (!handed) {
       this.d.record?.("stack.conflict", { files: res.files.length });
+      // 上一次改写后的核对请求说的是旧顶端：不管冲突交不交给 session，都先撤掉（BTL-278）
+      if (layer.ticketKey) this.d.withdraw?.({ ticketKey: layer.ticketKey, branch: layer.branch }, "verify");
       if (policy.conflictToSession) await this.deliverConflict(stack, runId);
       else this.d.repo.updateLayer(layer.id, { conflictKey: key });
     }

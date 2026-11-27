@@ -1676,6 +1676,21 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.verifyWithdrawn).toContain("B:b");
   });
 
+  it("withdraws the verify request on a conflict even when conflicts aren't handed to sessions", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.verify).toHaveLength(4);
+    w.policy.setLayer({ kind: "global" }, { autoRebase: true, dailyRebase: false, conflictToSession: false });
+    w.pushMain("b.txt", "main's b\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(w.repoT.list()[0]!.id)).toMatchObject({ outcome: "conflict" });
+    expect(w.delivered).toEqual([]);
+    expect(w.verifyWithdrawn).toContain("B:b");
+  });
+
   it("does not catch up a push of a tip that gained conflict markers; a git error skips the push too", async () => {
     let on = false;
     const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" || on });
