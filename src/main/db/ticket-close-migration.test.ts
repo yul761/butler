@@ -22,6 +22,16 @@ describe("ticket close migration (BTL-270)", () => {
     expect(C).toBeGreaterThan(0);
   });
 
+  it("is migration 63, right after BTL-269's 62, and upgrades a database at 62", () => {
+    // 合并顺序：#104 占 60，#103 占 61，#108（BTL-269）占 62，这一条排在它们后面。
+    expect(C).toBe(62);
+    expect(MIGRATIONS[C - 1]).toContain("blocked_reason");
+    const db = before();
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 62 });
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: MIGRATIONS.length });
+  });
+
   it("rebuilds tickets keeping every column and row, and the tables pointing at it keep their rows", () => {
     const db = before();
     const old = columns(db, "tickets");

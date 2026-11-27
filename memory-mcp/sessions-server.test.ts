@@ -682,8 +682,9 @@ describe("shipherd-sessions pre-review tools (BTL-271)", () => {
     for (const scope of [{ featureId: 7 }, { shipherd: true }] as const) {
       const zh = (await tools(setup(2000, scope).server)).map((t) => t.name);
       const en = await tools(setup(2000, scope, "en").server);
-      // 取消、插队是单独的工具，追加在最后（只读的 pre_review_queue 不带参数）。
-      expect(zh.slice(-4)).toEqual(["pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act"]);
+      // 取消、插队是单独的工具，追加在预审工具最后（只读的 pre_review_queue 不带参数）；后合的 ticket 关闭工具（BTL-270）排在它们后面。
+      expect(zh.slice(-TICKET_TOOLS.length)).toEqual(TICKET_TOOLS.map((t) => t.name));
+      expect(zh.slice(-4 - TICKET_TOOLS.length, -TICKET_TOOLS.length)).toEqual(["pre_review_status", "pre_review_run", "pre_review_queue", "pre_review_queue_act"]);
       expect(en.map((t) => t.name)).toEqual(zh);
       expect(/[\u4e00-\u9fff]/.test(JSON.stringify(en))).toBe(false);
     }
