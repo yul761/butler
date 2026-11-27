@@ -47,6 +47,32 @@ describe("lookupLessons", () => {
     expect(lookupLessons(repo, identity(), paths, roots, { paths: ["/elsewhere/src/db/x.ts"] }).lessons).toEqual([]);
   });
 
+  // 和 hook/lessons.test.ts 里补送的 locate 用例一样（同一份 locateInRoots）：Windows 路径、大小写、嵌套目录最长优先。
+  it("matches Windows paths without caring about case or slashes, and only folds case where the file system does", () => {
+    const { repo, add } = setup();
+    const w = add({ kind: "repo", slug: "acme/web" }, "web rule", ["src/**"]);
+    const a = add({ kind: "repo", slug: "acme/api" }, "api rule", ["src/**"]);
+    const win = [{ slug: "acme/web", dirs: ["C:\\wt\\acme\\web-btl-1"] }, { slug: "acme/api", dirs: ["C:\\wt\\acme\\api-btl-1"] }];
+    const r = lookupLessons(repo, identity(), paths, win, { paths: ["c:\\WT\\acme\\web-btl-1\\src\\A.ts"] }, {}, "win32");
+    expect(r.lessons.map((l) => l.id)).toEqual([w]);
+    expect(r.lessons[0].matched).toEqual(["acme/web:src/A.ts"]);
+    // 相对路径 + Windows 的 cwd
+    expect(lookupLessons(repo, identity(), paths, win, { paths: ["src\\db\\x.ts"], cwd: "C:\\wt\\acme\\api-btl-1" }, {}, "win32").lessons.map((l) => l.id)).toEqual([a]);
+    // linux 区分大小写；目录名只是前缀相同的不算
+    expect(lookupLessons(repo, identity(), paths, roots, { paths: ["/WT/acme/web-btl-1/src/a.ts"] }, {}, "linux").unresolved).toEqual(["/WT/acme/web-btl-1/src/a.ts"]);
+    expect(lookupLessons(repo, identity(), paths, roots, { paths: ["/wt/acme/web-btl-12/src/a.ts"] }, {}, "linux").unresolved).toEqual(["/wt/acme/web-btl-12/src/a.ts"]);
+  });
+
+  it("nested directories: the longest one wins", () => {
+    const { repo, add } = setup();
+    add({ kind: "repo", slug: "acme/web" }, "web rule", ["**/c.ts"]);
+    const a = add({ kind: "repo", slug: "acme/api" }, "api rule", ["c.ts"]);
+    const nested = [{ slug: "acme/web", dirs: ["/a"] }, { slug: "acme/api", dirs: ["/a/b"] }];
+    const r = lookupLessons(repo, identity(), paths, nested, { paths: ["/a/b/c.ts"] }, {}, "linux");
+    expect(r.lessons.map((l) => l.id)).toEqual([a]);
+    expect(r.lessons[0].matched).toEqual(["acme/api:c.ts"]);
+  });
+
   it("a product lesson applies in each repo of the product; unscoped lessons apply to every file", () => {
     const { repo, add } = setup();
     const pid = repo.createProduct("shop", ["acme/web", "acme/api"], 1);

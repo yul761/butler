@@ -1,6 +1,8 @@
 // 编辑时补送规矩（BTL-274）：主进程开 session 时写一份清单，hook 在 Edit / Write / NotebookEdit 之后按改的文件补送匹配的规矩全文。
 // 纯数据和命令拼装：hook 打包时也带上它。
 
+import { normalizePath } from "./glob";
+
 /**
  * 清单：<dir>/<session id>.json。settings 里的命令只看它在不在：没有要补送的 session 开销只是一次 test。
  * 主 session 全送完了也留着：子 agent 各有自己的上下文和已送记录，它们改到匹配的文件时还要送。
@@ -31,6 +33,28 @@ export interface DripManifest {
   lang: "zh" | "en";
   roots: DripRoot[];
   lessons: DripLesson[];
+}
+
+/** Windows、macOS 的文件系统默认不分大小写。 */
+export const pathsFoldCase = (platform: NodeJS.Platform): boolean => platform === "win32" || platform === "darwin";
+
+/**
+ * 文件属于哪个仓库、相对路径是什么：最长的目录优先（嵌套的 worktree）；Windows、macOS 上不分大小写，反斜杠当斜杠。
+ * 编辑时补送（hook）和 lessons 工具共用这一份判断。
+ */
+export function locateInRoots(file: string, roots: readonly DripRoot[], platform: NodeJS.Platform): { slug: string; rel: string } | null {
+  const fold = pathsFoldCase(platform);
+  const key = (p: string) => (fold ? p.toLowerCase() : p);
+  const f = normalizePath(file);
+  let best: { slug: string; rel: string; len: number } | null = null;
+  for (const r of roots) {
+    for (const dir of r.dirs) {
+      const d = normalizePath(dir).replace(/\/+$/, "");
+      if (!d || !key(f).startsWith(`${key(d)}/`) || (best && best.len >= d.length)) continue;
+      best = { slug: r.slug, rel: f.slice(d.length + 1), len: d.length };
+    }
+  }
+  return best && { slug: best.slug, rel: best.rel };
 }
 
 /** session id 里只留文件名安全的字符（Claude Code 的 session id 本来就是 uuid）。 */

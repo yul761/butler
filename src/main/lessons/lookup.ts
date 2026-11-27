@@ -1,4 +1,4 @@
-import type { DripRoot } from "../../shared/lesson-drip";
+import { locateInRoots, type DripRoot } from "../../shared/lesson-drip";
 import type { LessonDelivery } from "../../shared/lessons";
 import { lessonApplies } from "../../shared/lesson-scope";
 import { normalizePath } from "../../shared/glob";
@@ -40,24 +40,12 @@ export interface LookupResult {
  * 只有一个仓库时也可以直接算在它头上。认不出的不猜（多仓库 ticket 里同名相对路径不能把别的仓库的规矩带进来），放进 unresolved。
  */
 function resolvePaths(
-  paths: readonly string[], roots: readonly DripRoot[], fold: boolean, cwd: string | undefined,
+  paths: readonly string[], roots: readonly DripRoot[], platform: NodeJS.Platform, cwd: string | undefined,
 ): { files: { slug: string; rel: string }[]; unresolved: string[] } {
   const files: { slug: string; rel: string }[] = [];
   const unresolved: string[] = [];
-  const key = (p: string) => (fold ? p.toLowerCase() : p);
   const isAbs = (p: string) => /^([a-zA-Z]:)?[\\/]/.test(p);
-  const locate = (abs: string): { slug: string; rel: string } | null => {
-    const f = normalizePath(abs);
-    let best: { slug: string; rel: string; len: number } | null = null;
-    for (const r of roots) {
-      for (const dir of r.dirs) {
-        const d = normalizePath(dir).replace(/\/+$/, "");
-        if (!d || !key(f).startsWith(`${key(d)}/`) || (best && best.len >= d.length)) continue;
-        best = { slug: r.slug, rel: f.slice(d.length + 1), len: d.length };
-      }
-    }
-    return best && { slug: best.slug, rel: best.rel };
-  };
+  const locate = (abs: string) => locateInRoots(abs, roots, platform);
   const slugs = [...new Set(roots.map((r) => r.slug))];
   for (const raw of paths) {
     let at: { slug: string; rel: string } | null = null;
@@ -89,7 +77,7 @@ export function lookupLessons(
   for (const slug of slugs) for (const p of repo.productsOf(slug)) productSlugs.set(p.id, [...(productSlugs.get(p.id) ?? []), slug]);
   const labels = new Map<number, string>();
   for (const p of repo.products()) labels.set(p.id, p.name);
-  const resolved = q.paths?.length ? resolvePaths(q.paths, roots, platform === "win32" || platform === "darwin", q.cwd) : null;
+  const resolved = q.paths?.length ? resolvePaths(q.paths, roots, platform, q.cwd) : null;
   const files = resolved?.files ?? null;
   const query = q.query?.trim() ?? "";
   const idQuery = /^#?(\d+)$/.exec(query);

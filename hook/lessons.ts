@@ -2,10 +2,9 @@
 // 只读一份清单和一份已送记录，不调 git，不连网：每次编辑多花几毫秒。
 import { appendFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { DRIP_SENT_SUFFIX, DRIP_SUFFIX, dripIntro, dripName, type DripLesson, type DripManifest } from "../src/shared/lesson-drip";
+import { DRIP_SENT_SUFFIX, DRIP_SUFFIX, dripIntro, dripName, locateInRoots, type DripLesson, type DripManifest } from "../src/shared/lesson-drip";
 import { lessonApplies } from "../src/shared/lesson-scope";
 import { LESSON_DRIP_LIMIT } from "../src/shared/lessons";
-import { normalizePath } from "../src/shared/glob";
 import { envValue } from "../src/shared/legacy-env";
 
 export interface DripDeps {
@@ -58,26 +57,8 @@ function parseManifest(text: string | null): DripManifest | null {
 
 const sentIds = (text: string | null): Set<number> => new Set((text ?? "").split("\n").map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0));
 
-/** 文件属于清单里哪个仓库、相对路径是什么。最长的目录优先（嵌套的 worktree）；Windows、macOS 上不分大小写。 */
-export function locate(file: string, m: DripManifest, platform: NodeJS.Platform): { slug: string; rel: string } | null {
-  const fold = platform === "win32" || platform === "darwin";
-  const norm = (p: string) => {
-    const n = normalizePath(p).replace(/\/+$/, "");
-    return fold ? n.toLowerCase() : n;
-  };
-  const f = normalizePath(file);
-  const key = fold ? f.toLowerCase() : f;
-  let best: { slug: string; rel: string; len: number } | null = null;
-  for (const r of m.roots) {
-    for (const dir of r.dirs) {
-      const d = norm(dir);
-      if (!d || !key.startsWith(`${d}/`)) continue;
-      if (best && best.len >= d.length) continue;
-      best = { slug: r.slug, rel: f.slice(d.length + 1), len: d.length };
-    }
-  }
-  return best && { slug: best.slug, rel: best.rel };
-}
+/** 文件属于清单里哪个仓库、相对路径是什么（和 lessons 工具同一份判断）。 */
+export const locate = (file: string, m: DripManifest, platform: NodeJS.Platform): { slug: string; rel: string } | null => locateInRoots(file, m.roots, platform);
 
 const block = (l: DripLesson, lang: "zh" | "en"): string =>
   [`- #${l.id} [${l.label}] ${l.text}`, ...(l.why.trim() ? [lang === "zh" ? `  原因：${l.why}` : `  Why: ${l.why}`] : [])].join("\n");
