@@ -2503,6 +2503,7 @@ const ZH = {
     mergeBy: { coordinator: "总控合", user: "我自己合" } as Record<MergeBy, string>,
     note: "这一步的要求（可不填）",
     notes: "整体说明（可不填）",
+    noMerge: "流程里没有「合并」这一步：session 都不能合，要你自己合。",
     saved: "存好了。",
     unchanged: "和原来一样，没改。",
     strip: "工作流程",

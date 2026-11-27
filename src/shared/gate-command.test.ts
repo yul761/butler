@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyBypass, classifyGateCommand, classifyPush, classifyShip } from "./gate-command";
+import { classifyBypass, classifyGateCommand, gatePrCreate, classifyPush, classifyShip } from "./gate-command";
 
 describe("classifyGateCommand", () => {
   it("recognises gh pr merge", () => {
@@ -103,7 +103,12 @@ describe("classifyGateCommand", () => {
 
   it("checks a merge that follows gh pr create in the same command (BTL-273)", () => {
     expect(classifyGateCommand("gh pr create --fill && gh pr merge --auto")).toMatchObject({ kind: "pr_merge" });
-    expect(classifyGateCommand("git push -u origin feature/x && gh pr create --fill")).toMatchObject({ kind: "pr_create" });
+    expect(classifyGateCommand("git push -u origin feature/x && gh pr create --fill")).toMatchObject({ kind: "push", source: "feature/x" });
+    expect(gatePrCreate("git push -u origin feature/x && gh pr create --fill")).toMatchObject({ kind: "pr_create" });
+    // 推 HEAD 时主动作是推送（可能推到别的分支，要照常审）；开 PR 由 gatePrCreate 另外带上
+    expect(classifyGateCommand("git push -u origin HEAD && gh pr create --fill")).toMatchObject({ kind: "push" });
+    expect(gatePrCreate("git push -u origin HEAD && cd sub && gh pr create --fill -d")).toEqual({ kind: "pr_create", dir: "sub", head: null, draft: true, repo: null });
+    expect(gatePrCreate("git push origin HEAD:feat")).toBeNull();
   });
 
   it("ignores everything else", () => {

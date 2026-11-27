@@ -2476,6 +2476,7 @@ export const EN: UiStrings = {
     mergeBy: { coordinator: "Coordinator merges", user: "I merge" } as Record<MergeBy, string>,
     note: "What this step needs (optional)",
     notes: "Notes for the whole workflow (optional)",
+    noMerge: "There's no Merge step, so no session may merge; you merge it yourself.",
     saved: "Saved.",
     unchanged: "Same as before, nothing changed.",
     strip: "Workflow",

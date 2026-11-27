@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { runGate, type GateDeps } from "./gate";
+import { parseGateRequest } from "../src/shared/gate";
 
 function setup(opts: { alive?: boolean | "missing"; onSleep?: (home: string) => void } = {}) {
   const home = tempDir();
@@ -88,6 +89,15 @@ describe("runGate", () => {
     expect(names).toEqual(["abcd1234-req.json"]);
     expect(JSON.parse(readFileSync(join(s.home, "gate", "requests", names[0]), "utf8")).phase).toBe("post");
     expect(existsSync(join(s.home, "gate", "requests", "abcd1234-req.json.tmp"))).toBe(false);
+  });
+
+  it("carries a gh pr create that follows the reviewed action (BTL-273)", async () => {
+    const s = setup();
+    await runGate(s.input("git push -u origin HEAD && gh pr create --fill", "PostToolUse"), s.env, s.deps);
+    const req = JSON.parse(readFileSync(join(s.home, "gate", "requests", s.requests()[0]), "utf8"));
+    expect(req.action).toMatchObject({ kind: "push", source: "HEAD" });
+    expect(req.prCreate).toEqual({ kind: "pr_create", dir: null, head: null, draft: false, repo: null });
+    expect(parseGateRequest(req)?.prCreate).toEqual(req.prCreate);
   });
 
   it("treats PostToolUseFailure (the command failed) as post too", async () => {

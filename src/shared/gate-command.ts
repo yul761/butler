@@ -201,7 +201,29 @@ export function classifyGateCommand(command: string): GateAction | null {
     else if (action?.kind === "pr_create") prOpen ??= action;
     else if (action) return action;
   }
-  return prOpen ?? ownPush;
+  // 推自己的分支再开 PR：主动作仍是推送（跑完以后照旧马上查一次），开 PR 由 gatePrCreate 带上、闸门先审。
+  return ownPush ?? prOpen;
+}
+
+export type PrCreateAction = Extract<GateAction, { kind: "pr_create" }>;
+
+/**
+ * 命令里的 `gh pr create`（没有为 null）。classifyGateCommand 只返回一个动作：前面有别的要审的动作时
+ * （`git push origin HEAD && gh pr create`、`gh pr create && gh pr merge --auto`），开 PR 这一步也要单独审（BTL-273）。
+ */
+export function gatePrCreate(command: string): PrCreateAction | null {
+  let dir: string | null = null;
+  for (const tokens of splitSegments(command)) {
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+    if (tokens[i] === "cd") {
+      if (tokens[i + 1]) dir = joinDir(dir, tokens[i + 1]);
+      continue;
+    }
+    const action = classifySegment(tokens, dir);
+    if (action?.kind === "pr_create") return action;
+  }
+  return null;
 }
 
 /**

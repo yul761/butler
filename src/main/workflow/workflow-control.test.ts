@@ -40,6 +40,7 @@ function setup() {
     coordinator: () => null,
     session: (id) => sessions.get(id) ?? null,
     requestBotReview: async () => ({ ok: true, via: "api" }),
+    reviewCommentCount: async () => 0,
     ghCwd: () => null,
     now: () => 1000,
     log: () => {},

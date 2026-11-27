@@ -42,6 +42,7 @@ function setup(o: { tickets?: Ticket[]; level?: AutomationLevel } = {}) {
   const heads = new Map<string, string>();
   const sessions = new Map<string, Session>();
   const bot: { calls: number; result: BotReviewResult; gate?: Promise<void> } = { calls: 0, result: { ok: true, via: "api" } };
+  const counts: { calls: string[][]; result: number | null } = { calls: [], result: 0 };
   let recipient: string | null = "sess-1";
   let level: AutomationLevel = o.level ?? "semi";
   const mk = () =>
@@ -75,13 +76,17 @@ function setup(o: { tickets?: Ticket[]; level?: AutomationLevel } = {}) {
         if (bot.gate) await bot.gate;
         return bot.result;
       },
+      reviewCommentCount: async (_pr, _cwd, ids) => {
+        counts.calls.push(ids);
+        return counts.result;
+      },
       ghCwd: () => "/r/a-wt",
       now: () => now,
       log: () => {},
       onChange: () => {},
     });
   return {
-    db, repo, tickets, prs, events, preReviews, sent, queued, heads, sessions, bot, mk,
+    db, repo, tickets, prs, events, preReviews, sent, queued, heads, sessions, bot, counts, mk,
     svc: mk(),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -196,6 +201,18 @@ describe("WorkflowService: progress and notices", () => {
     expect(t.svc.view("X-1").current).toBe("merge");
   });
 
+  it("CI passing is only what it is now: a red run after a push moves the ticket back", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1, ci: "passing" }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("merge");
+    t.prs[0].ci = "failing";
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("ci_green");
+    expect(t.repo.done("X-1").map((d) => d.step)).not.toContain("ci_green");
+  });
+
   it("tells the epic coordinator when a coordinator-merged ticket reaches the merge", async () => {
     const t = setup();
     t.svc.setLayer({ kind: "global" }, presetWorkflow("fast"));
@@ -249,6 +266,8 @@ describe("WorkflowService: gate", () => {
     t.preReviews.push({ id: 3, target: { repoSlug: "o/a", branch: "feature/X-1", headSha: "s2" }, verdict: "clean" });
     expect(await t.svc.prCreate({ ...req, draft: false })).toContain("--draft");
     expect(await t.svc.prCreate(req)).toBeNull();
+    // 闸门给的仓库路径写法不同（末尾斜杠、Windows 大小写）也认得出是这个仓库
+    expect(await t.svc.prCreate({ ...req, repoPath: "/r/a/" })).toBeNull();
   });
 
   it("a user-merged workflow blocks every session, the coordinator included", () => {
@@ -363,6 +382,71 @@ describe("WorkflowService: bot review", () => {
     await t.svc.evaluate("X-1");
     expect(t.svc.view("X-1").current).toBe("merge");
     expect(t.bot.calls).toBe(1);
+  });
+
+  it("a review whose inline comments couldn't be fetched stays open until gh counts them", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    // PR 监视拉行内评论失败：只记下了 review，没有行内评论
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot", state: "COMMENTED" } }));
+    t.counts.result = null;
+    await t.svc.evaluate("X-1");
+    expect(t.counts.calls).toEqual([["7"]]);
+    expect(t.svc.view("X-1").current).toBe("bot_review");
+    expect(t.repo.botRequests("X-1")[0].reviewedAt).toBeNull();
+    // 流程没走到合并：合并照样被拦
+    expect(t.svc.merge({ ticketKey: "X-1", sessionId: null })).not.toBeNull();
+    // gh 数到了 3 条：要处理意见
+    t.counts.result = 3;
+    await t.svc.evaluate("X-1");
+    expect(t.svc.view("X-1").current).toBe("address_comments");
+    expect(t.repo.botRequests("X-1")[0]).toMatchObject({ reviewComments: 3 });
+  });
+
+  it("inline comments that show up after the round was settled raise its count", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 8, reviewId: 7, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    t.events.push(ev({ kind: "comment", at: t.now() + 6, data: { id: 9, reviewId: 7, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.repo.botRequests("X-1")[0]).toMatchObject({ reviewComments: 2 });
+  });
+
+  it("a request cut off by a quit is asked again after a restart", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    // 上次退出时 gh 还没回来：行停在 requesting
+    t.repo.claimBotRequest("X-1", 1, 1, "copilot", "s1", t.now());
+    await t.svc.evaluate("X-1");
+    expect(t.bot.calls).toBe(0);
+    const again = t.mk();
+    again.recoverInterrupted();
+    await again.evaluate("X-1");
+    expect(t.bot.calls).toBe(1);
+    expect(t.repo.botRequests("X-1")).toMatchObject([{ round: 1, status: "requested" }]);
+  });
+
+  it("won't take a session's step while an automatic step before it is still open", async () => {
+    const t = setup();
+    t.svc.setLayer({ kind: "global" }, botFlow);
+    t.prs.push(pr({ id: 1, ticketKey: "X-1", repoId: 1 }));
+    await t.svc.evaluate("X-1");
+    // bot 还没 review：不能先标「处理意见」
+    expect(t.svc.markStep("X-1", "address_comments", null)).toMatchObject({ ok: false, message: expect.stringContaining("bot review") });
+    expect(t.repo.done("X-1").map((d) => d.step)).not.toContain("address_comments");
+    // 说明超长：拒绝，不截断
+    t.events.push(ev({ kind: "review", at: t.now() + 5, data: { id: 7, who: "copilot" } }));
+    t.events.push(ev({ kind: "comment", at: t.now() + 5, data: { id: 8, reviewId: 7, who: "copilot" } }));
+    await t.svc.evaluate("X-1");
+    expect(t.svc.markStep("X-1", "address_comments", "x".repeat(501))).toMatchObject({ ok: false, message: expect.stringContaining("500") });
+    expect(t.svc.markStep("X-1", "address_comments", "改好了")).toMatchObject({ ok: true });
   });
 
   it("a human comment isn't the bot's answer", async () => {

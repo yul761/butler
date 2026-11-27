@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { classifyGateCommand } from "../src/shared/gate-command";
+import { classifyGateCommand, gatePrCreate } from "../src/shared/gate-command";
 import { GATE_VERSION, GATE_WAIT_MS, type GateRequest, type GateResult } from "../src/shared/gate";
 import { homeFromEnv } from "../src/main/paths";
 import { envValue } from "../src/shared/legacy-env";
@@ -66,7 +66,8 @@ export async function runGate(raw: string, env: NodeJS.ProcessEnv, deps: GateDep
     const alive = readJson(join(gateDir, "alive.json")) as { pid?: unknown } | null;
     if (!alive || typeof alive.pid !== "number" || !deps.pidAlive(alive.pid)) return "";
 
-    const request: GateRequest = { v: GATE_VERSION, phase, action, cwd: p.cwd, session: envValue(env, "SESSION")?.trim() || null, ticket: envValue(env, "TICKET")?.trim() || null };
+    const prCreate = action.kind === "pr_create" ? null : gatePrCreate(command);
+    const request: GateRequest = { v: GATE_VERSION, phase, action, ...(prCreate && { prCreate }), cwd: p.cwd, session: envValue(env, "SESSION")?.trim() || null, ticket: envValue(env, "TICKET")?.trim() || null };
     const id = deps.newId();
     const reqDir = join(gateDir, "requests");
     mkdirSync(reqDir, { recursive: true });

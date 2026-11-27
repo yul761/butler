@@ -269,6 +269,11 @@ export class MergeGate {
 
   private async before(req: GateRequest, clock: Clock): Promise<GateResult> {
     const a = req.action;
+    // 同一条命令里还开 PR（`git push origin HEAD && gh pr create`）：先审开 PR，过了再照常审前面那个动作。
+    if (req.prCreate && a.kind !== "pr_create") {
+      const r = await this.checkPrCreate(req, req.prCreate, clock);
+      if (r.decision === "deny") return r;
+    }
     // 推一个分支到同名的远端分支（git push -u origin feature/x）：推的是它自己，不是合并进别的分支，和目录无关。
     if (a.kind === "push" && a.source && a.source !== "HEAD" && a.source === a.target) return ALLOW;
     if (a.kind === "pr_create") return this.checkPrCreate(req, a, clock);

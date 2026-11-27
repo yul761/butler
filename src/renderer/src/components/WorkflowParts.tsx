@@ -149,6 +149,7 @@ export function WorkflowEditor({ initial, busy, error, onSave, onCancel }: { ini
           {addable.map((id) => <button key={id} data-testid={`workflow-add-${id}`} onClick={() => setSteps(insertStep(steps, id))}>+ {t.steps[id]}</button>)}
         </div>
       )}
+      {steps.length > 0 && !steps.some((s) => s.id === "merge") && <p className="muted" data-testid="workflow-no-merge">{t.noMerge}</p>}
       <textarea className="workflow-notes" placeholder={t.notes} value={notes} maxLength={4000} rows={2} onChange={(e) => setNotes(e.target.value)} />
       {error && <p className="error" role="alert">{error}</p>}
       <div className="row">

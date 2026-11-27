@@ -66,6 +66,8 @@ const ZH = {
   stepDone: (step: WorkflowStepId, next: WorkflowStepId | null) => (next ? `记下了：「${ZH_STEPS[step]}」做完了。下一步是「${ZH_STEPS[next]}」。` : `记下了：「${ZH_STEPS[step]}」做完了，流程走完了。`),
   stepNotInWorkflow: (step: WorkflowStepId) => `这个 ticket 的工作流程里没有「${ZH_STEPS[step]}」这一步。`,
   stepAuto: (step: WorkflowStepId) => `「${ZH_STEPS[step]}」不用你标：Shipherd 会按实际情况（预审、PR、CI、review、合并）自己判断。`,
+  stepTooEarly: (step: WorkflowStepId, before: WorkflowStepId) => `现在还不能标「${ZH_STEPS[step]}」：前面的「${ZH_STEPS[before]}」还没做完。`,
+  stepNoteTooLong: (max: number) => `说明太长了（最多 ${max} 字），请写短一点再标。`,
   noWorkflow: "这个 ticket 没有设工作流程，不用标步骤。",
   problem: (p: WorkflowProblem): string => {
     switch (p.code) {
@@ -167,6 +169,8 @@ const EN: WorkflowStrings = {
   stepDone: (step, next) => (next ? `Noted: "${EN_STEPS[step]}" is done. Next is "${EN_STEPS[next]}".` : `Noted: "${EN_STEPS[step]}" is done, and the workflow is complete.`),
   stepNotInWorkflow: (step) => `This ticket's workflow has no "${EN_STEPS[step]}" step.`,
   stepAuto: (step) => `You don't mark "${EN_STEPS[step]}": Shipherd tells from the facts (pre-review, PR, CI, reviews, merge).`,
+  stepTooEarly: (step, before) => `You can't mark "${EN_STEPS[step]}" yet: "${EN_STEPS[before]}" before it isn't done.`,
+  stepNoteTooLong: (max) => `The note is too long (${max} characters at most). Shorten it and mark again.`,
   noWorkflow: "This ticket has no workflow, so there are no steps to mark.",
   problem: (p) => {
     switch (p.code) {

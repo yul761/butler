@@ -28,6 +28,13 @@ describe("parseGateRequest", () => {
     expect(parseGateRequest({ ...base, action: { kind: "pr_merge", dir: null, pr: "3", repo: 7 } })).toBeNull();
   });
 
+  it("reads an optional prCreate, and refuses one that is not a pr_create (BTL-273)", () => {
+    const prCreate = { kind: "pr_create", dir: null, head: null, draft: false, repo: null };
+    expect(parseGateRequest({ ...base, prCreate })?.prCreate).toEqual(prCreate);
+    expect(parseGateRequest(base)).not.toHaveProperty("prCreate");
+    expect(parseGateRequest({ ...base, prCreate: { kind: "switch", dir: null, branch: "b", create: true } })).toBeNull();
+  });
+
   it("leaves out a push source that was not given", () => {
     expect(parseGateRequest(base)?.action).not.toHaveProperty("source");
   });

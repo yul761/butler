@@ -11,6 +11,7 @@ import type { StageEvent } from "../db/pr-stage-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
 import type { BotRequest, WorkflowRepo } from "../db/workflow-repo";
 import { LayeredResolver, type ScopeRef } from "../scope/layered";
+import { samePath } from "../tickets/ticket-service";
 import { botReviewCommands, type BotReviewResult } from "./bot-review";
 import { WF } from "./strings";
 
@@ -28,6 +29,10 @@ export const NO_CI_GRACE_MS = 10 * 60_000;
 const RESPONSE_SLACK_MS = 60_000;
 /** session 自己标的步骤；其余的按实际情况判断，session 标不了。 */
 export const SESSION_STEPS: readonly WorkflowStepId[] = ["implement", "self_review", "address_comments", "re_review"];
+/** 只看现在、不记进库的步骤。 */
+const LIVE_ONLY: readonly WorkflowStepId[] = ["ci_green", "human_review"];
+/** session 标步骤时的说明最多几个字（control 请求那边也按这个拒）。 */
+export const STEP_NOTE_MAX = 500;
 
 const NOTICE_REF = (key: string) => `workflow:${key}`;
 const MERGE_REF = (key: string) => `workflow-merge:${key}`;
@@ -62,6 +67,8 @@ export interface WorkflowServiceDeps {
   coordinator(featureId: number): string | null;
   session(id: string): Session | null;
   requestBotReview(pr: TicketPr, cwd: string, bot: ReviewBot): Promise<BotReviewResult>;
+  /** 这几次 bot review 一共几条行内评论；没拉到为 null（不是 0）。 */
+  reviewCommentCount(pr: TicketPr, cwd: string, reviewIds: string[]): Promise<number | null>;
   /** gh 在哪个目录跑（ticket 仓库的 worktree / 主 checkout）。 */
   ghCwd(pr: TicketPr): string | null;
   now(): number;
@@ -229,15 +236,54 @@ export class WorkflowService {
     return events.filter((e) => e.prId === prId && (e.kind === "review" || e.kind === "comment") && e.data.who === "copilot" && e.at >= since - RESPONSE_SLACK_MS);
   }
 
-  /** 这一轮 bot 回来了没有：回来了填 reviewedAt 和意见条数（行内评论）。 */
+  /**
+   * 这一轮 bot 回来了没有：回来了填 reviewedAt 和意见条数（行内评论）。
+   * 只有 review、还没看到它的行内评论时不定：PR 监视拉行内评论可能失败了，这时当成 0 条会把「处理意见」误判成做完，
+   * 要等 confirmBots 用 gh 数过（数不到就一直不定）。已经定了的，后来又看到更多行内评论（晚到的）就把条数往上改。
+   */
   private settleBot(req: BotRequest, events: StageEvent[]): BotRequest {
-    if (req.reviewedAt !== null || req.status === "requesting") return req;
+    if (req.status === "requesting") return req;
     const ev = this.botEvents(events, req.prId, req.requestedAt);
+    const inline = ev.filter((e) => e.kind === "comment" && e.data.reviewId != null).length;
+    if (req.reviewedAt !== null) {
+      if (inline > (req.reviewComments ?? 0) && this.d.repo.raiseBotComments(req.id, inline)) return { ...req, reviewComments: inline };
+      return req;
+    }
     if (ev.length === 0) return req;
+    // 有 review 却没有行内评论：等 gh 数过再定。只有普通评论（Codex 回一句）没有行内评论可拉，直接定。
+    if (inline === 0 && ev.some((e) => e.kind === "review")) return req;
     const at = Math.min(...ev.map((e) => e.at));
-    const comments = ev.filter((e) => e.kind === "comment" && e.data.reviewId != null).length;
-    this.d.repo.markBotReviewed(req.id, at, comments);
-    return { ...req, reviewedAt: at, reviewComments: comments };
+    this.d.repo.markBotReviewed(req.id, at, inline);
+    return { ...req, reviewedAt: at, reviewComments: inline };
+  }
+
+  /** bot 交了 review 但没看到行内评论的那几轮：用 gh 数一下（数到 0 才算没有意见；数不到留着下次再数）。 */
+  private async confirmBots(t: Ticket): Promise<void> {
+    const open = this.prsOf(t.key).filter((p) => p.state === "open");
+    if (open.length === 0) return;
+    const events = this.d.stages.forTicket(t.key);
+    for (const req of this.d.repo.botRequests(t.key)) {
+      const pr = open.find((p) => p.id === req.prId);
+      if (!pr || req.reviewedAt !== null || req.status === "requesting") continue;
+      const ev = this.botEvents(events, req.prId, req.requestedAt);
+      const reviews = ev.filter((e) => e.kind === "review" && e.data.id != null);
+      if (reviews.length === 0 || ev.some((e) => e.kind === "comment" && e.data.reviewId != null)) continue;
+      const cwd = this.d.ghCwd(pr);
+      if (cwd === null) continue;
+      let n: number | null;
+      try {
+        n = await this.d.reviewCommentCount(pr, cwd, reviews.map((e) => String(e.data.id)));
+      } catch (e) {
+        this.d.log(`workflow: counting the bot's inline comments on ${t.key} PR #${pr.number} failed`, e);
+        n = null;
+      }
+      if (n === null) {
+        this.d.log(`workflow: couldn't count the bot's inline comments on ${t.key} PR #${pr.number}; will try again`);
+        continue;
+      }
+      // 只填还空着的（等 gh 的时候别的路径可能已经定了）。
+      this.d.repo.markBotReviewed(req.id, Math.min(...ev.map((e) => e.at)), n);
+    }
   }
 
   /** 每个开着的 PR 的各轮请求（第 1 轮是 bot_review，后面是 re_review），已经对过回来没有。 */
@@ -321,11 +367,16 @@ export class WorkflowService {
     return out;
   }
 
-  /** 记下的 + 现在成立的，按步骤。PR 相关（ci_green、human_review、merge）只认现在成立的。 */
+  /**
+   * 记下的 + 现在成立的，按步骤。CI 通过、人工 review 只认现在成立的（不记进库：push 以后 CI 又红了，界面和提醒都要跟着退回去），
+   * 放进 done 时时间用现在。
+   */
   private doneSet(t: Ticket, w: Workflow): { done: Map<WorkflowStepId, { at: number; detail: string | null }>; live: Map<WorkflowStepId, string | null> } {
     const done = new Map<WorkflowStepId, { at: number; detail: string | null }>();
-    for (const d of this.d.repo.done(t.key)) done.set(d.step, { at: d.doneAt, detail: d.detail });
+    for (const d of this.d.repo.done(t.key)) if (!LIVE_ONLY.includes(d.step)) done.set(d.step, { at: d.doneAt, detail: d.detail });
     const live = this.facts(t, w, new Set(done.keys()));
+    const now = this.d.now();
+    for (const [step, detail] of live) if (LIVE_ONLY.includes(step)) done.set(step, { at: now, detail });
     return { done, live };
   }
 
@@ -362,7 +413,17 @@ export class WorkflowService {
     if (!eff) return { ok: false, message: WF().noWorkflow };
     if (!hasStep(eff.workflow, step)) return { ok: false, message: WF().stepNotInWorkflow(step) };
     if (!SESSION_STEPS.includes(step)) return { ok: false, message: WF().stepAuto(step) };
-    if (this.d.repo.markDone(ticketKey, step, this.d.now(), "session", note?.trim().slice(0, 500) || null)) this.d.onChange();
+    const text = note?.trim() || null;
+    if (text !== null && text.length > STEP_NOTE_MAX) return { ok: false, message: WF().stepNoteTooLong(STEP_NOTE_MAX) };
+    // 前面还有 Shipherd 按实际情况判断的步骤没做完（例如 bot 还没 review 就标「处理意见」）：不收，不然那一轮的意见会被跳过。
+    const t = this.d.tickets.get(ticketKey);
+    if (t) {
+      const { done, live } = this.doneSet(t, eff.workflow);
+      const ids = eff.workflow.steps.map((s) => s.id);
+      const blocking = ids.slice(0, ids.indexOf(step)).find((s) => !SESSION_STEPS.includes(s) && !done.has(s) && !live.has(s));
+      if (blocking) return { ok: false, message: WF().stepTooEarly(step, blocking) };
+    }
+    if (this.d.repo.markDone(ticketKey, step, this.d.now(), "session", text)) this.d.onChange();
     void this.evaluate(ticketKey);
     return { ok: true, message: WF().stepDone(step, this.view(ticketKey).current) };
   }
@@ -380,6 +441,15 @@ export class WorkflowService {
     return next;
   }
 
+  /**
+   * 启动时先调：上次关掉时正在调 gh 的那几轮（还是 requesting）没有人会再写回了，删掉让它们重新请；
+   * 不删的话这一轮永远占着，bot_review 一直做不完，合并也一直被拦。
+   */
+  recoverInterrupted(): void {
+    const n = this.d.repo.dropInterruptedBotRequests();
+    if (n > 0) this.d.log(`workflow: ${n} bot review request(s) were cut off by the last quit; asking again`);
+  }
+
   /** 启动时：有流程的进行中 ticket 都过一遍（提醒按库里记的那条判断，不重复送）。 */
   async evaluateAll(): Promise<void> {
     if (!this.anyWorkflow()) return;
@@ -395,11 +465,12 @@ export class WorkflowService {
       return;
     }
     const w = eff.workflow;
+    if (hasStep(w, "bot_review") || hasStep(w, "re_review")) await this.confirmBots(t);
     const now = this.d.now();
     const { done, live } = this.doneSet(t, w);
     let changed = false;
     for (const [step, detail] of live) {
-      if (!hasStep(w, step) || done.has(step)) continue;
+      if (!hasStep(w, step) || done.has(step) || LIVE_ONLY.includes(step)) continue;
       if (this.d.repo.markDone(ticketKey, step, now, "shipherd", detail)) {
         done.set(step, { at: now, detail });
         changed = true;
@@ -608,7 +679,7 @@ export class WorkflowService {
   /** 要开 PR 的这个提交有没有 clean 的预审。仓库认不出时用 ticket 的仓库里分支对得上的那个。 */
   private async preReviewAtHead(t: Ticket, i: { repoPath: string | null; dir: string | null; branch: string | null }): Promise<boolean> {
     const repo =
-      (i.repoPath !== null ? t.repos.find((r) => r.repoPath === i.repoPath && (i.branch === null || r.branch === i.branch)) : null) ??
+      (i.repoPath !== null ? t.repos.find((r) => samePath(r.repoPath, i.repoPath as string) && (i.branch === null || r.branch === i.branch)) : null) ??
       (i.repoPath === null ? (i.branch !== null ? t.repos.find((r) => r.branch === i.branch) : t.repos.length === 1 ? t.repos[0] : null) : null) ??
       null;
     if (!repo) return false;

@@ -22,7 +22,7 @@ function setup() {
     prs: { byTicket: () => [] }, stages: { forTicket: () => [] }, preReviews: { latestFor: () => null, latestForBranch: () => null },
     headSha: async () => null, level: () => "semi", mailbox: { send: () => {}, withdraw: () => {} },
     recipient: () => null, coordinator: () => null, session: () => null,
-    requestBotReview: async () => ({ ok: true, via: "api" }), ghCwd: () => null, now: () => 1, log: () => {}, onChange: () => {},
+    requestBotReview: async () => ({ ok: true, via: "api" }), reviewCommentCount: async () => 0, ghCwd: () => null, now: () => 1, log: () => {}, onChange: () => {},
   });
   const h = workflowHandlers({
     service, products: () => [{ id: 9, name: "Shipherd" }], features: { list: () => features },

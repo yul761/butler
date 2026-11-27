@@ -96,6 +96,9 @@ describe("workflow settings (BTL-273)", () => {
     expect(html).not.toContain('data-testid="workflow-add-merge"');
     expect(html).toContain('data-testid="workflow-add-ci_green"');
     expect(html).toContain(S.workflow.custom);
+    expect(html).not.toContain('data-testid="workflow-no-merge"');
+    const noMerge = renderToStaticMarkup(createElement(WorkflowEditor, { initial: { steps: [{ id: "implement" }, { id: "open_pr" }], notes: "" }, busy: false, error: null, onSave: () => {}, onCancel: () => {} }));
+    expect(noMerge).toContain(S.workflow.noMerge);
   });
 });
 

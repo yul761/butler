@@ -212,6 +212,16 @@ export class WorkflowRepo {
     return Number(this.db.prepare(`UPDATE workflow_bot_requests SET reviewed_at = ?, review_comments = ? WHERE id = ? AND reviewed_at IS NULL`).run(at, comments, id).changes) > 0;
   }
 
+  /** 已经定了的一轮，后来又看到更多行内评论（晚到的）：条数只往上改。 */
+  raiseBotComments(id: number, comments: number): boolean {
+    return Number(this.db.prepare(`UPDATE workflow_bot_requests SET review_comments = ? WHERE id = ? AND reviewed_at IS NOT NULL AND review_comments < ?`).run(comments, id, comments).changes) > 0;
+  }
+
+  /** 启动时：上次退出时还在 requesting 的行（gh 调到一半）删掉，返回删了几行。 */
+  dropInterruptedBotRequests(): number {
+    return Number(this.db.prepare(`DELETE FROM workflow_bot_requests WHERE status = 'requesting'`).run().changes);
+  }
+
   /** 失败的一轮删掉，下次可以重新请（重试按钮、session 说已经请过）。 */
   dropBotRequest(id: number): void {
     this.db.prepare(`DELETE FROM workflow_bot_requests WHERE id = ?`).run(id);

@@ -316,7 +316,7 @@ import { SessionModelSwitcher } from "./routing/session-switch";
 import { routingSettings } from "./routing/routing-settings";
 import type { DiscoveryView, Tier } from "../shared/model-routing";
 import { WorkflowRepo } from "./db/workflow-repo";
-import { requestBotReview } from "./workflow/bot-review";
+import { requestBotReview, reviewCommentCount } from "./workflow/bot-review";
 import { loopWithWorkflow, preReviewWithWorkflow } from "./workflow/overrides";
 import { workflowControl } from "./workflow/workflow-control";
 import { workflowHandlers } from "./workflow/workflow-ipc";
@@ -2702,12 +2702,17 @@ async function bootstrap(): Promise<void> {
       pr.slug === null || pr.number === null
         ? Promise.resolve({ ok: false as const, error: "the PR has no repository or number yet" })
         : requestBotReview((dir, args) => runGhDetail(dir, args, 30_000, 1024 * 1024), { cwd, slug: pr.slug, number: pr.number, bot }),
+    reviewCommentCount: (pr, cwd, ids) =>
+      pr.slug === null || pr.number === null
+        ? Promise.resolve(null)
+        : reviewCommentCount((dir, args) => runGhDetail(dir, args, 30_000, 1024 * 1024), { cwd, slug: pr.slug, number: pr.number }, ids),
     ghCwd: (pr) => (pr.repoId === null ? null : prGhDir(pr)),
     now: Date.now,
     log: logger,
     onChange: () => notify(),
   });
   workflowHooks.service = workflow;
+  workflow.recoverInterrupted();
   // 启动时把有流程的进行中 ticket 过一遍：上次关着时 PR、CI 变了的补上进度；提醒按库里记的那条，不重复送。
   void workflow.evaluateAll();
   /** PR 读到了、预审出结果了、合并了：有流程的 ticket 重新判断一次（只读库；串行，提醒按库里记的那条去重）。 */

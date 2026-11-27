@@ -72,7 +72,7 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
     repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs ?? TEST_DEADLINE_MS,
     whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold, repoOfSlug: o.repoOfSlug, workflow: o.workflow,
   });
-  const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}, meta?: { ageMs?: number }) =>
+  const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase" | "prCreate">> = {}, meta?: { ageMs?: number }) =>
     gate.handle({ v: 1, phase: "pre", action, cwd: repoPath, session: "s-req", ticket: null, ...extra } as GateRequest, meta);
   const merge = (source: string, extra: Parameters<typeof ask>[1] = {}, meta?: { ageMs?: number }) => ask({ kind: "local_merge", dir: null, source }, extra, meta);
   const outcomes = () => db.prepare(`SELECT branch, outcome FROM merge_holds ORDER BY id`).all() as { branch: string; outcome: string | null }[];
@@ -791,6 +791,20 @@ describe("MergeGate: workflow (BTL-273)", () => {
     // 这个仓库里没有 ticket 用 dms-3：不归任何 ticket，不查
     await t.ask({ kind: "pr_create", dir: null, head: "dms-3", draft: false, repo: null }, { ticket: "A-1" });
     expect(w.calls.prCreate).toHaveLength(1);
+  });
+
+  it("checks the gh pr create that follows a HEAD push in the same command", async () => {
+    const w = wf({ prCreate: "先别开 PR" });
+    const t = setup({ workflow: w.workflow });
+    const prCreate = { kind: "pr_create" as const, dir: null, head: "dms-2", draft: false, repo: null };
+    // git push -u origin HEAD && gh pr create --fill：主动作是推送，开 PR 跟在请求里
+    expect(await t.ask({ kind: "push", dir: null, target: "HEAD", source: "HEAD" }, { session: "s2", ticket: "DMS-2", prCreate })).toEqual({ v: 1, decision: "deny", reason: "先别开 PR" });
+    expect(w.calls.prCreate).toHaveLength(1);
+    // 开 PR 这步可以了：照常审推送
+    const ok = wf({ prCreate: null });
+    const u = setup({ workflow: ok.workflow });
+    expect(await u.ask({ kind: "push", dir: null, target: "dms-2", source: "dms-2" }, { prCreate })).toEqual({ v: 1, decision: "allow" });
+    expect(ok.calls.prCreate).toHaveLength(1);
   });
 
   it("falls back to the session's ticket when the directory is a shell variable", async () => {

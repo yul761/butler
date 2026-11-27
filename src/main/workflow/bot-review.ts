@@ -64,3 +64,20 @@ export async function requestBotReview(run: GhRun, t: BotReviewTarget): Promise<
   // 第一个接口的错误最说明问题（422 没有额度、没开 Copilot review）；它没说什么才用后面的。
   return { ok: false, error: errorOf(api) || errorOf(edit) };
 }
+
+/**
+ * 这几次 review 一共留了几条行内评论（`--paginate --jq length` 每页打印一个数，加起来）。
+ * 有一次没拉到（失败、超时、输出不是数字）就是 null：不能当成 0 条，不然处理意见这一步会被当成做完。
+ */
+export async function reviewCommentCount(run: GhRun, t: Omit<BotReviewTarget, "bot">, reviewIds: string[]): Promise<number | null> {
+  const { path, host } = apiParts(t.slug);
+  let total = 0;
+  for (const id of reviewIds) {
+    const r = await run(t.cwd, ["api", ...host, `repos/${path}/pulls/${t.number}/reviews/${id}/comments`, "--paginate", "--jq", "length"]);
+    if (r.stdout === null || r.timedOut) return null;
+    const nums = r.stdout.split(/\s+/).filter((x) => x !== "");
+    if (nums.length === 0 || !nums.every((x) => /^\d+$/.test(x))) return null;
+    total += nums.reduce((a, x) => a + Number(x), 0);
+  }
+  return total;
+}
