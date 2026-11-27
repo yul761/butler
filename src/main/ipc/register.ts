@@ -52,7 +52,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { UsageRepo } from "../db/usage-repo";
 import { summarizeUsage, USAGE_WINDOW_MS } from "../usage/usage-summary";
 import type { TicketsRepo } from "../db/tickets-repo";
-import type { CloseOptions, CloseResult, ReopenResult, SetStatusResult } from "../tickets/ticket-close";
+import type { CloseOptions, CloseResult, ReopenResult, RetryCloseOptions, RetryCloseResult, SetStatusResult } from "../tickets/ticket-close";
 import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
@@ -88,7 +88,7 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, automationLevelArg, closeTicketArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, automationLevelArg, closeRetryArg, closeTicketArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openShipherdArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg, preReviewStatusArg, preReviewQueueActionArg, messageIdArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -283,6 +283,7 @@ export interface IpcDeps {
   ticketClose?: {
     close(key: string, o: CloseOptions): Promise<CloseResult>;
     reopen(key: string): ReopenResult;
+    retry(key: string, o: RetryCloseOptions): Promise<RetryCloseResult>;
     setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null): SetStatusResult;
   };
   detectTrackerTools: () => Promise<McpProbe>;
@@ -370,6 +371,13 @@ export function registerIpc(d: IpcDeps): void {
     const o = closeTicketArg(raw);
     const r = await d.ticketClose.close(key, { ...o, source: "user" });
     if (!r.ok) throw new TicketError(r.error === "no_ticket" ? "not_found" : "invalid_reason", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ticketCloseNeedsReason);
+    return r;
+  });
+  handle(IPC.ticketsCloseRetry, async (rawKey: unknown, raw: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const r = await d.ticketClose.retry(key, { ...closeRetryArg(raw), source: "user" });
+    if (!r.ok) throw new TicketError("not_found", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ctlTicketNotClosed(key));
     return r;
   });
   handle(IPC.ticketsReopen, (rawKey: unknown) => {

@@ -95,6 +95,50 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   });
   d.log(`ticket ${key} closed by ${o.source}: ${reason}`);
   d.notify();
+  const r = await closeLeftovers(d, key, reason, o);
+  return { ok: true, ticket: key, ignoredFollowups, ...r };
+}
+
+export interface RetryCloseOptions {
+  source: TicketCloseSource;
+  /** 再试着关的 PR（上次没关成的链接）；空就不关 PR。 */
+  prUrls: string[];
+  /** 再试着结束的 session（上次没结束的 id）；空就不结束 session。 */
+  sessionIds: string[];
+}
+
+export type RetryCloseResult =
+  | { ok: true; ticket: string; closedPrs: string[]; prErrors: PrCloseError[]; endedSessions: string[]; sessionErrors: { id: string; error: string }[]; reopenedMeanwhile: boolean }
+  | { ok: false; error: "no_ticket" | "not_closed" };
+
+/**
+ * 关闭以后重试剩下的（BTL-270）：上次没关成的 PR、没结束的 session 再试一次，只试给的这些，评论里写关闭时记下的原因。
+ * ticket 已经不是关着的（重新打开了）就不做。已经不开着的 PR、已经结束的 session 不再出现在结果里。
+ */
+export async function retryClose(d: TicketCloseDeps, key: string, o: RetryCloseOptions): Promise<RetryCloseResult> {
+  const t = d.tickets.get(key);
+  if (!t) return { ok: false, error: "no_ticket" };
+  if (t.statusManual !== "closed") return { ok: false, error: "not_closed" };
+  const reason = oneLine(t.closure?.reason ?? "");
+  const r = await closeLeftovers(d, key, reason, {
+    source: o.source, closePrs: o.prUrls.length > 0, endSessions: o.sessionIds.length > 0,
+    onlyPrs: new Set(o.prUrls), onlySessions: new Set(o.sessionIds),
+  });
+  return { ok: true, ticket: key, ...r };
+}
+
+interface LeftoverOptions {
+  source: TicketCloseSource;
+  closePrs?: boolean;
+  endSessions?: boolean;
+  except?: string | null;
+  /** 只处理这些 PR / session（重试时）；不给就是全部。 */
+  onlyPrs?: ReadonlySet<string>;
+  onlySessions?: ReadonlySet<string>;
+}
+
+/** 关 PR、结束 session（closeTicket 和 retryClose 共用）：失败不抛，分项报告；每一步之前核对 ticket 还关着。 */
+async function closeLeftovers(d: TicketCloseDeps, key: string, reason: string, o: LeftoverOptions) {
   const closedPrs: string[] = [];
   const prErrors: PrCloseError[] = [];
   // 关 PR 要等 gh：每一步之前重新看一眼，等的时候有人重新打开了就停下，不去关一个又开着的 ticket 的 PR、结束它的 session。
@@ -102,8 +146,10 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   let reopenedMeanwhile = false;
   if (o.closePrs) {
     const open = d.openPrs(key);
-    for (const u of open.unclosable) prErrors.push({ url: u.url, error: u.why, kind: "unread" });
+    const wanted = (url: string) => !o.onlyPrs || o.onlyPrs.has(url);
+    for (const u of open.unclosable) if (wanted(u.url)) prErrors.push({ url: u.url, error: u.why, kind: "unread" });
     for (const pr of open.closable) {
+      if (!wanted(pr.url)) continue;
       if (!stillClosed()) {
         reopenedMeanwhile = true;
         break;
@@ -121,7 +167,7 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   const sessionErrors: { id: string; error: string }[] = [];
   if (o.endSessions && !reopenedMeanwhile && stillClosed()) {
     for (const s of d.liveSessions(key)) {
-      if (s.id === o.except) continue;
+      if (s.id === o.except || (o.onlySessions && !o.onlySessions.has(s.id))) continue;
       try {
         const r = d.endSession(s, o.source);
         if (r.ok) endedSessions.push(s.id);
@@ -137,7 +183,7 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   if (!reopenedMeanwhile) d.rederive(key);
   d.refreshPrs(key);
   d.notify();
-  return { ok: true, ticket: key, ignoredFollowups, closedPrs, prErrors, endedSessions, sessionErrors, reopenedMeanwhile };
+  return { closedPrs, prErrors, endedSessions, sessionErrors, reopenedMeanwhile };
 }
 
 /** 撤销关闭：回到自动状态，关闭时忽略的后续事项（之后没人动过的）还原。关掉的 PR、结束的 session 不会自己回来。 */

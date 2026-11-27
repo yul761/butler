@@ -271,7 +271,7 @@ import { StackControl } from "./control/stack-control";
 import { endSessionRefusal } from "./control/end-guard";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
-import { closeTicket, reopenTicket, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
+import { closeTicket, reopenTicket, retryClose, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
 import { prClose } from "./stacks/gh-stack";
 import { classifyCommentsByModel } from "./loop/comment-model";
 import { LoopPolicies } from "./loop/policies";
@@ -3718,6 +3718,7 @@ async function bootstrap(): Promise<void> {
   const ticketClose = {
     close: (key: string, o: Parameters<typeof closeTicket>[2]) => closeTicket(ticketCloseDeps, key, o),
     reopen: (key: string) => reopenTicket(ticketCloseDeps, key),
+    retry: (key: string, o: Parameters<typeof retryClose>[2]) => retryClose(ticketCloseDeps, key, o),
     setStatus: (key: string, status: Parameters<typeof setTicketStatus>[2]) => setTicketStatus(ticketCloseDeps, key, status),
   };
   registerIpc({

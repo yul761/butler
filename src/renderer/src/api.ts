@@ -1,5 +1,6 @@
 import type { AutomationLevel, AutomationState } from "../../shared/automation";
 import type { TicketGlance } from "../../shared/ticket-glance";
+import type { CloseLeftoversResult } from "./close-ticket-outcome";
 import { normTurnFilter, type TurnBoard, type TurnFilter, type TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
@@ -104,10 +105,9 @@ export const api = {
   createTicket: (input: CreateTicketInput) => call<Ticket>(IPC.ticketsCreate, input),
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
   closeTicket: (key: string, o: { reason: string; closePrs: boolean; endSessions: boolean }) =>
-    call<{
-      ignoredFollowups: number; closedPrs: string[]; prErrors: { url: string; error: string; kind: "failed" | "skipped" | "unread" }[]; endedSessions: string[];
-      sessionErrors: { id: string; error: string }[]; reopenedMeanwhile: boolean;
-    }>(IPC.ticketsClose, key, o),
+    call<CloseLeftoversResult & { ignoredFollowups: number }>(IPC.ticketsClose, key, o),
+  /** 关闭以后重试上次没关成的 PR、没结束的 session（BTL-270）。 */
+  retryClose: (key: string, o: { prUrls: string[]; sessionIds: string[] }) => call<CloseLeftoversResult>(IPC.ticketsCloseRetry, key, o),
   reopenTicket: (key: string) => call<{ restoredFollowups: number; status: TicketStatus }>(IPC.ticketsReopen, key),
   archive: (key: string) => call<void>(IPC.ticketsArchive, key),
   switchBranch: (repoId: number) => call<void>(IPC.ticketsSwitchBranch, repoId),

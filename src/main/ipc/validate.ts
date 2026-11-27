@@ -87,6 +87,19 @@ export function closeTicketArg(v: unknown): { reason: string; closePrs: boolean;
   return { reason: o.reason, closePrs: flag(o.closePrs), endSessions: flag(o.endSessions) };
 }
 
+/** 关闭以后重试剩下的（BTL-270）：上次没关成的 PR 链接、没结束的 session id，各最多 CLOSE_RETRY_MAX 个，超了直接报错、不截断。 */
+export const CLOSE_RETRY_MAX = 200;
+export function closeRetryArg(v: unknown): { prUrls: string[]; sessionIds: string[] } {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("invalid ticket close retry");
+  const list = <T>(x: unknown, each: (y: unknown) => T): T[] => {
+    if (x === undefined) return [];
+    if (!Array.isArray(x) || x.length > CLOSE_RETRY_MAX) throw new Error("invalid ticket close retry");
+    return x.map(each);
+  };
+  return { prUrls: list(o.prUrls, prUrlArg), sessionIds: list(o.sessionIds, sessionIdArg) };
+}
+
 /** ticket 仓库的 id：正整数。 */
 export function repoIdArg(v: unknown): number {
   if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) throw new Error("invalid repo id");

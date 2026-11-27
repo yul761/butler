@@ -85,6 +85,8 @@ export interface FakeGhFixture {
   loggedOut?: boolean;
   branches: Record<string, BranchPrFixture[]>;
   prs: Record<string, PrViewFixture>;
+  /** gh pr close 失败的 PR 号（BTL-270 关闭 ticket 时关 PR 失败）。 */
+  closeFails?: string[];
   /** gh pr create 打印的新 PR 链接；没有时 gh pr create 是不支持的调用。 */
   created?: string;
   /** 评论闭环（工作流 I）：PR 号 → GraphQL 的 review thread 节点。 */

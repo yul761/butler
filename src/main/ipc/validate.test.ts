@@ -10,7 +10,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, closeTicketArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, CLOSE_RETRY_MAX, closeRetryArg, closeTicketArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
 import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 describe("memory IPC arguments", () => {
@@ -579,5 +579,14 @@ describe("closeTicketArg (BTL-270)", () => {
     expect(() => closeTicketArg({ reason: "x".repeat(501) })).toThrow();
     expect(() => closeTicketArg({ reason: "x", closePrs: "yes" })).toThrow();
     expect(() => closeTicketArg(null)).toThrow();
+  });
+
+  it("takes the PR links and session ids to retry, refusing too many instead of dropping the rest", () => {
+    expect(closeRetryArg({ prUrls: ["https://github.com/o/r/pull/1"], sessionIds: ["s-1"] })).toEqual({ prUrls: ["https://github.com/o/r/pull/1"], sessionIds: ["s-1"] });
+    expect(closeRetryArg({})).toEqual({ prUrls: [], sessionIds: [] });
+    expect(() => closeRetryArg({ prUrls: Array.from({ length: CLOSE_RETRY_MAX + 1 }, (_, i) => `u${i}`) })).toThrow();
+    expect(() => closeRetryArg({ sessionIds: ["a b"] })).toThrow();
+    expect(() => closeRetryArg({ prUrls: "x" })).toThrow();
+    expect(() => closeRetryArg(null)).toThrow();
   });
 });

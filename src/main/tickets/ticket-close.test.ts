@@ -4,7 +4,7 @@ import { withTransaction } from "../db/database";
 import { FollowupsRepo } from "../db/followups-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { insertTicket, memDb } from "../test-utils";
-import { closeTicket, reopenTicket, setTicketStatus, type ClosablePr, type LiveSession, type OpenPrs, type TicketCloseDeps } from "./ticket-close";
+import { closeTicket, reopenTicket, retryClose, setTicketStatus, type ClosablePr, type LiveSession, type OpenPrs, type TicketCloseDeps } from "./ticket-close";
 
 const followup = (id: string, o: Partial<Followup> = {}): Followup => ({
   id, ticketKey: "T-1", kind: "doc", description: id, trigger: "none", dueDate: null, status: "open", snoozedUntil: null, source: "session", createdAt: 1, doneAt: null, ...o,
@@ -120,6 +120,49 @@ describe("closeTicket", () => {
     expect(await closeTicket(d, "NOPE", { reason: "x", source: "user" })).toEqual({ ok: false, error: "no_ticket" });
     expect(await closeTicket(d, "T-1", { reason: "  ", source: "user" })).toEqual({ ok: false, error: "empty_reason" });
     expect(tickets.get("T-1")?.statusManual).toBeNull();
+  });
+});
+
+describe("retryClose (the close dialog's retry)", () => {
+  it("tries again only the PRs and sessions it is given, with the reason the ticket was closed with", async () => {
+    const prs: ClosablePr[] = [1, 2, 3].map((n) => ({ url: `https://github.com/o/r/pull/${n}`, number: n, slug: "o/r", cwd: "/r" }));
+    const reasons: string[] = [];
+    let fail = true;
+    const { d, calls } = setup({
+      prs,
+      sessions: [{ id: "s1", termId: "s1", hibernated: false }, { id: "busy", termId: "busy", hibernated: false }],
+      closePr: async (pr, reason) => {
+        reasons.push(reason);
+        if (pr.number === 2 && fail) throw new Error("gh: timeout");
+        calls.push(`close ${pr.number}`);
+        return "closed";
+      },
+      endSession: (s) => (s.id === "busy" && fail ? { ok: false, error: "working" } : (calls.push(`end ${s.id}`), { ok: true })),
+    });
+    const first = await closeTicket(d, "T-1", { reason: "需求变了", source: "user", closePrs: true, endSessions: true });
+    expect(first).toMatchObject({ prErrors: [{ url: "https://github.com/o/r/pull/2", kind: "failed" }], sessionErrors: [{ id: "busy" }] });
+    calls.length = 0;
+    reasons.length = 0;
+    fail = false;
+    const r = await retryClose(d, "T-1", { source: "user", prUrls: ["https://github.com/o/r/pull/2"], sessionIds: ["busy"] });
+    expect(r).toEqual({ ok: true, ticket: "T-1", closedPrs: ["https://github.com/o/r/pull/2"], prErrors: [], endedSessions: ["busy"], sessionErrors: [], reopenedMeanwhile: false });
+    // PR 1、3 和 s1 上次已经处理过，不再碰。
+    expect(calls).toEqual(["close 2", "end busy", "rederive T-1", "refresh T-1"]);
+    expect(reasons).toEqual(["需求变了"]);
+  });
+
+  it("reports again what still fails, and does nothing for a ticket that is no longer closed", async () => {
+    const { d, tickets } = setup({
+      prs: [{ url: "https://github.com/o/r/pull/2", number: 2, slug: "o/r", cwd: "/r" }],
+      closePr: async () => { throw new Error("gh: timeout"); },
+    });
+    await closeTicket(d, "T-1", { reason: "不做了", source: "user", closePrs: true });
+    const again = await retryClose(d, "T-1", { source: "user", prUrls: ["https://github.com/o/r/pull/2"], sessionIds: [] });
+    expect(again).toMatchObject({ ok: true, closedPrs: [], prErrors: [{ url: "https://github.com/o/r/pull/2", error: "gh: timeout", kind: "failed" }] });
+    reopenTicket(d, "T-1");
+    expect(await retryClose(d, "T-1", { source: "user", prUrls: ["https://github.com/o/r/pull/2"], sessionIds: [] })).toEqual({ ok: false, error: "not_closed" });
+    expect(await retryClose(d, "NOPE", { source: "user", prUrls: [], sessionIds: [] })).toEqual({ ok: false, error: "no_ticket" });
+    expect(tickets.get("T-1")!.statusManual).toBeNull();
   });
 });
 

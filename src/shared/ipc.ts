@@ -8,6 +8,8 @@ export const IPC = {
   ticketsClose: "tickets:close",
   /** 撤销关闭（BTL-270）：参数 key。 */
   ticketsReopen: "tickets:reopen",
+  /** 关闭以后重试剩下的（BTL-270）：参数 key、{ prUrls, sessionIds }（上次没关成的 PR、没结束的 session）。 */
+  ticketsCloseRetry: "tickets:closeRetry",
   ticketsArchive: "tickets:archive",
   ticketsSwitchBranch: "tickets:switchBranch",
   ticketsUpdate: "tickets:update",
@@ -272,7 +274,7 @@ export const IPC = {
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
 export const INVOKE_CHANNELS: readonly string[] = [
-  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsClose, IPC.ticketsReopen, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
+  IPC.ticketsList, IPC.ticketsGlance, IPC.ticketsCreate, IPC.ticketsSetStatus, IPC.ticketsClose, IPC.ticketsReopen, IPC.ticketsCloseRetry, IPC.ticketsArchive, IPC.ticketsSwitchBranch,
   IPC.ticketsUpdate, IPC.ticketsArchived, IPC.ticketsUnarchive, IPC.ticketsAddRepo, IPC.ticketsUpdateRepo, IPC.ticketsRemoveRepo,
   IPC.featuresList, IPC.featuresCreate, IPC.featuresRename, IPC.featuresAddRepo, IPC.featuresRemoveRepo, IPC.featuresArchive,
   IPC.featuresSummaryRun, IPC.featuresArchived, IPC.featuresUnarchive, IPC.featuresOpenSession, IPC.reposScan, IPC.ticketsRecheckCleanup,
