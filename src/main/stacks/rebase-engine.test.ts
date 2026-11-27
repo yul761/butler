@@ -335,13 +335,15 @@ describe("runEngine special cases", () => {
     g(repo, "commit", "-q", "-m", "trunk");
     const newBase = g(repo, "rev-parse", "HEAD");
     g(repo, "checkout", "-q", "-b", "l");
-    writeFileSync(join(repo, "*.txt"), "<<<<<<< ours\nx\n>>>>>>> theirs\n");
+    // 名字像 pathspec 的 magic（:! 是排除）：不按字面读就认不出它自己。Windows 的文件名不能带 :，那里只用普通名字
+    const odd = process.platform === "win32" ? "odd.txt" : ":!odd.txt";
+    writeFileSync(join(repo, odd), "<<<<<<< ours\nx\n>>>>>>> theirs\n");
     writeFileSync(join(repo, "f3.txt"), "three\n");
     g(repo, "add", ".");
     g(repo, "commit", "-q", "-m", "layer");
     const newTip = g(repo, "rev-parse", "HEAD");
     const t = { branch: "l", oldTip: base, oldBase: base, newBase, newTip };
-    expect(await markersAdded(repo, [t])).toEqual([{ branch: "l", files: ["*.txt"] }]);
+    expect(await markersAdded(repo, [t])).toEqual([{ branch: "l", files: [odd] }]);
     // 层没改任何文件：不起 git grep
     expect(await markersAdded(repo, [{ ...t, newTip: newBase }])).toEqual([]);
     // 版本不存在：抛出，不当成「没有标记」

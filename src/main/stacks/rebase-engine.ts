@@ -314,7 +314,7 @@ export async function markersAdded(
   const counts = new Map<string, Map<string, number>>();
   const paths = [...touched];
   for (let k = 0; k < paths.length; k += GREP_PATHS) {
-    // 用户配了 color.ui=always 时输出带颜色码，下面就一行都认不出来：关掉颜色。路径按字面认（文件名里的 * 之类不当通配）。
+    // 用户配了 color.ui=always 时输出带颜色码，下面就一行都认不出来：关掉颜色。路径按字面认（文件名开头的 :! 之类不当 pathspec 的 magic）。
     const r = await runGit(repo, ["--literal-pathspecs", "-c", "color.grep=false", "grep", "--no-color", "-I", "-c", "-E", MARKER, ...revs, "--", ...paths.slice(k, k + GREP_PATHS)]);
     // 1 = 一处都没有
     if (r.code !== 0 && r.code !== 1) throw new Error(`git grep failed: ${r.stderr.trim()}`);
