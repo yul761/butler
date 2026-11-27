@@ -47,7 +47,7 @@ import type {
   AutostartState, CiItemRef, CreateTicketInput, Followup, FollowupStatus, HandoffOutcome, HandoffRecord, HealthReport, McpProbe, OpenSessionRequest,
   OpenSessionResult, Ticket, TicketRepo, TicketStatus, TicketView, UnclaimedSession, UpdateTicketInput, AddRepoInput, UpdateRepoInput,
   JobStateView, CreateFeatureInput, Feature, FeatureRepo, FeatureHandoffOutcome, FeatureView, OpenFeatureSessionRequest, OpenFixSessionRequest, ScanResult,
-  OpenShipherdSessionRequest, ShipherdView, MessageScope, MessageView, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView, InboxItemView,
+  OpenShipherdSessionRequest, ShipherdView, MessageScope, MessageView, DeliverNowResult, MergeEvent, NowView, UsageSummary, WatchedPr, RefreshSessionResult, InboxScope, InboxView, InboxItemView,
 } from "../../shared/types";
 
 declare global {
@@ -129,6 +129,8 @@ export const api = {
   automationState: () => call<AutomationState>(IPC.automationState),
   shipherdView: () => call<ShipherdView>(IPC.shipherdView),
   messages: (scope: MessageScope) => call<MessageView[]>(IPC.messagesList, scope),
+  /** 「现在送进去」（BTL-269）。 */
+  deliverNow: (id: string) => call<DeliverNowResult>(IPC.messagesDeliverNow, id),
   metrics: (days?: number) => call<MetricsOverview>(IPC.metricsView, days),
   openShipherdSession: (req: OpenShipherdSessionRequest) => call<OpenSessionResult>(IPC.shipherdOpenSession, req),
   openFixSession: (req: OpenFixSessionRequest) => call<OpenSessionResult>(IPC.sessionOpenFix, req),

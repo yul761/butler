@@ -79,12 +79,15 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   for (const text of ["接口改成 v2 了", "先别合 PR"]) {
     const sent = await callTool(page, s, "send_message", { epic: "payment", text });
     expect(sent.error).toBe(false);
-    expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: coordinator, state: "busy" });
+    // BTL-269：如实说没送到和原因。
+    expect(JSON.parse(sent.text)).toMatchObject({ queued: true, delivery: "queued", blockedBy: "turn", sessionId: coordinator, state: "busy" });
   }
-  // 「消息」里两条都在排队。
+  // 「消息」里两条都在排队，写着挡住的原因，各有一个「现在送进去」。
   await page.locator(".messages-box > summary").click();
   const list = page.getByTestId("message-list");
   await expect(list.locator('[data-status="queued"]')).toHaveCount(2);
+  await expect(list.getByTestId("message-blocked").first()).toContainText(S.mailboxBlocked.reason.turn);
+  await expect(list.getByTestId("message-deliver-now")).toHaveCount(2);
 
   // 总控下一次调用工具：两条合成一次 additionalContext 送进去。
   await side.getByRole("button", { name: "payment", exact: true }).click();
@@ -106,6 +109,20 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   await featureList.locator("> summary").click();
   await expect(featureList.locator('[data-status="delivered"]')).toHaveCount(2);
   await expect(featureList).toContainText(S.messageVia.hook);
+  await expect(featureList.getByTestId("message-deliver-now")).toHaveCount(0);
+
+  // BTL-269：它这一轮还没结束，第三条排着；用户点「现在送进去」，不等它停下就输入进去。
+  await side.getByRole("button", { name: S.shipherdNav, exact: true }).click();
+  const third = await callTool(page, s, "send_message", { epic: "payment", text: "第三条：现在就看" });
+  expect(JSON.parse(third.text)).toMatchObject({ delivery: "queued", blockedBy: "turn" });
+  await side.getByRole("button", { name: "payment", exact: true }).click();
+  await openTab(page, S.lay.tabControl);
+  if ((await featureList.getAttribute("open")) === null) await featureList.locator("> summary").click();
+  await featureList.getByTestId("message-deliver-now").click();
+  // 送进去以后这一条变成「已送达」，按钮那一行随之消失。
+  await expect(featureList.locator('[data-status="delivered"]')).toHaveCount(3, { timeout: 30_000 });
+  await expect(featureList.getByTestId("message-deliver-now")).toHaveCount(0);
+  await expect.poll(() => terminalText(page)).toContain("第三条：现在就看");
 });
 
 /**
@@ -150,7 +167,8 @@ test("a coordinator messages its ticket session, and its convention reaches the 
   expect(refused.error).toBe(true);
   const sent = await callTool(page, s, "send_message", { session: child, text: "表单用 v2 接口" });
   expect(sent.error).toBe(false);
-  expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: child });
+  // 子 session 停着：等这一次尝试，如实说送进去了（BTL-269）。
+  expect(JSON.parse(sent.text)).toMatchObject({ delivery: "delivered", sessionId: child });
   await expect.poll(childGot, { timeout: 30_000 }).toContain("表单用 v2 接口");
 
   // 总控存一条约定：推给子 session，自己的下一次工具调用不带。

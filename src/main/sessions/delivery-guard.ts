@@ -10,6 +10,12 @@ export const USER_TYPING_QUIET_MS = 30_000;
 /** cost_paused：成本熔断暂停了这个 session（工作流 L），用户点「继续并提高上限」之前 Shipherd 不往里输入，休眠的也不叫醒。 */
 export type DeliveryBlock = "closed" | "hibernated" | "busy" | "screen" | "needs_you" | "typing" | "draft" | "cost_paused";
 
+/**
+ * busy 的细分（BTL-269）：turn = 这一轮在跑；unsure = 记录说在跑、屏幕看着停了，Shipherd 在等证据够了再确认；
+ * refreshing = 正在换新；auto_input = 别的自动输入正在往里递。
+ */
+export type BusyReason = "turn" | "unsure" | "refreshing" | "auto_input";
+
 export interface DeliveryGuardDeps {
   /** 跑着这个 session（链上任何一个 id）的终端；没有为 null。index.ts 里就是现在的 gateTerm。 */
   termOf(sessionId: string): string | null;
@@ -31,12 +37,19 @@ export interface DeliveryGuardDeps {
   wakeIfHibernated?: (sessionId: string) => boolean;
   /** 成本熔断暂停了这个 session（链上任何一个 id）；没接时恒为 false。 */
   costPaused?: (sessionId: string) => boolean;
+  /**
+   * 屏幕和输出给出的空闲证据（IdleEvidence.check）。记录说在跑（waitingForInput 不是 true、活动是「在想」）而证据说停着时，
+   * 当它停着放行，并调 healed 校正记录（BTL-269 B：Stop hook 没来、transcript 没写结束，就会一直卡着）。没接时只看记录。
+   */
+  idle?: (headId: string, termId: string) => { idle: boolean; working: boolean; looksIdle: boolean };
+  /** 凭证据放行了一个记录说在跑的 session：把它记成在等输入（index.ts 里是 onTurnEndedWithoutStop）。 */
+  healed?: (headId: string) => void;
   /** 打过字之后多久之内不自动输入，默认 USER_TYPING_QUIET_MS（e2e 用环境变量调短）。 */
   typingQuietMs?: number;
   now(): number;
 }
 
-export type DeliveryCheck = { ok: true; termId: string; headId: string } | { ok: false; block: DeliveryBlock };
+export type DeliveryCheck = { ok: true; termId: string; headId: string } | { ok: false; block: DeliveryBlock; busy?: BusyReason };
 
 /**
  * 所有自动输入（合并总控的通知、PR/CI 结果、换新）都先过这一道：终端开着、session 停着等输入、没有别的自动输入正在往里递、
@@ -46,18 +59,26 @@ export type DeliveryCheck = { ok: true; termId: string; headId: string } | { ok:
 export class DeliveryGuard {
   constructor(private readonly d: DeliveryGuardDeps) {}
 
-  check(sessionId: string): DeliveryCheck {
+  /**
+   * force：用户在界面上点了「现在送进去」（BTL-269）：不看记录说在干活、「需要你」、刚打过字；
+   * 熔断、终端关着、换新、别的自动输入、屏幕上的确认框、输入框里的草稿照样挡（贴进去会替用户点了确认、或者连草稿一起提交）。
+   */
+  check(sessionId: string, o: { force?: boolean } = {}): DeliveryCheck {
     // 先看熔断：暂停着的不往里递，也不为了递东西叫醒它。
     if (this.d.costPaused?.(sessionId)) return { ok: false, block: "cost_paused" };
     const termId = this.d.termOf(sessionId);
     if (termId === null) return { ok: false, block: this.d.wakeIfHibernated?.(sessionId) ? "hibernated" : "closed" };
     const head = this.d.head(termId);
+    if (!head) return { ok: false, block: "busy", busy: "turn" };
+    const turn = o.force ? null : this.turn(head, termId);
+    if (turn) return { ok: false, block: "busy", busy: turn };
+    if (this.d.refreshing?.(head.id)) return { ok: false, block: "busy", busy: "refreshing" };
     // 别的自动输入正在往这个终端里递（I2）：等它递完，两段不能贴在同一个输入框里，也不能贴在它那一轮的回复中间。
-    if (!head || !this.quiet(head) || this.d.refreshing?.(head.id) || this.d.pty.autoInputInFlight(termId)) return { ok: false, block: "busy" };
+    if (this.d.pty.autoInputInFlight(termId)) return { ok: false, block: "busy", busy: "auto_input" };
     if (this.d.pty.screenNeedsUser(termId)) return { ok: false, block: "screen" };
-    if (this.d.needsYou?.(head.id)) return { ok: false, block: "needs_you" };
+    if (!o.force && this.d.needsYou?.(head.id)) return { ok: false, block: "needs_you" };
     const typed = this.d.pty.lastUserInputAt(termId);
-    if (typed > 0 && this.d.now() - typed < (this.d.typingQuietMs ?? USER_TYPING_QUIET_MS)) return { ok: false, block: "typing" };
+    if (!o.force && typed > 0 && this.d.now() - typed < (this.d.typingQuietMs ?? USER_TYPING_QUIET_MS)) return { ok: false, block: "typing" };
     // 草稿不看时间：用户打了一半去干别的，过多久回车都会把通知和草稿一起提交。
     if (this.d.pty.hasDraft(termId)) return { ok: false, block: "draft" };
     return { ok: true, termId, headId: head.id };
@@ -67,21 +88,29 @@ export class DeliveryGuard {
    * 给 deliver 的 recheck（I2）：check 通过、马上调 deliver 时取。粘贴前 guard 还通过、还是同一个终端、
    * check 之后用户没往这个终端里输入过（哪怕已经过了打字的安静期），才贴。
    */
-  recheckAfter(sessionId: string, passed: { termId: string }): () => boolean {
+  recheckAfter(sessionId: string, passed: { termId: string }, o: { force?: boolean } = {}): () => boolean {
     const checkedAt = this.d.now();
     return () => {
-      const g = this.check(sessionId);
+      const g = this.check(sessionId, o);
       return g.ok && g.termId === passed.termId && this.d.pty.lastUserInputAt(passed.termId) <= checkedAt;
     };
   }
 
   /**
-   * 停着等输入，并且活动是 waiting / idle；只剩后台任务在跑（这一轮已经结束，活动显示的是后台命令）也算停着。
+   * 停着等输入，并且活动是 waiting / idle；只剩后台任务在跑（这一轮已经结束，活动显示的是后台命令）也算停着：返回 null。
    * 活动还没读到（终端刚打开、还没轮到）算忙：不知道它在干什么就不打断。
+   * 记录说在跑时再看屏幕证据（idle）：证据说停着就放行并校正记录；看着停了、证据还不够是 unsure，否则是 turn。
    */
-  private quiet(head: Session): boolean {
-    if (head.waitingForInput !== true) return false;
+  private turn(head: Session, termId: string): BusyReason | null {
     const a = this.d.activity(head.id);
-    return a !== null && (a.background || a.kind === "waiting" || a.kind === "idle");
+    const recorded = head.waitingForInput === true && a !== null && (a.background || a.kind === "waiting" || a.kind === "idle");
+    if (recorded) return null;
+    const e = this.d.idle?.(head.id, termId);
+    if (!e) return "turn";
+    if (e.idle) {
+      if (head.waitingForInput !== true) this.d.healed?.(head.id);
+      return null;
+    }
+    return e.looksIdle ? "unsure" : "turn";
   }
 }

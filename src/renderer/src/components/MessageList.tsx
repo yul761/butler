@@ -1,6 +1,8 @@
 // 信箱（BTL-245）的消息列表：Shipherd 总控页、feature 页「总控」tab 对话下面默认折起的「消息（N）」。
 // 谁发给谁、种类、状态（已排队 / 已送达 / 已回复）、怎么送到的、正文和回复。新的在前。
-import type { MessageScope, MessageView } from "../../../shared/types";
+// 还在排队的写出挡住它的原因（BTL-269），并给一个「现在送进去」按钮。
+import { useState } from "react";
+import type { DeliverNowResult, MessageView, MessageScope } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
@@ -24,6 +26,7 @@ export function MessageListItems({ messages }: { messages: MessageView[] }) {
               {m.via && ` (${S.messageVia[m.via]})`}
             </span>
           </div>
+          {m.status === "queued" && <QueuedLine m={m} />}
           <p className="message-text">{m.text}</p>
           {m.reply !== null && (
             <div className="message-reply">
@@ -35,6 +38,33 @@ export function MessageListItems({ messages }: { messages: MessageView[] }) {
       ))}
     </ul>
   );
+}
+
+/** 排队中：挡住它的原因和开始时间（没试过送的不写原因），加「现在送进去」。 */
+function QueuedLine({ m }: { m: MessageView }) {
+  const [state, setState] = useState<"idle" | "sending" | string>("idle");
+  const L = S.mailboxBlocked;
+  const deliver = (): void => {
+    setState("sending");
+    api.deliverNow(m.id).then((r) => setState(resultText(r)), () => setState(L.failed));
+  };
+  return (
+    <div className="message-blocked" data-testid="message-blocked">
+      {m.blocked && <span className="muted">{L.line(L.reason[m.blocked.reason], m.blocked.since ? shortTime(m.blocked.since) : null)}</span>}
+      <button type="button" className="link" title={L.title} disabled={state === "sending"} onClick={deliver} data-testid="message-deliver-now">
+        {state === "sending" ? L.sending : L.button}
+      </button>
+      {state !== "idle" && state !== "sending" && <span className="muted" role="status">{state}</span>}
+    </div>
+  );
+}
+
+function resultText(r: DeliverNowResult): string {
+  const L = S.mailboxBlocked;
+  if (r.delivered) return L.delivered;
+  if (r.reason === "delivering") return L.delivering;
+  if (r.reason === "gone") return L.gone;
+  return r.reason === null ? L.failed : L.notNow(L.reason[r.reason]);
 }
 
 /** 默认折起的「消息（N）」；还没取到时整块不显示。 */

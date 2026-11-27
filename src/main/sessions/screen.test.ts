@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";
-import { dialogOnScreen, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen } from "./screen";
+import { dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, SCREEN_PENDING_LIMIT, squash, TermScreen, workingOnScreen } from "./screen";
 
 const RULE = "─".repeat(120);
 
@@ -188,11 +188,50 @@ describe("dialogOnScreen / permissionOnScreen", () => {
 
   it("finds permission prompts only", () => {
     expect(permissionOnScreen(["Bash command", "Do you want to proceed?", " ❯ 1. Yes"])).toBe(true);
-    expect(permissionOnScreen(["Do  you want to make this edit to a.ts?"])).toBe(true);
-    expect(permissionOnScreen(["Would you like to proceed?"])).toBe(true);
-    expect(permissionOnScreen(["Do you want to create foo.ts?"])).toBe(true);
+    expect(permissionOnScreen(["Do  you want to make this edit to a.ts?", " ❯ 1. Yes", "   2. Yes, allow all edits", "   3. No"])).toBe(true);
+    expect(permissionOnScreen([RULE, " Ready to code?", " Would you like to proceed?", "", " ❯ 1. Yes, and auto-accept edits", "   2. No, keep planning"])).toBe(true);
+    expect(permissionOnScreen(["Do you want to create foo.ts?", "> 1) Yes"])).toBe(true);
     expect(permissionOnScreen(["building..."])).toBe(false);
     expect(permissionOnScreen([" Do you trust the files in this folder?"])).toBe(false);
+  });
+});
+
+describe("permissionOnScreen (BTL-269 D: a quoted question is not a prompt)", () => {
+  it("needs a numbered first option after the question", () => {
+    // 回复里引用了这句话、输入框没认出来（底部提示多了一行）：没有选项，不算确认框。
+    const reply = ["⏺ 计划写好了。Would you like to proceed? 你看一下再说。", "", RULE, "❯ ", RULE, "  ⏵⏵ auto mode on", "  ctx 40%", "  model opus", "  branch x", "  extra"];
+    expect(inputBoxText(reply)).toBeNull();
+    expect(permissionOnScreen(reply)).toBe(false);
+    expect(permissionOnScreen(["Would you like to proceed?"])).toBe(false);
+    expect(permissionOnScreen(["Do you want to proceed?", "  1 file changed"])).toBe(false);
+    // 选项在问题上面（上一段对话里的列表）也不算。
+    expect(permissionOnScreen(["1. first step", "Do you want to proceed?"])).toBe(false);
+  });
+});
+
+describe("workingOnScreen / inputBoxEmpty", () => {
+  it("sees the spinner line of a running turn", () => {
+    expect(workingOnScreen(["✻ Thinking… (12s · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    expect(workingOnScreen(["⏺ done", RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(false);
+  });
+
+  it("an empty box or one with only the placeholder is empty; text is not; no box is null", () => {
+    expect(inputBoxEmpty(["⏺ done", RULE, "❯ ", RULE])).toBe(true);
+    expect(inputBoxEmpty([RULE, '❯ Try "fix lint errors"', RULE])).toBe(true);
+    expect(inputBoxEmpty([RULE, "❯ 帮我看看", RULE])).toBe(false);
+    expect(inputBoxEmpty([RULE, " ❯ 1. Yes", " 2. No"])).toBeNull();
+  });
+
+  it("dropDim removes the grey suggestion so the box reads empty", async () => {
+    const s = new TermScreen(40, 4);
+    s.write(`${"─".repeat(40)}\r\n❯ \x1b[2mrun the tests\x1b[22m\r\n${"─".repeat(40)}`);
+    await s.flush();
+    expect(inputBoxEmpty(s.lines())).toBe(false);
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(true);
+    s.write("\x1b[2;3Hreal");
+    await s.flush();
+    expect(inputBoxEmpty(s.lines({ dropDim: true }))).toBe(false);
+    s.dispose();
   });
 });
 

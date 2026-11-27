@@ -695,7 +695,23 @@ export interface MessageView {
   deliveredAt: string | null;
   reply: string | null;
   repliedAt: string | null;
+  /** 还在排队时，上一次试着送被什么挡住、从什么时候开始（BTL-269）；没挡过、送到了为 null。 */
+  blocked: { reason: MailboxBlockReason; since: string | null } | null;
 }
 
 /** messages:list 的范围：Shipherd 总控的，或者一个 feature 的。 */
 export type MessageScope = { shipherd: true } | { featureId: number };
+
+/**
+ * 排着的消息为什么还没送到（BTL-269）：turn 在干活；unsure 记录说在干活、屏幕看着停了，在确认；refreshing 在换新；
+ * auto_input 别的自动输入正在往里送；screen 屏幕上有确认框；needs_you 在等用户回答；typing 用户刚打过字；draft 输入框里有没发出去的字；
+ * closed / hibernated 终端关着、休眠着；cost_paused 成本熔断暂停了。
+ */
+export type MailboxBlockReason =
+  | "turn" | "unsure" | "refreshing" | "auto_input" | "screen" | "needs_you" | "typing" | "draft" | "closed" | "hibernated" | "cost_paused";
+
+/** messages:deliverNow 的结果（BTL-269）：送进去了；没送进去时的原因（delivering 正在送、gone 消息已经不在排队了）。 */
+export interface DeliverNowResult {
+  delivered: boolean;
+  reason: MailboxBlockReason | "delivering" | "gone" | null;
+}

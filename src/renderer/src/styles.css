@@ -565,6 +565,7 @@ button.danger { border-color: var(--danger); color: var(--danger); }
 .message-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
 .message-text, .message-reply p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12em; overflow-y: auto; }
 .message-reply { margin-left: 12px; padding-left: 8px; border-left: 2px solid var(--border); }
+.message-blocked { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-top: 2px; }
 .message.status-queued .badge { color: var(--muted); }
 .message.status-delivered .badge, .message.status-replied .badge { color: var(--ok); }
 

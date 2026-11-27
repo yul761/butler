@@ -132,13 +132,29 @@ export class TermScreen {
     flushRun();
   }
 
-  /** 当前这一屏，每行一个字符串（行尾空白去掉）。 */
-  lines(): string[] {
+  /**
+   * 当前这一屏，每行一个字符串（行尾空白去掉）。dropDim：暗色（SGR 2）的字换成空格——claude 空输入框里的灰色提示
+   * （Try "…"、建议的下一句）是暗色画的，看输入框是不是真的空着时用（BTL-269）。
+   */
+  lines(o: { dropDim?: boolean } = {}): string[] {
     if (this.disposed) return [];
     this.catchUp();
     const b = this.term.buffer.active;
     const out: string[] = [];
-    for (let i = 0; i < this.term.rows; i++) out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
+    for (let i = 0; i < this.term.rows; i++) {
+      const line = b.getLine(b.viewportY + i);
+      if (!line) out.push("");
+      else if (!o.dropDim) out.push(line.translateToString(true));
+      else {
+        let text = "";
+        for (let x = 0; x < line.length; x++) {
+          const cell = line.getCell(x);
+          if (!cell || cell.getWidth() === 0) continue;
+          text += cell.isDim() ? " ".repeat(cell.getWidth()) : cell.getChars() || " ";
+        }
+        out.push(text.trimEnd());
+      }
+    }
     return out;
   }
 
@@ -228,8 +244,47 @@ export function dialogOnScreen(lines: string[]): boolean {
   return hasAny(lines, DIALOG_MARKERS);
 }
 
+/** 选择框的第一个选项：「❯ 1. Yes」「1. Yes, and auto-accept edits」。 */
+const FIRST_OPTION = /^(?:[❯>]\s*)?1[.)]\s*\S/;
+
+/**
+ * 权限确认、退出计划模式的提示：问题下面紧跟着编号的选项（claude 一定画「1. Yes」这一行）。
+ * 只看提示区（同 promptArea），并且问题那一行之后要有第一个选项：回复里引用了「Would you like to proceed?」、
+ * 输入框又没认出来（底部提示多、改了样式）时不算（BTL-269 D：这样会一直挡住往空闲 session 里送消息）。
+ */
 export function permissionOnScreen(lines: string[]): boolean {
-  return hasAny(lines, PERMISSION_MARKERS);
+  if (inputBox(lines)) return false;
+  let last = -1;
+  lines.forEach((l, i) => {
+    if (isRule(l)) last = i;
+  });
+  const area = lines.slice(last + 1);
+  const ask = area.findIndex((l) => PERMISSION_MARKERS.some((m) => squash(l).includes(m)));
+  return ask >= 0 && area.slice(ask + 1).some((l) => FIRST_OPTION.test(l.trim()));
+}
+
+/** 这一轮还在跑：claude 在转圈的那一行写着「esc to interrupt」。 */
+export function workingOnScreen(lines: string[]): boolean {
+  return lines.some((l) => squash(l).includes("esctointerrupt"));
+}
+
+/** 空输入框里 claude 画的提示：Try "…"。 */
+const PLACEHOLDER = /^Try\s+["“]/;
+
+/**
+ * 输入框画着、里面是空的（只有灰色提示也算空）：true；画着、里面有字：false；没画输入框：null。
+ * 灰色提示要传 dropDim 读出来的那一屏才去得掉；Try "…" 这种按字认。
+ */
+export function inputBoxEmpty(lines: string[]): boolean | null {
+  const text = inputBoxText(lines);
+  if (text === null) return null;
+  return text === "" || PLACEHOLDER.test(text);
+}
+
+/** 输入框上面的那部分屏幕（对话的内容），不含输入框和下面会刷新的状态栏；没画输入框返回 null。 */
+export function aboveInputBox(lines: string[]): string[] | null {
+  const box = inputBox(lines);
+  return box ? lines.slice(0, box.top) : null;
 }
 
 /**

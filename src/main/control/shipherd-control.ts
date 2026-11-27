@@ -56,6 +56,8 @@ export interface ShipherdControlHelpers {
   sessionActivity: (wanted: string, belongs: (s: Session) => boolean) => Promise<ControlResult>;
   refreshSession: (req: { from: string | null; session: string }, belongs: (s: Session) => boolean) => ControlResult;
   listedActivity: (id: string) => object | null;
+  /** 信箱里排给它、还没送到的（BTL-269）。 */
+  pendingMail: (id: string) => object | null;
   lastReply: (id: string) => string | null;
 }
 
@@ -186,8 +188,14 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
     /** 排进目标的信箱（BTL-245）：在忙的下一次工具调用时读到，停着的直接输入；从不因为它在忙而拒绝。 */
     const enqueue = (sessionId: string, text: string, featureId: number | null, interrupt: boolean, hold = false) =>
       mailbox!.send({ kind: "shipherd", from: self?.id ?? null, to: sessionId, featureId, body: text, interrupt, hold });
-    const queued = (r: { id: string; state: "busy" | "idle" | "closed" }, sessionId: string, extra: object = {}): ControlResult =>
-      ok({ queued: true, sessionId: d.sessions.head(sessionId)?.id ?? sessionId, requestId: r.id, state: r.state, ...extra, note: `${M().mailboxSendNote(r.state)}${M().mailboxReplyNote}` });
+    /** 如实说这条现在怎么样了（BTL-269）：等这一次尝试（最多 15 秒），送到了还是排着、为什么排着。 */
+    const queued = async (r: { id: string; state: "busy" | "idle" | "closed" }, sessionId: string, extra: object = {}): Promise<ControlResult> => {
+      const o = await mailbox!.outcome(r.id);
+      return ok({
+        queued: o.delivery === "queued", delivery: o.delivery, sessionId: d.sessions.head(sessionId)?.id ?? sessionId, requestId: r.id, state: r.state,
+        ...(o.delivery === "queued" && { blockedBy: o.blockedBy, blockedSince: o.blockedSince }), ...extra, note: `${o.note}${M().mailboxReplyNote}`,
+      });
+    };
     /**
      * 终端关着（闲置时自动关掉了、Shipherd 重启过）：和用户点开一样接着最近的那个（给的 session 没隐藏就接着它），
      * 排着的消息当作它的第一条输入（submit 等输入框就绪）。epic 从没开过总控时新开一个。
@@ -220,7 +228,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       opening.set(key, new Promise((res) => (settle = res)));
       let r: OpenSessionResult | undefined;
       let room: Awaited<ReturnType<typeof admitOrRefuse>> | null = null;
-      const failed = (message: string): ControlResult => (early ? queued(early, resume!.id, { openError: message }) : fail(message));
+      const failed = (message: string): Promise<ControlResult> | ControlResult => (early ? queued(early, resume!.id, { openError: message }) : fail(message));
       try {
         // 要新开一个终端：和 start_session 一样先按内存放行（工作流 W）。
         room = await admitOrRefuse(d.admission, `send_message ${key}`);
@@ -316,7 +324,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
           return {
             id: s.id, role: roleOf(s), ...own, repo: repo ? name(repo) : null, firstPrompt: s.firstPrompt,
             waitingForInput: s.waitingForInput, lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
-            activity: h.listedActivity(s.id), needs_you: b.needsYou(s.id), decisions: decisions.get(s.id) ?? 0, last_reply: h.lastReply(s.id),
+            activity: h.listedActivity(s.id), needs_you: b.needsYou(s.id), decisions: decisions.get(s.id) ?? 0, mailbox: h.pendingMail(s.id), last_reply: h.lastReply(s.id),
             ...(pre && { preReview: pre.has(s.id) ? preReviewField(pre.get(s.id)!) : null }),
           };
         }));

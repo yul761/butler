@@ -243,6 +243,9 @@ describe("manual_trigger recording (successful invokes)", () => {
     expect(recordInvoke(record, IPC.sessionsWake, ["s9"], "woken")).toBe(true);
     expect(repo.events(0)).toHaveLength(2);
     expect(noOpResult(IPC.handoffsRun, undefined)).toBe(false);
+    // BTL-269：「现在送进去」只有真送进去才算一次手动触发。
+    expect(noOpResult(IPC.messagesDeliverNow, { delivered: true, reason: null })).toBe(false);
+    expect(noOpResult(IPC.messagesDeliverNow, { delivered: false, reason: "draft" })).toBe(true);
   });
 
   it("counts a breaker continue-and-raise on its ticket or session, but not when nothing was tripped", () => {

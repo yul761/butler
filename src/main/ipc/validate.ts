@@ -1038,3 +1038,9 @@ export function preReviewQueueActionArg(v: unknown): PreReviewQueueAction {
   if (o.op !== "cancel" && o.op !== "front") throw new Error("invalid pre-review queue action");
   return { op: o.op, id: posInt(o.id, "pre-review id") };
 }
+
+/** 信箱消息的 id（BTL-269）：UUID，只允许安全字符。 */
+export function messageIdArg(v: unknown): string {
+  if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid message id");
+  return v;
+}

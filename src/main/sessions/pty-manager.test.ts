@@ -643,6 +643,83 @@ describe("nextDraftLength", () => {
   });
 });
 
+describe("nextDraftLength: clearing keys (BTL-269 C)", () => {
+  it("Esc Esc clears, Ctrl-W and Option-Backspace delete one word", () => {
+    expect(nextDraftLength(5, "\x1b\x1b")).toBe(0);
+    expect(nextDraftLength(0, "\x1b\x1b[A")).toBe(0);
+  });
+});
+
+describe("PtyManager draft: clearing keys and the screen (BTL-269 C)", () => {
+  // 只假 Date：xterm 解析屏幕用真的定时器。
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+  afterEach(() => vi.useRealTimers());
+  const later = (ms: number) => vi.setSystemTime(Date.now() + ms);
+  const RULE = "─".repeat(120);
+
+  it("two separate Esc presses clear the draft; a slow second Esc does not", () => {
+    const { mgr } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "hello");
+    mgr.write("t1", "\x1b");
+    later(300);
+    mgr.write("t1", "\x1b");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", "again");
+    mgr.write("t1", "\x1b");
+    later(3000);
+    mgr.write("t1", "\x1b");
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+
+  it("Ctrl-W and Option-Backspace delete words: the last word gone leaves no draft", () => {
+    const { mgr } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "fix it");
+    mgr.write("t1", "\x17");
+    expect(mgr.hasDraft("t1")).toBe(true);
+    mgr.write("t1", "\x17");
+    expect(mgr.hasDraft("t1")).toBe(false);
+    mgr.write("t1", "go");
+    mgr.write("t1", "\x1b\x7f");
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("a stale count is dropped once the screen shows an empty input box (keys we can't follow: Ctrl-K, history edits)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    spawned[0].pty.emit(`${RULE}\r\n❯ draft\r\n${RULE}`);
+    mgr.write("t1", "draft");
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+    mgr.write("t1", "\x01\x0b"); // Ctrl-A, Ctrl-K: the box is empty now, the count does not know
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ \r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    // 刚按过键：屏幕可能还没跟上，先按计数。
+    expect(mgr.hasDraft("t1")).toBe(true);
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    // 灰色的建议不算草稿。
+    spawned[0].pty.emit("\x1b[2;3H\x1b[2mrun the tests\x1b[22m");
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("text in the box counts as a draft even when the count missed it", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.write("t1", "x");
+    mgr.write("t1", "\x1b");
+    mgr.write("t1", "\x1b"); // 计数清零了（以为是 Esc Esc），屏幕上其实还有字
+    spawned[0].pty.emit(`${RULE}\r\n❯ x\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(true);
+  });
+});
+
 describe("PtyManager.hasDraft", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

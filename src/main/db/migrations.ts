@@ -1662,4 +1662,11 @@ export const MIGRATIONS: string[] = [
     SELECT 'preReviewConcurrency', '1'
     WHERE EXISTS (SELECT 1 FROM tickets) OR EXISTS (SELECT 1 FROM settings WHERE key = 'onboardingDone' AND value = '1');
   `,
+  // 62（BTL-269）：排着的消息为什么还没送到。blocked_reason 是上一次试着送时挡住它的原因（MailboxBlockReason），blocked_since 是这个原因开始的时间，
+  // 原因变了才换；stuck_receipt_at 是给发件的总控发「还没送到」回执的时间：重启以后不重发。
+  `
+  ALTER TABLE session_messages ADD COLUMN blocked_reason TEXT;
+  ALTER TABLE session_messages ADD COLUMN blocked_since INTEGER;
+  ALTER TABLE session_messages ADD COLUMN stuck_receipt_at INTEGER;
+  `,
 ];

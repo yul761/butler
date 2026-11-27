@@ -260,6 +260,8 @@ export const IPC = {
   updateOpenRelease: "update:openRelease",
   /** 应用菜单点了要界面做的事（BTL-253 / 254）：参数是 AppMenuAction。 */
   appMenu: "app:menu",
+  /** 信箱（BTL-269）：用户在消息列表里点「现在送进去」：参数是消息 id，返回 DeliverNowResult。 */
+  messagesDeliverNow: "messages:deliverNow",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -291,6 +293,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease,
   IPC.diagSnapshot, IPC.diagExport,
   IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,
+  IPC.messagesDeliverNow,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];

@@ -32,6 +32,7 @@ export function fakeMailbox(o: { canDeliver: () => boolean; deliver: (to: string
       queued.set(key, {
         id, kind: x.kind, fromSession: x.from, toSession: x.to, featureId: x.featureId, body: x.body, interrupt: x.interrupt === true, ref: x.ref ?? null,
         meta: x.meta ?? null, status: "queued", via: null, expectsReply: false, baseReplyId: null, replyText: null, queuedAt: o.now?.() ?? 1000, deliveredAt: null, repliedAt: null,
+        blockedReason: null, blockedSince: null, stuckReceiptAt: null,
       });
       // 和真信箱一样：send 当场只是排队，送到在之后（直接输入是异步的）。
       queueMicrotask(deliverQueued);

@@ -1,4 +1,4 @@
-import type { MessageKind, MessageStatus } from "../../shared/types";
+import type { MailboxBlockReason, MessageKind, MessageStatus } from "../../shared/types";
 import type { Db } from "./database";
 
 /** 信箱里的一条消息（BTL-245）。时间都是毫秒。 */
@@ -22,6 +22,12 @@ export interface SessionMessage {
   queuedAt: number;
   deliveredAt: number | null;
   repliedAt: number | null;
+  /** 上一次试着送时挡住它的原因（BTL-269）；没挡过、送到了为 null。 */
+  blockedReason: MailboxBlockReason | null;
+  /** 这个原因从什么时候开始。 */
+  blockedSince: number | null;
+  /** 给发件的总控发「还没送到」回执的时间；没发过为 null。 */
+  stuckReceiptAt: number | null;
 }
 
 export type NewSessionMessage = Pick<SessionMessage, "id" | "kind" | "fromSession" | "toSession" | "featureId" | "body" | "queuedAt"> &
@@ -45,6 +51,9 @@ interface Row {
   queued_at: number | bigint;
   delivered_at: number | bigint | null;
   replied_at: number | bigint | null;
+  blocked_reason: MailboxBlockReason | null;
+  blocked_since: number | bigint | null;
+  stuck_receipt_at: number | bigint | null;
 }
 
 const num = (v: number | bigint | null): number | null => (v === null ? null : Number(v));
@@ -62,6 +71,7 @@ const toMessage = (r: Row): SessionMessage => ({
   id: r.id, kind: r.kind, fromSession: r.from_session, toSession: r.to_session, featureId: num(r.feature_id), body: r.body,
   interrupt: Number(r.interrupt) === 1, ref: r.ref, meta: parseMeta(r.meta), status: r.status, via: r.via, expectsReply: Number(r.expects_reply) === 1,
   baseReplyId: r.base_reply_id, replyText: r.reply_text, queuedAt: Number(r.queued_at), deliveredAt: num(r.delivered_at), repliedAt: num(r.replied_at),
+  blockedReason: r.blocked_reason, blockedSince: num(r.blocked_since), stuckReceiptAt: num(r.stuck_receipt_at),
 });
 
 /** 界面上的范围：Shipherd 总控发出或收到的（给它的 session id 们），或者一个 feature 的。 */
@@ -123,6 +133,28 @@ export class SessionMessagesRepo {
       .prepare(`UPDATE session_messages SET status = 'delivered', delivered_at = ?, via = ?, to_session = ?, base_reply_id = ? WHERE id = ? AND status = 'queued'`)
       .run(o.at, o.via, o.toSession, o.baseReplyId, id);
     return Number(r.changes) > 0;
+  }
+
+  /**
+   * 记下挡住这几条（还在排队的）的原因：原因没变的不动（blocked_since 留着原因开始的时间），变了换成新原因和 at；reason 为 null 清掉。
+   * 返回原因真的变了的那几条的 id。
+   */
+  setBlocked(ids: string[], reason: MailboxBlockReason | null, at: number): string[] {
+    const changed: string[] = [];
+    const stmt = this.db.prepare(
+      `UPDATE session_messages SET blocked_reason = ?, blocked_since = ? WHERE id = ? AND status = 'queued' AND blocked_reason IS NOT ? RETURNING id`,
+    );
+    for (const id of ids) {
+      const r = stmt.get(reason, reason === null ? null : at, id, reason) as { id: string } | undefined;
+      if (r) changed.push(r.id);
+    }
+    return changed;
+  }
+
+  /** 记下已经给这几条发过「还没送到」的回执。 */
+  setStuckReceipt(ids: string[], at: number): void {
+    const stmt = this.db.prepare(`UPDATE session_messages SET stuck_receipt_at = ? WHERE id = ? AND stuck_receipt_at IS NULL`);
+    for (const id of ids) stmt.run(at, id);
   }
 
   /** 送到了、还在等回复的（送到不早于 since）。 */

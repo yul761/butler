@@ -346,7 +346,8 @@ const PREFIX = "Shipherd 总控发来的消息（你这一轮做完时的最后�
 describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
   it("queues a message for an epic coordinator; the mailbox types it in with a prefix (BTL-245)", async () => {
     const { call, delivered } = setup();
-    expect(value(await call({ op: "send_message", session: "fc", text: "接口改了" }))).toMatchObject({ queued: true, sessionId: "fc" });
+    // 停着的：等这一次尝试，如实说送到了（BTL-269）。
+    expect(value(await call({ op: "send_message", session: "fc", text: "接口改了" }))).toMatchObject({ queued: false, delivery: "delivered", sessionId: "fc", note: expect.stringContaining("送进去了") });
     await tick();
     expect(delivered.map(([t]) => t)).toEqual(["fc"]);
     expect(delivered[0][1]).toContain(`${PREFIX}\n接口改了`);
@@ -375,6 +376,9 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
     setGuard(() => ({ ok: false, block: "busy" }));
     const out = value<{ requestId: string; note: string }>(await call({ op: "send_message", epic: "checkout", text: "t" }));
     expect(out.note).toContain("信箱");
+    // 挡住的原因如实返回（BTL-269），不再承诺「下一次调用工具时」。
+    expect(out).toMatchObject({ queued: true, delivery: "queued", blockedBy: "turn" });
+    expect(out.note).not.toContain("下一次调用工具时就会读到");
     await tick();
     expect(delivered).toEqual([]);
     expect(repo.get(out.requestId)?.status).toBe("queued");
@@ -386,7 +390,8 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
   it("interrupt presses Esc on a busy target first, then types the message in (BTL-245)", async () => {
     const { call, delivered, interrupts, setGuard } = setup();
     setGuard(() => ({ ok: false, block: "busy" }));
-    expect(value(await call({ op: "send_message", session: "fc", text: "停一下", interrupt: true }))).toMatchObject({ queued: true, state: "busy" });
+    // 叫停：按 Esc 以后照样送进去了。
+    expect(value(await call({ op: "send_message", session: "fc", text: "停一下", interrupt: true }))).toMatchObject({ delivery: "delivered", state: "busy" });
     await tick();
     expect(interrupts).toEqual(["fc"]);
     expect(delivered[0][1]).toContain("停一下");
@@ -447,8 +452,8 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
 
   it("takes an epic by name or id and sends to its running coordinator", async () => {
     const { call, delivered, opened, checkout } = setup();
-    expect(value(await call({ op: "send_message", epic: "Checkout", text: "a" }))).toMatchObject({ queued: true, sessionId: "fc" });
-    expect(value(await call({ op: "send_message", epic: String(checkout), text: "b" }))).toMatchObject({ queued: true, sessionId: "fc" });
+    expect(value(await call({ op: "send_message", epic: "Checkout", text: "a" }))).toMatchObject({ delivery: "delivered", sessionId: "fc" });
+    expect(value(await call({ op: "send_message", epic: String(checkout), text: "b" }))).toMatchObject({ delivery: "delivered", sessionId: "fc" });
     await tick();
     expect(delivered.map(([id]) => id)).toContain("fc");
     expect(opened).toEqual([]);

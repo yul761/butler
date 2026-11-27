@@ -25,7 +25,7 @@ describe("ShipherdLayout", () => {
 describe("MessageListSummary (BTL-245)", () => {
   const msg = (status: MessageView["status"], extra: Partial<MessageView> = {}): MessageView => ({
     id: `m-${status}`, kind: "shipherd", from: "Shipherd 总控", to: "feature 登录 的总控", toSession: "s1", status, via: null, interrupt: false,
-    text: "hi", queuedAt: "2026-11-03T09:00:00Z", deliveredAt: null, reply: null, repliedAt: null, ...extra,
+    text: "hi", queuedAt: "2026-11-03T09:00:00Z", deliveredAt: null, reply: null, repliedAt: null, blocked: null, ...extra,
   });
   it("is a closed details with the count; hidden until messages are known", () => {
     expect(renderToStaticMarkup(createElement(MessageListSummary, { messages: null }))).toBe("");
@@ -49,6 +49,18 @@ describe("MessageListSummary (BTL-245)", () => {
     expect(html).toContain(S.messageVia.hook);
     expect(html).toContain(S.messageVia.input);
     expect(html).toContain("好的");
+  });
+  it("says why a queued message has not got in yet and offers Deliver now; delivered ones have neither (BTL-269)", () => {
+    const html = renderToStaticMarkup(createElement(MessageListSummary, {
+      messages: [
+        msg("queued", { id: "a", blocked: { reason: "unsure", since: "2026-11-03T09:02:00Z" } }),
+        msg("queued", { id: "b" }),
+        msg("delivered", { id: "c", deliveredAt: "2026-11-03T09:01:00Z" }),
+      ],
+    }));
+    expect(html).toContain(S.mailboxBlocked.reason.unsure);
+    expect(html.match(/data-testid="message-deliver-now"/g)).toHaveLength(2);
+    expect(html.match(/data-testid="message-blocked"/g)).toHaveLength(2);
   });
   it("shows (0) and the empty line when there is nothing", () => {
     const html = renderToStaticMarkup(createElement(MessageListSummary, { messages: [] }));

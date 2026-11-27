@@ -57,10 +57,18 @@ async function setup(opts: {
   const logs: string[] = [];
   const refreshed: string[] = [];
   const mailed: SendInput[] = [];
+  const pendingMail = new Map<string, { queued: number; oldestQueuedAt: string; blockedBy: "turn" | null; blockedSince: string | null; note: string }>();
   const mailbox = {
     send: (x: SendInput) => (mailed.push(x), { id: `m${mailed.length}`, state: opts.mailState ?? ("busy" as const) }),
     opened: async () => true,
     views: () => [],
+    outcome: async () => {
+      const st = opts.mailState ?? "busy";
+      return st === "idle"
+        ? { delivery: "delivered" as const, blockedBy: null, blockedSince: null, note: "送进去了。" }
+        : { delivery: "queued" as const, blockedBy: st === "busy" ? ("turn" as const) : ("closed" as const), blockedSince: null, note: "排着。" };
+    },
+    pendingView: (id: string) => pendingMail.get(id) ?? null,
   };
   const handle = controlHandler({
     mailbox,
@@ -90,7 +98,7 @@ async function setup(opts: {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, blocks, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed };
+  return { handle, blocks, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed, pendingMail };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -272,6 +280,21 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(rows.find((x) => x.id === c.termId)!.activity).toBeNull();
     expect(await handle({ ...base, op: "session_activity", session: id })).toMatchObject({ ok: true, value: { kind: "command", stuck: true, output: "out" } });
     expect(await handle({ ...base, op: "session_activity", session: c.termId })).toMatchObject({ ok: true });
+  });
+
+  it("shows what is waiting in a session's mailbox and why, in list_sessions and session_activity (BTL-269)", async () => {
+    const { handle, base, sessionService, feature, pendingMail } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, from: c.termId, op: "start_session", ticket: "DMS-1", task: "a" });
+    const id = child.ok ? (child.value as { sessionId: string }).sessionId : "";
+    const view = { queued: 2, oldestQueuedAt: "2026-11-26T00:00:00.000Z", blockedBy: "turn" as const, blockedSince: "2026-11-26T00:00:05.000Z", note: "排着：它这一轮还在干活" };
+    pendingMail.set(id, view);
+    const listed = await handle({ ...base, op: "list_sessions" });
+    const rows = (listed.ok ? listed.value : []) as { id: string; mailbox: unknown }[];
+    expect(rows.find((x) => x.id === id)!.mailbox).toEqual(view);
+    expect(rows.find((x) => x.id === c.termId)!.mailbox).toBeNull();
+    expect(await handle({ ...base, op: "session_activity", session: id })).toMatchObject({ ok: true, value: { mailbox: view } });
   });
 
   it("lists a fix session with the session it fixes, and lets the coordinator read one in its own feature", async () => {

@@ -96,7 +96,8 @@ test("Shipherd control messages a feature coordinator by name, reopening it when
   await expect.poll(async () => JSON.parse((await callTool(page, s, "list_epics")).text)[0].coordinatorSession).toBe(coordinator);
   await page.waitForTimeout(1500);
   const again = await callTool(page, s, "send_message", { session: coordinator, text: "再看一下" });
-  expect(JSON.parse(again.text)).toMatchObject({ queued: true, sessionId: coordinator });
+  // 停着的：直接送进去了，返回值如实说（BTL-269）。
+  expect(JSON.parse(again.text)).toMatchObject({ delivery: "delivered", sessionId: coordinator });
   expect(JSON.parse(again.text).opened).toBeUndefined();
   await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toContain("Shipherd 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 再看一下");
   expect(fakeLog(s).match(new RegExp(`interactive resume ${coordinator} `, "g"))).toHaveLength(1);
@@ -130,7 +131,7 @@ test("Shipherd control messages an open feature coordinator nobody has typed int
 
   const sent = await callTool(page, s, "send_message", { epic: "checkout-revamp", text: "先看一下规划" });
   expect(sent.error).toBe(false);
-  expect(JSON.parse(sent.text)).toMatchObject({ queued: true, sessionId: coordinator });
+  expect(JSON.parse(sent.text)).toMatchObject({ delivery: "delivered", sessionId: coordinator });
   expect(JSON.parse(sent.text).opened).toBeUndefined();
   await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1))).toContain("Shipherd 总控发来的消息（你这一轮做完时的最后一段回复会转给它）： 先看一下规划");
   expect(sessionsIn(s, workspace)).toEqual([coordinator]);

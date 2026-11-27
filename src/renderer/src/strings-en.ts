@@ -18,7 +18,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
@@ -2506,5 +2506,30 @@ export const EN: UiStrings = {
     actFailed: { not_found: "That pre-review is gone; it may have just finished.", not_queued: "It is no longer queued.", failed: "That did not work. Try again." },
     concurrencyLabel: "Pre-reviews at the same time",
     concurrencyHint: "2 by default. One worktree only runs one at a time, so they never get in each other's way.",
+  },
+  /** Mailbox (BTL-269): why a queued message has not got in yet, and Deliver now. */
+  mailboxBlocked: {
+    reason: {
+      turn: "its turn is still running",
+      unsure: "the record says it is working but the screen shows it stopped; Shipherd is confirming",
+      refreshing: "it is being refreshed",
+      auto_input: "Shipherd is typing in an earlier batch",
+      screen: "a prompt on its screen is waiting for you",
+      needs_you: "it is waiting for you to answer a question",
+      typing: "you just typed in its terminal",
+      draft: "its input box has text you have not sent",
+      closed: "its terminal is closed",
+      hibernated: "it is hibernating",
+      cost_paused: "the cost breaker paused it",
+    } as Record<MailboxBlockReason, string>,
+    line: (why: string, since: string | null) => `Queued: ${why}${since ? ` (since ${since})` : ""}`,
+    button: "Deliver now",
+    title: "Type it in now without waiting for the turn to end or for your answer. It still waits if the input box has unsent text or a prompt is on screen.",
+    sending: "Sending…",
+    delivered: "Delivered",
+    notNow: (why: string) => `Not delivered: ${why}`,
+    delivering: "Shipherd is typing it in; give it a few seconds",
+    gone: "This message is no longer queued",
+    failed: "Not delivered; Shipherd tries again every 10 seconds",
   },
 };
