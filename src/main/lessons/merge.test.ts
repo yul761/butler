@@ -3,7 +3,8 @@ import { BatchRecorder } from "../batches/batch-recorder";
 import { lessonAdapter, mergeProposalAdapter } from "../batches/table-adapter";
 import { failed, fakeRunner, setupAdmission, type FakeAnswer } from "./admission/__fixtures__/setup";
 import { OPEN_GATE } from "./admission/model-steps";
-import { LessonMergeService, type MergeLayer } from "./merge";
+import { LessonMergeService, MERGE_CHUNK, mergeRetryAfter, stableBlocks, type MergeLayer } from "./merge";
+import type { Lesson } from "../../shared/lessons";
 
 const ids = (prompt: string) => [...prompt.matchAll(/^#(\d+) \(/gm)].map((m) => Number(m[1]));
 
@@ -161,6 +162,55 @@ describe("LessonMergeService", () => {
     await expect(s.svc.suggest()).rejects.toThrow("disk full");
     expect(s.svc.failed()).toBe(1);
     expect(s.svc.running()).toBe(false);
+  });
+
+  it("a block that failed is not asked again (and paid for) until its backoff is over; the button asks right away", async () => {
+    let fail = true;
+    const s = build((req) => (fail ? failed("timeout") : all()(req)));
+    s.lesson("re-read the row inside the write transaction before saving", { status: "confirmed" });
+    s.lesson("re-read the row inside the write transaction before writing back", { status: "confirmed" });
+    const calls = () => s.fake.of("lesson_merge").length;
+    expect(await s.svc.suggest()).toMatchObject({ failed: 1 });
+    expect(calls()).toBe(1);
+    // 一小时后的定时任务：还在退避（2 小时），不调模型，照样算没问成。
+    s.clock.now += 3600_000;
+    expect(await s.svc.suggest()).toMatchObject({ added: 0, failed: 1 });
+    expect(calls()).toBe(1);
+    s.clock.now += 3600_000;
+    expect(await s.svc.suggest()).toMatchObject({ failed: 1 });
+    expect(calls()).toBe(2);
+    // 第二次失败：退避翻倍到 4 小时；最多每天一次。
+    expect(mergeRetryAfter(2)).toBe(4 * 3600_000);
+    expect(mergeRetryAfter(9)).toBe(24 * 3600_000);
+    s.clock.now += 3 * 3600_000;
+    await s.svc.suggest();
+    expect(calls()).toBe(2);
+    // 用户点按钮：马上再问。
+    fail = false;
+    expect(await s.svc.suggest(undefined, { force: true })).toMatchObject({ added: 1, failed: 0 });
+    expect(calls()).toBe(3);
+  });
+
+  it("blocks are cut by lesson id, so removing one lesson only re-asks its own block", async () => {
+    const s = build(() => ({ merges: [] }), { overBudget: () => true });
+    const xs = Array.from({ length: 150 }, (_, i) => s.lesson(`rule number ${i} about topic ${i}`, { status: "confirmed" }));
+    await s.svc.suggest();
+    const first = s.fake.of("lesson_merge").length;
+    expect(first).toBeGreaterThan(2);
+    s.repo.setStatus(xs[40], "rejected", 2);
+    await s.svc.suggest();
+    expect(s.fake.of("lesson_merge").length - first).toBe(1);
+  });
+
+  it("stableBlocks: no block over the cap, every lesson in exactly one block, no lonely last lesson", () => {
+    const mk = (id: number) => ({ id }) as Lesson;
+    const units = Array.from({ length: 200 }, (_, i) => [mk(i + 1)]);
+    const blocks = stableBlocks(units);
+    expect(blocks.flat().map((l) => l.id)).toEqual(units.flat().map((l) => l.id));
+    expect(blocks.every((b) => b.length >= 2 && b.length <= MERGE_CHUNK + 1)).toBe(true);
+    // 一组字面相似的不拆开。
+    const grouped = stableBlocks([[mk(5), mk(9)], [mk(1), mk(2), mk(3)]]);
+    expect(grouped.flat().map((l) => l.id)).toEqual([1, 2, 3, 5, 9]);
   });
 
   it("ignores ids the model made up or from another layer, and keeps one proposal per lesson", async () => {

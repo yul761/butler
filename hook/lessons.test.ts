@@ -13,6 +13,8 @@ function fs(files: Record<string, string> = {}, platform: NodeJS.Platform = "lin
     append: (p, t) => f.set(p, (f.get(p) ?? "") + t),
     remove: (p) => void f.delete(p),
     exists: (p) => f.has(p),
+    lock: (p) => (f.has(p) ? false : (f.set(p, ""), true)),
+    sleep: () => {},
     platform,
   };
   return { f, d };
@@ -50,6 +52,7 @@ describe("runLessonDrip", () => {
     const web = runLessonDrip(edit("/wt/web/src/a.ts"), env, ROOT, d);
     expect(ctx(web.out)).toContain("#1");
     expect(ctx(web.out)).not.toContain("#2");
+    web.release();
     const api = runLessonDrip(edit("/wt/api/src/a.ts"), env, ROOT, d);
     expect(ctx(api.out)).toContain("#2");
     expect(ctx(api.out)).not.toContain("#1");
@@ -93,7 +96,9 @@ describe("runLessonDrip", () => {
 
   it("does not mark anything sent when stdout was not written (no commit)", () => {
     const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web")]) });
-    expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).not.toBe("");
+    const run = runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d);
+    expect(run.out).not.toBe("");
+    run.release();
     expect(f.has(`${ROOT}/s1.sent`)).toBe(false);
     expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).not.toBe("");
   });
@@ -128,6 +133,37 @@ describe("runLessonDrip", () => {
     expect(locate("/wt/web/../api/./src/a.ts", two, "linux")).toEqual({ slug: "acme/api", rel: "src/a.ts" });
     expect(locate("/wt/web/src/../../../etc/x", two, "linux")).toBeNull();
     expect(locate("C:\\wt\\web\\..\\api\\a.ts", { ...m, roots: [{ slug: "acme/api", dirs: ["c:\\wt\\api"] }] }, "win32")).toEqual({ slug: "acme/api", rel: "a.ts" });
+  });
+});
+
+describe("concurrent edits in one session", () => {
+  it("a second edit while the first is still writing stdout waits, then does not send the same lessons again", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web")]) });
+    let slept = 0;
+    const first = runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d);
+    expect(ctx(first.out)).toContain("#1");
+    // 第一个还没 commit：第二个拿不到锁，等一会儿；等的时候第一个送完了。
+    const waiting: DripDeps = { ...d, sleep: () => void (slept++ === 0 && first.commit()) };
+    expect(runLessonDrip(edit("/wt/web/b.ts"), env, ROOT, waiting).out).toBe("");
+    expect(slept).toBe(1);
+    expect(f.get(`${ROOT}/s1.sent`)).toBe("1\n");
+    expect(f.has(`${ROOT}/s1.sent.lock`)).toBe(false);
+  });
+
+  it("gives up without marking anything when the lock never frees, so the next edit still sends", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web")]), [`${ROOT}/s1.sent.lock`]: "" });
+    expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).toBe("");
+    expect(f.has(`${ROOT}/s1.sent`)).toBe(false);
+    f.delete(`${ROOT}/s1.sent.lock`);
+    expect(ctx(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out)).toContain("#1");
+  });
+
+  it("commit appends only ids nobody recorded meanwhile", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web"), lesson(2, "acme/web")]) });
+    const run = runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d);
+    f.set(`${ROOT}/s1.sent`, "2\n"); // 锁过期被抢的进程先记了 #2
+    run.commit();
+    expect(f.get(`${ROOT}/s1.sent`)).toBe("2\n1\n");
   });
 });
 

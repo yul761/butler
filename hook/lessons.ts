@@ -1,6 +1,6 @@
 // shipherd-hook lessons <dir>：Edit / Write / NotebookEdit 之后，把改的文件匹配上、还没送过全文的规矩作为 additionalContext 补送（BTL-274）。
 // 只读一份清单和一份已送记录，不调 git，不连网：每次编辑多花几毫秒。
-import { appendFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { DRIP_SENT_SUFFIX, DRIP_SUFFIX, dripIntro, dripName, locateInRoots, type DripLesson, type DripManifest } from "../src/shared/lesson-drip";
 import { lessonApplies } from "../src/shared/lesson-scope";
@@ -12,8 +12,26 @@ export interface DripDeps {
   append(file: string, text: string): void;
   remove(file: string): void;
   exists(file: string): boolean;
+  /** 独占地建锁文件（O_EXCL）；已经有人拿着就返回 false。 */
+  lock(file: string): boolean;
+  sleep(ms: number): void;
   platform: NodeJS.Platform;
 }
+
+/** 锁文件放了这么久还在，就当拿锁的进程已经死了，删掉重拿。 */
+export const DRIP_LOCK_STALE_MS = 10_000;
+/** 同一个 session 并发的编辑（并行的工具调用）：等前一个送完最多等这么多次、每次这么久，等不到这次就不送（没记成已送，下次编辑再送）。 */
+const LOCK_TRIES = 20;
+const LOCK_WAIT_MS = 10;
+
+const tryCreate = (f: string): "ok" | "taken" | "error" => {
+  try {
+    closeSync(openSync(f, "wx"));
+    return "ok";
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EEXIST" ? "taken" : "error";
+  }
+};
 
 export const realDripDeps: DripDeps = {
   read: (f) => {
@@ -32,16 +50,31 @@ export const realDripDeps: DripDeps = {
     }
   },
   exists: (f) => existsSync(f),
+  lock: (f) => {
+    const r = tryCreate(f);
+    // 建不了锁（不是被占着，是目录写不了之类）：不锁照送，别因为锁让补送彻底停掉。
+    if (r !== "taken") return true;
+    try {
+      if (Date.now() - statSync(f).mtimeMs <= DRIP_LOCK_STALE_MS) return false;
+      unlinkSync(f);
+    } catch {
+      /* 别人刚好放了锁：再试一次 */
+    }
+    return tryCreate(f) !== "taken";
+  },
+  sleep: (ms) => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
   platform: process.platform,
 };
 
 export interface DripRun {
   out: string;
-  /** stdout 写完以后调：记成已送；都送完了就把清单改名，之后的编辑连 hook 都不起。 */
+  /** stdout 写完以后调：把这次送的规矩追加到已送记录（只追加还没记过的），然后放锁。 */
   commit(): void;
+  /** 不管送没送成都要调（commit 里也会调，重复调没事）：放掉已送记录的锁。 */
+  release(): void;
 }
 
-const NOTHING: DripRun = { out: "", commit: () => {} };
+const NOTHING: DripRun = { out: "", commit: () => {}, release: () => {} };
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
@@ -90,6 +123,20 @@ export function runLessonDrip(stdin: string, env: NodeJS.ProcessEnv, root: strin
   const at = locate(file, m, d.platform);
   if (!at) return NOTHING;
   const sentFile = agent ? `${base}.${agent}${DRIP_SENT_SUFFIX}` : `${base}${DRIP_SENT_SUFFIX}`;
+  // 读已送记录、写 stdout、记成已送这一整段拿着锁：并发的两次编辑不会都读到「还没送」、把同一条送两遍。
+  const lockFile = `${sentFile}.lock`;
+  let locked = d.lock(lockFile);
+  for (let i = 1; !locked && i < LOCK_TRIES; i++) {
+    d.sleep(LOCK_WAIT_MS);
+    locked = d.lock(lockFile);
+  }
+  if (!locked) return NOTHING;
+  let held = true;
+  const release = () => {
+    if (!held) return;
+    held = false;
+    d.remove(lockFile);
+  };
   const sent = sentIds(d.read(sentFile));
   const lang = m.lang === "en" ? "en" : "zh";
   const intro = dripIntro(lang, at.rel);
@@ -105,18 +152,27 @@ export function runLessonDrip(stdin: string, env: NodeJS.ProcessEnv, root: strin
     picked.push(l);
     size += b.length + 1;
   }
-  if (picked.length === 0) return NOTHING;
+  if (picked.length === 0) {
+    release();
+    return NOTHING;
+  }
   const context = [intro, ...picked.map((l) => block(l, lang))].join("\n");
   const out = JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } });
   return {
     out,
     commit: () => {
       try {
-        d.append(sentFile, picked.map((l) => `${l.id}\n`).join(""));
+        // 锁过期被别人抢了的话，这期间别的进程可能已经记过：重读一遍，只追加没记过的。
+        const now = sentIds(d.read(sentFile));
+        const fresh = picked.filter((l) => !now.has(l.id));
+        if (fresh.length) d.append(sentFile, fresh.map((l) => `${l.id}\n`).join(""));
       } catch {
         /* 记不下就下次再送一遍，不抛 */
+      } finally {
+        release();
       }
     },
+    release,
   };
 }
 

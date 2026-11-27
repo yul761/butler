@@ -78,8 +78,12 @@ async function mailboxAnswer(): Promise<void> {
 async function lessonsAnswer(): Promise<void> {
   const run = runLessonDrip(await readStdin(), process.env, process.argv[3] ?? "");
   if (!run.out) return;
-  const ok = await new Promise<boolean>((resolve) => process.stdout.write(run.out, (err) => resolve(!err)));
-  if (ok) run.commit();
+  try {
+    const ok = await new Promise<boolean>((resolve) => process.stdout.write(run.out, (err) => resolve(!err)));
+    if (ok) run.commit();
+  } finally {
+    run.release();
+  }
 }
 
 const mode = process.argv[2];

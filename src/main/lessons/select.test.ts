@@ -161,6 +161,15 @@ describe("lessonTitle", () => {
     expect(lessonTitle("Use tabs. Always.")).toBe("Use tabs");
     expect(lessonTitle("x".repeat(80))).toHaveLength(60);
     expect(lessonTitle("v1.2 must stay")).toBe("v1.2 must stay");
+    // 冒号前太短：不在冒号处截，接着找下一个句末。
+    expect(lessonTitle("注意：改名迁移要重写生成产物。还要写测试")).toBe("注意：改名迁移要重写生成产物");
+    expect(lessonTitle("Rule: re-read the row in the transaction. Then write.")).toBe("Rule: re-read the row in the transaction");
+    expect(lessonTitle("迁移之前一定先备份数据库：用 VACUUM INTO")).toBe("迁移之前一定先备份数据库");
+    // 按字符截：emoji 不会被截成半个代理对。
+    const t = lessonTitle(`${"字".repeat(58)}😀😀😀`);
+    expect(Array.from(t)).toHaveLength(60);
+    expect(t).toBe(`${"字".repeat(58)}😀…`);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(t)).toBe(false); // 没有落单的高位代理
   });
 });
 

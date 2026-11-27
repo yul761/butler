@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,7 +7,7 @@ import { LessonsRepo } from "../db/lessons-repo";
 import { RepoIdentity } from "./repo-identity";
 import { dripManifest, dripRoots, prepareSessionDrip, pruneDrip, writeDripManifest } from "./drip";
 import { guidePlan } from "./select";
-import { runLessonDrip, realDripDeps } from "../../../hook/lessons";
+import { DRIP_LOCK_STALE_MS, runLessonDrip, realDripDeps } from "../../../hook/lessons";
 
 // /wt/<repo>-<n> 是 worktree，/<owner>_<repo> 是仓库本身；两个仓库的 worktree 用同名分支。
 const identity = () =>
@@ -78,6 +78,29 @@ describe("dripManifest", () => {
     // 再开（恢复）这个 session：清单重写，已送的不会再送。
     writeDripManifest(dir, "sess-1", dripManifest(repo, plan, roots, "en"));
     expect(run("/wt/acme/web-btl-9/src/index.ts").out).toBe("");
+    expect(readdirSync(dir).filter((n) => n.endsWith(".lock"))).toEqual([]);
+  });
+
+  it("real lock file: a live lock blocks the second edit, a stale one (crashed hook) is taken over", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drip-"));
+    const roots = [{ slug: "acme/web", dirs: ["/wt/web"] }];
+    writeDripManifest(dir, "s", { v: 1, lang: "en", roots, lessons: [{ id: 7, label: "acme/web", text: "rule", why: "", globs: [], lang: null, slugs: ["acme/web"] }] });
+    const deps = { ...realDripDeps, platform: "linux" as const, sleep: () => {} };
+    const run = () => runLessonDrip(JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "/wt/web/a.ts" } }), { SHIPHERD_SESSION: "s" }, dir, deps);
+    const first = run();
+    expect(first.out).toContain("#7");
+    expect(run().out).toBe("");
+    first.commit();
+    expect(existsSync(join(dir, "s.sent.lock"))).toBe(false);
+    rmSync(join(dir, "s.sent"));
+    // 上一个 hook 拿着锁死掉了：锁放得够久就算过期，照送。
+    writeFileSync(join(dir, "s.sent.lock"), "");
+    const old = (Date.now() - DRIP_LOCK_STALE_MS - 5_000) / 1000;
+    utimesSync(join(dir, "s.sent.lock"), old, old);
+    const again = run();
+    expect(again.out).toContain("#7");
+    again.release();
+    expect(existsSync(join(dir, "s.sent.lock"))).toBe(false);
   });
 });
 

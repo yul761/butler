@@ -93,12 +93,22 @@ const EMPTY_PLAN = (): GuidePlan => ({ full: [], index: [], indexMore: 0, rest: 
 /** 一行全文占的字符（和 session-guide 写出来的一样长，多算几个也无妨）。 */
 const fullCost = (label: string, text: string, cases?: number): number => label.length + text.length + 8 + (cases ? 12 : 0);
 
-/** 规矩的一行标题：第一句（到句号、分号为止），最多 INDEX_TITLE_MAX 字符。 */
+/** 冒号前少于这么多字（「注意：」「Rule:」）不在冒号处截：那样标题只剩一个引子。 */
+export const TITLE_MIN_BEFORE_COLON = 8;
+
+/** 规矩的一行标题：第一句（到句号、分号为止；冒号前够长才到冒号），最多 INDEX_TITLE_MAX 个字（按字符算，emoji 不截成半个）。 */
 export function lessonTitle(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
-  const m = /^(.+?)(?:[。；;！？!?]|\.(?:\s|$)|：|:\s)/.exec(flat);
-  const first = (m ? m[1] : flat).trim() || flat;
-  return first.length > INDEX_TITLE_MAX ? `${first.slice(0, INDEX_TITLE_MAX - 1)}…` : first;
+  let first = flat;
+  for (const m of flat.matchAll(/[。；;！？!?]|\.(?:\s|$)|：|:\s/g)) {
+    const head = flat.slice(0, m.index).trim();
+    if (!head) continue;
+    if ((m[0] === "：" || m[0].startsWith(":")) && Array.from(head).length < TITLE_MIN_BEFORE_COLON) continue;
+    first = head;
+    break;
+  }
+  const chars = Array.from(first);
+  return chars.length > INDEX_TITLE_MAX ? `${chars.slice(0, INDEX_TITLE_MAX - 1).join("")}…` : first;
 }
 
 const indexCost = (l: IndexLesson): number => l.label.length + l.title.length + l.globs.join(", ").length + (l.lang?.length ?? 0) + 24;

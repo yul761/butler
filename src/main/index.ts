@@ -106,6 +106,7 @@ import { planForSlug, safeGuidePlan } from "./lessons/select";
 import { lookupLessons } from "./lessons/lookup";
 import { LessonMergeService, type MergeLayer } from "./lessons/merge";
 import { dripManifest, dripRoots, prepareSessionDrip, pruneDrip } from "./lessons/drip";
+import { LessonUpkeep } from "./lessons/upkeep";
 import { lessonsHookCommand, lessonsResetCommand } from "../shared/lesson-drip";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
@@ -1345,7 +1346,8 @@ async function bootstrap(): Promise<void> {
   /** 这一层所在的仓库里，有哪个单独开 session 时全文装不下（BTL-274）。 */
   const layerOverBudget = (layer: MergeLayer): boolean => {
     const slugs = layer.kind === "repo" ? [layer.slug] : (lessonsRepo.product(layer.productId)?.slugs ?? []);
-    return slugs.some((slug) => planForSlug(lessonsRepo, slug, guideLessonOptions()).overBudget);
+    const opts = guideLessonOptions();
+    return slugs.some((slug) => planForSlug(lessonsRepo, slug, opts).overBudget);
   };
   // 合并相似规矩（BTL-274）：便宜档模型提建议，默认等你点一下；接受是一个能撤销的批次。
   const lessonMerges = new LessonMergeService({
@@ -1386,7 +1388,8 @@ async function bootstrap(): Promise<void> {
       auto: () => settings.get("lessonsMergeAuto") === "1",
       accept: (id) => lessonMerges.accept(id),
       dismiss: (id) => lessonMerges.dismiss(id),
-      suggest: (slug) => void lessonMerges.suggest(slug).catch((e: unknown) => logger("lessons: merge suggestion failed", e)),
+      // 规矩页的按钮：用户亲手点的，退避中的块也马上再问。
+      suggest: (slug) => void lessonMerges.suggest(slug, { force: true }).catch((e: unknown) => logger("lessons: merge suggestion failed", e)),
     },
     // writeRunFile 写不了会同步抛出：LessonsService 接住，记日志，返回 write_failed。sessionService 在下面才建好：调用时才用到。
     openRun: (d, repoPath) => {
@@ -1767,27 +1770,22 @@ async function bootstrap(): Promise<void> {
    */
   /** 度量的每日 gh 任务（ws-h）：要等 ticketPrs 建好，在下面赋值。 */
   let metricsGhJob: MetricsGhJob | null = null;
-  const lessonUpkeep = () => {
-    const now = Date.now();
-    const since = (key: "lessonsPrinciplesRegroupedAt" | "lessonsMergeSuggestedAt") => now - (Number(settings.get(key)) || 0);
-    const hourly = since("lessonsPrinciplesRegroupedAt") > 3600_000 || since("lessonsMergeSuggestedAt") > 3600_000;
-    if (!hourly || !bgScheduler.gate("lesson_admission").run) return;
-    let tight = false;
-    try {
-      tight = lessonsRepo.repos().some((r) => planForSlug(lessonsRepo, r.slug, guideLessonOptions()).overBudget);
-    } catch (e) {
-      logger("lessons: budget check failed", e);
-    }
-    const daily = 20 * 3600_000;
-    if ((tight || settings.get("lessonsPrinciples") === "1") && since("lessonsPrinciplesRegroupedAt") > (tight ? 3600_000 : daily)) {
-      settings.set("lessonsPrinciplesRegroupedAt", String(now));
-      void regroupPrinciples().catch((e: unknown) => logger("lessons: principles regroup failed", e));
-    }
-    if (since("lessonsMergeSuggestedAt") > (tight ? 3600_000 : daily) && !lessonMerges.running()) {
-      settings.set("lessonsMergeSuggestedAt", String(now));
-      void lessonMerges.suggest().catch((e: unknown) => logger("lessons: merge suggestion failed", e));
-    }
-  };
+  const upkeepKey = { regroup: "lessonsPrinciplesRegroupedAt", merge: "lessonsMergeSuggestedAt" } as const;
+  const upkeep = new LessonUpkeep({
+    gateOpen: () => bgScheduler.gate("lesson_admission").run,
+    tight: () => {
+      const opts = guideLessonOptions();
+      return lessonsRepo.repos().some((r) => planForSlug(lessonsRepo, r.slug, opts).overBudget);
+    },
+    principlesOn: () => settings.get("lessonsPrinciples") === "1",
+    lastAt: (job) => Number(settings.get(upkeepKey[job])) || 0,
+    setLastAt: (job, at) => settings.set(upkeepKey[job], String(at)),
+    regroup: () => regroupPrinciples(),
+    mergeRunning: () => lessonMerges.running(),
+    suggest: () => lessonMerges.suggest(),
+    log: logger,
+  });
+  const lessonUpkeep = () => upkeep.tick(Date.now());
   const checkSchedule = (trigger: ScheduleTrigger) => {
     if (headlessAbort.signal.aborted) return Promise.resolve();
     void shipherdPatrol.check();

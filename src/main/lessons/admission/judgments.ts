@@ -1,7 +1,7 @@
 import type { Db } from "../../db/database";
 
 /** 模型判断的种类（addendum 第 2 节）。 */
-export type JudgmentKind = "enrich" | "same" | "canon" | "conflict" | "clarity" | "classify" | "draft" | "sample" | "principle" | "merge" | "backtest_fp" | "shadow_fp";
+export type JudgmentKind = "enrich" | "same" | "canon" | "conflict" | "clarity" | "classify" | "draft" | "sample" | "principle" | "merge" | "merge_fail" | "backtest_fp" | "shadow_fp";
 
 export interface Judgment<T> { result: T; model: string | null; degraded: boolean; at: number }
 

@@ -23,6 +23,47 @@ export const MERGE_CHUNK = 60;
 export const MERGE_MIN_SIMILARITY = 0.35;
 /** 一组候选最多几条（再多的拆开，不交给模型一次合太多）。 */
 export const MERGE_MAX_GROUP = 8;
+/** 分块平均多少条切一刀：切点只看规矩编号，接受、删掉一条只让它所在的那一块缓存失效，后面的块不跟着变。 */
+export const MERGE_CUT_EVERY = 40;
+/** 一块问失败以后，同样的输入多久再问：2、4、8、16 小时，之后每天一次（规矩改了就是新的输入，马上能问）。 */
+export const mergeRetryAfter = (failures: number): number => Math.min(2 ** Math.max(1, failures), 24) * 3600_000;
+
+/** 编号打散（murmur3 的 fmix32）：只乘一个常数的话低位不变，取模切不出点来。 */
+const mix = (id: number): number => {
+  let h = id | 0;
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+};
+const cutAfter = (id: number): boolean => mix(id) % MERGE_CUT_EVERY === 0;
+
+/**
+ * 按编号排好的单元（一条规矩，或者一组字面相似的）装进块，一个单元不拆开。块在「编号落在切点上」的地方断开，
+ * 满 MERGE_CHUNK 也断；最后剩一条的并进前一块（单独一条没得比）。
+ */
+export function stableBlocks(units: readonly Lesson[][]): Lesson[][] {
+  const out: Lesson[][] = [];
+  let cur: Lesson[] = [];
+  for (const u of [...units].sort((a, b) => a[0].id - b[0].id)) {
+    if (cur.length && cur.length + u.length > MERGE_CHUNK) {
+      out.push(cur);
+      cur = [];
+    }
+    cur = [...cur, ...u];
+    if (cur.length >= 2 && cutAfter(u[u.length - 1].id)) {
+      out.push(cur);
+      cur = [];
+    }
+  }
+  if (cur.length === 1 && out.length) out[out.length - 1].push(...cur);
+  else if (cur.length) out.push(cur);
+  return out;
+}
+
+interface MergeFail { failures: number }
 
 export const MergeSchema = z.object({
   merges: z.array(z.object({ ids: z.array(z.number().int()).max(50), text: z.string().max(2000), why: z.string().max(2000) })).max(60),
@@ -143,25 +184,13 @@ export class LessonMergeService {
     return uf.groups(ls.map((l) => l.id)).flatMap((g) => chunks(g.map((id) => byId.get(id)!), MERGE_MAX_GROUP)).filter((g) => g.length >= 2);
   }
 
-  /** 组按顺序装进块，一组不拆开。 */
-  private batches(groups: Lesson[][]): Lesson[][] {
-    const out: Lesson[][] = [];
-    let cur: Lesson[] = [];
-    for (const g of groups) {
-      if (cur.length && cur.length + g.length > MERGE_CHUNK) {
-        out.push(cur);
-        cur = [];
-      }
-      cur = [...cur, ...g];
-    }
-    if (cur.length) out.push(cur);
-    return out;
-  }
-
-  /** 找相似规矩（定时任务和规矩页的按钮）；已经在跑就等那一次。slug 只看这个仓库和它所在的产品。 */
-  suggest(slug?: string): Promise<SuggestOutcome> {
+  /**
+   * 找相似规矩（定时任务和规矩页的按钮）；已经在跑就等那一次。slug 只看这个仓库和它所在的产品。
+   * force（按钮）：用户亲手点的，问失败过、还在退避的块也马上再问。
+   */
+  suggest(slug?: string, opts: { force?: boolean } = {}): Promise<SuggestOutcome> {
     if (!this.current) {
-      this.current = this.suggestAll(slug).finally(() => {
+      this.current = this.suggestAll(slug, opts.force ?? false).finally(() => {
         this.current = null;
         this.d.onChanged?.();
       });
@@ -170,12 +199,12 @@ export class LessonMergeService {
     return this.current;
   }
 
-  private async suggestAll(slug?: string): Promise<SuggestOutcome> {
+  private async suggestAll(slug: string | undefined, force: boolean): Promise<SuggestOutcome> {
     const zh = this.d.ctx().lang() === "zh";
     let added: number[];
     let failed = 0;
     try {
-      added = await this.askLayers(slug, zh, (n) => (failed += n));
+      added = await this.askLayers(slug, zh, force, (n) => (failed += n));
     } catch (e) {
       // 中途抛错（写库、缓存）：这一次没跑完，算一块失败，不能让上次的计数留着。
       failed++;
@@ -203,26 +232,33 @@ export class LessonMergeService {
       .map((p) => p.id);
   }
 
-  private async askLayers(slug: string | undefined, zh: boolean, fail: (n: number) => void): Promise<number[]> {
+  private async askLayers(slug: string | undefined, zh: boolean, force: boolean, fail: (n: number) => void): Promise<number[]> {
     const ctx = this.d.ctx();
     let added: number[] = [];
     for (const layer of this.layers(slug)) {
       const ls = this.confirmedIn(layer);
       if (ls.length < 2) continue;
       const tight = this.d.overBudget(layer);
-      const blocks = tight ? chunks(ls, MERGE_CHUNK) : this.batches(this.similarGroups(ls));
+      const blocks = stableBlocks(tight ? ls.map((l) => [l]) : this.similarGroups(ls));
       for (const block of blocks) {
         if (block.length < 2) continue;
         const key = `${layerKey(layer)}:${block.map((l) => l.id).join(",")}`;
         const hash = membersHash(block);
         let answer = ctx.judgments.get<MergeAnswer>("merge", key, hash)?.result ?? null;
         if (!answer) {
+          // 同样的输入刚问失败过：退避期内不再付费重问，算没问成。
+          const prev = ctx.judgments.get<MergeFail>("merge_fail", key, hash);
+          if (prev && !force && ctx.now() < prev.at + mergeRetryAfter(prev.result.failures)) {
+            fail(1);
+            continue;
+          }
           const o = await callModel(ctx.run, {
             task: "lesson_merge", label: "lesson merge", schema: MergeSchema, cwd: ctx.cwd,
             prompt: PROMPT[zh ? "zh" : "en"](block.map((l) => line(l, zh)).join("\n"), tight),
           }, ctx.onCall);
           if (!o.ok) {
             fail(1);
+            ctx.judgments.put("merge_fail", key, hash, { failures: (prev?.result.failures ?? 0) + 1 }, { model: null, degraded: false, at: ctx.now() });
             this.d.log?.(`lessons: merge suggestion failed for ${layerKey(layer)} (${o.reason})`, o.message);
             continue;
           }
