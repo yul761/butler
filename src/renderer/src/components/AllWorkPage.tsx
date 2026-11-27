@@ -17,9 +17,10 @@ import { api } from "../api";
 
 export interface AllWorkBodyProps {
   board: TurnBoard | null;
-  features: FeatureView[];
+  /** 只用到名字（BTL-277：传名字的投影，session 的活动变了这页不跟着重画）。 */
+  features: Pick<FeatureView, "id" | "name">[];
   /** 单独的 ticket（不在任何 feature 里）。 */
-  tickets: TicketView[];
+  tickets: Pick<TicketView, "key" | "title">[];
   unclaimedCount: number;
   /** 「显示 Shipherd 之外开的 session」开着才有「未认领 session」入口（BTL-244，默认关）。 */
   showUnclaimed?: boolean;

@@ -1,5 +1,5 @@
 // 范围页（epic，内部是 feature）的展示件：只吃 props，不调 api。
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, memo, useState, type ReactNode } from "react";
 import { isCollapsed, setCollapsed } from "../local-prefs";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../../shared/turn";
 import { barSegments, cardKey, type RunningRow } from "../home-view";
@@ -21,7 +21,8 @@ export function ScopeBar({ bar, total }: { bar: ScopeTurnRow["bar"]; total: numb
 }
 
 /** 「进行中」的一行：首页和范围页共用。 */
-export function RunRow({ row, onOpenTicket }: { row: RunningRow; onOpenTicket: (key: string) => void }) {
+/** memo（BTL-277）：行的内容没变就不重画（首页按结构留旧的行对象）。 */
+export const RunRow = memo(function RunRow({ row, onOpenTicket }: { row: RunningRow; onOpenTicket: (key: string) => void }) {
   return (
     <button className="home-run" disabled={row.ticketKey === null} onClick={() => row.ticketKey !== null && onOpenTicket(row.ticketKey)}>
       <span className="key">{row.ticketKey ?? ""}</span>
@@ -30,7 +31,7 @@ export function RunRow({ row, onOpenTicket }: { row: RunningRow; onOpenTicket: (
       <span className="age muted">{row.age}</span>
     </button>
   );
-}
+});
 
 export function ScopeOverview(p: {
   rows: ScopeTurnRow[]; total: ScopeTurnRow | null; youItems: TurnItem[]; kind: "feature"; emptyText: string;

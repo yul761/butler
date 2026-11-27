@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Turn, TurnItem } from "../../shared/turn";
-import { dotKey, scopeDots, youBadge } from "./sidebar-view";
+import { dotKey, sameDots, scopeDots, youBadge } from "./sidebar-view";
 
 function item(turn: Turn, o: Partial<TurnItem> = {}): TurnItem {
   return { ticketKey: "BTL-1", pr: null, featureId: null, turn, since: 1, others: 0, ...o };
@@ -47,5 +47,15 @@ describe("youBadge", () => {
     expect(youBadge(7)).toBe("7");
     expect(youBadge(99)).toBe("99");
     expect(youBadge(100)).toBe("99+");
+  });
+});
+
+describe("sameDots (BTL-277)", () => {
+  it("is true only for the same keys with the same tone and count", () => {
+    const a = new Map([["feature:1", { tone: "ask" as const, you: 1 }]]);
+    expect(sameDots(a, new Map([["feature:1", { tone: "ask" as const, you: 1 }]]))).toBe(true);
+    expect(sameDots(a, new Map([["feature:1", { tone: "ask" as const, you: 2 }]]))).toBe(false);
+    expect(sameDots(a, new Map([["feature:2", { tone: "ask" as const, you: 1 }]]))).toBe(false);
+    expect(sameDots(a, new Map())).toBe(false);
   });
 });

@@ -6,7 +6,7 @@ import type { DiagSnapshot } from "../src/shared/diag";
 import { completeWizard, expect, makeGitRepo, ROOT, terminalText, test, newButton, openTicketTab, type Sandbox } from "./fixtures";
 
 /**
- * 性能场景（BTL-242）：3 个 session 在干活（假 claude 的 /fake-work：每 300ms 一次工具调用、约 2KB 终端输出），
+ * 性能场景（BTL-242；BTL-277 加了 spinner 和渲染进程的 React 提交、组件渲染次数）：3 个 session 在干活（假 claude 的 /fake-work：每 300ms 一次工具调用、约 2KB 终端输出），
  * 停在首页 30 秒、再停在一个 ticket 页（终端开着）30 秒，记下事件循环 p99、state:changed 次数和界面 long task 总时长。
  * 只在 SHIPHERD_E2E_PERF=1 时跑（要两分多钟，数字写进 test-results/perf/perf-<label>.json）。
  */
@@ -52,7 +52,7 @@ async function startWork(page: Page, key: string): Promise<void> {
   await openTicketTab(page, "terminal");
   await page.getByRole("button", { name: `+ ${S.newSession}`, exact: true }).click();
   await expect.poll(() => terminalText(page)).toContain("fake claude ready");
-  await typeLine(page, "/fake-work 150 300");
+  await typeLine(page, "/fake-work 150 300 40");
   await expect.poll(() => terminalText(page)).toContain("work 1.");
 }
 
@@ -64,12 +64,40 @@ interface Measured {
   stateChanged: number;
   turnChanged: number;
   ptyDataKb: number;
+  /** pty:data 发了几条 IPC。 */
+  ptyDataMsgs: number;
+  /** React 提交了几次、一共渲染了几次组件（函数组件、memo、forwardRef，挂载和重渲都算）。 */
+  reactCommits: number;
+  componentRenders: number;
   longTasks: number;
   longTaskMs: number;
   invokes: number;
   invokeMs: number;
   cpuSec: Record<string, number>;
 }
+
+/**
+ * 在 React 加载之前装一个假的 DevTools 钩子（BTL-277）：生产构建的 react-dom 也会在每次提交时调 onCommitFiberRoot。
+ * 每次提交走一遍这棵树：子树没换（child 和上一版是同一个）就是整块跳过了；组件 fiber 带 PerformedWork（1）就是这次渲染过。
+ */
+const REACT_HOOK = `(() => {
+  const w = window;
+  w.__react = { commits: 0, renders: 0 };
+  const COMPONENT = new Set([0, 1, 11, 14, 15]);
+  const walk = (f) => {
+    while (f) {
+      const prev = f.alternate;
+      if (COMPONENT.has(f.tag) && (prev === null || (f.flags & 1) !== 0)) w.__react.renders += 1;
+      if (f.child && (prev === null || f.child !== prev.child)) walk(f.child);
+      f = f.sibling;
+    }
+  };
+  w.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+    supportsFiber: true, renderers: new Map(), inject(r) { const id = this.renderers.size + 1; this.renderers.set(id, r); return id; },
+    checkDCE() {}, onScheduleFiberRoot() {}, onCommitFiberUnmount() {}, onPostCommitFiberRoot() {},
+    onCommitFiberRoot(_id, root) { w.__react.commits += 1; walk(root.current.child); },
+  };
+})();`;
 
 /** 量 MEASURE_MS：主进程那边用 diag:snapshot 的测量段，渲染进程这边自己挂一个 long task 观察器。 */
 async function measure(page: Page): Promise<Measured> {
@@ -84,8 +112,13 @@ async function measure(page: Page): Promise<Measured> {
     w.__perf = { n: 0, ms: 0, obs };
     obs.observe({ type: "longtask", buffered: false });
   });
+  await page.evaluate(() => {
+    const r = (window as unknown as { __react?: { commits: number; renders: number } }).__react;
+    if (r) r.commits = r.renders = 0;
+  });
   await page.evaluate(() => (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<unknown> } }).shipherd.invoke("diag:snapshot", true));
   await page.waitForTimeout(MEASURE_MS);
+  const react = await page.evaluate(() => (window as unknown as { __react?: { commits: number; renders: number } }).__react ?? { commits: -1, renders: -1 });
   const snap = (await page.evaluate(() => (window as unknown as { shipherd: { invoke(c: string, ...a: unknown[]): Promise<unknown> } }).shipherd.invoke("diag:snapshot", false))) as { ok: true; value: DiagSnapshot };
   const lt = await page.evaluate(() => {
     const w = window as unknown as { __perf: { n: number; ms: number; obs: PerformanceObserver } };
@@ -101,6 +134,9 @@ async function measure(page: Page): Promise<Measured> {
     stateChanged: m.sends["state:changed"]?.n ?? 0,
     turnChanged: m.sends["turn:changed"]?.n ?? 0,
     ptyDataKb: Math.round((m.sends["pty:data"]?.bytes ?? 0) / 1024),
+    ptyDataMsgs: m.sends["pty:data"]?.n ?? 0,
+    reactCommits: react.commits,
+    componentRenders: react.renders,
     longTasks: lt.n,
     longTaskMs: Math.round(lt.ms),
     invokes: m.invokes.n,
@@ -113,6 +149,8 @@ test("perf: three working sessions on the home page and a ticket page", async ({
   test.setTimeout(300_000);
   const s = makeSandbox();
   const { page } = await launch(s);
+  await page.addInitScript(REACT_HOOK);
+  await page.reload();
   await completeWizard(page, s);
   await makeFeature(page, s);
   for (const key of KEYS) await startWork(page, key);
@@ -133,4 +171,5 @@ test("perf: three working sessions on the home page and a ticket page", async ({
   writeFileSync(join(dir, `perf-${label}.json`), `${JSON.stringify(result, null, 2)}\n`);
   console.log(`perf ${JSON.stringify(result)}`);
   expect(home.seconds).toBeGreaterThan(25);
+  expect(home.reactCommits).toBeGreaterThanOrEqual(0);
 });

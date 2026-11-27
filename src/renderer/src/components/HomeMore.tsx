@@ -1,5 +1,5 @@
 // 首页「运行情况」折叠里的东西（UI 重做第 2 层）：从原来的「现在」页原样搬来——实况窗口、内存、最近合并、自动接活、用量。
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useState, type ReactNode } from "react";
 import type { MemoryHistoryPoint, MemorySnapshot } from "../../../shared/mem-usage";
 import { noticeNeedsYou } from "../../../shared/turn";
 import type { IntakeRecentEntry } from "../../../shared/intake";
@@ -33,7 +33,7 @@ export function HomeMore({ view, onOpen, onOpenTicket, liveTickets, onGo }: Home
   const usage = useUsage();
   return (
     <div className="home-more">
-      <InfoNotices view={view} onOpen={onOpen} onGo={onGo} />
+      <InfoNotices notices={view.notices} onOpen={onOpen} onGo={onGo} />
       {view.mem && <MemoryCard snap={view.mem} view={view} />}
       <LiveWindow view={view} onOpen={onOpen} />
       <RecentMerges merges={view.merges} onOpenTicket={onOpenTicket} liveTickets={liveTickets} />
@@ -47,9 +47,9 @@ export function HomeMore({ view, onOpen, onOpenTicket, liveTickets, onGo }: Home
  * 只是告诉你一声的 Shipherd 提醒（检查自动升级了可以撤销、复盘暂停了、共享 MCP 起不来……）：要你动手的那些是首页的卡片，这里不重复。
  * spec 说它们以后放进「Shipherd 自己」相应页面的主层；那些页面做好之前先放在这里，免得哪儿都看不到。
  */
-function InfoNotices({ view, onOpen, onGo }: { view: NowView; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
+const InfoNotices = memo(function InfoNotices({ notices, onOpen, onGo }: { notices: NowView["notices"]; onOpen: (t: NowTarget) => void; onGo: (r: Route) => void }) {
   const now = useNow();
-  const info = view.notices.filter((n) => !noticeNeedsYou(n));
+  const info = notices.filter((n) => !noticeNeedsYou(n));
   if (info.length === 0) return null;
   return (
     <section className="home-info-notices">
@@ -57,7 +57,7 @@ function InfoNotices({ view, onOpen, onGo }: { view: NowView; onOpen: (t: NowTar
       {info.map((n) => <Notice key={noticeKey(n)} notice={n} now={now} onOpen={onOpen} onGo={onGo} />)}
     </section>
   );
-}
+});
 
 /** 用量不跟每次 stateChanged 重取：一分钟一次就够了。 */
 const USAGE_REFRESH_MS = 60_000;
@@ -166,7 +166,8 @@ function MemoryCard({ snap, view }: { snap: MemorySnapshot; view: NowView }) {
 }
 
 /** 自动接活（工作流 N）最近 24 小时自动做了什么：不用你管的那些，收起着。 */
-function IntakeRecent({ entries, onGo }: { entries: IntakeRecentEntry[]; onGo: (r: Route) => void }) {
+/** memo（BTL-277）：nowView 按结构留旧引用，这一块的数据没变就不重画。 */
+const IntakeRecent = memo(function IntakeRecent({ entries, onGo }: { entries: IntakeRecentEntry[]; onGo: (r: Route) => void }) {
   const [open, toggle] = useCollapsed("now:intake");
   if (entries.length === 0) return null;
   return (
@@ -190,10 +191,11 @@ function IntakeRecent({ entries, onGo }: { entries: IntakeRecentEntry[]; onGo: (
       )}
     </section>
   );
-}
+});
 
 /** 最近合并（默认收起）：一行一条；已归档或不存在的 ticket 只显示文字。 */
-function RecentMerges({ merges, onOpenTicket, liveTickets }: { merges: MergeEvent[]; onOpenTicket: (key: string) => void; liveTickets: Set<string> }) {
+/** memo（BTL-277）：nowView 按结构留旧引用，这一块的数据没变就不重画。 */
+const RecentMerges = memo(function RecentMerges({ merges, onOpenTicket, liveTickets }: { merges: MergeEvent[]; onOpenTicket: (key: string) => void; liveTickets: Set<string> }) {
   // 这个记号在存储里的意思是“展开了”。
   const [open, toggle] = useCollapsed("now:merges");
   if (merges.length === 0) return null;
@@ -223,10 +225,11 @@ function RecentMerges({ merges, onOpenTicket, liveTickets }: { merges: MergeEven
       })}
     </section>
   );
-}
+});
 
 /** 一行用量小字，点开列出按类型和按模型的占比（默认收起）。 */
-function UsageLine({ usage }: { usage: UsageSummary }) {
+/** memo（BTL-277）：nowView 按结构留旧引用，这一块的数据没变就不重画。 */
+const UsageLine = memo(function UsageLine({ usage }: { usage: UsageSummary }) {
   // 这个记号在存储里的意思是“展开了”。
   const [open, toggle] = useCollapsed("now:usage");
   const details = open ? usageDetails(usage, S) : null;
@@ -249,4 +252,4 @@ function UsageLine({ usage }: { usage: UsageSummary }) {
       )}
     </section>
   );
-}
+});

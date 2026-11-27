@@ -12,6 +12,7 @@ import { collectRedactTerms } from "./diag/redact";
 import { FeedbackService, osName } from "./feedback/feedback-service";
 import { Invalidator } from "./diag/invalidator";
 import { PtySubscriptions } from "./sessions/pty-subscriptions";
+import { OutputBatcher } from "./sessions/output-batcher";
 import { ViewCache } from "./diag/view-cache";
 import { throttle } from "./diag/throttle";
 import { isStateScope, type StateChangedPayload } from "../shared/state-scope";
@@ -431,6 +432,8 @@ async function rendererGaveUp(info: { reason: string; exitCode: number; reloads:
 }
 /** 渲染进程挂着的终端（BTL-242）：pty:data 只发给它们。 */
 const ptySubs = new PtySubscriptions();
+/** 终端输出攒一下再发（BTL-277）：每个终端最多每 OUTPUT_BATCH_MS 一条 pty:data。 */
+const ptyOutput = new OutputBatcher((id, data) => safeSend(IPC.ptyData, id, data));
 
 function safeSend(channel: string, ...args: unknown[]): void {
   if (win && canSend(win)) {
@@ -799,8 +802,9 @@ async function bootstrap(): Promise<void> {
   /** 自动接活建好以后才接上（session 结束时让它再试排着的）。 */
   let intakeEnded: (() => void) | null = null;
   const pty = new PtyManager(nodePtyFactory, {
+    // 攒 OUTPUT_BATCH_MS 再发（BTL-277）：只攒挂着的终端；发的时候已经摘下也照发，渲染进程那边不在 ready 状态会丢掉。
     data: (id, data) => {
-      if (ptySubs.has(id)) safeSend(IPC.ptyData, id, data);
+      if (ptySubs.has(id)) ptyOutput.push(id, data);
     },
     opened: (id) => {
       procs?.terminalOpened(id);
@@ -808,6 +812,8 @@ async function bootstrap(): Promise<void> {
       sessions.markTermOpen(id, Date.now());
     },
     exit: (id, code) => {
+      // 攒着的输出先发：退出提示排在最后一段输出后面。
+      ptyOutput.forget(id);
       safeSend(IPC.ptyExit, id, code);
       if (closing) return;
       if (!quitState.quitting) sessions.clearTermOpen(id);
@@ -3452,6 +3458,7 @@ async function bootstrap(): Promise<void> {
     },
     onWrite: () => viewCache.invalidate(),
     ptySubs,
+    ptyOutput,
     views,
     conv,
     fork: forkService,

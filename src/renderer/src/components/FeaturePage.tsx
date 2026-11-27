@@ -14,6 +14,7 @@ import { EpicLevel } from "./EpicLevel";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";
 import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
+import { useNow } from "./TicketActivity";
 import { useTurnBoard } from "./useTurnBoard";
 import { SessionArea, useSessionPanes, WorkspaceHeader } from "./WorkspaceParts";
 
@@ -72,7 +73,8 @@ export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSessi
   };
   const turn = useTurnBoard({ featureId: feature.id });
   const board = turn.board;
-  const now = Date.now();
+  // 定时走（BTL-277：页面不再跟着每次列表刷新重画，「多久了」要自己往前走）。
+  const now = useNow();
   // 卡片、标红和「进行中」按 ticket 级的轮次（同首页、同「全部 ticket」表格）。
   const view = board === null ? null : scopeBoardView(board.items, S, now);
   const running = view?.running ?? null;

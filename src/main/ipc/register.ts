@@ -99,6 +99,7 @@ import type { FeedbackService } from "../feedback/feedback-service";
 import { isReadChannel } from "./read-channels";
 import type { UpdateCheckResult, UpdateView } from "../../shared/update";
 import type { PtySubscriptions } from "../sessions/pty-subscriptions";
+import { attachSince, attachSnapshot } from "../sessions/pty-attach";
 
 export interface IpcDeps {
   tickets: TicketsRepo;
@@ -208,6 +209,8 @@ export interface IpcDeps {
   feedback?: Pick<FeedbackService, "open" | "previewDiagnostics" | "saveDiagnostics">;
   /** 渲染进程挂着的终端（pty:snapshot 挂、pty:detach 摘）。 */
   ptySubs?: Pick<PtySubscriptions, "attach" | "detach">;
+  /** 终端输出的攒批（BTL-277）：取快照、补段之前先把攒着的发出去，回包之后不会再重复到一次。 */
+  ptyOutput?: { flush(termId: string): void };
   /** 写操作的 invoke 前后调（作废视图缓存）。 */
   onWrite?: () => void;
   /** 缓存过的视图（BTL-242）；不给就直接调 sessionService。 */
@@ -492,18 +495,10 @@ export function registerIpc(d: IpcDeps): void {
   });
   handle(IPC.activityDismiss, (raw: unknown) => d.activity.dismiss(sessionIdArg(raw)));
 
-  // 取快照就是挂上这个终端（BTL-242）：之后它的输出才发过来；先挂再取，快照之后的数据一条不漏。
-  handle(IPC.ptySnapshot, (id: string) => {
-    if (typeof id === "string") d.ptySubs?.attach(id);
-    return d.pty.snapshotAt(id);
-  });
+  // 取快照就是挂上这个终端（BTL-242）：之后它的输出才发过来；先挂再取，快照之后的数据一条不漏。攒着的输出先发（BTL-277）。
+  handle(IPC.ptySnapshot, (id: string) => attachSnapshot(d, id));
   // 挂回摘下过的终端：同样先挂再取，mark 之后的数据一条不漏。补不上时回整份快照（reset：渲染进程先清屏再写）。
-  handle(IPC.ptySince, (id: string, mark: unknown) => {
-    if (typeof id === "string") d.ptySubs?.attach(id);
-    const m = mark as { epoch?: unknown; end?: unknown } | null;
-    const delta = m && typeof m.epoch === "number" && typeof m.end === "number" ? d.pty.since(id, { epoch: m.epoch, end: m.end }) : null;
-    return delta ? { reset: false, ...delta } : { reset: true, ...d.pty.snapshotAt(id) };
-  });
+  handle(IPC.ptySince, (id: string, mark: unknown) => attachSince(d, id, mark));
   ipcMain.on(IPC.ptyDetach, (_e, id: unknown) => {
     if (typeof id === "string") d.ptySubs?.detach(id);
   });

@@ -1,52 +1,166 @@
 import { Terminal } from "@xterm/headless";
 
+/** 攒着没解析的输出超过这么多（字符）就当场同步解析一次，不丢（BTL-277）。回放尾巴（tail）只在解析抛错时用来重建。 */
+export const SCREEN_PENDING_LIMIT = 64 * 1024;
+
+type Step = { data: string } | { cols: number; rows: number };
+
+/** xterm 的同步解析入口（公开 API 只有异步的 write）：没有它就退回原来的做法，每块输出马上交给 xterm 异步解析。 */
+interface SyncCore {
+  writeSync(data: string): void;
+}
+
+function syncCore(term: Terminal): SyncCore | null {
+  const core = (term as unknown as { _core?: Partial<SyncCore> })._core;
+  return core && typeof core.writeSync === "function" ? (core as SyncCore) : null;
+}
+
 /**
  * 主进程里每个终端的一份屏幕（BTL-190 第 9 点）：把 pty 的输出喂给一个不显示的 xterm，判断对话框、权限确认、输入框时看
  * 它当前显示的那一屏。只看输出流的最后一段会认错：claude 2.1.322 在词之间用光标跳列而不是空格，界面也是零碎重画的，
  * 已经消失的旧对话框文字会一直留在流的末尾。
- * 解析是异步的（xterm 攒一批再解析），屏幕比输出晚一个事件循环；flush() 等它追上。
+ *
+ * 懒解析（BTL-277）：输出和改尺寸先按顺序记下来，有人看屏幕（lines、flush）时才一次同步解析完，读到的就是到这一刻为止
+ * 全部输出画出来的那一屏，和逐块解析的结果一样。没人看的时候（spinner 一直在转）主进程不解析。
+ * 攒着的超过 SCREEN_PENDING_LIMIT 就当场同步解析一次（内存有上限，画出来的屏幕和逐块解析一样）。只有解析抛错时，
+ * 才清空 xterm、用 tail()（PtyManager 的回放缓冲）重建。
  */
 export class TermScreen {
   private readonly term: Terminal;
+  private readonly core: SyncCore | null;
   private disposed = false;
+  /** 还没交给 xterm 的输出和改尺寸，按到达顺序。 */
+  private steps: Step[] = [];
+  private pendingChars = 0;
+  /** 解析抛错了：下次看屏幕时按这个尺寸用回放尾巴重建。 */
+  private rebuild: { cols: number; rows: number } | null = null;
+  private cols: number;
+  private rows: number;
 
-  constructor(cols: number, rows: number) {
-    this.term = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true });
+  constructor(cols: number, rows: number, private readonly tail?: () => string) {
+    this.cols = cols;
+    this.rows = rows;
+    // writeSync 第一次用时 xterm 会打一条 warn，关掉它的日志。
+    this.term = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true, logLevel: "off" });
+    this.core = syncCore(this.term);
   }
 
   write(data: string): void {
-    if (!this.disposed) this.term.write(data);
+    if (this.disposed || data === "") return;
+    if (!this.core) {
+      this.term.write(data);
+      return;
+    }
+    if (this.rebuild) return;
+    this.steps.push({ data });
+    this.pendingChars += data.length;
+    // 攒满了就当场解析一次，不能丢：回放尾巴里只有增量更新，不是整屏快照。权限框画好以后别的行又刷过了上限，
+    // 用尾巴重建就看不到这个框了（PR #101 review）。解析出错时 catchUp 会标成重建，这里不往 pty 的回调里抛。
+    if (this.pendingChars > SCREEN_PENDING_LIMIT) {
+      try {
+        this.catchUp();
+      } catch {
+        /* 下次读屏幕时用回放尾巴重建 */
+      }
+    }
   }
 
   /**
    * 跟着 pty 改尺寸。排在已经写进来、还没解析的输出后面：那些是按旧尺寸画的，先改尺寸就会画到新的格子上。
-   * xterm 在解析完前面那一段、开始下一段之前调回调，正好落在流里的这个位置。
    */
   resize(cols: number, rows: number): void {
     if (this.disposed || cols <= 0 || rows <= 0) return;
-    this.term.write("", () => {
-      if (!this.disposed) this.term.resize(cols, rows);
-    });
+    this.cols = cols;
+    this.rows = rows;
+    if (!this.core) {
+      // xterm 在解析完前面那一段、开始下一段之前调回调，正好落在流里的这个位置。
+      this.term.write("", () => {
+        if (!this.disposed) this.term.resize(cols, rows);
+      });
+      return;
+    }
+    if (this.rebuild) this.rebuild = { cols, rows };
+    else this.steps.push({ cols, rows });
+  }
+
+  /** 把攒着的都交给 xterm（同步）。解析抛错时：有回放尾巴就记下下次读时重建（这段输出已经出队，不能当它画上了）。 */
+  private catchUp(): void {
+    if (!this.core) return;
+    try {
+      this.drain();
+    } catch (e) {
+      if (this.tail) {
+        this.steps = [];
+        this.pendingChars = 0;
+        this.rebuild = { cols: this.cols, rows: this.rows };
+      }
+      throw e;
+    }
+  }
+
+  private drain(): void {
+    if (!this.core) return;
+    if (this.rebuild) {
+      const { cols, rows } = this.rebuild;
+      this.rebuild = null;
+      // 上次读可能停在一个转义序列中间（两块 pty 输出切开了 OSC 标题、CSI……），之后那段解析抛错、作废了：
+      // reset() 不清解析器的状态，先送一个 CAN 把半截序列作废，不然回放尾巴会被吞进那个序列里。
+      this.core.writeSync("\x18");
+      this.term.reset();
+      if (this.term.cols !== cols || this.term.rows !== rows) this.term.resize(cols, rows);
+      const tail = this.tail?.() ?? "";
+      if (tail !== "") this.core.writeSync(tail);
+      return;
+    }
+    if (this.steps.length === 0) return;
+    const steps = this.steps;
+    this.steps = [];
+    this.pendingChars = 0;
+    let run: string[] = [];
+    const flushRun = () => {
+      if (run.length === 0) return;
+      this.core!.writeSync(run.length === 1 ? run[0] : run.join(""));
+      run = [];
+    };
+    for (const s of steps) {
+      if ("data" in s) run.push(s.data);
+      else {
+        flushRun();
+        this.term.resize(s.cols, s.rows);
+      }
+    }
+    flushRun();
   }
 
   /** 当前这一屏，每行一个字符串（行尾空白去掉）。 */
   lines(): string[] {
     if (this.disposed) return [];
+    this.catchUp();
     const b = this.term.buffer.active;
     const out: string[] = [];
     for (let i = 0; i < this.term.rows; i++) out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
     return out;
   }
 
-  /** 等已经写进来的输出都解析完。 */
+  /** 等已经写进来的输出都解析完（懒解析时马上就完了）。 */
   flush(): Promise<void> {
     if (this.disposed) return Promise.resolve();
+    if (this.core) {
+      this.catchUp();
+      return Promise.resolve();
+    }
     return new Promise((resolve) => this.term.write("", resolve));
+  }
+
+  /** 攒着还没解析的字符数（测试和基准用）。等着重建时是 0：要画的内容在回放尾巴里。 */
+  pending(): number {
+    return this.pendingChars;
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.steps = [];
     this.term.dispose();
   }
 }

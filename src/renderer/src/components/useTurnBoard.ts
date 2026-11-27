@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { TurnBoard, TurnFilter } from "../../../shared/turn";
 import { api } from "../api";
 import { boardFor, createTurnBoardLoader } from "../turn-board-loader";
+import { keepSame } from "../keep-same";
 
 export interface TurnBoardState {
   board: TurnBoard | null;
@@ -22,7 +23,8 @@ export function useTurnBoard(filter?: TurnFilter): TurnBoardState {
     const loader = createTurnBoardLoader({
       fetch: () => api.turnBoard(f),
       subscribe: (cb) => api.onTurnChanged(cb),
-      onBoard: (board) => setState({ key, board, error: null }),
+      // 内容没变的卡片、行留旧引用（BTL-277）：memo 的 TurnCard、ScopeRow 只在自己那一项变了时重画。
+      onBoard: (board) => setState((s) => ({ key, board: s.key === key ? keepSame(s.board, board) : board, error: null })),
       onError: (error) => setState((s) => (s.key === key ? { ...s, error } : { key, board: null, error })),
     });
     reloadRef.current = loader.reload;

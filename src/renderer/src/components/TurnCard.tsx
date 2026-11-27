@@ -1,6 +1,6 @@
 // 首页的一张「轮到你」卡片（UI 重做第 2 层，spec §5.3）：类型标签、一句话（第 1 层的 turnSentence）、位置和多久、一到三个按钮。
 // Shipherd 要你点一下的那类直接放原来的 Notice，按钮也是它自己的。
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { TurnItem } from "../../../shared/turn";
 import type { NowTarget } from "../../../shared/types";
 import { api } from "../api";
@@ -25,7 +25,8 @@ export interface TurnCardProps {
   onChanged: () => void;
 }
 
-export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: TurnCardProps) {
+/** memo（BTL-277）：board 按结构留旧引用、App 的回调稳定，别的卡片变了这张不重画。 */
+export const TurnCard = memo(function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: TurnCardProps) {
   const t = item.turn;
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -76,4 +77,4 @@ export function TurnCard({ item, ctx, now, onFix, onOpen, onGo, onChanged }: Tur
       )}
     </div>
   );
-}
+});

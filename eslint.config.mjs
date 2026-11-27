@@ -223,7 +223,7 @@ export default tseslint.config(
   // no-implied-eval 只认声明过的全局：这里声明 setTimeout / setInterval，否则字符串形式的定时器抓不到。
   {
     files: SOURCE_FILES,
-    languageOptions: { globals: { setTimeout: "readonly", setInterval: "readonly" } },
+    languageOptions: { globals: { setTimeout: "readonly", setInterval: "readonly", clearInterval: "readonly" } },
     rules: { "no-eval": "error", "no-new-func": "error", "no-implied-eval": "error" },
   },
   { files: SOURCE_FILES, rules: productionRules },

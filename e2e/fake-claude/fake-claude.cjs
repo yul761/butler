@@ -19,8 +19,8 @@
 //     输入 /fake-skill <skill 名> 时像 Skill 工具：跑 PostToolUse（tool_name=Skill，带 tool_use_id；也读 --settings 里 matcher 为 Skill 的 hook），打印 skill <名>，这一轮照常结束；
 //     输入 /fake-tool <工具名> [JSON 参数] 时写一条 tool_use 和它的结果，这一轮不结束（实况窗口：工具调用、记忆读写的行和光点）；
 //       之后跑 PostToolUse（tool_name=工具名，也读 --settings 里的 hook）：hook 输出的 additionalContext 记成 additional-context <一行>（信箱，BTL-245）；
-//     输入 /fake-work <秒> <毫秒> 时像一个在干活的 session（BTL-242 的性能场景）：这么多秒里每隔这么多毫秒写一条 tool_use 和结果、
-//       打印约 2KB 的终端输出，到点后结束这一轮；
+//     输入 /fake-work <秒> <毫秒> [spinner 毫秒] 时像一个在干活的 session（BTL-242 的性能场景）：这么多秒里每隔这么多毫秒写一条 tool_use 和结果、
+//       打印约 2KB 的终端输出，到点后结束这一轮；给了第三个数就再每隔这么多毫秒重画一行 spinner（BTL-277）；
 //     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 shipherd-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Shipherd 从这里查 session 的名字；
@@ -719,13 +719,22 @@ function interactive() {
       out(`tool ${fakeTool[1]}\n`);
       return;
     }
-    const work = /^\/fake-work (\d+) (\d+)$/.exec(line);
+    const work = /^\/fake-work (\d+) (\d+)(?: (\d+))?$/.exec(line);
     if (work) {
       const until = Date.now() + Number(work[1]) * 1000;
       const every = Math.max(20, Number(work[2]));
       let n = 0;
+      // 第三个数（BTL-277）：每隔这么多毫秒像 claude 的 spinner 那样重画一行（同步输出包着、回到行首、清行），一小块一次写。
+      const spinEvery = work[3] ? Math.max(10, Number(work[3])) : 0;
+      let spin = 0;
+      const spinner = spinEvery ? setInterval(() => {
+        spin += 1;
+        process.stdout.write(`\x1b[?2026h\r\x1b[2K\x1b[38;2;215;119;87m${"✻✶✳✢·"[spin % 5]}\x1b[39m Working… (${Math.floor(spin * spinEvery / 1000)}s · esc to interrupt)\x1b[?2026l`);
+      }, spinEvery) : null;
       const tick = () => {
         if (Date.now() >= until) {
+          if (spinner) clearInterval(spinner);
+          process.stdout.write("\r\x1b[2K");
           endTurnLater(`做完了 ${n} 步`);
           return;
         }
