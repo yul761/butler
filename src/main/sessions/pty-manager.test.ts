@@ -595,7 +595,7 @@ describe("PtyManager screen reads (BTL-277 lazy parsing)", () => {
     mgr.open("t1", spec, opts);
     spawned[0].pty.emit("start\r\n");
     const { mark } = mgr.snapshotAt("t1");
-    // 比屏幕排队的上限多、比回放缓冲（上限加余量）少：缓冲还留着 mark 之后的全部。
+    // 比屏幕排队的上限多（读屏幕前会当场解析几次）、比回放缓冲（上限加余量）少：缓冲还留着 mark 之后的全部。
     const line = `${"z".repeat(98)}\r\n`;
     let more = "";
     while (more.length < 290 * 1024) more += line;

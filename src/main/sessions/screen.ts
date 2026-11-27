@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/headless";
 
-/** 攒着没解析的输出超过这么多（字符）就不再留：下次有人看屏幕时用回放尾部（tail）重建（BTL-277）。 */
+/** 攒着没解析的输出超过这么多（字符）就当场同步解析一次，不丢（BTL-277）。回放尾巴（tail）只在解析抛错时用来重建。 */
 export const SCREEN_PENDING_LIMIT = 64 * 1024;
 
 type Step = { data: string } | { cols: number; rows: number };
@@ -54,7 +54,7 @@ export class TermScreen {
     if (this.rebuild) return;
     this.steps.push({ data });
     this.pendingChars += data.length;
-    // 攒满了就当场解析一次，不能丢：回放尾巴里只有增量更新，不是整屏快照。权限框画好以后别的行又刷了 256KB，
+    // 攒满了就当场解析一次，不能丢：回放尾巴里只有增量更新，不是整屏快照。权限框画好以后别的行又刷过了上限，
     // 用尾巴重建就看不到这个框了（PR #101 review）。解析出错时 catchUp 会标成重建，这里不往 pty 的回调里抛。
     if (this.pendingChars > SCREEN_PENDING_LIMIT) {
       try {
@@ -103,7 +103,7 @@ export class TermScreen {
     if (this.rebuild) {
       const { cols, rows } = this.rebuild;
       this.rebuild = null;
-      // 上次读可能停在一个转义序列中间（两块 pty 输出切开了 OSC 标题、CSI……），后面的输出又整段丢了：
+      // 上次读可能停在一个转义序列中间（两块 pty 输出切开了 OSC 标题、CSI……），之后那段解析抛错、作废了：
       // reset() 不清解析器的状态，先送一个 CAN 把半截序列作废，不然回放尾巴会被吞进那个序列里。
       this.core.writeSync("\x18");
       this.term.reset();

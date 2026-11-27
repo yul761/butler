@@ -260,7 +260,7 @@ export class PtyManager {
     const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
     const term: Term = {
       proc, chunks: [], chunkLen: 0, written: 0, epoch: nextEpoch++, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draftLen: 0, openedAt: this.now(),
-      // 屏幕攒太多没解析时用回放缓冲重建（BTL-277）：和渲染进程挂终端时重放的是同一份。
+      // 屏幕解析抛错时用回放缓冲重建（BTL-277）：和渲染进程挂终端时重放的是同一份。
       screen: new TermScreen(cols, rows, () => screenTail(term)), submittedAt: 0, held: null,
     };
     this.terms.set(termId, term);
