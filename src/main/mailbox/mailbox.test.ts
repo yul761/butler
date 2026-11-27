@@ -495,3 +495,21 @@ describe("Mailbox", () => {
     expect(w.deliveredMsgs).toEqual([{ id: a.id, via: "input" }, { id: b.id, via: "input" }]);
   });
 });
+
+/** 空闲时 mailbox.tick 的开销（BTL-275 基准，只在 SHIPHERD_PERF_BENCH=1 时跑）：20 个开着的终端、信箱都空着。 */
+describe.skipIf(process.env.SHIPHERD_PERF_BENCH !== "1")("idle tick bench (BTL-275)", () => {
+  it("an idle tick with 20 open terminals", async () => {
+    const w = world();
+    for (let i = 0; i < 20; i++) w.add(`t${i}`, false);
+    const prune = vi.spyOn(w.repo, "prune");
+    await w.mb.tick();
+    prune.mockClear();
+    const n = 60; // 10 分钟（每 10 秒一次）
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) {
+      w.tick(10_000);
+      await w.mb.tick();
+    }
+    console.log(`[idle-bench] mailbox tick: ${((performance.now() - t0) / n).toFixed(2)} ms per tick, ${prune.mock.calls.length} prune DELETEs in ${n} ticks (10 min)`);
+  });
+});
