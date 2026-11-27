@@ -147,6 +147,7 @@ import { MetricsRollup } from "./metrics/rollup";
 import { baselineCutoffOf, ensureMetricsSince, metricsSince } from "./metrics/since";
 import { TOUCH_MS as WAIT_TOUCH_MS, WaitTracker, type WaitHead } from "./metrics/wait-tracker";
 import { registerIpc } from "./ipc/register";
+import { prWatchListHandler } from "./ipc/prwatch-handlers";
 import { readFeaturePolicy, readGovernedLayers } from "./settings/feature-policy";
 import { AutomationLevels } from "./automation/levels";
 import { featurePolicyLayers, type FeaturePolicyDeps } from "./ipc/feature-policy-handlers";
@@ -3902,7 +3903,7 @@ async function bootstrap(): Promise<void> {
     // 允许的主机和 lessons 的 openSource 一样，只认 git remote 认出来的仓库（lessons_repos），不认 ticket_prs 自己的 slug。
     prOpen: (url) => openKnownPr(url, { prs: knownPrLookup(ticketPrs, () => reviewRequests.list()), trustedSlugs: () => lessonsRepo.repos().map((r) => r.slug), openExternal: (u) => shell.openExternal(u), log: logger }),
     linkOpen: (url) => openExternalLink(url, { openExternal: (u) => shell.openExternal(u), log: logger }),
-    prWatchList: (key) => (key === undefined ? [...prWatcher.statusOfMany(tickets.list().map((t) => t.key)).values()].flat() : prWatcher.statusOf(key)),
+    prWatchList: prWatchListHandler({ watcher: prWatcher, ticketKeys: () => tickets.list().map((t) => t.key) }),
     terminalVisible: (id, v) => procServices.terminalVisible(id, v),
     terminalInput: (id) => procServices.terminalActive(id),
     terminalKeys: meterTerminalKeys,

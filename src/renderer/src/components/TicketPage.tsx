@@ -93,6 +93,12 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   useEffect(() => {
     if (!closed) restPreviews.drop(ticket.key);
   }, [ticket.key, closed]);
+  // 关闭框关上了：提交过才 settle 并重新看；什么都没提交就取消（null）的，记下的数照用。
+  const afterClose = (closedPrs: string[] | null) => {
+    if (closedPrs === null) return;
+    restPreviews.settle(ticket.key, closedPrs);
+    setRestSeq((n) => n + 1);
+  };
   const reopen = () => api.reopenTicket(ticket.key).then((r) => setNotice(S.tc.reopened(r.restoredFollowups)), reportError);
 
   return (
@@ -128,8 +134,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       )}
       {notice && <div className="muted ticket-notice">{notice}</div>}
       {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
-      {closing && <CloseTicketDialog ticket={ticket} onClose={(closedPrs) => { setClosing(false); restPreviews.settle(ticket.key, closedPrs); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
-      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={(closedPrs) => { setClosingRest(false); restPreviews.settle(ticket.key, closedPrs); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
+      {closing && <CloseTicketDialog ticket={ticket} onClose={(closedPrs) => { setClosing(false); afterClose(closedPrs); }} onNotice={setNotice} />}
+      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={(closedPrs) => { setClosingRest(false); afterClose(closedPrs); }} onNotice={setNotice} />}
 
       <PageTabs
         page={`ticket:${ticket.key}`}

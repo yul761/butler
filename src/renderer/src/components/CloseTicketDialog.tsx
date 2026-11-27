@@ -28,8 +28,9 @@ function PrErrorList({ prs }: { prs: ClosePrError[] }) {
  * rest：ticket 已经关着，从 ticket 页的「关掉剩下的 PR」打开（BTL-270 审查）：同一个勾选框，不再要原因（评论写关闭时的原因），
  * 勾上的走重试（tickets:closeRetry，关之前同样核对），之后和关闭一样处理结果。
  * onClose 带上这次（包括重试）真关掉了的 PR：ticket 页等监视记录跟上了再重新看「关掉剩下的 PR」（restPreviews.settle）。
+ * 什么都没提交（没关成也没试过）就取消的是 null：ticket 页不丢记下的数、也不重新预览。
  */
-export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: { ticket: Ticket; onClose: (closedPrs: string[]) => void; onNotice?: (text: string) => void; rest?: boolean }) {
+export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: { ticket: Ticket; onClose: (closedPrs: string[] | null) => void; onNotice?: (text: string) => void; rest?: boolean }) {
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<ClosePreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -40,7 +41,9 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
   const [left, setLeft] = useState<Leftovers | null>(null);
   /** 这个框里（关闭和每次重试）真关掉了的 PR。 */
   const closed = useRef<string[]>([]);
-  const close = () => onClose([...closed.current]);
+  /** 提交过（关闭或重试，不管成没成）：关上时才让 ticket 页重新看。 */
+  const submitted = useRef(false);
+  const close = () => onClose(submitted.current ? [...closed.current] : null);
   const empty = reason.trim().length === 0;
   const tooLong = reason.length > REASON_LIMIT;
 
@@ -79,6 +82,7 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
   }
 
   async function run(fn: () => Promise<CloseLeftoversResult>) {
+    submitted.current = true;
     setBusy(true);
     setError(null);
     try {

@@ -170,5 +170,40 @@ describe("the closed ticket page's remaining-PR count and the closed-meanwhile n
     expect(closedMeanwhile({ ...r, alreadyClosed: true }, true)).toBeNull();
     expect(closedMeanwhile(r, false)).toBeNull();
     expect(closedMeanwhile({ ...r, alreadyClosed: true, reopenedMeanwhile: true }, false)).toBeNull();
+    // 有没处理成的也一样：不是被别人先关的、是「关掉剩下的 PR」框、半路被重新打开的，都不提示（failed 不排在这些前面）。
+    expect(closedMeanwhile({ ...r, prErrors: [prError] }, false)).toBeNull();
+    expect(closedMeanwhile({ ...r, prErrors: [prError], alreadyClosed: true }, true)).toBeNull();
+    expect(closedMeanwhile({ ...r, sessionErrors: [{ id: "s", error: "busy" }], alreadyClosed: true }, true)).toBeNull();
+    expect(closedMeanwhile({ ...r, prErrors: [prError], alreadyClosed: true, reopenedMeanwhile: true }, false)).toBeNull();
+  });
+
+  it("two settles in a row wait for both closes' PRs, until the later deadline (BTL-270 review)", () => {
+    let t = 0;
+    const c = restPreviewCache(() => t);
+    c.settle("T-1", ["u1"]);
+    t = 10_000;
+    c.settle("T-1", ["u2"]);
+    // 两次的 PR 合起来等：只跟上了一个还是等，到期取较晚的（第二次的）。
+    expect(c.waiting("T-1", "u1\nu2\nu3")).toBe(REST_SETTLE_MS);
+    expect(c.waiting("T-1", "u1\nu3")).toBe(REST_SETTLE_MS);
+    t = REST_SETTLE_MS + 5_000;
+    expect(c.waiting("T-1", "u2\nu3")).toBe(5_000);
+    // 这次什么都没关上的 settle 不缩短、也不取消上一次还没等完的。
+    c.settle("T-1", []);
+    expect(c.waiting("T-1", "u2\nu3")).toBe(5_000);
+    expect(c.waiting("T-1", "u3")).toBe(0);
+    // 上一次已经等到头了：不带上它的 PR，也不沿用它的到期时间。
+    c.settle("T-1", ["u1"]);
+    t += REST_SETTLE_MS + 1;
+    c.settle("T-1", ["u3"]);
+    expect(c.waiting("T-1", "u1")).toBe(0);
+    c.settle("T-1", ["u3"]);
+    expect(c.waiting("T-1", "u3")).toBe(REST_SETTLE_MS);
+    // 一个比较早的 settle 不会把较晚的到期时间拉回来。
+    c.drop("T-1");
+    c.settle("T-1", ["u1"]);
+    t += 15_000;
+    c.settle("T-1", []);
+    expect(c.waiting("T-1", "u1")).toBe(REST_SETTLE_MS - 15_000);
   });
 });

@@ -8,13 +8,17 @@ import type { Ticket } from "../../../shared/types";
 
 const h = vi.hoisted(() => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
-  return { results: [] as CloseLeftoversResult[], calls: [] as string[] };
+  return { results: [] as (CloseLeftoversResult | Error)[], calls: [] as string[] };
 });
+const next = () => {
+  const r = h.results.shift()!;
+  return r instanceof Error ? Promise.reject(r) : Promise.resolve(r);
+};
 vi.mock("../api", () => ({
   api: {
     closePreview: () => Promise.resolve({ closable: [{ url: "u1", number: 1 }, { url: "u2", number: 2 }], unclosable: [] }),
-    closeTicket: () => (h.calls.push("close"), Promise.resolve(h.results.shift()!)),
-    retryClose: () => (h.calls.push("retry"), Promise.resolve(h.results.shift()!)),
+    closeTicket: () => (h.calls.push("close"), next()),
+    retryClose: () => (h.calls.push("retry"), next()),
   },
 }));
 
@@ -29,10 +33,10 @@ const ticket = { key: "T-1", closure: { reason: "r", source: "user", at: 1 } } a
 describe("CloseTicketDialog reports what it closed and what was left (BTL-270 review)", () => {
   let container: HTMLElement;
   let root: ReturnType<typeof createRoot>;
-  let closed: string[][];
+  let closed: (string[] | null)[];
   let notices: string[];
   const mount = async (rest: boolean) => {
-    await act(async () => root.render(createElement(CloseTicketDialog, { ticket, rest, onClose: (c: string[]) => closed.push(c), onNotice: (t: string) => notices.push(t) })));
+    await act(async () => root.render(createElement(CloseTicketDialog, { ticket, rest, onClose: (c: string[] | null) => closed.push(c), onNotice: (t: string) => notices.push(t) })));
   };
   const q = <T extends Element>(sel: string) => container.querySelector<T>(sel)!;
   const click = async (el: HTMLElement) => act(async () => el.click());
@@ -65,9 +69,11 @@ describe("CloseTicketDialog reports what it closed and what was left (BTL-270 re
     await submit();
     expect(h.calls).toEqual(["retry", "retry"]);
     expect(closed).toEqual([["u1", "u2"]]);
+    // 「关掉剩下的 PR」框本来就是关着的 ticket：有没处理成的也不提示「刚被关了」。
+    expect(notices).toEqual([]);
   });
 
-  it("leaving the leftovers passes only what was closed; cancelling passes nothing", async () => {
+  it("leaving the leftovers passes only what was closed; cancelling without submitting passes null", async () => {
     await mount(true);
     await tick();
     h.results.push(result({ closedPrs: ["u1"], prErrors: [failed("u2")] }));
@@ -78,7 +84,17 @@ describe("CloseTicketDialog reports what it closed and what was left (BTL-270 re
     root = createRoot(container);
     await mount(true);
     await click([...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === S.cancel)!);
-    expect(closed).toEqual([["u1"], []]);
+    expect(closed).toEqual([["u1"], null]);
+  });
+
+  it("a submit that threw still counts as tried: cancelling afterwards passes an empty list, not null", async () => {
+    await mount(true);
+    await tick();
+    h.results.push(new Error("ipc boom"));
+    await submit();
+    expect(container.textContent).toContain("ipc boom");
+    await click([...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === S.cancel)!);
+    expect(closed).toEqual([[]]);
   });
 
   it("closed meanwhile with a ticked PR that failed: says what was left, not 'nothing more to do', and keeps the retry box", async () => {

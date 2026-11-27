@@ -78,7 +78,7 @@ export const REST_SETTLE_MS = 20_000;
  * 关闭框关掉了 PR（settle 给了链接）：后台监视的记录要过一会儿才跟上，stamp 会再变一次。这段时间里 waiting() 不为 0，
  * 先不预览，等 stamp 里没有这些 PR 了（或者等到 REST_SETTLE_MS）再预览一次，不在 stamp 变前后各跑一次（BTL-270 审查）。
  */
-export function restPreviewCache(now: () => number = Date.now) {
+export function restPreviewCache(now: () => number = () => Date.now()) {
   const seen = new Map<string, { at: number; n: number; stamp: string }>();
   const gens = new Map<string, number>();
   const settling = new Map<string, { urls: string[]; until: number }>();
@@ -105,11 +105,22 @@ export function restPreviewCache(now: () => number = Date.now) {
       settling.delete(key);
       drop(key);
     },
-    /** 关闭框关上了：drop，关掉了 PR 的（closedUrls）记下来，等监视记录跟上再预览（waiting）。 */
+    /**
+     * 关闭框关上了：drop，关掉了 PR 的（closedUrls）记下来，等监视记录跟上再预览（waiting）。
+     * 上一次的还没等完又 settle（连着关了两回）：两次的 PR 合起来等，到期取较晚的；这次没关掉 PR 的不缩短上一次的等待。
+     */
     settle(key: string, closedUrls: readonly string[]): void {
       drop(key);
-      if (closedUrls.length === 0) settling.delete(key);
-      else settling.set(key, { urls: [...closedUrls], until: now() + REST_SETTLE_MS });
+      const t = now();
+      const prev = settling.get(key);
+      const live = prev && prev.until > t ? prev : undefined;
+      const urls = [...new Set([...(live?.urls ?? []), ...closedUrls])];
+      if (urls.length === 0) {
+        settling.delete(key);
+        return;
+      }
+      const until = Math.max(live?.until ?? 0, closedUrls.length > 0 ? t + REST_SETTLE_MS : 0);
+      settling.set(key, { urls, until });
     },
     /**
      * 还要等多少毫秒再预览：stamp 里还有刚关掉的 PR、也没等到头时是剩下的时间，否则是 0（同时忘掉这次等待）。

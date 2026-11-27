@@ -11,7 +11,7 @@ const h = vi.hoisted(() => {
     watched: [] as unknown[] | "failed",
     previews: [] as { key: string; resolve: (n: number) => void }[],
     listeners: new Set<() => void>(),
-    dialogs: [] as { rest: boolean; onClose: (closed: string[]) => void }[],
+    dialogs: [] as { rest: boolean; onClose: (closed: string[] | null) => void }[],
     watchCalls: [] as unknown[],
   };
   return state;
@@ -33,7 +33,7 @@ vi.mock("../api", () => {
   return { api: new Proxy({}, { get: (_t, k) => known[String(k)] ?? (String(k).startsWith("on") ? () => () => {} : () => new Promise(() => {})) }) };
 });
 vi.mock("./CloseTicketDialog", () => ({
-  CloseTicketDialog: (p: { rest?: boolean; onClose: (closed: string[]) => void }) => {
+  CloseTicketDialog: (p: { rest?: boolean; onClose: (closed: string[] | null) => void }) => {
     h.dialogs.push({ rest: p.rest === true, onClose: p.onClose });
     return null;
   },
@@ -41,7 +41,7 @@ vi.mock("./CloseTicketDialog", () => ({
 
 const { createRoot } = await import("react-dom/client");
 const { TicketPage } = await import("./TicketPage");
-const { restPreviews } = await import("../close-ticket-outcome");
+const { restPreviews, REST_SETTLE_MS } = await import("../close-ticket-outcome");
 const { STATE_DEBOUNCE_MS } = await import("./useStateRefetch");
 
 let n = 0;
@@ -98,6 +98,7 @@ describe("TicketPage's close-the-rest button and its preview cache (BTL-270 revi
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    vi.useRealTimers();
   });
 
   it("reads only this ticket's watch list, previews once, and a remount with the same open PRs uses the count; a changed stamp previews again", async () => {
@@ -141,8 +142,9 @@ describe("TicketPage's close-the-rest button and its preview cache (BTL-270 revi
     expect(d.rest).toBe(true);
     await act(async () => d.onClose(["u1"]));
     await settle();
-    // 监视记录还没跟上（u1 还开着）：不预览。
+    // 监视记录还没跟上（u1 还开着）：不预览，按钮先藏起来（不显示算上了 u1 的旧数）。
     expect(h.previews).toHaveLength(0);
+    expect(button()).toBeNull();
     h.watched = [watch(key, "u2")];
     await changed();
     expect(h.previews).toHaveLength(1);
@@ -151,6 +153,70 @@ describe("TicketPage's close-the-rest button and its preview cache (BTL-270 revi
     await changed();
     expect(h.previews).toHaveLength(0);
     expect(button()).not.toBeNull();
+  });
+
+  it("cancelling the dialog without submitting keeps the count: no new preview, the button stays", async () => {
+    await mount(true);
+    await answer(2);
+    await act(async () => button()!.click());
+    await act(async () => h.dialogs.at(-1)!.onClose(null));
+    await settle();
+    expect(h.previews).toHaveLength(0);
+    expect(button()).not.toBeNull();
+    await remount();
+    expect(h.previews).toHaveLength(0);
+  });
+
+  describe("waiting for the watch list, on fake timers", () => {
+    /** 假定时器下往前走 ms（顺带跑完 promise）。 */
+    const adv = async (ms: number) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
+    const mountFake = async () => {
+      await act(async () => root.render(createElement(TicketPage, { ticket: ticket(key, true), onArchived: () => {}, onFix: () => {} })));
+      await adv(0);
+    };
+    const answerFake = async (count: number) => {
+      const p = h.previews.shift()!;
+      await act(async () => p.resolve(count));
+      await adv(0);
+    };
+    const closeU1 = async () => {
+      await mountFake();
+      await answerFake(2);
+      await act(async () => button()!.click());
+      await act(async () => h.dialogs.at(-1)!.onClose(["u1"]));
+      await adv(0);
+    };
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    });
+
+    it("the watch list never drops the closed PR: previews exactly once when REST_SETTLE_MS is up", async () => {
+      await closeU1();
+      expect(h.previews).toHaveLength(0);
+      expect(button()).toBeNull();
+      await adv(REST_SETTLE_MS - 1);
+      expect(h.previews).toHaveLength(0);
+      await adv(1);
+      expect(h.previews).toHaveLength(1);
+      await answerFake(1);
+      expect(button()).not.toBeNull();
+      await adv(REST_SETTLE_MS * 3);
+      expect(h.previews).toHaveLength(0);
+    });
+
+    it("unmounted while waiting: the timer is cleared and nothing previews later", async () => {
+      await closeU1();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await act(async () => root.unmount());
+      expect(vi.getTimerCount()).toBe(0);
+      await adv(REST_SETTLE_MS * 2);
+      expect(h.previews).toHaveLength(0);
+      root = createRoot(container);
+    });
   });
 
   it("a dialog that closed nothing previews once right away", async () => {
