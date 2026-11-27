@@ -217,6 +217,20 @@ export class InboxService {
     if (changed) this.d.notify();
   }
 
+  /**
+   * 「需要你」时它自己的总控的指示送进去了（BTL-269 A）：它还没答的 ask_user 记成总控代答（answered，答案写明是总控答的），
+   * 不然这张过时的卡片会一直挡住 CI 结果、换新和闲置关闭。卡片上用户已经答好、还没送的不动。
+   */
+  coordinatorAnswered(sessionId: string): void {
+    const head = this.headId(sessionId);
+    const now = this.d.now();
+    let changed = false;
+    for (const item of this.d.repo.pendingDecisions()) {
+      if (item.answer === null && this.headId(item.sessionId) === head && this.d.repo.answerOnBehalf(item.id, M().inboxCoordinatorAnswered, now)) changed = true;
+    }
+    if (changed) this.d.notify();
+  }
+
   /** 这个 session（链上任何一个 id）有未决的 ask_user：不自动输入（除了回答本身）、不闲置关闭、不自动换新。 */
   hasPendingDecision(sessionId: string): boolean {
     const head = this.headId(sessionId);

@@ -28,6 +28,8 @@ export const MAIN_STALE_MS = 5 * 60_000;
 export const AGE_NOTE_MS = 10 * 60_000;
 /** 总控发的消息排了这么久还没送到（原因不是用户在打字、有草稿）：给它发一条回执说明原因（BTL-269）。 */
 export const STUCK_RECEIPT_MS = 2 * 60_000;
+/** 只是这一轮还在干活（turn）的等更久才回执：跑几分钟的工具很正常，不为一句「还没送到」叫醒总控。 */
+export const STUCK_TURN_RECEIPT_MS = 10 * 60_000;
 /** send_message 最多等这么久看消息送没送到，再如实返回（MCP 请求 60 秒超时，留足余量）。 */
 export const SETTLE_MS = 15_000;
 /** 用户在打字、有草稿：这时不发「还没送到」的回执，等用户。 */
@@ -100,6 +102,10 @@ export interface MailboxDeps {
    * 不算用户在终端里答了提问（InboxService.shipherdTyping）。
    */
   typing?(headId: string, phase: "start" | "sent" | "failed"): void;
+  /** 这个 session 在「需要你」里（和 guard 的 needs_you 同一个判断）：「现在送进去」时给总控的指示加注明（BTL-269）。 */
+  needsYou?(headId: string): boolean;
+  /** 「需要你」时自己的总控的指示送进去了（BTL-269 A）：它还没答的 ask_user 记成总控代答，不再挡别的自动输入。 */
+  coordinatorAnswered?(headId: string): void;
   /**
    * 目标没开着终端、排着的不只是约定广播：休眠着的就叫它醒（醒来停下时 stopped 再送）；真关了的什么都不做，下次打开再送。
    * 约定广播不为它叫醒谁。
@@ -621,7 +627,9 @@ export class Mailbox {
     }
     this.d.log(`mailbox: ${head}: the user asked to deliver ${id} now`);
     const queued = this.queuedFor(head).filter((x) => !this.interrupting.has(x.id));
-    await this.input(head, gate.termId, queued, this.d.recheckAfter(head, gate, o), id);
+    // 它在等用户回答时，总控的指示照样注明是在替用户回答（和 flush 一样）。
+    const needsYou = this.d.needsYou?.(head) === true;
+    await this.input(head, gate.termId, queued, this.d.recheckAfter(head, gate, o), id, undefined, needsYou);
     const after = this.d.repo.get(id);
     if (after && after.status !== "queued") return { delivered: true, reason: null };
     return { delivered: false, reason: after?.blockedReason ?? null };
@@ -666,6 +674,8 @@ export class Mailbox {
       typing?.(head, result === "sent" ? "sent" : "failed");
       if (result !== "sent") {
         this.d.log(`mailbox: input to ${head}: ${result}`);
+        // 没等到输入框（BTL-269）：如实记下来，别留着之前的原因（比如还说「在干活」）。recheck 没过、终端退出的下一次检查会记真正的原因。
+        if (result === "timeout") this.block(head, claimed.mine, "deliver_failed");
         return false;
       }
       for (const m of ids) {
@@ -673,6 +683,13 @@ export class Mailbox {
         const now = this.d.repo.get(m.id);
         if (now && revOf(now) !== revOf(m)) continue;
         if (this.markDelivered(m, "input", at)) sent.add(m.id);
+      }
+      if (needsYou && ids.some((m) => sent.has(m.id) && this.fromController(m, head))) {
+        try {
+          this.d.coordinatorAnswered?.(head);
+        } catch (e) {
+          this.d.log(`mailbox: coordinatorAnswered for ${head} failed`, e);
+        }
       }
       this.d.notify();
       return true;
@@ -774,7 +791,7 @@ export class Mailbox {
   private stuckReceipts(): void {
     const now = this.d.now();
     const stuck = this.d.repo.queued().filter(
-      (m) => m.fromSession !== null && EXPECTS_REPLY.has(m.kind) && m.stuckReceiptAt === null && now - m.queuedAt >= STUCK_RECEIPT_MS
+      (m) => m.fromSession !== null && EXPECTS_REPLY.has(m.kind) && m.stuckReceiptAt === null && now - m.queuedAt >= (m.blockedReason === "turn" ? STUCK_TURN_RECEIPT_MS : STUCK_RECEIPT_MS)
         && m.blockedReason !== null && !USER_REASONS.has(m.blockedReason) && !this.inFlight.has(m.id),
     );
     const groups = new Map<string, SessionMessage[]>();

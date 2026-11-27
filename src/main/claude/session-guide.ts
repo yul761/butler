@@ -60,8 +60,8 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
     kind !== "coordinator"
       ? null
       : lang === "zh"
-        ? "要给子 session 改任务、告诉它接口变了，用 shipherd-sessions 的 send_message：消息排进它的信箱，它在忙一般在下一次调用工具时读到，不用等它停下。返回值如实说送到了没有：delivery 是 queued 时 blockedBy 是没送到的原因，note 说大概什么时候送到；排了 2 分钟还没送到会给你发回执，不用重发。真要它马上停手才带 interrupt: true。"
-        : "To change a child session's task or tell it an interface changed, use send_message from shipherd-sessions: the message goes into its mailbox and a busy session usually reads it at its next tool call, so you do not wait for it to stop. The result says honestly whether it got in: when delivery is queued, blockedBy is why and note says roughly when it will; if it is still waiting after 2 minutes you get a receipt, so do not resend. Pass interrupt: true only when it really has to stop now.",
+        ? "要给子 session 改任务、告诉它接口变了，用 shipherd-sessions 的 send_message：消息排进它的信箱，它在忙一般在下一次调用工具时读到，不用等它停下。返回值如实说送到了没有：delivery 是 queued 时 blockedBy 是没送到的原因，note 说大概什么时候送到；排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发回执，不用重发。真要它马上停手才带 interrupt: true。"
+        : "To change a child session's task or tell it an interface changed, use send_message from shipherd-sessions: the message goes into its mailbox and a busy session usually reads it at its next tool call, so you do not wait for it to stop. The result says honestly whether it got in: when delivery is queued, blockedBy is why and note says roughly when it will; if it is still waiting after 2 minutes (10 if its turn is simply still running) you get a receipt, so do not resend. Pass interrupt: true only when it really has to stop now.",
   // 全局总控（内部叫 Shipherd 总控，BTL-190 第 5 点）：看全部，不建不删；跨 epic 协调用 send_message。
   (lang, kind) =>
     kind !== "shipherd"

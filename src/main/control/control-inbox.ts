@@ -12,8 +12,11 @@ export interface ControlInboxOptions<Req = ControlRequest, Res = ControlResult> 
   parse?: (raw: unknown) => Req | null;
   /** 解析失败（或 handle 抛错）时写给对方的结果。默认是总控的“请求格式不对”。 */
   badResult?: () => Res;
-  /** meta.ageMs：请求文件写下到现在过了多久（含排队等前面请求的时间）。合并闸门用它扣掉 hook 已经等掉的时间。 */
-  handle: (req: Req, meta: { ageMs: number }) => Promise<Res>;
+  /**
+   * meta.ageMs：请求文件写下到现在过了多久（含排队等前面请求的时间）。合并闸门用它扣掉 hook 已经等掉的时间。
+   * meta.release()：剩下的只是等（比如 send_message 等这一次送的结果，BTL-269），先放后面的请求走；结果照样写回。
+   */
+  handle: (req: Req, meta: ControlInboxMeta) => Promise<Res>;
   intervalMs?: number;
   /** 没人取走的结果文件（总控等超时了）、写了一半的临时文件保留多久。 */
   staleMs?: number;
@@ -23,12 +26,19 @@ export interface ControlInboxOptions<Req = ControlRequest, Res = ControlResult> 
   log?: (msg: string, err?: unknown) => void;
 }
 
+export interface ControlInboxMeta {
+  ageMs: number;
+  release: () => void;
+}
+
 /** 请求收件箱（总控、合并闸门共用）：fs.watch 加定时轮询，一次处理一个，结果写成同名文件（临时文件 + rename）。 */
 export class ControlInbox<Req = ControlRequest, Res = ControlResult> {
   private watcher: FSWatcher | null = null;
   private timer: NodeJS.Timeout | null = null;
   private inflight: Promise<number> | null = null;
   private again = false;
+  /** release() 以后还在跑的请求（写完结果就移走）。 */
+  private readonly detached = new Set<Promise<void>>();
 
   constructor(private readonly o: ControlInboxOptions<Req, Res>) {}
 
@@ -55,6 +65,11 @@ export class ControlInbox<Req = ControlRequest, Res = ControlResult> {
     this.watcher = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /** 测试用：等 release() 以后还在后台跑的请求都写完结果。 */
+  async settled(): Promise<void> {
+    while (this.detached.size > 0) await Promise.all([...this.detached]);
   }
 
   /** 永不 reject。并发调用共享同一个进行中的 drain。返回处理的请求数。 */
@@ -107,21 +122,30 @@ export class ControlInbox<Req = ControlRequest, Res = ControlResult> {
       return 0;
     }
     const bad = (): Res => (this.o.badResult ?? (() => ({ v: 1, ok: false, error: M().badRequest }) as Res))();
-    let result: Res;
-    try {
-      const req = (this.o.parse ?? (parseControlRequest as (raw: unknown) => Req | null))(JSON.parse(raw));
-      result = req ? await this.o.handle(req, { ageMs: Math.max(0, age) }) : bad();
-    } catch (e) {
-      this.o.log?.(`control inbox: ${name} failed`, e);
-      result = this.o.badResult ? this.o.badResult() : ({ v: 1, ok: false, error: e instanceof Error ? e.message : String(e) } as Res);
-    }
-    const out = join(this.o.resultsDir, name);
-    const tmp = join(this.o.resultsDir, `${id}.tmp`);
-    try {
-      await writeFile(tmp, JSON.stringify(result), { mode: 0o600 });
-      await renameWithRetry(tmp, out);
-    } catch (e) {
-      this.o.log?.(`control inbox: could not write the result for ${name}`, e);
+    let release!: () => void;
+    const released = new Promise<"released">((r) => (release = () => r("released")));
+    const work = (async (): Promise<void> => {
+      let result: Res;
+      try {
+        const req = (this.o.parse ?? (parseControlRequest as (raw: unknown) => Req | null))(JSON.parse(raw));
+        result = req ? await this.o.handle(req, { ageMs: Math.max(0, age), release }) : bad();
+      } catch (e) {
+        this.o.log?.(`control inbox: ${name} failed`, e);
+        result = this.o.badResult ? this.o.badResult() : ({ v: 1, ok: false, error: e instanceof Error ? e.message : String(e) } as Res);
+      }
+      const out = join(this.o.resultsDir, name);
+      const tmp = join(this.o.resultsDir, `${id}.tmp`);
+      try {
+        await writeFile(tmp, JSON.stringify(result), { mode: 0o600 });
+        await renameWithRetry(tmp, out);
+      } catch (e) {
+        this.o.log?.(`control inbox: could not write the result for ${name}`, e);
+      }
+    })();
+    if ((await Promise.race([work.then(() => "done" as const), released])) === "released") {
+      // 后面的请求不用再等这一条（BTL-269）：它写完结果自己移走。
+      this.detached.add(work);
+      void work.finally(() => this.detached.delete(work));
     }
     return 1;
   }

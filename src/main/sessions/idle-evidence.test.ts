@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IDLE_QUIET_MS, IdleEvidence } from "./idle-evidence";
+import { HealedTurns, IDLE_QUIET_MS, IdleEvidence } from "./idle-evidence";
 
 const RULE = "─".repeat(80);
 const idle = ["⏺ 做完了。", "", RULE, "❯ ", RULE, "  ? for shortcuts"];
@@ -62,5 +62,22 @@ describe("IdleEvidence (BTL-269 B)", () => {
     e.forget("t");
     w.lines = idle;
     expect(check().idle).toBe(false);
+  });
+});
+
+describe("HealedTurns (BTL-269 B)", () => {
+  it("lets needs-you see a healed session as waiting until it moves again", () => {
+    const h = new HealedTurns();
+    expect(h.kindFor("s", true, "thinking")).toBe("thinking");
+    h.add("s");
+    expect(h.kindFor("s", true, "thinking")).toBe("waiting");
+    expect(h.kindFor("s", true, "thinking")).toBe("waiting");
+    expect(h.kindFor("other", true, "thinking")).toBe("thinking");
+    // 它又开始干活了：忘掉。
+    expect(h.kindFor("s", false, "thinking")).toBe("thinking");
+    expect(h.kindFor("s", true, "thinking")).toBe("thinking");
+    h.add("s");
+    expect(h.kindFor("s", true, "edit")).toBe("edit");
+    expect(h.kindFor("s", true, "thinking")).toBe("thinking");
   });
 });

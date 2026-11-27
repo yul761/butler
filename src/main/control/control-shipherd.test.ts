@@ -344,6 +344,14 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const PREFIX = "Shipherd 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：";
 
 describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
+  it("send_message releases the control inbox before waiting for the attempt, and still reports it (BTL-269)", async () => {
+    const { handle, base } = setup();
+    let released = 0;
+    const r = await handle({ ...base, op: "send_message", session: "fc", text: "x" } as ShipherdControlRequest, { release: () => void released++ });
+    expect(released).toBe(1);
+    expect(value(r)).toMatchObject({ delivery: "delivered" });
+  });
+
   it("queues a message for an epic coordinator; the mailbox types it in with a prefix (BTL-245)", async () => {
     const { call, delivered } = setup();
     // 停着的：等这一次尝试，如实说送到了（BTL-269）。

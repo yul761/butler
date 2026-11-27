@@ -711,7 +711,8 @@ const ZH = {
     notifySummary: (event: string, n: number) => `推送通知：${event} × ${n}`,
   },
   // BTL-269：信箱里的消息为什么还没送到、什么时候能送到。
-  mailboxCoordinatorAnswering: "（它在等用户回答问题。下面是你的总控发来的，可以当作对那个问题的回答；用户那边的提问还留着，用户也可能另外回答。）",
+  mailboxCoordinatorAnswering: "（它在等用户回答问题。下面是你的总控发来的，当作对那个问题的回答；那个提问已经记成总控代答。用户要是另有想法，会在终端里直接告诉你。）",
+  inboxCoordinatorAnswered: "（总控代答了）",
   mailboxBlocked: {
     turn: "它这一轮还在干活",
     unsure: "记录说它在干活，屏幕上看已经停了，Shipherd 在确认",
@@ -724,6 +725,7 @@ const ZH = {
     closed: "它的终端关着",
     hibernated: "它在休眠",
     cost_paused: "它被花费熔断暂停了",
+    deliver_failed: "Shipherd 往里输入时没等到它的输入框就绪",
   } as Record<MailboxBlockReason, string>,
   mailboxEta: {
     turn: "它下一次调用工具、或者这一轮结束时送到",
@@ -737,6 +739,7 @@ const ZH = {
     closed: "它下次打开时送到",
     hibernated: "叫醒以后送到",
     cost_paused: "用户在界面上点「继续」以后送到",
+    deliver_failed: "Shipherd 每 10 秒会再试，它下一次调用工具时也会读到",
   } as Record<MailboxBlockReason, string>,
   mailboxDelivered: "消息已经送进去了。",
   mailboxDelivering: "Shipherd 正在把消息输入进去（在等它的输入框就绪），一般几秒钟。",
@@ -1390,7 +1393,8 @@ const EN: MainStrings = {
     notifySummary: (event: string, n: number) => `Push notification: ${event} × ${n}`,
   },
   // BTL-269: why a queued message has not gone in yet, and when it will.
-  mailboxCoordinatorAnswering: "(It is waiting for the user to answer a question. What follows is from your coordinator and can be taken as the answer; the user's question stays open and the user may still answer it too.)",
+  mailboxCoordinatorAnswering: "(It is waiting for the user to answer a question. What follows is from your coordinator; take it as the answer. The question has been marked as answered by the coordinator; if the user thinks otherwise they will tell you in the terminal.)",
+  inboxCoordinatorAnswered: "(answered by the coordinator)",
   mailboxBlocked: {
     turn: "it is still working on this turn",
     unsure: "the record says it is working but the screen shows it stopped; Shipherd is confirming",
@@ -1403,6 +1407,7 @@ const EN: MainStrings = {
     closed: "its terminal is closed",
     hibernated: "it is hibernating",
     cost_paused: "the cost breaker paused it",
+    deliver_failed: "Shipherd tried to type it in but its input box never became ready",
   } as Record<MailboxBlockReason, string>,
   mailboxEta: {
     turn: "It goes in at its next tool call or when this turn ends",
@@ -1416,6 +1421,7 @@ const EN: MainStrings = {
     closed: "It goes in the next time it opens",
     hibernated: "It goes in once it is awake",
     cost_paused: "It goes in once the user clicks Continue",
+    deliver_failed: "Shipherd retries every 10 seconds; it also reads it at its next tool call",
   } as Record<MailboxBlockReason, string>,
   mailboxDelivered: "The message has gone in.",
   mailboxDelivering: "Shipherd is typing the message in (waiting for its input box), usually a few seconds.",

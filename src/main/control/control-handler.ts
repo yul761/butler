@@ -121,7 +121,10 @@ function openError(r: Extract<OpenSessionResult, { ok: false }>, repo: TicketRep
 /**
  * 处理总控发来的请求（设计文档 2026-10-23 第二步）。请求文件谁都能写：ticket、仓库、开启者都在这里重新核对。
  */
-export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => Promise<ControlResult> {
+/** meta.release（收件箱给的，BTL-269）：剩下的只是等送的结果时调，让别的 session 的请求先走。 */
+export type ControlMeta = { release?: () => void };
+
+export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, meta?: ControlMeta) => Promise<ControlResult> {
   const name = (r: { repoPath: string }) => basename(r.repoPath);
   const repoNameOf = (t: Ticket, id: number | null) => {
     const r = t.repos.find((x) => x.id === id);
@@ -412,7 +415,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
    * feature 总控的 send_message（BTL-245）：只能发给这个 feature 的 ticket session 和修复 session，排进它的信箱。
    * 从不因为它在忙被拒；终端关着时排着，下次打开再送。from 必须是这个 feature 开着终端的总控。
    */
-  const featureSend = async (f: Feature, own: Ticket[], req: Extract<FeatureControlRequest, { op: "send_message" }>): Promise<ControlResult> => {
+  const featureSend = async (f: Feature, own: Ticket[], req: Extract<FeatureControlRequest, { op: "send_message" }>, meta: ControlMeta): Promise<ControlResult> => {
     if (!d.mailbox) return fail(M().ctlStartUnavailable);
     const h = req.from ? d.sessions.head(req.from) : null;
     if (!h || h.featureId !== f.id || !h.coordinator || !d.sessionService.termIdOf(h.id)) return fail(M().ctlInboxNotYours);
@@ -433,7 +436,8 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
       });
     }
     const state = w?.state === "running" ? "idle" : r.state;
-    // 如实说送到了没有（BTL-269）：等这一次尝试，排着的带上原因。
+    // 如实说送到了没有（BTL-269）：等这一次尝试，排着的带上原因。只剩等了，别的请求先走。
+    meta.release?.();
     const o = await d.mailbox.outcome(r.id);
     return ok({
       queued: o.delivery === "queued", delivery: o.delivery, sessionId: t.id, requestId: r.id, state,
@@ -441,7 +445,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     });
   };
 
-  const featureRequest = async (req: NonInbox<FeatureControlRequest>): Promise<ControlResult> => {
+  const featureRequest = async (req: NonInbox<FeatureControlRequest>, meta: ControlMeta): Promise<ControlResult> => {
     const f = d.features?.get(req.featureId);
     if (!f || f.archivedAt !== null) return fail(M().ctlFeatureGone);
     const own = d.tickets.listByFeature(f.id);
@@ -495,7 +499,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
 
     if (req.op === "list_sessions") return listed(featureSessionRows(f, own));
 
-    if (req.op === "send_message") return featureSend(f, own, req);
+    if (req.op === "send_message") return featureSend(f, own, req, meta);
 
     if (req.op === "end_session" || req.op === "refresh_session") {
       // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关，也不归它换新（修复 session 换新会被拒绝）。
@@ -576,10 +580,10 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
   // Shipherd 总控（BTL-190 第 5 点）。
   const shipherdRequest = shipherdControl(d, { sessionActivity, refreshSession, listedActivity, lastReply, pendingMail });
 
-  return async (req) => {
+  return async (req, meta = {}) => {
     if (req.op === "ask_user" || req.op === "report") return inboxRequest(req);
-    if ("shipherd" in req) return shipherdRequest(req);
-    if ("featureId" in req) return featureRequest(req);
+    if ("shipherd" in req) return shipherdRequest(req, meta);
+    if ("featureId" in req) return featureRequest(req, meta);
     const t = d.tickets.get(req.ticketKey);
     if (!t || t.archivedAt !== null) return fail(M().ctlTicketGone(req.ticketKey));
     if (req.op === "lessons") return lessonsRequest(req, t);

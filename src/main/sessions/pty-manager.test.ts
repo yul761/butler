@@ -647,6 +647,9 @@ describe("nextDraftLength: clearing keys (BTL-269 C)", () => {
   it("Esc Esc clears, Ctrl-W and Option-Backspace delete one word", () => {
     expect(nextDraftLength(5, "\x1b\x1b")).toBe(0);
     expect(nextDraftLength(0, "\x1b\x1b[A")).toBe(0);
+    // Alt+方向键（有的终端发 \x1b\x1b[A）不是 Esc Esc，不清空。
+    expect(nextDraftLength(5, "\x1b\x1b[A")).toBe(5);
+    expect(nextDraftLength(5, "\x1b\x1bOB")).toBe(5);
   });
 });
 
@@ -702,6 +705,41 @@ describe("PtyManager draft: clearing keys and the screen (BTL-269 C)", () => {
     expect(mgr.hasDraft("t1")).toBe(false);
     // 灰色的建议不算草稿。
     spawned[0].pty.emit("\x1b[2;3H\x1b[2mrun the tests\x1b[22m");
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+  });
+
+  it("deliver pastes when only the status line below the box keeps redrawing: the content above it is stable", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.markStarted("t1");
+    const draw = (n: number) => spawned[0].pty.emit("\x1b[2J\x1b[H" + `● done\r\n${RULE}\r\n❯ \r\n${RULE}\r\n  ctx ${n}%`);
+    draw(0);
+    await mgr.screenSettled("t1");
+    const p = mgr.deliver("t1", "hi", { idleMs: 800, screenStableMs: 1000 });
+    for (let i = 1; i <= 8 && spawned[0].pty.written.length === 0; i++) {
+      later(300);
+      draw(i);
+      await mgr.screenSettled("t1");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(spawned[0].pty.written[0]).toBe("\x1b[200~hi\x1b[201~");
+    mgr.kill("t1");
+    await p;
+  });
+
+  it("text in the box the user did not type is not their draft: Shipherd's unsubmitted paste, claude's suggested next line", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    // 没打过字：输入框里的字（不是暗色的建议、也不是用户打的）不当草稿。
+    spawned[0].pty.emit(`${RULE}\r\n❯ \x1b[38;2;153;153;153mrun the tests\x1b[39m\r\n${RULE}`);
+    await mgr.screenSettled("t1");
+    later(10_000);
+    expect(mgr.hasDraft("t1")).toBe(false);
+    // 用户打字、回车提交了：之后输入框里出现的字也不算。
+    mgr.write("t1", "go\r");
+    spawned[0].pty.emit("\x1b[2J\x1b[H" + `${RULE}\r\n❯ leftover paste\r\n${RULE}`);
     await mgr.screenSettled("t1");
     later(10_000);
     expect(mgr.hasDraft("t1")).toBe(false);

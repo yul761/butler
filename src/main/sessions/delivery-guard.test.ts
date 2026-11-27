@@ -210,7 +210,12 @@ describe("DeliveryGuard: the record says working, the screen says stopped (BTL-2
     const screen = { lines: idleScreen, outAt: t.state.now - 1000, grewAt: t.state.now - 1000 as number | null };
     const healed: string[] = [];
     const evidence = new IdleEvidence({ screen: () => screen.lines, lastOutputAt: () => screen.outAt, transcriptGrewAt: () => screen.grewAt, now: () => t.state.now });
-    const guard = new DeliveryGuard({ ...t.deps(), idle: (h, term) => evidence.check(h, term), healed: (h) => healed.push(h) });
+    // 校正记录：和真的一样把 waitingForInput 改成 true（活动还是「在想」）。
+    const heal = (h: string) => {
+      healed.push(h);
+      t.state.head = { ...t.state.head!, waitingForInput: true };
+    };
+    const guard = new DeliveryGuard({ ...t.deps(), refreshing: (h) => t.state.refreshing?.(h) ?? false, idle: (h, term) => evidence.check(h, term), healed: heal });
     return { t, screen, healed, guard };
   }
 
@@ -219,6 +224,9 @@ describe("DeliveryGuard: the record says working, the screen says stopped (BTL-2
     expect(guard.check("s-old")).toEqual({ ok: false, block: "busy", busy: "unsure" });
     expect(healed).toEqual([]);
     t.state.now += 45_000;
+    // 先校正记录、这一次不送：按停下处理，先判断一次「需要你」。
+    expect(guard.check("s-old")).toEqual({ ok: false, block: "busy", busy: "unsure" });
+    expect(healed).toEqual(["s-head"]);
     expect(guard.check("s-old")).toEqual({ ok: true, termId: "t-1", headId: "s-head" });
     expect(healed).toEqual(["s-head"]);
     // transcript 还在长：不放行。
@@ -247,15 +255,33 @@ describe("DeliveryGuard: the record says working, the screen says stopped (BTL-2
     t.state.now += 46_000;
     screen.outAt = t.state.now; // 状态栏刚刷新过
     screen.lines = [...idleScreen.slice(0, -1), "  ctx 41%"];
+    expect(guard.check("s-old")).toMatchObject({ ok: false, busy: "unsure" }); // 校正这一次
     expect(guard.check("s-old").ok).toBe(true);
   });
 
-  it("force (the Deliver now button) skips working, needs-you and typing, but not a draft, a prompt on screen or a refresh", () => {
+  it("does not heal the record when another check blocks (a refresh), so a session being refreshed is not treated as stopped", () => {
+    const { t, healed, guard } = stuck();
+    t.state.now += 45_000;
+    t.state.refreshing = () => true;
+    expect(guard.check("s-old")).toMatchObject({ ok: false, busy: "refreshing" });
+    expect(healed).toEqual([]);
+  });
+
+  it("force (the Deliver now button) still stops when the screen shows it working: the hook gets it in at its next tool call", () => {
+    const { screen, guard } = stuck();
+    screen.lines = ["✻ Thinking… (12s · esc to interrupt)", ...idleScreen];
+    expect(guard.check("s-old", { force: true })).toEqual({ ok: false, block: "busy", busy: "turn" });
+    // 看着停了、还没安静够久：送。
+    screen.lines = idleScreen;
+    expect(guard.check("s-old", { force: true })).toMatchObject({ ok: true });
+  });
+
+  it("force (the Deliver now button) skips unsure, needs-you and typing, but not a draft, a prompt on screen or a refresh", () => {
     const t = setup();
     t.state.head = session({ waitingForInput: false });
     t.state.needsYou = () => true;
     t.state.typedAt = t.state.now - 1000;
-    const g = () => new DeliveryGuard(t.deps());
+    const g = () => new DeliveryGuard({ ...t.deps(), idle: () => ({ idle: false, working: false, looksIdle: true }) });
     expect(g().check("s-old", { force: true })).toMatchObject({ ok: true });
     t.state.draft = true;
     expect(g().check("s-old", { force: true })).toEqual({ ok: false, block: "draft" });

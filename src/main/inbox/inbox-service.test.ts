@@ -179,6 +179,24 @@ describe("InboxService ask_user (BTL-190 2+3)", () => {
     expect(inbox.hasPendingDecision("s2")).toBe(false);
   });
 
+  it("marks a session's unanswered questions as answered by its coordinator, leaving card answers and other sessions alone (BTL-269 A)", () => {
+    const s = session("s1");
+    const t = session("t1");
+    const { inbox, repo, replace, state } = setup({ sessions: [s, t] });
+    const a = inbox.ask(s, { question: "a" });
+    const b = inbox.ask(s, { question: "b" });
+    state.answerGate = { ok: false, block: "typing" };
+    inbox.answer(b, "from the card");
+    const c = inbox.ask(t, { question: "c" });
+    replace("s1", session("s2"));
+    expect(inbox.hasPendingDecision("s2")).toBe(true);
+    inbox.coordinatorAnswered("s2");
+    expect(repo.get(a)).toMatchObject({ status: "answered", answer: "（总控代答了）" });
+    expect(repo.get(b)).toMatchObject({ status: "pending", answer: "from the card" });
+    expect(repo.get(c)?.status).toBe("pending");
+    expect(inbox.hasPendingDecision("t1")).toBe(true);
+  });
+
   it("ignores the UserPromptSubmit of Shipherd's own /handoff and resume message while the session is being refreshed", () => {
     const s = session("s1");
     const { inbox, repo, state, replace } = setup({ sessions: [s] });

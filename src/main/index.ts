@@ -196,7 +196,7 @@ import { nodePtyFactory } from "./sessions/pty-node";
 import { SessionService } from "./sessions/session-service";
 import { judgeStuck } from "./sessions/stuck-judge";
 import { markTurnEndedWithoutStop, onTurnEndedWithoutStop } from "./sessions/turn-end";
-import { IdleEvidence } from "./sessions/idle-evidence";
+import { HealedTurns, IdleEvidence } from "./sessions/idle-evidence";
 import { isControllerOf } from "./mailbox/controller";
 import { deliveryNeedsYou, judgeNeedsYou, NeedsYouTracker, type NeedsYouHead } from "./sessions/needs-you";
 import { buildNowView } from "./now/now-view";
@@ -1411,13 +1411,15 @@ async function bootstrap(): Promise<void> {
   /** 休眠前最后一次看到的样子：休眠的 session 照样留在「需要你」里（活动监视只看开着的终端）。 */
   const needsYouFrozen = new Map<string, NeedsYouHead>();
   /** 开着终端的 Shipherd session 的 head（同一个 head 只算一次），带上活动和最后一条回复。activityMonitor 在下面才建好：调用时才用到。 */
+  /** 靠屏幕证据校正成停着的（BTL-269 B）：「需要你」照样判断它最后那条回复。 */
+  const healedTurns = new HealedTurns();
   const needsYouHeads = (): NeedsYouHead[] => {
     const heads = new Map<string, NeedsYouHead>();
     for (const termId of pty.openIds()) {
       const h = sessions.head(termId);
       // 复盘分析 session 只是用户来问问题的，不判断需要你。
       if (!h || h.origin !== "shipherd" || h.lessonRunId !== null || heads.has(h.id)) continue;
-      heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: activityMonitor.get(h.id)?.kind ?? null, reply: activityMonitor.lastReplyOf(h.id) });
+      heads.set(h.id, { id: h.id, cwd: h.cwd, waiting: h.waitingForInput, kind: healedTurns.kindFor(h.id, h.waitingForInput, activityMonitor.get(h.id)?.kind ?? null), reply: activityMonitor.lastReplyOf(h.id) });
     }
     const hibernated = new Set(hibernatedHeads().map((h) => h.id));
     for (const id of [...needsYouFrozen.keys()]) if (!hibernated.has(id) || heads.has(id)) needsYouFrozen.delete(id);
@@ -1917,6 +1919,7 @@ async function bootstrap(): Promise<void> {
     // 免得在 guard 里面又开始往同一个终端送别的。
     healed: (headId) => {
       if (!markTurnEndedWithoutStop(sessions, headId, Date.now())) return;
+      healedTurns.add(headId);
       logger(`delivery: ${headId} looked stopped on screen for a while though no Stop came; marking it waiting for input`);
       notify("data");
       setTimeout(() => sessionStopped(headId), 0);
@@ -1925,10 +1928,12 @@ async function bootstrap(): Promise<void> {
   };
   // 合并通知和 CI 结果用的：在等用户回答的 session 不往里贴东西（计划 14），「需要你」还没判断完的也先不贴（I1），
   // 正在换新的也不贴（计划 16）。refresher 在下面才建好：回调里才用到。
+  /** 自动输入眼里的「需要你」：判断出来需要你、还没判断完，或者有未决的 ask_user。inboxService 在下面才建好：回调里才用到。 */
+  const deliveryNeedsYouOf = (id: string): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id);
   const deliveryGuard = new DeliveryGuard({
     ...guardDeps,
     // 有未决 ask_user 的也算在等用户（BTL-190 第 2+3 点）。inboxService 在下面才建好：回调里才用到。
-    needsYou: (id): boolean => deliveryNeedsYou(needsYou, id) || inboxService.hasPendingDecision(id),
+    needsYou: (id): boolean => deliveryNeedsYouOf(id),
     refreshing: (id) => refresher.isRefreshing(id),
   });
   // 成本熔断（工作流 L，设计 addendum 第 4 节）。上限经三层配置；没设上限时什么都不做。
@@ -2180,6 +2185,8 @@ async function bootstrap(): Promise<void> {
     },
     nameOf: mailboxName,
     typing: (h, phase) => inboxService.shipherdTyping(h, phase),
+    coordinatorAnswered: (h) => inboxService.coordinatorAnswered(h),
+    needsYou: (h) => deliveryNeedsYouOf(h),
     // 休眠着的（WS-M B）叫它醒，醒来停下时 sessionStopped 再送；真关了的、总控管的在后台恢复（BTL-256）。熔断压着的不叫。
     // 真关了的只为别的 session 发来的消息恢复（总控的指示、汇报……）：CI、合并这类 Shipherd 自己的通知排着等下次打开，
     // 免得总控刚 end_session 的 session 被下一条通知又拉起来。

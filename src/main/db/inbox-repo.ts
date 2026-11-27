@@ -165,6 +165,11 @@ export class InboxRepo {
     return Number(this.db.prepare(`UPDATE inbox_items SET status = ?, resolved_at = ? WHERE id = ? AND status = 'pending'`).run(status, at, id).changes) > 0;
   }
 
+  /** 别人替用户答了（总控代答，BTL-269 A）：还未决、卡片上也没答过的这一条记成 answered，答案写 label。返回改没改。 */
+  answerOnBehalf(id: number, label: string, at: number): boolean {
+    return Number(this.db.prepare(`UPDATE inbox_items SET status = 'answered', answer = ?, resolved_at = ? WHERE id = ? AND status = 'pending' AND answer IS NULL`).run(label, at, id).changes) > 0;
+  }
+
   /** ticket、feature 归档时：这个范围里还未决的「待你决定」和汇报都记成 dismissed。返回结束了几条。 */
   dismissPending(scope: InboxArchiveScope, at: number): number {
     const w = "ticketKey" in scope ? { sql: "ticket_key = ?", arg: scope.ticketKey as string | number } : { sql: "feature_id = ?", arg: scope.featureId };

@@ -1,5 +1,5 @@
 import type { SpawnSpec } from "../claude/spawn";
-import { dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, TermScreen } from "./screen";
+import { aboveInputBox, dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, TermScreen } from "./screen";
 
 export interface PtyProcess {
   readonly pid: number;
@@ -49,6 +49,11 @@ interface Term {
   lastUserInputAt: number;
   /** 输入框里还没发出去的文字（按键推算，见 nextDraft）；"" = 没有草稿。hasDraft 还会拿屏幕上的输入框校正它。 */
   draft: string;
+  /**
+   * 用户上一次提交（回车）或屏幕上看到空输入框以后，又往里打过字（BTL-269 review）。只有这时屏幕上输入框里的字才可能是用户的：
+   * Shipherd 自己贴进去没提交成的、claude 画的建议下一句都不是用户的草稿。
+   */
+  typedSinceEmpty: boolean;
   /** 上一次单独按 Esc（data 就是一个 \x1b）的时间；0 = 没有。隔得近的两次单独的 Esc 和 Esc Esc 一样清空输入框。 */
   lastEscAt: number;
   /** 终端打开（新开或恢复）的时间（R36：刚打开的终端不自动换新）。 */
@@ -92,12 +97,13 @@ export function nextDraft(current: string, data: string): string {
       continue;
     }
     // 先认 Option+Backspace（\x1b\x7f）和 Esc Esc，免得被当成 ESC 序列去掉：换成 Ctrl+W、Ctrl+U。
+    // 第二个 Esc 后面跟着 [ 或 O 的是 Alt+方向键这类（\x1b\x1b[A），不是 Esc Esc。
     // CSI 参数含 <（SGR 鼠标上报），SS3 带一个字符（\x1bOA），所以不直接用 stripAnsi；其余形状同它。
     const text = parts[i]
       // eslint-disable-next-line no-control-regex
       .replace(/\x1b\x7f/g, "\x17")
       // eslint-disable-next-line no-control-regex
-      .replace(/\x1b(?=\x1b)/g, "\x15")
+      .replace(/\x1b\x1b(?![[O])/g, "\x15")
       // eslint-disable-next-line no-control-regex
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bO.|\x1b[@-Z\\-_]/g, "");
     for (const ch of text) {
@@ -122,6 +128,8 @@ const ESC_ESC_MS = 1000;
 /** 用户停手多久、终端输出停了多久以后，才拿屏幕上的输入框校正草稿：刚按的键、刚画的屏幕可能还没对上。 */
 const DRAFT_SCREEN_QUIET_MS = 5000;
 const DRAFT_OUTPUT_QUIET_MS = 1000;
+/** deliver：输出一直不停（状态栏在刷新）时，输入框以上的内容这么久没变也算输入框就绪。 */
+const SCREEN_STABLE_MS = 2000;
 
 /**
  * 终端自己发出的报告（xterm 回答程序的查询、上报焦点和鼠标）：焦点 \x1b[I / \x1b[O、光标位置 CPR、设备属性 DA、
@@ -137,6 +145,8 @@ export function isUserInput(data: string): boolean {
 
 export interface DeliverOptions {
   /** 输出安静多久算输入框就绪。 */
+  /** 输出不停时，输入框以上的内容多久没变算就绪（默认 SCREEN_STABLE_MS，不少于 idleMs）。 */
+  screenStableMs?: number;
   idleMs?: number;
   /** 等 SessionStart 最多多久（没装 hook 时之后只靠安静 + 对话框检查）。 */
   startWaitMs?: number;
@@ -285,7 +295,7 @@ export class PtyManager {
     const proc = this.factory(spec.file, spec.args, { cwd: opts.cwd, env: opts.env, cols: opts.cols ?? 120, rows: opts.rows ?? 32 });
     const cols = opts.cols ?? 120, rows = opts.rows ?? 32;
     const term: Term = {
-      proc, chunks: [], chunkLen: 0, written: 0, epoch: nextEpoch++, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draft: "", lastEscAt: 0, openedAt: this.now(),
+      proc, chunks: [], chunkLen: 0, written: 0, epoch: nextEpoch++, cutModes: new Map(), lastOutputAt: 0, exited: false, started: false, lastUserInputAt: 0, draft: "", typedSinceEmpty: false, lastEscAt: 0, openedAt: this.now(),
       // 屏幕解析抛错时用回放缓冲重建（BTL-277）：和渲染进程挂终端时重放的是同一份。
       screen: new TermScreen(cols, rows, () => screenTail(term)), submittedAt: 0, held: null,
     };
@@ -362,7 +372,12 @@ export class PtyManager {
     if (t) {
       const user = isUserInput(data);
       const now = this.now();
-      if (user) t.lastUserInputAt = now;
+      if (user) {
+        t.lastUserInputAt = now;
+        // 回车提交了：输入框又空了。只算最后一个回车后面还有没有打字。
+        const cr = data.lastIndexOf("\r");
+        t.typedSinceEmpty = cr < 0 ? true : cr < data.length - 1;
+      }
       if (data === "\x1b") {
         // 单独的 Esc：和上一次单独的 Esc 隔得近，就是 Esc Esc（claude 清空输入框）。
         if (t.lastEscAt > 0 && now - t.lastEscAt <= ESC_ESC_MS) {
@@ -401,7 +416,8 @@ export class PtyManager {
 
   /**
    * 拿屏幕上的输入框校正按键推算的草稿（BTL-269 C）：用户停手、输出也停了一会儿，屏幕上画着空输入框（灰色提示不算字），
-   * 草稿就清掉（方向键、Ctrl+K、历史记录这些按键跟不上）；输入框里有字、推算却是空的，就当有草稿（不能把用户的字一起提交）。
+   * 草稿就清掉（方向键、Ctrl+K、历史记录这些按键跟不上）；输入框里有字、推算却是空的，而且用户提交以后又打过字，就当有草稿
+   * （不能把用户的字一起提交）。用户没打过字时输入框里的字不是用户的（Shipherd 没提交成的粘贴、claude 的建议下一句），不当草稿。
    * 没画输入框（对话框、菜单、还没画出来）不动。
    */
   private checkDraftOnScreen(termId: string, t: Term): void {
@@ -416,10 +432,13 @@ export class PtyManager {
       return;
     }
     const empty = inputBoxEmpty(lines);
-    if (empty === true && t.draft !== "") {
-      this.log(`pty ${termId}: the input box is empty on screen; dropping a stale draft of ${[...t.draft].length} chars`);
-      t.draft = "";
-    } else if (empty === false && t.draft === "") t.draft = inputBoxText(lines) ?? "";
+    if (empty === true) {
+      t.typedSinceEmpty = false;
+      if (t.draft !== "") {
+        this.log(`pty ${termId}: the input box is empty on screen; dropping a stale draft of ${[...t.draft].length} chars`);
+        t.draft = "";
+      }
+    } else if (empty === false && t.draft === "" && t.typedSinceEmpty) t.draft = inputBoxText(lines) ?? "";
   }
 
   /** 终端最后一次输出的时间；还没输出过、终端不在了返回 0。 */
@@ -570,14 +589,25 @@ export class PtyManager {
 
   private async deliverOnce(termId: string, text: string, o: DeliverOptions): Promise<DeliverResult> {
     const idleMs = o.idleMs ?? 800;
+    const stableMs = Math.max(idleMs, o.screenStableMs ?? SCREEN_STABLE_MS);
     const start = this.now();
     let budgetFrom = start;
+    /** 输入框以上的内容和从什么时候起没变（null = 没画输入框）。 */
+    let shown = null as { key: string; since: number } | null;
     for (;;) {
       const t = this.terms.get(termId);
       if (!t || t.exited) return "exited";
       const now = this.now();
       const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
-      const idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
+      let idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
+      if (!idle && started && t.lastOutputAt > 0) {
+        // 输出一直不停，但只是输入框下面的状态栏在刷新（BTL-269 review）：输入框以上的内容 stableMs 没变也算就绪。
+        const above = aboveInputBox(this.screenLines(termId));
+        const key = above === null ? null : above.join("\n");
+        if (key === null) shown = null;
+        else if (shown?.key !== key) shown = { key, since: now };
+        else if (now - shown.since >= stableMs) idle = true;
+      }
       const dialog = (started && idle) || o.waitOutDialogs ? dialogOnScreen(this.screenLines(termId)) : false;
       if (dialog && o.waitOutDialogs) budgetFrom = now;
       if (started && idle && !dialog) {

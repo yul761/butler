@@ -111,7 +111,8 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   await expect(featureList).toContainText(S.messageVia.hook);
   await expect(featureList.getByTestId("message-deliver-now")).toHaveCount(0);
 
-  // BTL-269：它这一轮还没结束，第三条排着；用户点「现在送进去」，不等它停下就输入进去。
+  // BTL-269：它这一轮还没结束，第三条排着；用户点「现在送进去」：看得出它在干活就马上说为什么没送（贴也贴不进去），
+  // 它下一次调用工具时 hook 照样送到。
   await side.getByRole("button", { name: S.shipherdNav, exact: true }).click();
   const third = await callTool(page, s, "send_message", { epic: "payment", text: "第三条：现在就看" });
   expect(JSON.parse(third.text)).toMatchObject({ delivery: "queued", blockedBy: "turn" });
@@ -119,10 +120,13 @@ test("a busy coordinator gets queued messages at its next tool call, merged into
   await openTab(page, S.lay.tabControl);
   if ((await featureList.getAttribute("open")) === null) await featureList.locator("> summary").click();
   await featureList.getByTestId("message-deliver-now").click();
-  // 送进去以后这一条变成「已送达」，按钮那一行随之消失。
+  await expect(featureList.locator('[role="status"]')).toContainText(S.mailboxBlocked.notNow(S.mailboxBlocked.reason.turn), { timeout: 10_000 });
+  await expect(featureList.locator('[data-status="queued"]')).toHaveCount(1);
+  await typeLine(page, '/fake-tool Read {"file_path":"c.ts"}');
+  await expect.poll(() => contexts(s).length).toBe(2);
+  expect(contexts(s)[1]).toContain("第三条：现在就看");
   await expect(featureList.locator('[data-status="delivered"]')).toHaveCount(3, { timeout: 30_000 });
   await expect(featureList.getByTestId("message-deliver-now")).toHaveCount(0);
-  await expect.poll(() => terminalText(page)).toContain("第三条：现在就看");
 });
 
 /**

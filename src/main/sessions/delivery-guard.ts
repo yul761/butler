@@ -60,8 +60,11 @@ export class DeliveryGuard {
   constructor(private readonly d: DeliveryGuardDeps) {}
 
   /**
-   * force：用户在界面上点了「现在送进去」（BTL-269）：不看记录说在干活、「需要你」、刚打过字；
+   * force：用户在界面上点了「现在送进去」（BTL-269）：不看「需要你」、刚打过字，屏幕看着停了、只是还没安静够久的（unsure）也送；
+   * 屏幕上看得出还在干活的照样挡（turn：贴不进去，等它下一次调用工具时 hook 送更快）。
    * 熔断、终端关着、换新、别的自动输入、屏幕上的确认框、输入框里的草稿照样挡（贴进去会替用户点了确认、或者连草稿一起提交）。
+   * 屏幕证据说它停着、记录还说在干活时，等别的检查都过了才校正记录，这一次先不送（unsure）：
+   * 校正会按停下处理，先判断一次「需要你」（卡住的那一轮可能是用文字问了用户问题），再送。
    */
   check(sessionId: string, o: { force?: boolean } = {}): DeliveryCheck {
     // 先看熔断：暂停着的不往里递，也不为了递东西叫醒它。
@@ -70,8 +73,8 @@ export class DeliveryGuard {
     if (termId === null) return { ok: false, block: this.d.wakeIfHibernated?.(sessionId) ? "hibernated" : "closed" };
     const head = this.d.head(termId);
     if (!head) return { ok: false, block: "busy", busy: "turn" };
-    const turn = o.force ? null : this.turn(head, termId);
-    if (turn) return { ok: false, block: "busy", busy: turn };
+    const turn = this.turn(head, termId);
+    if (turn.busy && !(o.force && turn.busy === "unsure")) return { ok: false, block: "busy", busy: turn.busy };
     if (this.d.refreshing?.(head.id)) return { ok: false, block: "busy", busy: "refreshing" };
     // 别的自动输入正在往这个终端里递（I2）：等它递完，两段不能贴在同一个输入框里，也不能贴在它那一轮的回复中间。
     if (this.d.pty.autoInputInFlight(termId)) return { ok: false, block: "busy", busy: "auto_input" };
@@ -81,6 +84,10 @@ export class DeliveryGuard {
     if (!o.force && typed > 0 && this.d.now() - typed < (this.d.typingQuietMs ?? USER_TYPING_QUIET_MS)) return { ok: false, block: "typing" };
     // 草稿不看时间：用户打了一半去干别的，过多久回车都会把通知和草稿一起提交。
     if (this.d.pty.hasDraft(termId)) return { ok: false, block: "draft" };
+    if (turn.heal) {
+      this.d.healed?.(head.id);
+      return { ok: false, block: "busy", busy: "unsure" };
+    }
     return { ok: true, termId, headId: head.id };
   }
 
@@ -99,18 +106,15 @@ export class DeliveryGuard {
   /**
    * 停着等输入，并且活动是 waiting / idle；只剩后台任务在跑（这一轮已经结束，活动显示的是后台命令）也算停着：返回 null。
    * 活动还没读到（终端刚打开、还没轮到）算忙：不知道它在干什么就不打断。
-   * 记录说在跑时再看屏幕证据（idle）：证据说停着就放行并校正记录；看着停了、证据还不够是 unsure，否则是 turn。
+   * 记录说在跑时再看屏幕证据（idle）：证据说停着就放行，记录还是「在干活」的要校正（heal）；看着停了、证据还不够是 unsure，否则是 turn。
    */
-  private turn(head: Session, termId: string): BusyReason | null {
+  private turn(head: Session, termId: string): { busy: BusyReason | null; heal: boolean } {
     const a = this.d.activity(head.id);
     const recorded = head.waitingForInput === true && a !== null && (a.background || a.kind === "waiting" || a.kind === "idle");
-    if (recorded) return null;
+    if (recorded) return { busy: null, heal: false };
     const e = this.d.idle?.(head.id, termId);
-    if (!e) return "turn";
-    if (e.idle) {
-      if (head.waitingForInput !== true) this.d.healed?.(head.id);
-      return null;
-    }
-    return e.looksIdle ? "unsure" : "turn";
+    if (!e) return { busy: "turn", heal: false };
+    if (e.idle) return { busy: null, heal: head.waitingForInput !== true };
+    return { busy: e.looksIdle ? "unsure" : "turn", heal: false };
   }
 }

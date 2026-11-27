@@ -10,7 +10,7 @@ import { noPreReview, type PrAssessmentView, type Readiness, type RiskLevel } fr
 import { M } from "../strings";
 import { admitOrRefuse } from "./admission";
 import { preReviewControl, preReviewField, ticketPreReviewField } from "./prereview-control";
-import type { ControlHandlerDeps } from "./control-handler";
+import type { ControlHandlerDeps, ControlMeta } from "./control-handler";
 
 /** Shipherd 总控（BTL-190 第 5 点）要的数据：index.ts 从 SessionService、PrWatcher、「需要你」和收件箱拿。 */
 export interface ShipherdControlDeps {
@@ -117,7 +117,7 @@ export function ownersOf(d: ControlHandlerDeps): (t: Ticket) => { epic: Named; f
  * 只有 send_message 会开 session：目标 feature 总控的终端关着（比如闲置时自动关掉了）时，接着它最近的那个再把消息交进去。
  * 请求文件谁都能写：往终端里写东西的 send_message 和换新别人的 refresh_session 要求 from 是开着终端的 Shipherd 总控自己。
  */
-export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers): (req: Exclude<ShipherdControlRequest, { op: InboxControlOp["op"] }>) => Promise<ControlResult> {
+export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers): (req: Exclude<ShipherdControlRequest, { op: InboxControlOp["op"] }>, meta?: ControlMeta) => Promise<ControlResult> {
   const name = (r: { repoPath: string }) => basename(r.repoPath);
 
   /** 名字或 id（数字先按 id 找，再按名字，不分大小写）。 */
@@ -130,7 +130,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
   /** 正在给这个 epic 开 session（send_message 打开关着的终端）：同时来的第二条不再开第二个，等它开好排进同一个信箱。值是开好的 head，没开成为 null。 */
   const opening = new Map<string, Promise<string | null>>();
 
-  return async (req) => {
+  return async (req, meta = {}) => {
     const b = d.shipherd;
     if (!b) return fail(M().ctlShipherdOff);
     const features = d.features?.list() ?? [];
@@ -190,6 +190,7 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       mailbox!.send({ kind: "shipherd", from: self?.id ?? null, to: sessionId, featureId, body: text, interrupt, hold });
     /** 如实说这条现在怎么样了（BTL-269）：等这一次尝试（最多 15 秒），送到了还是排着、为什么排着。 */
     const queued = async (r: { id: string; state: "busy" | "idle" | "closed" }, sessionId: string, extra: object = {}): Promise<ControlResult> => {
+      meta.release?.(); // 只剩等了，别的请求先走（BTL-269）。
       const o = await mailbox!.outcome(r.id);
       return ok({
         queued: o.delivery === "queued", delivery: o.delivery, sessionId: d.sessions.head(sessionId)?.id ?? sessionId, requestId: r.id, state: r.state,

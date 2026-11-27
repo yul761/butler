@@ -792,7 +792,7 @@ export const FEATURE_SEND_TOOL = {
   description:
     `给这个 epic 的一个 ticket session 或修复 session 发一条消息（最多 ${MESSAGE_LIMIT} 字符）：改主意了、接口变了、要它先做别的。` +
     "消息排进它的信箱，不会因为它在忙被拒：它在干活一般在下一次调用工具时读到，停着就直接输入。" +
-    "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟还没送到会给你发一条「【回执】」，不用重发。" +
+    "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发一条「【回执】」，不用重发。" +
     "终端关着（比如 Shipherd 重启过）时，总控开的 session 会在后台接着原来的对话恢复（和 start_session 一样先看内存），起来以后送进去；返回值的 wake 说清楚：" +
     "resuming 正在恢复，送到时你会收到一条「【回执】」；waiting_memory 内存不够，消息排着，内存够了再试（wakeError 说差多少）；" +
     "ended_by_user 用户自己点 × 结束的，不自动恢复，用户打开时送到；resume_failed 恢复失败过（wakeError 是原因），用户打开时送到；not_managed 不是总控开的，下次打开时送到。" +
@@ -816,7 +816,7 @@ export const FEATURE_SEND_TOOL_EN = {
   description:
     `Send a message (at most ${MESSAGE_LIMIT} characters) to one of this epic's ticket sessions or fix sessions: a change of plan, an interface that changed, something to do first. ` +
     "It goes into its mailbox and is never refused for being busy: a working session usually reads it at its next tool call, and a stopped one gets it typed in. " +
-    "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes you get a \"[Receipt]\", so do not resend. " +
+    "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes (10 if its turn is simply still running) you get a \"[Receipt]\", so do not resend. " +
     "When the terminal is closed (for example after Shipherd restarted), a session a coordinator started is resumed in the background on its conversation (after the same memory check as start_session) and gets the message once it is up; the wake field in the result says which: " +
     "resuming (being resumed; you get a \"[Receipt]\" when it is delivered); waiting_memory (memory is short; the message stays queued and Shipherd tries again when there is room; wakeError says how short); " +
     "ended_by_user (the user ended it with ×; not resumed, delivered when the user opens it); resume_failed (resuming failed earlier, wakeError says why; delivered when the user opens it); not_managed (not started by a coordinator; delivered the next time it opens). " +
@@ -903,7 +903,7 @@ export const SHIPHERD_TOOLS = [
       `给一个 epic 总控发一条消息（最多 ${MESSAGE_LIMIT} 字符），用来跨 epic 协调：比如告诉它另一个 epic 的接口改了、先合哪个 PR。` +
       "目标给 epic（发给它的总控）或 session 两者之一；epic 用名字或 id（list_epics 里的）。epic 里的 feature 没有自己的总控，要它做什么告诉 epic 总控。" +
       "消息一律排进它的信箱，不会因为它在忙被拒：它在干活一般在下一次调用工具时读到，停着就直接输入，用户正在输入时等用户打完。" +
-      "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟还没送到会给你发一条「【回执】」，不用重发。" +
+      "返回值的 delivery 如实说送到了没有：delivered 已经送进去；queued 还排着，blockedBy 是原因（turn 这一轮在跑、unsure 屏幕上看停了正在确认、needs_you 在等用户、typing/draft 用户在打字或有草稿、screen 有确认框……），note 说大概什么时候送到。排了 2 分钟（只是它这一轮在跑的话 10 分钟）还没送到会给你发一条「【回执】」，不用重发。" +
       "终端关着（比如闲置时被自动关掉了）也能发：Shipherd 接着它最近的对话打开（epic 从没开过总控就新开一个），再把消息交进去。" +
       "用户自己点 × 结束的总控不替用户打开，消息排着，返回 wake: ended_by_user；内存不够时返回 wake: waiting_memory，消息排着，内存够了 Shipherd 在后台恢复它再送。" +
       "interrupt: true 先按 Esc 叫停它手上的事再送（只在真要它马上停下时用）。不能发给 ticket 的 session 和修复 session，要它们做什么就告诉管它们的总控。" +
@@ -1049,7 +1049,7 @@ export const SHIPHERD_TOOLS_EN = [
       "A closed terminal (for example one closed for being idle) is fine: Shipherd reopens its latest conversation (or opens a new coordinator if the epic never had one) and hands it the message. " +
       "A coordinator the user ended with × is not reopened for them: the message stays queued and the result says wake: ended_by_user. When memory is short the result says wake: waiting_memory; the message stays queued and Shipherd resumes it in the background once there is room. " +
       "Every message goes into its mailbox and is never refused for being busy: a working target usually reads it at its next tool call, a stopped one gets it typed in, and Shipherd waits while the user is typing. " +
-      "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes you get a \"[Receipt]\", so do not resend. " +
+      "delivery in the result says honestly whether it got in: delivered means it is in; queued means it is still waiting, blockedBy says why (turn: its turn is running; unsure: it looks stopped on screen and Shipherd is confirming; needs_you: waiting for the user; typing/draft: the user is typing or has a draft; screen: a prompt on screen…) and note says roughly when it will get in. If it is still waiting after 2 minutes (10 if its turn is simply still running) you get a \"[Receipt]\", so do not resend. " +
       "interrupt: true presses Esc to stop what it is doing first (only when it really has to stop now). Ticket sessions and fix sessions cannot be messaged; tell the coordinator that manages them instead. " +
       "The message is prefixed with \"Message from Shipherd control\". It returns a requestId; the last reply the target writes in the turn after reading it comes back to you automatically, starting with \"[Reply]\" and carrying the same requestId, so you do not need to poll session_activity.",
     inputSchema: {

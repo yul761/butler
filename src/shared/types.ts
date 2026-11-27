@@ -708,7 +708,9 @@ export type MessageScope = { shipherd: true } | { featureId: number };
  * closed / hibernated 终端关着、休眠着；cost_paused 成本熔断暂停了。
  */
 export type MailboxBlockReason =
-  | "turn" | "unsure" | "refreshing" | "auto_input" | "screen" | "needs_you" | "typing" | "draft" | "closed" | "hibernated" | "cost_paused";
+  | "turn" | "unsure" | "refreshing" | "auto_input" | "screen" | "needs_you" | "typing" | "draft" | "closed" | "hibernated" | "cost_paused"
+  /** guard 放行了，往里贴的时候没成（等输入框超时）。 */
+  | "deliver_failed";
 
 /** messages:deliverNow 的结果（BTL-269）：送进去了；没送进去时的原因（delivering 正在送、gone 消息已经不在排队了）。 */
 export interface DeliverNowResult {

@@ -58,3 +58,26 @@ export class IdleEvidence {
     return 0;
   }
 }
+
+/**
+ * 靠屏幕证据校正成「停着」的 session（BTL-269 B）：transcript 没写这一轮结束，活动还是「在想」，
+ * 「需要你」只看活动是 waiting 的，就判断不到它最后那条回复（卡住的那一轮可能是用文字问了用户问题）。
+ * 校正过、还停着的，给「需要你」的活动按 waiting 算；它再动起来（waitingForInput 变回 false）就忘掉。
+ */
+export class HealedTurns {
+  private readonly ids = new Set<string>();
+
+  add(headId: string): void {
+    this.ids.add(headId);
+  }
+
+  /** 给「需要你」看的活动种类。 */
+  kindFor<K extends string>(headId: string, waiting: boolean, kind: K | null): K | "waiting" | null {
+    if (!this.ids.has(headId)) return kind;
+    if (!waiting || (kind !== null && kind !== "thinking")) {
+      this.ids.delete(headId);
+      return kind;
+    }
+    return "waiting";
+  }
+}

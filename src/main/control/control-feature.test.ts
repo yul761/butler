@@ -57,12 +57,14 @@ async function setup(opts: {
   const logs: string[] = [];
   const refreshed: string[] = [];
   const mailed: SendInput[] = [];
+  const trace: string[] = [];
   const pendingMail = new Map<string, { queued: number; oldestQueuedAt: string; blockedBy: "turn" | null; blockedSince: string | null; note: string }>();
   const mailbox = {
     send: (x: SendInput) => (mailed.push(x), { id: `m${mailed.length}`, state: opts.mailState ?? ("busy" as const) }),
     opened: async () => true,
     views: () => [],
     outcome: async () => {
+      trace.push("outcome");
       const st = opts.mailState ?? "busy";
       return st === "idle"
         ? { delivery: "delivered" as const, blockedBy: null, blockedSince: null, note: "送进去了。" }
@@ -98,7 +100,7 @@ async function setup(opts: {
   await ticketService.create({ key: "DMS-2", featureId: feature.id, repoPaths: [frontend, backend], workMode: "worktree" });
   await ticketService.create({ key: "OTH-1", featureId: other.id, repoPaths: [frontend], workMode: "worktree" });
   const base = { v: 1 as const, featureId: feature.id, from: null };
-  return { handle, blocks, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed, pendingMail };
+  return { handle, blocks, sessionService, sessions, tickets, spawned, submitted, feature, other, base, frontend, backend, activities, notified: () => notified, killed, needsUser, replies, logs, refreshed, mailed, pendingMail, trace };
 }
 
 describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
@@ -352,6 +354,18 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     sessions.insertIfAbsent({ id: "kid-new", ticketKey: "DMS-1", cwd: "/w", origin: "shipherd", createdAt: 2 });
     sessions.setReplacedBy(kid, "kid-new");
     expect(await handle({ ...from, op: "send_message", session: kid, text: "y" })).toMatchObject({ ok: true, value: { sessionId: "kid-new" } });
+  });
+
+  it("send_message lets the control inbox move on before it waits for the delivery attempt (BTL-269)", async () => {
+    const { handle, base, sessionService, feature, trace } = await setup();
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    const child = await handle({ ...base, op: "start_session", ticket: "DMS-1", task: "a" });
+    if (!child.ok) throw new Error(child.error);
+    const kid = (child.value as { sessionId: string }).sessionId;
+    const r = await handle({ ...base, from: c.termId, op: "send_message", session: kid, text: "x" }, { release: () => trace.push("release") });
+    expect(r.ok).toBe(true);
+    expect(trace).toEqual(["release", "outcome"]);
   });
 
   it("send_message to a closed session says whether Shipherd is resuming it, waiting for memory, or the user ended it (BTL-256)", async () => {
