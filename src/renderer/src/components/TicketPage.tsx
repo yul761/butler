@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Turn } from "../../../shared/turn";
 import { MANUAL_TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
-import { pickableInPreview } from "../close-ticket-outcome";
+import { pickableInPreview, restPreviews } from "../close-ticket-outcome";
 import { reportError } from "../errors";
 import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
@@ -85,7 +85,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const statusValue = ticket.statusManual ?? "auto";
   const closed = ticket.statusManual === "closed";
   // 关着的 ticket 还有开着的、能关的（或核对失败、可以再试的）自己的 PR：给一个「关掉剩下的 PR」入口（BTL-270 审查），打开同一个勾选框。
-  // 对话框关上以后再看一次（restSeq）。
+  // 预览要跑 gh：同一个 ticket 短时间里再打开页面用记下的数（restPreviews）；对话框关上以后丢掉重新看（restSeq）。
   const [restLeft, setRestLeft] = useState(0);
   const [restSeq, setRestSeq] = useState(0);
   const [closingRest, setClosingRest] = useState(false);
@@ -94,9 +94,19 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       setRestLeft(0);
       return;
     }
+    const hit = restPreviews.get(ticket.key);
+    if (hit !== undefined) {
+      setRestLeft(hit);
+      return;
+    }
     let live = true;
-    api.closePreview(ticket.key).then(
-      (p) => live && setRestLeft(pickableInPreview(p)),
+    const key = ticket.key;
+    api.closePreview(key).then(
+      (p) => {
+        const n = pickableInPreview(p);
+        restPreviews.set(key, n);
+        if (live) setRestLeft(n);
+      },
       () => live && setRestLeft(0),
     );
     return () => {
@@ -138,8 +148,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       )}
       {notice && <div className="muted ticket-notice">{notice}</div>}
       {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
-      {closing && <CloseTicketDialog ticket={ticket} onClose={() => { setClosing(false); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
-      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={() => { setClosingRest(false); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
+      {closing && <CloseTicketDialog ticket={ticket} onClose={() => { setClosing(false); restPreviews.drop(ticket.key); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
+      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={() => { setClosingRest(false); restPreviews.drop(ticket.key); setRestSeq((n) => n + 1); }} onNotice={setNotice} />}
 
       <PageTabs
         page={`ticket:${ticket.key}`}

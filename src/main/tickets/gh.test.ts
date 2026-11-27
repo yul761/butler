@@ -820,11 +820,11 @@ printf '%s' "$q" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",(
 // BTL-270 审查：关 PR 之前核对 head 在不在 fork 上。
 describe("parsePrHead", () => {
   it("reads the head owner, head and target branch, whether it is cross-repo and open; anything malformed is null", () => {
-    const pr = { isCrossRepository: true, headRepositoryOwner: { id: "x", login: "fork" }, headRefName: "main", baseRefName: "main", state: "OPEN" };
-    expect(parsePrHead(JSON.stringify(pr))).toEqual({ crossRepo: true, headOwner: "fork", headBranch: "main", baseBranch: "main", open: true });
-    expect(parsePrHead(JSON.stringify({ ...pr, isCrossRepository: false, headRefName: "t-1", state: "CLOSED" }))).toEqual({ crossRepo: false, headOwner: "fork", headBranch: "t-1", baseBranch: "main", open: false });
-    // head 仓库删了：owner 是 null（不是这个 ticket 的）。
-    expect(parsePrHead(JSON.stringify({ ...pr, headRepositoryOwner: null }))).toMatchObject({ headOwner: null });
+    const pr = { isCrossRepository: true, headRepositoryOwner: { id: "x", login: "fork" }, headRepository: { id: "y", name: "app" }, headRefName: "main", baseRefName: "main", state: "OPEN" };
+    expect(parsePrHead(JSON.stringify(pr))).toEqual({ crossRepo: true, headOwner: "fork", headRepo: "app", headBranch: "main", baseBranch: "main", open: true });
+    expect(parsePrHead(JSON.stringify({ ...pr, isCrossRepository: false, headRefName: "t-1", state: "CLOSED" }))).toEqual({ crossRepo: false, headOwner: "fork", headRepo: "app", headBranch: "t-1", baseBranch: "main", open: false });
+    // head 仓库删了：owner、仓库名是 null（不是这个 ticket 的）。
+    expect(parsePrHead(JSON.stringify({ ...pr, headRepositoryOwner: null, headRepository: null }))).toMatchObject({ headOwner: null, headRepo: null });
     expect(parsePrHead(JSON.stringify({ ...pr, isCrossRepository: "yes" }))).toBeNull();
     expect(parsePrHead(JSON.stringify({ ...pr, headRefName: 3 }))).toBeNull();
     expect(parsePrHead("not json")).toBeNull();
@@ -832,8 +832,9 @@ describe("parsePrHead", () => {
   });
 
   it("an old gh that leaves out headRepositoryOwner or baseRefName is too_old, not just malformed (BTL-270 review)", () => {
-    const pr = { isCrossRepository: false, headRepositoryOwner: { login: "o" }, headRefName: "t-1", baseRefName: "main", state: "OPEN" };
+    const pr = { isCrossRepository: false, headRepositoryOwner: { login: "o" }, headRepository: { name: "app" }, headRefName: "t-1", baseRefName: "main", state: "OPEN" };
     expect(parsePrHead(JSON.stringify({ ...pr, headRepositoryOwner: undefined }))).toBe("too_old");
+    expect(parsePrHead(JSON.stringify({ ...pr, headRepository: undefined }))).toBe("too_old");
     expect(parsePrHead(JSON.stringify({ ...pr, baseRefName: undefined }))).toBe("too_old");
   });
 });
@@ -846,7 +847,8 @@ describe.skipIf(process.platform === "win32")("prHead", () => {
     expect(await prHead(missing, "1", 5000)).toMatchObject({ ghTooOld: true });
     const other = fakeGh(`echo 'HTTP 502' >&2\nexit 1`);
     expect(await prHead(other, "1", 5000)).toEqual({ error: "HTTP 502" });
-    const ok = fakeGh(`echo '{"isCrossRepository":true,"headRepositoryOwner":{"login":"me"},"headRefName":"t-1","baseRefName":"main","state":"OPEN"}'`);
-    expect(await prHead(ok, "1", 5000)).toEqual({ crossRepo: true, headOwner: "me", headBranch: "t-1", baseBranch: "main", open: true });
+    const ok = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"\necho '{"isCrossRepository":true,"headRepositoryOwner":{"login":"me"},"headRepository":{"name":"app"},"headRefName":"t-1","baseRefName":"main","state":"OPEN"}'`);
+    expect(await prHead(ok, "1", 5000)).toEqual({ crossRepo: true, headOwner: "me", headRepo: "app", headBranch: "t-1", baseBranch: "main", open: true });
+    expect(readFileSync(join(ok, "args.txt"), "utf8").trim()).toBe("pr view 1 --json isCrossRepository,headRepositoryOwner,headRepository,headRefName,baseRefName,state");
   });
 });

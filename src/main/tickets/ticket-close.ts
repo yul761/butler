@@ -87,10 +87,11 @@ export function classifyOpenPrs<R extends OpenPrRow>(rows: readonly R[], c: {
       r.headBranch === null || r.headBranch === (r.baseBranch ?? null) || (c.publicBranch?.(r.repoId, r.headBranch) ?? false) || !c.ownBranch(r.repoId, r.headBranch)
     ) no("not_own_branch");
     else {
-      const branchToo = c.sharedBranch?.(r.repoId, r.headBranch) ?? null;
-      const other = branchToo === null ? c.sharedWith(r) : null;
-      if (branchToo) no("shared_branch", branchToo);
-      else if (other) no("shared", other);
+      // 两个都成立时报 shared（更确定：这个 PR 本身就挂在那个 ticket 上），不再去看分支名。
+      const other = c.sharedWith(r);
+      const branchToo = other === null ? c.sharedBranch?.(r.repoId, r.headBranch) ?? null : null;
+      if (other) no("shared", other);
+      else if (branchToo) no("shared_branch", branchToo);
       else closable.push({ url: r.url, number: r.number, slug: r.slug, cwd: c.ghDir(r) });
     }
   }
@@ -191,7 +192,11 @@ export type CloseResult =
       /** ticket 本来就关着：这次只关了剩下的 PR、结束了剩下的 session，关闭的时间、原因、来源不变。 */
       alreadyClosed?: true;
     }
-  | { ok: false; error: "no_ticket" | "empty_reason" | "already_closed" }
+  | { ok: false; error: "no_ticket" | "empty_reason" }
+  /**
+   * 已经关着，这次也没什么可做。checkedPrs：读过 PR、确实没有剩下能关的；false 是这次没要求关 PR（没读），剩下的 PR 不知道。
+   */
+  | { ok: false; error: "already_closed"; checkedPrs: boolean }
   /**
    * 不是用户、要关 PR 却没点名（prUrls）：什么都没做。closable 是能关的（点名用），prErrors 是关不了的（核对失败的 unverified 也能点名）。
    * alreadyClosed：ticket 本来就关着，这次是关剩下的 PR。
@@ -214,7 +219,8 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   if (!t) return { ok: false, error: "no_ticket" };
   if (!reason) return { ok: false, error: "empty_reason" };
   // 已经关着：不再关一次，第一次关的时间、原因、来源留着；要关 PR、结束 session 的，去关剩下的（BTL-270 审查）。
-  if (t.statusManual === "closed") return closeRemaining(d, key, oneLine(t.closure?.reason ?? "") || reason, o);
+  // PR 评论：用户在关闭框里填了原因（打开框以后总控先关了），评论用用户填的；总控、路由再来一次用第一次关时的原因。
+  if (t.statusManual === "closed") return closeRemaining(d, key, o.source === "user" ? reason : oneLine(t.closure?.reason ?? "") || reason, o);
   // 总控、路由要关 PR 必须点名：PR 的评论是公开发到 GitHub 的，不让它一句「全关」就关掉没看过的 PR。
   // ticket 也先不关：点名了再来一次时一起关。没有能点名的（全是关不了的）就不用再来一趟：直接关，就用这次读到的清单，不再去读一次 gh。
   let known: OpenPrs | undefined;
@@ -241,19 +247,26 @@ const pickPrs = (key: string, open: OpenPrs, alreadyClosed: boolean): CloseResul
 
 /**
  * 已经关着的 ticket 再要关 PR、结束 session（BTL-270 审查）：只对剩下的、开着的本 ticket PR 走 closeLeftovers，核对和第一次关一样；
- * 总控、路由没点名（prUrls）就回 pick_prs。没有能关的 PR（能关的和核对失败、可以再试的都没有）、也不结束 session 时回 already_closed。
- * 评论里写第一次关时记下的原因。
+ * 总控、路由没点名（prUrls）就回 pick_prs。没点名、也没有能关的 PR（能关的和核对失败、可以再试的都没有）、也不结束 session 时回 already_closed；
+ * 点名了的照样回 ok，关不了的（not_own_branch、shared_branch 这些）和第一次关时一样写在 prErrors 里。
+ * 读 PR 要等 gh：等完重新看一眼，被重新打开了就什么都不做，按 reopenedMeanwhile 回。
  */
 async function closeRemaining(d: TicketCloseDeps, key: string, reason: string, o: CloseOptions): Promise<CloseResult> {
-  if (!o.closePrs && !o.endSessions) return { ok: false, error: "already_closed" };
+  if (!o.closePrs && !o.endSessions) return { ok: false, error: "already_closed", checkedPrs: false };
   const onlyPrs = o.prUrls && new Set(o.prUrls.map(prUrlKey));
   const unnamed = o.source !== "user" && o.prUrls === undefined;
   let known: OpenPrs | undefined;
   if (o.closePrs) {
     known = await d.openPrs(key, onlyPrs);
+    const now = d.tickets.get(key);
+    if (!now) return { ok: false, error: "no_ticket" };
+    if (now.statusManual !== "closed") {
+      d.log(`ticket ${key}: reopened while reading its PRs; closed nothing`);
+      return { ok: true, ticket: key, ignoredFollowups: 0, closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: true, alreadyClosed: true };
+    }
     const left = nameable(known);
     if (unnamed && left > 0) return pickPrs(key, known, true);
-    if (left === 0 && !o.endSessions) return { ok: false, error: "already_closed" };
+    if (o.prUrls === undefined && left === 0 && !o.endSessions) return { ok: false, error: "already_closed", checkedPrs: true };
   }
   const r = await closeLeftovers(d, key, reason, { ...o, ...(onlyPrs && { onlyPrs }), ...(known && { known, noClose: unnamed }) });
   return { ok: true, ticket: key, ignoredFollowups: 0, ...r, alreadyClosed: true };

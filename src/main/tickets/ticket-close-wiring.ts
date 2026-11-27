@@ -30,8 +30,8 @@ export interface CloseWiringDeps {
     byBranch(branch: string): { ticketKey: string; repoId: number }[];
   };
   ghDir(pr: { repoId: number | null }): string;
-  /** 仓库路径的 slug（origin，改名后的）；读不到是 null。比较是不是同一个仓库、fork 的 owner 用。 */
-  slugOf(repoPath: string): string | null;
+  /** 仓库路径的 slug（origin，改名后的）；读不到是 null。比较是不是同一个仓库、fork 的 owner 和仓库名用。异步：不在主线程上同步跑 git。 */
+  slugOf(repoPath: string): Promise<string | null>;
   /** 仓库的默认分支（origin/HEAD）。 */
   defaultBranch(repoPath: string): Promise<string>;
   /** gh pr view 实时核对 head；读不到是 { error }（gh 太老时带 ghTooOld）。 */
@@ -82,11 +82,24 @@ export function closeWiring(d: CloseWiringDeps): Pick<TicketCloseDeps, "openPrs"
         })),
       );
       // 是不是同一个仓库：按 slug 比（同一个仓库的两个 clone、worktree 路径不同），哪边的 slug 读不到再按路径比。
-      const slugs = new Map<string, string | null>();
-      const slugAt = (path: string) => {
-        if (!slugs.has(path)) slugs.set(path, d.slugOf(path));
-        return slugs.get(path) ?? null;
-      };
+      // slug 先异步读好（warm），判断时只查读好的：没读的当作读不到。
+      const slugs = new Map<string, Promise<string | null>>();
+      const known = new Map<string, string | null>();
+      const warmPaths = (paths: Iterable<string | null>) =>
+        Promise.all([...paths].filter((p): p is string => p !== null).map((p) => {
+          let pending = slugs.get(p);
+          if (!pending) {
+            pending = d.slugOf(p).catch(() => null).then((v) => (known.set(p, v), v));
+            slugs.set(p, pending);
+          }
+          return pending;
+        }));
+      // 判断一个分支名要用到的仓库：这个 PR 的仓库，和别的 ticket 用这个分支名的仓库。
+      const warmBranch = (repoId: number, branch: string) => warmPaths([
+        pathOf(repoId), ...d.tickets.reposOnBranch(branch).map((r) => r.repoPath), ...d.branchOwners.byBranch(branch).map((o) => pathOf(o.repoId)),
+      ]);
+      const slugAt = (path: string) => known.get(path) ?? null;
+      await Promise.all(rows.filter((r) => r.state === "open" && r.repoId !== null && r.headBranch !== null).map((r) => warmBranch(r.repoId!, r.headBranch!)));
       const sameRepo = (a: string, b: string | null): boolean => {
         if (b === null) return false;
         const sa = slugAt(a);
@@ -114,14 +127,17 @@ export function closeWiring(d: CloseWiringDeps): Pick<TicketCloseDeps, "openPrs"
         ghDir: (p) => d.ghDir(p),
       });
       const byUrl = new Map(rows.map((r) => [r.url, r]));
-      return verifyHeads(d, first, (pr, h) => {
+      return verifyHeads(d, first, async (pr, h) => {
         const repoId = byUrl.get(pr.url)?.repoId ?? null;
         if (repoId === null) return { kind: "not_own_branch" };
+        await warmBranch(repoId, h.headBranch);
         // head 仓库的 owner 要和 ticket 仓库（origin）的 owner 一样（BTL-270 审查）：fork 流程里 origin 是 me/app、PR 开到 org/app，
-        // head 在 me 下也算本 ticket 的（crossRepo 也行）；别人 fork 上的、head 仓库删了的不是。owner 不知道（slug 都读不到）就不关。
+        // head 在 me 下也算本 ticket 的；别人 fork 上的、head 仓库删了的不是。owner 不知道（slug 都读不到）就不关。
+        // head 在 fork 上（crossRepo）时仓库名也要和 origin 一样：同一个 owner 下另一个 fork 的同名分支不是这个 ticket 的；名字读不到就不关。
         const repoPath = pathOf(repoId);
         const ticketSlug = (repoPath === null ? null : slugAt(repoPath)) ?? pr.slug;
         if (ticketSlug === null || h.headOwner === null || h.headOwner.toLowerCase() !== slugOwner(ticketSlug)) return { kind: "not_own_branch" };
+        if (h.crossRepo && (h.headRepo === null || h.headRepo.toLowerCase() !== slugName(ticketSlug))) return { kind: "not_own_branch" };
         // 用这次读到的实时分支名、实时目标分支再判断一次，不用行里记的。
         if (h.headBranch === h.baseBranch || isPublic(repoId, h.headBranch) || !own(repoId, h.headBranch)) return { kind: "not_own_branch" };
         const other = usedByOthers(repoId, h.headBranch);
@@ -162,13 +178,15 @@ export function closeWiring(d: CloseWiringDeps): Pick<TicketCloseDeps, "openPrs"
 
 /** slug（owner/name，企业版前面带主机）的 owner，小写。 */
 const slugOwner = (slug: string): string => (slug.split("/").at(-2) ?? "").toLowerCase();
+/** slug 的仓库名，小写。 */
+const slugName = (slug: string): string => (slug.split("/").at(-1) ?? "").toLowerCase();
 
 /**
  * 能关的再用 gh 实时核对一次 head（BTL-270 审查），并发跑：whyNot 给了原因的（别人 fork 上的、分支名或目标分支对不上、别的 ticket 也用这个分支名）不关；
  * 已经不开着的不列。核对失败（gh 失败、超时、gh 太老）是可以重试的 unverified：不去关一个没核对过的 PR，但重试时会再核对。
  */
 async function verifyHeads(
-  d: CloseWiringDeps, open: OpenPrs, whyNot: (pr: OpenPrs["closable"][number], h: PrHead) => { kind: UnclosableKind; ticket?: string } | null,
+  d: CloseWiringDeps, open: OpenPrs, whyNot: (pr: OpenPrs["closable"][number], h: PrHead) => Promise<{ kind: UnclosableKind; ticket?: string } | null>,
 ): Promise<OpenPrs> {
   const heads = await Promise.all(
     open.closable.map((pr) =>
@@ -177,6 +195,11 @@ async function verifyHeads(
   );
   const closable: OpenPrs["closable"] = [];
   const unclosable: UnclosablePr[] = [...open.unclosable];
+  // 判断要等 slug（异步读）：一起等，结果按原来的顺序放。
+  const why = await Promise.all(open.closable.map((pr, i) => {
+    const h = heads[i];
+    return "error" in h || !h.open ? null : whyNot(pr, h);
+  }));
   open.closable.forEach((pr, i) => {
     const h = heads[i];
     if ("error" in h) {
@@ -184,7 +207,7 @@ async function verifyHeads(
       const error = h.ghTooOld ? M().ticketCloseGhTooOld(h.error) : M().ticketCloseVerifyFailed(h.error);
       unclosable.push({ url: pr.url, number: pr.number, kind: "unverified", error });
     } else if (h.open) {
-      const no = whyNot(pr, h);
+      const no = why[i];
       if (no) unclosable.push({ url: pr.url, number: pr.number, ...no });
       else closable.push(pr);
     }

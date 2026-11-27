@@ -761,6 +761,7 @@ const ZH = {
     retry: "重试剩下的",
     leaveIt: "就这样",
     reopenedMeanwhile: "关的时候又被重新打开了，剩下的 PR 没关、session 没结束",
+    closedMeanwhile: "这个 ticket 刚被关了（关闭原因还是第一次的），只关了你勾的 PR",
   },
   noSessions: "还没有 session。点“新 session”开始。",
   resume: "续接",

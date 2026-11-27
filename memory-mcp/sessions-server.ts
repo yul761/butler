@@ -853,11 +853,11 @@ export const CLOSE_TICKET_TOOL = {
     "关掉一个 ticket：不做了（需求变了、换了做法），和做完了（done）分开算。没处理完的后续事项一起标成忽略，记下原因。" +
     "要顺便关掉它开着的 PR，得用 pr_urls 点名（原因会作为评论公开发到 GitHub）：只带 close_prs 不点名时，有能点名的就什么都不做、ticket 也不关，" +
     "回一份 closablePrs（能关的）和 prErrors（关不了的；kind 是 unverified 的是关之前核对失败，也可以点名再试），看过再带上 pr_urls 调一次；一个能点名的都没有就直接关 ticket，关不了的列在 prErrors。" +
-    "只关这个 ticket 自己分支上的；不是它分支上的（含 main 这类公共分支、head 不在 ticket 仓库 owner 下的 fork）、同一仓库别的 ticket 也用过的分支名（kind 是 shared_branch）、" +
+    "只关这个 ticket 自己分支上的；不是它分支上的（含 main 这类公共分支、head 不在 ticket 仓库 owner 下的、在同一个 owner 下另一个仓库名的 fork）、同一仓库别的 ticket 也用过的分支名（kind 是 shared_branch）、" +
     "也挂在别的 ticket 上的（关了的也算）、读不到的不关。点名了的才报：没关成的和关不了的列在 prErrors 里（closedPrs 是关掉了的），note 里按原因说该怎么办；点名了却不是它开着的 PR 列在 notOpenPrs。end_sessions 为 true 时顺便结束它的 session（不会结束你自己），" +
     "和 end_session 一样过结束前的检查：正在干活、屏幕上有等用户回答的确认的不结束，列在 sessionErrors 里。PR 没关掉、session 没结束时 ticket 照样关掉。" +
-    "已经关着的 ticket 不会再关一次（第一次的时间和原因留着）：带 close_prs 再调是去关剩下开着的 PR（同样要用 pr_urls 点名、同样先核对），带 end_sessions 是结束剩下的 session；" +
-    "都没有剩下的就回 already_closed。之后可以用 reopen_ticket 撤销。",
+    "已经关着的 ticket 不会再关一次（第一次的时间和原因留着）：带 close_prs 再调是去关剩下开着的 PR（同样要用 pr_urls 点名、同样先核对；点名了却关不了的照样列在 prErrors 里），带 end_sessions 是结束剩下的 session；" +
+    "没点名、也没有剩下能关的就回 already_closed；读的时候被重新打开了就什么都不做，回 reopenedMeanwhile。之后可以用 reopen_ticket 撤销。",
   inputSchema: {
     type: "object",
     properties: {
@@ -881,11 +881,11 @@ export const CLOSE_TICKET_TOOL_EN = {
     "To also close its open PRs, name them in pr_urls (the reason is posted as a public comment on GitHub). close_prs without pr_urls, when there is anything to name, does nothing, not even closing the ticket: " +
     "it returns closablePrs (the ones that can be closed) and prErrors (the ones that can't; kind unverified means the check before closing failed, and those can be named to try again), so you can check them and call again with pr_urls; " +
     "when there is nothing to name it closes the ticket at once and lists the PRs it can't close in prErrors. Only PRs on this ticket's own branches are closed; " +
-    "PRs on other branches (including a shared branch like main, or a fork whose head is not under the owner of the ticket's repo), PRs on a branch name another ticket in the same repo also used (kind shared_branch), PRs also linked to another ticket (closed ones included), and PRs Shipherd can't read are not closed. " +
+    "PRs on other branches (including a shared branch like main, or a fork whose head is not under the owner of the ticket's repo, or sits in a repo of another name under that owner), PRs on a branch name another ticket in the same repo also used (kind shared_branch), PRs also linked to another ticket (closed ones included), and PRs Shipherd can't read are not closed. " +
     "Only the named PRs are reported: the ones that failed or can't be closed are listed in prErrors (closedPrs lists what was closed), and note says what to do for each reason. URLs in pr_urls that are not open PRs of this ticket are listed in notOpenPrs. end_sessions: true also ends its sessions (never yours), " +
     "through the same checks as end_session: a session that is working or showing a prompt that waits for the user is not ended and is listed in sessionErrors. The ticket is closed even if some PRs or sessions are left. " +
-    "A ticket that is already closed is not closed again (the first time and reason are kept): calling with close_prs closes the PRs still left open (named in pr_urls and checked first, the same way), and end_sessions ends the sessions still left; " +
-    "when nothing is left it returns already_closed. reopen_ticket undoes it.",
+    "A ticket that is already closed is not closed again (the first time and reason are kept): calling with close_prs closes the PRs still left open (named in pr_urls and checked first, the same way; named ones that can't be closed are listed in prErrors), and end_sessions ends the sessions still left; " +
+    "with nothing named and nothing left it returns already_closed; if it is reopened while the PRs are read, nothing is done and reopenedMeanwhile comes back. reopen_ticket undoes it.",
   inputSchema: {
     ...CLOSE_TICKET_TOOL.inputSchema,
     properties: {

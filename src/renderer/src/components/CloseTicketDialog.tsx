@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { REASON_LIMIT } from "../../../shared/control";
 import type { Ticket } from "../../../shared/types";
 import { api } from "../api";
-import { closeOutcome, closePrsRequest, retryableInPreview, retryRequest, type CloseLeftoversResult, type ClosePreview, type ClosePrError } from "../close-ticket-outcome";
+import { closedMeanwhile, closeOutcome, closePrsRequest, retryableInPreview, retryRequest, type CloseLeftoversResult, type ClosePreview, type ClosePrError } from "../close-ticket-outcome";
 import { S } from "../strings";
 
 type Leftovers = { prErrors: ClosePrError[]; sessionErrors: { id: string; error: string }[] };
@@ -62,6 +62,8 @@ export function CloseTicketDialog({ ticket, onClose, onNotice, rest = false }: {
 
   function settle(r: CloseLeftoversResult) {
     const o = closeOutcome(r);
+    // 打开关闭框以后别人（总控）先关了这个 ticket：这次只关了勾的 PR（评论用这里填的原因），关闭的原因、来源还是第一次的。
+    if (closedMeanwhile(r, rest)) onNotice?.(S.tc.closedMeanwhile);
     if (!o.done) {
       setLeft({ prErrors: o.prErrors, sessionErrors: o.sessionErrors });
       return;

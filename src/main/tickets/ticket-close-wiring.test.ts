@@ -12,7 +12,7 @@ import { closeWiring, type CloseWiringDeps } from "./ticket-close-wiring";
 const url = (n: number) => `https://github.com/o/app/pull/${n}`;
 
 type Head = PrHead | PrHeadError;
-const head = (over: Partial<PrHead> = {}): PrHead => ({ crossRepo: false, headOwner: "o", headBranch: "t-1", baseBranch: "main", open: true, ...over });
+const head = (over: Partial<PrHead> = {}): PrHead => ({ crossRepo: false, headOwner: "o", headRepo: "app", headBranch: "t-1", baseBranch: "main", open: true, ...over });
 
 function setup(o: { defaultBranch?: string | ((repoPath: string) => Promise<string>); slugs?: Record<string, string | null>; ticketBranch?: string; heads?: Record<number, Head | (() => Promise<Head>)>; ran?: boolean; kind?: string | null; waiting?: boolean; screen?: boolean } = {}) {
   const db = memDb();
@@ -35,7 +35,7 @@ function setup(o: { defaultBranch?: string | ((repoPath: string) => Promise<stri
     tickets, ticketPrs, branchOwners,
     ghDir: () => "/r/app",
     // 默认 /r/app 的 origin 是 o/app，别的路径读不到 slug（按路径比）。
-    slugOf: vi.fn((p: string) => (o.slugs && p in o.slugs ? o.slugs[p] : p === "/r/app" ? "o/app" : null)),
+    slugOf: vi.fn(async (p: string) => (o.slugs && p in o.slugs ? o.slugs[p] : p === "/r/app" ? "o/app" : null)),
     defaultBranch: vi.fn(typeof o.defaultBranch === "function" ? o.defaultBranch : async () => (o.defaultBranch as string | undefined) ?? "main"),
     prHead: vi.fn(async (_cwd: string, u: string) => {
       const n = Number(u.split("/").pop());
@@ -276,6 +276,45 @@ describe("closeWiring.openPrs", () => {
     const r = await s.w.openPrs("T-1");
     expect(r.closable.map((p) => p.number)).toEqual([1]);
     expect(r.unclosable).toEqual([{ url: "https://github.com/o/web/pull/2", number: 2, kind: "shared_branch", ticket: "T-7" }]);
+  });
+
+  it("judges shared_branch on the live head: the row says one own branch, GitHub says another own branch that another ticket used (BTL-270 review)", async () => {
+    const s = setup({ heads: { 1: head({ headBranch: "feat/wt" }) } });
+    // T-1 自己的分支有两个：仓库分支 t-1，和推过的 feat/wt；T-2 在同一个仓库里也推过 feat/wt。
+    s.branchOwners.record({ ticketKey: "T-1", repoId: s.repoId, branch: "feat/wt", sessionId: "s", dir: "/wt", at: 1 });
+    s.branchOwners.record({ ticketKey: "T-2", repoId: s.tickets.listRepos("T-2")[0].id, branch: "feat/wt", sessionId: "s2", dir: "/wt2", at: 1 });
+    s.link(1, "t-1");
+    vi.mocked(s.d.prHead).mockImplementation(async () => head({ headBranch: "feat/wt" }));
+    const r = await s.w.openPrs("T-1");
+    expect(r.closable).toEqual([]);
+    expect(r.unclosable).toEqual([{ url: url(1), number: 1, kind: "shared_branch", ticket: "T-2" }]);
+  });
+
+  it("a cross-repo head must sit in the repo named like the origin, not just under its owner; a head repo name it can't read is not closed (BTL-270 review)", async () => {
+    const s = setup({ slugs: { "/r/app": "me/app" } });
+    for (const n of [1, 2, 3, 4]) s.link(n, "t-1");
+    vi.mocked(s.d.prHead).mockImplementation(async (_cwd, u) => ({
+      1: head({ crossRepo: true, headOwner: "me", headRepo: "App" }),
+      2: head({ crossRepo: true, headOwner: "me", headRepo: "app-other-fork" }),
+      3: head({ crossRepo: true, headOwner: "me", headRepo: null }),
+      4: head({ crossRepo: false, headOwner: "me", headRepo: "whatever" }),
+    })[Number(u.split("/").pop()) as 1 | 2 | 3 | 4]);
+    const r = await s.w.openPrs("T-1");
+    // 名字不分大小写；不是 fork 的（crossRepo false）head 就在 PR 的仓库里，只比 owner。
+    expect(r.closable.map((p) => p.number).sort()).toEqual([1, 4]);
+    expect(r.unclosable.map((u) => [u.number, u.kind]).sort()).toEqual([[2, "not_own_branch"], [3, "not_own_branch"]]);
+  });
+
+  it("reads slugs only through the async slugOf, once per path", async () => {
+    const s = setup({ ticketBranch: "develop" });
+    s.link(1, "develop");
+    s.link(2, "develop");
+    insertTicket(s.tickets, { key: "T-5", title: null, repoPath: "/clone/app", workMode: "branch", worktreePath: null, branch: "develop", status: "in_review", statusManual: null, createdAt: 1, archivedAt: null });
+    vi.mocked(s.d.prHead).mockImplementation(async () => head({ headBranch: "develop" }));
+    await s.w.openPrs("T-1");
+    const paths = vi.mocked(s.d.slugOf).mock.calls.map((c) => c[0]);
+    expect(new Set(paths)).toEqual(new Set(["/r/app", "/clone/app"]));
+    expect(paths).toHaveLength(2);
   });
 
   it("with onlyPrs it reads and checks only the named PRs (BTL-270 review)", async () => {

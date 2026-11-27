@@ -109,7 +109,11 @@ describe("TicketControl (BTL-270)", () => {
   it("close_ticket on a ticket that is already closed is refused and keeps the first close (BTL-270 review)", async () => {
     const { run, tickets } = setup();
     await run({ op: "close_ticket", ticket: "A-1", reason: "需求变了" });
-    expect(await run({ op: "close_ticket", ticket: "A-1", reason: "又关一次" })).toEqual({ v: 1, ok: false, error: M().ctlTicketAlreadyClosed("A-1") });
+    // 没要求关 PR（没读）：不说「没有剩下能关的 PR」，说怎么去关。
+    expect(await run({ op: "close_ticket", ticket: "A-1", reason: "又关一次" })).toEqual({ v: 1, ok: false, error: M().ctlTicketAlreadyClosedUnchecked("A-1") });
+    expect(await run({ op: "set_ticket_status", ticket: "A-1", status: "closed", reason: "再关" })).toEqual({ v: 1, ok: false, error: M().ctlTicketAlreadyClosedUnchecked("A-1") });
+    expect(M().ctlTicketAlreadyClosedUnchecked("A-1")).toContain("close_prs");
+    expect(M().ctlTicketAlreadyClosedUnchecked("A-1")).not.toContain("没有剩下能关的 PR");
     expect(tickets.get("A-1")?.closure).toEqual({ at: 5, reason: "需求变了", source: "coordinator" });
   });
 

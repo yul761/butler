@@ -443,6 +443,8 @@ const ZH = {
   ticketCloseGhTooOld: (err: string) => `gh 版本太老，读不到 PR 的 head 在哪（${err}），这次没关：升级 gh（brew upgrade gh 或到 cli.github.com 下载）以后重试`,
   ctlTicketAlreadyClosed: (key: string) =>
     `${key} 已经关了（关闭的时间和原因不变），也没有剩下能关的 PR。还开着的 session 可以带 end_sessions 再调 close_ticket 结束。`,
+  ctlTicketAlreadyClosedUnchecked: (key: string) =>
+    `${key} 已经关了（关闭的时间和原因不变）。要关它剩下的 PR，带上 close_prs 再调 close_ticket；要结束还开着的 session，带上 end_sessions。`,
   ctlFollowupsAllNeedsTicket: "all: true 要和 ticket 一起用：先不带 all 列出没处理完的，再对一个 ticket 带 all 看全部。",
   ctlCloseSessionErrors: (n: number) => `有 ${n} 个 session 没结束（正在干活或在等用户确认），见 sessionErrors。`,
   ctlCloseReopenedMeanwhile: "关的时候 ticket 被重新打开了：后面的 PR 没关、session 没结束。",
@@ -1194,6 +1196,8 @@ const EN: MainStrings = {
   ticketCloseGhTooOld: (err: string) => `gh is too old to tell where the PR's head is (${err}), so it was not closed: upgrade gh (brew upgrade gh, or download it from cli.github.com) and retry`,
   ctlTicketAlreadyClosed: (key: string) =>
     `${key} is already closed (its close time and reason stay as they are) and has no PRs left that can be closed. To end sessions that are still open, call close_ticket again with end_sessions.`,
+  ctlTicketAlreadyClosedUnchecked: (key: string) =>
+    `${key} is already closed (its close time and reason stay as they are). To close the PRs it still has open, call close_ticket again with close_prs; to end sessions that are still open, add end_sessions.`,
   ctlFollowupsAllNeedsTicket: "all: true needs a ticket: list the unfinished ones without all, then pass all with one ticket to see everything.",
   ctlCloseSessionErrors: (n: number) => `${n} session(s) were not ended (working, or waiting for the user to confirm); see sessionErrors.`,
   ctlCloseReopenedMeanwhile: "The ticket was reopened while closing: the remaining PRs were left open and no sessions were ended.",

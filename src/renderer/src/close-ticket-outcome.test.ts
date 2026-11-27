@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeOutcome, closePrsRequest, pickableInPreview, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
+import { closedMeanwhile, closeOutcome, closePrsRequest, pickableInPreview, REST_PREVIEW_TTL_MS, restPreviewCache, retryableInPreview, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
 
 const base: CloseLeftoversResult = { closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
 
@@ -78,5 +78,32 @@ describe("PRs whose head check failed (unverified)", () => {
     const o = closeOutcome({ closedPrs: [], prErrors: [unverified], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false });
     expect(o).toEqual({ done: false, prErrors: [unverified], sessionErrors: [] });
     expect(retryRequest({ prErrors: [unverified], sessionErrors: [] })).toEqual({ prUrls: [unverified.url], sessionIds: [] });
+  });
+});
+
+// BTL-270 审查（第二轮）：关着的 ticket 页不每次打开都预览（要跑 gh）；关闭框里 ticket 被别人先关了要提示。
+describe("the closed ticket page's remaining-PR count and the closed-meanwhile notice", () => {
+  it("keeps a ticket's count for a short while, then reads again; drop forgets it at once", () => {
+    let t = 0;
+    const c = restPreviewCache(() => t);
+    expect(c.get("T-1")).toBeUndefined();
+    c.set("T-1", 2);
+    t = REST_PREVIEW_TTL_MS - 1;
+    expect(c.get("T-1")).toBe(2);
+    expect(c.get("T-2")).toBeUndefined();
+    t = REST_PREVIEW_TTL_MS;
+    expect(c.get("T-1")).toBeUndefined();
+    c.set("T-1", 0);
+    expect(c.get("T-1")).toBe(0);
+    c.drop("T-1");
+    expect(c.get("T-1")).toBeUndefined();
+  });
+
+  it("says the ticket had just been closed only for the close dialog, and not when it was reopened meanwhile", () => {
+    const r = { closedPrs: ["u"], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
+    expect(closedMeanwhile({ ...r, alreadyClosed: true }, false)).toBe(true);
+    expect(closedMeanwhile({ ...r, alreadyClosed: true }, true)).toBe(false);
+    expect(closedMeanwhile(r, false)).toBe(false);
+    expect(closedMeanwhile({ ...r, alreadyClosed: true, reopenedMeanwhile: true }, false)).toBe(false);
   });
 });

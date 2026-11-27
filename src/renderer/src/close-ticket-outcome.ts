@@ -22,6 +22,8 @@ export interface CloseLeftoversResult {
   endedSessions: string[];
   sessionErrors: { id: string; error: string }[];
   reopenedMeanwhile: boolean;
+  /** ticket 本来就关着（打开关闭框以后别人先关了）：这次只关了勾的 PR、结束了勾的 session。 */
+  alreadyClosed?: true;
 }
 
 export type CloseOutcome =
@@ -46,6 +48,36 @@ export const retryableInPreview = (preview: ClosePreview | null): ClosePrError[]
 
 /** 预览里能勾的有几个（能关的，和核对失败、再试可能成的）：关着的 ticket 有这些才给「关掉剩下的 PR」入口（BTL-270 审查）。 */
 export const pickableInPreview = (preview: ClosePreview | null): number => (preview?.closable.length ?? 0) + retryableInPreview(preview).length;
+
+/**
+ * 打开关闭框以后别人（总控）先关了这个 ticket（BTL-270 审查）：提交时提示这次只关了勾的 PR。「关掉剩下的 PR」框本来就是关着的，不提示；
+ * 关的时候又被重新打开了的，提示的是重新打开。
+ */
+export const closedMeanwhile = (r: CloseLeftoversResult, rest: boolean): boolean => !rest && r.alreadyClosed === true && !r.reopenedMeanwhile;
+
+/** 关着的 ticket 页上「关掉剩下的 PR」看的数记多久：预览要跑 gh（每个能关的 PR 一次），不每次打开 ticket 页都跑。 */
+export const REST_PREVIEW_TTL_MS = 2 * 60_000;
+
+/**
+ * 每个 ticket 最近一次预览出的能勾的数（BTL-270 审查）：TTL 内再打开 ticket 页直接用；关闭框关上以后（可能关掉了 PR）drop 掉重新预览。
+ */
+export function restPreviewCache(now: () => number = Date.now) {
+  const seen = new Map<string, { at: number; n: number }>();
+  return {
+    get(key: string): number | undefined {
+      const e = seen.get(key);
+      return e && now() - e.at < REST_PREVIEW_TTL_MS ? e.n : undefined;
+    },
+    set(key: string, n: number): void {
+      seen.set(key, { at: now(), n });
+    },
+    drop(key: string): void {
+      seen.delete(key);
+    },
+  };
+}
+
+export const restPreviews = restPreviewCache();
 
 /**
  * 关闭框提交时要关哪些 PR：只关勾了的、而且是这次列出来能勾的（能关的，和核对失败、再试可能成的）。一个都没勾就不要求关 PR（BTL-270 审查）：

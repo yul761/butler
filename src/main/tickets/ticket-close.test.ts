@@ -124,7 +124,7 @@ describe("closeTicket", () => {
     const { d, tickets, calls } = setup({ prs: [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }] });
     await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
     calls.length = 0;
-    expect(await closeTicket(d, "T-1", { reason: "又说一遍", source: "coordinator" })).toEqual({ ok: false, error: "already_closed" });
+    expect(await closeTicket(d, "T-1", { reason: "又说一遍", source: "coordinator" })).toEqual({ ok: false, error: "already_closed", checkedPrs: false });
     expect(tickets.get("T-1")!.closure).toEqual({ at: 100, reason: "需求变了", source: "user" });
     expect(calls).toEqual([]);
   });
@@ -270,10 +270,62 @@ describe("closeTicket on a ticket that is already closed (closing the PRs left o
         const { d, calls } = setup({ prs: [], unclosable });
         await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
         calls.length = 0;
-        expect(await closeTicket(d, "T-1", { reason: "x", source, closePrs: true })).toEqual({ ok: false, error: "already_closed" });
+        expect(await closeTicket(d, "T-1", { reason: "x", source, closePrs: true })).toEqual({ ok: false, error: "already_closed", checkedPrs: true });
         expect(calls).toEqual([]);
       }
     }
+  });
+
+  it("named PRs that can't be closed come back as ok with why in prErrors, as on the first close; not already_closed (BTL-270 review)", async () => {
+    const unclosable = [
+      { url: pr(4).url, number: 4, kind: "not_own_branch" as const },
+      { url: pr(5).url, number: 5, kind: "shared_branch" as const, ticket: "T-2" },
+    ];
+    const { d, calls } = setup({ prs: [], unclosable });
+    await closeTicket(d, "T-1", { reason: "需求变了", source: "user" });
+    calls.length = 0;
+    for (const source of ["coordinator", "user"] as const) {
+      const r = await closeTicket(d, "T-1", { reason: "x", source, closePrs: true, prUrls: [pr(4).url, pr(5).url] });
+      expect(r).toEqual({
+        ok: true, ticket: "T-1", ignoredFollowups: 0, closedPrs: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false, alreadyClosed: true,
+        prErrors: [
+          { url: pr(4).url, kind: "not_own_branch", error: M().ticketClosePrWhy("not_own_branch", null) },
+          { url: pr(5).url, kind: "shared_branch", ticket: "T-2", error: M().ticketClosePrWhy("shared_branch", "T-2") },
+        ],
+      });
+    }
+    expect(calls.filter((c) => c.startsWith("close "))).toEqual([]);
+  });
+
+  it("reopened while its PRs are read: closes nothing, ends nothing, says reopenedMeanwhile instead of asking to name PRs (BTL-270 review)", async () => {
+    const ref: { tickets?: TicketsRepo; d?: TicketCloseDeps } = {};
+    const { d, tickets, calls } = setup({
+      openPrs: async () => {
+        if (ref.tickets!.get("T-1")?.statusManual === "closed") reopenTicket(ref.d!, "T-1", "user");
+        return { closable: [pr(1)], unclosable: [] };
+      },
+      sessions: [{ id: "s1", termId: "s1", hibernated: false }],
+    });
+    ref.tickets = tickets;
+    ref.d = d;
+    tickets.close("T-1", { at: 50, reason: "需求变了", source: "user" });
+    for (const o of [{ source: "coordinator" as const }, { source: "coordinator" as const, prUrls: [pr(1).url] }, { source: "user" as const, prUrls: [pr(1).url], endSessions: true }]) {
+      if (tickets.get("T-1")?.statusManual !== "closed") tickets.close("T-1", { at: 50, reason: "需求变了", source: "user" });
+      calls.length = 0;
+      const r = await closeTicket(d, "T-1", { reason: "x", closePrs: true, ...o });
+      expect(r).toEqual({ ok: true, ticket: "T-1", ignoredFollowups: 0, closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: true, alreadyClosed: true });
+      expect(calls.filter((c) => c.startsWith("close ") || c.startsWith("end "))).toEqual([]);
+    }
+  });
+
+  it("the user's close dialog on a ticket a coordinator closed meanwhile closes the ticked PRs with the reason the user wrote; the close keeps the coordinator's reason", async () => {
+    const reasons: string[] = [];
+    const { d, tickets } = setup({ prs: [pr(1)], closePr: async (_p, reason) => (reasons.push(reason), "closed") });
+    tickets.close("T-1", { at: 50, reason: "总控先关了", source: "coordinator" });
+    const r = await closeTicket(d, "T-1", { reason: "我这边也不做了", source: "user", closePrs: true, prUrls: [pr(1).url] });
+    expect(r).toMatchObject({ ok: true, alreadyClosed: true, closedPrs: [pr(1).url] });
+    expect(reasons).toEqual(["我这边也不做了"]);
+    expect(tickets.get("T-1")!.closure).toEqual({ at: 50, reason: "总控先关了", source: "coordinator" });
   });
 
   it("end_sessions on a closed ticket ends the sessions still left, even with no PR to close", async () => {
@@ -294,7 +346,7 @@ describe("closeTicket on a ticket that is already closed (closing the PRs left o
       },
     });
     ref.tickets = t;
-    expect(await closeTicket(d, "T-1", { reason: "不做了", source: "coordinator", closePrs: true })).toEqual({ ok: false, error: "already_closed" });
+    expect(await closeTicket(d, "T-1", { reason: "不做了", source: "coordinator", closePrs: true })).toEqual({ ok: false, error: "already_closed", checkedPrs: true });
     expect(t.get("T-1")!.closure).toEqual({ at: 50, reason: "用户先关了", source: "user" });
     // 没走第二次关闭：后续事项没被这次忽略。
     expect(followups.get("open")?.status).toBe("open");
@@ -419,7 +471,7 @@ describe("classifyOpenPrs (which open PRs closing a ticket may close)", () => {
     expect(r.unclosable.map((u) => [u.number, u.kind])).toEqual([[1, "not_own_branch"], [2, "not_own_branch"]]);
   });
 
-  it("an own branch name another ticket in the repo also used is shared_branch, naming that ticket; not folded into not_own_branch (BTL-270 review)", () => {
+  it("an own branch name another ticket in the repo also used is shared_branch, naming that ticket; not folded into not_own_branch; a PR also linked to another ticket is shared even then (BTL-270 review)", () => {
     const rows = [row(1, { headBranch: "develop" }), row(2), row(3, { headBranch: "develop", other: "T-3" })];
     const r = classifyOpenPrs(rows, {
       givenUp: () => false, ownBranch: () => true, sharedBranch: (_id, b) => (b === "develop" ? "T-2" : null), sharedWith: (x) => x.other, ghDir: () => "/r",
@@ -427,7 +479,8 @@ describe("classifyOpenPrs (which open PRs closing a ticket may close)", () => {
     expect(r.closable.map((p) => p.number)).toEqual([2]);
     expect(r.unclosable).toEqual([
       { url: "https://github.com/o/r/pull/1", number: 1, kind: "shared_branch", ticket: "T-2" },
-      { url: "https://github.com/o/r/pull/3", number: 3, kind: "shared_branch", ticket: "T-2" },
+      // 两个都成立：报 shared（PR 本身挂在 T-3 上），不报 shared_branch。
+      { url: "https://github.com/o/r/pull/3", number: 3, kind: "shared", ticket: "T-3" },
     ]);
   });
 

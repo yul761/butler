@@ -99,8 +99,12 @@ export class TicketControl {
           note: M().ctlClosePickPrs(r.closable.length, r.prErrors.length, r.alreadyClosed),
         });
       }
-      // 原因由 parseControlRequest 保证不空：失败是已经关着、又没有剩下能关的 PR（第一次的原因留着），或者 ticket 刚被删掉。
-      if (!r.ok) return fail(r.error === "already_closed" ? M().ctlTicketAlreadyClosed(t.key) : M().ctlNoTicket(req.ticket));
+      // 原因由 parseControlRequest 保证不空：失败是已经关着、这次没什么可做（第一次的原因留着），或者 ticket 刚被删掉。
+      // 读过 PR、确实没剩的，和没要求关 PR（没读）的说法不一样：后者不知道还剩不剩，告诉它怎么去关。
+      if (!r.ok) {
+        if (r.error !== "already_closed") return fail(M().ctlNoTicket(req.ticket));
+        return fail(r.checkedPrs ? M().ctlTicketAlreadyClosed(t.key) : M().ctlTicketAlreadyClosedUnchecked(t.key));
+      }
       // 点名了、却不是这个 ticket 开着的 PR（关掉了的、别的 ticket 的、写错了的）：没碰，单独列出来。
       const seen = new Set([...r.closedPrs, ...r.prErrors.map((e) => e.url)].map(prUrlKey));
       const notOpen = r.reopenedMeanwhile ? [] : (req.op === "close_ticket" ? req.pr_urls ?? [] : []).filter((u) => !seen.has(prUrlKey(u)));
