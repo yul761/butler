@@ -3953,7 +3953,7 @@ async function bootstrap(): Promise<void> {
   // 共享 MCP 开着就现在启动 hub，免得第一批 session 还在等它起来、先用了 stdio（WS-M H）。
   if (sharedMcpOn(settings) && existsSync(bundledHubPath())) mcpHub.start();
   // 「现在」页的提醒有的只按时间出现（comment loop 超过 30 分钟没送到等），没有自己的 notify：每分钟看一次，变了才发（BTL-275，原来靠栈 tick 每分钟无条件发）。
-  const noticesWatch = changeWatcher(currentNotices, () => notify());
+  const noticesWatch = changeWatcher(currentNotices, () => notify()); // 现在就记基线（启动时的提醒），第一次定时检查和它比
   const scheduleTimer = setInterval(() => {
     void checkSchedule("tick");
     noticesWatch();
