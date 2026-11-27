@@ -84,6 +84,22 @@ export type StackControlOp =
   | { op: "stack_rebase"; stack: number }
   | { op: "stack_layer_mode"; stack: number; branch: string; mode: "draft" | "branch" };
 
+/**
+ * 预审（BTL-271）：epic 总控和 Shipherd 总控都有。ticket、pr 给且只给一个（pr 是 ticket_prs 的 id 或 PR 链接）。
+ * epic 总控只能看、只能动自己 epic 里的 ticket 和 PR；Shipherd 总控不限。pre_review_queue 只看队列；epic 总控的队列只列自己 epic 的条目（position 是全队的第几，total 是全队条数）。
+ * pre_review_queue_act 取消（cancel）或插队（front）一次预审，给且只给一个预审 id；会作废花了钱的预审，所以和只读的 pre_review_queue 分开、要确认。
+ * epic 总控的 front 只排到自己 epic 的最前，越不过别的 epic；Shipherd 总控排到全队最前。
+ */
+export type PreReviewRef = { ticket: string; pr?: undefined } | { pr: string; ticket?: undefined };
+export type PreReviewControlOp =
+  | ({ op: "pre_review_status" } & PreReviewRef)
+  | ({ op: "pre_review_run" } & PreReviewRef)
+  | { op: "pre_review_queue" }
+  | ({ op: "pre_review_queue_act" } & ({ cancel: number; front?: undefined } | { front: number; cancel?: undefined }));
+
+export const isPreReviewOp = (op: unknown): op is PreReviewControlOp["op"] =>
+  op === "pre_review_status" || op === "pre_review_run" || op === "pre_review_queue" || op === "pre_review_queue_act";
+
 /** ticket 的 session 的请求（ticket 总控 BTL-246 起没有了，只剩 ask_user、report 和下面两个）。 */
 export type TicketControlRequest =
   | ({ v: 1; ticketKey: string; from: string | null } & InboxControlOp)
@@ -116,6 +132,10 @@ export const MAX_CREATE_REPOS = 20;
 export type FeatureControlRequest =
   | ({ v: 1; featureId: number; from: string | null } & InboxControlOp)
   | ({ v: 1; featureId: number; from: string | null } & StackControlOp)
+  | ({ v: 1; featureId: number; from: string | null } & PreReviewControlOp)
+  /** BTL-271：epic 总控也能看自己 epic 的 PR 和一个 PR 的评估（和 Shipherd 总控同一份，只是只列自己的）。 */
+  | { v: 1; featureId: number; from: string | null; op: "list_prs" }
+  | { v: 1; featureId: number; from: string | null; op: "pr_assessment"; pr: string }
   | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
   | { v: 1; featureId: number; from: string | null; op: "list_repos" }
   | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string; stack_on?: string; feature?: string }
@@ -155,6 +175,7 @@ export type ShipherdMessageTarget = { session: string; epic?: undefined } | { ep
 export type ShipherdControlRequest =
   | ({ v: 1; shipherd: true; from: string | null } & InboxControlOp)
   | ({ v: 1; shipherd: true; from: string | null } & StackControlOp)
+  | ({ v: 1; shipherd: true; from: string | null } & PreReviewControlOp)
   /** epic（内部是 features 表）和它们里面 feature 的进度（BTL-246）。 */
   | { v: 1; shipherd: true; from: string | null; op: "list_epics" }
   /** epic 里的 feature（内部是 block），可以只看一个 epic。 */
@@ -229,6 +250,23 @@ export const isStackOp = (op: unknown): op is StackControlOp["op"] => op === "li
 
 const okId = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && x > 0;
 
+/** 预审的四个请求（BTL-271）；不合规返回 null。pr 给数字（list_prs 的 prId）时转成字符串。 */
+export function preReviewOp<B extends object>(base: B, o: Record<string, unknown>): (B & PreReviewControlOp) | null {
+  if (o.op === "pre_review_queue") return o.cancel === undefined && o.front === undefined ? { ...base, op: "pre_review_queue" } : null;
+  if (o.op === "pre_review_queue_act") {
+    const given = (["cancel", "front"] as const).filter((k) => o[k] !== undefined);
+    if (given.length !== 1 || !okId(o[given[0]])) return null;
+    const id = o[given[0]] as number;
+    return given[0] === "cancel" ? { ...base, op: "pre_review_queue_act", cancel: id } : { ...base, op: "pre_review_queue_act", front: id };
+  }
+  if (o.op !== "pre_review_status" && o.op !== "pre_review_run") return null;
+  const pr = okId(o.pr) ? String(o.pr) : o.pr;
+  const given = (["ticket", "pr"] as const).filter((k) => o[k] !== undefined);
+  if (given.length !== 1) return null;
+  if (given[0] === "ticket") return okName(o.ticket, 200) && o.ticket.trim() ? { ...base, op: o.op, ticket: o.ticket.trim() } : null;
+  return okName(pr, 500) && pr.trim() ? { ...base, op: o.op, pr: pr.trim() } : null;
+}
+
 function stackOp<B extends object>(base: B, o: Record<string, unknown>): (B & StackControlOp) | null {
   if (o.op === "list_stacks") return { ...base, op: "list_stacks" };
   if (o.op === "stack_define") {
@@ -271,6 +309,9 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if ("ticketKey" in o || !Number.isSafeInteger(o.featureId) || (o.featureId as number) <= 0) return null;
     const base = { v: 1 as const, featureId: o.featureId as number, from };
     if (isInboxOp(o.op)) return inboxOp(base, o);
+    if (isPreReviewOp(o.op)) return preReviewOp(base, o);
+    if (o.op === "list_prs") return { ...base, op: "list_prs" };
+    if (o.op === "pr_assessment") return okName(o.pr, 500) ? { ...base, op: "pr_assessment", pr: o.pr } : null;
     if (o.op === "list_tickets") return { ...base, op: "list_tickets" };
     if (o.op === "list_repos") return { ...base, op: "list_repos" };
     if (o.op === "list_sessions") return { ...base, op: "list_sessions" };
@@ -353,6 +394,7 @@ function parseShipherdRequest(o: Record<string, unknown>, from: string | null): 
   const base = { v: 1 as const, shipherd: true as const, from };
   if (isInboxOp(o.op)) return inboxOp(base, o);
   if (isStackOp(o.op)) return stackOp(base, o);
+  if (isPreReviewOp(o.op)) return preReviewOp(base, o);
   if (o.op === "list_epics" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
     return { ...base, op: o.op };
   }

@@ -46,11 +46,24 @@ export interface BackgroundQueueDeps {
   clearTimer?: (h: unknown) => void;
   log?: (msg: string, err?: unknown) => void;
   onChange?: () => void;
+  /** 这一种同时最多跑几个（设置里的，比如预审并发 preReviewConcurrency）；没给或返回 null 用 BACKGROUND_KINDS 里的。 */
+  concurrency?: (kind: BgKind) => number | null;
+}
+
+/** 登记处理函数时的选项。 */
+export interface BgRegisterOptions {
+  /**
+   * 互斥键：键相同的任务不同时跑（比如预审按 worktree：同一个目录里复跑命令、查 HEAD 会互相干扰）。
+   * 返回 null 的不受限制。取任务时算一次，跑完才放开。
+   */
+  lockKey?: (job: BgJob) => string | null;
 }
 
 interface Live {
   job: BgJob;
   ctl: AbortController;
+  /** 这个任务占着的互斥键（BgRegisterOptions.lockKey）。 */
+  lock: string | null;
   /** 为什么 abort：让路（放回队列）、取消、退出。 */
   why: "yield" | "cancel" | "quit" | null;
 }
@@ -61,6 +74,7 @@ interface AdmitSlot { release: () => void; opened: boolean }
 /** 通用后台队列（设计 addendum 第 3.6 节）：D、F、G、N 的任务在这里登记处理函数，排进来的按调度器的闸门跑。 */
 export class BackgroundQueue {
   private readonly handlers = new Map<BgKind, BgHandler>();
+  private readonly options = new Map<BgKind, BgRegisterOptions>();
   private readonly live = new Map<number, Live>();
   private started = false;
   private timer: unknown = null;
@@ -68,9 +82,43 @@ export class BackgroundQueue {
 
   constructor(private readonly d: BackgroundQueueDeps) {}
 
-  register(kind: BgKind, handler: BgHandler): void {
+  register(kind: BgKind, handler: BgHandler, o: BgRegisterOptions = {}): void {
     this.handlers.set(kind, handler);
+    this.options.set(kind, o);
     this.pump();
+  }
+
+  /** 这一种同时最多跑几个（设置优先，至少 1）。 */
+  concurrencyOf(kind: BgKind): number {
+    let n: number | null = null;
+    try {
+      n = this.d.concurrency?.(kind) ?? null;
+    } catch (e) {
+      this.d.log?.(`background: reading the concurrency of ${kind} failed`, e);
+    }
+    return n !== null && Number.isFinite(n) && n >= 1 ? Math.floor(n) : BACKGROUND_KINDS[kind].concurrency;
+  }
+
+  /** 这一种在跑的任务各自占着的互斥键（任务 id → 键；没有键的不在里面）。 */
+  locksOf(kind: BgKind): Map<number, string> {
+    const out = new Map<number, string>();
+    for (const l of this.live.values()) if (l.job.kind === kind && l.lock !== null) out.set(l.job.id, l.lock);
+    return out;
+  }
+
+  /** 排队的这一个提到最前面（预审队列的「提到最前」）；within 给了时只提到这些 ticket 的最前。不在排队返回 false。 */
+  moveToFront(id: number, within?: (ticketKey: string | null) => boolean): boolean {
+    let ok = false;
+    try {
+      ok = this.d.repo.moveToFront(id, within);
+    } catch (e) {
+      this.d.log?.(`background: moving #${id} to the front failed`, e);
+    }
+    if (ok) {
+      this.d.onChange?.();
+      this.pump();
+    }
+    return ok;
   }
 
   enqueue(kind: BgKind, payload: unknown, o: { ticketKey?: string | null; dedupeKey?: string | null; notBefore?: number | null; priority?: number } = {}): number {
@@ -147,18 +195,38 @@ export class BackgroundQueue {
     if (!this.started) return;
     const now = this.d.now();
     for (const [kind, handler] of this.handlers) {
-      const max = BACKGROUND_KINDS[kind].concurrency;
+      const max = this.concurrencyOf(kind);
+      const lockKey = this.options.get(kind)?.lockKey;
       while (this.running(kind) < max) {
         if (!this.d.scheduler.gate(kind).run) break;
         let job: BgJob | null;
+        // 互斥键：取的时候算，被占着的跳过（后面键不同的照样能跑）；取到的那个的键记下，跑完才放开。
+        const held = new Set(this.locksOf(kind).values());
+        const keys = new Map<number, string | null>();
+        const keyOf = (j: BgJob): string | null => {
+          if (!lockKey) return null;
+          if (!keys.has(j.id)) {
+            let k: string | null = null;
+            try {
+              k = lockKey(j);
+            } catch (e) {
+              this.d.log?.(`background: the lock key of ${kind} #${j.id} failed`, e);
+            }
+            keys.set(j.id, k);
+          }
+          return keys.get(j.id) ?? null;
+        };
         try {
-          job = this.d.repo.take(kind, now, (key) => this.d.scheduler.gate(kind, { ticketKey: key }).run);
+          job = this.d.repo.take(
+            kind, now, (key) => this.d.scheduler.gate(kind, { ticketKey: key }).run,
+            lockKey ? (j) => { const k = keyOf(j); return k === null || !held.has(k); } : undefined,
+          );
         } catch (e) {
           this.d.log?.(`background: taking the next ${kind} job failed`, e);
           break;
         }
         if (!job) break;
-        this.run(job, handler);
+        this.run(job, handler, keyOf(job));
       }
     }
     this.armTimer(now);
@@ -182,9 +250,9 @@ export class BackgroundQueue {
     }, Math.max(0, next - now));
   }
 
-  private run(job: BgJob, handler: BgHandler): void {
+  private run(job: BgJob, handler: BgHandler, lock: string | null = null): void {
     const ctl = new AbortController();
-    const l: Live = { job, ctl, why: null };
+    const l: Live = { job, ctl, why: null, lock };
     this.live.set(job.id, l);
     const slots: AdmitSlot[] = [];
     const ctx: BgJobContext = {

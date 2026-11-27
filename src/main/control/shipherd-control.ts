@@ -6,9 +6,10 @@ import { effectiveStatus, type Block, type Feature, type FeatureStatusRow, type 
 import { roleOf, type InboxService } from "../inbox/inbox-service";
 import { progressOverview } from "../progress/progress-view";
 import type { MetricsOverview } from "../../shared/metrics";
-import type { PrAssessmentView, Readiness, RiskLevel } from "../../shared/prereview";
+import { noPreReview, type PrAssessmentView, type Readiness, type RiskLevel } from "../../shared/prereview";
 import { M } from "../strings";
 import { admitOrRefuse } from "./admission";
+import { preReviewControl, preReviewField, ticketPreReviewField } from "./prereview-control";
 import type { ControlHandlerDeps } from "./control-handler";
 
 /** Shipherd 总控（BTL-190 第 5 点）要的数据：index.ts 从 SessionService、PrWatcher、「需要你」和收件箱拿。 */
@@ -41,8 +42,8 @@ export interface ShipherdControlDeps {
   /** 就绪、风险（ws-g）：list_prs 带上 risk / ready / missing，pr_assessment 给一个 PR 的全部评估。 */
   assessment?: {
     summaries(prIds: number[]): Map<number, { risk: RiskLevel | null; ready: boolean | null; missing: Readiness["missing"] }>;
-    /** ticket_prs 的 id 或 PR 链接；找不到为 null。 */
-    view(ref: string): PrAssessmentView | null;
+    /** ticket_prs 的 id 或 PR 链接；找不到为 null。keep 给了只认这些 ticket 的 PR（epic 总控，BTL-271）。 */
+    view(ref: string, keep?: (ticketKey: string) => boolean): PrAssessmentView | null;
   };
   /** list_inbox 的 messages：Shipherd 总控发出、收到的信箱消息（BTL-245）。 */
   shipherdSessions?: () => string[];
@@ -58,10 +59,56 @@ export interface ShipherdControlHelpers {
   lastReply: (id: string) => string | null;
 }
 
-type Named = { id: number; name: string } | null;
+export type Named = { id: number; name: string } | null;
 
 const ok = (value: unknown): ControlResult => ({ v: 1, ok: true, value });
 const fail = (error: string): ControlResult => ({ v: 1, ok: false, error });
+
+/**
+ * list_prs 的每一行（Shipherd 总控列全部，epic 总控只列 keep 的 ticket 的，BTL-271）。
+ * ticketOwners 给每行带上 epic 和 feature。
+ */
+export function prRows(
+  d: ControlHandlerDeps, b: ShipherdControlDeps, ticketOwners: (t: Ticket) => { epic: Named; feature: Named }, keep: (ticketKey: string) => boolean,
+): object[] {
+  const prs = b.prs().filter((p) => keep(p.ticketKey));
+  const turnOf = b.prTurns();
+  const assessed = b.assessment?.summaries(prs.flatMap((p) => (p.prId !== null ? [p.prId] : []))) ?? new Map();
+  // BTL-271：每个 PR 的预审状态（和界面徽标同一份）。
+  const pre = d.preReviewOps?.status.forPrs(prs.flatMap((p) => (p.prId !== null ? [p.prId] : []))) ?? null;
+  return prs.map((p) => {
+    const t = d.tickets.get(p.ticketKey);
+    const x = p.detail;
+    const a = p.prId !== null ? assessed.get(p.prId) : undefined;
+    const pb = pre && p.prId !== null ? pre.get(p.prId) : undefined;
+    return {
+      prId: p.prId,
+      ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
+      checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { epic: null, feature: null }),
+      // ws-b：叠放、轮到谁要的字段。分支行（还没有 PR）没有。
+      ...(x && p.checkedAt > 0 && {
+        title: x.title, headBranch: p.branch || null, baseBranch: x.baseBranch, draft: x.isDraft, author: x.author, labels: x.labels,
+        reviewRequests: x.reviewRequests, reviewers: x.reviewers.map((r) => ({ ...r, at: iso(r.at) })), mergeable: x.mergeable, mergeState: x.mergeState,
+        statusChangedAt: iso(x.statusChangedAt), turn: p.url ? turnOf(p.url, p.ticketKey) : null,
+      }),
+      // ws-g：只是读表（还没评估过为 null）。
+      ...(b.assessment && p.prId !== null && { risk: a?.risk ?? null, ready: a?.ready ?? null, missing: (a?.missing ?? []).map((m: Readiness["missing"][number]) => m.detail) }),
+      ...(pre && p.prId !== null && { preReview: pb ? preReviewField(pb) : null }),
+    };
+  });
+}
+
+/** epic 和 epic 里的 feature（BTL-246），每行 list_tickets / list_prs 用；按 epic 取一次。 */
+export function ownersOf(d: ControlHandlerDeps): (t: Ticket) => { epic: Named; feature: Named } {
+  const features = new Map((d.features?.list() ?? []).map((f) => [f.id, f]));
+  const blocks = new Map<number, Block[]>();
+  const named = (x: { id: number; name: string } | undefined | null): Named => (x ? { id: x.id, name: x.name } : null);
+  return (t) => {
+    let list = t.featureId === null ? [] : blocks.get(t.featureId);
+    if (!list && t.featureId !== null) blocks.set(t.featureId, (list = d.blocks?.list(t.featureId) ?? []));
+    return { epic: named(t.featureId === null ? undefined : features.get(t.featureId)), feature: t.featureId === null || t.blockId == null ? null : named((list ?? []).find((x) => x.id === t.blockId)) };
+  };
+}
 
 /**
  * Shipherd 总控的请求（BTL-190 第 5 点）：全部只读，加上 send_message 和 refresh_session。不建、不删、不结束。
@@ -237,34 +284,22 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
           if (!f) return fail(M().ctlNoSuchEpic(req.epic, features.map((x) => x.name).join(", ") || M().ctlNoEpics));
           list = list.filter((t) => t.featureId === f.id);
         }
+        // BTL-271：每个 ticket 的预审状态，一次查完。
+        const pre = d.preReviewOps?.status.forTickets(list.map((t) => t.key)) ?? null;
         return ok(list.map((t) => ({
           key: t.key, title: t.title, status: effectiveStatus(t), ...ticketOwners(t),
           repos: t.repos.map((r) => ({ name: name(r), dir: d.ticketService.workDir(r), branch: r.branch })),
+          ...(pre && { preReview: ticketPreReviewField(pre.get(t.key) ?? { overall: noPreReview(t.key), items: [] }) }),
         })));
       }
-      case "list_prs": {
-        const prs = b.prs();
-        const turnOf = b.prTurns();
-        const assessed = b.assessment?.summaries(prs.flatMap((p) => (p.prId !== null ? [p.prId] : []))) ?? new Map();
-        return ok(prs.map((p) => {
-          const t = d.tickets.get(p.ticketKey);
-          const x = p.detail;
-          const a = p.prId !== null ? assessed.get(p.prId) : undefined;
-          return {
-            prId: p.prId,
-            ticket: p.ticketKey, repo: p.repoPath === null ? null : basename(p.repoPath), branch: p.branch, number: p.number, url: p.url, state: p.state, review: p.review, ci: p.ci,
-            checkedAt: p.checkedAt ? new Date(p.checkedAt).toISOString() : null, ...(t ? ticketOwners(t) : { epic: null, feature: null }),
-            // ws-b：叠放、轮到谁要的字段。分支行（还没有 PR）没有。
-            ...(x && p.checkedAt > 0 && {
-              title: x.title, headBranch: p.branch || null, baseBranch: x.baseBranch, draft: x.isDraft, author: x.author, labels: x.labels,
-              reviewRequests: x.reviewRequests, reviewers: x.reviewers.map((r) => ({ ...r, at: iso(r.at) })), mergeable: x.mergeable, mergeState: x.mergeState,
-              statusChangedAt: iso(x.statusChangedAt), turn: p.url ? turnOf(p.url, p.ticketKey) : null,
-            }),
-            // ws-g：只是读表（还没评估过为 null）。
-            ...(b.assessment && p.prId !== null && { risk: a?.risk ?? null, ready: a?.ready ?? null, missing: (a?.missing ?? []).map((m: Readiness["missing"][number]) => m.detail) }),
-          };
-        }));
-      }
+      case "list_prs":
+        return ok(prRows(d, b, ticketOwners, () => true));
+      case "pre_review_status":
+      case "pre_review_run":
+      case "pre_review_queue":
+      case "pre_review_queue_act":
+        // 全局总控不限 epic，插队排到全队最前；重跑、取消、插队只接受开着的 Shipherd 总控自己发的（会花额度、动别人的队列）。
+        return preReviewControl(d.preReviewOps, { owns: () => true, known: (key) => !!d.tickets.get(key), canAct: fromOpenShipherd, whole: true }, req);
       case "pr_assessment": {
         if (!b.assessment) return fail(M().ctlPreReviewUnavailable);
         const v = b.assessment.view(req.pr);
@@ -273,12 +308,16 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       case "list_sessions": {
         const decisions = new Map<string, number>();
         for (const x of b.inbox.view({ all: true }).decisions) decisions.set(x.sessionId, (decisions.get(x.sessionId) ?? 0) + 1);
-        return ok(b.openHeads().filter((s) => !s.shipherd).map((s) => {
+        const heads = b.openHeads().filter((s) => !s.shipherd);
+        // BTL-271：「等 CI」和「预审中」分开：每个 session 最近一次预审。
+        const pre = d.preReviewOps?.status.forSessions(heads.map((s) => s.id)) ?? null;
+        return ok(heads.map((s) => {
           const { repo, ...own } = owners(s);
           return {
             id: s.id, role: roleOf(s), ...own, repo: repo ? name(repo) : null, firstPrompt: s.firstPrompt,
             waitingForInput: s.waitingForInput, lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
             activity: h.listedActivity(s.id), needs_you: b.needsYou(s.id), decisions: decisions.get(s.id) ?? 0, last_reply: h.lastReply(s.id),
+            ...(pre && { preReview: pre.has(s.id) ? preReviewField(pre.get(s.id)!) : null }),
           };
         }));
       }

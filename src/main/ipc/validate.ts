@@ -28,6 +28,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { DESCRIPTION_MAX, isFeedbackKind, TITLE_MAX } from "../../shared/feedback";
 import type { FeedbackOpenRequest } from "../feedback/feedback-service";
 import { EXTERNAL_LINK_MAX } from "../util/external-link";
+import { PRE_REVIEW_STATUS_MAX, type PreReviewQueueAction, type PreReviewStatusRequest } from "../../shared/prereview";
 
 /**
  * 渲染进程不可信：IPC 参数在主进程里按运行时类型检查，不合规就抛错（toIpcResult 包装成 { ok: false }）。
@@ -1015,4 +1016,25 @@ export function feedbackOpenArg(v: unknown): FeedbackOpenRequest {
     ...(step ? { step } : {}),
     attachDiagnostics: o.attachDiagnostics === true,
   };
+}
+
+/** 一批预审徽标（BTL-271）：超过上限直接拒绝，不悄悄截断。 */
+export function preReviewStatusArg(v: unknown): PreReviewStatusRequest {
+  const o = objArg(v, "pre-review status request", ["tickets", "sessions", "prs"]);
+  const max = PRE_REVIEW_STATUS_MAX;
+  const out: PreReviewStatusRequest = {};
+  if (o.tickets !== undefined) out.tickets = idList(o.tickets, "pre-review tickets", max).map(ticketKeyArg);
+  if (o.sessions !== undefined) out.sessions = idList(o.sessions, "pre-review sessions", max);
+  if (o.prs !== undefined) {
+    if (!Array.isArray(o.prs) || o.prs.length > max) throw new Error("invalid pre-review prs");
+    out.prs = o.prs.map((x) => posInt(x, "pre-review pr"));
+  }
+  return out;
+}
+
+/** 预审队列上的取消、提到最前。 */
+export function preReviewQueueActionArg(v: unknown): PreReviewQueueAction {
+  const o = objArg(v, "pre-review queue action", ["op", "id"]);
+  if (o.op !== "cancel" && o.op !== "front") throw new Error("invalid pre-review queue action");
+  return { op: o.op, id: posInt(o.id, "pre-review id") };
 }

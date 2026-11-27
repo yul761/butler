@@ -20,6 +20,7 @@ import { TitleDialog } from "./TitleDialog";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
 import { GLANCE_SCOPES } from "../state-bus";
+import { TicketPreReviewChip } from "./PreReviewChip";
 
 interface Props {
   ticket: TicketView;
@@ -84,6 +85,7 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
       <header className="ticket-header">
         <h2>{ticket.key}{ticket.title && <span className="title"> · {ticket.title}</span>}</h2>
         <span className="muted">{ticket.repos.length === 1 ? repoWhere(ticket.repos[0]) : ""}</span>
+        <TicketPreReviewChip ticketKey={ticket.key} />
         <select
           value={statusValue}
           onChange={(e) => api.setStatus(ticket.key, e.target.value === "auto" ? null : (e.target.value as TicketStatus)).catch(reportError)}

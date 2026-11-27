@@ -119,6 +119,15 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
       : lang === "zh"
       ? "上下文太长时 Shipherd 会替你写 handoff、清空、再让你从记忆里接上，这时按它的话做就行。重要的决定和约定随时用 remember 写进记忆。"
       : "Shipherd may refresh a session whose context grows too long: it writes a handoff for you, clears the session, and has you pick up from memory; just follow what it says. Save important decisions and agreements to memory with remember as you go.",
+  // 预审看得见、查得到（BTL-271）：两级总控。
+  (lang, kind) =>
+    kind !== "coordinator" && kind !== "shipherd"
+      ? null
+      : lang === "zh"
+        ? "预审的状态在 list_tickets、list_sessions、list_prs 的 preReview 里（queued / paused / running 是在等预审，不是在等 CI）。" +
+          "用户问预审了没有、结果怎样，用 pre_review_status（ticket 或 pr）；要重新预审用 pre_review_run；预审排着不动时用 pre_review_queue 看谁在跑、谁在排、为什么停着；要取消或提前一次，用 pre_review_queue_act（会作废已经花了额度的预审，要用户确认）。"
+        : "Pre-review state is in preReview on list_tickets, list_sessions and list_prs (queued, paused or running means it is waiting on pre-review, not on CI). " +
+          "When the user asks whether something was pre-reviewed or how it went, use pre_review_status (ticket or pr); to pre-review again, use pre_review_run; when pre-reviews are not moving, pre_review_queue shows what is running, what is queued and why it is stopped; to cancel one or move it forward, use pre_review_queue_act (it throws away a pre-review that already spent quota, so the user confirms it).",
 ];
 
 export interface GuideOptions {

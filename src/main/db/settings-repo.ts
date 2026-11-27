@@ -132,6 +132,8 @@ export const SETTING_DEFAULTS = {
   externalIntakeTrackerStatus: "0",
   /** 工作流 G：开发 session 交证据、提 PR 前后台预审（复跑、对照规矩、核对证据），结果送回 session：1 开 0 关。 */
   preReviewEnabled: "0",
+  /** BTL-271：预审同时最多跑几个（1–8）。不同 worktree 的可以同时跑，同一个 worktree 的一个接一个。新装 2；升级上来的迁移 60 写成 1（以前一次一个）。 */
+  preReviewConcurrency: "2",
   /** 工作流 D：一次分析加了或命中了规矩以后自动判那个仓库（只推荐，除非 admission.autoConfirm）：1 开 0 关。 */
   lessonsAutoAdmit: "0",
   /** 工作流 D：每天把已确认的规矩归成原则，session 说明里写原则 + 案例文件：1 开 0 关。 */

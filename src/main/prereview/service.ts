@@ -5,7 +5,7 @@ import type { TicketPr } from "../db/ticket-prs-repo";
 import type { RepoProfile } from "../../shared/baselines";
 import type { ResolvedPrPolicy } from "../../shared/pr-policy";
 import { sanitizeTask } from "../../shared/control";
-import { parseSubmitEvidence, type EvidenceGap, type PreReviewView, type ReviewTarget } from "../../shared/prereview";
+import { parseSubmitEvidence, type EvidenceGap, type PreReviewPauseReason, type PreReviewQueueActResult, type PreReviewView, type ReviewTarget } from "../../shared/prereview";
 import type { GitRun } from "./diff";
 import { deliveryText } from "./delivery";
 import { evidenceStatus, requiredEvidence } from "./evidence";
@@ -23,7 +23,14 @@ export interface SessionPlace {
 
 export interface PreReviewServiceDeps {
   repo: PreReviewRepo;
-  queue: { enqueue(kind: "pre_review", payload: PreReviewPayload, o: { ticketKey?: string | null; dedupeKey?: string | null }): number; cancel(id: number): boolean };
+  queue: {
+    enqueue(kind: "pre_review", payload: PreReviewPayload, o: { ticketKey?: string | null; dedupeKey?: string | null }): number;
+    cancel(id: number): boolean;
+    /** 排队的任务提到最前（BTL-271 队列页）；within 给了时只提到这些 ticket 的最前。 */
+    moveToFront?(id: number, within?: (ticketKey: string | null) => boolean): boolean;
+  };
+  /** 这一次预审现在排第几、为什么停着（PreReviewStatusService.placeOf）；submit_evidence 的回复里说。 */
+  placeOf?(preReviewId: number): QueuePlace | null;
   /** preReviewEnabled；给了 ticket 时它所在 epic 自己选的自动化档位优先（BTL-247）。 */
   enabled(ticketKey?: string | null): boolean;
   /** session 在哪（worktree、ticket、仓库 slug）；不认识的 session 为 null。 */
@@ -47,6 +54,17 @@ export interface PreReviewServiceDeps {
   log(msg: string, err?: unknown): void;
 }
 
+/** 排在预审队列的哪儿。 */
+export interface QueuePlace {
+  position: number | null;
+  /** 前面还有几个在排队。 */
+  ahead: number;
+  /** 现在在跑几个。 */
+  running: number;
+  reason: PreReviewPauseReason | null;
+  waiting: "concurrency" | "worktree" | null;
+}
+
 export type SubmitResult = { ok: true; preReviewId: number; message: string } | { ok: false; message: string };
 
 const MSG = {
@@ -56,7 +74,14 @@ const MSG = {
     unknown: "Shipherd does not know this session's worktree.",
     noGit: "Could not read HEAD and branch in the worktree.",
     dirty: "The worktree has uncommitted changes. Commit first: evidence has to match a specific commit.",
-    queued: (sha: string) => `Evidence received for ${sha}. Shipherd is pre-reviewing it; the result will be sent here. Until then, do not change the worktree. End this turn now.`,
+    queued: (sha: string, place: string) => `Evidence received for ${sha}. ${place}The result will be sent here. Until then, do not change the worktree. End this turn now.`,
+    place: (p: QueuePlace | null): string => {
+      if (!p || p.position === null) return "Shipherd is pre-reviewing it. ";
+      const at = p.position === 1 ? "It is next in the pre-review queue" : `It is number ${p.position} in the pre-review queue (${p.ahead} ahead)`;
+      const why = p.reason ? `; pre-review is paused right now (${REASON.en[p.reason]}) and starts once that clears` : p.waiting === "worktree" ? "; it waits for the pre-review already running in this worktree" : p.running > 0 ? `; ${p.running} running` : "";
+      return `${at}${why}. `;
+    },
+    cancelled: (sha: string) => `The pre-review of ${sha} was cancelled in Shipherd. No result is coming; carry on with your flow.`,
   },
   zh: {
     off: "Shipherd 没开预审，证据没有记录。继续就行。",
@@ -64,8 +89,21 @@ const MSG = {
     unknown: "Shipherd 不认识这个 session 的 worktree。",
     noGit: "读不到 worktree 里的 HEAD 和分支。",
     dirty: "worktree 里有没提交的改动。先提交：证据要对应一个确定的提交。",
-    queued: (sha: string) => `已收到 ${sha} 的证据，Shipherd 正在预审，结果会送进来。在那之前不要改 worktree。现在结束这一轮。`,
+    queued: (sha: string, place: string) => `已收到 ${sha} 的证据。${place}结果会送进来。在那之前不要改 worktree。现在结束这一轮。`,
+    place: (p: QueuePlace | null): string => {
+      if (!p || p.position === null) return "Shipherd 正在预审。";
+      const at = p.position === 1 ? "排在预审队列第 1 个" : `排在预审队列第 ${p.position} 个（前面还有 ${p.ahead} 个）`;
+      const why = p.reason ? `；预审现在停着（${REASON.zh[p.reason]}），恢复后才开始` : p.waiting === "worktree" ? "；这个 worktree 里已经有一次预审在跑，等它跑完" : p.running > 0 ? `；现在有 ${p.running} 个在跑` : "";
+      return `${at}${why}。`;
+    },
+    cancelled: (sha: string) => `${sha} 的预审在 Shipherd 里被取消了，不会有结果送来。按流程继续就行。`,
   },
+};
+
+/** 预审停着的原因，一句话（submit_evidence 的回复、总控工具）。 */
+export const REASON: Record<"zh" | "en", Record<PreReviewPauseReason, string>> = {
+  zh: { manual: "预审被手动暂停了", cost: "花费熔断了", quota: "额度紧张", user_active: "等你空闲", outside_hours: "不在允许的时段", memory: "内存不够" },
+  en: { manual: "paused by hand", cost: "the cost breaker tripped", quota: "quota is tight", user_active: "waiting for you to be idle", outside_hours: "outside the allowed hours", memory: "memory is short" },
 };
 
 export class PreReviewService {
@@ -99,7 +137,7 @@ export class PreReviewService {
   private blank(o: Pick<PreReviewRow, "ticketKey" | "sessionId" | "target" | "cwd" | "base" | "prId" | "trigger"> & { notes?: string | null }): Omit<PreReviewRow, "id"> {
     return {
       ...o, notes: o.notes ?? null, status: "queued", jobId: null, files: [], lessonIds: [], checks: null, violations: [], summary: null, verdict: null,
-      detail: null, model: null, deliveredAt: null, deliverTries: 0, createdAt: this.d.now(), finishedAt: null,
+      detail: null, model: null, deliveredAt: null, deliverTries: 0, createdAt: this.d.now(), startedAt: null, finishedAt: null,
     };
   }
 
@@ -132,7 +170,44 @@ export class PreReviewService {
     for (const a of args.acceptance) this.d.repo.addEvidence({ ...base, kind: "acceptance", category: null, name: a.criterion, command: null, claimed: null, summary: a.how });
     for (const u of args.ui ?? []) this.d.repo.addEvidence({ ...base, kind: "ui", category: null, name: u.path, command: null, claimed: null, summary: u.note ?? "" });
     for (const n of args.notRun ?? []) this.d.repo.addEvidence({ ...base, kind: "not_run", category: n.category ?? null, name: n.name, command: null, claimed: null, summary: n.reason });
-    return { ok: true, preReviewId: id, message: m.queued(head.slice(0, 7)) };
+    let at: QueuePlace | null = null;
+    try {
+      at = this.d.placeOf?.(id) ?? null;
+    } catch (e) {
+      this.d.log(`submit_evidence ${sessionId}: reading the queue place failed`, e);
+    }
+    return { ok: true, preReviewId: id, message: m.queued(head.slice(0, 7), m.place(at)) };
+  }
+
+  /**
+   * 队列页、总控取消一次预审（排队的或在跑的）：行标成 skipped（cancelled），任务撤掉（在跑的中止）。
+   * 交证据触发的会告诉那个 session 不用再等。
+   */
+  cancel(id: number): PreReviewQueueActResult {
+    const row = this.d.repo.get(id);
+    if (!row) return { ok: false, reason: "not_found" };
+    if (row.status !== "queued" && row.status !== "running") return { ok: false, reason: "not_queued" };
+    // 先改行再撤任务：在跑的被中止时，runner 看到行已经不是 running，不会把它放回 queued。
+    this.d.repo.update(id, { status: "skipped", detail: "cancelled", startedAt: null, finishedAt: this.d.now() });
+    if (row.jobId !== null) this.d.queue.cancel(row.jobId);
+    this.d.log(`pre-review ${id}: cancelled (${row.status})`);
+    if (row.sessionId && row.trigger === "evidence") {
+      this.d.mailbox.send({ kind: "review", from: null, to: row.sessionId, featureId: null, body: sanitizeTask(this.m().cancelled(row.target.headSha.slice(0, 7))), ref: `prereview:${id}` });
+    }
+    this.d.changed();
+    return { ok: true };
+  }
+
+  /** 队列页、总控把排队的一次预审提到最前；within 给了时只提到这些 ticket 的最前（epic 总控越不过别的 epic）。 */
+  moveToFront(id: number, within?: (ticketKey: string | null) => boolean): PreReviewQueueActResult {
+    const row = this.d.repo.get(id);
+    if (!row) return { ok: false, reason: "not_found" };
+    // 行可能还停在 running（任务已经放回队列）：能不能插队看任务（BackgroundQueue.moveToFront 只认排队的）。
+    if ((row.status !== "queued" && row.status !== "running") || row.jobId === null) return { ok: false, reason: "not_queued" };
+    if (!this.d.queue.moveToFront?.(row.jobId, within)) return { ok: false, reason: "not_queued" };
+    this.d.log(`pre-review ${id}: moved to the front of the queue`);
+    this.d.changed();
+    return { ok: true };
   }
 
   /**
@@ -150,19 +225,37 @@ export class PreReviewService {
     return this.enqueue(this.blank({ ticketKey: pr.ticketKey, sessionId, target, cwd, base: pr.baseBranch, prId: pr.id, trigger: "pr" }), `pr:${pr.slug}:${pr.headBranch}:${pr.headSha}`);
   }
 
-  /** 页面、总控的「重新预审」：开关关着也能跑（用户亲手点的）。证据沿用这份代码最近一次交的。 */
+  /**
+   * 页面、总控的「重新预审」：开关关着也能跑（用户亲手点的）。证据、session 沿用这个 ticket 对这份代码最近一次交的
+   * （同一份代码挂在别的 ticket 上时不拿那边的：结果会送到别的 epic 的 session）。
+   */
   manual(pr: TicketPr): number | null {
     if (!pr.headSha || !pr.headBranch) return null;
     const target: ReviewTarget = { repoSlug: pr.slug, branch: pr.headBranch, headSha: pr.headSha };
-    const prev = this.d.repo.latestFor(target);
+    const prev = this.d.repo.latestForTicket(pr.ticketKey, target);
     const sessionId = prev?.sessionId ?? this.d.recipient(pr);
     const cwd = prev?.cwd ?? this.d.cwdOf(pr, sessionId);
-    const id = this.enqueue(this.blank({ ticketKey: pr.ticketKey, sessionId, target, cwd, base: pr.baseBranch, prId: pr.id, trigger: "manual", notes: prev?.notes ?? null }), `manual:${pr.id}`);
-    // 证据跟着复制过来（核实结果重做）。
+    return this.again(prev, { ticketKey: pr.ticketKey, sessionId, target, cwd, base: pr.baseBranch, prId: pr.id }, `manual:${pr.id}`);
+  }
+
+  /**
+   * 总控按 ticket 重新预审、还没有 PR 的代码（BTL-271）：对着某一次预审的同一份代码（仓库、分支、提交）再排一次，
+   * session、worktree、base、证据都沿用。找不到这一次返回 null。
+   */
+  rerun(preReviewId: number): number | null {
+    const prev = this.d.repo.get(preReviewId);
+    if (!prev) return null;
+    const latest = this.d.repo.latestForTicket(prev.ticketKey, prev.target) ?? prev;
+    return this.again(latest, { ticketKey: prev.ticketKey, sessionId: latest.sessionId, target: prev.target, cwd: latest.cwd, base: latest.base, prId: latest.prId }, `manual:${prev.target.repoSlug}:${prev.target.branch}`);
+  }
+
+  /** 排一次手动预审，把上一次（同一份代码）的证据复制过来（核实结果重做）。 */
+  private again(prev: PreReviewRow | null, o: Pick<PreReviewRow, "ticketKey" | "sessionId" | "target" | "cwd" | "base" | "prId">, dedupe: string): number {
+    const id = this.enqueue(this.blank({ ...o, trigger: "manual", notes: prev?.notes ?? null }), dedupe);
     if (prev) {
       const now = this.d.now();
       for (const e of this.d.repo.evidenceOf(prev.id)) {
-        this.d.repo.addEvidence({ preReviewId: id, prId: pr.id, ticketKey: pr.ticketKey, sessionId: e.sessionId, target, kind: e.kind, category: e.category, name: e.name, command: e.command, claimed: e.claimed, summary: e.summary, createdAt: now });
+        this.d.repo.addEvidence({ preReviewId: id, prId: o.prId, ticketKey: o.ticketKey, sessionId: e.sessionId, target: o.target, kind: e.kind, category: e.category, name: e.name, command: e.command, claimed: e.claimed, summary: e.summary, createdAt: now });
       }
     }
     return id;
@@ -230,11 +323,25 @@ export class PreReviewService {
     }
   }
 
-  /** 启动时：上次没跑完、任务已经不在了的（队列会把在跑的放回去；这里只收尾没有任务的）。 */
-  sweep(jobAlive: (jobId: number) => boolean): void {
+  /**
+   * 启动时：上次没跑完的。任务已经不在了的记失败；任务被队列放回排队、行还停在 running 的（退出时 runner 没来得及改），
+   * 行也放回 queued、清掉开跑时间，徽标、插队和队列页才对得上。jobState 是任务现在的状态，没有任务为 null。
+   */
+  sweep(jobState: (jobId: number) => "queued" | "running" | null): void {
+    let changed = false;
     for (const row of this.d.repo.stale(this.d.now())) {
-      if (row.jobId !== null && jobAlive(row.jobId)) continue;
+      const state = row.jobId !== null ? jobState(row.jobId) : null;
+      if (state === "running") continue;
+      if (state === "queued") {
+        if (row.status === "running") {
+          this.d.repo.update(row.id, { status: "queued", startedAt: null });
+          changed = true;
+        }
+        continue;
+      }
       this.d.repo.update(row.id, { status: "failed", verdict: "error", detail: "interrupted", finishedAt: this.d.now() });
+      changed = true;
     }
+    if (changed) this.d.changed();
   }
 }

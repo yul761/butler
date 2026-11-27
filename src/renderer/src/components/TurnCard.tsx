@@ -11,6 +11,7 @@ import { S } from "../strings";
 import { runCardAction } from "../turn-card-actions";
 import { turnSentence } from "../turn-text";
 import { Notice } from "./Notice";
+import { TicketPreReviewChip } from "./PreReviewChip";
 
 export interface TurnCardProps {
   item: TurnItem;
@@ -58,10 +59,11 @@ export const TurnCard = memo(function TurnCard({ item, ctx, now, onFix, onOpen, 
       <div className="turn-card-body">
         {shipherd ? <Notice notice={t.notice} now={now} onOpen={onOpen} onGo={onGo} /> : <p className="sentence">{turnSentence(t, item, S)}</p>}
         {t.kind === "stuck" && t.action && <p className="stuck-action">{S.hm.stuckAction(t.action)}</p>}
-        {(where || age) && (
+        {(where || age || item.ticketKey !== null) && (
           <p className="where muted">
             {where && <span className="path" title={where}><span className="scope">{scope}</span>{key !== null && <span className="key">{key}</span>}</span>}
             {age && <span className="age">{age}</span>}
+            {item.ticketKey !== null && <TicketPreReviewChip ticketKey={item.ticketKey} />}
           </p>
         )}
         {result && <p className="muted" role="status">{result}</p>}

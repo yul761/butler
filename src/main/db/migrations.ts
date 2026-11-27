@@ -1652,4 +1652,14 @@ export const MIGRATIONS: string[] = [
     batch_id INTEGER);
   CREATE INDEX lesson_merge_proposals_status ON lesson_merge_proposals(status);
   `,
+  // 61（BTL-271）：预审看得见。started_at 是这一次真正开跑的时间（界面显示「预审中 3 分钟」；放回队列时清空）。
+  // 按 ticket 看每个（仓库, 分支）最近一次预审（徽标、总控的 list_tickets）要按 ticket 找，加索引。
+  // 预审并发数新装默认 2；已经在用的（有 ticket 或做完了引导）留在以前的 1 个，不悄悄翻倍花额度。
+  `
+  ALTER TABLE pre_reviews ADD COLUMN started_at INTEGER;
+  CREATE INDEX pre_reviews_ticket ON pre_reviews (ticket_key, repo_slug, branch);
+  INSERT OR IGNORE INTO settings (key, value)
+    SELECT 'preReviewConcurrency', '1'
+    WHERE EXISTS (SELECT 1 FROM tickets) OR EXISTS (SELECT 1 FROM settings WHERE key = 'onboardingDone' AND value = '1');
+  `,
 ];

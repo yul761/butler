@@ -20,7 +20,7 @@ const ok = (value: unknown): HeadlessExecResult => ({ ok: true, value, rawText: 
 const proj: ProfileProject = { dir: "", langs: [], install: null, build: null, testAll: "pnpm test", testOne: null, fastest: null, lint: null, typecheck: null, inferred: [] };
 const lesson = (id: number, text: string): Lesson => ({ id, text, strength: "must", scopeGlobs: [], scopeLang: null } as unknown as Lesson);
 
-function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean); dirty?: string; guardOk?: boolean; review?: unknown; verify?: unknown } = {}) {
+function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean); dirty?: string; guardOk?: boolean; review?: unknown; verify?: unknown; placeOf?: PreReviewServiceDeps["placeOf"]; lang?: "zh" | "en" } = {}) {
   const db = memDb();
   const repo = new PreReviewRepo(db);
   const tickets = new TicketsRepo(db);
@@ -28,6 +28,8 @@ function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean)
   const prs = new TicketPrsRepo(db);
   const jobs: { kind: string; payload: { preReviewId: number }; dedupeKey: string | null | undefined }[] = [];
   const cancelled: number[] = [];
+  const fronted: number[] = [];
+  let changes = 0;
   const sent: string[] = [];
   let guardOk = o.guardOk ?? true;
   const git = async (_cwd: string, args: string[]) => (args[0] === "rev-parse" ? (args[1] === "HEAD" ? SHA : "feat/x") : (o.dirty ?? ""));
@@ -35,7 +37,8 @@ function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean)
   const deliverQueued = mailbox.deliverQueued;
   const sd: PreReviewServiceDeps = {
     repo,
-    queue: { enqueue: (kind, payload, x) => (jobs.push({ kind, payload, dedupeKey: x.dedupeKey }), jobs.length), cancel: (id) => (cancelled.push(id), true) },
+    queue: { enqueue: (kind, payload, x) => (jobs.push({ kind, payload, dedupeKey: x.dedupeKey }), jobs.length), cancel: (id) => (cancelled.push(id), true), moveToFront: (id) => (fronted.push(id), true) },
+    placeOf: o.placeOf,
     enabled: (k) => (typeof o.enabled === "function" ? o.enabled(k) : (o.enabled ?? true)),
     place: (sid) => (sid === "s1" ? { cwd: "/w", ticketKey: "T-1", slug: "o/app" } : null),
     git,
@@ -46,8 +49,8 @@ function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean)
     profile: () => ({ projects: [proj], dirs: [], ci: [], pitfalls: [] }),
     policy: () => defaultPrPolicy(),
     mailbox,
-    lang: () => "en",
-    changed: () => undefined,
+    lang: () => o.lang ?? "en",
+    changed: () => void changes++,
     now: () => 1000,
     log: () => undefined,
   };
@@ -69,6 +72,7 @@ function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean)
     lang: () => "en",
     after: async (row) => void after.push(row.id),
     deliver: async (row) => void (await service.deliver(row)),
+    changed: () => void changes++,
     now: () => 2000,
     log: () => undefined,
   };
@@ -78,7 +82,7 @@ function setup(o: { enabled?: boolean | ((ticketKey?: string | null) => boolean)
     const c = { id: 1, kind: "pre_review", payload: { preReviewId: id }, checkpoint, ticketKey: "T-1", attempts: 1, signal, save: (x: unknown) => saved.push(x), sessionAwake: () => true, admitSession: async () => ({ ok: false, reason: "x" }) } as BgJobContext;
     return { c, saved };
   };
-  return { db, repo, prs, service, handler, ctx, jobs, cancelled, sent, after, setGuard: (v: boolean) => (guardOk = v), deliverQueued };
+  return { db, repo, prs, service, handler, ctx, jobs, cancelled, fronted, sent, after, setGuard: (v: boolean) => (guardOk = v), deliverQueued, mailbox, changes: () => changes, rd };
 }
 
 const evidence = { checks: [{ name: "unit tests", category: "test", command: "echo ok", result: "pass", output: "12 passed" }], acceptance: [{ criterion: "AC1", how: "added X" }] };
@@ -229,6 +233,20 @@ describe("PreReviewService.onPrSeen", () => {
     const row = s.prs.link({ ticketKey: "T-1", url: "https://github.com/o/app/pull/4", slug: "o/app", repoId: null, number: 4, headBranch: "feat/x", state: "open", source: "branch", linkedAt: 1 }).pr;
     return { ...row, headSha: SHA, ...p };
   };
+  it("manual and rerun reuse this ticket's session and worktree, not those of another ticket on the same code", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    // 同一份代码后来又挂在另一个 epic 的 ticket T-2 上交过一次（更新的一行）。
+    const other = s.repo.insert({ ticketKey: "T-2", sessionId: "s-other", target: { repoSlug: "o/app", branch: "feat/x", headSha: SHA }, cwd: "/elsewhere", base: null, prId: null, trigger: "evidence", createdAt: 1500 });
+    expect(other).toBeGreaterThan(r.preReviewId);
+    const m = s.service.manual(pr(s))!;
+    expect(s.repo.get(m)).toMatchObject({ ticketKey: "T-1", sessionId: "s1", cwd: "/w" });
+    const again = s.service.rerun(r.preReviewId)!;
+    expect(s.repo.get(again)).toMatchObject({ ticketKey: "T-1", sessionId: "s1", cwd: "/w" });
+    // 证据也是这个 ticket 的那一次。
+    expect(s.repo.evidenceOf(again).map((e) => e.sessionId)).toEqual(["s1", "s1"]);
+  });
   it("attaches the PR to earlier work on the same commit and queues once per commit", async () => {
     const s = setup();
     const r = await s.service.submitEvidence("s1", evidence);
@@ -270,5 +288,130 @@ describe("runner helpers", () => {
     expect(verdictOf([], f)).toBe("violations");
     expect(verdictOf([], summarizeHits([hit({ mode: "shadow" })]))).toBe("clean");
     expect(verdictOf([{ lessonId: 1, checkKey: null, file: "a", line: null, severity: "should", what: "", fix: "" }], [])).toBe("clean");
+  });
+});
+
+describe("pre-review visibility and queue actions (BTL-271)", () => {
+  it("submit_evidence tells the session its place in the queue and why the queue is stopped", async () => {
+    const zh = setup({ lang: "zh", placeOf: () => ({ position: 3, ahead: 2, running: 2, reason: null, waiting: null }) });
+    const r = await zh.service.submitEvidence("s1", evidence);
+    expect(r.message).toContain("排在预审队列第 3 个（前面还有 2 个）");
+    expect(r.message).toContain("现在有 2 个在跑");
+    const paused = setup({ lang: "zh", placeOf: () => ({ position: 1, ahead: 0, running: 0, reason: "cost", waiting: null }) });
+    expect((await paused.service.submitEvidence("s1", evidence)).message).toContain("预审现在停着（花费熔断了），恢复后才开始");
+    const en = setup({ placeOf: () => ({ position: 2, ahead: 1, running: 1, reason: "memory", waiting: null }) });
+    expect((await en.service.submitEvidence("s1", evidence)).message).toMatch(/number 2 in the pre-review queue \(1 ahead\); pre-review is paused right now \(memory is short\)/);
+    // 马上就开跑了（不在排队里）
+    const running = setup({ placeOf: () => null });
+    expect((await running.service.submitEvidence("s1", evidence)).message).toContain("Shipherd is pre-reviewing it.");
+  });
+
+  it("cancel takes a queued pre-review off the queue and tells the waiting session", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    expect(s.service.cancel(r.preReviewId)).toEqual({ ok: true });
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ status: "skipped", detail: "cancelled" });
+    expect(s.cancelled).toEqual([1]);
+    expect(s.mailbox.queuedByRef(`prereview:${r.preReviewId}`)).toBeTruthy();
+    expect(s.service.cancel(r.preReviewId)).toEqual({ ok: false, reason: "not_queued" });
+    expect(s.service.cancel(999)).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("cancelling a running pre-review: the runner neither puts it back nor writes its late result", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    const ctl = new AbortController();
+    const { c } = s.ctx(r.preReviewId, null, ctl.signal);
+    // 模型调用期间取消：中止信号、行改成 skipped
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const slow = makePreReviewHandler({ ...s.rd, exec: async (x) => (await gate, ok(x.task === "pre_review" ? { violations: [], summary: "late" } : { items: [] })) });
+    const run = slow(c);
+    await new Promise((res) => setTimeout(res, 0));
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ status: "running", startedAt: 2000 });
+    expect(s.service.cancel(r.preReviewId)).toEqual({ ok: true });
+    ctl.abort();
+    release();
+    await run;
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ status: "skipped", detail: "cancelled", summary: null });
+  });
+
+  it("a cancel that lands while the model runs drops the result even without the abort signal", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const slow = makePreReviewHandler({ ...s.rd, exec: async (x) => (await gate, ok(x.task === "pre_review" ? { violations: [], summary: "late" } : { items: [] })) });
+    const run = slow(s.ctx(r.preReviewId).c);
+    await new Promise((res) => setTimeout(res, 0));
+    s.service.cancel(r.preReviewId);
+    release();
+    expect(await run).toEqual({ done: true });
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ status: "skipped", summary: null });
+    expect(s.after).toEqual([]);
+  });
+
+  it("the runner records the start time when it marks running and notifies at start and at the verdict", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    const before = s.changes();
+    await s.handler(s.ctx(r.preReviewId).c);
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ status: "done", startedAt: 2000 });
+    expect(s.changes() - before).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a yielded pre-review goes back to the queue with no start time", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    const ctl = new AbortController();
+    ctl.abort();
+    expect(await s.handler(s.ctx(r.preReviewId, null, ctl.signal).c)).toEqual({ defer: true });
+    expect(s.repo.get(r.preReviewId)).toMatchObject({ status: "queued", startedAt: null });
+  });
+
+  it("moveToFront moves the queued job; finished or unknown ones are refused", async () => {
+    const s = setup();
+    const r = await s.service.submitEvidence("s1", evidence);
+    if (!r.ok) throw new Error(r.message);
+    expect(s.service.moveToFront(r.preReviewId)).toEqual({ ok: true });
+    expect(s.fronted).toEqual([1]);
+    await s.handler(s.ctx(r.preReviewId).c);
+    expect(s.service.moveToFront(r.preReviewId)).toEqual({ ok: false, reason: "not_queued" });
+    expect(s.service.moveToFront(12345)).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("startup sweep: a row left running whose job went back to the queue is queued again with no start time, and can move to the front", () => {
+    const s = setup();
+    const target = { repoSlug: "o/app", branch: "feat/x", headSha: SHA };
+    const mk = (jobId: number | null) => {
+      const id = s.repo.insert({ ticketKey: "T-1", sessionId: "s1", target, cwd: "/w", base: null, prId: null, trigger: "evidence", createdAt: 1 });
+      s.repo.update(id, { status: "running", startedAt: 500, jobId });
+      return id;
+    };
+    // 上次退出时：任务被 resetRunning 放回排队、行没来得及改；一条任务还在跑（这次启动刚取走）；一条任务没了。
+    const requeued = mk(7);
+    const live = mk(8);
+    const gone = mk(9);
+    const before = s.changes();
+    s.service.sweep((jobId) => (jobId === 7 ? "queued" : jobId === 8 ? "running" : null));
+    expect(s.repo.get(requeued)).toMatchObject({ status: "queued", startedAt: null });
+    expect(s.repo.get(live)).toMatchObject({ status: "running", startedAt: 500 });
+    expect(s.repo.get(gone)).toMatchObject({ status: "failed", verdict: "error", detail: "interrupted" });
+    expect(s.changes()).toBeGreaterThan(before);
+    expect(s.service.moveToFront(requeued)).toEqual({ ok: true });
+    expect(s.fronted).toEqual([7]);
+  });
+
+  it("moveToFront goes by the job even while the row still says running (the queue refuses a job that really runs)", () => {
+    const s = setup();
+    const id = s.repo.insert({ ticketKey: "T-1", sessionId: "s1", target: { repoSlug: "o/app", branch: "feat/x", headSha: SHA }, cwd: "/w", base: null, prId: null, trigger: "evidence", createdAt: 1 });
+    s.repo.update(id, { status: "running", startedAt: 500, jobId: 3 });
+    expect(s.service.moveToFront(id)).toEqual({ ok: true });
+    expect(s.fronted).toEqual([3]);
   });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { EXTERNAL_ACTION_SETTINGS } from "../../../shared/external";
+import { PRE_REVIEW_CONCURRENCY } from "../../../shared/prereview";
 import type { PrPolicyKey, PrPolicyOverrides, PrScope, RiskPathClass } from "../../../shared/pr-policy";
 import type { EditableSettings } from "../../../shared/settings";
 import { api, ShipherdError } from "../api";
@@ -10,6 +11,8 @@ import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
 const R = () => S.rv;
+/** 预审并发数能选的值（设置 preReviewConcurrency）。 */
+const CONCURRENCY_OPTIONS = Array.from({ length: PRE_REVIEW_CONCURRENCY.max - PRE_REVIEW_CONCURRENCY.min + 1 }, (_, i) => PRE_REVIEW_CONCURRENCY.min + i);
 
 /** 设置 →「预审和就绪」（工作流 G）：预审总开关、自动贴简报、三层策略。 */
 export function ReviewSettings() {
@@ -40,15 +43,16 @@ function Switches() {
   if (!values) return null;
   const current = values;
   const post = EXTERNAL_ACTION_SETTINGS.pr_brief_post;
-  const toggle = async (key: "preReviewEnabled" | typeof post, on: boolean) => {
-    setValues({ ...current, [key]: on ? "1" : "0" });
+  const set = async (key: "preReviewEnabled" | "preReviewConcurrency" | typeof post, value: string) => {
+    setValues({ ...current, [key]: value });
     try {
-      await api.setSetting(key, on ? "1" : "0");
+      await api.setSetting(key, value);
     } catch (e) {
       reportError(e);
     }
     await load();
   };
+  const toggle = (key: "preReviewEnabled" | typeof post, on: boolean) => set(key, on ? "1" : "0");
   return (
     <div className="field" data-testid="review-switches">
       <label className="inline">
@@ -56,6 +60,17 @@ function Switches() {
         {R().enabled}
       </label>
       <p className="muted">{R().enabledHint}</p>
+      <label className="inline">
+        {S.prq.concurrencyLabel}
+        <select
+          data-testid="review-concurrency"
+          value={current.preReviewConcurrency}
+          onChange={(e) => void set("preReviewConcurrency", e.target.value)}
+        >
+          {CONCURRENCY_OPTIONS.map((n) => <option key={n} value={String(n)}>{n}</option>)}
+        </select>
+      </label>
+      <p className="muted">{S.prq.concurrencyHint}</p>
       <h3>{R().externalTitle}</h3>
       <label className="inline">
         <input type="checkbox" data-testid="review-auto-post" checked={current[post] === "1"} onChange={(e) => void toggle(post, e.target.checked)} />

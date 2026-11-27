@@ -3,7 +3,7 @@ import type { Route } from "./App";
 
 /** 这一版有的页面。路由可能来自旧版本（比如以前的 epic 页）：不在这里的也算没了。 */
 const PAGES: Record<Route["page"], true> = {
-  home: true, ticket: true, feature: true, shipherd: true, effect: true, all: true, unclaimed: true, archived: true, settings: true, audit: true, lessons: true,
+  home: true, ticket: true, feature: true, shipherd: true, effect: true, all: true, unclaimed: true, archived: true, settings: true, audit: true, lessons: true, prereview: true,
 };
 
 /**

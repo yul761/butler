@@ -6,6 +6,7 @@ import { useCollapsed } from "./useCollapsed";
 import { api } from "../api";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
+import { preReviewSidebarText } from "../prereview-view";
 
 // 侧栏（UI 重做第 2 层，spec §5.3）：轮到你、全部工作的树、总控、「Shipherd 自己」一组、防休眠。
 // 树里每个节点的点只表示谁该动（第 1 层的 turn:board 算出来，App 传进 dots）。
@@ -48,6 +49,8 @@ function DotMark({ dot }: { dot: Dot | null }) {
 /** 侧栏（BTL-242 起 memo）：App 每次刷新都重画，列表没变时这里不跟着画。 */
 export const Sidebar = memo(function Sidebar({ tickets, features, youCount, dots, route, onNavigate, keepAwake, onKeepAwake }: Props) {
   const lessonsPending = useStateRefetch("lessons-pending", api.lessonsPending) ?? 0;
+  const preQueue = useStateRefetch("prereview-queue", api.preReviewQueue);
+  const preText = preQueue ? preReviewSidebarText(preQueue, S) : null;
   const badge = youCount !== null && youCount > 0 ? youCount : 0;
   const activeKey = route.page === "ticket" ? route.key : null;
   const activeFeature = route.page === "feature" ? route.id : null;
@@ -77,6 +80,12 @@ export const Sidebar = memo(function Sidebar({ tickets, features, youCount, dots
         {tickets.map((t) => <TicketButton key={t.key} ticket={t} active={activeKey === t.key} dot={dots.get(dotKey("ticket", t.key)) ?? null} onNavigate={onNavigate} />)}
       </div>
       <button className={cls("nav shipherd", route.page === "shipherd")} onClick={() => onNavigate({ page: "shipherd" })}>{S.shipherdNav}</button>
+      {/* 预审队列（BTL-271）：有在跑、在排的才显示；正在看队列页时也留着（不然点进去它就没了）。 */}
+      {(preText !== null || route.page === "prereview") && (
+        <button className={cls("nav prq-nav", route.page === "prereview")} data-testid="nav-prereview" onClick={() => onNavigate({ page: "prereview" })}>
+          {preText ?? S.prq.title}
+        </button>
+      )}
       <h3 className="nav-group">{S.selfGroup}</h3>
       <button className={cls("nav", route.page === "lessons")} data-testid="lessons-nav" title={lessonsPending > 0 ? S.lessonsNavCount(lessonsPending) : undefined} onClick={() => onNavigate({ page: "lessons" })}>
         {S.lessons}{lessonsPending > 0 ? ` · ${lessonsPending}` : ""}

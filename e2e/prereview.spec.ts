@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { CAT } from "../src/main/assess/readiness";
@@ -62,6 +62,10 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   git("commit", "-q", "-m", "greet the user");
   const sha = git("rev-parse", "HEAD").trim();
   s.setGh(fixture(sha));
+  // 第一次预审先卡在假 claude 里：看「预审中」的徽标、侧栏指示和队列页（BTL-271）。
+  const gate = join(s.dir, "prereview-gate");
+  writeFileSync(gate, "");
+  s.env.FAKE_CLAUDE_PREREVIEW_GATE = gate;
 
   const { page } = await launch(s);
   await completeWizard(page, s);
@@ -71,6 +75,9 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await enabled.check();
   await expect(enabled).toBeChecked();
   await expect(page.getByTestId("review-row-evidence.require.test")).toBeVisible();
+  // 并发数是个设置（BTL-271）：改成 3，队列页上写着。
+  await page.getByTestId("review-concurrency").selectOption("3");
+  await expect(page.getByTestId("review-concurrency")).toHaveValue("3");
 
   await (await newButton(page, "newTicket")).click();
   await page.getByLabel(S.ticketKey, { exact: true }).fill("E2E-7");
@@ -85,6 +92,23 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   // 1. 只交验收条件：预审做完，证据缺测试输出 → 没就绪。
   const first = await callTool(page, s, "submit_evidence", { acceptance: [{ criterion: "greets the user", how: "src/greet.ts returns Hello, <name>" }] });
   expect(first.error, first.text).toBe(false);
+  // 预审卡着（BTL-271）：ticket 页头和 session 条上都是「预审中」（和「等 CI」分得开），侧栏有「预审 1 个进行中」。
+  await expect.poll(() => fakeLog(s), { timeout: 90_000 }).toContain("pre-review held");
+  await expect(page.locator(".ticket-header [data-testid=prereview-chip]")).toHaveAttribute("data-state", "running", { timeout: 30_000 });
+  await expect(page.locator(".sessions-bar [data-testid=prereview-chip]")).toHaveAttribute("data-state", "running");
+  const nav = page.getByTestId("nav-prereview");
+  await expect(nav).toContainText(S.prq.sidebar(1, 0));
+  // 点进去：队列页列出在跑的那个（ticket、怎么触发的），写着并发数。
+  await nav.click();
+  const running = page.getByTestId("prereview-running");
+  await expect(running).toContainText("E2E-7");
+  await expect(running).toContainText(S.prq.trigger.evidence);
+  await expect(page.getByTestId("prereview-queue-page")).toContainText(S.prq.concurrency(3));
+  // 放行：队列空了，回 ticket 页。
+  rmSync(gate);
+  await expect(page.getByTestId("prereview-queue-empty")).toBeVisible({ timeout: 90_000 });
+  await page.locator(".sidebar").getByRole("button", { name: /^E2E-7/ }).click();
+  await expect(page.getByRole("heading", { name: "E2E-7", exact: true })).toBeVisible();
   await openTicketTab(page, "pr");
   const card = page.getByTestId("review-pr-51");
   await expect(card.getByTestId("review-prereview")).toHaveAttribute("data-status", "done", { timeout: 90_000 });
@@ -93,6 +117,8 @@ test("evidence goes through pre-review into readiness, risk and a review brief",
   await expect(evidenceCond).toContainText(new RegExp(`${CAT.zh.test}|${CAT.en.test}`));
   await expect(card.getByTestId("review-ready-badge")).toHaveText(S.rv.notReady);
   await expect(card.getByTestId("review-gaps")).toBeVisible();
+  // 做完了：页头的徽标是「预审通过」（假 claude 没找到违规）。
+  await expect(page.locator(".ticket-header [data-testid=prereview-chip]")).toHaveAttribute("data-state", "clean");
 
   // 2. 补上测试输出：核对一致 → 六个条件都满足，就绪；有风险等级和简报。工具在「终端」页签的 session 里调，结果回「PR 详情」看。
   await openTicketTab(page, "terminal");

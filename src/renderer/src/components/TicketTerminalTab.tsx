@@ -16,6 +16,7 @@ import { RefreshSessionButton } from "./RefreshSessionButton";
 import { SessionLimit } from "./SessionLimit";
 import { SessionCost } from "./SessionCost";
 import { TerminalPane } from "./TerminalPane";
+import { SessionPreReviewChip } from "./PreReviewChip";
 
 const VISIBLE_SESSIONS = 3;
 
@@ -205,6 +206,7 @@ export function TicketTerminalTab({ ticket, term }: { ticket: TicketView; term: 
               {s.spawnedBy && <span className="muted" title={S.spawnedByCoordinator}>↳</span>}
               <span className="label">{sessionLabel(s, S.untitledSession)}</span>
               <NoChecksMark reason={s.checksAbsent} />
+              <SessionPreReviewChip sessionId={s.id} />
               <span className="muted">{s.lastActivityAt ? formatShort(s.lastActivityAt) : ""}</span>
               <HibernateBadges s={s} />
               <span className="action">{s.termId ? S.switchTo : isHibernated(s) ? S.hib.open : S.open}</span>

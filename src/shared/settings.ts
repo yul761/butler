@@ -65,6 +65,8 @@ export const EDITABLE_SETTINGS = [
   "externalIntakeTrackerComment",
   "externalIntakeTrackerStatus",
   "preReviewEnabled",
+  // BTL-271：预审同时最多跑几个（1–8，默认 2）。
+  "preReviewConcurrency",
   "lessonsAutoAdmit",
   "lessonsPrinciples",
   "lessonsCoreGuide",

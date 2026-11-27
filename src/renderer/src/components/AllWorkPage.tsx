@@ -14,6 +14,7 @@ import { WhoTag } from "./ScopeParts";
 import { ManagedStacks } from "./StacksPanel";
 import { useStateRefetch } from "./useStateRefetch";
 import { api } from "../api";
+import { TicketPreReviewChip } from "./PreReviewChip";
 
 export interface AllWorkBodyProps {
   board: TurnBoard | null;
@@ -95,7 +96,7 @@ export function AllWorkBody(p: AllWorkBodyProps) {
                     {r.kind === "ticket" ? <><span className="key">{r.id}</span>{r.title && <span className="title">{r.title}</span>}</> : <span className="title">{r.name}</span>}
                   </button></td>
                   <td>{whoCell(r, s)}</td>
-                  <td>{nowText(r, s)}</td>
+                  <td>{nowText(r, s)}{r.kind === "ticket" && <TicketPreReviewChip ticketKey={String(r.id)} hideNone />}</td>
                   <td>
                     {s && bar.length > 0 ? (
                       <div className="turn-bar">{bar.map((b) => <i key={b.tone} className={`turn-${b.tone}`} style={{ width: `${b.pct}%` }} />)}</div>

@@ -6,6 +6,7 @@ import { shortTime } from "../progress-ui";
 import { assessmentTitle, riskPill } from "../review-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
+import { PrPreReviewChip } from "./PreReviewChip";
 
 const R = () => S.rv;
 
@@ -112,7 +113,7 @@ function PreReviewBlock({ a }: { a: PrAssessmentView }) {
   const del = p?.files.reduce((n, f) => n + f.deleted, 0) ?? 0;
   return (
     <>
-      <h5>{R().preReview}</h5>
+      <h5>{R().preReview} {a.prId !== null && <PrPreReviewChip prId={a.prId} />}</h5>
       {!p ? <p className="muted">{R().preReviewNone}</p> : (
         <div data-testid="review-prereview" data-status={p.status}>
           <p>

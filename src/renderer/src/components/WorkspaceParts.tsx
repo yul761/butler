@@ -14,6 +14,7 @@ import { SessionLimit } from "./SessionLimit";
 import { SessionCost } from "./SessionCost";
 import { RepoPicker } from "./RepoPicker";
 import { TerminalPane } from "./TerminalPane";
+import { SessionPreReviewChip } from "./PreReviewChip";
 
 /** feature 页的标题栏，以及页面下半部分的仓库条、session 条和终端（session 条和终端 Shipherd 总控页也用）。 */
 
@@ -188,6 +189,7 @@ export function SessionButton({ s, panes, place }: { s: SessionView; panes: Sess
         <span className="place">{place}</span>
         <span className="label">{label}</span>
         <NoChecksMark reason={s.checksAbsent} />
+        <SessionPreReviewChip sessionId={s.id} />
         <HibernateBadges s={s} />
         <span className="action">{s.termId ? S.switchTo : hibernated ? S.hib.open : S.open}</span>
       </button>

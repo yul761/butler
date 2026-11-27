@@ -52,6 +52,8 @@ export interface RunnerDeps {
   after(row: PreReviewRow): Promise<void>;
   /** 送进 session（没有 session 或送不到就留着，roundDone 再试）。 */
   deliver(row: PreReviewRow): Promise<void>;
+  /** 开跑、出结论、放回队列时：界面马上刷新（notify）。 */
+  changed?(): void;
   now(): number;
   log(msg: string, err?: unknown): void;
 }
@@ -91,19 +93,28 @@ export function makePreReviewHandler(d: RunnerDeps): BgHandler {
     const row = Number.isFinite(id) ? d.repo.get(id) : null;
     if (!row) return { done: true };
     if (row.status !== "queued" && row.status !== "running") return { done: true };
-    d.repo.update(row.id, { status: "running", jobId: ctx.id });
+    // 开跑的时间在标 running 的这一刻取（界面算「预审中 N 分钟」）。
+    d.repo.update(row.id, { status: "running", jobId: ctx.id, startedAt: d.now() });
+    d.changed?.();
     // 让路时放回 queued（新证据能取代它）；中途抛错收成 failed，不留一行永远「进行中」。
+    // 放回之前重读：等的这段时间里被取消了（行已经是 skipped）就不放回。
+    const requeue = () => {
+      if (d.repo.get(row.id)?.status !== "running") return;
+      d.repo.update(row.id, { status: "queued", startedAt: null });
+      d.changed?.();
+    };
     try {
       const r = await runOnce(d, ctx, row);
-      if ("defer" in r) d.repo.update(row.id, { status: "queued" });
+      if ("defer" in r) requeue();
       return r;
     } catch (e) {
       if (ctx.signal.aborted) {
-        d.repo.update(row.id, { status: "queued" });
+        requeue();
         return { defer: true };
       }
       d.log(`pre-review ${row.id}: failed`, e);
       d.repo.update(row.id, { status: "failed", verdict: "error", detail: `error: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500), finishedAt: d.now() });
+      d.changed?.();
       await afterAndDeliver(d, row.id);
       return { done: true };
     }
@@ -118,6 +129,7 @@ async function runOnce(d: RunnerDeps, ctx: BgJobContext, row: PreReviewRow): Pro
   const save = () => ctx.save(cp);
   const finishFailed = async (detail: string): Promise<BgJobResult> => {
     d.repo.update(row.id, { status: "failed", verdict: "error", detail: detail.slice(0, 500), finishedAt: d.now() });
+    d.changed?.();
     await afterAndDeliver(d, row.id);
     return { done: true };
   };
@@ -196,6 +208,8 @@ async function runOnce(d: RunnerDeps, ctx: BgJobContext, row: PreReviewRow): Pro
   ]);
   if (!row.cwd) rmSync(modelCwd, { recursive: true, force: true });
   if (ctx.signal.aborted) return { defer: true };
+  // 模型调用期间被取消了（队列页、总控）：行已经是 skipped，结果丢掉，不写回。
+  if (d.repo.get(row.id)?.status !== "running") return { done: true };
 
   // 3. 证据核实结果：模型没定的、调用失败的记 unverifiable。
   const verdicts = new Map(verify.ok ? verify.verdicts : []);
@@ -214,6 +228,8 @@ async function runOnce(d: RunnerDeps, ctx: BgJobContext, row: PreReviewRow): Pro
       model: review.model, status: "done", detail: total > lessons.length ? `${total - lessons.length} rules left out` : null, finishedAt: d.now(),
     });
   }
+  // 结论一写下就刷新：后面的评估、简报还要一会儿，界面不能一直显示「预审中」。
+  d.changed?.();
   await afterAndDeliver(d, row.id);
   return { done: true };
 }

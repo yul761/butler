@@ -198,6 +198,7 @@ const ZH = {
   hibernateMinutes: "休眠的等待时间是 0（这种不休眠）或者一个不小于 5 的整数分钟数，最多 5 位",
   automationLevel: "自动化档位只能是 manual（手动）或 semi（半自动）",
   memoryPressureFreePercent: "内存紧张的线是 1 到 50 之间的整数（可用内存的百分比）",
+  preReviewConcurrency: "预审并发数是 1 到 8 之间的整数",
   claudePathAbsolute: "claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找",
   language: "语言只能是 auto、zh 或 en",
   reviewRequestScope: "请你 review 的范围只能是 all 或 registered",
@@ -405,6 +406,17 @@ const ZH = {
   ctlLessonsUnavailable: "现在查不到规矩，过一会儿再试；session 说明旁边的全文文件里也有",
   ctlNoPreReview: "这个 session 还没有预审结果（交完证据、或 PR 开出来以后才有）",
   ctlNoSuchPr: (pr: string) => `找不到 PR「${pr}」（给 list_prs 里的 prId 或 PR 链接）`,
+  // BTL-271：总控的预审工具。
+  ctlPreReviewNoTicket: (t: string) => `找不到 ticket ${t}（用 list_tickets 里的 key）`,
+  ctlPreReviewNotInEpic: (x: string) => `${x} 不在这个 epic 里，只能看、只能重跑自己 epic 的`,
+  ctlPreReviewPrClosed: (url: string) => `${url} 已经关了或合了，不再预审`,
+  ctlPreReviewNoHead: (url: string) => `${url} 还没读到 head 提交，过一会儿再试`,
+  ctlPreReviewNothing: (t: string) => `${t} 没有开着的 PR，也没预审过，没有可以重跑的代码（先让它的 session 交证据）`,
+  ctlPreReviewNotCoordinator: "只有这个作用域开着的总控自己能重跑、取消、插队预审；看可以",
+  ctlPreReviewAlreadyNote: "这份代码已经在排队或在跑了，没有再排一次（already = true）。position 是排第几；做完结果会送给交证据的 session，用 pre_review_status 看。",
+  ctlPreReviewQueuedNote: "已经排上了。position 是排第几，reason 是队列为什么停着；做完结果会送给交证据的 session，用 pre_review_status 看。",
+  ctlPreReviewNoSuch: (id: number) => `预审 ${id} 不在队列里，或者不归你管（用 pre_review_queue 看 id）`,
+  ctlPreReviewActFailed: (reason: string): string => (reason === "not_queued" ? "这次预审已经不在排队了（开跑了、做完了或者被取消了）" : reason === "not_found" ? "找不到这次预审" : "没做成，再试一次"),
   shipherdMessagePrefix: "Shipherd 总控发来的消息（你这一轮做完时的最后一段回复会转给它）：",
   shipherdPatrolMessage:
     "【每日巡检】请做一次巡检：1. progress_overview 看整体进度和每个 PR 轮到谁，列出 CI 失败、要修改、可以合并的；2. list_inbox 看待你决定和最近的汇报；" +
@@ -874,6 +886,7 @@ const EN: MainStrings = {
   hibernateMinutes: "The hibernation wait must be 0 (never for this kind) or a whole number of minutes from 5 up, at most 5 digits",
   automationLevel: "The automation level must be manual or semi",
   memoryPressureFreePercent: "The memory pressure line must be a whole number from 1 to 50 (percent of memory free)",
+  preReviewConcurrency: "Pre-review concurrency must be a whole number from 1 to 8",
   claudePathAbsolute: "The claude path must be absolute, for example /usr/local/bin/claude; leave it empty to find it automatically",
   language: "The language can only be auto, zh or en",
   reviewRequestScope: "The review request scope can only be all or registered",
@@ -1054,6 +1067,17 @@ const EN: MainStrings = {
   ctlLessonsUnavailable: "Can't look up the rules right now; try again in a moment. The full-text file next to the session guide has them too",
   ctlNoPreReview: "This session has no pre-review result yet (one appears after you submit evidence or open a PR)",
   ctlNoSuchPr: (pr: string) => `No PR "${pr}" (pass a prId from list_prs or a PR URL)`,
+  // BTL-271: the coordinators' pre-review tools.
+  ctlPreReviewNoTicket: (t: string) => `No ticket ${t} (use a key from list_tickets)`,
+  ctlPreReviewNotInEpic: (x: string) => `${x} is not in this epic; you can only see and re-run your own epic's`,
+  ctlPreReviewPrClosed: (url: string) => `${url} is closed or merged, so it is not pre-reviewed any more`,
+  ctlPreReviewNoHead: (url: string) => `${url} has no head commit read yet; try again in a moment`,
+  ctlPreReviewNothing: (t: string) => `${t} has no open PR and was never pre-reviewed, so there is no code to re-run (have its session submit evidence first)`,
+  ctlPreReviewNotCoordinator: "Only this scope's open coordinator itself can re-run, cancel or reorder pre-reviews; anyone can look",
+  ctlPreReviewAlreadyNote: "That code is already queued or running, so it was not queued again (already = true). position is its place in line; the result goes to the session that submitted evidence. Check it with pre_review_status.",
+  ctlPreReviewQueuedNote: "Queued. position is its place in line and reason is why the queue is stopped; the result goes to the session that submitted evidence. Check it with pre_review_status.",
+  ctlPreReviewNoSuch: (id: number) => `Pre-review ${id} is not in the queue, or is not yours (see the ids with pre_review_queue)`,
+  ctlPreReviewActFailed: (reason: string): string => (reason === "not_queued" ? "That pre-review is no longer queued (it started, finished or was cancelled)" : reason === "not_found" ? "No such pre-review" : "It did not work; try again"),
   shipherdMessagePrefix: "Message from Shipherd control (the last reply you write when you finish this turn goes back to it):",
   shipherdPatrolMessage:
     "[Daily patrol] Please do a patrol: 1. progress_overview for the overall progress and whose turn each PR is, and list those with failing CI, requested changes, or ready to merge; 2. list_inbox for pending decisions and recent reports; " +
