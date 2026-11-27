@@ -107,7 +107,7 @@ describe("closeTicket", () => {
         return "closed";
       },
     });
-    const pending = closeTicket(d, "T-1", { reason: "不做了", source: "coordinator", closePrs: true, endSessions: true });
+    const pending = closeTicket(d, "T-1", { reason: "不做了", source: "coordinator", closePrs: true, prUrls: prs.map((p) => p.url), endSessions: true });
     await Promise.resolve();
     // gh 还在跑：用户点了重新打开。
     expect(reopenTicket(d, "T-1", "user")).toMatchObject({ ok: true });
@@ -138,6 +138,25 @@ describe("closeTicket", () => {
       prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "not_own_branch", error: M().ticketClosePrWhy("not_own_branch", null) }],
     });
     expect(calls).toEqual(["close https://github.com/o/r/pull/2", "rederive T-1", "refresh T-1"]);
+  });
+
+  it("a coordinator or routing close asking to close PRs without naming them does nothing and returns what could be closed (BTL-270 review)", async () => {
+    for (const source of ["coordinator", "routing"] as const) {
+      const prs: ClosablePr[] = [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }];
+      const { d, tickets, followups, calls } = setup({ prs, unclosable: [{ url: "https://github.com/o/r/pull/9", number: 9, kind: "given_up" }], sessions: [{ id: "s1", termId: "s1", hibernated: false }] });
+      const r = await closeTicket(d, "T-1", { reason: "不做了", source, closePrs: true, endSessions: true });
+      expect(r).toEqual({
+        ok: false, error: "pick_prs", ticket: "T-1", closable: [{ url: "https://github.com/o/r/pull/1", number: 1 }],
+        prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "given_up", error: M().ticketClosePrWhy("given_up", null) }],
+      });
+      expect(calls).toEqual([]);
+      expect(tickets.get("T-1")?.statusManual).toBeNull();
+      expect(followups.get("open")?.status).toBe("open");
+    }
+    // 用户（关闭框）不点名就是能关的全部。
+    const { d, calls } = setup({ prs: [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }] });
+    expect(await closeTicket(d, "T-1", { reason: "不做了", source: "user", closePrs: true })).toMatchObject({ ok: true, closedPrs: ["https://github.com/o/r/pull/1"] });
+    expect(calls[0]).toBe("close https://github.com/o/r/pull/1");
   });
 
   it("with nothing ticked (prUrls empty) closes no PR, but still lists the open ones it can't close", async () => {

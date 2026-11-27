@@ -124,7 +124,7 @@ describe("TicketControl (BTL-270)", () => {
         return "closed";
       },
     });
-    const r = await run({ op: "close_ticket", ticket: "A-1", reason: "不做了", close_prs: true });
+    const r = await run({ op: "close_ticket", ticket: "A-1", reason: "不做了", close_prs: true, pr_urls: [1, 2].map((n) => `https://github.com/o/r/pull/${n}`) });
     expect(r).toMatchObject({
       ok: true,
       value: {
@@ -139,6 +139,49 @@ describe("TicketControl (BTL-270)", () => {
     expect(M().ctlClosePrErrors([{ kind: "shared", ticket: "A-2" }])).not.toContain("gh pr close");
     expect(M().ctlClosePrErrors([{ kind: "not_own_branch" }])).not.toContain("gh pr close");
     expect(M().ctlClosePrErrors([{ kind: "failed" }])).toContain("gh pr close");
+  });
+
+  // BTL-270 审查（建议 2）：总控要关 PR 必须点名。
+  it("close_ticket with close_prs but no pr_urls does nothing and returns the closable list to pick from", async () => {
+    const closed: string[] = [];
+    const { run, tickets, followups } = setup({
+      openPrs: () => ({
+        closable: [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }],
+        unclosable: [{ url: "https://github.com/o/r/pull/9", number: 9, kind: "not_own_branch" }],
+      }),
+      closePr: async (pr) => (closed.push(pr.url), "closed"),
+    });
+    const r = await run({ op: "close_ticket", ticket: "A-1", reason: "不做了", close_prs: true, end_sessions: true });
+    expect(r).toMatchObject({
+      ok: true,
+      value: {
+        ticket: "A-1", closed: false, status: "merged_pending_followup",
+        closablePrs: [{ url: "https://github.com/o/r/pull/1", number: 1 }],
+        prErrors: [{ url: "https://github.com/o/r/pull/9", kind: "not_own_branch" }],
+        note: M().ctlClosePickPrs(1, 1),
+      },
+    });
+    expect(closed).toEqual([]);
+    expect(tickets.get("A-1")?.statusManual).toBeNull();
+    expect(followups.get("a1")?.status).toBe("open");
+    // 带上 pr_urls 再来：只关点名的，ticket 关掉。点名了却不是它开着的 PR：没碰，列在 notOpenPrs。
+    const again = await run({
+      op: "close_ticket", ticket: "A-1", reason: "不做了", close_prs: true, pr_urls: ["https://github.com/O/R/pull/1/", "https://github.com/o/r/pull/77"],
+    });
+    expect(again).toMatchObject({ ok: true, value: { status: "closed", closedPrs: ["https://github.com/o/r/pull/1"], notOpenPrs: ["https://github.com/o/r/pull/77"] } });
+    expect((again.ok && (again.value as { note: string }).note) || "").toContain(M().ctlCloseNotOpenPrs(1));
+    expect(closed).toEqual(["https://github.com/o/r/pull/1"]);
+  });
+
+  it("close_ticket without close_prs closes the ticket and no PR", async () => {
+    const closed: string[] = [];
+    const { run, tickets } = setup({
+      openPrs: () => ({ closable: [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }], unclosable: [] }),
+      closePr: async (pr) => (closed.push(pr.url), "closed"),
+    });
+    expect(await run({ op: "close_ticket", ticket: "A-1", reason: "不做了" })).toMatchObject({ ok: true, value: { status: "closed", closedPrs: [] } });
+    expect(tickets.get("A-1")?.statusManual).toBe("closed");
+    expect(closed).toEqual([]);
   });
 
   it("refreshes PRs as the coordinator, so given-up PRs are not forced (BTL-270 review)", async () => {

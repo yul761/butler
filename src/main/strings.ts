@@ -438,6 +438,10 @@ const ZH = {
   ctlFollowupsAllNeedsTicket: "all: true 要和 ticket 一起用：先不带 all 列出没处理完的，再对一个 ticket 带 all 看全部。",
   ctlCloseSessionErrors: (n: number) => `有 ${n} 个 session 没结束（正在干活或在等用户确认），见 sessionErrors。`,
   ctlCloseReopenedMeanwhile: "关的时候 ticket 被重新打开了：后面的 PR 没关、session 没结束。",
+  ctlClosePickPrs: (closable: number, unclosable: number) =>
+    `什么都没做，ticket 也没关：要关 PR 得用 pr_urls 点名。closablePrs 里是能关的 ${closable} 个，看过确实该关的再带上 pr_urls 调一次；` +
+    `不关 PR 就去掉 close_prs。${unclosable > 0 ? `另有 ${unclosable} 个关不了，原因见 prErrors。` : ""}`,
+  ctlCloseNotOpenPrs: (n: number) => `pr_urls 里有 ${n} 个不是这个 ticket 开着的 PR（已经关了、别的 ticket 的、或者写错了），没碰，见 notOpenPrs。`,
   ctlReopenNote: "关掉的 PR、结束的 session 不会自己回来：要接着做，就重开 PR 或开新的 session。",
   ctlMetricsUnavailable: "Shipherd 这里没有效果数据",
   ctlPreReviewUnavailable: "Shipherd 这里没有预审",
@@ -1176,6 +1180,10 @@ const EN: MainStrings = {
   ctlFollowupsAllNeedsTicket: "all: true needs a ticket: list the unfinished ones without all, then pass all with one ticket to see everything.",
   ctlCloseSessionErrors: (n: number) => `${n} session(s) were not ended (working, or waiting for the user to confirm); see sessionErrors.`,
   ctlCloseReopenedMeanwhile: "The ticket was reopened while closing: the remaining PRs were left open and no sessions were ended.",
+  ctlClosePickPrs: (closable: number, unclosable: number) =>
+    `Nothing was done and the ticket is still open: to close PRs, name them in pr_urls. closablePrs lists the ${closable} that can be closed; check them and call again with pr_urls for the ones that should go, ` +
+    `or drop close_prs to close the ticket without closing PRs.${unclosable > 0 ? ` ${unclosable} more can't be closed; see prErrors for why.` : ""}`,
+  ctlCloseNotOpenPrs: (n: number) => `${n} URL(s) in pr_urls are not open PRs of this ticket (already closed, another ticket's, or mistyped) and were left alone; see notOpenPrs.`,
   ctlReopenNote: "Closed PRs and ended sessions do not come back by themselves: reopen the PR or start a new session to keep going.",
   ctlMetricsUnavailable: "Shipherd has no effect data here",
   ctlPreReviewUnavailable: "Shipherd has no pre-review here",

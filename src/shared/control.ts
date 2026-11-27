@@ -107,7 +107,7 @@ export const isPreReviewOp = (op: unknown): op is PreReviewControlOp["op"] =>
  * closed 要给 reason（走 close_ticket）。list_followups 列没处理完的后续事项（all 连处理过的一起），resolve_followup 标成完成或忽略。
  */
 export type TicketStatusControlOp =
-  | { op: "close_ticket"; ticket: string; reason: string; close_prs?: boolean; end_sessions?: boolean }
+  | { op: "close_ticket"; ticket: string; reason: string; close_prs?: boolean; pr_urls?: string[]; end_sessions?: boolean }
   | { op: "reopen_ticket"; ticket: string }
   | { op: "set_ticket_status"; ticket: string; status: ManualTicketStatus | "auto"; reason?: string }
   | { op: "list_followups"; ticket?: string; all?: boolean }
@@ -125,6 +125,9 @@ export type TicketControlRequest =
 
 /** lessons 工具一次最多带几个路径、关键词多长。 */
 export const LESSONS_TOOL_MAX_PATHS = 50;
+/** close_ticket 的 pr_urls 最多几个、每个最长多少：超了直接拒绝，不截断（BTL-270 审查）。 */
+export const CLOSE_TICKET_MAX_PR_URLS = 50;
+export const CLOSE_TICKET_PR_URL_MAX = 2048;
 export const LESSONS_TOOL_MAX_QUERY = 200;
 
 /**
@@ -334,9 +337,14 @@ function ticketStatusOp<B extends object>(base: B, o: Record<string, unknown>): 
   if (o.op === "reopen_ticket") return { ...base, op: "reopen_ticket", ticket: o.ticket };
   if (o.op === "close_ticket") {
     if (!okReason(o.reason) || !optBool(o.close_prs) || !optBool(o.end_sessions)) return null;
+    const urls = o.pr_urls;
+    if (urls !== undefined && (!Array.isArray(urls) || urls.length > CLOSE_TICKET_MAX_PR_URLS || !urls.every((u) => okName(u, CLOSE_TICKET_PR_URL_MAX)))) return null;
+    // 点名了 PR 却说不关（close_prs: false）：自相矛盾，拒绝。
+    if (urls !== undefined && o.close_prs === false) return null;
     return {
       ...base, op: "close_ticket", ticket: o.ticket, reason: o.reason,
-      ...(o.close_prs === true && { close_prs: true }), ...(o.end_sessions === true && { end_sessions: true }),
+      ...((o.close_prs === true || urls !== undefined) && { close_prs: true }), ...(urls !== undefined && { pr_urls: urls as string[] }),
+      ...(o.end_sessions === true && { end_sessions: true }),
     };
   }
   if (o.op === "set_ticket_status") {

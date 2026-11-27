@@ -1,4 +1,5 @@
 import type { ControlResult, TicketStatusControlOp } from "../../shared/control";
+import { prUrlKey } from "../../shared/pr-url";
 import { effectiveStatus, type Followup, type ManualTicketStatus, type Ticket, type TicketCloseSource } from "../../shared/types";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
@@ -86,12 +87,25 @@ export class TicketControl {
       const reason = req.reason ?? "";
       const o: CloseOptions = {
         reason, source: "coordinator", except: call.from,
-        ...(req.op === "close_ticket" && { closePrs: req.close_prs === true, endSessions: req.end_sessions === true }),
+        ...(req.op === "close_ticket" && {
+          closePrs: req.close_prs === true, endSessions: req.end_sessions === true, ...(req.pr_urls !== undefined && { prUrls: req.pr_urls }),
+        }),
       };
       const r = await this.d.close(t.key, o);
+      // 要关 PR 却没点名（BTL-270 审查）：什么都没做，回能关的清单，让它带 pr_urls 再来。
+      if (!r.ok && r.error === "pick_prs") {
+        return ok({
+          ticket: r.ticket, status: this.status(r.ticket), closed: false, closablePrs: r.closable, prErrors: r.prErrors,
+          note: M().ctlClosePickPrs(r.closable.length, r.prErrors.length),
+        });
+      }
       // 原因由 parseControlRequest 保证不空：失败是已经关着（第一次的原因留着），或者 ticket 刚被删掉。
       if (!r.ok) return fail(r.error === "already_closed" ? M().ctlTicketAlreadyClosed(t.key) : M().ctlNoTicket(req.ticket));
+      // 点名了、却不是这个 ticket 开着的 PR（关掉了的、别的 ticket 的、写错了的）：没碰，单独列出来。
+      const seen = new Set([...r.closedPrs, ...r.prErrors.map((e) => e.url)].map(prUrlKey));
+      const notOpen = r.reopenedMeanwhile ? [] : (req.op === "close_ticket" ? req.pr_urls ?? [] : []).filter((u) => !seen.has(prUrlKey(u)));
       const notes = [
+        notOpen.length > 0 && M().ctlCloseNotOpenPrs(notOpen.length),
         r.reopenedMeanwhile && M().ctlCloseReopenedMeanwhile,
         r.prErrors.length > 0 && M().ctlClosePrErrors(r.prErrors),
         r.sessionErrors.length > 0 && M().ctlCloseSessionErrors(r.sessionErrors.length),
@@ -99,6 +113,7 @@ export class TicketControl {
       return ok({
         ticket: r.ticket, status: r.reopenedMeanwhile ? this.status(r.ticket) : "closed", ignoredFollowups: r.ignoredFollowups,
         closedPrs: r.closedPrs, prErrors: r.prErrors, endedSessions: r.endedSessions, sessionErrors: r.sessionErrors,
+        ...(notOpen.length > 0 && { notOpenPrs: notOpen }),
         ...(notes.length > 0 && { note: notes.join(" ") }),
       });
     }

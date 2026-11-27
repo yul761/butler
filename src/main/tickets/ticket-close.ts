@@ -149,7 +149,10 @@ export interface CloseOptions {
   source: TicketCloseSource;
   /** 顺便把 ticket 开着的、能关的 PR 关掉（gh pr close，评论里写原因）。 */
   closePrs?: boolean;
-  /** 只关这些（关闭框里勾了的）；不给就是能关的全部（总控）。 */
+  /**
+   * 只关这些（关闭框里勾了的、总控 pr_urls 点名的）。不给时：用户（关闭框）是能关的全部；
+   * 别的来源（总控、路由）一个都不关，先回一份能关的清单（pickPrs），ticket 也不关，让它点名再来（BTL-270 审查）。
+   */
   prUrls?: string[];
   /** 顺便结束 ticket 的 session（开着的关终端、休眠着的不再唤醒）。 */
   endSessions?: boolean;
@@ -164,7 +167,9 @@ export type CloseResult =
       /** 关 PR 的时候有人重新打开了 ticket：后面的 PR 没关、session 没结束。 */
       reopenedMeanwhile: boolean;
     }
-  | { ok: false; error: "no_ticket" | "empty_reason" | "already_closed" };
+  | { ok: false; error: "no_ticket" | "empty_reason" | "already_closed" }
+  /** 不是用户、要关 PR 却没点名（prUrls）：什么都没做。closable 是能关的（点名用），prErrors 是关不了的。 */
+  | { ok: false; error: "pick_prs"; ticket: string; closable: { url: string; number: number }[]; prErrors: PrCloseError[] };
 
 export type ReopenResult = { ok: true; ticket: string; restoredFollowups: number; status: TicketStatus } | { ok: false; error: "no_ticket" | "not_closed" };
 
@@ -183,6 +188,12 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   if (!reason) return { ok: false, error: "empty_reason" };
   // 已经关着：不再关一次，第一次关的时间、原因、来源留着（剩下的 PR / session 用 retryClose）。
   if (t.statusManual === "closed") return { ok: false, error: "already_closed" };
+  // 总控、路由要关 PR 必须点名：PR 的评论是公开发到 GitHub 的，不让它一句「全关」就关掉没看过的 PR。
+  // ticket 也先不关：关了以后就不能再带 prUrls 关一次（already_closed），只能请用户在关闭框里重试。
+  if (o.closePrs && o.source !== "user" && o.prUrls === undefined) {
+    const p = closePreview(d, key)!;
+    return { ok: false, error: "pick_prs", ticket: key, closable: p.closable, prErrors: p.unclosable };
+  }
   const ignoredFollowups = d.transaction(() => {
     d.tickets.close(key, { at: d.now(), reason, source: o.source });
     return d.followups.ignoreForClose(key, reason, o.source);

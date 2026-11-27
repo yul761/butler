@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { renameWithRetrySync } from "../src/main/util/fs-retry";
 import {
   BLOCK_DESCRIPTION_LIMIT, BLOCK_NAME_LIMIT, CONTEXT_LIMIT, CONTROL_VERSION, LESSONS_TOOL_MAX_PATHS, LESSONS_TOOL_MAX_QUERY, MAX_CREATE_REPOS, parseControlRequest, OPTION_LIMIT, OPTIONS_MAX,
-  MAX_STACK_LAYERS, MESSAGE_LIMIT, okAnswers, preReviewOp, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind, type SessionCapacity,
+  CLOSE_TICKET_MAX_PR_URLS, CLOSE_TICKET_PR_URL_MAX, MAX_STACK_LAYERS, MESSAGE_LIMIT, okAnswers, preReviewOp, QUESTION_LIMIT, REASON_LIMIT, REPORT_KINDS, REPORT_LIMIT, SUMMARY_LIMIT, TASK_LIMIT, type ControlRequest, type ControlResult, type ReportKind, type SessionCapacity,
 } from "../src/shared/control";
 import type { Lang } from "../src/shared/i18n";
 import { MANUAL_TICKET_STATUSES } from "../src/shared/types";
@@ -851,8 +851,9 @@ export const CLOSE_TICKET_TOOL = {
   name: "close_ticket",
   description:
     "关掉一个 ticket：不做了（需求变了、换了做法），和做完了（done）分开算。没处理完的后续事项一起标成忽略，记下原因。" +
-    "close_prs 为 true 时顺便关掉它开着的 PR：只关这个 ticket 自己分支上的，原因会作为评论公开发到 GitHub；不是它分支上的、也挂在别的没关的 ticket 上的、读不到的不关，" +
-    "和关失败的一起列在 prErrors 里（closedPrs 是关掉了的），note 里按原因说该怎么办。end_sessions 为 true 时顺便结束它的 session（不会结束你自己），" +
+    "要顺便关掉它开着的 PR，得用 pr_urls 点名（原因会作为评论公开发到 GitHub）：只带 close_prs 不点名时什么都不做、ticket 也不关，" +
+    "回一份 closablePrs（能关的）和 prErrors（关不了的），看过再带上 pr_urls 调一次。只关这个 ticket 自己分支上的；不是它分支上的（含 main 这类公共分支、fork 上的同名分支）、" +
+    "也挂在别的 ticket 上的、读不到的不关，和关失败的一起列在 prErrors 里（closedPrs 是关掉了的），note 里按原因说该怎么办；点名了却不是它开着的 PR 列在 notOpenPrs。end_sessions 为 true 时顺便结束它的 session（不会结束你自己），" +
     "和 end_session 一样过结束前的检查：正在干活、屏幕上有等用户回答的确认的不结束，列在 sessionErrors 里。PR 没关掉、session 没结束时 ticket 照样关掉。" +
     "已经关着的再关会被拒绝（第一次的原因留着）。之后可以用 reopen_ticket 撤销。",
   inputSchema: {
@@ -860,7 +861,11 @@ export const CLOSE_TICKET_TOOL = {
     properties: {
       ticket: TICKET_PROP,
       reason: CLOSE_REASON,
-      close_prs: { type: "boolean", description: "可选：顺便关掉它自己分支上开着的 PR（原因公开发成评论）" },
+      close_prs: { type: "boolean", description: "可选：要关 PR。不带 pr_urls 时只回能关的清单，什么都不做" },
+      pr_urls: {
+        type: "array", maxItems: CLOSE_TICKET_MAX_PR_URLS, items: { type: "string", minLength: 1, maxLength: CLOSE_TICKET_PR_URL_MAX },
+        description: `可选：要关的 PR 链接（closablePrs 里的，最多 ${CLOSE_TICKET_MAX_PR_URLS} 个）；给了就是要关 PR，原因公开发成评论`,
+      },
       end_sessions: { type: "boolean", description: "可选：顺便结束它的 session（正在干活、等用户确认的不结束）" },
     },
     required: ["ticket", "reason"],
@@ -871,8 +876,10 @@ export const CLOSE_TICKET_TOOL_EN = {
   ...CLOSE_TICKET_TOOL,
   description:
     "Close a ticket: it is dropped (the need changed, or you went another way), counted apart from finished (done). Its unfinished follow-ups are marked ignored with the reason. " +
-    "close_prs: true also closes its open PRs, but only those on this ticket's own branches, posting the reason as a public comment on GitHub. PRs on other branches, PRs also linked to another open ticket, and PRs Shipherd can't read are not closed; " +
-    "they are listed in prErrors with the ones that failed (closedPrs lists what was closed), and note says what to do for each reason. end_sessions: true also ends its sessions (never yours), " +
+    "To also close its open PRs, name them in pr_urls (the reason is posted as a public comment on GitHub). close_prs without pr_urls does nothing, not even closing the ticket: " +
+    "it returns closablePrs (the ones that can be closed) and prErrors (the ones that can't), so you can check them and call again with pr_urls. Only PRs on this ticket's own branches are closed; " +
+    "PRs on other branches (including a shared branch like main, or a same-named branch on a fork), PRs also linked to another ticket, and PRs Shipherd can't read are not closed; " +
+    "they are listed in prErrors with the ones that failed (closedPrs lists what was closed), and note says what to do for each reason. URLs in pr_urls that are not open PRs of this ticket are listed in notOpenPrs. end_sessions: true also ends its sessions (never yours), " +
     "through the same checks as end_session: a session that is working or showing a prompt that waits for the user is not ended and is listed in sessionErrors. The ticket is closed even if some PRs or sessions are left. " +
     "Closing a ticket that is already closed is refused (the first reason is kept). reopen_ticket undoes it.",
   inputSchema: {
@@ -880,7 +887,11 @@ export const CLOSE_TICKET_TOOL_EN = {
     properties: {
       ticket: TICKET_PROP_EN,
       reason: CLOSE_REASON_EN,
-      close_prs: { type: "boolean", description: "optional: also close its open PRs on its own branches (the reason is posted as a public comment)" },
+      close_prs: { type: "boolean", description: "optional: close PRs; without pr_urls it only returns the list of closable PRs and does nothing" },
+      pr_urls: {
+        ...CLOSE_TICKET_TOOL.inputSchema.properties.pr_urls,
+        description: `optional: links of the PRs to close (from closablePrs, at most ${CLOSE_TICKET_MAX_PR_URLS}); giving them means closing PRs, with the reason posted as a public comment`,
+      },
       end_sessions: { type: "boolean", description: "optional: also end its sessions (not those working or waiting for the user)" },
     },
   },
@@ -1284,7 +1295,7 @@ const TEXT = {
       : tool === "resolve_followup" ? `resolve_followup 需要 followup（list_followups 里的 id）、status（done 或 ignored）和 reason（不能为空，最多 ${REASON_LIMIT} 字）`
       : tool === "reopen_ticket" ? "reopen_ticket 需要字符串参数 ticket"
       : tool === "set_ticket_status" ? `set_ticket_status 需要 ticket 和 status（${[...MANUAL_TICKET_STATUSES, "auto"].join("、")}）；closed 要给 reason（最多 ${REASON_LIMIT} 字）`
-      : `close_ticket 需要 ticket 和 reason（不能为空，最多 ${REASON_LIMIT} 字）；close_prs、end_sessions 是布尔值`,
+      : `close_ticket 需要 ticket 和 reason（不能为空，最多 ${REASON_LIMIT} 字）；close_prs、end_sessions 是布尔值；pr_urls 是字符串数组（最多 ${CLOSE_TICKET_MAX_PR_URLS} 个，每个最长 ${CLOSE_TICKET_PR_URL_MAX} 字），给了 pr_urls 就不能 close_prs: false`,
     needRepoTask: "start_session 需要 repo 和 task 两个字符串参数",
     needTicketTask: "start_session 需要 ticket 和 task 两个字符串参数",
     repoString: "repo 必须是字符串",
@@ -1334,7 +1345,7 @@ const TEXT = {
       : tool === "resolve_followup" ? `resolve_followup needs followup (an id from list_followups), status (done or ignored) and reason (not empty, at most ${REASON_LIMIT} characters)`
       : tool === "reopen_ticket" ? "reopen_ticket needs a string argument, ticket"
       : tool === "set_ticket_status" ? `set_ticket_status needs ticket and status (${[...MANUAL_TICKET_STATUSES, "auto"].join(", ")}); closed needs a reason (at most ${REASON_LIMIT} characters)`
-      : `close_ticket needs ticket and reason (not empty, at most ${REASON_LIMIT} characters); close_prs and end_sessions are booleans`,
+      : `close_ticket needs ticket and reason (not empty, at most ${REASON_LIMIT} characters); close_prs and end_sessions are booleans; pr_urls is an array of strings (at most ${CLOSE_TICKET_MAX_PR_URLS}, each at most ${CLOSE_TICKET_PR_URL_MAX} characters), and can't go with close_prs: false`,
     needRepoTask: "start_session needs two string arguments, repo and task",
     needTicketTask: "start_session needs two string arguments, ticket and task",
     repoString: "repo must be a string",
