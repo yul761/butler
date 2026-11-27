@@ -55,6 +55,37 @@ describe("RepoIdentity", () => {
     expect(noUpstream.remoteSlugsOf("/a")).toEqual(["acme/web"]);
   });
 
+  it("has async slugOf / remoteSlugsOf that share the cache, run one git per path at a time, and don't cache a failure (BTL-278)", async () => {
+    let origin = 0;
+    let up = 0;
+    let fail = true;
+    const id = new RepoIdentity({
+      git: () => {
+        throw new Error("sync git must not run");
+      },
+      upstreamGit: () => {
+        throw new Error("sync git must not run");
+      },
+      asyncGit: async () => (origin++, "git@github.com:me/web.git"),
+      upstreamAsyncGit: async () => {
+        up++;
+        if (fail) throw new Error("timeout");
+        return "https://github.com/acme/web.git";
+      },
+      exists: () => true,
+    });
+    expect(await id.remoteSlugsOfAsync("/a")).toEqual(["me/web"]);
+    fail = false;
+    const [x, y] = await Promise.all([id.remoteSlugsOfAsync("/a"), id.remoteSlugsOfAsync("/a")]);
+    expect(x).toEqual(["me/web", "acme/web"]);
+    expect(y).toEqual(x);
+    expect(await id.remoteSlugsOfAsync("/a")).toEqual(["me/web", "acme/web"]);
+    expect([origin, up]).toEqual([1, 2]);
+    // 同步版读的是同一份缓存
+    expect(id.remoteSlugsOf("/a")).toEqual(["me/web", "acme/web"]);
+    expect(await id.slugOfAsync("/a")).toBe("me/web");
+  });
+
   it("gives the renamed name once the rename service is attached; rawSlugOf keeps what the remote says (BTL-261)", () => {
     const id = new RepoIdentity({ git: () => "git@github.com:o/old.git", upstreamGit: () => "https://github.com/up/old", exists: () => true });
     expect(id.slugOf("/a")).toBe("o/old");

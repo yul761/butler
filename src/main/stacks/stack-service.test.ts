@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { repoLockKey, repoLocks } from "../tickets/repo-lock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalActionKind } from "../../shared/external";
+import { parseRemoteSlug } from "../../shared/repo-slug";
 import type { StackRunMode } from "../../shared/stacks";
 import { JOB_STACKS_DAILY, JobsRepo } from "../db/jobs-repo";
 import { StacksRepo } from "../db/stacks-repo";
@@ -11,7 +12,7 @@ import type { ExternalDetail } from "../external/actions";
 import { copyRepo, makeRepo, memDb, setOriginUrl, tempDir } from "../test-utils";
 import type { CreatePr, PrSnapshot } from "./gh-stack";
 import { StackPolicyService } from "./stack-policy";
-import { reasonKey, remoteKind, StackService, type StackServiceDeps } from "./stack-service";
+import { reasonKey, remoteKind, stackMailRef, stackMailRepoIdOf, StackService, type StackServiceDeps } from "./stack-service";
 
 // 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够。
 // 夹具已经按文件共享（BTL-240），剩下的是被测代码自己的 git 调用（一个用例几十到上百个进程）：Windows runner 上
@@ -651,6 +652,50 @@ describe("StackService triggers", () => {
     expect(g(w.repo, "worktree", "list").split("\n")).toHaveLength(1);
   });
 
+  it("doesn't hand out a force push over a reviewer's commit: auto asks first, and the confirmed handoff has no push command (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    // reviewer 在 GitHub 上往 b 推了一个 suggestion（本地 b 没有）
+    g(w.hub, "fetch", "-q", "origin");
+    g(w.hub, "checkout", "-q", "-B", "b", "origin/b");
+    commit(w.hub, "suggestion.txt", "s\n", "Apply suggestion");
+    g(w.hub, "push", "-q", "origin", "b");
+    const x = g(w.hub, "rev-parse", "HEAD");
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm", detail: { confirm: { why: "remote_ahead", branches: ["b"] } } });
+    expect(w.delivered).toEqual([]);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "confirm", detail: "remote_ahead", branches: ["b"] }));
+    // 用户确认：交给 session，但不给推送命令
+    await w.svc.rebaseNow(id);
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict" });
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0]!.text).not.toContain("--force-with-lease");
+    expect(w.delivered[0]!.text).toContain(x.slice(0, 7));
+    expect(w.delivered[0]!.text).toMatch(/先不要推/);
+    expect(g(w.remote, "rev-parse", "b")).toBe(x);
+  });
+
+  it("a resent conflict keeps the lease it was handed with, even after the remote moved (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    vi.mocked(w.deps.deliver).mockResolvedValueOnce(false);
+    const remoteB = w.remoteTips(["b"])[0]!;
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict", detail: { conflict: { lease: { remote: "origin", sha: remoteB, ahead: false } } } });
+    // 送出去之前 reviewer 推了提交，Shipherd 也 fetch 到了
+    g(w.hub, "fetch", "-q", "origin");
+    g(w.hub, "checkout", "-q", "-B", "b", "origin/b");
+    commit(w.hub, "suggestion.txt", "s\n", "Apply suggestion");
+    g(w.hub, "push", "-q", "origin", "b");
+    g(w.repo, "fetch", "-q", "origin");
+    await w.svc.sessionStopped("B");
+    expect(w.delivered).toHaveLength(1);
+    // 还是锁交出去时的那个 sha：照着推会被拒，不会冲掉 reviewer 的提交
+    expect(w.delivered[0]!.text).toContain(`--force-with-lease=refs/heads/b:${remoteB} `);
+  });
+
   it("after the session follows the conflict instructions, the next run carries on from its resolution", async () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
@@ -756,6 +801,41 @@ describe("StackService restore", () => {
     expect(BRANCHES.map(w.remoteTip)).toEqual(before);
     expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "restore", outcome: "restored" });
     expect((await w.svc.restore(id)).ok).toBe(false);
+  });
+
+  it("addresses a layer's mail by ticket, repository and branch: the same ticket and branch in another repository is another letter (BTL-278)", async () => {
+    // 同一个 ticket 跨两个仓库、分支同名
+    const repos = [
+      { id: 1, repoPath: "/w/api", branch: "feature/X-1" },
+      { id: 2, repoPath: "/w/web", branch: "feature/X-1" },
+    ];
+    const same = (a: string, b: string) => a === b;
+    const web = { ticketKey: "X-1", ticketRepoId: null, repoPath: "/w/web", branch: "feature/X-1" };
+    expect(stackMailRepoIdOf(web, repos, same)).toBe(2);
+    expect(stackMailRepoIdOf({ ...web, repoPath: "/w/other" }, repos, same)).toBeNull();
+    expect(stackMailRepoIdOf({ ...web, ticketRepoId: 1 }, repos, same)).toBe(1);
+    // 一边的新信、撤回用的 ref 和另一边的不一样
+    expect(stackMailRef(web, 1)).not.toBe(stackMailRef(web, 2));
+    expect(stackMailRef(web, 1, "verify")).not.toBe(stackMailRef(web, 2, "verify"));
+    expect(stackMailRef(web, 1)).not.toBe(stackMailRef(web, 1, "verify"));
+    // 栈服务递信时带上自己的仓库
+    const w = world({ policy: { dailyRebase: false } });
+    await defineAll(w);
+    w.pushMain("m.txt", "m\n");
+    await w.svc.tick();
+    expect(vi.mocked(w.deps.deliver).mock.calls.map((c) => c[0].repoPath)).toEqual(expect.arrayContaining([w.repo]));
+    expect(vi.mocked(w.deps.deliver).mock.calls.every((c) => c[0].repoPath === w.repo)).toBe(true);
+  });
+
+  it("withdraws the verify requests of the rewrite it undoes (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("m.txt", "m\n");
+    await w.svc.tick();
+    expect(w.verify.map((v) => v.ticketKey)).toEqual(["A", "B", "C", "D"]);
+    expect(w.verifyWithdrawn).toEqual([]);
+    expect(await w.svc.restore(id)).toEqual({ ok: true });
+    expect(w.verifyWithdrawn).toEqual(["A:a", "B:b", "C:c", "D:d"]);
   });
 
   it("deletes backups after 30 days", async () => {
@@ -953,7 +1033,7 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     const local = w.tips(["a", "b"]);
     const remote = w.remoteTips(["a", "b"]);
     await w.svc.rebaseNow(id);
-    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "deferred", reason: "can't read the open PRs" });
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "deferred", reason: expect.stringMatching(/^can't read the open PRs/) });
     expect(w.tips(["a", "b"])).toEqual(local);
     expect(w.remoteTips(["a", "b"])).toEqual(remote);
     // 别人刚往 a 的 PR 推了一个提交：手动确认也不能盖掉它
@@ -979,7 +1059,7 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     try {
       w.pushMain("x.txt", "x\n");
       await w.svc.tick();
-      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringMatching(/^can't read the open PRs/) });
       const tries = () => calls;
       const at: number[] = [];
       // 一分钟一个 tick，跑三个小时：每次读不到都等更久
@@ -1016,7 +1096,7 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     w.pushMain("y.txt", "y\n");
     w.advance(5 * 60_000);
     await w.svc.tick();
-    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringMatching(/^can't read the open PRs/) });
   });
 
   it("asks before handing a conflict on a layer under review to its session", async () => {
@@ -1162,7 +1242,7 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
       const id = await defineAll(w);
       w.pushMain("x.txt", "x\n");
       await w.svc.tick();
-      if (github) expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+      if (github) expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringMatching(/^can't read the open PRs/) });
       else expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
     } finally {
       vi.mocked(gh.openPrs).mockImplementation(impl);
@@ -1203,10 +1283,37 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
       upstreamOk = false;
       w.pushMain("x.txt", "x\n");
       await w.svc.tick();
-      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringMatching(/^can't read the open PRs/) });
     } finally {
       vi.mocked(gh.openPrs).mockImplementation(impl);
     }
+  });
+
+  it("in a fork workflow pushes the layers to the fork they live on, never creates them on upstream; defers when it can't tell (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    // upstream：只有 main；层都在 origin（自己的 fork）上。栈跟着 upstream 的 main
+    const up = join(tempDir(), "up.git");
+    g(tempDir(), "clone", "-q", "--bare", w.remote, up);
+    for (const b of BRANCHES) g(up, "branch", "-D", b);
+    g(w.repo, "remote", "add", "upstream", up);
+    g(w.repo, "fetch", "-q", "upstream");
+    w.repoT.updateStack(id, { remote: "upstream" });
+    w.pushMain("x.txt", "x\n");
+    g(w.remote, "push", "-q", up, "main");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
+    expect(g(up, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe("refs/heads/main");
+    // c 在哪个 remote 上都没有（origin 也配着）：不知道推到哪里，不改写
+    g(w.remote, "branch", "-D", "c");
+    g(w.repo, "update-ref", "-d", "refs/remotes/origin/c");
+    w.pushMain("y.txt", "y\n");
+    g(w.remote, "push", "-q", up, "main");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringContaining("can't tell which remote c is pushed to") });
+    expect(g(up, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe("refs/heads/main");
   });
 
   it("without a head repository from gh, falls back to: a PR from a fork is not ours", async () => {
@@ -1278,7 +1385,7 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     w.advance(5 * 60_000);
     const remote = w.remoteTips(BRANCHES);
     await w.svc.tick();
-    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringMatching(/^can't read the open PRs/) });
     expect(w.remoteTips(BRANCHES)).toEqual(remote);
   });
 
@@ -1426,10 +1533,15 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     ["a github.com remote", "https://github.com/acme/app.git", true],
     ["an SSH alias", "work:acme/app.git", true],
     ["a GitLab remote", "https://gitlab.com/acme/app.git", false],
+    ["a GitLab subgroup", "git@gitlab.com:grp/sub/app.git", false],
+    ["a Bitbucket remote", "https://bitbucket.org/acme/app.git", false],
     ["an unknown host", "https://git.mycorp.com/acme/app.git", true],
-  ])("without a known slug, an unreadable PR list on %s defers: %s", async (_label, url, defers) => {
+  ])("with the slug slugOf really gives, an unreadable PR list on %s defers: %s", async (_label, url, defers) => {
     const w = world({ policy: { dailyRebase: false } });
-    w.deps.slugOf = async () => null;
+    // 和真的 slugOf 一样：github.com 是 owner/name，别的主机带主机名（BTL-278：GitLab 的 slug 不能交给 gh）
+    const slug = parseRemoteSlug(url);
+    w.deps.slugOf = async () => slug;
+    w.deps.remoteSlugs = async () => (slug ? [slug] : []);
     g(w.repo, "remote", "set-url", "origin", url);
     // git 照旧走本地的 bare 仓库
     g(w.repo, "config", `url.${w.remote}.insteadOf`, url);
@@ -1440,8 +1552,12 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
       const id = await defineAll(w);
       w.pushMain("x.txt", "x\n");
       await w.svc.tick();
-      if (defers) expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+      if (defers) expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringMatching(/^can't read the open PRs/) });
       else expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+      // 别家主机的 slug 不交给 gh
+      expect(vi.mocked(gh.openPrs).mock.calls.map((c) => c[1])).not.toContainEqual(expect.stringMatching(/gitlab|bitbucket/));
+      // GitHub Enterprise 这类主机：原因里写上主机和怎么登录
+      if (url.includes("mycorp")) expect(w.repoT.lastRun(id)!.reason).toContain("gh auth login --hostname git.mycorp.com");
     } finally {
       vi.mocked(gh.openPrs).mockImplementation(impl);
     }
@@ -1544,8 +1660,9 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     process.env.GIT_CONFIG_GLOBAL = globalFile;
     try {
       const w = world({ policy: { dailyRebase: false } });
-      await defineAll(w);
-      // 旧版留下的：local 层的 rerere.enabled=true 和共用的 rr-cache
+      const id = await defineAll(w);
+      // 旧版留下的：跑过的 run、local 层的 rerere.enabled=true 和共用的 rr-cache
+      w.repoT.finishRun(w.repoT.startRun(id, "manual", "update_refs"), { outcome: "noop" });
       g(w.repo, "config", "--local", "rerere.enabled", "true");
       const rr = join(w.repo, ".git", "rr-cache");
       mkdirSync(join(rr, "old"), { recursive: true });
@@ -1554,7 +1671,7 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
       expect(() => g(w.repo, "config", "--local", "--get", "rerere.enabled")).toThrow();
       expect(existsSync(rr)).toBe(false);
       expect(readdirSync(join(w.repo, ".git")).some((f) => f.startsWith("rr-cache.shipherd-off-"))).toBe(true);
-      expect(JSON.parse(readFileSync(join(w.deps.workRoot, "rerere-cleaned.json"), "utf8"))).toEqual([w.repo]);
+      expect(JSON.parse(readFileSync(join(w.deps.workRoot, "rerere-cleaned.json"), "utf8"))).toEqual({ candidates: [w.repo], done: [w.repo] });
       // session 开着 rerere 解过一次、记下解法又放弃了；之后就算 rerere 又开着，照提示的命令 rebase 也不会套用
       const cmd = /git -c rerere\.enabled=false rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
       const wt = join(tempDir(), "wt-b");
@@ -1596,12 +1713,65 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     process.env.GIT_CONFIG_GLOBAL = globalFile;
     try {
       const w = world({ policy: { dailyRebase: false } });
-      await defineAll(w);
+      const id = await defineAll(w);
+      w.repoT.finishRun(w.repoT.startRun(id, "manual", "update_refs"), { outcome: "noop" });
       g(w.repo, "config", "--local", "rerere.enabled", "true");
       setup(w.repo, globalFile);
       const before = g(w.repo, "config", "--local", "--get", "rerere.enabled");
       await w.svc.tick();
       expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe(before);
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+    }
+  });
+
+  it("leaves the rerere a user turned on in a repository an older Shipherd never rebased in (BTL-278)", async () => {
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const globalFile = join(tempDir(), "gitconfig");
+    writeFileSync(globalFile, "");
+    process.env.GIT_CONFIG_GLOBAL = globalFile;
+    try {
+      const w = world({ policy: { dailyRebase: false } });
+      await defineAll(w);
+      // stack_runs 里没有这个仓库：local 层的 rerere 是用户自己开的
+      g(w.repo, "config", "--local", "rerere.enabled", "true");
+      w.pushMain("x.txt", "x\n");
+      await w.svc.tick();
+      expect(w.repoT.lastRun(w.repoT.list()[0]!.id)).toMatchObject({ outcome: "rebased" });
+      expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe("true");
+      // 跑过一次以后也不再算候选（候选只在第一次建文件时定）
+      const again = new StackService(w.deps);
+      w.pushMain("y.txt", "y\n");
+      w.advance(5 * 60_000);
+      await again.tick();
+      expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe("true");
+      expect(JSON.parse(readFileSync(join(w.deps.workRoot, "rerere-cleaned.json"), "utf8"))).toEqual({ candidates: [], done: [w.repo] });
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+    }
+  });
+
+  it("records a failed --unset (several values) once instead of retrying every tick (BTL-278)", async () => {
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const globalFile = join(tempDir(), "gitconfig");
+    writeFileSync(globalFile, "");
+    process.env.GIT_CONFIG_GLOBAL = globalFile;
+    try {
+      const w = world({ policy: { dailyRebase: false } });
+      const id = await defineAll(w);
+      w.repoT.finishRun(w.repoT.startRun(id, "manual", "update_refs"), { outcome: "noop" });
+      g(w.repo, "config", "--local", "--add", "rerere.enabled", "true");
+      g(w.repo, "config", "--local", "--add", "rerere.enabled", "true");
+      const record = vi.fn();
+      w.deps.record = record;
+      await w.svc.tick();
+      w.advance(5 * 60_000);
+      await new StackService(w.deps).tick();
+      const calls = record.mock.calls.filter((c) => c[0] === "stack.rerere_cleanup");
+      expect(calls).toEqual([["stack.rerere_cleanup", { cleaned: false, failed: true }]]);
+      expect(g(w.repo, "config", "--local", "--get-all", "rerere.enabled").split("\n")).toEqual(["true", "true"]);
     } finally {
       if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
       else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
@@ -1716,6 +1886,106 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.remoteTip("b")).toBe(remote[1]);
     expect(w.repoT.layers(id)[1]!.remoteOkSha).toBe(remote[1]);
     expect(w.remoteTip("d")).toBe(remote[3]);
+  });
+
+  it("checks a held-back push for conflict markers before reading PRs, once per pair of tips, and says so on the Now page (BTL-278)", async () => {
+    let on = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" || on });
+    const logs: string[] = [];
+    w.deps.log = (m: string) => void logs.push(m);
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    const remote = w.remoteTips(BRANCHES);
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), "<<<<<<< ours\nb\n=======\nmain's b\n>>>>>>> theirs\n");
+    g(w.repo, "commit", "-q", "-a", "--amend", "--no-edit");
+    g(w.repo, "checkout", "-q", "main");
+    const lb = w.repoT.layers(id)[1]!;
+    w.repoT.updateLayer(lb.id, { tipSha: w.tip("b") });
+    on = true;
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.remoteTip("c")).toBe(w.tip("c"));
+    expect(w.remoteTip("b")).toBe(remote[1]);
+    const gh = await import("./gh-stack");
+    const n0 = vi.mocked(gh.openPrs).mock.calls.length;
+    for (let i = 0; i < 3; i++) {
+      w.advance(60_000);
+      await w.svc.tick();
+    }
+    // 只剩 b 等着补推、b 又有标记：不读 PR，也不重查、不重复记
+    expect(vi.mocked(gh.openPrs).mock.calls.length).toBe(n0);
+    expect(logs.filter((m) => m.includes("conflict markers in b.txt"))).toHaveLength(1);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "markers", branch: "b", files: ["b.txt"], ticketKey: "B" }));
+    // 标记解掉、顶端换了：重查，推出去，提醒没了
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), "b\n");
+    g(w.repo, "commit", "-q", "-a", "--amend", "--no-edit");
+    g(w.repo, "checkout", "-q", "main");
+    w.repoT.updateLayer(lb.id, { tipSha: w.tip("b") });
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.remoteTip("b")).toBe(w.tip("b"));
+    expect(w.svc.notices().filter((n) => n.reason === "markers")).toEqual([]);
+  });
+
+  it("backs off reading PRs for a held-back push when they can't be read (BTL-278)", async () => {
+    let on = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" || on });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    const remote = w.remoteTips(BRANCHES);
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    vi.mocked(gh.openPrs).mockResolvedValue(null);
+    try {
+      on = true;
+      const n0 = vi.mocked(gh.openPrs).mock.calls.length;
+      for (let i = 0; i < 4; i++) {
+        w.advance(60_000);
+        await w.svc.tick();
+      }
+      // 第一次读不到，之后 5 分钟内不再读
+      expect(vi.mocked(gh.openPrs).mock.calls.length - n0).toBe(1);
+      expect(w.remoteTips(BRANCHES)).toEqual(remote);
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+      w.advance(2 * 60_000);
+      await w.svc.tick();
+      expect(w.remoteTip("b")).toBe(w.tip("b"));
+    } finally {
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+    }
+  });
+
+  it("after a day of unreadable PRs on an unknown host, says why and how to sign gh in (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const url = "https://git.mycorp.com/acme/app.git";
+    const slug = parseRemoteSlug(url);
+    w.deps.slugOf = async () => slug;
+    w.deps.remoteSlugs = async () => [slug!];
+    g(w.repo, "remote", "set-url", "origin", url);
+    g(w.repo, "config", `url.${w.remote}.insteadOf`, url);
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    vi.mocked(gh.openPrs).mockResolvedValue(null);
+    try {
+      const id = await defineAll(w);
+      w.pushMain("x.txt", "x\n");
+      await w.svc.tick();
+      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred" });
+      expect(w.svc.notices().filter((n) => n.reason === "prs_unreadable")).toEqual([]);
+      for (let i = 0; i < 30; i++) {
+        w.advance(60 * 60_000);
+        await w.svc.tick();
+      }
+      expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "prs_unreadable", host: "git.mycorp.com" }));
+      expect(w.svc.notices().filter((n) => n.reason === "stuck")).toEqual([]);
+    } finally {
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+    }
   });
 
   it("does not catch up a push while a run of the same stack is still going", async () => {

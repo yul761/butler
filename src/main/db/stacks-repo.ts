@@ -1,6 +1,6 @@
 import type { SQLInputValue } from "node:sqlite";
 import type {
-  StackLayerMode, StackLayerState, StackRunMode, StackRunOutcome, StackSource, StackTrigger,
+  ConflictLease, StackConfirmWhy, StackLayerMode, StackLayerState, StackRunMode, StackRunOutcome, StackSource, StackTrigger,
 } from "../../shared/stacks";
 import { type Db, withTransaction } from "./database";
 
@@ -62,14 +62,18 @@ export interface RunLayerDetail {
 export interface RunDetail {
   layers?: RunLayerDetail[];
   /** key：交给 session 后记到层的 conflictKey 上的值；ident：同一个冲突的判断（冲突文件和它们在 onto 里的内容）。 */
-  conflict?: { branch: string; files: string[]; commit: string | null; onto: string; upstream: string; ident?: string; key?: string };
+  /** lease：交给 session 的强推命令锁哪个 remote 的哪个 sha，ahead = 远端有本地没有的提交（BTL-278）。 */
+  conflict?: { branch: string; files: string[]; commit: string | null; onto: string; upstream: string; ident?: string; key?: string; lease?: ConflictLease };
   /**
    * 引擎跑出这次结果时的输入（BTL-278）：trunk 和各层顶端（有交给 session 的冲突时只算它下面的层）。
    * 上一次没落地（冲突、失败、要确认、回滚）、输入又没变时不再跑。
    */
   inputs?: string;
   /** needs_confirm：为什么、哪几层。 */
-  confirm?: { why: "ready_pr" | "handoff"; branches: string[] };
+  /** push：确认以后会不会强推（这几层的「强推」开关开着），文案用；旧行没有，按会推算。 */
+  confirm?: { why: StackConfirmWhy; branches: string[]; push?: boolean };
+  /** 改写后真的排进了 session 信箱的核对请求（BTL-278）。 */
+  verifyAsked?: string[];
   /** needs_confirm：这次是 autosquash（确认时也 autosquash）。 */
   autosquash?: boolean;
   /** 手动 run：谁点的（BTL-278）。 */
@@ -225,6 +229,11 @@ export class StacksRepo {
   }
 
   /** 没删的栈，按 id。 */
+  /** 跑过 rebase 的仓库（删掉的栈也算）：旧版在这些仓库里打开过 rerere（BTL-278）。 */
+  repoPathsWithRuns(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT s.repo_path AS p FROM stacks s JOIN stack_runs r ON r.stack_id = s.id`).all() as { p: string }[]).map((r) => r.p);
+  }
+
   list(): StackRow[] {
     return (this.db.prepare(`SELECT * FROM stacks WHERE removed_at IS NULL ORDER BY id`).all() as Raw[]).map(toStack);
   }

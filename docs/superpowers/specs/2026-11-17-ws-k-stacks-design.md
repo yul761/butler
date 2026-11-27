@@ -117,6 +117,20 @@
 - 只有自动认出来的栈、或者不是 draft 的层，才按 PR 状态改 mode；用 MCP 或 ticket 定义的 draft 层不同步 k/n 标题。
 - `stack_rebase` 的说明写明：栈在 `needs_confirm` 时调它等于替用户确认改写，要先 `ask_user`。
 
+第三轮 review 补的（BTL-278）：
+
+- 冲突的 lease 在 run 的时候定下来，记在 run 的 `detail.conflict.lease` 里（推到哪个 remote、远端的完整 sha、远端是不是有本地没有的提交）。补送（session 停了以后重送）用记下的这一份，不重新读跟踪 ref。远端的 sha 不是本地的祖先（也不是 Shipherd 上次替换掉的那个提交）：自动 run 停成 `needs_confirm`（`remote_ahead`），用户点「马上 rebase」以后照常把冲突交给 session，但不给推送命令，叫它解完报 blocked，由用户决定怎么把远端的提交合进来。
+- 冲突正文里 `rebase --continue` 和 `--skip` 也带 `-c rerere.enabled=false`（`-c` 只管那一条命令，每一步都要带）。
+- 清旧版的 rerere 只清旧版碰过的仓库：第一次建 `rerere-cleaned.json`（`{candidates, done}`）时，把 `stack_runs` 里有记录的仓库（删掉的栈也算）记成候选；不是候选的直接记成已处理、不动。文件读出来改完写临时文件再 rename，同一个进程里串行。`--unset` 失败（同一个键有多个值）记下来、记一笔日志，不再每轮重试。
+- 别家主机（GitLab、Bitbucket 等）上的 slug（`host/owner/name`，子组更长）不交给 gh：交给它必然读不到，栈就永远推迟。一个 slug 都不剩时按 remote 的种类判断。
+- 读不到 PR 的推迟原因带上主机（`can't read the open PRs on <host>; …`）。推迟超过一天，「现在」页出 `prs_unreadable` 提醒，说明原因和办法（`gh auth login --hostname <host>`）。
+- 补推（`pushPending`）先查冲突标记，再读 PR。标记的检查结果按（层、本地顶端、远端顶端）记在内存里，两头不变就不重查；被拦下的层在「现在」页出 `markers` 提醒。补推读不到 PR 也退避（5 分钟起翻倍，最多 1 小时）。
+- fork 工作流按层推：分支在 origin 上就推 origin，只在栈的 remote 上就推那里，两边都没有、又配了 origin，就认不出（不推，开着 `force_push` 时整次推迟），绝不在 upstream 上新建分支。fetch 的时候 origin 也一起 fetch。
+- 栈服务的 `slugOf` 和 `remoteSlugs` 改用异步、有缓存的版本（同一个路径同时只跑一个 git，失败的不缓存）。
+- `markersAdded` 的 git grep 按参数总长分批（预算 24K 字符，留了余量，Windows 命令行上限 32K），版本列表最多占一半。
+- 栈发给 session 的信，ref 带上 ticket 的仓库：`stack:<ticket>:<ticket 仓库 id>:<branch>`，核对请求再加 `:verify`。同一个 ticket 跨仓库、分支同名时，一边的新信不会换掉另一边的，撤回也只撤自己那边。ticketRepoId 没记上时按仓库路径和分支找，路径对不上不算。
+- 核对请求和冲突一样有 ref，信箱里还没送出的同一个 ref 会被新的那条替换，不会排一串。改写提醒只对真送到的层说「已经请 session 核对」；`force_push` 关着时，确认的那句话不说「再强推」。
+
 ### 3.8 冲突
 
 - 冲突发生在哪一层就送给那一层的 session（`stacks.conflictToSession`，默认开）：过 DeliveryGuard，用 `pty.deliver`。正文写清楚分支、冲突文件、要在自己 worktree 里执行的那条 `git rebase --onto <新父> <起点>`，解完 push；K 下一轮接着处理上面的层。冲突交出去以后，session 自己动这一层（和它上面的层）不算「有新提交」，自动 run 也不改写它们；直到这一层的顶端包含了新父，或者 trunk、父层真的变了。

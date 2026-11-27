@@ -179,8 +179,14 @@ export type StackRunMode = "update_refs" | "per_layer";
 /** needs_confirm（BTL-278）：自动跑出来要改写正在 review 的 PR、或者交给 session 的冲突层，什么都没落地，等人点「马上 rebase」。 */
 export type StackRunOutcome = "rebased" | "noop" | "conflict" | "deferred" | "failed" | "rolled_back" | "restored" | "needs_confirm";
 
-/** 为什么要人确认：ready_pr = 要改写开着、可以 review 的 PR；handoff = 要改写冲突已经交给 session 的层（或它上面的层）。 */
-export type StackConfirmWhy = "ready_pr" | "handoff";
+/**
+ * 为什么要人确认：ready_pr = 要改写开着、可以 review 的 PR；handoff = 要改写冲突已经交给 session 的层（或它上面的层）；
+ * remote_ahead = 冲突的那一层远端有本地没有的提交（比如 reviewer 推的），交出去的强推会冲掉它们（BTL-278）。
+ */
+export type StackConfirmWhy = "ready_pr" | "handoff" | "remote_ahead";
+
+/** 交给 session 的冲突里，强推命令锁哪个 remote 的哪个 sha（BTL-278）。remote 为 null = 认不出推到哪里。 */
+export interface ConflictLease { remote: string | null; sha: string | null; ahead: boolean }
 
 /** 谁点的「马上 rebase」（BTL-278）：user = 界面上；coordinator = epic 总控调 stack_rebase；shipherd = Shipherd 总控调的。 */
 export type StackActor = "user" | "coordinator" | "shipherd";
@@ -202,7 +208,7 @@ export interface StackRunView {
   /** 推送：开关关着没推的分支。 */
   unpushed: string[];
   /** needs_confirm：为什么、哪几层。 */
-  confirm: { why: StackConfirmWhy; branches: string[] } | null;
+  confirm: { why: StackConfirmWhy; branches: string[]; push?: boolean } | null;
   startedAt: number;
   finishedAt: number | null;
 }
@@ -269,7 +275,8 @@ export interface StacksView {
 
 /** 栈的提醒（「现在」页）。 */
 /** rewritten：最近一次自动 rebase 改写了这几层、它们还停在 Shipherd 写的顶端（没人编译过，BTL-278）。 */
-export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten";
+/** prs_unreadable：读不到 PR 推迟了一天以上；markers：改写过的顶端有冲突标记，等着的补推没推。 */
+export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten" | "prs_unreadable" | "markers";
 
 export interface StackNoticeInfo {
   reason: StackNoticeReason;
@@ -278,10 +285,16 @@ export interface StackNoticeInfo {
   branch: string;
   /** 这一层的 ticket（提醒上「打开 ticket」用）。 */
   ticketKey?: string | null;
-  /** conflict：冲突文件；stuck：最近的原因；confirm：ready_pr 或 handoff。 */
+  /** conflict、markers：冲突（标记）文件，markers 的空表示查不了；stuck：最近的原因；confirm：ready_pr、handoff 或 remote_ahead。 */
   files?: string[];
+  /** prs_unreadable：remote 的主机（认不出就是 null，当 github.com）。 */
+  host?: string | null;
   /** confirm：等确认的几层；rewritten：刚被自动改写的几层。 */
   branches?: string[];
+  /** rewritten：其中真的请了 session 核对的几层。 */
+  asked?: string[];
+  /** confirm：确认以后会不会强推。 */
+  push?: boolean;
   detail?: string | null;
   /** draft_stale：已经多少天；behind：落后多少天。 */
   days?: number;

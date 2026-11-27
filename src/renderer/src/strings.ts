@@ -571,6 +571,7 @@ const ZH = {
       stackConflict: "栈里有冲突没交给 session",
       stackStuck: "栈的 rebase 卡住了",
       stackConfirm: "栈的 rebase 等你确认",
+      stackMarkers: "栈里有一层带着冲突标记，没推出去",
       intake: "自动接活拿不准，等你决定",
       other: "Shipherd 要你点一下",
     },
@@ -1958,10 +1959,15 @@ const ZH = {
     autoRebaseExplicitOff: "epic 是半自动，但这个仓库明确关了自动 rebase，按关。Shipherd 只看，不改分支。",
     epicOn: (names: string) => `因为 epic 是半自动，这些栈的自动 rebase 已开着：${names}`,
     epicIgnored: (names: string) => `这些栈的 epic 是半自动，但这里明确关了自动 rebase，按关：${names}`,
-    confirmLine: (why: "ready_pr" | "handoff", branches: string) =>
-      why === "ready_pr"
-        ? `${branches} 有在 review 的 PR，Shipherd 没改写。要改写就点「马上 rebase」：Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。`
-        : `${branches} 现在归 session 管（最下面那层的冲突还没解完），Shipherd 没动。要改写就点「马上 rebase」：Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。`,
+    confirmLine: (why: "ready_pr" | "handoff" | "remote_ahead", branches: string, push = true) => {
+      if (why === "remote_ahead") return `${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）。Shipherd 没把冲突交出去；点「马上 rebase」会交给 session，但不给推送命令，远端的提交怎么合进来由你决定。`;
+      const how = push
+        ? "Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。"
+        : "Shipherd 只在本地做 git rebase（「强推」开关关着，不推），不编译、不跑测试，改写后会请各层的 session 核对。";
+      return why === "ready_pr"
+        ? `${branches} 有在 review 的 PR，Shipherd 没改写。要改写就点「马上 rebase」：${how}`
+        : `${branches} 现在归 session 管（最下面那层的冲突还没解完），Shipherd 没动。要改写就点「马上 rebase」：${how}`;
+    },
     source: { mcp: "总控定的", ticket: "stack_on 建的", detected: "自动识别" } as Record<StackSource, string>,
     state: { branch_only: "分支", draft: "draft PR", ready: "PR", merged: "已合并" } as Record<StackLayerState, string>,
     bottom: "栈底",
@@ -1985,11 +1991,22 @@ const ZH = {
       draft_stale: (stack: string, branch: string, days: number) => `栈「${stack}」的 ${branch} 当 draft 已经 ${days} 天了，不用跑 CI 的话可以降回分支`,
       behind: (stack: string, commits: number, days: number) => `栈「${stack}」的栈底落后 trunk ${commits} 个提交（最早的是 ${days} 天前的）`,
       stuck: (stack: string, detail: string) => `栈「${stack}」的 rebase 卡住了：${detail}`,
-      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff") =>
-        why === "ready_pr"
+      prs_unreadable: (stack: string, host: string | null) =>
+        `栈「${stack}」一天多没 rebase 了：读不到${host ? ` ${host} 上` : ""}开着的 PR，Shipherd 没法确认哪些层在 review，就一直推迟。多半是 gh 没登录这台主机：在终端跑 gh auth login${host ? ` --hostname ${host}` : ""}，登录后下一轮会自己接着跑。`,
+      markers: (stack: string, branch: string, files: string) =>
+        files
+          ? `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它：解掉标记提交后，或者点「马上 rebase」重来。`
+          : `栈「${stack}」的 ${branch} 改写过、还没推出去，可是查不了里面有没有冲突标记，Shipherd 先不推。点「马上 rebase」重来。`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead") =>
+        why === "remote_ahead"
+          ? `栈「${stack}」的 ${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的），照常交给 session 强推会冲掉它们。Shipherd 没动；点「马上 rebase」会把冲突交给 session，但不给推送命令。`
+          : why === "ready_pr"
           ? `栈「${stack}」要 rebase，可是 ${branches} 有在 review 的 PR。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`
           : `栈「${stack}」要 rebase，可是 ${branches} 现在归 session 管：最下面那层的冲突交给它了，还没解完。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`,
-      rewritten: (stack: string, branches: string) => `栈「${stack}」的 ${branches} 刚被 Shipherd 自动 rebase 过：只是 git 合了过去，没编译、没跑测试。已经请各层的 session 核对；没有 session 的层要自己编译、跑测试。`,
+      rewritten: (stack: string, branches: string, asked: string, rest: string) =>
+        `栈「${stack}」的 ${branches} 刚被 Shipherd 自动 rebase 过：只是 git 合了过去，没编译、没跑测试。` +
+        (asked ? `已经请 ${asked} 的 session 核对。` : "") +
+        (rest ? `${rest} 没有 session 收到核对请求，要自己编译、跑测试。` : ""),
     },
     noticeOpen: "看栈",
     settingsIntro: "栈式 PR 的策略，分三层：全局 → 产品 → 仓库，下层覆盖上层。「允许 Shipherd 自动 rebase 栈」默认关，开了 Shipherd 才会改这个仓库里栈的本地分支；推送、开 PR、贴总览 issue 另外受下面的对外动作开关控制，也都默认关。",

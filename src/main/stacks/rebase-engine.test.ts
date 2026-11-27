@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { copyRepo, makeRepo, tempDir } from "../test-utils";
 import { isAncestor, parseGitVersion, parseWorktreeList, refsUnder, supportsUpdateRefs } from "./git-stack";
-import { markersAdded, runEngine, type EngineLayer } from "./rebase-engine";
+import { batchByLength, markersAdded, runEngine, type EngineLayer } from "./rebase-engine";
 
 // 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够。
 // 夹具已经按文件共享（BTL-240），剩下的是被测代码自己的 git 调用（一个用例几十到上百个进程）：Windows runner 上
@@ -348,5 +348,26 @@ describe("runEngine special cases", () => {
     expect(await markersAdded(repo, [{ ...t, newTip: newBase }])).toEqual([]);
     // 版本不存在：抛出，不当成「没有标记」
     await expect(markersAdded(repo, [{ ...t, newTip: "f".repeat(40) }])).rejects.toThrow();
+  });
+
+  it("markersAdded splits git grep by the length of its arguments, not by a count of paths (BTL-278)", async () => {
+    // 按总长度分：长路径少放几个，单个就超了的自己一批
+    expect(batchByLength(["aaaa", "bbbb", "cccc"], 14)).toEqual([["aaaa", "bbbb"], ["cccc"]]);
+    expect(batchByLength(["x".repeat(50), "y"], 14)).toEqual([["x".repeat(50)], ["y"]]);
+    expect(batchByLength([], 14)).toEqual([]);
+    // 预算很小、版本和路径都要分好几批：每一批里的标记都认得出，计数不串
+    const repo = makeRepo();
+    const base = g(repo, "rev-parse", "main");
+    g(repo, "checkout", "-q", "-b", "l");
+    const names = Array.from({ length: 12 }, (_, k) => `dir-${k}/${"n".repeat(20)}-${k}.txt`);
+    for (const [k, f] of names.entries()) {
+      mkdirSync(join(repo, `dir-${k}`), { recursive: true });
+      writeFileSync(join(repo, f), k === 11 ? "<<<<<<< ours\nx\n>>>>>>> theirs\n" : `${k}\n`);
+    }
+    g(repo, "add", ".");
+    g(repo, "commit", "-q", "-m", "layer");
+    const newTip = g(repo, "rev-parse", "HEAD");
+    const t = { branch: "l", oldTip: base, oldBase: base, newBase: base, newTip };
+    expect(await markersAdded(repo, [t], 300)).toEqual([{ branch: "l", files: [names[11]] }]);
   });
 });

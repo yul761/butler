@@ -291,8 +291,30 @@ async function rebaseOnce(
 
 const MARKER = "^(<<<<<<<|>>>>>>>)( |$)";
 
-/** 一次 git grep 带多少个路径（Windows 的命令行最长 32K 字符）。 */
-const GREP_PATHS = 100;
+/**
+ * 一次 git grep 的参数最多多长（BTL-278）：Windows 的整条命令行最长 32767 个字符，git 的路径、引号、转义还要占一些；
+ * 原来按 100 个路径一批，路径一长（monorepo 里 200 多字的很常见）就超了。
+ */
+const GREP_ARGS_BUDGET = 24_000;
+
+/** 按总长度分批（每个参数另算 3 个字符：空格和可能加的一对引号）；单个就超了的自己一批。 */
+export function batchByLength(items: string[], budget: number): string[][] {
+  const out: string[][] = [];
+  let cur: string[] = [];
+  let len = 0;
+  for (const it of items) {
+    const n = it.length + 3;
+    if (cur.length > 0 && len + n > budget) {
+      out.push(cur);
+      cur = [];
+      len = 0;
+    }
+    cur.push(it);
+    len += n;
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
 
 /**
  * 每层新顶端里比「应有的」多出冲突标记的文件。应有的 = 新起点里的 + 这一层自己那段提交带进来的（旧顶端减旧起点），
@@ -300,7 +322,7 @@ const GREP_PATHS = 100;
  * 版本的整棵树都 grep 一遍，大仓库里会超时）：没改到的文件新顶端和新起点一样，不会多出标记。git 出错、超时都抛出。
  */
 export async function markersAdded(
-  repo: string, tips: { branch: string; oldTip: string; newTip: string; oldBase: string; newBase: string }[],
+  repo: string, tips: { branch: string; oldTip: string; newTip: string; oldBase: string; newBase: string }[], budget = GREP_ARGS_BUDGET,
 ): Promise<{ branch: string; files: string[] }[]> {
   if (tips.length === 0) return [];
   const touched = new Set<string>();
@@ -312,10 +334,17 @@ export async function markersAdded(
   if (touched.size === 0) return [];
   const revs = [...new Set(tips.flatMap((t) => [t.oldTip, t.newTip, t.oldBase, t.newBase]))];
   const counts = new Map<string, Map<string, number>>();
-  const paths = [...touched];
-  for (let k = 0; k < paths.length; k += GREP_PATHS) {
-    // 用户配了 color.ui=always 时输出带颜色码，下面就一行都认不出来：关掉颜色。路径按字面认（文件名开头的 :! 之类不当 pathspec 的 magic）。
-    const r = await runGit(repo, ["--literal-pathspecs", "-c", "color.grep=false", "grep", "--no-color", "-I", "-c", "-E", MARKER, ...revs, "--", ...paths.slice(k, k + GREP_PATHS)]);
+  // 用户配了 color.ui=always 时输出带颜色码，下面就一行都认不出来：关掉颜色。路径按字面认（文件名开头的 :! 之类不当 pathspec 的 magic）。
+  const fixed = ["--literal-pathspecs", "-c", "color.grep=false", "grep", "--no-color", "-I", "-c", "-E", MARKER, "--"];
+  const room = budget - fixed.reduce((a, x) => a + x.length + 3, 0);
+  // 版本和路径都按长度分：版本最多占一半
+  const batches: [string[], string[]][] = [];
+  for (const rs of batchByLength(revs, Math.floor(room / 2))) {
+    const left = room - rs.reduce((a, x) => a + x.length + 3, 0);
+    for (const ps of batchByLength([...touched], left)) batches.push([rs, ps]);
+  }
+  for (const [rs, ps] of batches) {
+    const r = await runGit(repo, [...fixed.slice(0, -1), ...rs, "--", ...ps]);
     // 1 = 一处都没有
     if (r.code !== 0 && r.code !== 1) throw new Error(`git grep failed: ${r.stderr.trim()}`);
     let seen = 0;

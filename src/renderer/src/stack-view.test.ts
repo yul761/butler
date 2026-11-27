@@ -41,6 +41,33 @@ describe("stack view (workstream K)", () => {
     expect(lastRunLines(null, STRINGS.zh, 0)).toEqual([]);
   });
 
+  it("only promises what really happens: a force push when pushing is on, a verify request when one was delivered (BTL-278)", () => {
+    for (const S of Object.values(STRINGS)) {
+      for (const why of ["ready_pr", "handoff"] as const) {
+        expect(S.sk.confirmLine(why, "b1", true)).toMatch(/强推|force-push/);
+        expect(S.sk.confirmLine(why, "b1", false)).not.toMatch(/再强推|then force-push/);
+        expect(S.sk.confirmLine(why, "b1", false)).toMatch(/不推|nothing is pushed|doesn't push/i);
+      }
+      const confirm = (push: boolean) => lastRunLines({ id: 1, trigger: "main_updated", mode: "update_refs", outcome: "needs_confirm", reason: null, hasBackup: false, conflict: null, unpushed: [], confirm: { why: "ready_pr", branches: ["b1"], push }, startedAt: 0, finishedAt: 1 }, S, 0).join("\n");
+      expect(confirm(false)).toContain(S.sk.confirmLine("ready_pr", "b1", false));
+      expect(confirm(true)).toContain(S.sk.confirmLine("ready_pr", "b1", true));
+      const n = (asked: string[]) => stackNoticeText({ reason: "rewritten", stackId: 1, stackName: "pay", branch: "b1", branches: ["b1", "b2"], asked }, S);
+      const askedRe = (b: string) => new RegExp(`已经请 ${b} 的 session|The session of ${b} was asked`);
+      const restRe = (b: string) => new RegExp(`${b} 没有 session 收到|No session got a request to check ${b}:`);
+      // 都送到了：不说「没有 session 收到」；一个都没送到：不说「已经请」
+      expect(n(["b1", "b2"])).toMatch(askedRe("b1, b2"));
+      expect(n(["b1", "b2"])).not.toMatch(/没有 session 收到|No session got/);
+      expect(n([])).not.toMatch(/已经请|was asked/);
+      expect(n([])).toMatch(restRe("b1, b2"));
+      expect(n(["b1"])).toMatch(askedRe("b1"));
+      expect(n(["b1"])).toMatch(restRe("b2"));
+      expect(stackNoticeText({ reason: "prs_unreadable", stackId: 1, stackName: "pay", branch: "b1", host: "git.corp.io" }, S)).toContain("gh auth login --hostname git.corp.io");
+      expect(stackNoticeText({ reason: "prs_unreadable", stackId: 1, stackName: "pay", branch: "b1", host: null }, S)).toContain("gh auth login");
+      expect(stackNoticeText({ reason: "markers", stackId: 1, stackName: "pay", branch: "b1", files: ["x.ts"] }, S)).toContain("x.ts");
+      expect(stackNoticeText({ reason: "markers", stackId: 1, stackName: "pay", branch: "b1", files: [] }, S)).toContain(S.sk.rebaseNow);
+    }
+  });
+
   it("says why a run waits for a confirm, and who turned autoRebase on or off (BTL-278)", () => {
     for (const S of Object.values(STRINGS)) {
       const ready = stackNoticeText({ reason: "confirm", stackId: 1, stackName: "pay", branch: "b1", branches: ["b1", "b2"], detail: "ready_pr", prNumber: 7 }, S);

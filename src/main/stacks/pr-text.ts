@@ -25,11 +25,17 @@ export interface ConflictText {
   remote: string;
   /** 交出去时远端这个分支的完整 sha（force-with-lease 锁它）；远端还没有这个分支时是 null。 */
   remoteSha: string | null;
+  /** 远端有本地分支没有的提交（比如 reviewer 推的）：不给推送命令，强推会冲掉它们（BTL-278）。 */
+  remoteAhead?: boolean;
 }
 
-/** 给 session 的强推命令：lease 锁定交出去时远端的完整 sha（远端没有就锁「不存在」），再加 --force-if-includes（BTL-278）。 */
 /** 自动改写以后请那一层的 session 核对（BTL-278）。 */
 export interface VerifyText { branch: string; onto: string; tip: string; pushed: boolean; }
+
+/**
+ * 给 session 的强推命令：lease 锁定交出去时远端的完整 sha（远端没有就锁「不存在」）（BTL-278）。
+ * 只在远端是本地分支的祖先时才给（调用方核对过）：带了具体 sha 的 lease 只比 sha，--force-if-includes 不再起作用。
+ */
 
 export const pushLine = (p: { branch: string; remote: string; remoteSha: string | null }): string =>
   `git push --force-with-lease=refs/heads/${p.branch}:${p.remoteSha ?? ""} --force-if-includes ${p.remote} HEAD:refs/heads/${p.branch}`;
@@ -53,9 +59,12 @@ const ZH = {
   conflict: (p: ConflictText) =>
     `Shipherd：给栈做 rebase 时，分支 ${p.branch} 有冲突（${p.files.join("、")}）。真分支都没改。请在这个 worktree 里执行：\n\n` +
     `git -c rerere.enabled=false rebase --onto ${p.onto} ${p.upstream}\n\n` +
-    `解决冲突（两边的意图都要保留），git rebase --continue。看到「Resolved '…' using previous resolution」不要信，那是以前记下的解法：git checkout -m 那个文件，重新解。` +
+    `解决冲突（两边的意图都要保留），再用 git -c rerere.enabled=false rebase --continue 接着走（要跳过某个提交也一样带上：git -c rerere.enabled=false rebase --skip）。-c 只管这一条命令，后面每一步都要带。` +
+    `看到「Resolved '…' using previous resolution」不要信，那是以前记下的解法：git checkout -m 那个文件，重新解。` +
     `推之前：确认没有冲突标记（git grep -nE '^(<<<<<<<|>>>>>>>)( |$)' 没有输出），构建、跑相关的测试，核对迁移号没有和 ${p.onto.slice(0, 7)} 里已有的撞。` +
-    (p.push
+    (p.remoteAhead
+      ? `先不要推：远端的 ${p.branch}（${(p.remoteSha ?? "").slice(0, 7)}）有这个分支没有的提交，可能是 reviewer 推的，强推会把它们冲掉。解完冲突以后用 report（kind 用 blocked）说明，由用户决定怎么把它们合进来。`
+      : p.push
       ? `然后只用这一条推：\n\n${pushLine(p)}\n\n推不上去（stale info、远端变了）就停下，用 report（kind 用 blocked）说明，不要重新 fetch 再推：可能是 reviewer 在 GitHub 上推了提交。`
       : "先不要推（Shipherd 的「强推」开关关着，推不推由用户决定）。") +
     `你不 rebase，Shipherd 也不会替你改这个分支；决定不 rebase 就说一声原因。` +
@@ -80,6 +89,7 @@ const ZH = {
     autoRebaseOff: "这个仓库的「允许 Shipherd 自动 rebase 栈」没开（设置 → 栈）",
     busy: "这个栈正在处理，稍后再试",
     isBottom: "栈底就是要 review 的那层，不用开 draft",
+    noPushRemote: (b: string) => `认不出 ${b} 该推到哪个 remote（origin 和 trunk 跟着的 remote 上都还没有它），没推。先把它推到自己的仓库上再试`,
     readyPr: "这一层的 PR 已经可以 review 了，不能改回纯分支",
     merged: "这一层已经合并了",
     nothingToRestore: "没有可以恢复的备份",
@@ -120,9 +130,12 @@ const EN: StackTexts = {
   conflict: (p) =>
     `Shipherd: rebasing the stack hit a conflict on branch ${p.branch} (${p.files.join(", ")}). No real branch was changed. In this worktree, run:\n\n` +
     `git -c rerere.enabled=false rebase --onto ${p.onto} ${p.upstream}\n\n` +
-    `Resolve the conflict (keep the intent of both sides) and git rebase --continue. If you see "Resolved '…' using previous resolution", don't trust it; that is an old recorded resolution: git checkout -m that file and resolve it again. ` +
+    `Resolve the conflict (keep the intent of both sides), then go on with git -c rerere.enabled=false rebase --continue (the same for skipping a commit: git -c rerere.enabled=false rebase --skip). The -c only covers that one command, so add it at every step. ` +
+    `If you see "Resolved '…' using previous resolution", don't trust it; that is an old recorded resolution: git checkout -m that file and resolve it again. ` +
     `Before pushing: make sure no conflict markers are left (git grep -nE '^(<<<<<<<|>>>>>>>)( |$)' prints nothing), build, run the related tests, and check your migration numbers don't clash with the ones already in ${p.onto.slice(0, 7)}.` +
-    (p.push
+    (p.remoteAhead
+      ? ` Don't push: the remote ${p.branch} (${(p.remoteSha ?? "").slice(0, 7)}) has commits this branch doesn't, maybe pushed by a reviewer, and a force push would drop them. Once the conflict is solved, say so with report (kind blocked); the user decides how to bring them in.`
+      : p.push
       ? ` Then push with exactly this:\n\n${pushLine(p)}\n\nIf the push is rejected (stale info, the remote moved), stop and say so with report (kind blocked); don't fetch again and push: a reviewer may have pushed commits on GitHub.`
       : " Don't push (Shipherd's Force push switch is off; pushing is up to the user).") +
     ` Until you rebase, Shipherd won't touch this branch. If you decide not to rebase, say why.` +
@@ -147,6 +160,7 @@ const EN: StackTexts = {
     autoRebaseOff: "\"Let Shipherd rebase stacks\" is off for this repository (Settings → Stacks)",
     busy: "This stack is being processed; try again shortly",
     isBottom: "The bottom layer is the one to review; it doesn't need a draft",
+    noPushRemote: (b) => `Can't tell which remote ${b} goes to (neither origin nor the remote trunk follows has it yet), so it wasn't pushed. Push it to your own repository first, then try again`,
     readyPr: "This layer's PR is already open for review; it can't go back to a plain branch",
     merged: "This layer is already merged",
     nothingToRestore: "There is no backup to restore",

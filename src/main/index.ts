@@ -268,7 +268,7 @@ import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
 import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
-import { StackService, type OwnedBranch } from "./stacks/stack-service";
+import { StackService, stackMailRepoIdOf, stackMailRef, type OwnedBranch, type StackMailTo } from "./stacks/stack-service";
 import { StackControl } from "./control/stack-control";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
@@ -2596,6 +2596,7 @@ async function bootstrap(): Promise<void> {
     }
     return null;
   };
+  const stackMailRepoId = (to: StackMailTo): number | null => stackMailRepoIdOf(to, tickets.listRepos(to.ticketKey), samePath);
   const stackService = new StackService({
     repo: new StacksRepo(db, Date.now),
     policy: stackPolicy,
@@ -2610,9 +2611,9 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
     owned: stackOwned,
-    slugOf: async (path) => repoIdentity.slugOf(path),
-    // fork 工作流：层的 PR 开在 upstream 上（BTL-278）
-    remoteSlugs: async (path) => repoIdentity.remoteSlugsOf(path),
+    slugOf: (path) => repoIdentity.slugOfAsync(path),
+    // fork 工作流：层的 PR 开在 upstream 上（BTL-278）；异步、有缓存，不每轮同步起 git
+    remoteSlugs: (path) => repoIdentity.remoteSlugsOfAsync(path),
     // 开着终端、在这个目录里、正在干活的 session（同一个 head 只看一次）。
     sessionBusy: (path) => pty.openIds().some((t) => {
       const h = sessions.head(t);
@@ -2622,15 +2623,19 @@ async function bootstrap(): Promise<void> {
     trunkBusy: (repoPath, trunk, ignore) => gateRepo.activeHolds().some((h) => samePath(h.repoPath, repoPath) && h.target === trunk && !ignore.includes(h.branch)),
     awaitingCheck: (url): boolean => ticketPrs.byUrl(url).some((r): boolean => commentLoop.awaitingCheck(r.id)),
     // 和 CI、评论同一个收件人；排进它的信箱（BTL-248），同一层新的冲突换掉还没送的旧的。认不出收件人时返回 false。
+    // ref 带上 ticket 的仓库（BTL-278）：同一个 ticket 跨仓库、分支同名时，一边的新信不能换掉、撤掉另一边的
     deliver: async (to, text, topic) => {
-      const repoId = to.ticketRepoId ?? tickets.listRepos(to.ticketKey).find((r) => r.branch === to.branch)?.id ?? null;
+      const repoId = stackMailRepoId(to);
       if (repoId === null) return false;
       const rcpt = loopRecipient(to.ticketKey, repoId, to.branch);
       if (!rcpt.ok) return false;
-      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: `stack:${to.ticketKey}:${to.branch}${topic ? `:${topic}` : ""}` });
+      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: stackMailRef(to, repoId, topic) });
       return true;
     },
-    withdraw: (to, topic) => mailbox.withdraw(`stack:${to.ticketKey}:${to.branch}${topic ? `:${topic}` : ""}`),
+    withdraw: (to, topic) => {
+      const repoId = stackMailRepoId(to);
+      if (repoId !== null) mailbox.withdraw(stackMailRef(to, repoId, topic));
+    },
     record: recordEvent,
     onChange: () => notify(),
     closedByShipherd: (url) => ticketPrs.markShipherdClosed(url, Date.now()),
