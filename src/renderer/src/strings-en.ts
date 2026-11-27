@@ -1939,8 +1939,12 @@ export const EN: UiStrings = {
     autoRebaseExplicitOff: "The epic is semi-automatic, but this repo turned auto rebase off. It stays off. Shipherd only watches and does not change the branches.",
     epicOn: (names: string) => `Auto rebase is on for these stacks because their epic is semi-automatic: ${names}`,
     epicIgnored: (names: string) => `These stacks' epic is semi-automatic, but auto rebase is turned off here, so it stays off: ${names}`,
-    confirmLine: (why, branches, push = true) => {
-      if (why === "remote_ahead") return `${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer). Shipherd didn't hand the conflict over; "Rebase now" hands it to the session without a push command, and you decide how to bring those commits in.`;
+    confirmLine: (why, branches, push = true, toSession = true) => {
+      if (why === "remote_ahead") {
+        const then = toSession ? "hands the conflict to the session" : "leaves the conflict to you (Hand conflicts to the session is off)";
+        const noPush = push ? "without a push command" : "and nothing is pushed: the Force push switch is off, so Shipherd doesn't push or give a push command";
+        return `${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer). Shipherd didn't hand the conflict over; "Rebase now" ${then} ${noPush}, and you decide how to bring those commits in.`;
+      }
       const how = push
         ? "Shipherd only runs git rebase and force-pushes. It doesn't build or run tests; afterwards it asks each layer's session to check."
         : "Shipherd only runs git rebase locally (the Force push switch is off, so nothing is pushed). It doesn't build or run tests; afterwards it asks each layer's session to check.";
@@ -1972,14 +1976,19 @@ export const EN: UiStrings = {
       behind: (stack: string, commits: number, days: number) => `The bottom of stack "${stack}" is ${n(commits, "commit")} behind trunk (the oldest from ${n(days, "day")} ago)`,
       stuck: (stack: string, detail: string) => `Rebasing stack "${stack}" is stuck: ${detail}`,
       prs_unreadable: (stack: string, host: string | null) =>
-        `Stack "${stack}" hasn't been rebased for over a day: Shipherd can't read the open PRs${host ? ` on ${host}` : ""}, so it can't tell which layers are in review and keeps putting it off. Most likely gh isn't signed in to that host: run gh auth login${host ? ` --hostname ${host}` : ""} in a terminal, and the next round picks it up.`,
+        host && host !== "github.com"
+          ? `Stack "${stack}" hasn't been rebased automatically for over a day: Shipherd can't read the PRs on ${host}, so it can't tell which layers are in review and keeps putting it off. If it's GitHub Enterprise, run gh auth login --hostname ${host} in a terminal and the next round picks it up; if it isn't a GitHub repository, the stack can only be rebased by hand ("Rebase now").`
+          : `Stack "${stack}" hasn't been rebased automatically for over a day: Shipherd can't read the open PRs, so it can't tell which layers are in review and keeps putting it off. Most likely gh isn't signed in: run gh auth login in a terminal, and the next round picks it up.`,
       markers: (stack: string, branch: string, files: string) =>
         files
-          ? `${branch} in stack "${stack}" was rewritten but not pushed yet, and ${files} has conflict markers (<<<<<<<). Shipherd won't push it: resolve the markers and commit, or click "Rebase now" to start over.`
-          : `${branch} in stack "${stack}" was rewritten but not pushed yet, and Shipherd couldn't check it for conflict markers, so it holds the push. Click "Rebase now" to start over.`,
-      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead") =>
+          ? `${branch} in stack "${stack}" was rewritten but not pushed yet, and ${files} has conflict markers (<<<<<<<) the remote copy doesn't. Shipherd won't push it (rebasing again keeps the markers): have this layer's session remove them and commit; Shipherd checks again next round and pushes once it's clean.`
+          : `${branch} in stack "${stack}" was rewritten but not pushed yet, and Shipherd couldn't check it for conflict markers, so it holds the push and checks again in a while. If this keeps up, look at Shipherd's log.`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
         why === "remote_ahead"
-          ? `Stack "${stack}": ${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer); the usual force push from the session would drop them. Shipherd left it alone; "Rebase now" hands the conflict to the session without a push command.`
+          ? `Stack "${stack}": ${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer)` +
+            (push && toSession ? "; the usual force push from the session would drop them" : "") +
+            `. Shipherd left it alone; "Rebase now" ${toSession ? "hands the conflict to the session" : "leaves the conflict to you"}` +
+            (push ? " without a push command." : ", and nothing is pushed: the Force push switch is off, so there's no push command either.")
           : why === "ready_pr"
           ? `Stack "${stack}" needs a rebase, but ${branches} has a PR under review. Shipherd left it alone. Click "Rebase now" if it's OK to rewrite (Shipherd doesn't build or run tests).`
           : `Stack "${stack}" needs a rebase, but ${branches} belong to a session for now: it still has the conflict on the lowest one. Shipherd left them alone. Click "Rebase now" if it's OK to rewrite (Shipherd doesn't build or run tests).`,

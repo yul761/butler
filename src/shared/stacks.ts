@@ -208,7 +208,8 @@ export interface StackRunView {
   /** 推送：开关关着没推的分支。 */
   unpushed: string[];
   /** needs_confirm：为什么、哪几层。 */
-  confirm: { why: StackConfirmWhy; branches: string[]; push?: boolean } | null;
+  /** push：确认以后会不会强推；toSession：冲突会不会交给 session（remote_ahead 的文案用）。 */
+  confirm: { why: StackConfirmWhy; branches: string[]; push?: boolean; toSession?: boolean } | null;
   startedAt: number;
   finishedAt: number | null;
 }
@@ -295,6 +296,8 @@ export interface StackNoticeInfo {
   asked?: string[];
   /** confirm：确认以后会不会强推。 */
   push?: boolean;
+  /** confirm：冲突会不会交给 session。 */
+  toSession?: boolean;
   detail?: string | null;
   /** draft_stale：已经多少天；behind：落后多少天。 */
   days?: number;

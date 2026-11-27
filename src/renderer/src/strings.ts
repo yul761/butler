@@ -1959,8 +1959,12 @@ const ZH = {
     autoRebaseExplicitOff: "epic 是半自动，但这个仓库明确关了自动 rebase，按关。Shipherd 只看，不改分支。",
     epicOn: (names: string) => `因为 epic 是半自动，这些栈的自动 rebase 已开着：${names}`,
     epicIgnored: (names: string) => `这些栈的 epic 是半自动，但这里明确关了自动 rebase，按关：${names}`,
-    confirmLine: (why: "ready_pr" | "handoff" | "remote_ahead", branches: string, push = true) => {
-      if (why === "remote_ahead") return `${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）。Shipherd 没把冲突交出去；点「马上 rebase」会交给 session，但不给推送命令，远端的提交怎么合进来由你决定。`;
+    confirmLine: (why: "ready_pr" | "handoff" | "remote_ahead", branches: string, push = true, toSession = true) => {
+      if (why === "remote_ahead") {
+        const then = toSession ? "会把冲突交给 session 解" : "会把冲突留给你解（「冲突交给 session」关着）";
+        const noPush = push ? "不给推送命令" : "「强推」开关关着，Shipherd 不推，也不给推送命令";
+        return `${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）。Shipherd 没把冲突交出去；点「马上 rebase」${then}，${noPush}，远端的提交怎么合进来由你决定。`;
+      }
       const how = push
         ? "Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。"
         : "Shipherd 只在本地做 git rebase（「强推」开关关着，不推），不编译、不跑测试，改写后会请各层的 session 核对。";
@@ -1992,14 +1996,19 @@ const ZH = {
       behind: (stack: string, commits: number, days: number) => `栈「${stack}」的栈底落后 trunk ${commits} 个提交（最早的是 ${days} 天前的）`,
       stuck: (stack: string, detail: string) => `栈「${stack}」的 rebase 卡住了：${detail}`,
       prs_unreadable: (stack: string, host: string | null) =>
-        `栈「${stack}」一天多没 rebase 了：读不到${host ? ` ${host} 上` : ""}开着的 PR，Shipherd 没法确认哪些层在 review，就一直推迟。多半是 gh 没登录这台主机：在终端跑 gh auth login${host ? ` --hostname ${host}` : ""}，登录后下一轮会自己接着跑。`,
+        host && host !== "github.com"
+          ? `栈「${stack}」一天多没自动 rebase 了：Shipherd 读不到 ${host} 上的 PR，没法确认哪些层在 review，就一直推迟。是 GitHub Enterprise 就在终端跑 gh auth login --hostname ${host}，登录后下一轮会自己接着跑；不是 GitHub 的仓库，栈只能手动 rebase（点「马上 rebase」）。`
+          : `栈「${stack}」一天多没自动 rebase 了：读不到开着的 PR，Shipherd 没法确认哪些层在 review，就一直推迟。多半是 gh 没登录：在终端跑 gh auth login，登录后下一轮会自己接着跑。`,
       markers: (stack: string, branch: string, files: string) =>
         files
-          ? `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它：解掉标记提交后，或者点「马上 rebase」重来。`
-          : `栈「${stack}」的 ${branch} 改写过、还没推出去，可是查不了里面有没有冲突标记，Shipherd 先不推。点「马上 rebase」重来。`,
-      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead") =>
+          ? `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<），远端那份没有。Shipherd 不推它（重新 rebase 也会带着这些标记）：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`
+          : `栈「${stack}」的 ${branch} 改写过、还没推出去，可是查不了里面有没有冲突标记，Shipherd 先不推，过一会儿再查。一直这样就看一下 Shipherd 的日志。`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
         why === "remote_ahead"
-          ? `栈「${stack}」的 ${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的），照常交给 session 强推会冲掉它们。Shipherd 没动；点「马上 rebase」会把冲突交给 session，但不给推送命令。`
+          ? `栈「${stack}」的 ${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）` +
+            (push && toSession ? "，照常交给 session 强推会冲掉它们" : "") +
+            `。Shipherd 没动；点「马上 rebase」会把冲突${toSession ? "交给 session" : "留给你"}，` +
+            (push ? "但不给推送命令。" : "「强推」开关关着，不推，也不给推送命令。")
           : why === "ready_pr"
           ? `栈「${stack}」要 rebase，可是 ${branches} 有在 review 的 PR。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`
           : `栈「${stack}」要 rebase，可是 ${branches} 现在归 session 管：最下面那层的冲突交给它了，还没解完。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`,

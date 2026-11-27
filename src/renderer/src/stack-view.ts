@@ -16,7 +16,8 @@ export function stackNoticeText(n: StackNoticeInfo, S: UiStrings): string {
     case "stuck": return t.stuck(n.stackName, n.detail ?? "—");
     case "prs_unreadable": return t.prs_unreadable(n.stackName, n.host ?? null);
     case "markers": return t.markers(n.stackName, n.branch, (n.files ?? []).join(", "));
-    case "confirm": return t.confirm(n.stackName, (n.branches ?? [n.branch]).join(", "), n.detail === "handoff" || n.detail === "remote_ahead" ? n.detail : "ready_pr");
+    case "confirm":
+      return t.confirm(n.stackName, (n.branches ?? [n.branch]).join(", "), n.detail === "handoff" || n.detail === "remote_ahead" ? n.detail : "ready_pr", n.push ?? true, n.toSession ?? true);
     case "rewritten": {
       const all = n.branches ?? [n.branch];
       const asked = n.asked ?? [];
@@ -46,7 +47,7 @@ export function lastRunLines(r: StackRunView | null, S: UiStrings, now: number):
   const lines = [S.sk.lastRun(S.sk.outcome[r.outcome], S.sk.trigger[r.trigger], resetClock(r.startedAt, now))];
   if (r.reason && (r.outcome === "deferred" || r.outcome === "failed")) lines[0] += ` · ${r.reason}`;
   if (r.conflict) lines.push(S.sk.conflict(r.conflict.branch, r.conflict.files.join(", ") || "—"));
-  if (r.outcome === "needs_confirm" && r.confirm) lines.push(S.sk.confirmLine(r.confirm.why, r.confirm.branches.join(", "), r.confirm.push ?? true));
+  if (r.outcome === "needs_confirm" && r.confirm) lines.push(S.sk.confirmLine(r.confirm.why, r.confirm.branches.join(", "), r.confirm.push ?? true, r.confirm.toSession ?? true));
   if (r.unpushed.length > 0) lines.push(S.sk.unpushedList(r.unpushed.join(", ")));
   return lines;
 }
