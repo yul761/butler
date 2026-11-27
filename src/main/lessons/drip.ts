@@ -67,6 +67,23 @@ export function writeDripManifest(dir: string, sessionId: string, m: DripManifes
   renameSync(tmp, `${base}${DRIP_SUFFIX}`);
 }
 
+/**
+ * 开 session 时准备补送：hook 装着、有要补送的才写清单，否则删掉旧的。返回补送是不是真的会发生（清单写到了磁盘上）：
+ * 说明里写不写「编辑时补送」就看它，清单没写出来（没装 hook、没有要补送的、写失败）就不写，免得是假话。
+ */
+export function prepareSessionDrip(d: {
+  hookInstalled: boolean; dir: string; sessionId: string; manifest: () => DripManifest | null; log: (msg: string, e: unknown) => void;
+}): boolean {
+  try {
+    const m = d.hookInstalled ? d.manifest() : null;
+    writeDripManifest(d.dir, d.sessionId, m);
+    return m !== null;
+  } catch (e) {
+    d.log("lesson drip manifest not written", e);
+    return false;
+  }
+}
+
 const DRIP_MAX_AGE_MS = 30 * 24 * 3600_000;
 
 /** 启动时清掉 30 天没动过的清单和已送记录；返回删了几个。 */

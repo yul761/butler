@@ -890,7 +890,7 @@ const ZH = {
   lessonDeliveryTitle: {
     full: "开 session 时整条写进说明",
     principle: "写成一行原则，这条是它的案例（全文在旁边的文件里）",
-    index: "说明里只列标题，session 用 lessons 工具查全文",
+    index: "说明里只列标题，session 用 lessons 工具查全文；它管整个仓库，session 第一次改文件时 Shipherd 也会把全文补送过去",
     drip: "说明里只列标题；改到它管的文件时 Shipherd 把全文补送给 session",
     check: "已经转成检查，由检查来管，不再占说明的位置",
   } as Record<string, string>,

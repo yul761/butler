@@ -39,17 +39,31 @@ export interface DripManifest {
 export const pathsFoldCase = (platform: NodeJS.Platform): boolean => platform === "win32" || platform === "darwin";
 
 /**
- * 文件属于哪个仓库、相对路径是什么：最长的目录优先（嵌套的 worktree）；Windows、macOS 上不分大小写，反斜杠当斜杠。
+ * 统一斜杠，并展开 . 和 ..（/wt/web/../api/a.ts → /wt/api/a.ts）：不展开的话前缀比较会把它算进 web。
+ * 跑出开头的 .. 原样留着（这样的路径对不上任何仓库）；Windows 的盘符（c:）不会被 .. 吃掉。
+ */
+export function collapsePath(p: string): string {
+  const out: string[] = [];
+  for (const seg of normalizePath(p).split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === ".." && out.length && out[out.length - 1] !== ".." && !/^[a-zA-Z]:$/.test(out[out.length - 1])) out.pop();
+    else out.push(seg);
+  }
+  return out.join("/");
+}
+
+/**
+ * 文件属于哪个仓库、相对路径是什么：最长的目录优先（嵌套的 worktree）；Windows、macOS 上不分大小写，反斜杠当斜杠，. 和 .. 先展开。
  * 编辑时补送（hook）和 lessons 工具共用这一份判断。
  */
 export function locateInRoots(file: string, roots: readonly DripRoot[], platform: NodeJS.Platform): { slug: string; rel: string } | null {
   const fold = pathsFoldCase(platform);
   const key = (p: string) => (fold ? p.toLowerCase() : p);
-  const f = normalizePath(file);
+  const f = collapsePath(file);
   let best: { slug: string; rel: string; len: number } | null = null;
   for (const r of roots) {
     for (const dir of r.dirs) {
-      const d = normalizePath(dir).replace(/\/+$/, "");
+      const d = collapsePath(dir);
       if (!d || !key(f).startsWith(`${key(d)}/`) || (best && best.len >= d.length)) continue;
       best = { slug: r.slug, rel: f.slice(d.length + 1), len: d.length };
     }

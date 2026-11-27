@@ -8,6 +8,7 @@ import { LessonMergeService, type MergeLayer } from "./merge";
 const ids = (prompt: string) => [...prompt.matchAll(/^#(\d+) \(/gm)].map((m) => Number(m[1]));
 
 function build(answer: FakeAnswer, o: { overBudget?: (l: MergeLayer) => boolean; auto?: boolean } = {}) {
+  let auto = o.auto ?? false;
   const s = setupAdmission();
   const recorder = new BatchRecorder(s.db, [lessonAdapter(s.db), mergeProposalAdapter(s.db)]);
   const fake = fakeRunner({ lesson_merge: answer });
@@ -15,9 +16,9 @@ function build(answer: FakeAnswer, o: { overBudget?: (l: MergeLayer) => boolean;
   const svc = new LessonMergeService({
     db: s.db, repo: s.repo, recorder, now: () => s.clock.now,
     ctx: () => ({ run: fake.run, judgments: s.judgments, lang: () => "en", now: () => s.clock.now, cwd: "/home", gate: OPEN_GATE }),
-    overBudget: o.overBudget ?? (() => false), auto: () => o.auto ?? false, onChanged: () => changed++,
+    overBudget: o.overBudget ?? (() => false), auto: () => auto, onChanged: () => changed++,
   });
-  return { ...s, recorder, fake, svc, changed: () => changed };
+  return { ...s, recorder, fake, svc, changed: () => changed, setAuto: (v: boolean) => (auto = v) };
 }
 
 const all = (text = "Re-read the row in the write transaction") => (req: { prompt: string }) => ({ merges: [{ ids: ids(req.prompt), text, why: "races lose edits" }] });
@@ -125,6 +126,41 @@ describe("LessonMergeService", () => {
     // 次数一样多：保留编号小的。
     expect(s.repo.get(b)!.mergedInto).toBe(a);
     expect(s.db.prepare(`SELECT kind, origin FROM admission_batches`).all()).toEqual([{ kind: "merge_similar", origin: "auto" }]);
+  });
+
+  it("auto-accept also takes proposals left pending from earlier runs, but never one the user undid", async () => {
+    const s = build(all());
+    const a = s.lesson("re-read the row inside the write transaction before saving", { status: "confirmed" });
+    const b = s.lesson("re-read the row inside the write transaction before writing back", { status: "confirmed" });
+    await s.svc.suggest();
+    const [p] = s.svc.pending();
+    // 设置后来才打开：这一轮没有新建议，以前留下的照样自动接受。
+    s.setAuto(true);
+    expect(await s.svc.suggest()).toEqual({ added: 0, accepted: 1, failed: 0 });
+    expect(s.repo.get(b)!.mergedInto).toBe(a);
+    const { id: batch } = s.db.prepare(`SELECT id FROM admission_batches WHERE kind = 'merge_similar'`).get() as { id: number };
+    expect(s.recorder.undo(batch, 2).ok).toBe(true);
+    expect(s.svc.pending().map((x) => x.id)).toEqual([p.id]);
+    // 撤销过的：下一轮不再自动接受，只能手动接受。
+    expect(await s.svc.suggest()).toEqual({ added: 0, accepted: 0, failed: 0 });
+    expect(s.repo.get(b)!.mergedInto).toBeNull();
+    expect(s.svc.accept(p.id)).toMatchObject({ ok: true });
+  });
+
+  it("a run that throws midway still updates the failure count instead of keeping the last one", async () => {
+    const s = build(all());
+    s.lesson("re-read the row inside the write transaction before saving", { status: "confirmed" });
+    s.lesson("re-read the row inside the write transaction before writing back", { status: "confirmed" });
+    await s.svc.suggest();
+    expect(s.svc.failed()).toBe(0);
+    s.lesson("never log a token or a secret to the console output", { status: "confirmed" });
+    s.lesson("never log a token or a secret to the console at all", { status: "confirmed" });
+    s.judgments.put = () => {
+      throw new Error("disk full");
+    };
+    await expect(s.svc.suggest()).rejects.toThrow("disk full");
+    expect(s.svc.failed()).toBe(1);
+    expect(s.svc.running()).toBe(false);
   });
 
   it("ignores ids the model made up or from another layer, and keeps one proposal per lesson", async () => {

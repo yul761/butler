@@ -65,7 +65,7 @@ const memberKey = (l: Lesson) => [l.id, l.text, l.why, l.scopeGlobs, l.scopeLang
 export const membersHash = (ls: readonly Lesson[]): string => inputHash([...ls].sort((a, b) => a.id - b.id).map(memberKey));
 
 const layerKey = (l: MergeLayer) => (l.kind === "repo" ? `repo:${l.slug}` : `product:${l.productId}`);
-const inLayer = (l: Lesson, layer: MergeLayer) =>
+const inLayer = (l: Pick<Lesson, "scope">, layer: MergeLayer) =>
   layer.kind === "repo" ? l.scope.kind === "repo" && l.scope.slug === layer.slug : l.scope.kind === "product" && l.scope.productId === layer.productId;
 
 interface Row {
@@ -171,10 +171,41 @@ export class LessonMergeService {
   }
 
   private async suggestAll(slug?: string): Promise<SuggestOutcome> {
-    const ctx = this.d.ctx();
-    const zh = ctx.lang() === "zh";
-    let added: number[] = [];
+    const zh = this.d.ctx().lang() === "zh";
+    let added: number[];
     let failed = 0;
+    try {
+      added = await this.askLayers(slug, zh, (n) => (failed += n));
+    } catch (e) {
+      // 中途抛错（写库、缓存）：这一次没跑完，算一块失败，不能让上次的计数留着。
+      failed++;
+      throw e;
+    } finally {
+      this.lastFailed = failed;
+    }
+    let accepted = 0;
+    if (this.d.auto()) for (const id of this.autoCandidates(slug)) if (this.accept(id, "auto").ok) accepted++;
+    return { added: added.length, accepted, failed };
+  }
+
+  /**
+   * 自动接受的范围：这几层里所有还在待处理、仍然有效的建议（不只这一轮新出的：设置是后来才打开的、上次自动接受时规矩正好在改，都要补上）。
+   * 用户撤销过的不再自动接受：撤销就是说「这几条别合」，只能手动再接受。
+   */
+  private autoCandidates(slug?: string): number[] {
+    const layers = this.layers(slug);
+    const undone = this.d.db.prepare(
+      `SELECT 1 FROM admission_batch_items i JOIN admission_batches b ON b.id = i.batch_id WHERE i.entity = 'lesson_merge' AND i.entity_id = ? AND b.undone_at IS NOT NULL LIMIT 1`,
+    );
+    return this.pending()
+      .filter((p) => layers.some((l) => inLayer(p, l)))
+      .filter((p) => !undone.get(p.id))
+      .map((p) => p.id);
+  }
+
+  private async askLayers(slug: string | undefined, zh: boolean, fail: (n: number) => void): Promise<number[]> {
+    const ctx = this.d.ctx();
+    let added: number[] = [];
     for (const layer of this.layers(slug)) {
       const ls = this.confirmedIn(layer);
       if (ls.length < 2) continue;
@@ -191,7 +222,7 @@ export class LessonMergeService {
             prompt: PROMPT[zh ? "zh" : "en"](block.map((l) => line(l, zh)).join("\n"), tight),
           }, ctx.onCall);
           if (!o.ok) {
-            failed++;
+            fail(1);
             this.d.log?.(`lessons: merge suggestion failed for ${layerKey(layer)} (${o.reason})`, o.message);
             continue;
           }
@@ -201,10 +232,7 @@ export class LessonMergeService {
         added = [...added, ...this.store(layer, block, answer, tight ? "over_budget" : "similar")];
       }
     }
-    this.lastFailed = failed;
-    let accepted = 0;
-    if (this.d.auto()) for (const id of added) if (this.accept(id, "auto").ok) accepted++;
-    return { added: added.length, accepted, failed };
+    return added;
   }
 
   /** 写回：在事务里重新读这些规矩，问的时候的样子变了就丢掉这一组；和待处理、拒绝过的同一组同一指纹不重复提。 */

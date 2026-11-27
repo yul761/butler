@@ -1,4 +1,4 @@
-import { locateInRoots, type DripRoot } from "../../shared/lesson-drip";
+import { collapsePath, locateInRoots, type DripRoot } from "../../shared/lesson-drip";
 import type { LessonDelivery } from "../../shared/lessons";
 import { lessonApplies } from "../../shared/lesson-scope";
 import { normalizePath } from "../../shared/glob";
@@ -51,8 +51,10 @@ function resolvePaths(
     let at: { slug: string; rel: string } | null = null;
     if (isAbs(raw)) at = locate(raw);
     else {
-      if (cwd && isAbs(cwd)) at = locate(`${normalizePath(cwd).replace(/\/+$/, "")}/${normalizePath(raw).replace(/^\.\//, "")}`);
-      if (!at && slugs.length === 1) at = { slug: slugs[0], rel: normalizePath(raw).replace(/^\.\//, "") };
+      if (cwd && isAbs(cwd)) at = locate(`${normalizePath(cwd)}/${normalizePath(raw)}`);
+      // 只有一个仓库、又没有 cwd 可依时直接算在它头上；跑到仓库外面的（../）不算。
+      const rel = collapsePath(raw);
+      if (!at && slugs.length === 1 && rel && rel !== ".." && !rel.startsWith("../")) at = { slug: slugs[0], rel };
     }
     if (at) files.push(at);
     else unresolved.push(raw);

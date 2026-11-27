@@ -99,6 +99,17 @@ export class ChecksService {
     return this.resolved(scope).filter((x) => x.row.enabled).map((x) => this.localize(x.row));
   }
 
+  /**
+   * 这个仓库里真的在拦的检查（开着、enforce、block，和 hook 判断拦不拦是同一条件）来自哪些规矩（BTL-274）。
+   * 和 hook 快照同一套三层合并：产品层开着的检查，仓库层把它关掉或改成 shadow 时，在这个仓库里就不算由检查管。
+   */
+  enforcedLessonIds(slug: string): Set<number> {
+    const out = new Set<number>();
+    for (const { row } of this.resolved({ kind: "repo", slug }))
+      if (row.enabled && row.mode === "enforce" && row.severity === "block" && row.lessonId !== null) out.add(row.lessonId);
+    return out;
+  }
+
   /** 某个仓库看到的这条检查（三层合并后，含停用的），存量扫描和导出用（工作流 E2）。 */
   resolvedFor(slug: string, key: string): (ResolvedCheck & { enabled: boolean; origin: ScopeRef }) | null {
     const x = this.resolved({ kind: "repo", slug }).find((r) => r.key === key);

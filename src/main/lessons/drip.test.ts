@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { memDb } from "../test-utils";
 import { LessonsRepo } from "../db/lessons-repo";
 import { RepoIdentity } from "./repo-identity";
-import { dripManifest, dripRoots, pruneDrip, writeDripManifest } from "./drip";
+import { dripManifest, dripRoots, prepareSessionDrip, pruneDrip, writeDripManifest } from "./drip";
 import { guidePlan } from "./select";
 import { runLessonDrip, realDripDeps } from "../../../hook/lessons";
 
@@ -95,5 +95,31 @@ describe("writeDripManifest / pruneDrip", () => {
     expect(pruneDrip(dir, Date.now())).toBe(1);
     expect(existsSync(join(dir, "new.sent"))).toBe(true);
     expect(pruneDrip(join(dir, "missing"), Date.now())).toBe(0);
+  });
+});
+
+describe("prepareSessionDrip", () => {
+  const m = { v: 1 as const, lang: "zh" as const, roots: [{ slug: "acme/web", dirs: ["/wt/web"] }], lessons: [] };
+  it("says drip happens only when the manifest is really on disk", () => {
+    const dir = mkdtempSync(join(tmpdir(), "drip-"));
+    const logs: string[] = [];
+    const run = (o: { hook?: boolean; manifest?: () => typeof m | null; dir?: string }) =>
+      prepareSessionDrip({ hookInstalled: o.hook ?? true, dir: o.dir ?? dir, sessionId: "s", manifest: o.manifest ?? (() => m), log: (msg) => logs.push(msg) });
+    expect(run({})).toBe(true);
+    expect(existsSync(join(dir, "s.json"))).toBe(true);
+    // 没有要补送的：删掉旧清单，说明里不写补送。
+    expect(run({ manifest: () => null })).toBe(false);
+    expect(existsSync(join(dir, "s.json"))).toBe(false);
+    // 没装 hook：连清单都不算。
+    let asked = false;
+    expect(run({ hook: false, manifest: () => ((asked = true), m) })).toBe(false);
+    expect(asked).toBe(false);
+    // 写失败（目录其实是个文件）：记日志，不写补送。
+    const file = join(dir, "not-a-dir");
+    writeFileSync(file, "x");
+    expect(run({ dir: file })).toBe(false);
+    expect(logs).toEqual(["lesson drip manifest not written"]);
+    // 算清单时抛错也一样。
+    expect(run({ manifest: () => { throw new Error("db"); } })).toBe(false);
   });
 });

@@ -63,6 +63,20 @@ describe("lookupLessons", () => {
     expect(lookupLessons(repo, identity(), paths, roots, { paths: ["/wt/acme/web-btl-12/src/a.ts"] }, {}, "linux").unresolved).toEqual(["/wt/acme/web-btl-12/src/a.ts"]);
   });
 
+  it("collapses . and .. before deciding which repo a path is in", () => {
+    const { repo, add } = setup();
+    add({ kind: "repo", slug: "acme/web" }, "web rule");
+    const a = add({ kind: "repo", slug: "acme/api" }, "api rule", ["src/**"]);
+    // 从 web 的 worktree 查 ../api-btl-1/src/a.ts：是 api 仓库的文件，不能把 web 的规矩带出来。
+    const r = lookupLessons(repo, identity(), paths, roots, { paths: ["../api-btl-1/src/a.ts"], cwd: "/wt/acme/web-btl-1" }, {}, "linux");
+    expect(r.lessons.map((l) => l.id)).toEqual([a]);
+    expect(r.lessons[0].matched).toEqual(["acme/api:src/a.ts"]);
+    expect(lookupLessons(repo, identity(), paths, roots, { paths: ["/wt/acme/web-btl-1/../api-btl-1/./src/a.ts"] }, {}, "linux").lessons.map((l) => l.id)).toEqual([a]);
+    // 只有一个仓库时，跑到仓库外面的相对路径不算在它头上。
+    const one = [{ slug: "acme/api", dirs: ["/wt/acme/api-btl-1"] }];
+    expect(lookupLessons(repo, identity(), ["/acme_api"], one, { paths: ["../x/src/a.ts"] }, {}, "linux").unresolved).toEqual(["../x/src/a.ts"]);
+  });
+
   it("nested directories: the longest one wins", () => {
     const { repo, add } = setup();
     add({ kind: "repo", slug: "acme/web" }, "web rule", ["**/c.ts"]);

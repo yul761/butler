@@ -29,7 +29,6 @@ import { ClaudeAvailability } from "./claude/availability";
 import { buildNotices, ciNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
-import { ChecksRepo } from "./db/checks-repo";
 import { readBgSettings } from "./background/bg-settings";
 import { electronIdleSignal } from "./background/idle";
 import { BackgroundQueue } from "./background/queue";
@@ -106,7 +105,7 @@ import { pruneSessionGuides, writeSessionGuide } from "./claude/session-guide";
 import { planForSlug, safeGuidePlan } from "./lessons/select";
 import { lookupLessons } from "./lessons/lookup";
 import { LessonMergeService, type MergeLayer } from "./lessons/merge";
-import { dripManifest, dripRoots, pruneDrip, writeDripManifest } from "./lessons/drip";
+import { dripManifest, dripRoots, prepareSessionDrip, pruneDrip } from "./lessons/drip";
 import { lessonsHookCommand, lessonsResetCommand } from "../shared/lesson-drip";
 import { resolveLang } from "../shared/i18n";
 import { FeatureService } from "./tickets/feature-service";
@@ -1341,7 +1340,7 @@ async function bootstrap(): Promise<void> {
     principles: settings.get("lessonsPrinciples") === "1",
     core: settings.get("lessonsCoreGuide") === "1",
     checksActive: checksConfig(settings).enabled && health.hookBinCurrent() && existsSync(paths.hookBin),
-    enforced: new ChecksRepo(db).enforcedLessonIds(),
+    enforcedIn: (slug: string) => checksService.enforcedLessonIds(slug),
   });
   /** 这一层所在的仓库里，有哪个单独开 session 时全文装不下（BTL-274）。 */
   const layerOverBudget = (layer: MergeLayer): boolean => {
@@ -1549,19 +1548,18 @@ async function bootstrap(): Promise<void> {
       // 规矩按大小装（BTL-274）：全文写得下的写全文，其余列索引、写进旁边的全文文件、编辑时补送；已转成检查的由检查管。
       const plan = kind === "ticket" ? safeGuidePlan(lessonsRepo, repoIdentity, repoPaths, logger, guideLessonOptions()) : null;
       const lessons = plan?.full ?? [];
-      if (session) {
-        try {
-          const m = plan && hookInstalled() ? dripManifest(lessonsRepo, plan, dripRoots(repoIdentity, session.editDirs), currentLang()) : null;
-          writeDripManifest(paths.lessonDrip, session.termId, m);
-        } catch (e) {
-          logger("lesson drip manifest not written", e);
-        }
-      }
+      // 说明里写不写「编辑时补送」，看清单是不是真的写出来了。
+      const drip = session
+        ? prepareSessionDrip({
+            hookInstalled: hookInstalled(), dir: paths.lessonDrip, sessionId: session.termId, log: logger,
+            manifest: () => (plan ? dripManifest(lessonsRepo, plan, dripRoots(repoIdentity, session.editDirs), currentLang()) : null),
+          })
+        : false;
       const preReview = kind === "ticket" && preReviewActive(ticketKey);
       return writeSessionGuide(paths.mcp, currentLang(), kind, lessons, {
         index: plan ? { rows: plan.index, more: plan.indexMore, rest: plan.rest } : undefined,
         lessonsTool: kind === "ticket" && !!ticketKey,
-        drip: hookInstalled(),
+        drip,
         // 预审（工作流 G）打开时：规矩段那句「PR 前会自动预审」，加上「完成前交证据」一段（按仓库档案列命令）。
         preReview,
         extra: [

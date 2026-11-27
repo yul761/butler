@@ -876,7 +876,7 @@ export const EN: UiStrings = {
   lessonDeliveryTitle: {
     full: "Written in full into the guide when a session opens",
     principle: "Written as one principle line, with this lesson as a case (full text in the file next to it)",
-    index: "Only the title is in the guide; the session looks up the full text with the lessons tool",
+    index: "Only the title is in the guide; the session looks up the full text with the lessons tool. It covers the whole repo, so Shipherd also sends the full text the first time the session edits a file",
     drip: "Only the title is in the guide; Shipherd sends the full text when the session edits a file it covers",
     check: "Turned into a check, which enforces it; it takes no room in the guide",
   } as Record<string, string>,

@@ -41,6 +41,11 @@ describe("lessons delivery view (BTL-274)", () => {
       }
       expect(S.lessonsError.merge_stale).toBeTruthy();
     }
+    // 「索引」那一档的规矩管整个仓库，第一次改文件时也会补送：悬停说明要说到这一点。
+    expect(STRINGS.zh.lessonDeliveryTitle.index).toMatch(/lessons 工具/);
+    expect(STRINGS.zh.lessonDeliveryTitle.index).toMatch(/补送/);
+    expect(STRINGS.en.lessonDeliveryTitle.index).toMatch(/lessons tool/);
+    expect(STRINGS.en.lessonDeliveryTitle.index).toMatch(/sends the full text/);
     expect(STRINGS.zh.lessonsMergeSimilar(3)).toBe("合并 3 条相似规矩");
   });
 });

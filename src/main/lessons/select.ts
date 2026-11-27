@@ -11,21 +11,24 @@ import type { RepoIdentity } from "./repo-identity";
 const byRank = (a: Lesson, b: Lesson): number => b.hits - a.hits || b.lastSeenAt - a.lastSeenAt || a.id - b.id;
 
 /** 这些 slug 的仓库规矩和所属产品规矩（已确认，按 id 去重），带上 label，已排好序。 */
-function confirmedFor(repo: LessonsRepo, slugs: string[]): { lesson: Lesson; label: string }[] {
-  const out: { lesson: Lesson; label: string }[] = [];
+/** slugs：这个 session 里它适用的仓库（仓库规矩是它自己，产品规矩是这些 slug 里属于这个产品的）。 */
+type Ranked = { lesson: Lesson; label: string; slugs: string[] };
+
+function confirmedFor(repo: LessonsRepo, slugs: string[]): Ranked[] {
+  const out: Ranked[] = [];
   const seen = new Set<number>();
-  const push = (lesson: Lesson, label: string) => {
+  const push = (lesson: Lesson, label: string, in_: string[]) => {
     if (seen.has(lesson.id) || lesson.mergedInto !== null) return;
     seen.add(lesson.id);
-    out.push({ lesson, label });
+    out.push({ lesson, label, slugs: in_ });
   };
-  const products = new Map<number, string>();
+  const products = new Map<number, { name: string; slugs: string[] }>();
   for (const slug of slugs) {
-    for (const lesson of repo.lessons({ status: ["confirmed"], scope: { kind: "repo", slug } })) push(lesson, slug);
-    for (const p of repo.productsOf(slug)) products.set(p.id, p.name);
+    for (const lesson of repo.lessons({ status: ["confirmed"], scope: { kind: "repo", slug } })) push(lesson, slug, [slug]);
+    for (const p of repo.productsOf(slug)) products.set(p.id, { name: p.name, slugs: [...(products.get(p.id)?.slugs ?? []), slug] });
   }
-  for (const [productId, name] of products) {
-    for (const lesson of repo.lessons({ status: ["confirmed"], scope: { kind: "product", productId } })) push(lesson, name);
+  for (const [productId, { name, slugs: in_ }] of products) {
+    for (const lesson of repo.lessons({ status: ["confirmed"], scope: { kind: "product", productId } })) push(lesson, name, in_);
   }
   return out.sort((a, b) => byRank(a.lesson, b.lesson));
 }
@@ -39,10 +42,10 @@ export interface GuideLessonOptions {
   /** 确定性检查在跑：已转成检查的规矩由检查管，不占说明的位置。检查关着时它们照常当文字送（不然就真丢了）。默认 true。 */
   checksActive?: boolean;
   /**
-   * 有开着、在拦（enforce）的检查的规矩。给了的话，标着 converted 但检查被删、停用或只在 shadow 的规矩照常当文字送；
-   * 不给（测试）时 converted 就算由检查管。
+   * 这个仓库里真的在拦的检查来自哪些规矩（ChecksService.enforcedLessonIds，按仓库做过三层合并）。给了的话，标着 converted
+   * 但在它适用的某个仓库里检查被删、停用、只在 shadow 的规矩照常当文字送；不给（测试）时 converted 就算由检查管。
    */
-  enforced?: ReadonlySet<number>;
+  enforcedIn?: (slug: string) => ReadonlySet<number>;
   /** 全文的字符预算（默认 GUIDE_FULL_BUDGET）。 */
   fullBudget?: number;
   /** 索引的字符预算（默认 GUIDE_INDEX_BUDGET）。 */
@@ -120,7 +123,7 @@ export function planForSlug(repo: LessonsRepo, slug: string, opts: GuideLessonOp
   return planFor(repo, confirmedFor(repo, [slug]), opts);
 }
 
-function planFor(repo: LessonsRepo, ranked: { lesson: Lesson; label: string }[], opts: GuideLessonOptions): GuidePlan {
+function planFor(repo: LessonsRepo, ranked: Ranked[], opts: GuideLessonOptions): GuidePlan {
   if (ranked.length === 0) return EMPTY_PLAN();
   const fullBudget = opts.fullBudget ?? GUIDE_FULL_BUDGET;
   const indexBudget = opts.indexBudget ?? GUIDE_INDEX_BUDGET;
@@ -128,9 +131,16 @@ function planFor(repo: LessonsRepo, ranked: { lesson: Lesson; label: string }[],
   const modes = new Map<number, LessonDelivery>();
   let pool = ranked;
   if (checksActive) {
-    const byCheck = (l: Lesson) => l.checkability === "converted" && (!opts.enforced || opts.enforced.has(l.id));
-    for (const r of ranked) if (byCheck(r.lesson)) modes.set(r.lesson.id, "check");
-    pool = ranked.filter((r) => !byCheck(r.lesson));
+    const sets = new Map<string, ReadonlySet<number>>();
+    const enforcedIn = (slug: string) => {
+      let s = sets.get(slug);
+      if (!s) sets.set(slug, (s = opts.enforcedIn!(slug)));
+      return s;
+    };
+    // 它适用的每个仓库里都有在拦的检查才算由检查管：有一个仓库没在拦，那里的 session 就得读到文字。
+    const byCheck = (r: Ranked) => r.lesson.checkability === "converted" && (!opts.enforcedIn || (r.slugs.length > 0 && r.slugs.every((s) => enforcedIn(s).has(r.lesson.id))));
+    for (const r of ranked) if (byCheck(r)) modes.set(r.lesson.id, "check");
+    pool = ranked.filter((r) => !byCheck(r));
   }
   if (opts.core) {
     const v = repo.violationCounts(pool.map((r) => r.lesson.id));

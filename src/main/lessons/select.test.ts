@@ -110,10 +110,22 @@ describe("guidePlan", () => {
     const d = add(repo, { kind: "repo", slug: "acme/web" }, "no debugger");
     repo.setFields(c, { checkability: "converted" }, 1);
     repo.setFields(d, { checkability: "converted" }, 1);
-    const plan = guidePlan(repo, identity(), ["/acme_web"], { enforced: new Set([d]) });
+    const plan = guidePlan(repo, identity(), ["/acme_web"], { enforcedIn: (slug) => new Set(slug === "acme/web" ? [d] : []) });
     expect(texts(plan.full)).toEqual(["no console.log"]);
     expect(plan.modes.get(c)).toBe("full");
     expect(plan.modes.get(d)).toBe("check");
+  });
+
+  it("a converted product lesson counts as handled by a check only if the check enforces it in every repo of the session", () => {
+    const repo = setup();
+    const pid = repo.createProduct("shop", ["acme/web", "acme/api"], 1);
+    const p = add(repo, { kind: "product", productId: pid }, "no console.log");
+    repo.setFields(p, { checkability: "converted" }, 1);
+    // api 仓库把产品层的检查关了：同时开两个仓库时它要当文字送；只开 web 时由检查管。
+    const enforcedIn = (slug: string) => new Set(slug === "acme/web" ? [p] : []);
+    expect(guidePlan(repo, identity(), ["/acme_web", "/acme_api"], { enforcedIn }).modes.get(p)).toBe("full");
+    expect(guidePlan(repo, identity(), ["/acme_web"], { enforcedIn }).modes.get(p)).toBe("check");
+    expect(guidePlan(repo, identity(), ["/acme_api"], { enforcedIn }).modes.get(p)).toBe("full");
   });
 
   it("puts unscoped lessons in full text first: scoped ones still reach the session on edit", () => {

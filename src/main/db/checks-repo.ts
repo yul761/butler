@@ -97,12 +97,6 @@ export class ChecksRepo {
     return (this.db.prepare(`SELECT id FROM checks WHERE scope_kind = 'product' AND product_id = ?`).all(productId) as { id: number }[]).map((r) => Number(r.id));
   }
 
-  /** 真的在拦的检查（开着、enforce）来自哪些规矩（BTL-274：只有这些规矩才算「已由检查管」）。 */
-  enforcedLessonIds(): Set<number> {
-    const rows = this.db.prepare(`SELECT DISTINCT lesson_id FROM checks WHERE lesson_id IS NOT NULL AND enabled = 1 AND mode = 'enforce'`).all() as { lesson_id: number }[];
-    return new Set(rows.map((r) => Number(r.lesson_id)));
-  }
-
   /** 从这条规矩生成的检查。 */
   idsOfLesson(lessonId: number): number[] {
     return (this.db.prepare(`SELECT id FROM checks WHERE lesson_id = ?`).all(lessonId) as { id: number }[]).map((r) => Number(r.id));

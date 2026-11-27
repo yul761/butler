@@ -123,6 +123,11 @@ describe("runLessonDrip", () => {
     expect(locate("/wt/web2/a", { ...m, roots: [{ slug: "x", dirs: ["/wt/web"] }] }, "linux")).toBeNull();
     // 嵌套目录：最长的优先
     expect(locate("/a/b/c.ts", { ...m, roots: [{ slug: "outer", dirs: ["/a"] }, { slug: "inner", dirs: ["/a/b"] }] }, "linux")).toEqual({ slug: "inner", rel: "c.ts" });
+    // . 和 .. 先展开：web 目录下的 ../api 是 api 仓库的文件。
+    const two = { ...m, roots: [{ slug: "acme/web", dirs: ["/wt/web"] }, { slug: "acme/api", dirs: ["/wt/api/"] }] };
+    expect(locate("/wt/web/../api/./src/a.ts", two, "linux")).toEqual({ slug: "acme/api", rel: "src/a.ts" });
+    expect(locate("/wt/web/src/../../../etc/x", two, "linux")).toBeNull();
+    expect(locate("C:\\wt\\web\\..\\api\\a.ts", { ...m, roots: [{ slug: "acme/api", dirs: ["c:\\wt\\api"] }] }, "win32")).toEqual({ slug: "acme/api", rel: "a.ts" });
   });
 });
 
