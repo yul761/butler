@@ -22,8 +22,8 @@ function syncCore(term: Terminal): SyncCore | null {
  *
  * 懒解析（BTL-277）：输出和改尺寸先按顺序记下来，有人看屏幕（lines、flush）时才一次同步解析完，读到的就是到这一刻为止
  * 全部输出画出来的那一屏，和逐块解析的结果一样。没人看的时候（spinner 一直在转）主进程不解析。
- * 攒着的超过 SCREEN_PENDING_LIMIT 就丢掉，标成要重建：下次看屏幕时清空 xterm，用 tail()（PtyManager 的回放缓冲，
- * 和渲染进程挂终端时重放的是同一份）重画。没有 tail 就照常攒着。
+ * 攒着的超过 SCREEN_PENDING_LIMIT 就当场同步解析一次（内存有上限，画出来的屏幕和逐块解析一样）。只有解析抛错时，
+ * 才清空 xterm、用 tail()（PtyManager 的回放缓冲）重建。
  */
 export class TermScreen {
   private readonly term: Terminal;
@@ -32,7 +32,7 @@ export class TermScreen {
   /** 还没交给 xterm 的输出和改尺寸，按到达顺序。 */
   private steps: Step[] = [];
   private pendingChars = 0;
-  /** 攒满丢掉了：下次看屏幕时按这个尺寸重建。 */
+  /** 解析抛错了：下次看屏幕时按这个尺寸用回放尾巴重建。 */
   private rebuild: { cols: number; rows: number } | null = null;
   private cols: number;
   private rows: number;
@@ -54,10 +54,14 @@ export class TermScreen {
     if (this.rebuild) return;
     this.steps.push({ data });
     this.pendingChars += data.length;
-    if (this.tail && this.pendingChars > SCREEN_PENDING_LIMIT) {
-      this.steps = [];
-      this.pendingChars = 0;
-      this.rebuild = { cols: this.cols, rows: this.rows };
+    // 攒满了就当场解析一次，不能丢：回放尾巴里只有增量更新，不是整屏快照。权限框画好以后别的行又刷了 256KB，
+    // 用尾巴重建就看不到这个框了（PR #101 review）。解析出错时 catchUp 会标成重建，这里不往 pty 的回调里抛。
+    if (this.pendingChars > SCREEN_PENDING_LIMIT) {
+      try {
+        this.catchUp();
+      } catch {
+        /* 下次读屏幕时用回放尾巴重建 */
+      }
     }
   }
 

@@ -127,39 +127,19 @@ describe("TermScreen lazy parsing (BTL-277)", () => {
     }
   });
 
-  it("drops what piled up past the limit and rebuilds from the replay tail when asked", () => {
-    let tail = "";
-    const s = new TermScreen(60, 10, () => tail);
-    const spin = tuiStream(5, 4000).filter((f) => f.includes("Thinking")).join("");
-    expect(spin.length).toBeGreaterThan(SCREEN_PENDING_LIMIT);
-    s.write(spin);
-    expect(s.pending()).toBe(0);
-    s.resize(50, 9);
-    // 回放缓冲里是最后一段：画着一个权限确认。
-    tail = `\x1b[2J\x1b[H${"─".repeat(50)}\r\n Bash command\r\n Do you want to proceed?\r\n ❯ 1. Yes`;
+  it("parses on the spot past the limit instead of dropping: a prompt drawn earlier stays on screen (PR #101 review)", () => {
+    const s = new TermScreen(60, 10, () => "\x1b[2J\x1b[Hfrom tail");
+    s.write(`\x1b[2J\x1b[H${"─".repeat(50)}\r\n Bash command\r\n Do you want to proceed?\r\n ❯ 1. Yes`);
+    // 之后只重画最后一行，超过排队上限。
+    let more = "";
+    for (let i = 0; more.length <= SCREEN_PENDING_LIMIT + 1024; i++) more += `\x1b[10;1H\x1b[2K✻ Thinking ${i}`;
+    s.write(more);
+    expect(s.pending()).toBeLessThanOrEqual(SCREEN_PENDING_LIMIT);
     const lines = s.lines();
-    expect(lines).toHaveLength(9);
     expect(lines[0]).toBe("─".repeat(50));
     expect(permissionOnScreen(lines)).toBe(true);
-    // 重建完以后接着懒解析新来的输出。
-    s.write("\x1b[2J\x1b[Hready");
-    expect(s.pending()).toBeGreaterThan(0);
-    expect(s.lines()[0]).toBe("ready");
+    expect(lines.join("\n")).not.toContain("from tail");
     s.dispose();
-  });
-
-  it("a rebuild starts from a clean parser even when the last read stopped inside an escape sequence", () => {
-    // 上一次读停在两块 pty 输出之间，正好切开了一个标题（OSC）或者一个 CSI；之后的输出没解析就整段丢了。
-    for (const cut of ["\x1b]0;✳ Work", "\x1b[3", "\x1bP1$r", "\x1b"]) {
-      let tail = "";
-      const s = new TermScreen(40, 4, () => tail);
-      s.write(`before\r\n${cut}`);
-      expect(s.lines()[0]).toBe("before");
-      s.write("y".repeat(SCREEN_PENDING_LIMIT + 1));
-      tail = "hello\r\nworld no bel";
-      expect(s.lines().slice(0, 2), JSON.stringify(cut)).toEqual(["hello", "world no bel"]);
-      s.dispose();
-    }
   });
 
   it("a parse that throws leaves the screen to be rebuilt from the tail on the next read", () => {
@@ -180,10 +160,10 @@ describe("TermScreen lazy parsing (BTL-277)", () => {
     s.dispose();
   });
 
-  it("keeps piling up without a tail (nothing to rebuild from)", () => {
+  it("parses past the limit without a tail too", () => {
     const s = new TermScreen(20, 2);
     s.write("x".repeat(SCREEN_PENDING_LIMIT + 10));
-    expect(s.pending()).toBe(SCREEN_PENDING_LIMIT + 10);
+    expect(s.pending()).toBe(0);
     s.dispose();
   });
 });
