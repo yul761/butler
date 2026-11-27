@@ -1,8 +1,8 @@
 // shipherd-hook lessons <dir>：Edit / Write / NotebookEdit 之后，把改的文件匹配上、还没送过全文的规矩作为 additionalContext 补送（BTL-274）。
 // 只读一份清单和一份已送记录，不调 git，不连网：每次编辑多花几毫秒。
-import { appendFileSync, existsSync, readFileSync, renameSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { DRIP_DONE_SUFFIX, DRIP_SENT_SUFFIX, DRIP_SUFFIX, dripIntro, dripName, type DripLesson, type DripManifest } from "../src/shared/lesson-drip";
+import { DRIP_SENT_SUFFIX, DRIP_SUFFIX, dripIntro, dripName, type DripLesson, type DripManifest } from "../src/shared/lesson-drip";
 import { lessonApplies } from "../src/shared/lesson-scope";
 import { LESSON_DRIP_LIMIT } from "../src/shared/lessons";
 import { normalizePath } from "../src/shared/glob";
@@ -11,7 +11,6 @@ import { envValue } from "../src/shared/legacy-env";
 export interface DripDeps {
   read(file: string): string | null;
   append(file: string, text: string): void;
-  rename(from: string, to: string): void;
   remove(file: string): void;
   exists(file: string): boolean;
   platform: NodeJS.Platform;
@@ -26,7 +25,6 @@ export const realDripDeps: DripDeps = {
     }
   },
   append: (f, t) => appendFileSync(f, t),
-  rename: (a, b) => renameSync(a, b),
   remove: (f) => {
     try {
       unlinkSync(f);
@@ -135,32 +133,15 @@ export function runLessonDrip(stdin: string, env: NodeJS.ProcessEnv, root: strin
       try {
         d.append(sentFile, picked.map((l) => `${l.id}\n`).join(""));
       } catch {
-        return;
-      }
-      if (agent) return;
-      const all = sentIds(d.read(sentFile));
-      if (m.lessons.every((l) => all.has(l.id))) {
-        try {
-          d.rename(manifestFile, `${base}${DRIP_DONE_SUFFIX}`);
-        } catch {
-          /* 下次再试 */
-        }
+        /* 记不下就下次再送一遍，不抛 */
       }
     },
   };
 }
 
-/** shipherd-hook lessons-reset <dir>：SessionStart（startup / clear / compact）时已送记录作废，清单放回去。 */
+/** shipherd-hook lessons-reset <dir>：SessionStart（startup / clear / compact）时主 session 的已送记录作废，下一次编辑重新补送。 */
 export function resetLessonDrip(env: NodeJS.ProcessEnv, root: string, d: DripDeps = realDripDeps): void {
   const sid = envValue(env, "SESSION")?.trim();
   if (!sid || !root) return;
-  const base = join(root, dripName(sid));
-  d.remove(`${base}${DRIP_SENT_SUFFIX}`);
-  if (!d.exists(`${base}${DRIP_SUFFIX}`) && d.exists(`${base}${DRIP_DONE_SUFFIX}`)) {
-    try {
-      d.rename(`${base}${DRIP_DONE_SUFFIX}`, `${base}${DRIP_SUFFIX}`);
-    } catch {
-      /* 下次再试 */
-    }
-  }
+  d.remove(`${join(root, dripName(sid))}${DRIP_SENT_SUFFIX}`);
 }

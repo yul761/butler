@@ -29,6 +29,7 @@ import { ClaudeAvailability } from "./claude/availability";
 import { buildNotices, ciNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
+import { ChecksRepo } from "./db/checks-repo";
 import { readBgSettings } from "./background/bg-settings";
 import { electronIdleSignal } from "./background/idle";
 import { BackgroundQueue } from "./background/queue";
@@ -1340,6 +1341,7 @@ async function bootstrap(): Promise<void> {
     principles: settings.get("lessonsPrinciples") === "1",
     core: settings.get("lessonsCoreGuide") === "1",
     checksActive: checksConfig(settings).enabled && health.hookBinCurrent() && existsSync(paths.hookBin),
+    enforced: new ChecksRepo(db).enforcedLessonIds(),
   });
   /** 这一层所在的仓库里，有哪个单独开 session 时全文装不下（BTL-274）。 */
   const layerOverBudget = (layer: MergeLayer): boolean => {

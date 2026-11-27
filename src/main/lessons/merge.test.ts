@@ -138,6 +138,21 @@ describe("LessonMergeService", () => {
     expect(s.svc.pending().map((p) => [p.ids, p.text])).toEqual([[[a, b], "one"]]);
   });
 
+  it("leaves lessons turned into checks out, and drops a proposal whose lesson was turned into a check meanwhile", async () => {
+    const s = build(all());
+    const a = s.lesson("re-read the row inside the write transaction before saving", { status: "confirmed" });
+    const b = s.lesson("re-read the row inside the write transaction before writing back", { status: "confirmed" });
+    const c = s.lesson("re-read the row inside the write transaction before saving it", { status: "confirmed" });
+    s.repo.setFields(c, { checkability: "converted" }, 1);
+    await s.svc.suggest();
+    const [p] = s.svc.pending();
+    expect(p.ids).toEqual([a, b]);
+    s.repo.setFields(b, { checkability: "converted" }, 2);
+    expect(s.svc.pending()).toEqual([]);
+    expect(s.svc.accept(p.id)).toEqual({ ok: false, reason: "merge_stale" });
+    expect(s.repo.get(a)!.mergedInto).toBeNull();
+  });
+
   it("with a slug, only looks at that repo and its products", async () => {
     const s = build(all());
     s.lesson("re-read the row inside the write transaction before saving", { status: "confirmed" });

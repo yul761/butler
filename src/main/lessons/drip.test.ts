@@ -74,10 +74,9 @@ describe("dripManifest", () => {
     expect(api.out).toContain(`#${a} [acme/api] api rule`);
     expect(api.out).not.toContain(`#${w}`);
     api.commit();
-    expect(existsSync(join(dir, "sess-1.json.all"))).toBe(true);
+    expect(existsSync(join(dir, "sess-1.json"))).toBe(true);
     // 再开（恢复）这个 session：清单重写，已送的不会再送。
     writeDripManifest(dir, "sess-1", dripManifest(repo, plan, roots, "en"));
-    expect(existsSync(join(dir, "sess-1.json.all"))).toBe(false);
     expect(run("/wt/acme/web-btl-9/src/index.ts").out).toBe("");
   });
 });

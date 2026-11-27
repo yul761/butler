@@ -75,7 +75,7 @@ export interface ControlHandlerDeps {
     latest(sessionId: string): PreReviewView | null;
   };
   /** lessons 工具（BTL-274）：这个 ticket 的仓库的规矩全文。不给就拒绝。 */
-  lessons?: (t: Ticket, q: { paths?: string[]; query?: string }) => unknown;
+  lessons?: (t: Ticket, q: { paths?: string[]; query?: string; cwd?: string }) => unknown;
   /** 设置里的 ticket 号格式：create_ticket 的号不对时告诉总控（不给用默认格式）。 */
   ticketPattern?: () => string;
   /**
@@ -528,7 +528,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest) => 
     if (!h) return fail(M().ctlInboxNoSession);
     if (h.ticketKey !== t.key) return fail(M().ctlInboxNotYours);
     try {
-      return ok(d.lessons(t, { paths: req.paths, query: req.query }));
+      return ok(d.lessons(t, { paths: req.paths, query: req.query, cwd: h.cwd }));
     } catch (e) {
       d.log?.("control: lessons lookup failed", e);
       return fail(M().ctlLessonsUnavailable);

@@ -119,10 +119,11 @@ export class LessonMergeService {
     return [...repos, ...products];
   }
 
+  /** 已确认、没合并、没转成检查的规矩。转成检查的不合：它不占说明的位置，合进去的文字规矩反而会跟着它被当成「由检查管」。 */
   private confirmedIn(layer: MergeLayer): Lesson[] {
     return this.d.repo
       .lessons({ status: ["confirmed"], scope: layer })
-      .filter((l) => l.mergedInto === null)
+      .filter((l) => l.mergedInto === null && l.checkability !== "converted")
       .sort((a, b) => a.id - b.id);
   }
 
@@ -261,7 +262,7 @@ export class LessonMergeService {
     if (ids.length < 2) return false;
     const ls = this.d.repo.lessons({ ids });
     const scope = this.scopeOf(r);
-    return ls.length === ids.length && ls.every((l) => l.status === "confirmed" && l.mergedInto === null && inLayer(l, scope)) && membersHash(ls) === r.input_hash;
+    return ls.length === ids.length && ls.every((l) => l.status === "confirmed" && l.mergedInto === null && l.checkability !== "converted" && inLayer(l, scope)) && membersHash(ls) === r.input_hash;
   }
 
   private expireStale(): void {

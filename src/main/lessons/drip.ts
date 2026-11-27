@@ -1,6 +1,6 @@
 import { mkdirSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DRIP_DONE_SUFFIX, DRIP_SUFFIX, dripName, type DripLesson, type DripManifest, type DripRoot } from "../../shared/lesson-drip";
+import { DRIP_SUFFIX, dripName, type DripLesson, type DripManifest, type DripRoot } from "../../shared/lesson-drip";
 import type { Lang } from "../../shared/i18n";
 import type { LessonsRepo } from "../db/lessons-repo";
 import type { RepoIdentity } from "./repo-identity";
@@ -53,14 +53,14 @@ export function dripManifest(repo: LessonsRepo, plan: Pick<GuidePlan, "rest">, r
  */
 export function writeDripManifest(dir: string, sessionId: string, m: DripManifest | null): void {
   const base = join(dir, dripName(sessionId));
-  for (const f of [`${base}${DRIP_DONE_SUFFIX}`, ...(m ? [] : [`${base}${DRIP_SUFFIX}`])]) {
+  if (!m) {
     try {
-      unlinkSync(f);
+      unlinkSync(`${base}${DRIP_SUFFIX}`);
     } catch {
       /* 本来就没有 */
     }
+    return;
   }
-  if (!m) return;
   mkdirSync(dir, { recursive: true });
   const tmp = `${base}.tmp-${process.pid}`;
   writeFileSync(tmp, JSON.stringify(m));

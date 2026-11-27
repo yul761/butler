@@ -22,7 +22,7 @@ describe("lessons lookup (BTL-274)", () => {
     const asked: [string, unknown][] = [];
     const handle = setup({ s: session("s", { ticketKey: "BTL-1" }) }, (t: Ticket, q) => (asked.push([t.key, q]), { lessons: [{ id: 1 }], total: 1, truncated: false }));
     expect(await handle({ v: 1, ticketKey: "BTL-1", from: "s", op: "lessons", paths: ["a.ts"], query: "x" })).toEqual({ v: 1, ok: true, value: { lessons: [{ id: 1 }], total: 1, truncated: false } });
-    expect(asked).toEqual([["BTL-1", { paths: ["a.ts"], query: "x" }]]);
+    expect(asked).toEqual([["BTL-1", { paths: ["a.ts"], query: "x", cwd: "/w" }]]);
   });
 
   it("refuses unknown callers, another ticket's session, archived tickets, and when not wired; a throwing lookup is an error, not a crash", async () => {

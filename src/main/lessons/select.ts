@@ -38,6 +38,11 @@ export interface GuideLessonOptions {
   core?: boolean;
   /** 确定性检查在跑：已转成检查的规矩由检查管，不占说明的位置。检查关着时它们照常当文字送（不然就真丢了）。默认 true。 */
   checksActive?: boolean;
+  /**
+   * 有开着、在拦（enforce）的检查的规矩。给了的话，标着 converted 但检查被删、停用或只在 shadow 的规矩照常当文字送；
+   * 不给（测试）时 converted 就算由检查管。
+   */
+  enforced?: ReadonlySet<number>;
   /** 全文的字符预算（默认 GUIDE_FULL_BUDGET）。 */
   fullBudget?: number;
   /** 索引的字符预算（默认 GUIDE_INDEX_BUDGET）。 */
@@ -123,8 +128,9 @@ function planFor(repo: LessonsRepo, ranked: { lesson: Lesson; label: string }[],
   const modes = new Map<number, LessonDelivery>();
   let pool = ranked;
   if (checksActive) {
-    for (const r of ranked) if (r.lesson.checkability === "converted") modes.set(r.lesson.id, "check");
-    pool = ranked.filter((r) => r.lesson.checkability !== "converted");
+    const byCheck = (l: Lesson) => l.checkability === "converted" && (!opts.enforced || opts.enforced.has(l.id));
+    for (const r of ranked) if (byCheck(r.lesson)) modes.set(r.lesson.id, "check");
+    pool = ranked.filter((r) => !byCheck(r.lesson));
   }
   if (opts.core) {
     const v = repo.violationCounts(pool.map((r) => r.lesson.id));

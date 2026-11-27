@@ -43,7 +43,8 @@ export function LessonDelivery({ s, act, error, makeCheck, drafting, note }: Les
           <button className={open === "merge" ? "primary" : undefined} data-testid="lessons-merge-similar" onClick={() => setOpen(open === "merge" ? null : "merge")}>
             {S.lessonsMergeSimilar(merges)}
           </button>
-        ) : s.mergeRunning ? (
+        ) : null}
+        {s.mergeRunning ? (
           <span className="pill" data-testid="lessons-merge-running">{S.lessonsMergeRunning}</span>
         ) : (
           <button data-testid="lessons-merge-find" onClick={() => void act("merge-find", { op: "suggestMerges" })}>{S.lessonsMergeFind}</button>
@@ -56,11 +57,13 @@ export function LessonDelivery({ s, act, error, makeCheck, drafting, note }: Les
       </div>
       {s.mergeFailed > 0 && !s.mergeRunning && <p className="muted" data-testid="lessons-merge-failed">{S.lessonsMergeFailed(s.mergeFailed)}</p>}
       {err("merge-find")}
+      {/* 接受 / 不合并失败（比如建议作废了）时那一条已经不在列表里：错误放在列表外面，不跟着消失。 */}
+      {err("merge-proposal")}
       {open === "merge" && (
         <div className="lessons-merge-proposals">
           {s.mergeProposals.length === 0 && <p className="muted">{S.lessonsMergeNone}</p>}
           {s.mergeProposals.map((p) => {
-            const key = `merge-${p.id}`;
+            const key = "merge-proposal";
             return (
               <div key={p.id} className="lesson" data-testid={`lessons-merge-proposal-${p.id}`}>
                 <p className="muted">
@@ -76,7 +79,6 @@ export function LessonDelivery({ s, act, error, makeCheck, drafting, note }: Les
                   <button className="primary" data-testid={`lessons-merge-accept-${p.id}`} onClick={() => void act(key, { op: "acceptMerge", id: p.id })}>{S.lessonsMergeAccept}</button>
                   <button data-testid={`lessons-merge-dismiss-${p.id}`} onClick={() => void act(key, { op: "dismissMerge", id: p.id })}>{S.lessonsMergeDismiss}</button>
                 </div>
-                {err(key)}
               </div>
             );
           })}

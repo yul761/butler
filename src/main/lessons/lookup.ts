@@ -24,25 +24,30 @@ export interface LookupLesson {
   matched?: string[];
 }
 
+const DELIVERY_RANK: Record<string, number> = { index: 0, drip: 1, principle: 2, full: 3, check: 4 };
+
 export interface LookupResult {
   lessons: LookupLesson[];
   /** 筛完、截断之前有几条。 */
   total: number;
   truncated: boolean;
+  /** 认不出属于哪个仓库的路径（相对路径又不在任何一个仓库的目录里）：换成绝对路径再查。 */
+  unresolved?: string[];
 }
 
-/** 文件在哪个仓库：绝对路径按目录找（最长的优先）；相对路径在每个仓库里都算一遍（多仓库 ticket 最好给绝对路径）。 */
-function resolvePaths(paths: readonly string[], roots: readonly DripRoot[], fold: boolean): { slug: string; rel: string }[] {
-  const out: { slug: string; rel: string }[] = [];
+/**
+ * 文件在哪个仓库：按目录找（最长的优先）。相对路径按调用的 session 的工作目录（cwd）补成绝对路径；
+ * 只有一个仓库时也可以直接算在它头上。认不出的不猜（多仓库 ticket 里同名相对路径不能把别的仓库的规矩带进来），放进 unresolved。
+ */
+function resolvePaths(
+  paths: readonly string[], roots: readonly DripRoot[], fold: boolean, cwd: string | undefined,
+): { files: { slug: string; rel: string }[]; unresolved: string[] } {
+  const files: { slug: string; rel: string }[] = [];
+  const unresolved: string[] = [];
   const key = (p: string) => (fold ? p.toLowerCase() : p);
-  for (const raw of paths) {
-    const abs = /^([a-zA-Z]:)?[\\/]/.test(raw);
-    if (!abs) {
-      const rel = normalizePath(raw);
-      for (const r of roots) out.push({ slug: r.slug, rel });
-      continue;
-    }
-    const f = normalizePath(raw);
+  const isAbs = (p: string) => /^([a-zA-Z]:)?[\\/]/.test(p);
+  const locate = (abs: string): { slug: string; rel: string } | null => {
+    const f = normalizePath(abs);
     let best: { slug: string; rel: string; len: number } | null = null;
     for (const r of roots) {
       for (const dir of r.dirs) {
@@ -51,9 +56,20 @@ function resolvePaths(paths: readonly string[], roots: readonly DripRoot[], fold
         best = { slug: r.slug, rel: f.slice(d.length + 1), len: d.length };
       }
     }
-    if (best) out.push({ slug: best.slug, rel: best.rel });
+    return best && { slug: best.slug, rel: best.rel };
+  };
+  const slugs = [...new Set(roots.map((r) => r.slug))];
+  for (const raw of paths) {
+    let at: { slug: string; rel: string } | null = null;
+    if (isAbs(raw)) at = locate(raw);
+    else {
+      if (cwd && isAbs(cwd)) at = locate(`${normalizePath(cwd).replace(/\/+$/, "")}/${normalizePath(raw).replace(/^\.\//, "")}`);
+      if (!at && slugs.length === 1) at = { slug: slugs[0], rel: normalizePath(raw).replace(/^\.\//, "") };
+    }
+    if (at) files.push(at);
+    else unresolved.push(raw);
   }
-  return out;
+  return { files, unresolved };
 }
 
 /**
@@ -62,7 +78,7 @@ function resolvePaths(paths: readonly string[], roots: readonly DripRoot[], fold
  */
 export function lookupLessons(
   repo: LessonsRepo, identity: RepoIdentity, repoPaths: string[], roots: DripRoot[],
-  q: { paths?: string[]; query?: string }, opts: GuideLessonOptions = {}, platform: NodeJS.Platform = process.platform,
+  q: { paths?: string[]; query?: string; cwd?: string }, opts: GuideLessonOptions = {}, platform: NodeJS.Platform = process.platform,
 ): LookupResult {
   const plan = guidePlan(repo, identity, repoPaths, opts);
   const ids = [...plan.modes.keys()];
@@ -73,11 +89,13 @@ export function lookupLessons(
   for (const slug of slugs) for (const p of repo.productsOf(slug)) productSlugs.set(p.id, [...(productSlugs.get(p.id) ?? []), slug]);
   const labels = new Map<number, string>();
   for (const p of repo.products()) labels.set(p.id, p.name);
-  const files = q.paths?.length ? resolvePaths(q.paths, roots, platform === "win32" || platform === "darwin") : null;
+  const resolved = q.paths?.length ? resolvePaths(q.paths, roots, platform === "win32" || platform === "darwin", q.cwd) : null;
+  const files = resolved?.files ?? null;
   const query = q.query?.trim() ?? "";
   const idQuery = /^#?(\d+)$/.exec(query);
   const words = idQuery ? [] : query.toLowerCase().split(/\s+/).filter(Boolean);
-  const order = new Map(ids.map((id, i) => [id, i]));
+  // 说明里没写全文的排前面（截断时先丢的是 session 已经看过全文的），同一种送法里按说明的顺序。
+  const order = new Map(ids.map((id, i) => [id, (DELIVERY_RANK[plan.modes.get(id) ?? "full"] ?? 0) * 1e6 + i]));
   const out: LookupLesson[] = [];
   for (const l of [...lessons].sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))) {
     if (idQuery && l.id !== Number(idQuery[1])) continue;
@@ -103,5 +121,8 @@ export function lookupLessons(
       ...(matched && { matched }),
     });
   }
-  return { lessons: out.slice(0, LOOKUP_MAX), total: out.length, truncated: out.length > LOOKUP_MAX };
+  return {
+    lessons: out.slice(0, LOOKUP_MAX), total: out.length, truncated: out.length > LOOKUP_MAX,
+    ...(resolved && resolved.unresolved.length > 0 && { unresolved: resolved.unresolved }),
+  };
 }

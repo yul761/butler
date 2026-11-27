@@ -104,6 +104,18 @@ describe("guidePlan", () => {
     expect(off.modes.get(c)).toBe("full");
   });
 
+  it("a converted lesson whose check was deleted, disabled or is only shadowing is sent as text again", () => {
+    const repo = setup();
+    const c = add(repo, { kind: "repo", slug: "acme/web" }, "no console.log");
+    const d = add(repo, { kind: "repo", slug: "acme/web" }, "no debugger");
+    repo.setFields(c, { checkability: "converted" }, 1);
+    repo.setFields(d, { checkability: "converted" }, 1);
+    const plan = guidePlan(repo, identity(), ["/acme_web"], { enforced: new Set([d]) });
+    expect(texts(plan.full)).toEqual(["no console.log"]);
+    expect(plan.modes.get(c)).toBe("full");
+    expect(plan.modes.get(d)).toBe("check");
+  });
+
   it("puts unscoped lessons in full text first: scoped ones still reach the session on edit", () => {
     const repo = setup();
     const scoped = add(repo, { kind: "repo", slug: "acme/web" }, "scoped rule", "confirmed", 50);

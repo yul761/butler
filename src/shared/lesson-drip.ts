@@ -1,9 +1,11 @@
 // 编辑时补送规矩（BTL-274）：主进程开 session 时写一份清单，hook 在 Edit / Write / NotebookEdit 之后按改的文件补送匹配的规矩全文。
 // 纯数据和命令拼装：hook 打包时也带上它。
 
-/** 清单：<dir>/<session id>.json。全部送完后 hook 把它改名成 .json.all，settings 里的命令只看 .json 在不在，开销就只是一次 test。 */
+/**
+ * 清单：<dir>/<session id>.json。settings 里的命令只看它在不在：没有要补送的 session 开销只是一次 test。
+ * 主 session 全送完了也留着：子 agent 各有自己的上下文和已送记录，它们改到匹配的文件时还要送。
+ */
 export const DRIP_SUFFIX = ".json";
-export const DRIP_DONE_SUFFIX = ".json.all";
 /** 已经送过全文的规矩 id，一行一个：<dir>/<session id>.sent；子 agent 各有一份 <session id>.<agent>.sent。 */
 export const DRIP_SENT_SUFFIX = ".sent";
 

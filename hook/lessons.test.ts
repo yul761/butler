@@ -11,12 +11,6 @@ function fs(files: Record<string, string> = {}, platform: NodeJS.Platform = "lin
   const d: DripDeps = {
     read: (p) => f.get(p) ?? null,
     append: (p, t) => f.set(p, (f.get(p) ?? "") + t),
-    rename: (a, b) => {
-      const v = f.get(a);
-      if (v === undefined) throw new Error("ENOENT");
-      f.delete(a);
-      f.set(b, v);
-    },
     remove: (p) => void f.delete(p),
     exists: (p) => f.has(p),
     platform,
@@ -79,7 +73,7 @@ describe("runLessonDrip", () => {
     expect(ctx(runLessonDrip(edit("/wt/web/m/001.sql"), env, ROOT, d).out)).toContain("#4");
   });
 
-  it("keeps what does not fit for the next edit, and renames the manifest once everything was sent", () => {
+  it("keeps what does not fit for the next edit; once the main session has everything, a subagent still gets it", () => {
     const long = "x".repeat(LESSON_DRIP_LIMIT - 500);
     const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web", [], long), lesson(2, "acme/web", [], long)]) });
     const first = runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d);
@@ -90,8 +84,11 @@ describe("runLessonDrip", () => {
     const second = runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d);
     expect(ctx(second.out)).toContain("#2");
     second.commit();
-    expect(f.has(`${ROOT}/s1.json`)).toBe(false);
-    expect(f.has(`${ROOT}/s1.json.all`)).toBe(true);
+    expect(f.has(`${ROOT}/s1.json`)).toBe(true);
+    expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).toBe("");
+    // 子 agent 有自己的上下文：主 session 全送完了，它改到匹配的文件照样收到。
+    const sub = runLessonDrip(edit("/wt/web/a.ts", { agent_id: "ag-1" }), env, ROOT, d);
+    expect(ctx(sub.out)).toContain("#1");
   });
 
   it("does not mark anything sent when stdout was not written (no commit)", () => {
@@ -130,11 +127,11 @@ describe("runLessonDrip", () => {
 });
 
 describe("resetLessonDrip", () => {
-  it("forgets what was sent and puts a finished manifest back", () => {
-    const { f, d } = fs({ [`${ROOT}/s1.json.all`]: manifest([lesson(1, "acme/web")]), [`${ROOT}/s1.sent`]: "1\n" });
+  it("forgets what was sent so the next edit sends it again", () => {
+    const { f, d } = fs({ [`${ROOT}/s1.json`]: manifest([lesson(1, "acme/web")]), [`${ROOT}/s1.sent`]: "1\n" });
+    expect(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out).toBe("");
     resetLessonDrip(env, ROOT, d);
     expect(f.has(`${ROOT}/s1.sent`)).toBe(false);
-    expect(f.has(`${ROOT}/s1.json`)).toBe(true);
     expect(ctx(runLessonDrip(edit("/wt/web/a.ts"), env, ROOT, d).out)).toContain("#1");
   });
 });

@@ -39,8 +39,11 @@ describe("lookupLessons", () => {
     expect(r.lessons.map((l) => l.id)).toEqual([w]);
     expect(r.lessons[0].matched).toEqual(["acme/web:src/db/x.ts"]);
     expect(lookupLessons(repo, identity(), paths, roots, { paths: ["/wt/acme/api-btl-1/src/db/x.ts"] }).lessons.map((l) => l.id)).toEqual([a]);
-    // 相对路径：每个仓库都算一遍，各自对上各自的。
-    expect(lookupLessons(repo, identity(), paths, roots, { paths: ["src/db/x.ts"] }).lessons.map((l) => l.matched)).toEqual([["acme/web:src/db/x.ts"], ["acme/api:src/db/x.ts"]]);
+    // 相对路径：按调用的 session 的 cwd 归到它的仓库；认不出时不猜，列进 unresolved。
+    expect(lookupLessons(repo, identity(), paths, roots, { paths: ["src/db/x.ts"], cwd: "/wt/acme/api-btl-1" }).lessons.map((l) => l.id)).toEqual([a]);
+    const lost = lookupLessons(repo, identity(), paths, roots, { paths: ["src/db/x.ts"] });
+    expect(lost.lessons).toEqual([]);
+    expect(lost.unresolved).toEqual(["src/db/x.ts"]);
     expect(lookupLessons(repo, identity(), paths, roots, { paths: ["/elsewhere/src/db/x.ts"] }).lessons).toEqual([]);
   });
 
