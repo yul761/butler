@@ -309,6 +309,17 @@ describe("TurnService.board", () => {
     expect(s.board(null).items[0].turn).toEqual({ owner: "you", kind: "stuck", source: "ticket_needs_decision", detail: null, sessionId: null });
   });
 
+  it("needs_decision whose PR was already reopened on GitHub (status not caught up yet) does not ask you to decide (BTL-270)", () => {
+    const deps = { tickets: () => [ticket("BTL-1", { effectiveStatus: "needs_decision" })], prs: () => [watched({ ci: "passing" })], prRow: () => row({ ci: "passing" }) };
+    const items = new TurnService(fakeDeps(deps)).board(null).items;
+    expect(items.some((i) => i.turn.kind === "stuck" && i.turn.source === "ticket_needs_decision")).toBe(false);
+    // 还没读过、放弃读了的开着的 PR 不算：照样要你决定。
+    for (const w of [watched({ checkedAt: 0 }), watched({ gaveUp: true })]) {
+      const again = new TurnService(fakeDeps({ ...deps, prs: () => [w] })).board(null).items;
+      expect(again.some((i) => i.turn.kind === "stuck" && i.turn.source === "ticket_needs_decision")).toBe(true);
+    }
+  });
+
   it("a done ticket without PRs shows only with a filter", () => {
     const s = new TurnService(fakeDeps({ tickets: () => [ticket("BTL-1", { effectiveStatus: "done" })] }));
     expect(s.board(null).items).toEqual([]);

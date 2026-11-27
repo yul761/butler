@@ -1,26 +1,62 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { REASON_LIMIT } from "../../../shared/control";
 import type { Ticket } from "../../../shared/types";
 import { api } from "../api";
-import { closeOutcome, retryRequest, type CloseLeftoversResult, type ClosePrError } from "../close-ticket-outcome";
+import { closeOutcome, retryRequest, type CloseLeftoversResult, type ClosePreview, type ClosePrError } from "../close-ticket-outcome";
 import { S } from "../strings";
 
 type Leftovers = { prErrors: ClosePrError[]; sessionErrors: { id: string; error: string }[] };
 
+function PrErrorList({ prs }: { prs: ClosePrError[] }) {
+  return (
+    <ul className="close-leftovers">
+      {prs.map((p) => (
+        <li key={p.url}>
+          <code>{p.url}</code> <span className="muted">{S.tc.prKind[p.kind]}</span>
+          <div className="error">{p.error}</div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * 关闭 ticket（不做了，BTL-270）：原因必填、最多 REASON_LIMIT 个字。输入框不截断（粘贴超长的照样看得见），超了提示、不让提交，主进程也拒；
- * 可以顺便关掉开着的 PR、结束它的 session。ticket 关上了但有 PR 没关掉、session 没结束时不算完成：对话框留着，
- * 逐条列出没处理完的和原因，可以重试剩下的，也可以就这样。
+ * 打开时先列出这个 ticket 开着的 PR：能关的（这个 ticket 自己分支上的）逐个勾选，默认不勾，勾了的才关；关不了的写明原因，不会关。
+ * 勾了 PR 时说明原因会作为评论公开发到 GitHub。可以顺便结束它的 session。
+ * ticket 关上了但有 PR 没关掉、session 没结束时不算完成：对话框留着，逐条列出没处理完的和原因，可以重试剩下的（再试也一样的不重试），也可以就这样。
  */
 export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticket; onClose: () => void; onNotice?: (text: string) => void }) {
   const [reason, setReason] = useState("");
-  const [closePrs, setClosePrs] = useState(true);
+  const [preview, setPreview] = useState<ClosePreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [endSessions, setEndSessions] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [left, setLeft] = useState<Leftovers | null>(null);
   const empty = reason.trim().length === 0;
   const tooLong = reason.length > REASON_LIMIT;
+
+  useEffect(() => {
+    let live = true;
+    api.closePreview(ticket.key).then(
+      (p) => live && setPreview(p),
+      (err: unknown) => live && setPreviewError((err as Error).message),
+    );
+    return () => {
+      live = false;
+    };
+  }, [ticket.key]);
+
+  function toggle(url: string, on: boolean) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(url);
+      else next.delete(url);
+      return next;
+    });
+  }
 
   function settle(r: CloseLeftoversResult) {
     const o = closeOutcome(r);
@@ -47,13 +83,19 @@ export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticke
   function submit(e: FormEvent) {
     e.preventDefault();
     if (empty || busy || tooLong) return;
-    void run(() => api.closeTicket(ticket.key, { reason, closePrs, endSessions }));
+    // 只关勾了的、而且是这次列出来能关的。
+    const prUrls = (preview?.closable ?? []).map((p) => p.url).filter((u) => picked.has(u));
+    // 关不了的 PR 在结果里照样列出来（它们还开着），所以列表里有东西就要 closePrs。
+    const closePrs = prUrls.length > 0 || (preview?.unclosable.length ?? 0) > 0;
+    void run(() => api.closeTicket(ticket.key, { reason, closePrs, endSessions, prUrls }));
   }
+
+  const again = left ? retryRequest(left) : null;
 
   function retry(e: FormEvent) {
     e.preventDefault();
-    if (!left || busy) return;
-    void run(() => api.retryClose(ticket.key, retryRequest(left)));
+    if (!again || busy) return;
+    void run(() => api.retryClose(ticket.key, again));
   }
 
   if (left) {
@@ -65,14 +107,7 @@ export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticke
           {left.prErrors.length > 0 && (
             <>
               <h3>{S.tc.leftPrs(left.prErrors.length)}</h3>
-              <ul className="close-leftovers">
-                {left.prErrors.map((p) => (
-                  <li key={p.url}>
-                    <code>{p.url}</code> <span className="muted">{S.tc.prKind[p.kind]}</span>
-                    <div className="error">{p.error}</div>
-                  </li>
-                ))}
-              </ul>
+              <PrErrorList prs={left.prErrors} />
             </>
           )}
           {left.sessionErrors.length > 0 && (
@@ -88,10 +123,11 @@ export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticke
               </ul>
             </>
           )}
+          {!again && <p className="muted close-nothing-to-retry">{S.tc.nothingToRetry}</p>}
           {error && <p className="error">{error}</p>}
           <div className="actions">
             <button type="button" onClick={onClose} disabled={busy}>{S.tc.leaveIt}</button>
-            <button type="submit" className="primary" disabled={busy}>{S.tc.retry}</button>
+            <button type="submit" className="primary" disabled={busy || !again}>{S.tc.retry}</button>
           </div>
         </form>
       </div>
@@ -108,7 +144,30 @@ export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticke
           <textarea value={reason} aria-invalid={tooLong} placeholder={S.tc.reasonHint} onChange={(e) => setReason(e.target.value)} autoFocus rows={3} />
         </label>
         <p className={tooLong ? "error" : "muted"}>{tooLong ? S.tc.reasonTooLong(REASON_LIMIT) : S.tc.reasonCount(reason.length, REASON_LIMIT)}</p>
-        <label className="check"><input type="checkbox" checked={closePrs} onChange={(e) => setClosePrs(e.target.checked)} /> {S.tc.closePrs}</label>
+        <fieldset className="close-prs">
+          <legend>{S.tc.closePrs}</legend>
+          {previewError ? (
+            <p className="error">{S.tc.prsFailed(previewError)}</p>
+          ) : !preview ? (
+            <p className="muted">{S.tc.prsLoading}</p>
+          ) : (
+            <>
+              {preview.closable.length === 0 && preview.unclosable.length === 0 && <p className="muted">{S.tc.prsNone}</p>}
+              {preview.closable.map((p) => (
+                <label key={p.url} className="check">
+                  <input type="checkbox" checked={picked.has(p.url)} onChange={(e) => toggle(p.url, e.target.checked)} /> <code>{p.url}</code>
+                </label>
+              ))}
+              {picked.size > 0 && <p className="muted close-public-comment">{S.tc.publicComment}</p>}
+              {preview.unclosable.length > 0 && (
+                <>
+                  <p className="muted">{S.tc.unclosableTitle(preview.unclosable.length)}</p>
+                  <PrErrorList prs={preview.unclosable} />
+                </>
+              )}
+            </>
+          )}
+        </fieldset>
         <label className="check"><input type="checkbox" checked={endSessions} onChange={(e) => setEndSessions(e.target.checked)} /> {S.tc.endSessions}</label>
         {error && <p className="error">{error}</p>}
         <div className="actions">

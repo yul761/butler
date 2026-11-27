@@ -23,6 +23,9 @@ test("close a ticket with a reason, see why it is closed, then reopen it", async
   await page.getByRole("button", { name: S.tc.close, exact: true }).click();
   const dialog = page.locator("form.close-ticket");
   await expect(dialog.getByRole("heading", { name: S.tc.title("E2E-9") })).toBeVisible();
+  // 没有开着的 PR：预览里写着没有，也没有公开评论的提示。
+  await expect(dialog.getByText(S.tc.prsNone)).toBeVisible();
+  await expect(dialog.locator(".close-public-comment")).toHaveCount(0);
   // 原因没填不能关。
   await expect(dialog.getByRole("button", { name: S.tc.confirm, exact: true })).toBeDisabled();
   // 超长的不截断：原文都在框里，提示超了，不让提交。
@@ -79,6 +82,13 @@ test("when a PR fails to close, the dialog stays open with the reason and retryi
   await page.getByRole("button", { name: S.tc.close, exact: true }).click();
   const dialog = page.locator("form.close-ticket");
   await dialog.getByRole("textbox").fill("换了做法");
+  // 预览列出这个 ticket 分支上的 PR，默认不勾；勾了才关，并提示原因会作为评论公开发到 GitHub。
+  const pick = dialog.locator("fieldset.close-prs").getByRole("checkbox", { name: url });
+  await expect(pick).toBeVisible();
+  await expect(pick).not.toBeChecked();
+  await expect(dialog.getByText(S.tc.publicComment)).toHaveCount(0);
+  await pick.check();
+  await expect(dialog.getByText(S.tc.publicComment)).toBeVisible();
   await dialog.getByRole("button", { name: S.tc.confirm, exact: true }).click();
 
   // ticket 关了，但 PR 没关掉：不显示为完成，对话框换成「没处理完的」，每条都有链接和原因。

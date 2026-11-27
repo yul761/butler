@@ -1,6 +1,6 @@
 import type { Lang } from "../shared/i18n";
 import { formatDuration } from "../shared/text";
-import type { InboxRole, MailboxBlockReason, RefreshRefusal } from "../shared/types";
+import type { ClosePrErrorKind, InboxRole, MailboxBlockReason, RefreshRefusal, UnclosablePrKind } from "../shared/types";
 import type { UpdateFailReason } from "../shared/update";
 import { currentLang } from "./i18n";
 
@@ -139,6 +139,7 @@ const ZH = {
   ticketStatusNotManual: "「已关闭」要填原因，请用「关闭 ticket」；「待决定」是自动得出的，不能手动设",
   ticketCloseUnavailable: "这里不能关闭 ticket",
   ticketCloseNeedsReason: "关闭 ticket 要写一句原因",
+  ticketAlreadyClosed: (key: string) => `${key} 已经关了`,
   invalidKey: (key: string) => `ticket 号格式不对：${key}`,
   ticketArchived: (key: string) => `ticket ${key} 已经归档，可以在“已归档”里恢复`,
   ticketExists: (key: string) => `ticket ${key} 已经存在`,
@@ -409,7 +410,31 @@ const ZH = {
   ctlNoTicket: (ticket: string) => `没有 ticket ${ticket}（list_tickets 里的才行）`,
   ctlTicketNotClosed: (key: string) => `${key} 没关，不用重新打开`,
   ctlNoSuchFollowup: (id: string) => `找不到后续事项 ${id}（给 list_followups 里的 id）`,
-  ctlClosePrErrors: (n: number) => `有 ${n} 个 PR 没关掉，原因见 prErrors（kind=skipped 是对外动作开关关着，unread 是没读过或放弃读了）。可以自己用 gh pr close 再关一次。`,
+  /** 总控 close_ticket 的提示：按没关掉的原因分开说，关不了的不让它自己去关（BTL-270 审查）。 */
+  ctlClosePrErrors: (errs: readonly { kind: ClosePrErrorKind; ticket?: string }[]) => {
+    const n = (k: ClosePrErrorKind) => errs.filter((e) => e.kind === k).length;
+    const shared = [...new Set(errs.flatMap((e) => (e.kind === "shared" && e.ticket ? [e.ticket] : [])))];
+    return [
+      `有 ${errs.length} 个 PR 没关掉，逐个原因见 prErrors。`,
+      n("failed") > 0 && `${n("failed")} 个是 gh 关失败了：看 error，问题解决了可以自己 gh pr close 再关。`,
+      n("skipped") > 0 && `${n("skipped")} 个没关是因为对外动作开关关着：要关就请用户打开开关，或者请用户自己关。`,
+      n("shared") > 0 && `${n("shared")} 个也挂在还没关的 ticket（${shared.join("、")}）上：不要替它们关，问那个 ticket 的 session 或用户。`,
+      n("not_own_branch") > 0 && `${n("not_own_branch")} 个的分支不是这个 ticket 自己的，可能是别人的 PR：不要关。`,
+      n("foreign") > 0 && `${n("foreign")} 个不在这个 ticket 的仓库里：不要关。`,
+      n("never_read") + n("given_up") > 0 && `${n("never_read") + n("given_up")} 个 Shipherd 读不到状态：先 gh pr view 看清是不是真开着、是不是这个 ticket 的，再决定。`,
+    ].filter((x): x is string => typeof x === "string").join("");
+  },
+  /** 关 ticket 时关不了的 PR，给人看的原因（ticket：shared 时也挂着它的那个）。 */
+  ticketClosePrWhy: (kind: UnclosablePrKind, ticket: string | null): string =>
+    ({
+      never_read: "还没读到这个 PR 的状态",
+      given_up: "一直读不到这个 PR，已经不读了",
+      foreign: "不在这个 ticket 的仓库里",
+      not_own_branch: "分支不是这个 ticket 自己的",
+      shared: `也挂在还没关的 ${ticket ?? "别的 ticket"} 上`,
+    })[kind],
+  ticketClosePrSkipped: "对外动作的开关关着，没去关",
+  ctlTicketAlreadyClosed: (key: string) => `${key} 已经关了：关闭的时间和原因不变。没关掉的 PR、没结束的 session，请用户在 ticket 页的关闭框里重试，或者按 prErrors 的说明处理`,
   ctlFollowupsAllNeedsTicket: "all: true 要和 ticket 一起用：先不带 all 列出没处理完的，再对一个 ticket 带 all 看全部。",
   ctlCloseSessionErrors: (n: number) => `有 ${n} 个 session 没结束（正在干活或在等用户确认），见 sessionErrors。`,
   ctlCloseReopenedMeanwhile: "关的时候 ticket 被重新打开了：后面的 PR 没关、session 没结束。",
@@ -883,6 +908,7 @@ const EN: MainStrings = {
   ticketStatusNotManual: "Closing needs a reason, so use Close ticket; Needs a decision is set automatically and can't be picked by hand",
   ticketCloseUnavailable: "Tickets can't be closed here",
   ticketCloseNeedsReason: "Write a short reason for closing the ticket",
+  ticketAlreadyClosed: (key: string) => `${key} is already closed`,
   invalidKey: (key: string) => `The ticket id is not in the expected format: ${key}`,
   ticketArchived: (key: string) => `Ticket ${key} is archived; you can restore it under “Archived”`,
   ticketExists: (key: string) => `Ticket ${key} already exists`,
@@ -1124,7 +1150,29 @@ const EN: MainStrings = {
   ctlNoTicket: (ticket: string) => `There is no ticket ${ticket} (use one from list_tickets)`,
   ctlTicketNotClosed: (key: string) => `${key} is not closed, so there is nothing to reopen`,
   ctlNoSuchFollowup: (id: string) => `No followup ${id} (use an id from list_followups)`,
-  ctlClosePrErrors: (n: number) => `${n} PR(s) could not be closed; see prErrors (kind=skipped: the external action switch is off; unread: never read or reading was given up). You can run gh pr close on them yourself.`,
+  ctlClosePrErrors: (errs: readonly { kind: ClosePrErrorKind; ticket?: string }[]) => {
+    const n = (k: ClosePrErrorKind) => errs.filter((e) => e.kind === k).length;
+    const shared = [...new Set(errs.flatMap((e) => (e.kind === "shared" && e.ticket ? [e.ticket] : [])))];
+    return [
+      `${errs.length} PR(s) were not closed; see prErrors for each reason.`,
+      n("failed") > 0 && ` ${n("failed")}: gh failed to close it; read the error, and once it is fixed you can run gh pr close yourself.`,
+      n("skipped") > 0 && ` ${n("skipped")}: the external action switch is off; ask the user to turn it on, or to close it themselves.`,
+      n("shared") > 0 && ` ${n("shared")}: also linked to a ticket that is still open (${shared.join(", ")}); don't close it for them, ask that ticket's session or the user.`,
+      n("not_own_branch") > 0 && ` ${n("not_own_branch")}: its branch is not this ticket's own, so it may be someone else's PR; don't close it.`,
+      n("foreign") > 0 && ` ${n("foreign")}: not in a repo of this ticket; don't close it.`,
+      n("never_read") + n("given_up") > 0 && ` ${n("never_read") + n("given_up")}: Shipherd can't read its state; check with gh pr view that it is really open and belongs to this ticket before deciding.`,
+    ].filter((x): x is string => typeof x === "string").join("");
+  },
+  ticketClosePrWhy: (kind: UnclosablePrKind, ticket: string | null): string =>
+    ({
+      never_read: "Shipherd hasn't read this PR yet",
+      given_up: "This PR could never be read, so Shipherd stopped reading it",
+      foreign: "Not in a repo of this ticket",
+      not_own_branch: "Its branch is not this ticket's own",
+      shared: `Also linked to ${ticket ?? "another ticket"}, which is still open`,
+    })[kind],
+  ticketClosePrSkipped: "The external action switch is off, so it was not closed",
+  ctlTicketAlreadyClosed: (key: string) => `${key} is already closed; its close time and reason stay as they are. For leftover PRs and sessions, ask the user to retry from the close dialog on the ticket page, or follow the notes on prErrors`,
   ctlFollowupsAllNeedsTicket: "all: true needs a ticket: list the unfinished ones without all, then pass all with one ticket to see everything.",
   ctlCloseSessionErrors: (n: number) => `${n} session(s) were not ended (working, or waiting for the user to confirm); see sessionErrors.`,
   ctlCloseReopenedMeanwhile: "The ticket was reopened while closing: the remaining PRs were left open and no sessions were ended.",

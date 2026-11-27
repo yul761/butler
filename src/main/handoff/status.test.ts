@@ -19,7 +19,11 @@ describe("deriveStatus", () => {
     ["blockers without a PR", h({ blockers: ["等后端接口"] }), 0, "blocked"],
     // BTL-270：PR 都关了没合，也没有开着的：等人决定，不再沿用旧的 blockers / blocked，也不悄悄变回 active。
     ["closed PR", h({ status: "in_review", prs: [pr("closed")] }), 0, "needs_decision"],
-    ["closed PR on a blocked ticket with old blockers", h({ status: "blocked", prs: [pr("closed")], blockers: ["等 review"] }), 0, "needs_decision"],
+    // BTL-270 审查：模型明确说 blocked 还列了原因，以 blocked 为准；没列原因的 blocked 才变成等人决定。
+    ["closed PR on a blocked ticket with blockers listed", h({ status: "blocked", prs: [pr("closed")], blockers: ["等 review"] }), 0, "blocked"],
+    ["closed PR on a blocked ticket without blockers", h({ status: "blocked", prs: [pr("closed")] }), 0, "needs_decision"],
+    ["closed PR, the model says done", h({ status: "done", prs: [pr("closed")] }), 0, "done"],
+    ["closed PR, the model says merged_pending_followup", h({ status: "merged_pending_followup", prs: [pr("closed")] }), 1, "merged_pending_followup"],
     ["closed PR, the model says it is working again", h({ status: "active", prs: [pr("closed")] }), 0, "active"],
     ["closed PR, the model says active but lists blockers", h({ status: "active", prs: [pr("closed")], blockers: ["等后端"] }), 0, "blocked"],
     ["needs_decision with a new open PR", h({ status: "needs_decision", prs: [pr("closed"), pr("open")] }), 0, "in_review"],
@@ -75,5 +79,16 @@ describe("deriveStatus", () => {
     expect(deriveStatus({ status: "active", prs: [], blockers: [] }, 0, { remembered: [a, b], linkedOpen: false, foreign })).toBe("active");
     // 自己仓库的开着的 PR 照样留在 review。
     expect(deriveStatus({ status: "in_review", prs: [a, { ...b, url: "https://github.com/o/app/pull/25" }], blockers: [] }, 0, { remembered: [], linkedOpen: false, foreign })).toBe("in_review");
+  });
+
+  it("a draft Shipherd closed itself (stack back to a branch) does not count as closed without a merge (BTL-270)", () => {
+    const a = { number: 3, url: "https://github.com/o/app/pull/3", state: "closed" as const, review: null };
+    const shipherdClosed = new Set(["https://github.com/o/app/pull/3"]);
+    expect(deriveStatus(h({ status: "in_review", prs: [a] }), 0)).toBe("needs_decision");
+    expect(deriveStatus(h({ status: "in_review", prs: [{ ...a, url: "https://github.com/O/app/pull/3/" }] }), 0, { remembered: [], linkedOpen: false, shipherdClosed })).toBe("in_review");
+    expect(deriveStatus(h({ status: "in_review" }), 0, { remembered: [a], linkedOpen: false, shipherdClosed })).toBe("in_review");
+    // 另一个有人关掉的照样要决定。
+    const b = { number: 4, url: "https://github.com/o/app/pull/4", state: "closed" as const, review: null };
+    expect(deriveStatus(h({ status: "in_review", prs: [a, b] }), 0, { remembered: [], linkedOpen: false, shipherdClosed })).toBe("needs_decision");
   });
 });

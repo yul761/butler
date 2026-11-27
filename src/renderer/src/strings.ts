@@ -26,7 +26,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
   merged_pending_followup: "已合并·待收尾",
@@ -731,7 +731,12 @@ const ZH = {
     reasonHint: "比如：需求变了，这个不做了",
     reasonCount: (n: number, max: number) => `${n}/${max}`,
     reasonTooLong: (max: number) => `原因最多 ${max} 个字`,
-    closePrs: "顺便关掉开着的 PR",
+    closePrs: "勾上的 PR 一起关掉",
+    prsLoading: "正在看这个 ticket 开着的 PR…",
+    prsNone: "没有开着的 PR",
+    prsFailed: (error: string) => `看不到开着的 PR：${error}`,
+    unclosableTitle: (n: number) => `${n} 个开着的 PR 不会关`,
+    publicComment: "关 PR 时，上面的原因会作为评论发到 GitHub 上，能看到这个 PR 的人都看得到。",
     endSessions: "顺便结束它的 session",
     confirm: "关闭",
     banner: (reason: string) => `已关闭：${reason}`,
@@ -742,7 +747,11 @@ const ZH = {
     leftLede: "ticket 已经关了。下面这些没关掉、没结束，原因写在每一条下面。可以重试，也可以就这样。",
     leftPrs: (n: number) => `${n} 个 PR 没关掉`,
     leftSessions: (n: number) => `${n} 个 session 没结束`,
-    prKind: { failed: "gh 出错", skipped: "对外动作开关关着", unread: "还没读到这个 PR" } as Record<"failed" | "skipped" | "unread", string>,
+    prKind: {
+      failed: "gh 出错", skipped: "对外动作开关关着", never_read: "还没读到", given_up: "读不到了",
+      foreign: "不在这个 ticket 的仓库里", not_own_branch: "不是这个 ticket 的分支", shared: "别的 ticket 也在用",
+    } as Record<ClosePrErrorKind, string>,
+    nothingToRetry: "剩下的再试也一样（不是 gh 出错），要自己处理。",
     retry: "重试剩下的",
     leaveIt: "就这样",
     reopenedMeanwhile: "关的时候又被重新打开了，剩下的 PR 没关、session 没结束",

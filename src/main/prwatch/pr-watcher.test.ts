@@ -953,6 +953,46 @@ describe("PrWatcher: branches", () => {
     expect(s.stages.has(`${s.repoId}:first_commit:b`)).toBe(true);
   });
 
+  // BTL-270 审查：GitHub 网页上重开了一个已经读成 closed 的 PR：分支列表说它开着，下一轮把关掉的行也读一次。
+  it("a closed PR the branch list shows open again (reopened on GitHub) is re-read, so the ticket leaves needs_decision", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const row = s.link();
+    s.gh.prStatus.mockResolvedValue(pr({ state: "CLOSED" }));
+    s.gh.prsForBranch.mockResolvedValue([listed(7, { state: "CLOSED" })]);
+    await s.w.check();
+    expect(s.prs.get(row.id)?.state).toBe("closed");
+    const reads = s.gh.prStatus.mock.calls.length;
+    s.gh.prStatus.mockResolvedValue(pr());
+    s.gh.prsForBranch.mockResolvedValue([listed(7)]);
+    s.advance(5 * 60_000);
+    await s.w.check();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prStatus.mock.calls.length).toBe(reads + 1);
+    expect(s.prs.get(row.id)?.state).toBe("open");
+    expect(s.deps.onPrChanged).toHaveBeenLastCalledWith("BTL-1");
+  });
+
+  it("the reopened re-read still leaves a PR found gone or resting alone (BTL-261)", async () => {
+    vi.useFakeTimers();
+    for (const kind of ["gone", "resting"] as const) {
+      const s = setup();
+      const row = s.link();
+      s.gh.prStatus.mockResolvedValue(pr({ state: "CLOSED" }));
+      s.gh.prsForBranch.mockResolvedValue([listed(7, { state: "CLOSED" })]);
+      await s.w.check();
+      s.prs.update(row.id, kind === "gone" ? { readGoneAt: s.now() } : { readFailures: PR_READ_GIVE_UP + 1, readRetryAt: s.now() + PR_READ_RETRY_MS });
+      const reads = s.gh.prStatus.mock.calls.length;
+      s.gh.prStatus.mockResolvedValue(pr());
+      s.gh.prsForBranch.mockResolvedValue([listed(7)]);
+      s.advance(5 * 60_000);
+      await s.w.check();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(s.gh.prStatus.mock.calls.length).toBe(reads);
+      expect(s.prs.get(row.id)?.state).toBe("closed");
+    }
+  });
+
   it("does not check a branch that has an open PR; the PR read takes over its CI", async () => {
     const s = setup();
     s.gh.prsForBranch.mockResolvedValue([listed(7)]);

@@ -1,6 +1,6 @@
 import type { AutomationLevel, AutomationState } from "../../shared/automation";
 import type { TicketGlance } from "../../shared/ticket-glance";
-import type { CloseLeftoversResult } from "./close-ticket-outcome";
+import type { CloseLeftoversResult, ClosePreview } from "./close-ticket-outcome";
 import { normTurnFilter, type TurnBoard, type TurnFilter, type TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
@@ -104,7 +104,9 @@ export const api = {
   ticketGlance: (key: string) => call<TicketGlance>(IPC.ticketsGlance, key),
   createTicket: (input: CreateTicketInput) => call<Ticket>(IPC.ticketsCreate, input),
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
-  closeTicket: (key: string, o: { reason: string; closePrs: boolean; endSessions: boolean }) =>
+  /** 关闭框打开时：这个 ticket 开着的 PR 里能关的、关不了的和原因（BTL-270）。 */
+  closePreview: (key: string) => call<ClosePreview>(IPC.ticketsClosePreview, key),
+  closeTicket: (key: string, o: { reason: string; closePrs: boolean; endSessions: boolean; prUrls?: string[] }) =>
     call<CloseLeftoversResult & { ignoredFollowups: number }>(IPC.ticketsClose, key, o),
   /** 关闭以后重试上次没关成的 PR、没结束的 session（BTL-270）。 */
   retryClose: (key: string, o: { prUrls: string[]; sessionIds: string[] }) => call<CloseLeftoversResult>(IPC.ticketsCloseRetry, key, o),

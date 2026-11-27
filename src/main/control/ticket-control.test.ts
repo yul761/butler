@@ -5,6 +5,7 @@ import { withTransaction } from "../db/database";
 import { FeaturesRepo } from "../db/features-repo";
 import { FollowupsRepo } from "../db/followups-repo";
 import { TicketsRepo } from "../db/tickets-repo";
+import { M } from "../strings";
 import { insertTicket, memDb } from "../test-utils";
 import { closeTicket, reopenTicket, setTicketStatus, type TicketCloseDeps } from "../tickets/ticket-close";
 import { TicketControl, type TicketControlScope } from "./ticket-control";
@@ -13,7 +14,7 @@ const followup = (id: string, ticketKey: string, o: Partial<Followup> = {}): Fol
   id, ticketKey, kind: "doc", description: id, trigger: "none", dueDate: null, status: "open", snoozedUntil: null, source: "session", createdAt: 1, doneAt: null, ...o,
 });
 
-function setup() {
+function setup(o: { openPrs?: TicketCloseDeps["openPrs"]; closePr?: TicketCloseDeps["closePr"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const followups = new FollowupsRepo(db);
@@ -33,17 +34,18 @@ function setup() {
     tickets.setStatus(key, open > 0 ? "merged_pending_followup" : "done", 9);
   });
   const notify = vi.fn();
+  const refreshSources: string[] = [];
   const closeDeps: TicketCloseDeps = {
-    tickets, followups, transaction: (fn) => withTransaction(db, fn), openPrs: () => ({ closable: [], unclosable: [] }), closePr: async () => "closed", liveSessions: () => [],
-    endSession: () => ({ ok: true }), rederive, refreshPrs: () => {}, notify, now: () => 5, log: () => {},
+    tickets, followups, transaction: (fn) => withTransaction(db, fn), openPrs: o.openPrs ?? (() => ({ closable: [], unclosable: [] })), closePr: o.closePr ?? (async () => "closed"), liveSessions: () => [],
+    endSession: () => ({ ok: true }), rederive, refreshPrs: (_k, source) => void refreshSources.push(source), notify, now: () => 5, log: () => {},
   };
   const control = new TicketControl({
-    tickets, followups, close: (k, o) => closeTicket(closeDeps, k, o), reopen: (k) => reopenTicket(closeDeps, k),
-    setStatus: (k, s) => setTicketStatus(closeDeps, k, s), rederive, notify, now: () => 5,
+    tickets, followups, close: (k, o) => closeTicket(closeDeps, k, o), reopen: (k, source) => reopenTicket(closeDeps, k, source),
+    setStatus: (k, s, source) => setTicketStatus(closeDeps, k, s, source), rederive, notify, now: () => 5,
   });
   const feature: TicketControlScope = { kind: "feature", featureId: epic };
   const run = (req: TicketStatusControlOp, scope: TicketControlScope = feature, canWrite = true) => control.handle(scope, req, { from: "coord", canWrite });
-  return { run, tickets, followups, rederive, feature };
+  return { run, tickets, followups, rederive, feature, refreshSources };
 }
 
 describe("TicketControl (BTL-270)", () => {
@@ -102,5 +104,50 @@ describe("TicketControl (BTL-270)", () => {
     expect(followups.get("a1")?.status).toBe("open");
     expect(await run({ op: "set_ticket_status", ticket: "A-1", status: "auto" })).toMatchObject({ ok: true, value: { status: "merged_pending_followup", manual: false } });
     expect(tickets.get("A-1")?.statusManual).toBeNull();
+  });
+
+  it("close_ticket on a ticket that is already closed is refused and keeps the first close (BTL-270 review)", async () => {
+    const { run, tickets } = setup();
+    await run({ op: "close_ticket", ticket: "A-1", reason: "需求变了" });
+    expect(await run({ op: "close_ticket", ticket: "A-1", reason: "又关一次" })).toEqual({ v: 1, ok: false, error: M().ctlTicketAlreadyClosed("A-1") });
+    expect(tickets.get("A-1")?.closure).toEqual({ at: 5, reason: "需求变了", source: "coordinator" });
+  });
+
+  it("close_ticket lists what was closed and what was not, with a hint per reason; it never says to gh pr close a PR shared with an open ticket", async () => {
+    const { run } = setup({
+      openPrs: () => ({
+        closable: [1, 2].map((n) => ({ url: `https://github.com/o/r/pull/${n}`, number: n, slug: "o/r", cwd: "/r" })),
+        unclosable: [{ url: "https://github.com/o/r/pull/8", number: 8, kind: "shared", ticket: "A-2" }, { url: "https://github.com/o/r/pull/9", number: 9, kind: "not_own_branch" }],
+      }),
+      closePr: async (pr) => {
+        if (pr.number === 2) throw new Error("gh: boom");
+        return "closed";
+      },
+    });
+    const r = await run({ op: "close_ticket", ticket: "A-1", reason: "不做了", close_prs: true });
+    expect(r).toMatchObject({
+      ok: true,
+      value: {
+        closedPrs: ["https://github.com/o/r/pull/1"],
+        prErrors: [{ url: "https://github.com/o/r/pull/8", kind: "shared", ticket: "A-2" }, { url: "https://github.com/o/r/pull/9", kind: "not_own_branch" }, { url: "https://github.com/o/r/pull/2", kind: "failed" }],
+      },
+    });
+    const note = (r.ok && (r.value as { note: string }).note) || "";
+    expect(note).toBe(M().ctlClosePrErrors([{ kind: "shared", ticket: "A-2" }, { kind: "not_own_branch" }, { kind: "failed" }]));
+    expect(note).toContain("A-2");
+    // 只有 gh 失败的那一类让总控自己 gh pr close；另外两类明确说不要关。
+    expect(M().ctlClosePrErrors([{ kind: "shared", ticket: "A-2" }])).not.toContain("gh pr close");
+    expect(M().ctlClosePrErrors([{ kind: "not_own_branch" }])).not.toContain("gh pr close");
+    expect(M().ctlClosePrErrors([{ kind: "failed" }])).toContain("gh pr close");
+  });
+
+  it("refreshes PRs as the coordinator, so given-up PRs are not forced (BTL-270 review)", async () => {
+    const { run, refreshSources } = setup();
+    await run({ op: "close_ticket", ticket: "A-1", reason: "不做了" });
+    await run({ op: "reopen_ticket", ticket: "A-1" });
+    await run({ op: "close_ticket", ticket: "A-1", reason: "还是不做" });
+    // 关着的改成别的状态：先撤销关闭，也按总控算。
+    await run({ op: "set_ticket_status", ticket: "A-1", status: "blocked" });
+    expect(refreshSources).toEqual(["coordinator", "coordinator", "coordinator", "coordinator"]);
   });
 });

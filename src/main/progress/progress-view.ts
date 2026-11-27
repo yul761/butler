@@ -5,7 +5,7 @@ import {
   type ProgressStackNode, type ProgressStackRepo, type ProgressStuck, type ProgressTicket, type ProgressView,
 } from "../../shared/progress";
 import { prChangesRequested, type Turn } from "../../shared/turn";
-import { effectiveStatus, type Ticket, type WatchedPr } from "../../shared/types";
+import { awaitsDecision, effectiveStatus, type Ticket, type WatchedPr } from "../../shared/types";
 
 /** 一个 feature 最新的汇总（featureRowsAll 加上 ws-b 的新鲜度）。 */
 export interface ProgressSummary {
@@ -69,8 +69,8 @@ export function bucketOf(t: Pick<Ticket, "status" | "statusManual">, prs: Progre
   if (status === "closed") return "closed";
   const open = prs.filter((p) => p.state === "open");
   if (status === "done" || status === "merged_pending_followup" || (open.length === 0 && prs.some((p) => p.state === "merged"))) return "merged";
-  // needs_decision（PR 都关了没合，BTL-270）也要你动手，放进阻塞这一格。
-  if (status === "blocked" || status === "needs_decision" || open.some(blocking)) return "blocked";
+  // needs_decision（PR 都关了没合，BTL-270）也要你动手，放进阻塞这一格；又有开着的 PR 时按 PR 算，和 Now 页一致（awaitsDecision）。
+  if (status === "blocked" || awaitsDecision(status, open.length) || open.some(blocking)) return "blocked";
   if (open.some((p) => !p.isDraft)) return "in_review";
   if (open.length > 0 || started) return "in_progress";
   return "not_started";

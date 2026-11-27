@@ -1,8 +1,18 @@
-/** 关 ticket 时没关掉的 PR：failed 是 gh 失败；skipped 是对外动作开关关着；unread 是还没读过、放弃读了或不在 ticket 仓库里。 */
+import { RETRYABLE_CLOSE_PR_ERRORS, type ClosePrErrorKind } from "../../shared/types";
+
+/** 关 ticket 时没关掉的 PR：failed 是 gh 失败；skipped 是对外动作开关关着；其余是关不了（见 shared/types 的 UnclosablePrKind）。 */
 export interface ClosePrError {
   url: string;
   error: string;
-  kind: "failed" | "skipped" | "unread";
+  kind: ClosePrErrorKind;
+  /** shared：也挂着它的那个 ticket。 */
+  ticket?: string;
+}
+
+/** 关闭框打开时列的（tickets:closePreview）：能关的逐个勾选，关不了的写明原因。 */
+export interface ClosePreview {
+  closable: { url: string; number: number }[];
+  unclosable: ClosePrError[];
 }
 
 /** 关闭（tickets:close）和重试（tickets:closeRetry）共有的结果：关了哪些、哪些没关成、ticket 是不是半路被重新打开了。 */
@@ -30,7 +40,12 @@ export function closeOutcome(r: CloseLeftoversResult): CloseOutcome {
   return { done: false, prErrors: r.prErrors, sessionErrors: r.sessionErrors };
 }
 
-/** 重试只试上次没处理完的这些。 */
-export function retryRequest(o: { prErrors: ClosePrError[]; sessionErrors: { id: string }[] }): { prUrls: string[]; sessionIds: string[] } {
-  return { prUrls: o.prErrors.map((p) => p.url), sessionIds: o.sessionErrors.map((s) => s.id) };
+/**
+ * 重试只试上次没处理完、而且再试可能成的：gh 失败的、开关关着的 PR，没结束的 session。关不了的那几类（不是这个 ticket 的分支、
+ * 别的 ticket 也在用、读不到）再试也一样，不送（BTL-270 审查）。都是这种的时候是 null，重试按钮不可点。
+ */
+export function retryRequest(o: { prErrors: ClosePrError[]; sessionErrors: { id: string }[] }): { prUrls: string[]; sessionIds: string[] } | null {
+  const prUrls = o.prErrors.filter((p) => RETRYABLE_CLOSE_PR_ERRORS.includes(p.kind)).map((p) => p.url);
+  const sessionIds = o.sessionErrors.map((s) => s.id);
+  return prUrls.length + sessionIds.length > 0 ? { prUrls, sessionIds } : null;
 }

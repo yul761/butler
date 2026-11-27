@@ -1679,6 +1679,7 @@ export const MIGRATIONS: string[] = [
   // 列按原来的顺序抄过来（ALTER ADD COLUMN 加过的四列在最后），新加 closed_at / closed_reason / closed_source：谁、为什么关的。
   // followups 加五列：resolved_reason / resolved_source 是总控或用户处理（完成、忽略）时写的原因和来源；
   // ignored_by_close 标记是关 ticket 时顺手忽略的，prior_status / prior_snoozed_until 记忽略前的状态，重新打开时按它们还原。
+  // ticket_prs 加 shipherd_closed_at：Shipherd 自己关掉的 PR（栈的一层退回普通分支时关掉的 draft），不算「PR 都关了没合」。
   `
   -- shipherd:foreign-keys-off
   CREATE TABLE tickets_new (
@@ -1711,5 +1712,6 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE followups ADD COLUMN ignored_by_close INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE followups ADD COLUMN prior_status TEXT;
   ALTER TABLE followups ADD COLUMN prior_snoozed_until TEXT;
+  ALTER TABLE ticket_prs ADD COLUMN shipherd_closed_at INTEGER;
   `,
 ];

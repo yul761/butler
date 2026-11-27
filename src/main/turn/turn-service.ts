@@ -8,6 +8,7 @@ import {
   type CiSendSkip, type TimedTurn, type Turn, type TurnBoard, type TurnFilter, type TurnSendReason,
 } from "../../shared/turn";
 import type { CiItemRef, CiUndelivered, FeatureView, NowNotice, NowTarget, Session, SessionView, TicketView, WatchedPr } from "../../shared/types";
+import { awaitsDecision } from "../../shared/types";
 import type { InboxItem } from "../db/inbox-repo";
 import type { ReviewRequestRow } from "../db/review-requests-repo";
 import type { TicketPr } from "../db/ticket-prs-repo";
@@ -370,7 +371,10 @@ export class TurnService {
         continue;
       }
       const headIds = heads.map((s) => s.id);
+      // 开着的 PR（读过的、没放弃的，和 linkedOpen 一样算）：有的话不说「要你决定」，和进度页一致（awaitsDecision）。
+      let openPrs = 0;
       for (const w of p.run("prs.status", () => this.d.prs(t.key))) {
+        if (w.state === "open" && w.checkedAt > 0 && w.gaveUp !== true) openPrs++;
         const row = w.prId !== null ? this.d.prRow(w.prId) : null;
         const pr = row ? p.run("prs.turn", () => this.prInput(t.key, w, row, headIds, snap)) : null;
         if (!pr || w.prId === null) continue;
@@ -392,8 +396,8 @@ export class TurnService {
         const first = heads[0];
         bt.others.push({ turn: { owner: "you", kind: "stuck", source: "ticket_blocked", detail: null, sessionId: first?.id ?? null }, since: (first && this.d.lastReplyAt(first.id)) ?? now });
       }
-      // PR 都关了没合（BTL-270）：要你决定还做不做（重开 PR、开新的，或者 close_ticket）。
-      if (t.effectiveStatus === "needs_decision") {
+      // PR 都关了没合（BTL-270）：要你决定还做不做（重开 PR、开新的，或者 close_ticket）。存的状态还没跟上、PR 已经重开了的不算。
+      if (awaitsDecision(t.effectiveStatus, openPrs)) {
         bt.others.push({ turn: { owner: "you", kind: "stuck", source: "ticket_needs_decision", detail: null, sessionId: heads[0]?.id ?? null }, since: (heads[0] && this.d.lastReplyAt(heads[0].id)) ?? now });
       }
       if (bt.prs.length === 0 && (t.effectiveStatus === "done" || t.effectiveStatus === "merged_pending_followup")) {

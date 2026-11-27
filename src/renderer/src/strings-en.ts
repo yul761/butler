@@ -18,7 +18,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
@@ -719,7 +719,12 @@ export const EN: UiStrings = {
     reasonHint: "For example: the need changed, we're not doing this",
     reasonCount: (n: number, max: number) => `${n}/${max}`,
     reasonTooLong: (max: number) => `Keep the reason under ${max} characters`,
-    closePrs: "Also close its open PRs",
+    closePrs: "Close the ticked PRs too",
+    prsLoading: "Looking for this ticket's open PRs…",
+    prsNone: "No open PRs",
+    prsFailed: (error: string) => `Couldn't list the open PRs: ${error}`,
+    unclosableTitle: (n: number) => (n === 1 ? "1 open PR won't be closed" : `${n} open PRs won't be closed`),
+    publicComment: "When a PR is closed, the reason above is posted on GitHub as a comment that anyone who can see the PR can read.",
     endSessions: "Also end its sessions",
     confirm: "Close",
     banner: (reason: string) => `Closed: ${reason}`,
@@ -730,7 +735,11 @@ export const EN: UiStrings = {
     leftLede: "The ticket is closed. These were not closed or ended; the reason is under each one. You can retry them, or leave it.",
     leftPrs: (n: number) => (n === 1 ? "1 PR was not closed" : `${n} PRs were not closed`),
     leftSessions: (n: number) => (n === 1 ? "1 session was not ended" : `${n} sessions were not ended`),
-    prKind: { failed: "gh failed", skipped: "external actions are off", unread: "this PR hasn't been read yet" } as Record<"failed" | "skipped" | "unread", string>,
+    prKind: {
+      failed: "gh failed", skipped: "external actions are off", never_read: "not read yet", given_up: "can't be read",
+      foreign: "not in a repo of this ticket", not_own_branch: "not this ticket's branch", shared: "another ticket uses it too",
+    } as Record<ClosePrErrorKind, string>,
+    nothingToRetry: "Retrying won't change the rest (gh didn't fail on them); handle them yourself.",
     retry: "Retry the rest",
     leaveIt: "Leave it",
     reopenedMeanwhile: "It was reopened while closing, so the remaining PRs stay open and no sessions were ended",

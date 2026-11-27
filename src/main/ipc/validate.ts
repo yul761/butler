@@ -76,7 +76,7 @@ export function updateTicketArg(v: unknown): UpdateTicketInput {
  * 关 ticket（BTL-270）：原因必填、不超过 REASON_LIMIT（界面上同样限长，超了直接报错、不截断）；
  * closePrs、endSessions 是布尔或不给。
  */
-export function closeTicketArg(v: unknown): { reason: string; closePrs: boolean; endSessions: boolean } {
+export function closeTicketArg(v: unknown): { reason: string; closePrs: boolean; endSessions: boolean; prUrls?: string[] } {
   const o = v as Record<string, unknown> | null;
   if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("invalid ticket close");
   if (typeof o.reason !== "string" || o.reason.trim().length === 0 || o.reason.length > REASON_LIMIT) throw new Error("invalid ticket close reason");
@@ -84,7 +84,10 @@ export function closeTicketArg(v: unknown): { reason: string; closePrs: boolean;
     if (x !== undefined && typeof x !== "boolean") throw new Error("invalid ticket close");
     return x === true;
   };
-  return { reason: o.reason, closePrs: flag(o.closePrs), endSessions: flag(o.endSessions) };
+  // 关闭框里勾了的 PR（BTL-270 审查：用户确认过的才关）：不给就是不限；超过 CLOSE_RETRY_MAX 直接报错、不截断。
+  if (o.prUrls !== undefined && (!Array.isArray(o.prUrls) || o.prUrls.length > CLOSE_RETRY_MAX)) throw new Error("invalid ticket close");
+  const prUrls = Array.isArray(o.prUrls) ? o.prUrls.map(prUrlArg) : undefined;
+  return { reason: o.reason, closePrs: flag(o.closePrs), endSessions: flag(o.endSessions), ...(prUrls && { prUrls }) };
 }
 
 /** 关闭以后重试剩下的（BTL-270）：上次没关成的 PR 链接、没结束的 session id，各最多 CLOSE_RETRY_MAX 个，超了直接报错、不截断。 */

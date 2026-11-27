@@ -581,6 +581,15 @@ describe("closeTicketArg (BTL-270)", () => {
     expect(() => closeTicketArg(null)).toThrow();
   });
 
+  it("takes the PRs ticked in the dialog, refusing too many instead of cutting the list", () => {
+    const urls = Array.from({ length: CLOSE_RETRY_MAX }, (_, i) => `https://github.com/o/r/pull/${i + 1}`);
+    expect(closeTicketArg({ reason: "x", closePrs: true, prUrls: urls })).toEqual({ reason: "x", closePrs: true, endSessions: false, prUrls: urls });
+    expect(closeTicketArg({ reason: "x", closePrs: true, prUrls: [] })).toEqual({ reason: "x", closePrs: true, endSessions: false, prUrls: [] });
+    expect(() => closeTicketArg({ reason: "x", closePrs: true, prUrls: [...urls, "https://github.com/o/r/pull/999"] })).toThrow();
+    expect(() => closeTicketArg({ reason: "x", prUrls: "https://github.com/o/r/pull/1" })).toThrow();
+    expect(() => closeTicketArg({ reason: "x", prUrls: [42] })).toThrow();
+  });
+
   it("takes the PR links and session ids to retry, refusing too many instead of dropping the rest", () => {
     expect(closeRetryArg({ prUrls: ["https://github.com/o/r/pull/1"], sessionIds: ["s-1"] })).toEqual({ prUrls: ["https://github.com/o/r/pull/1"], sessionIds: ["s-1"] });
     expect(closeRetryArg({})).toEqual({ prUrls: [], sessionIds: [] });

@@ -41,7 +41,8 @@ import { parseThresholds } from "./routing/spend";
 import { CostPolicyError, type CostBreakerView } from "../shared/cost";
 import type { NowNotice, NowTarget } from "../shared/types";
 import { AvailabilityRepo } from "./db/availability-repo";
-import type { Session, TicketRepo, WatchedPr } from "../shared/types";
+import type { Session, TicketCloseSource, TicketRepo, WatchedPr } from "../shared/types";
+import { effectiveStatus } from "../shared/types";
 import { StackPolicyError } from "../shared/stacks";
 import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
@@ -271,7 +272,7 @@ import { StackControl } from "./control/stack-control";
 import { endSessionRefusal } from "./control/end-guard";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
-import { closeTicket, reopenTicket, retryClose, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
+import { classifyOpenPrs, closePreview, closeTicket, prRefreshOptions, reopenTicket, retryClose, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
 import { prClose } from "./stacks/gh-stack";
 import { classifyCommentsByModel } from "./loop/comment-model";
 import { LoopPolicies } from "./loop/policies";
@@ -1661,7 +1662,7 @@ async function bootstrap(): Promise<void> {
   }
   const ingest = (input: IngestInput) => {
     const r = ingestHandoff(
-      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen, givenUpPrs, foreignPr },
+      { db, tickets, handoffs, followups, now: Date.now, newFollowupId: () => `f_${randomBytes(4).toString("hex")}`, linkPrs: (k, prs) => void prLinker.linkHandoffPrs(k, prs), linkedOpen, givenUpPrs, shipherdClosedPrs, foreignPr },
       input,
     );
     // 设计文档 5.4：入库后同步写入 StateCore（异步，失败只记日志）。
@@ -2428,6 +2429,8 @@ async function bootstrap(): Promise<void> {
   const linkedOpen = (k: string): boolean => anyLinkedOpen(ticketPrs.byTicket(k));
   // 放弃读了的 PR：handoff 里（模型报的、记着的）开着也不再把 ticket 留在 in_review。
   const givenUpPrs = (k: string): ReadonlySet<string> => new Set(ticketPrs.byTicket(k).filter(prGivenUp).map((p) => p.url));
+  const shipherdClosedPrs = (k: string): ReadonlySet<string> =>
+    new Set(ticketPrs.byTicket(k).filter((p) => (p.shipherdClosedAt ?? null) !== null).map((p) => p.url));
   // 不在 ticket 任何仓库里的 PR（BTL-261）：不收录、不跟踪，handoff 里说它开着也不把 ticket 留在 in_review。
   const foreignPr = (k: string, url: string): boolean => prLinker.foreign(k, url);
   const branchWatch = new BranchWatchRepo(db);
@@ -2624,6 +2627,7 @@ async function bootstrap(): Promise<void> {
     },
     record: recordEvent,
     onChange: () => notify(),
+    closedByShipherd: (url) => ticketPrs.markShipherdClosed(url, Date.now()),
     jobs,
     repos: () => [...new Set(tickets.list().filter((t) => t.archivedAt === null).flatMap((t) => t.repos.map((r) => r.repoPath)))],
     // 开栈底 PR 时的简报（工作流 G）：G 的 BriefService 建好后填进 stackBriefProvider；关着或没有时为 null。
@@ -2844,7 +2848,7 @@ async function bootstrap(): Promise<void> {
       if (tickets.get(key)?.archivedAt != null) return;
       const base = handoffs.latestValid(key);
       if (!base?.payload) return;
-      const next = prHandoff(key, ticketPrs.byTicket(key), { id: base.id, createdAt: base.createdAt, status: base.payload.status, prs: base.payload.prs });
+      const next = prHandoff(key, ticketPrs.byTicket(key), { id: base.id, createdAt: base.createdAt, status: base.payload.status, prs: base.payload.prs, blockers: base.payload.blockers });
       if (!next) return;
       // 和早间刷新一样：done_today、followups、decisions、learnings 清空，免得重复计算、重复写进记忆。
       ingest({
@@ -2880,6 +2884,11 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
   });
+  // 马上查一个 ticket 的 PR：谁发起的决定强不强制读放弃了的，等决定的 ticket 连关掉的也读（prRefreshOptions）。
+  const soonTicketPrs = (key: string, source: TicketCloseSource | "session"): void => {
+    const t = tickets.get(key);
+    prWatcher.soonTicket(key, prRefreshOptions(t ? effectiveStatus(t) : null, source));
+  };
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
     repoOfSlug: (slug, cwdRepo) => {
@@ -3120,7 +3129,7 @@ async function bootstrap(): Promise<void> {
     if (epicId !== null) void memory.syncFeature(epicId);
     // 栈（工作流 K）：这一层有新提交就 rebase 上面的层；没递进去的冲突趁现在补送。
     if (head?.ticketKey) void stackService.sessionStopped(head.ticketKey).catch((e: unknown) => logger(`stacks: after ${stopped} stopped failed`, e));
-    if (head?.ticketKey) prWatcher.soonTicket(head.ticketKey);
+    if (head?.ticketKey) soonTicketPrs(head.ticketKey, "session");
     // 总控停下来：epic 里每个 ticket 都查一遍，但放弃了的 PR 不跟着重试（BTL-261：不然它们每一轮都被读）。
     else if (head?.coordinator && head.featureId != null) for (const t of tickets.listByFeature(head.featureId)) prWatcher.soonTicket(t.key, { retryGivenUp: false });
     else if (head?.repoId != null) prWatcher.soon(head.repoId);
@@ -3648,22 +3657,18 @@ async function bootstrap(): Promise<void> {
   const ticketCloseDeps: TicketCloseDeps = {
     tickets, followups,
     transaction: (fn) => withTransaction(db, fn),
-    // 读过、没放弃、在 ticket 自己仓库里的开着的 PR 能关（在那个仓库的 gh 目录里跑）；其余看着开着的照样报出来，不当作关完了。
+    // 读过、没放弃、在 ticket 自己仓库里、head 分支是这个 ticket 自己的分支的开着的 PR 能关（在那个仓库的 gh 目录里跑）；
+    // 其余看着开着的照样报出来、写明原因，不当作关完了（classifyOpenPrs）。
     openPrs: (key) => {
-      const open = ticketPrs.byTicket(key).filter((p) => p.state === "open");
-      // 同一个 PR 也挂在别的还没关的 ticket 上：不替那个 ticket 关。
-      const sharedWith = (p: TicketPr) => ticketPrs.byUrl(p.url).map((r) => r.ticketKey).find((k) => k !== key && tickets.get(k)?.statusManual !== "closed") ?? null;
-      const why = (p: TicketPr) => {
-        if (p.checkedAt === 0) return "never read";
-        if (prGivenUp(p)) return "reading it was given up";
-        if (p.repoId === null) return "not in a repo of this ticket";
-        const other = sharedWith(p);
-        return other ? `also linked to ${other}` : null;
-      };
-      return {
-        closable: open.filter((p) => why(p) === null).map((p) => ({ url: p.url, number: p.number, slug: p.slug, cwd: prGhDir(p) })),
-        unclosable: open.flatMap((p) => { const w = why(p); return w ? [{ url: p.url, why: w }] : []; }),
-      };
+      const t = tickets.get(key);
+      return classifyOpenPrs<TicketPr>(ticketPrs.byTicket(key), {
+        givenUp: (p) => prGivenUp(p),
+        // ticket 仓库的分支，和 session 推过、记了归属的分支（worktree 里的子 session）。
+        ownBranch: (repoId, branch) => (t?.repos.some((r) => r.id === repoId && r.branch === branch) ?? false) || branchOwners.get(key, repoId, branch) !== null,
+        // 同一个 PR 也挂在别的还没关的 ticket 上：不替那个 ticket 关。
+        sharedWith: (p) => ticketPrs.byUrl(p.url).map((r) => r.ticketKey).find((k) => k !== key && tickets.get(k)?.statusManual !== "closed") ?? null,
+        ghDir: prGhDir,
+      });
     },
     // 用户在关闭框里勾了要关的：照做，审计里记一笔（和 stacks 关草稿 PR 同一类）。总控、路由发起的和别的对外动作一样看开关。
     closePr: async (pr, reason, o) => {
@@ -3704,10 +3709,11 @@ async function bootstrap(): Promise<void> {
       return { ok: true };
     },
     rederive: (key) => {
-      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, foreignPr }, key);
+      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, shipherdClosedPrs, foreignPr }, key);
       void memory.syncTicket(key);
     },
-    refreshPrs: (key) => prWatcher.soonTicket(key),
+    // 总控、路由发起的不强制读放弃了的、认定不存在的 PR（BTL-261），用户发起的才强制；等决定的 ticket 连关掉的也读一次。
+    refreshPrs: (key, source) => soonTicketPrs(key, source),
     notify: () => {
       viewCache.invalidate();
       notify();
@@ -3717,9 +3723,10 @@ async function bootstrap(): Promise<void> {
   };
   const ticketClose = {
     close: (key: string, o: Parameters<typeof closeTicket>[2]) => closeTicket(ticketCloseDeps, key, o),
-    reopen: (key: string) => reopenTicket(ticketCloseDeps, key),
+    reopen: (key: string, source: TicketCloseSource) => reopenTicket(ticketCloseDeps, key, source),
     retry: (key: string, o: Parameters<typeof retryClose>[2]) => retryClose(ticketCloseDeps, key, o),
-    setStatus: (key: string, status: Parameters<typeof setTicketStatus>[2]) => setTicketStatus(ticketCloseDeps, key, status),
+    setStatus: (key: string, status: Parameters<typeof setTicketStatus>[2], source: TicketCloseSource) => setTicketStatus(ticketCloseDeps, key, status, source),
+    preview: (key: string) => closePreview(ticketCloseDeps, key),
   };
   registerIpc({
     diag: diag ?? undefined,
@@ -3980,7 +3987,7 @@ async function bootstrap(): Promise<void> {
       }
     }),
     rederive: (key) => {
-      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, foreignPr }, key);
+      rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, shipherdClosedPrs, foreignPr }, key);
       // followup 完成 / 忽略 / 恢复：StateCore 里对应的条目跟着 forget / 重写。
       void memory.syncTicket(key);
     },

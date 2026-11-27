@@ -1,5 +1,5 @@
 import type { ControlResult, TicketStatusControlOp } from "../../shared/control";
-import { effectiveStatus, type Followup, type ManualTicketStatus, type Ticket } from "../../shared/types";
+import { effectiveStatus, type Followup, type ManualTicketStatus, type Ticket, type TicketCloseSource } from "../../shared/types";
 import type { FollowupsRepo } from "../db/followups-repo";
 import type { TicketsRepo } from "../db/tickets-repo";
 import { M } from "../strings";
@@ -16,9 +16,9 @@ export interface TicketControlDeps {
   followups: Pick<FollowupsRepo, "get" | "listByTicket" | "listOpen" | "resolve">;
   /** closeTicket / reopenTicket（tickets/ticket-close.ts），依赖在 index.ts 里接好。 */
   close(key: string, o: CloseOptions): Promise<CloseResult>;
-  reopen(key: string): ReopenResult;
+  reopen(key: string, source: TicketCloseSource): ReopenResult;
   /** setTicketStatus（tickets/ticket-close.ts）：closed 以外的手动状态，null 回到自动；关着的先撤销关闭。 */
-  setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null): SetStatusResult;
+  setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null, source: TicketCloseSource): SetStatusResult;
   /** 后续事项变了以后重算自动状态（rederiveTicketStatus）。 */
   rederive(key: string): void;
   notify(): void;
@@ -89,11 +89,11 @@ export class TicketControl {
         ...(req.op === "close_ticket" && { closePrs: req.close_prs === true, endSessions: req.end_sessions === true }),
       };
       const r = await this.d.close(t.key, o);
-      // 原因由 parseControlRequest 保证不空，失败只会是 ticket 刚被删掉。
-      if (!r.ok) return fail(M().ctlNoTicket(req.ticket));
+      // 原因由 parseControlRequest 保证不空：失败是已经关着（第一次的原因留着），或者 ticket 刚被删掉。
+      if (!r.ok) return fail(r.error === "already_closed" ? M().ctlTicketAlreadyClosed(t.key) : M().ctlNoTicket(req.ticket));
       const notes = [
         r.reopenedMeanwhile && M().ctlCloseReopenedMeanwhile,
-        r.prErrors.length > 0 && M().ctlClosePrErrors(r.prErrors.length),
+        r.prErrors.length > 0 && M().ctlClosePrErrors(r.prErrors),
         r.sessionErrors.length > 0 && M().ctlCloseSessionErrors(r.sessionErrors.length),
       ].filter((x): x is string => typeof x === "string");
       return ok({
@@ -103,12 +103,12 @@ export class TicketControl {
       });
     }
     if (req.op === "reopen_ticket") {
-      const r = this.d.reopen(t.key);
+      const r = this.d.reopen(t.key, "coordinator");
       if (!r.ok) return fail(r.error === "not_closed" ? M().ctlTicketNotClosed(t.key) : M().ctlNoTicket(req.ticket));
       return ok({ ticket: r.ticket, restoredFollowups: r.restoredFollowups, status: r.status, note: M().ctlReopenNote });
     }
     // set_ticket_status 的其余状态（和界面的下拉框同一个函数）：关着的先撤销关闭，auto 回到自动。
-    const r = this.d.setStatus(t.key, req.status === "auto" || req.status === "closed" ? null : req.status);
+    const r = this.d.setStatus(t.key, req.status === "auto" || req.status === "closed" ? null : req.status, "coordinator");
     if (!r.ok) return fail(M().ctlNoTicket(req.ticket));
     this.d.log?.(`set_ticket_status ${t.key} -> ${req.status} by ${call.from ?? "?"}`);
     return ok({ ticket: t.key, status: r.status, manual: req.status !== "auto", ...(r.reopened && { reopened: true }) });

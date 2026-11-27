@@ -173,6 +173,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.preReviewStatus, IPC.preReviewQueue, IPC.preReviewQueueAct,
   IPC.baselinesView, IPC.baselinesRules, IPC.baselinesSummary, IPC.legacyView, IPC.legacyViolations, IPC.checkExportList, IPC.backtestView,
   IPC.interruptsState, IPC.profilesGet, IPC.turnBoard,
+  // 关闭框打开时列出开着的 PR（BTL-270）：只读，真关的是 tickets:close
+  IPC.ticketsClosePreview,
   // 切到首页时的补查：和打开页面一样不算推动工作
   IPC.turnHomeOpened,
   // 建立、整理、归档

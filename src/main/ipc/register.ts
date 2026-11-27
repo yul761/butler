@@ -52,7 +52,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { UsageRepo } from "../db/usage-repo";
 import { summarizeUsage, USAGE_WINDOW_MS } from "../usage/usage-summary";
 import type { TicketsRepo } from "../db/tickets-repo";
-import type { CloseOptions, CloseResult, ReopenResult, RetryCloseOptions, RetryCloseResult, SetStatusResult } from "../tickets/ticket-close";
+import type { CloseOptions, CloseResult, ClosePreview, ReopenResult, RetryCloseOptions, RetryCloseResult, SetStatusResult } from "../tickets/ticket-close";
 import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
@@ -282,9 +282,11 @@ export interface IpcDeps {
   /** 关掉 / 重新打开 ticket（tickets/ticket-close.ts，BTL-270）。来源记成 user。 */
   ticketClose?: {
     close(key: string, o: CloseOptions): Promise<CloseResult>;
-    reopen(key: string): ReopenResult;
+    reopen(key: string, source: "user"): ReopenResult;
     retry(key: string, o: RetryCloseOptions): Promise<RetryCloseResult>;
-    setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null): SetStatusResult;
+    setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null, source: "user"): SetStatusResult;
+    /** 关闭框里列的开着的 PR：能关的、关不了的和原因。 */
+    preview(key: string): ClosePreview | null;
   };
   detectTrackerTools: () => Promise<McpProbe>;
   /** 设置 › 功能：三张策略表各读一次（UI 重做第 6 层）。 */
@@ -359,7 +361,7 @@ export function registerIpc(d: IpcDeps): void {
     if (status === "closed" || status === "needs_decision") throw new TicketError("invalid_status", M().ticketStatusNotManual);
     // 和总控的 set_ticket_status 同一个函数：从「已关闭」换成别的，先撤销关闭（关闭时忽略的后续事项还原）。
     if (d.ticketClose) {
-      if (!d.ticketClose.setStatus(key, status).ok) throw new TicketError("not_found", M().ctlNoTicket(key));
+      if (!d.ticketClose.setStatus(key, status, "user").ok) throw new TicketError("not_found", M().ctlNoTicket(key));
       return;
     }
     d.tickets.setStatusManual(key, status, d.now());
@@ -370,7 +372,18 @@ export function registerIpc(d: IpcDeps): void {
     if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
     const o = closeTicketArg(raw);
     const r = await d.ticketClose.close(key, { ...o, source: "user" });
-    if (!r.ok) throw new TicketError(r.error === "no_ticket" ? "not_found" : "invalid_reason", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ticketCloseNeedsReason);
+    if (!r.ok) {
+      if (r.error === "no_ticket") throw new TicketError("not_found", M().ctlNoTicket(key));
+      if (r.error === "already_closed") throw new TicketError("invalid_status", M().ticketAlreadyClosed(key));
+      throw new TicketError("invalid_reason", M().ticketCloseNeedsReason);
+    }
+    return r;
+  });
+  handle(IPC.ticketsClosePreview, (rawKey: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const r = d.ticketClose.preview(key);
+    if (!r) throw new TicketError("not_found", M().ctlNoTicket(key));
     return r;
   });
   handle(IPC.ticketsCloseRetry, async (rawKey: unknown, raw: unknown) => {
@@ -383,7 +396,7 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.ticketsReopen, (rawKey: unknown) => {
     const key = ticketKeyArg(rawKey);
     if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
-    const r = d.ticketClose.reopen(key);
+    const r = d.ticketClose.reopen(key, "user");
     if (!r.ok) throw new TicketError("not_found", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ctlTicketNotClosed(key));
     return r;
   });

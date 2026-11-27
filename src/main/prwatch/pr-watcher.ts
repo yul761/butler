@@ -6,7 +6,7 @@ import {
   GH_NOT_FOUND, latestReviewers, prBatchable, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLogDetail, type prBatch, type prRead, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
-import { prUrlParts } from "../../shared/pr-url";
+import { prUrlKey, prUrlParts } from "../../shared/pr-url";
 import type { firstCommitAt } from "../tickets/git";
 import type { Ticket, TicketRepo, WatchedPr } from "../../shared/types";
 import type { CiItem } from "./ci-delivery";
@@ -697,6 +697,12 @@ export class PrWatcher {
     }
     // 新链接的行 checked_at 为 0，下一轮的 PR 读取马上读它（R12）。
     if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repoId, repoPath: t.repoPath, branch: t.branch }, list, "branch") > 0) marks.changed = true;
+    // 列出来开着、行里记的却是关掉的（在 GitHub 网页上重开了）：链接不改读过的行，平时也不读关掉的行，
+    // 下一轮把这个 ticket 关掉的行也读一次，不然 ticket 一直停在「待决定」（BTL-270 审查）。不强制重试放弃了的（BTL-261）。
+    const openUrls = new Set(list.filter((b) => b.state === "OPEN").map((b) => prUrlKey(b.url)));
+    if (openUrls.size > 0 && this.d.prs.byTicket(t.ticketKey).some((r) => r.state === "closed" && r.checkedAt > 0 && openUrls.has(prUrlKey(r.url)))) {
+      this.soonTicket(t.ticketKey, { retryGivenUp: false, includeSettled: true });
+    }
     if (list.some((b) => b.state === "OPEN")) {
       // CI 由 PR 的读取接手。读失败的标记清掉了、或者第一次有这一行：界面上的「读不到」要跟着消失（BTL-275：栈 tick 不再每分钟兜底刷新）。
       this.d.branches.upsert({ ...base, ...kept, readError: false, checkedAt: now });

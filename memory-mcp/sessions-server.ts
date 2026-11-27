@@ -851,14 +851,17 @@ export const CLOSE_TICKET_TOOL = {
   name: "close_ticket",
   description:
     "关掉一个 ticket：不做了（需求变了、换了做法），和做完了（done）分开算。没处理完的后续事项一起标成忽略，记下原因。" +
-    "close_prs 为 true 时顺便关掉它开着的 PR（评论里写原因），end_sessions 为 true 时顺便结束它的 session（不会结束你自己）。关 PR 失败时 ticket 照样关掉，结果里有 prErrors。之后可以用 reopen_ticket 撤销。",
+    "close_prs 为 true 时顺便关掉它开着的 PR：只关这个 ticket 自己分支上的，原因会作为评论公开发到 GitHub；不是它分支上的、也挂在别的没关的 ticket 上的、读不到的不关，" +
+    "和关失败的一起列在 prErrors 里（closedPrs 是关掉了的），note 里按原因说该怎么办。end_sessions 为 true 时顺便结束它的 session（不会结束你自己），" +
+    "和 end_session 一样过结束前的检查：正在干活、屏幕上有等用户回答的确认的不结束，列在 sessionErrors 里。PR 没关掉、session 没结束时 ticket 照样关掉。" +
+    "已经关着的再关会被拒绝（第一次的原因留着）。之后可以用 reopen_ticket 撤销。",
   inputSchema: {
     type: "object",
     properties: {
       ticket: TICKET_PROP,
       reason: CLOSE_REASON,
-      close_prs: { type: "boolean", description: "可选：顺便关掉它开着的 PR" },
-      end_sessions: { type: "boolean", description: "可选：顺便结束它的 session" },
+      close_prs: { type: "boolean", description: "可选：顺便关掉它自己分支上开着的 PR（原因公开发成评论）" },
+      end_sessions: { type: "boolean", description: "可选：顺便结束它的 session（正在干活、等用户确认的不结束）" },
     },
     required: ["ticket", "reason"],
     additionalProperties: false,
@@ -868,14 +871,17 @@ export const CLOSE_TICKET_TOOL_EN = {
   ...CLOSE_TICKET_TOOL,
   description:
     "Close a ticket: it is dropped (the need changed, or you went another way), counted apart from finished (done). Its unfinished follow-ups are marked ignored with the reason. " +
-    "close_prs: true also closes its open PRs (with the reason as a comment); end_sessions: true also ends its sessions (never yours). If a PR cannot be closed the ticket is closed anyway and the result lists prErrors. reopen_ticket undoes it.",
+    "close_prs: true also closes its open PRs, but only those on this ticket's own branches, posting the reason as a public comment on GitHub. PRs on other branches, PRs also linked to another open ticket, and PRs Shipherd can't read are not closed; " +
+    "they are listed in prErrors with the ones that failed (closedPrs lists what was closed), and note says what to do for each reason. end_sessions: true also ends its sessions (never yours), " +
+    "through the same checks as end_session: a session that is working or showing a prompt that waits for the user is not ended and is listed in sessionErrors. The ticket is closed even if some PRs or sessions are left. " +
+    "Closing a ticket that is already closed is refused (the first reason is kept). reopen_ticket undoes it.",
   inputSchema: {
     ...CLOSE_TICKET_TOOL.inputSchema,
     properties: {
       ticket: TICKET_PROP_EN,
       reason: CLOSE_REASON_EN,
-      close_prs: { type: "boolean", description: "optional: also close its open PRs" },
-      end_sessions: { type: "boolean", description: "optional: also end its sessions" },
+      close_prs: { type: "boolean", description: "optional: also close its open PRs on its own branches (the reason is posted as a public comment)" },
+      end_sessions: { type: "boolean", description: "optional: also end its sessions (not those working or waiting for the user)" },
     },
   },
 } as const;

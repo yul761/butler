@@ -27,6 +27,21 @@ export interface TicketClosure {
   reason: string;
   source: TicketCloseSource;
 }
+/**
+ * 关 ticket 时关不了的 PR 为什么关不了（BTL-270）：never_read 还没读过；given_up 放弃读了（一直读不到、或认定不存在）；
+ * foreign 不在 ticket 的仓库里；not_own_branch head 分支不是这个 ticket 自己的分支；shared 也挂在别的没关的 ticket 上。
+ */
+export const UNCLOSABLE_PR_KINDS = ["never_read", "given_up", "foreign", "not_own_branch", "shared"] as const;
+export type UnclosablePrKind = (typeof UNCLOSABLE_PR_KINDS)[number];
+/** 关 ticket 时没关掉的 PR：failed 是 gh 失败，skipped 是对外动作开关关着，其余是关不了。 */
+export type ClosePrErrorKind = "failed" | "skipped" | UnclosablePrKind;
+/** 重试有意义的：gh 失败、开关关着。关不了的那几类再试也一样。 */
+export const RETRYABLE_CLOSE_PR_ERRORS: readonly ClosePrErrorKind[] = ["failed", "skipped"];
+/**
+ * 这时候是不是真的在等人决定（BTL-270）：状态是 needs_decision，而且没有开着的 PR。存的状态还没跟上
+ * （GitHub 上重开了、另开了一个，下一轮读才改）时，有开着的 PR 就按 PR 算，不再说要你决定。看板和进度页共用。
+ */
+export const awaitsDecision = (status: TicketStatus, openPrs: number): boolean => status === "needs_decision" && openPrs === 0;
 export type WorkMode = "worktree" | "branch";
 
 /** ticket 涉及的一个仓库：各自的工作方式和分支（设计文档 2026-10-23 多仓库 ticket）。 */

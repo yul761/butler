@@ -11,7 +11,7 @@ describe("closeOutcome (BTL-270 close dialog)", () => {
   it("is not done when the ticket closed but a PR did not, and keeps every reason to show", () => {
     const prErrors = [
       { url: "https://github.com/o/r/pull/2", error: "gh: timeout", kind: "failed" as const },
-      { url: "https://github.com/o/r/pull/9", error: "never read", kind: "unread" as const },
+      { url: "https://github.com/o/r/pull/9", error: "never read", kind: "never_read" as const },
     ];
     const r = closeOutcome({ ...base, closedPrs: ["https://github.com/o/r/pull/1"], prErrors });
     expect(r).toEqual({ done: false, prErrors, sessionErrors: [] });
@@ -27,5 +27,17 @@ describe("closeOutcome (BTL-270 close dialog)", () => {
 
   it("retries exactly what was left", () => {
     expect(retryRequest({ prErrors: [{ url: "u2", error: "e", kind: "failed" }], sessionErrors: [{ id: "s2" }] })).toEqual({ prUrls: ["u2"], sessionIds: ["s2"] });
+  });
+
+  it("retries only what can succeed: gh failures and the switch being off, not PRs that can't be closed (BTL-270 review)", () => {
+    const prErrors = [
+      { url: "u1", error: "e", kind: "failed" as const },
+      { url: "u2", error: "e", kind: "skipped" as const },
+      ...(["never_read", "given_up", "foreign", "not_own_branch", "shared"] as const).map((kind, i) => ({ url: `x${i}`, error: "e", kind })),
+    ];
+    expect(retryRequest({ prErrors, sessionErrors: [] })).toEqual({ prUrls: ["u1", "u2"], sessionIds: [] });
+    // 都是关不了的：没东西可重试。
+    expect(retryRequest({ prErrors: prErrors.slice(2), sessionErrors: [] })).toBeNull();
+    expect(retryRequest({ prErrors: prErrors.slice(2), sessionErrors: [{ id: "s" }] })).toEqual({ prUrls: [], sessionIds: ["s"] });
   });
 });

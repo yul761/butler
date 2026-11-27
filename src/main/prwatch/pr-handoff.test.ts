@@ -117,4 +117,33 @@ describe("prHandoff", () => {
     const out = prHandoff("BTL-1", [row({ state: "merged", mergedAt: 5 })], { ...base(1, [pr({ state: "closed", review: null })]), status: "needs_decision" });
     expect(out?.status).toBe("done");
   });
+  // BTL-270 审查：合并过的（done / merged_pending_followup）PR 再被关不改状态，和 deriveStatus 一致。
+  it.each(["done", "merged_pending_followup"] as const)("a %s ticket keeps its status when its PRs close", (status) => {
+    const out = prHandoff("BTL-1", [row({ state: "closed", review: null })], { ...base(1, [pr()]), status });
+    expect(out?.status).toBe(status);
+    expect(out?.clearBlockers).toBe(false);
+  });
+
+  it("blocked with listed blockers wins over every PR being closed", () => {
+    const out = prHandoff("BTL-1", [row({ state: "closed", review: null })], { ...base(1, [pr()]), status: "blocked", blockers: ["waiting on the API team"] });
+    expect(out?.status).toBe("blocked");
+    expect(out?.clearBlockers).toBe(false);
+  });
+
+  it("blocked without blockers still becomes needs_decision when every PR closes", () => {
+    const out = prHandoff("BTL-1", [row({ state: "closed", review: null })], { ...base(1, [pr()]), status: "blocked", blockers: [] });
+    expect(out?.status).toBe("needs_decision");
+  });
+
+  it("a draft Shipherd closed itself (stack back to a branch) is written but does not ask for a decision", () => {
+    const out = prHandoff("BTL-1", [row({ state: "closed", review: null, isDraft: true, shipherdClosedAt: 5 })], base(1, [pr()]));
+    expect(out?.prs).toEqual([pr({ state: "closed", review: null })]);
+    expect(out?.status).toBe("in_review");
+    expect(out?.clearBlockers).toBe(false);
+  });
+
+  it("a Shipherd-closed draft next to a PR someone closed: the other one still asks for a decision", () => {
+    const rows = [row({ state: "closed", review: null, shipherdClosedAt: 5 }), row({ id: 2, number: 8, url: "https://github.com/o/app/pull/8", state: "closed", review: null })];
+    expect(prHandoff("BTL-1", rows, base(1, [pr()]))?.status).toBe("needs_decision");
+  });
 });

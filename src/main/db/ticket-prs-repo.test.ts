@@ -211,6 +211,24 @@ describe("TicketPrsRepo", () => {
     expect(linkedOpen([{ ...row, state: "merged" }])).toBe(false);
   });
 
+  it("markShipherdClosed stamps every ticket's row of that PR; reading it open again clears the stamp (BTL-270)", () => {
+    const { prs } = setup();
+    const a = prs.link(link()).pr;
+    const b = prs.link(link({ ticketKey: "T-2" })).pr;
+    const other = prs.link(link({ url: "https://github.com/a/b/pull/2", number: 2 })).pr;
+    expect(a.shipherdClosedAt).toBeNull();
+    prs.markShipherdClosed("https://github.com/A/b/pull/1/", 50);
+    expect([prs.get(a.id)?.shipherdClosedAt, prs.get(b.id)?.shipherdClosedAt, prs.get(other.id)?.shipherdClosedAt]).toEqual([50, 50, null]);
+    // 关之前就发出去的读取晚到、报的还是 open（行里也还是 open）：不清。
+    prs.update(a.id, { state: "open", checkedAt: 55 });
+    expect(prs.get(a.id)?.shipherdClosedAt).toBe(50);
+    prs.update(a.id, { state: "closed", checkedAt: 60 });
+    expect(prs.get(a.id)?.shipherdClosedAt).toBe(50);
+    prs.update(a.id, { state: "open", checkedAt: 70 });
+    expect(prs.get(a.id)?.shipherdClosedAt).toBeNull();
+    expect(prs.get(b.id)?.shipherdClosedAt).toBe(50);
+  });
+
   it("setDelivered records who got the CI result and when; null clears all three", () => {
     const { prs } = setup();
     const p = prs.link(link({})).pr;

@@ -58,6 +58,9 @@ describe("bucketOf", () => {
     const t = ticket("A");
     expect(bucketOf({ ...t, status: "blocked", statusManual: "closed" }, [p({ ci: "failing" })!], true)).toBe("closed");
     expect(bucketOf({ ...t, status: "needs_decision" }, [], true)).toBe("blocked");
+    // 存的状态还没跟上、PR 已经在 GitHub 上重开了：按 PR 算，和 Now 页一致（awaitsDecision）。
+    expect(bucketOf({ ...t, status: "needs_decision" }, [p()!], true)).toBe("in_review");
+    expect(bucketOf({ ...t, status: "needs_decision" }, [{ ...p()!, state: "closed" as const }], true)).toBe("blocked");
     const v = buildProgress(input({ tickets: [{ ...ticket("A"), statusManual: "closed" }, { ...ticket("B"), status: "needs_decision" }], prs: [] }));
     expect(v.counts).toMatchObject({ closed: 1, blocked: 1, merged: 0, total: 2 });
     expect(v.stuck.map((x) => [x.ticketKey, x.turn.kind === "stuck" && x.turn.source])).toEqual([["B", "ticket_needs_decision"]]);

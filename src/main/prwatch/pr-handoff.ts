@@ -16,12 +16,14 @@ const sameSet = (a: Pr[], b: Pr[]): boolean => {
  * 放弃读了的行（prGivenUp）状态不再当真：不写，base 里同一个 PR 报成开着的也去掉，不让它把 ticket 留在 in_review。
  * status 沿用 base 的；只有 base 是 active / in_review / needs_decision、合并后的列表里没有开着的、且有一行是在 base 之后合并的，才升到 done。
  * 合并后的 PR 全都关了没合（BTL-270）：needs_decision，clearBlockers 让调用方把 base 的 blockers 清掉；needs_decision 时又有开着的 PR：in_review。
+ * 和 deriveStatus 一致：base 是 active（又开始干了）、done / merged_pending_followup（合并过了）不改；模型说 blocked 还列了 blockers 时 blocked 优先。
+ * Shipherd 自己关掉的 PR（shipherdClosedAt，栈的一层退回普通分支时关掉的 draft）照样写进 prs，但不算「关了没合」。
  * sourceRef 是 `prwatch:<ticket>:<number:state:review,…>@<base 的 id>`：同一次变化重复调用会被当成重复丢掉；
  * 带上 base 是因为 review 可能来回变（approved → pending → approved），只看状态的话第二次 approved 会被当成重复。
  * 没有读过的行、或者 prs 和 base 一样（没什么可写的）时返回 null。
  */
 export function prHandoff(
-  ticketKey: string, rows: TicketPr[], base: { id: number; createdAt: number; status: Handoff["status"]; prs: Pr[] },
+  ticketKey: string, rows: TicketPr[], base: { id: number; createdAt: number; status: Handoff["status"]; prs: Pr[]; blockers?: string[] },
 ): { prs: Pr[]; status: Handoff["status"]; sourceRef: string; clearBlockers: boolean } | null {
   const givenUp = new Set(rows.filter(prGivenUp).map((r) => prUrlKey(r.url)));
   const watched: Pr[] = rows
@@ -37,8 +39,12 @@ export function prHandoff(
   const anyOpen = prs.some((p) => p.state === "open");
   const promote = (base.status === "active" || base.status === "in_review" || base.status === "needs_decision") && !anyOpen && mergedSince;
   // BTL-270：PR 全都关了没合、也没有开着的，等人决定；旧的 blockers 是对着关掉的 PR 说的，一起清掉。
-  // 模型明确说 active（又开始干了）不改，和 deriveStatus 一致。
-  const decide = prs.length > 0 && prs.every((p) => p.state === "closed") && base.status !== "active";
+  // 模型明确说 active（又开始干了）、已经合并过（done / merged_pending_followup）、blocked 并列了原因的不改，和 deriveStatus 一致。
+  const byShipherd = new Set(rows.filter((r) => (r.shipherdClosedAt ?? null) !== null).map((r) => prUrlKey(r.url)));
+  const counted = prs.filter((p) => !byShipherd.has(prUrlKey(p.url)));
+  const blockedWithReasons = base.status === "blocked" && (base.blockers?.length ?? 0) > 0;
+  const decidable = base.status === "in_review" || base.status === "needs_decision" || (base.status === "blocked" && !blockedWithReasons);
+  const decide = decidable && counted.length > 0 && counted.every((p) => p.state === "closed");
   // 等决定时又有了开着的 PR（重开了、另开了一个）：回到 review。
   const reopened = base.status === "needs_decision" && anyOpen;
   const status = promote ? "done" : decide ? "needs_decision" : reopened ? "in_review" : base.status;
