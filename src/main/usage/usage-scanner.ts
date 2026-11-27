@@ -177,6 +177,8 @@ class UsageSink implements TailSink {
   private rows: UsageRow[] = [];
   /** 还没写进库的游标；null 是和库里一样。 */
   private cur: { offset: number; size: number } | null = null;
+  /** 库里现在的游标（上次读到或写进去的）：和它一样就不再写（BTL-275：每 30 秒每个文件一次空写）。 */
+  private saved: { offset: number; size: number } | null = null;
 
   constructor(
     private readonly repo: UsageRepo,
@@ -186,7 +188,8 @@ class UsageSink implements TailSink {
   ) {}
 
   begin(st: TailStat): { offset: number } {
-    const cur = this.cur ?? this.repo.cursor(this.file);
+    if (!this.cur) this.saved = this.repo.cursor(this.file);
+    const cur = this.cur ?? this.saved;
     const keep = cur !== null && st.size >= cur.size && st.size >= cur.offset;
     const offset = keep ? cur.offset : 0;
     this.cur = { offset, size: st.size };
@@ -222,7 +225,11 @@ class UsageSink implements TailSink {
     try {
       if (this.rows.length > 0) this.repo.record(this.rows);
       this.rows = [];
-      if (this.cur) this.repo.setCursor(this.file, this.cur.offset, this.cur.size);
+      const c = this.cur;
+      if (c && (this.saved?.offset !== c.offset || this.saved.size !== c.size)) {
+        this.repo.setCursor(this.file, c.offset, c.size);
+        this.saved = c;
+      }
       this.cur = null;
     } catch (err) {
       this.log?.(`usage scan: saving ${this.file} failed`, err);

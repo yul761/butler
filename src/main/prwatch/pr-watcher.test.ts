@@ -1733,6 +1733,31 @@ describe("PrWatcher: batch-reading PRs with GraphQL (BTL-276)", () => {
     expect(onSlugMoved).toHaveBeenCalledWith("o/app", "o/app2");
   });
 
+  it("statusOfMany (BTL-275) shows what each batched round read: a cache hit refreshes checkedAt, a change seen by the cheap read lands after the full read", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr({ ci: "pending" })]]);
+    const s = batched(remote);
+    s.link();
+    await s.w.check();
+    const first = s.w.statusOfMany(["BTL-1"]).get("BTL-1")!;
+    expect(first.map((p) => [p.number, p.ci])).toEqual([[7, "pending"]]);
+    // 便宜读：没变，用缓存，但这一轮的读取时间照写进库。
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["cheap:7"]);
+    const hit = s.w.statusOfMany(["BTL-1"]).get("BTL-1")!;
+    expect(hit[0].checkedAt).toBeGreaterThan(first[0].checkedAt);
+    expect(hit[0].ci).toBe("pending");
+    // 便宜读发现 CI 变了：全读以后 statusOfMany 给的是新的，和 statusOf 一样。
+    remote.set(7, pr({ ci: "passing" }));
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["cheap:7", "full:7"]);
+    expect(s.w.statusOfMany(["BTL-1"]).get("BTL-1")!.map((p) => p.ci)).toEqual(["passing"]);
+    expect(s.w.statusOfMany(["BTL-1"]).get("BTL-1")).toEqual(s.w.statusOf("BTL-1"));
+  });
+
   it("reads a PR whose number GraphQL cannot take on its own with gh pr view, not in the batch", async () => {
     const big = 2 ** 31;
     const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
