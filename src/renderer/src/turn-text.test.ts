@@ -62,9 +62,10 @@ describe("turnSentence", () => {
     const waiting = (reason: "review" | "undelivered") => shipherd({ kind: "comments_waiting", waiting: { reason, ticketKey: "BTL-1", prId: 1, number: 3, count: 2, since: 0 }, target: T, title: null });
     expect(say(waiting("review"))).toBe("有 2 条评论等你分类");
     expect(say(waiting("undelivered"))).toBe("有 2 条评论没送到 session");
-    const stack = (reason: "conflict" | "stuck") => shipherd({ kind: "stack", stack: { reason, stackId: 1, stackName: "s", branch: "b" }, target: null });
+    const stack = (reason: "conflict" | "stuck" | "confirm") => shipherd({ kind: "stack", stack: { reason, stackId: 1, stackName: "s", branch: "b" }, target: null });
     expect(say(stack("conflict"))).toBe("栈里有冲突没交给 session");
     expect(say(stack("stuck"))).toBe("栈的 rebase 卡住了");
+    expect(say(stack("confirm"))).toBe("栈的 rebase 等你确认");
     expect(say(shipherd({ kind: "lessons_paused" }))).toBe("Shipherd 要你点一下");
     setUiLang("en");
     expect(say(waiting("review"))).toBe("2 comments to triage");

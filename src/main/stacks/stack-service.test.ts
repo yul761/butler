@@ -55,7 +55,9 @@ vi.mock("./gh-stack", async (orig) => {
     prClose: vi.fn(async (_c: string, _s: string | null, n: number, comment: string) => (rec("prClose", n, comment), (pr(n).state = "CLOSED"))),
     ensureLabel: vi.fn(async (_c: string, _s: string | null, name: string) => void rec("ensureLabel", name)),
     prView: vi.fn(async (_c: string, _s: string | null, n: number) => (fake.prs.has(n) ? { ...fake.prs.get(n)!, labels: [...fake.prs.get(n)!.labels] } : null)),
-    openPrs: vi.fn(async () => [...fake.prs.values()].filter((p) => p.state === "OPEN")),
+    // 和 gh 一样新的在前、最多 OPEN_PR_LIMIT 条
+    openPrs: vi.fn(async () => [...fake.prs.values()].filter((p) => p.state === "OPEN").sort((x, y) => y.number - x.number).slice(0, real.OPEN_PR_LIMIT)),
+    openPrsForHeads: vi.fn(async (_c: string, _s: string | null, heads: string[]) => [...fake.prs.values()].filter((p) => p.state === "OPEN" && heads.includes(p.head))),
     issueCreate: vi.fn(async (_c: string, _s: string | null, title: string, body: string) => {
       rec("issueCreate", title);
       const number = fake.next++;
@@ -143,6 +145,7 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?:
   const external: { kind: ExternalActionKind; detail: ExternalDetail; ran: boolean }[] = [];
   const allow = o.allow ?? (() => true);
   const delivered: { ticketKey: string; text: string }[] = [];
+  const withdrawn: string[] = [];
   const posted: string[] = [];
   const deps: StackServiceDeps = {
     repo: repoT,
@@ -166,12 +169,13 @@ function world(o: { mode?: StackRunMode; allow?: (k: ExternalActionKind, scope?:
     gateHeld: () => false,
     trunkBusy: () => false,
     deliver: vi.fn(async (to: { ticketKey: string }, text: string) => (delivered.push({ ticketKey: to.ticketKey, text }), true)),
+    withdraw: vi.fn((to: { ticketKey: string; branch: string }) => void withdrawn.push(`${to.ticketKey}:${to.branch}`)),
     briefProvider: (l) => ({ markdown: `<!-- shipherd:brief -->brief for ${l.branch}<!-- /shipherd:brief -->`, posted: (url) => posted.push(url) }),
     forceMode: o.mode,
   };
   const svc = new StackService(deps);
   return {
-    repo, remote, hub, db, svc, deps, repoT, policy, external, delivered, posted,
+    repo, remote, hub, db, svc, deps, repoT, policy, external, delivered, withdrawn, posted,
     tip: (b: string) => g(repo, "rev-parse", b),
     remoteTip: (b: string) => g(remote, "rev-parse", b),
     /** 几个分支的提交，一个 git 进程。 */
@@ -850,6 +854,483 @@ async function countGits(): Promise<{ n: () => number; done: () => void }> {
   const { readFileSync } = await import("node:fs");
   return { n: () => readFileSync(log, "utf8").split("\n").filter(Boolean).length, done: resetGitBinary };
 }
+
+/** 「GitHub」上开着的一个 PR（openPrs、prView 都看得到）。 */
+function openPr(n: number, head: string, base: string, draft: boolean): PrSnapshot {
+  const p: PrSnapshot = { number: n, url: `https://github.com/acme/app/pull/${n}`, state: "OPEN", isDraft: draft, title: `PR ${n}`, body: "", base, head, headSha: null, labels: [] };
+  fake.prs.set(n, p);
+  return p;
+}
+
+describe("StackService guards before rewriting branches (BTL-278)", () => {
+  it.each(["mcp", "ticket", "detected"] as const)("reads the open review PR of a %s stack and asks before rewriting that layer", async (source) => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    let id: number;
+    if (source === "detected") {
+      openPr(2, "b", "a", true);
+      id = (await w.svc.detect(w.repo))[0]!;
+    } else if (source === "ticket") {
+      id = (await w.svc.stackOn({ repoPath: w.repo, parentBranch: "a", branch: "b", featureId: null })).stackId!;
+    } else {
+      id = (await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" })).stackId!;
+    }
+    expect(w.repoT.layers(id)[0]).toMatchObject({ state: "ready", mode: "branch", prNumber: 1 });
+    w.pushMain("x.txt", "x\n");
+    const local = w.tips(["a", "b"]);
+    const remote = w.remoteTips(["a", "b"]);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm" });
+    expect(w.tips(["a", "b"])).toEqual(local);
+    expect(w.remoteTips(["a", "b"])).toEqual(remote);
+    expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "confirm", branch: "a", prNumber: 1, detail: "ready_pr" }));
+    // 不每分钟再问一次
+    for (let n = 0; n < 3; n++) {
+      w.advance(5 * 60_000);
+      await w.svc.tick();
+    }
+    expect(w.repoT.runs(id, 10)).toHaveLength(1);
+    // 用户确认：手动 rebase 才改写、推上去
+    expect((await w.svc.rebaseNow(id)).ok).toBe(true);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "rebased" });
+    expect(w.remoteTips(["a", "b"])).toEqual(w.tips(["a", "b"]));
+    expect(w.svc.notices().filter((n) => n.reason === "confirm")).toEqual([]);
+  });
+
+  it("records who confirmed: a click in the app or the coordinator's stack_rebase", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    const id = (await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" })).stackId!;
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    const asked = w.repoT.lastRun(id)!;
+    expect(asked.outcome).toBe("needs_confirm");
+    expect((await w.svc.rebaseNow(id, "coordinator")).ok).toBe(true);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "rebased", detail: { actor: "coordinator", confirms: asked.id } });
+    // 没有等确认的时候点「马上 rebase」：记下是谁点的，但不算确认了什么
+    w.pushMain("y.txt", "y\n");
+    expect((await w.svc.rebaseNow(id)).ok).toBe(true);
+    expect(w.repoT.lastRun(id)!.detail).toMatchObject({ actor: "user" });
+    expect(w.repoT.lastRun(id)!.detail.confirms).toBeUndefined();
+  });
+
+  it("drops the confirm notice once the layer is no longer under review, and the next auto run goes ahead", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    const id = (await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" })).stackId!;
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "confirm" }));
+    // PR 转回 draft：读到的层状态变了
+    fake.prs.get(1)!.isDraft = true;
+    await w.svc.detect(w.repo);
+    expect(w.repoT.layers(id)[0]!.state).toBe("draft");
+    expect(w.svc.notices().filter((n) => n.reason === "confirm")).toEqual([]);
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    expect(w.remoteTips(["a", "b"])).toEqual(w.tips(["a", "b"]));
+  });
+
+  it("a manual confirm still runs the checks before the force push", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    const id = (await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" })).stackId!;
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)!.outcome).toBe("needs_confirm");
+    // GitHub 读不到：手动也不改写
+    const gh = await import("./gh-stack");
+    vi.mocked(gh.openPrs).mockResolvedValueOnce(null);
+    const local = w.tips(["a", "b"]);
+    const remote = w.remoteTips(["a", "b"]);
+    await w.svc.rebaseNow(id);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "deferred", reason: "can't read the open PRs" });
+    expect(w.tips(["a", "b"])).toEqual(local);
+    expect(w.remoteTips(["a", "b"])).toEqual(remote);
+    // 别人刚往 a 的 PR 推了一个提交：手动确认也不能盖掉它
+    g(w.hub, "fetch", "-q", "origin");
+    g(w.hub, "checkout", "-q", "-B", "a", "origin/a");
+    g(w.hub, "commit", "-q", "--allow-empty", "-m", "reviewer fix");
+    g(w.hub, "push", "-q", "origin", "a");
+    const theirs = w.remoteTip("a");
+    await w.svc.rebaseNow(id);
+    expect(w.remoteTip("a")).toBe(theirs);
+    expect(w.repoT.lastRun(id)!.outcome).not.toBe("rebased");
+  });
+
+  it("finds the layer's PR even when the repo has more open PRs than one page holds", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    for (let n = 0; n < 200; n++) openPr(1000 + n, `other-${n}`, "main", false);
+    const id = (await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" })).stackId!;
+    expect(w.repoT.layers(id)[0]).toMatchObject({ state: "ready", prNumber: 1 });
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm" });
+    // 逐层查也查不到：不改写
+    const gh = await import("./gh-stack");
+    vi.mocked(gh.openPrsForHeads).mockResolvedValueOnce(null);
+    w.pushMain("y.txt", "y\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+  });
+
+  it("asks before handing a conflict on a layer under review to its session", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    openPr(2, "b", "a", false);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm", detail: { confirm: { why: "ready_pr" } } });
+    expect(w.repoT.lastRun(id)!.detail.confirm!.branches).toContain("b");
+    expect(w.delivered).toEqual([]);
+    expect(w.repoT.layers(id)[1]!.conflictKey).toBeNull();
+    // 确认了就交给 session
+    await w.svc.rebaseNow(id);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "conflict" });
+    expect(w.delivered).toHaveLength(1);
+  });
+
+  it("hands a conflict to its session when the ready layer below it is not rewritten", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    openPr(1, "a", "main", false);
+    const id = await defineAll(w);
+    expect(w.repoT.layers(id)[0]).toMatchObject({ state: "ready", prNumber: 1 });
+    // a 的作者推了 review 修改（a 还在 main 上），b 叠上去冲突：a 不会被改写，冲突直接交给 b
+    g(w.repo, "checkout", "-q", "a");
+    commit(w.repo, "b.txt", "a's b\n", "a review fix");
+    g(w.repo, "checkout", "-q", "--detach");
+    const a = w.tip("a");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict", detail: { conflict: { branch: "b" } } });
+    expect(w.delivered.map((d) => d.ticketKey)).toEqual(["B"]);
+    expect(w.tip("a")).toBe(a);
+  });
+
+  it("retries a failed run after a while even when nothing changed (a git timeout is not a verdict)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    g(w.repo, "fetch", "-q", "origin");
+    const stack = w.repoT.get(id)!;
+    const inputs = await (w.svc as unknown as { inputsOf(s: typeof stack): Promise<string> }).inputsOf(stack);
+    const runId = w.repoT.startRun(id, "main_updated", "update_refs");
+    w.repoT.finishRun(runId, { outcome: "failed", reason: "git rebase timed out", detail: { inputs } });
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)!.id).toBe(runId);
+    w.advance(61 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+  });
+
+  it("backs off when the same failure repeats on the same inputs", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    g(w.repo, "fetch", "-q", "origin");
+    const stack = w.repoT.get(id)!;
+    const inputs = await (w.svc as unknown as { inputsOf(s: typeof stack): Promise<string> }).inputsOf(stack);
+    for (let n = 0; n < 2; n++) {
+      const r = w.repoT.startRun(id, "main_updated", "update_refs");
+      w.repoT.finishRun(r, { outcome: "failed", reason: "conflict markers left in a.txt", detail: { inputs } });
+    }
+    const last = w.repoT.lastRun(id)!.id;
+    // 连着两次：等两小时
+    w.advance(61 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)!.id).toBe(last);
+    w.advance(60 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+  });
+
+  it.each([
+    ["a github.com remote", true],
+    ["a remote on another host", false],
+  ])("without a known slug, an unreadable PR list on %s defers: %s", async (_label, github) => {
+    const w = world({ policy: { dailyRebase: false } });
+    w.deps.slugOf = async () => null;
+    if (github) {
+      // remote 写成 github.com 的地址，git 照旧走本地的 bare 仓库
+      g(w.repo, "remote", "set-url", "origin", "https://github.com/acme/app.git");
+      g(w.repo, "config", `url.${w.remote}.insteadOf`, "https://github.com/acme/app.git");
+    }
+    const gh = await import("./gh-stack");
+    const impl = vi.mocked(gh.openPrs).getMockImplementation()!;
+    vi.mocked(gh.openPrs).mockResolvedValue(null);
+    try {
+      const id = await defineAll(w);
+      w.pushMain("x.txt", "x\n");
+      await w.svc.tick();
+      if (github) expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+      else expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    } finally {
+      vi.mocked(gh.openPrs).mockImplementation(impl);
+    }
+  });
+
+  it("reads the PR of a layer added to an existing stack", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = (await w.svc.define({ repoPath: w.repo, branches: ["a", "b"], source: "mcp" })).stackId!;
+    openPr(3, "c", "b", false);
+    const r = await w.svc.stackOn({ repoPath: w.repo, parentBranch: "b", branch: "c", featureId: null });
+    expect(r.stackId).toBe(id);
+    expect(w.repoT.layers(id).find((l) => l.branch === "c")).toMatchObject({ state: "ready", prNumber: 3 });
+  });
+
+  it("reads a PR opened after the stack was defined before pushing anything", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    expect(w.repoT.layers(id).map((l) => l.state)).toEqual(["branch_only", "branch_only", "branch_only", "branch_only"]);
+    openPr(7, "b", "a", false);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.layers(id)[1]).toMatchObject({ state: "ready", prNumber: 7, prUrl: "https://github.com/acme/app/pull/7" });
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm" });
+    expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
+  });
+
+  it("fills in a missing repo slug before reading PRs, and defers an auto run when GitHub can't be read", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.repoT.updateStack(id, { repoSlug: null });
+    openPr(1, "a", "main", false);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.get(id)!.repoSlug).toBe("acme/app");
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm" });
+    const gh = await import("./gh-stack");
+    vi.mocked(gh.openPrs).mockResolvedValueOnce(null);
+    w.pushMain("y.txt", "y\n");
+    w.advance(5 * 60_000);
+    const remote = w.remoteTips(BRANCHES);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "can't read the open PRs" });
+    expect(w.remoteTips(BRANCHES)).toEqual(remote);
+  });
+
+  it("withdraws a conflict it queued for a run that a newer run replaced while it was being delivered", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    // 第一次没递进去（收件人认不出）
+    vi.mocked(w.deps.deliver).mockResolvedValueOnce(false);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    const old = w.repoT.lastRun(id)!;
+    expect(old).toMatchObject({ outcome: "conflict" });
+    expect(old.detail.delivered).toBeFalsy();
+    // session 停下来时补递；排进信箱的同时又跑了一次新的 run
+    vi.mocked(w.deps.deliver).mockImplementationOnce(async (to, text) => {
+      w.delivered.push({ ticketKey: to.ticketKey, text });
+      const newer = w.repoT.startRun(id, "manual", "update_refs");
+      w.repoT.finishRun(newer, { outcome: "deferred", reason: "busy" });
+      return true;
+    });
+    await w.svc.sessionStopped("B");
+    expect(w.delivered).toHaveLength(1);
+    expect(w.withdrawn).toEqual(["B:b"]);
+    expect(w.repoT.run(old.id)!.detail.delivered).toBeFalsy();
+    expect(w.repoT.layers(id)[1]!.conflictKey).toBeNull();
+  });
+
+  it("resends the newer run's conflict on the same layer when it withdraws a stale one", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    vi.mocked(w.deps.deliver).mockResolvedValueOnce(false);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    const old = w.repoT.lastRun(id)!;
+    let newer = 0;
+    vi.mocked(w.deps.deliver).mockImplementationOnce(async (to, text) => {
+      w.delivered.push({ ticketKey: to.ticketKey, text });
+      // 同一层又冲突了一次，而且已经送过（同一个 ref，信箱里那条是它的）
+      newer = w.repoT.startRun(id, "manual", "update_refs");
+      w.repoT.finishRun(newer, { outcome: "conflict", reason: old.reason, detail: { ...old.detail, delivered: true } });
+      return true;
+    });
+    await w.svc.sessionStopped("B");
+    expect(w.withdrawn).toEqual(["B:b"]);
+    expect(w.delivered).toHaveLength(2);
+    expect(w.repoT.run(old.id)!.detail.delivered).toBeFalsy();
+    expect(w.repoT.lastRun(id)!.id).toBe(newer);
+    expect(w.repoT.layers(id)[1]!.conflictKey).toBe(old.detail.conflict!.key);
+  });
+
+  it("hands a conflict over once: no rerun every tick, the session's own moves are not triggers, an unrelated trunk change does not resend it", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.delivered).toHaveLength(1);
+    for (let n = 0; n < 3; n++) {
+      w.advance(60_000);
+      await w.svc.tick();
+    }
+    await w.svc.sessionStopped("B");
+    expect(w.delivered).toHaveLength(1);
+    expect(w.repoT.runs(id, 10)).toHaveLength(1);
+    // session 在自己的分支上接着干活，没照提示 rebase（或者决定不 rebase）：不算「有新提交」，也不去改写它
+    g(w.repo, "checkout", "-q", "b");
+    const mine = commit(w.repo, "b2.txt", "more\n", "b more");
+    g(w.repo, "checkout", "-q", "main");
+    w.advance(60_000);
+    await w.svc.tick();
+    await w.svc.sessionStopped("B");
+    expect(w.repoT.runs(id, 10)).toHaveLength(1);
+    // trunk 动了、但没动冲突的文件：还是同一个冲突，不再发，b 不动
+    w.pushMain("x.txt", "x\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    await w.svc.sessionStopped("B");
+    expect(w.delivered).toHaveLength(1);
+    expect(w.repoT.runs(id, 10)).toHaveLength(1);
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict" });
+    expect(w.tip("b")).toBe(mine);
+    // trunk 又改了冲突的那个文件：是新的冲突，发一次
+    w.pushMain("b.txt", "main's b, again\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.delivered).toHaveLength(2);
+    expect(w.tip("b")).toBe(mine);
+    expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
+  });
+
+  it("a conflict handed to a session stays the session's: a clean auto run asks first, and a manual rebase takes it back", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.repoT.layers(id)[1]!.conflictKey).not.toBeNull();
+    // trunk 又把 b.txt 删了：现在干净地 rebase 得过去，但 b 的冲突在 session 手里
+    g(w.hub, "fetch", "-q", "origin");
+    g(w.hub, "rm", "-q", "b.txt");
+    g(w.hub, "commit", "-q", "-m", "main drops b.txt");
+    g(w.hub, "push", "-q", "origin", "main");
+    const before = w.tips(BRANCHES);
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "needs_confirm", detail: { confirm: { why: "handoff", branches: ["b", "c", "d"] } } });
+    expect(w.tips(BRANCHES)).toEqual(before);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "confirm", branch: "b", detail: "handoff" }));
+    expect((await w.svc.rebaseNow(id)).ok).toBe(true);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "rebased" });
+    expect(w.repoT.layers(id)[1]!.conflictKey).toBeNull();
+    // 层收回来了：还排在 session 信箱里没送的那条旧冲突要撤回
+    expect(w.withdrawn).toEqual(["B:b"]);
+    expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
+  });
+
+  it("never turns rerere on, and never pushes a resolution its session threw away", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(() => g(w.repo, "config", "--local", "--get", "rerere.enabled")).toThrow();
+    const cmd = /git rebase --onto (\S+) (\S+)/.exec(w.delivered[0]!.text)!;
+    // session 在自己的 worktree 里开着 rerere 试了一次、记下了一个解法，又放弃了
+    const wt = join(tempDir(), "wt-b");
+    g(w.repo, "worktree", "add", "-q", wt, "b");
+    try {
+      g(wt, "-c", "rerere.enabled=true", "rebase", "-q", "--onto", cmd[1]!, cmd[2]!);
+    } catch {
+      // 冲突
+    }
+    writeFileSync(join(wt, "b.txt"), "b\n");
+    g(wt, "-c", "rerere.enabled=true", "rerere");
+    g(wt, "rebase", "--abort");
+    g(w.repo, "worktree", "remove", "--force", wt);
+    const before = w.tips(BRANCHES);
+    const remote = w.remoteTips(BRANCHES);
+    w.pushMain("x.txt", "x\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    await w.svc.rebaseNow(id);
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict" });
+    expect(w.tips(BRANCHES)).toEqual(before);
+    expect(w.remoteTips(BRANCHES)).toEqual(remote);
+    expect(w.external.filter((e) => e.kind === "force_push")).toEqual([]);
+  });
+
+  it("does not catch up a push onto a layer under review until someone confirms", async () => {
+    let on = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" || on });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    expect(w.remoteTip("a")).not.toBe(w.tip("a"));
+    // 这期间有人把 a 开成了 PR、在 review
+    openPr(1, "a", "main", false);
+    on = true;
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.remoteTip("a")).not.toBe(w.tip("a"));
+    expect(w.remoteTips(["b", "c", "d"])).toEqual(w.tips(["b", "c", "d"]));
+    expect((await w.svc.rebaseNow(id)).ok).toBe(true);
+    expect(w.remoteTip("a")).toBe(w.tip("a"));
+  });
+
+  it("asks before an autosquash rewrites a layer under review, and the confirm does the autosquash", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    await w.svc.tick();
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b-fix.txt", "fix\n", "fixup! b one");
+    g(w.repo, "checkout", "-q", "main");
+    await w.svc.tick(); // layer_commits：c、d 接上去
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "layer_commits", outcome: "rebased" });
+    openPr(2, "b", "a", false);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "autosquash", outcome: "needs_confirm" });
+    expect(g(w.repo, "log", "--format=%s", "main..b")).toBe("fixup! b one\nb one\na one");
+    await w.svc.rebaseNow(id);
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    expect(g(w.repo, "log", "--format=%s", "main..b")).toBe("b one\na one");
+  });
+
+  it("does not fold a trunk-update confirm into an autosquash one: the confirm then moves the stack onto trunk", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    await w.svc.tick();
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b-fix.txt", "fix\n", "fixup! b one");
+    g(w.repo, "checkout", "-q", "main");
+    await w.svc.tick();
+    openPr(2, "b", "a", false);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "autosquash", outcome: "needs_confirm", detail: { autosquash: true } });
+    w.pushMain("x.txt", "x\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "needs_confirm" });
+    expect(w.repoT.lastRun(id)!.detail.autosquash).toBeUndefined();
+    await w.svc.rebaseNow(id);
+    expect(g(w.repo, "merge-base", "--is-ancestor", "origin/main", "d") === "").toBe(true);
+  });
+
+  it("an explicit repo-level off beats a semi epic, a global off does not, and the view says which", async () => {
+    const w = world({ autoRebase: false });
+    const id = await defineAll(w);
+    const name = w.repoT.get(id)!.name;
+    const card = async () => (await w.svc.view({ featureId: null })).stacks[0]!;
+    w.deps.overlay = (base) => ({ ...base, autoRebase: true });
+    expect(w.svc.policyOf(w.repoT.get(id)!).autoRebase).toBe(true);
+    expect(await card()).toMatchObject({ autoRebase: true, autoRebaseBy: "epic" });
+    expect(w.svc.epicNote({ kind: "global" })).toEqual({ on: [name], ignored: [] });
+    w.policy.setLayer({ kind: "repo", slug: "acme/app" }, { autoRebase: false });
+    expect(w.svc.policyOf(w.repoT.get(id)!).autoRebase).toBe(false);
+    expect(await card()).toMatchObject({ autoRebase: false, autoRebaseBy: "explicit_off" });
+    expect(w.svc.epicNote({ kind: "repo", slug: "acme/app" })).toEqual({ on: [], ignored: [name] });
+    expect(w.svc.epicNote({ kind: "repo", slug: "other/repo" })).toEqual({ on: [], ignored: [] });
+    w.policy.setLayer({ kind: "repo", slug: "acme/app" }, {});
+    w.deps.overlay = undefined;
+    expect(await card()).toMatchObject({ autoRebase: false, autoRebaseBy: "policy" });
+  });
+});
 
 describe.skipIf(process.platform === "win32")("an idle tick (BTL-275)", () => {
   it("with nothing changed sends no onChange and asks git once per stack; a trunk that moved notifies", async () => {

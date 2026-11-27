@@ -18,7 +18,7 @@ const feature = (id: number, repos: string[]): Feature => ({
 
 const stack = (id: number, over: Partial<StackView>, layers: [string, string | null][]): StackView => ({
   id, name: `s${id}`, repoPath: repo, repoSlug: null, trunk: "main", featureId: null, source: "mcp", mergeMethod: null,
-  autoRebase: true, overviewUrl: null, lastRun: null, restorable: null,
+  autoRebase: true, autoRebaseBy: "policy", overviewUrl: null, lastRun: null, restorable: null,
   layers: layers.map(([branch, ticketKey], i) => ({
     id: id * 10 + i, position: i, branch, ticketKey, ticketTitle: null, mode: "branch", state: i === 0 ? "ready" : "branch_only",
     prNumber: null, prUrl: null, behind: 0, lastRebaseAt: null, draftSince: null, mergedAt: null, unpushed: false,
@@ -70,6 +70,8 @@ describe("StackControl (workstream K)", () => {
     expect(await c.handle({ kind: "feature", featureId: 1 }, { op: "stack_rebase", stack: 7 })).toMatchObject({ ok: false });
     expect(service.rebaseNow).not.toHaveBeenCalled();
     expect(await c.handle({ kind: "feature", featureId: 2 }, { op: "stack_rebase", stack: 1 })).toMatchObject({ ok: true, value: { result: "rebased" } });
+    // 总控调的 stack_rebase 记成总控确认的（BTL-278），和用户在界面上点的分开
+    expect(service.rebaseNow).toHaveBeenLastCalledWith(1, "coordinator");
   });
 
   it("sets a layer's mode by branch", async () => {
@@ -111,6 +113,7 @@ describe("StackControl (workstream K)", () => {
     expect(service.define).not.toHaveBeenCalled();
     // Shipherd 总控都行
     expect(await c.handle({ kind: "shipherd" }, { op: "stack_rebase", stack: 2 })).toMatchObject({ ok: true });
+    expect(service.rebaseNow).toHaveBeenLastCalledWith(2, "shipherd");
   });
 
   it("records the feature for a Shipherd-control stack only when every ticket shares it", async () => {

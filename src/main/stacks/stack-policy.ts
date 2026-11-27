@@ -65,6 +65,21 @@ export class StackPolicyService {
     return slug ? this.resolver.forRepo(slug).value : this.resolver.forGlobal().value;
   }
 
+  /**
+   * autoRebase 在仓库或产品层明确关着（BTL-278）：epic 选了半自动也不打开。全局层不算，全局档位写的就是它。
+   */
+  autoRebaseExplicitOff(slug: string | null): boolean {
+    if (!slug) return false;
+    const r = this.resolver.forRepo(slug);
+    const o = r.origin.autoRebase;
+    return r.value.autoRebase === false && !!o && o !== "default" && (o.kind === "repo" || o.kind === "product");
+  }
+
+  /** 这个仓库属于这个产品。 */
+  inProduct(slug: string | null, productId: number): boolean {
+    return !!slug && this.d.productsOf(slug).some((p) => p.id === productId);
+  }
+
   /** 有没有哪一层开了 autoRebase（都没开时 tick 不用 fetch）。 */
   anyAutoRebase(): boolean {
     const rows = this.d.db.prepare(`SELECT overrides FROM stack_policies`).all() as { overrides: string }[];

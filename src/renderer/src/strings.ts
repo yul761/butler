@@ -570,6 +570,7 @@ const ZH = {
       commentsUndelivered: (n: number) => `有 ${n} 条评论没送到 session`,
       stackConflict: "栈里有冲突没交给 session",
       stackStuck: "栈的 rebase 卡住了",
+      stackConfirm: "栈的 rebase 等你确认",
       intake: "自动接活拿不准，等你决定",
       other: "Shipherd 要你点一下",
     },
@@ -1952,13 +1953,22 @@ const ZH = {
     noUpdateRefs: "这台电脑的 git 不支持 --update-refs（要 2.38 以上），Shipherd 会一层一层 rebase，慢一些。",
     repoTrunk: (repo: string, trunk: string) => `${repo} · trunk ${trunk}`,
     autoRebaseOff: "这个仓库没开「允许 Shipherd 自动 rebase 栈」：Shipherd 只看，不改分支。",
+    autoRebaseEpicOn: "自动 rebase：因为 epic 是半自动，已开着。",
+    autoRebaseEpicOff: "自动 rebase：因为 epic 是手动，已关着。Shipherd 只看，不改分支。",
+    autoRebaseExplicitOff: "epic 是半自动，但这个仓库明确关了自动 rebase，按关。Shipherd 只看，不改分支。",
+    epicOn: (names: string) => `因为 epic 是半自动，这些栈的自动 rebase 已开着：${names}`,
+    epicIgnored: (names: string) => `这些栈的 epic 是半自动，但这里明确关了自动 rebase，按关：${names}`,
+    confirmLine: (why: "ready_pr" | "handoff", branches: string) =>
+      why === "ready_pr"
+        ? `${branches} 有在 review 的 PR，Shipherd 没改写。要改写就点「马上 rebase」。`
+        : `${branches} 现在归 session 管（最下面那层的冲突还没解完），Shipherd 没动。要改写就点「马上 rebase」。`,
     source: { mcp: "总控定的", ticket: "stack_on 建的", detected: "自动识别" } as Record<StackSource, string>,
     state: { branch_only: "分支", draft: "draft PR", ready: "PR", merged: "已合并" } as Record<StackLayerState, string>,
     bottom: "栈底",
     behind: (n: number) => `落后 trunk ${n} 个提交`,
     unpushed: "改写过，还没推",
     lastRun: (outcome: string, trigger: string, when: string) => `最近一次：${outcome}（${trigger}，${when}）`,
-    outcome: { rebased: "rebase 好了", noop: "不用 rebase", conflict: "有冲突", deferred: "推迟了", failed: "失败了", rolled_back: "已回滚", restored: "已从备份恢复" } as Record<StackRunOutcome, string>,
+    outcome: { rebased: "rebase 好了", noop: "不用 rebase", conflict: "有冲突", deferred: "推迟了", failed: "失败了", rolled_back: "已回滚", restored: "已从备份恢复", needs_confirm: "等你确认" } as Record<StackRunOutcome, string>,
     trigger: { main_updated: "trunk 更新", bottom_merged: "栈底合并", layer_commits: "某层有新提交", daily: "每日", manual: "手动", autosquash: "autosquash", restore: "恢复" } as Record<StackTrigger, string>,
     conflict: (branch: string, files: string) => `冲突在 ${branch}：${files}`,
     unpushedList: (branches: string) => `「推送分支」开关关着，没推：${branches}`,
@@ -1975,6 +1985,10 @@ const ZH = {
       draft_stale: (stack: string, branch: string, days: number) => `栈「${stack}」的 ${branch} 当 draft 已经 ${days} 天了，不用跑 CI 的话可以降回分支`,
       behind: (stack: string, commits: number, days: number) => `栈「${stack}」的栈底落后 trunk ${commits} 个提交（最早的是 ${days} 天前的）`,
       stuck: (stack: string, detail: string) => `栈「${stack}」的 rebase 卡住了：${detail}`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff") =>
+        why === "ready_pr"
+          ? `栈「${stack}」要 rebase，可是 ${branches} 有在 review 的 PR。Shipherd 没动，确认要改写就点「马上 rebase」。`
+          : `栈「${stack}」要 rebase，可是 ${branches} 现在归 session 管：最下面那层的冲突交给它了，还没解完。Shipherd 没动，确认要改写就点「马上 rebase」。`,
     },
     noticeOpen: "看栈",
     settingsIntro: "栈式 PR 的策略，分三层：全局 → 产品 → 仓库，下层覆盖上层。「允许 Shipherd 自动 rebase 栈」默认关，开了 Shipherd 才会改这个仓库里栈的本地分支；推送、开 PR、贴总览 issue 另外受下面的对外动作开关控制，也都默认关。",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StackLayerView, StackPolicyView, StackView } from "../../shared/stacks";
-import { layerActions, lastRunLines, parseStackInput, stackKeyKind, stackNoticeText, stackOverridesFromDraft, stackShown } from "./stack-view";
+import { layerActions, lastRunLines, parseStackInput, stackAutoRebaseNote, stackEpicLines, stackKeyKind, stackNoticeText, stackOverridesFromDraft, stackShown } from "./stack-view";
 import { STRINGS } from "./strings";
 
 const layer = (id: number, state: StackLayerView["state"]): StackLayerView => ({
@@ -9,7 +9,7 @@ const layer = (id: number, state: StackLayerView["state"]): StackLayerView => ({
 });
 const stack = (layers: StackLayerView[]): StackView => ({
   id: 1, name: "s", repoPath: "/r", repoSlug: null, trunk: "main", featureId: null, source: "mcp", mergeMethod: null,
-  autoRebase: true, overviewUrl: null, layers, lastRun: null, restorable: null,
+  autoRebase: true, autoRebaseBy: "policy", overviewUrl: null, layers, lastRun: null, restorable: null,
 });
 
 describe("stack view (workstream K)", () => {
@@ -26,12 +26,38 @@ describe("stack view (workstream K)", () => {
       expect(stackNoticeText({ reason: "behind", stackId: 1, stackName: "pay", branch: "b1", commits: 25, days: 4 }, S)).toContain("25");
       expect(stackNoticeText({ reason: "draft_stale", stackId: 1, stackName: "pay", branch: "b3", days: 15 }, S)).toContain("b3");
       expect(stackNoticeText({ reason: "stuck", stackId: 1, stackName: "pay", branch: "b1", detail: "gate held" }, S)).toContain("gate held");
-      const lines = lastRunLines({ id: 1, trigger: "bottom_merged", mode: "update_refs", outcome: "conflict", reason: null, hasBackup: true, conflict: { branch: "b2", files: ["x"] }, unpushed: ["b3"], startedAt: 0, finishedAt: 1 }, S, 0);
+      const lines = lastRunLines({ id: 1, trigger: "bottom_merged", mode: "update_refs", outcome: "conflict", reason: null, hasBackup: true, conflict: { branch: "b2", files: ["x"] }, unpushed: ["b3"], confirm: null, startedAt: 0, finishedAt: 1 }, S, 0);
       expect(lines).toHaveLength(3);
       expect(lines[1]).toContain("b2");
       expect(lines[2]).toContain("b3");
     }
     expect(lastRunLines(null, STRINGS.zh, 0)).toEqual([]);
+  });
+
+  it("says why a run waits for a confirm, and who turned autoRebase on or off (BTL-278)", () => {
+    for (const S of Object.values(STRINGS)) {
+      const ready = stackNoticeText({ reason: "confirm", stackId: 1, stackName: "pay", branch: "b1", branches: ["b1", "b2"], detail: "ready_pr", prNumber: 7 }, S);
+      expect(ready).toContain("pay");
+      expect(ready).toContain("b1, b2");
+      expect(ready).toContain(S.sk.rebaseNow);
+      const handed = stackNoticeText({ reason: "confirm", stackId: 1, stackName: "pay", branch: "b2", branches: ["b2"], detail: "handoff" }, S);
+      expect(handed).not.toBe(ready.replace("b1, b2", "b2"));
+      const lines = lastRunLines({ id: 1, trigger: "main_updated", mode: "update_refs", outcome: "needs_confirm", reason: "ready_pr: b1", hasBackup: false, conflict: null, unpushed: [], confirm: { why: "ready_pr", branches: ["b1"] }, startedAt: 0, finishedAt: 1 }, S, 0);
+      expect(lines[0]).toContain(S.sk.outcome.needs_confirm);
+      expect(lines[1]).toContain("b1");
+      const s = stack([layer(1, "ready")]);
+      expect(stackAutoRebaseNote(s, S)).toBeNull();
+      expect(stackAutoRebaseNote({ ...s, autoRebase: false }, S)).toBe(S.sk.autoRebaseOff);
+      expect(stackAutoRebaseNote({ ...s, autoRebaseBy: "epic" }, S)).toBe(S.sk.autoRebaseEpicOn);
+      expect(stackAutoRebaseNote({ ...s, autoRebase: false, autoRebaseBy: "epic" }, S)).toBe(S.sk.autoRebaseEpicOff);
+      expect(stackAutoRebaseNote({ ...s, autoRebase: false, autoRebaseBy: "explicit_off" }, S)).toBe(S.sk.autoRebaseExplicitOff);
+      expect(stackEpicLines({ on: [], ignored: [] }, S)).toEqual([]);
+      const epic = stackEpicLines({ on: ["pay"], ignored: ["ship"] }, S);
+      expect(epic).toHaveLength(2);
+      expect(epic[0]).toContain("pay");
+      expect(epic[1]).toContain("ship");
+    }
+    expect(STRINGS.zh.sk.autoRebaseEpicOn).toContain("因为 epic 是半自动，已开着");
   });
 
   it("parses policy input by key kind", () => {

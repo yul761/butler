@@ -76,7 +76,8 @@ export class StackControl {
     const s = await this.one(scope, req.stack);
     if (typeof s === "string") return fail(s);
     if (req.op === "stack_rebase") {
-      const r = await this.d.service.rebaseNow(s.id);
+      // 总控调的就是总控确认的（BTL-278），和用户在界面上点的分开记
+      const r = await this.d.service.rebaseNow(s.id, scope.kind === "feature" ? "coordinator" : "shipherd");
       if (!r.ok) return fail(r.message);
       return ok({ result: r.message ?? null, stack: await this.after(s.id) });
     }

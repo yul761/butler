@@ -35,7 +35,7 @@ const ZH = {
     `git rebase --onto ${p.onto} ${p.upstream}\n\n` +
     `解决冲突（两边的意图都要保留），git rebase --continue，` +
     (p.push ? "然后 git push --force-with-lease。" : "先不要推（Shipherd 的「强推」开关关着，推不推由用户决定）。") +
-    `rerere 已经打开，你解过的冲突 Shipherd 下次会自动套用。` +
+    `Shipherd 不会自动套用 rerere 记下的解法，冲突每次都交给你解。你不 rebase，Shipherd 也不会替你改这个分支；决定不 rebase 就说一声原因。` +
     (p.above.length ? `上面的层（${p.above.join("、")}）不要自己动，Shipherd 会接着处理。` : "") +
     `做完以后结束这一轮。`,
   errors: {
@@ -92,7 +92,7 @@ const EN: StackTexts = {
     `git rebase --onto ${p.onto} ${p.upstream}\n\n` +
     `Resolve the conflict (keep the intent of both sides) and git rebase --continue` +
     (p.push ? ", then git push --force-with-lease." : ". Don't push (Shipherd's Force push switch is off; pushing is up to the user).") +
-    ` rerere is on, so Shipherd reuses your resolution next time.` +
+    ` Shipherd never reuses a resolution rerere remembers; every conflict comes to you. Until you rebase, Shipherd won't touch this branch. If you decide not to rebase, say why.` +
     (p.above.length ? ` Leave the layers above (${p.above.join(", ")}) alone; Shipherd handles them next.` : "") +
     ` End the turn when done.`,
   errors: {

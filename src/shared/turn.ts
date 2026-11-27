@@ -150,7 +150,7 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "comments_waiting":
       return true;
     case "cost": return n.breaker.state === "paused";
-    case "stack": return n.stack.reason === "conflict" || n.stack.reason === "stuck";
+    case "stack": return n.stack.reason === "conflict" || n.stack.reason === "stuck" || n.stack.reason === "confirm";
     case "intake": return INTAKE_DECISION_STATES.includes(n.item.state);
     case "lessons_paused":
     case "lessons_failing":

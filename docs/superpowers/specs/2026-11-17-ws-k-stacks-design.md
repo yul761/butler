@@ -63,10 +63,10 @@
 - 在 `<SHIPHERD_HOME>/stack-work/<stackId>-<runId>` 用 `git worktree add --detach` 建临时 worktree；给每层建临时分支 `refs/heads/shipherd-stack/<runId>/<position>` 指向它现在的顶端。`finally` 里删临时分支、`worktree remove --force`、`worktree prune`。
 - 用户的 git hook 不在这里跑（`-c core.hooksPath=<空目录>`）：这是机械的重放，内容已经过了 session 那边的检查；husky 这类 post-checkout hook 在临时目录里装依赖只会拖慢。
 - git ≥2.38：一段线性的层（下一层顶端是上一层顶端的祖先）用一条命令：
-  `git -c rerere.enabled=true -c rerere.autoUpdate=true rebase -i --update-refs --empty=drop --no-autosquash --onto <新父> <起点> shipherd-stack/<runId>/<最高层>`。
+  `git -c rerere.enabled=false rebase -i --update-refs --empty=drop --no-autosquash --onto <新父> <起点> shipherd-stack/<runId>/<最高层>`。
   `-i` 只是为了过一道 sequence editor：Shipherd 自己的小脚本（`process.execPath` + `ELECTRON_RUN_AS_NODE=1`，和 MCP 服务一样的跑法，两个平台都行）把 todo 里不是临时分支的 `update-ref` 行删掉，其他原样保留（git 自己的 pick 顺序、跳过已在上游的提交都不变）。中间某层不在下一层顶端之上（链断了）就分成几段，每段一条命令，下一段的新父是上一段 rebase 后的对应层。
 - git <2.38：每层一条 `git rebase --onto <新父> <起点> shipherd-stack/<runId>/<position>`。
-- 停下来时先看 rerere 是不是已经解完（没有未合并的文件）：解完就 `rebase --continue`（`GIT_EDITOR=true`），最多 50 次；还有未合并的文件就是冲突：记下 `REBASE_HEAD` 属于哪一层、冲突文件，`rebase --abort`，真分支一个都没动。
+- 停下来就是冲突（BTL-278 起不再靠 rerere 自动 continue）：记下 `REBASE_HEAD` 属于哪一层、冲突文件，`rebase --abort`，真分支一个都没动。
 - 合并方式（第 4 节）只决定新栈底的起点：merge commit 走普通 rebase（`git rebase <trunk>` 的语义，起点是 merge-base）；squash 走 `--onto <trunk> <旧栈底顶端>`。
 
 ### 3.3 版本检测
@@ -104,13 +104,16 @@
 
 ### 3.7 rerere
 
-`autoRebase` 打开的仓库，K 第一次跑时 `git config --local rerere.enabled true`（写日志），这样 session 自己解冲突时 rerere 会记下，下次 K 碰到同样的冲突能自动解。K 自己的命令总带 `-c rerere.enabled=true`。
+（BTL-278 改了）K 不再替仓库打开 rerere，自己的命令总带 `-c rerere.enabled=false`，停下来就是冲突，不自动 continue。rr-cache 在共用的 git 目录里，所有 worktree 共用一份；session 解过又放弃的解法也在里面，不经人看就套用、force push 出去，就出了 BTL-278 那次事故。用户自己开的 rerere 不动，session 在自己的 worktree 里照样能用。
+
+推送前还要过几道（BTL-278）：结果里新多出冲突标记就算失败；自动触发的 run 要改写开着、可以 review 的 PR，或者冲突已经交给 session 的层，结果记成 `needs_confirm`，本地和远端都不动，等人点「马上 rebase」。冲突落在 ready 层上，或者它下面这次真要改写的层里有 ready 的，自动 run 同样记 `needs_confirm`，不交给 session；下面没动的 ready 层不算（引擎在冲突结果里带回下面各层的新顶端）。失败的 run 过一阵再试：第一次等 1 小时，同样的输入、同样的原因连着失败，每次翻倍，最多一天。
 
 ### 3.8 冲突
 
-- 冲突发生在哪一层就送给那一层的 session（`stacks.conflictToSession`，默认开）：过 DeliveryGuard，用 `pty.deliver`。正文写清楚分支、冲突文件、要在自己 worktree 里执行的那条 `git rebase --onto <新父> <起点>`（rerere 已开），解完 push；K 下一轮接着处理上面的层。
+- 冲突发生在哪一层就送给那一层的 session（`stacks.conflictToSession`，默认开）：过 DeliveryGuard，用 `pty.deliver`。正文写清楚分支、冲突文件、要在自己 worktree 里执行的那条 `git rebase --onto <新父> <起点>`，解完 push；K 下一轮接着处理上面的层。冲突交出去以后，session 自己动这一层（和它上面的层）不算「有新提交」，自动 run 也不改写它们；直到这一层的顶端包含了新父，或者 trunk、父层真的变了。
 - session 没开、递不进去（过了 30 分钟还没递出去），或者 `conflictToSession` 关着：「现在」页出一条栈冲突提醒，可以打开对应 ticket。
-- 同一个冲突（同一层、同一组新父和起点）只送一次。
+- 同一个冲突（同一层、同一组新父和起点、同样的冲突文件和新父里这些文件的内容）只送一次，也不再每分钟重跑；trunk 或父层真的变了才重试。
+- 补递的冲突所属的 run 已经被新的 run 取代：不送；送的过程中被取代就撤回刚排进去的那条。新的那次也是这一层的冲突、已经送过，按它重送（同一个 ref 的消息刚被撤掉）。
 
 ## 4. 栈底合并
 

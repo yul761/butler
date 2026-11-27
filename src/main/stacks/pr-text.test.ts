@@ -3,6 +3,18 @@ import { parseCreatedUrl } from "./gh-stack";
 import { bottomBody, dependsLine, draftBody, draftTitle, stackGraph, stripPrefix, T, withDependsLine, withoutDependsLine } from "./pr-text";
 
 describe("stack PR text", () => {
+  it("the conflict hand-off says Shipherd won't reuse a rerere resolution, in both languages (BTL-278)", () => {
+    const p = { branch: "b", files: ["b.txt"], onto: "1111111", upstream: "2222222", above: ["c"], push: true };
+    const zh = T("zh").conflict(p);
+    const en = T("en").conflict(p);
+    expect(zh).toContain("不会自动套用 rerere 记下的解法");
+    expect(zh).not.toContain("自动套用。");
+    expect(en).toContain("never reuses a resolution rerere remembers");
+    expect(en).not.toContain("reuses your resolution next time");
+    expect(zh).toContain("不 rebase");
+    expect(en).toContain("not to rebase");
+  });
+
   it("prefixes draft titles in both languages and strips either prefix", () => {
     expect(draftTitle(3, 6, "Add cache", "zh")).toBe("[stack 3/6 · 勿 review] Add cache");
     expect(draftTitle(3, 6, "[stack 2/6 · 勿 review] Add cache", "en")).toBe("[stack 3/6 · do not review] Add cache");

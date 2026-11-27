@@ -559,6 +559,7 @@ export const EN: UiStrings = {
       commentsUndelivered: (n: number) => `${n} comments not delivered`,
       stackConflict: "A stack conflict wasn't handed to a session",
       stackStuck: "The stack rebase is stuck",
+      stackConfirm: "A stack rebase needs your OK",
       intake: "Auto-intake needs your decision",
       other: "Shipherd needs a click",
     },
@@ -1932,13 +1933,22 @@ export const EN: UiStrings = {
     noUpdateRefs: "This computer's git has no --update-refs (it needs 2.38 or later), so Shipherd rebases one layer at a time, which is slower.",
     repoTrunk: (repo: string, trunk: string) => `${repo} · trunk ${trunk}`,
     autoRebaseOff: "\"Let Shipherd rebase stacks\" is off for this repo: Shipherd only watches and does not change the branches.",
+    autoRebaseEpicOn: "Auto rebase: on, because the epic is semi-automatic.",
+    autoRebaseEpicOff: "Auto rebase: off, because the epic is manual. Shipherd only watches and does not change the branches.",
+    autoRebaseExplicitOff: "The epic is semi-automatic, but this repo turned auto rebase off. It stays off. Shipherd only watches and does not change the branches.",
+    epicOn: (names: string) => `Auto rebase is on for these stacks because their epic is semi-automatic: ${names}`,
+    epicIgnored: (names: string) => `These stacks' epic is semi-automatic, but auto rebase is turned off here, so it stays off: ${names}`,
+    confirmLine: (why: "ready_pr" | "handoff", branches: string) =>
+      why === "ready_pr"
+        ? `${branches} has a PR under review, so Shipherd didn't rewrite it. Click "Rebase now" to rewrite it.`
+        : `${branches} belong to a session for now (the conflict on the lowest one isn't solved yet), so Shipherd left them alone. Click "Rebase now" to rewrite them.`,
     source: { mcp: "set by a coordinator", ticket: "made with stack_on", detected: "detected" } as Record<StackSource, string>,
     state: { branch_only: "branch", draft: "draft PR", ready: "PR", merged: "merged" } as Record<StackLayerState, string>,
     bottom: "bottom",
     behind: (count: number) => `${n(count, "commit")} behind trunk`,
     unpushed: "rewritten, not pushed yet",
     lastRun: (outcome: string, trigger: string, when: string) => `Latest: ${outcome} (${trigger}, ${when})`,
-    outcome: { rebased: "rebased", noop: "nothing to rebase", conflict: "conflict", deferred: "deferred", failed: "failed", rolled_back: "rolled back", restored: "restored from backup" } as Record<StackRunOutcome, string>,
+    outcome: { rebased: "rebased", noop: "nothing to rebase", conflict: "conflict", deferred: "deferred", failed: "failed", rolled_back: "rolled back", restored: "restored from backup", needs_confirm: "waiting for your OK" } as Record<StackRunOutcome, string>,
     trigger: { main_updated: "trunk moved", bottom_merged: "bottom merged", layer_commits: "new commits on a layer", daily: "daily", manual: "manual", autosquash: "autosquash", restore: "restore" } as Record<StackTrigger, string>,
     conflict: (branch: string, files: string) => `Conflict on ${branch}: ${files}`,
     unpushedList: (branches: string) => `"Push branches" is off, not pushed: ${branches}`,
@@ -1955,6 +1965,10 @@ export const EN: UiStrings = {
       draft_stale: (stack: string, branch: string, days: number) => `${branch} in stack "${stack}" has been a draft for ${n(days, "day")}; turn it back into a branch if it no longer needs CI`,
       behind: (stack: string, commits: number, days: number) => `The bottom of stack "${stack}" is ${n(commits, "commit")} behind trunk (the oldest from ${n(days, "day")} ago)`,
       stuck: (stack: string, detail: string) => `Rebasing stack "${stack}" is stuck: ${detail}`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff") =>
+        why === "ready_pr"
+          ? `Stack "${stack}" needs a rebase, but ${branches} has a PR under review. Shipherd left it alone. Click "Rebase now" if it's OK to rewrite.`
+          : `Stack "${stack}" needs a rebase, but ${branches} belong to a session for now: it still has the conflict on the lowest one. Shipherd left them alone. Click "Rebase now" if it's OK to rewrite.`,
     },
     noticeOpen: "View stacks",
     settingsIntro: "Policy for stacked PRs, in three layers: global → product → repo, each overriding the one above. \"Let Shipherd rebase stacks\" is off by default; only with it on does Shipherd change the local branches of stacks in that repo. Pushing, opening PRs and posting the overview issue also need the outward-action switches below, all off by default.",

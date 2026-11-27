@@ -172,6 +172,10 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     expect(r.onto).not.toBe(tips.b);
     expect(await isAncestor(repo, trunk, r.onto)).toBe(true);
     expect(g(repo, "rev-list", "--count", `${trunk}..${r.onto}`)).toBe("4");
+    // 冲突那层下面的 a、b 这次都挪到了新 main 上：报出它们的新顶端，b 的就是 onto
+    expect(r.below.map((t) => t.branch)).toEqual(["a", "b"]);
+    expect(r.below.every((t) => t.newTip !== t.oldTip)).toBe(true);
+    expect(r.below[1]!.newTip).toBe(r.onto);
     // session 照提示在自己的 worktree 里做
     const resolved = resolveAsSession(repo, "c", r.onto, r.upstream, "c.txt", "c1\n");
     expect(g(repo, "rev-list", "--count", `${r.onto}..${resolved}`)).toBe("2");
@@ -273,25 +277,51 @@ describe("runEngine special cases", () => {
     expect(g(repo, "log", "--format=%s", `${tips.a}..${g2.tips[1]!.newTip}`)).toBe("b two\nb one");
   });
 
-  it("replays a resolution rerere already knows", async () => {
+  it("does not reuse a resolution rerere remembers, even one the session gave up on (BTL-278)", async () => {
     const { repo, tips } = fourLayers();
     const trunk = commit(repo, "c.txt", "main's c\n", "main edits c");
-    const rr = (...a: string[]) => {
-      try {
-        return g(repo, "-c", "rerere.enabled=true", ...a);
-      } catch {
-        return "";
-      }
-    };
-    // 用户以前手动解过一次同样的冲突
-    rr("checkout", "-q", "-b", "practice", tips.c!);
-    rr("rebase", "-q", trunk);
+    // rr-cache 在共用的 git 目录里，所有 worktree 共用：session 在自己的 worktree 里解过、又放弃的解法也记在这里
+    g(repo, "config", "rerere.enabled", "true");
+    g(repo, "config", "rerere.autoUpdate", "true");
+    g(repo, "checkout", "-q", "-b", "practice", tips.c!);
+    try {
+      g(repo, "rebase", "-q", trunk);
+    } catch {
+      // 冲突
+    }
+    // 「解法」：第二个提交接着它能干净地叠上去（只有第一个提交冲突）
     writeFileSync(join(repo, "c.txt"), "c1\n");
     g(repo, "add", "c.txt");
-    execFileSync("git", ["-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", "--continue"], { cwd: repo, stdio: "ignore", env: { ...process.env, GIT_EDITOR: "true" } });
+    execFileSync("git", ["-c", "core.editor=true", "rebase", "--continue"], { cwd: repo, stdio: "ignore", env: { ...process.env, GIT_EDITOR: "true" } });
     g(repo, "checkout", "-q", "main");
     g(repo, "branch", "-D", "practice");
     const r = await runEngine(input(repo, { layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
-    expect(r.kind).toBe("rebased");
+    expect(r).toMatchObject({ kind: "conflict", branch: "c", files: ["c.txt"] });
+    expect(revs(repo, ["a", "b", "c", "d"])).toEqual(["a", "b", "c", "d"].map((b) => tips[b]));
+  });
+
+  it("refuses a result that gained conflict markers, but not markers a layer already had (BTL-278)", async () => {
+    const { repo, tips } = fourLayers();
+    // 一个「解决」冲突时把冲突标记留在文件里还报成功的合并驱动：结果里多出来的标记要拦下来
+    const driver = join(tempDir(), "sloppy-merge.sh");
+    writeFileSync(driver, `printf '<<<<<<< ours\\nx\\n=======\\ny\\n>>>>>>> theirs\\n' > "$1"\nexit 0\n`);
+    g(repo, "config", "merge.sloppy.driver", `sh '${driver.replace(/\\/g, "/")}' %A`);
+    writeFileSync(join(g(repo, "rev-parse", "--git-common-dir").replace(/^(?!\/|[A-Za-z]:)/, `${repo}/`), "info", "attributes"), "c.txt merge=sloppy\n");
+    const trunk = commit(repo, "c.txt", "main's c\n", "main edits c");
+    // 用户开了颜色：git grep 的输出带颜色码也要认得出来
+    g(repo, "config", "color.ui", "always");
+    const r = await runEngine(input(repo, { layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
+    expect(r.kind).toBe("failed");
+    if (r.kind === "failed") expect(r.reason).toMatch(/conflict markers.*c\.txt/);
+    expect(revs(repo, ["a", "b", "c", "d"])).toEqual(["a", "b", "c", "d"].map((b) => tips[b]));
+
+    // 标记本来就在层里（比如测试夹具）：照常 rebase
+    const { repo: repo2 } = fourLayers();
+    g(repo2, "checkout", "-q", "b");
+    commit(repo2, "fixture.txt", "<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n", "b adds a fixture");
+    g(repo2, "checkout", "-q", "main");
+    const trunk2 = commit(repo2, "z.txt", "z\n", "main adds z");
+    const r2 = await runEngine(input(repo2, { layers: layers(repo2, ["a", "b", "c", "d"]), trunk: trunk2 }));
+    expect(r2.kind).toBe("rebased");
   });
 });

@@ -18,7 +18,7 @@ function shipherdSentence(n: NowNotice, t: UiStrings["turn"]["shipherd"]): strin
     case "comments_waiting":
       return n.waiting.reason === "review" ? t.commentsReview(n.waiting.count) : t.commentsUndelivered(n.waiting.count);
     case "stack":
-      return n.stack.reason === "stuck" ? t.stackStuck : t.stackConflict;
+      return n.stack.reason === "stuck" ? t.stackStuck : n.stack.reason === "confirm" ? t.stackConfirm : t.stackConflict;
     default:
       return t.other;
   }

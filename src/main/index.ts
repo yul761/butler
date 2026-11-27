@@ -2628,6 +2628,7 @@ async function bootstrap(): Promise<void> {
       mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: `stack:${to.ticketKey}:${to.branch}` });
       return true;
     },
+    withdraw: (to) => mailbox.withdraw(`stack:${to.ticketKey}:${to.branch}`),
     record: recordEvent,
     onChange: () => notify(),
     closedByShipherd: (url) => ticketPrs.markShipherdClosed(url, Date.now()),
@@ -3591,7 +3592,8 @@ async function bootstrap(): Promise<void> {
     policySet: (scope: LoopScope, overrides: LoopPolicyOverrides) => loopPolicies.setLayer(scope, overrides),
   };
   const stackPolicyIo = {
-    policyView: (scope: PolicyScope) => stackPolicy.view(scope),
+    // BTL-278：被 epic 档位盖过的栈在设置页说出来
+    policyView: (scope: PolicyScope) => ({ ...stackPolicy.view(scope), epic: stackService.epicNote(scope) }),
     policySet: (scope: PolicyScope, overrides: Record<string, unknown>): StackPolicySetResult => {
       try {
         stackPolicy.setLayer(scope, overrides);

@@ -61,7 +61,21 @@ export interface RunLayerDetail {
 
 export interface RunDetail {
   layers?: RunLayerDetail[];
-  conflict?: { branch: string; files: string[]; commit: string | null; onto: string; upstream: string };
+  /** key：交给 session 后记到层的 conflictKey 上的值；ident：同一个冲突的判断（冲突文件和它们在 onto 里的内容）。 */
+  conflict?: { branch: string; files: string[]; commit: string | null; onto: string; upstream: string; ident?: string; key?: string };
+  /**
+   * 引擎跑出这次结果时的输入（BTL-278）：trunk 和各层顶端（有交给 session 的冲突时只算它下面的层）。
+   * 上一次没落地（冲突、失败、要确认、回滚）、输入又没变时不再跑。
+   */
+  inputs?: string;
+  /** needs_confirm：为什么、哪几层。 */
+  confirm?: { why: "ready_pr" | "handoff"; branches: string[] };
+  /** needs_confirm：这次是 autosquash（确认时也 autosquash）。 */
+  autosquash?: boolean;
+  /** 手动 run：谁点的（BTL-278）。 */
+  actor?: "user" | "coordinator" | "shipherd";
+  /** 手动 run 确认的是哪一次 needs_confirm。 */
+  confirms?: number;
   mergeMethod?: "squash" | "merge";
   pushed?: string[];
   unpushed?: string[];

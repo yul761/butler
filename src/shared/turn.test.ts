@@ -59,6 +59,8 @@ describe("noticeNeedsYou", () => {
     const stack = (reason: string) => ({ kind: "stack", stack: { reason }, target: null }) as unknown as NowNotice;
     expect(noticeNeedsYou(stack("conflict"))).toBe(true);
     expect(noticeNeedsYou(stack("behind"))).toBe(false);
+    // BTL-278：自动 rebase 要改写正在 review 的 PR，等你点「马上 rebase」
+    expect(noticeNeedsYou(stack("confirm"))).toBe(true);
     const intake = (state: string) => ({ kind: "intake", item: { state } }) as unknown as NowNotice;
     expect(noticeNeedsYou(intake("needs_decision"))).toBe(true);
     expect(noticeNeedsYou(intake("queued"))).toBe(false);

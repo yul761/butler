@@ -11,7 +11,7 @@ export const STACK_OVERVIEWS = ["off", "issue"] as const;
 export type StackOverview = (typeof STACK_OVERVIEWS)[number];
 
 export interface StackPolicy {
-  /** 允许 Shipherd 改这个仓库里栈的本地分支（rebase、autosquash、开 rerere）。总开关，默认关。 */
+  /** 允许 Shipherd 改这个仓库里栈的本地分支（rebase、autosquash）。总开关，默认关。 */
   autoRebase: boolean;
   /** 栈底合并后怎么接：auto 按合并事件检测。 */
   mergeMethod: StackMergeMethod;
@@ -152,6 +152,8 @@ export interface StackPolicyKeyView {
 export interface StackPolicyView {
   scope: PolicyScope;
   keys: StackPolicyKeyView[];
+  /** 这个范围里 autoRebase 被 epic 档位盖过的栈（BTL-278；index.ts 从栈服务补上）。 */
+  epic?: StackEpicNote;
 }
 
 export interface StackPolicyLayer {
@@ -174,7 +176,18 @@ export const STACK_TRIGGERS = ["main_updated", "bottom_merged", "layer_commits",
 export type StackTrigger = (typeof STACK_TRIGGERS)[number];
 
 export type StackRunMode = "update_refs" | "per_layer";
-export type StackRunOutcome = "rebased" | "noop" | "conflict" | "deferred" | "failed" | "rolled_back" | "restored";
+/** needs_confirm（BTL-278）：自动跑出来要改写正在 review 的 PR、或者交给 session 的冲突层，什么都没落地，等人点「马上 rebase」。 */
+export type StackRunOutcome = "rebased" | "noop" | "conflict" | "deferred" | "failed" | "rolled_back" | "restored" | "needs_confirm";
+
+/** 为什么要人确认：ready_pr = 要改写开着、可以 review 的 PR；handoff = 要改写冲突已经交给 session 的层（或它上面的层）。 */
+export type StackConfirmWhy = "ready_pr" | "handoff";
+
+/** 谁点的「马上 rebase」（BTL-278）：user = 界面上；coordinator = epic 总控调 stack_rebase；shipherd = Shipherd 总控调的。 */
+export type StackActor = "user" | "coordinator" | "shipherd";
+
+export function isSettledOutcome(o: StackRunOutcome): boolean {
+  return o === "rebased" || o === "noop" || o === "restored";
+}
 
 export interface StackRunView {
   id: number;
@@ -188,6 +201,8 @@ export interface StackRunView {
   conflict: { branch: string; files: string[] } | null;
   /** 推送：开关关着没推的分支。 */
   unpushed: string[];
+  /** needs_confirm：为什么、哪几层。 */
+  confirm: { why: StackConfirmWhy; branches: string[] } | null;
   startedAt: number;
   finishedAt: number | null;
 }
@@ -222,11 +237,24 @@ export interface StackView {
   mergeMethod: "squash" | "merge" | null;
   /** 生效的策略里最常看的几个。 */
   autoRebase: boolean;
+  /**
+   * autoRebase 是谁定的（BTL-278）：policy = 三层策略；epic = 层所在的 epic 选了档位（半自动打开、手动关掉）；
+   * explicit_off = epic 是半自动，但仓库或产品层明确关了，按关。
+   */
+  autoRebaseBy: StackAutoRebaseBy;
   overviewUrl: string | null;
   layers: StackLayerView[];
   lastRun: StackRunView | null;
   /** 最近一次留了备份的 run（「从备份恢复」用）。 */
   restorable: StackRunView | null;
+}
+
+export type StackAutoRebaseBy = "policy" | "epic" | "explicit_off";
+
+/** 设置页：这个范围里 autoRebase 被 epic 档位打开的栈，和 epic 想开、被明确关掉的栈（名字）。 */
+export interface StackEpicNote {
+  on: string[];
+  ignored: string[];
 }
 
 export interface StacksFilter {
@@ -240,7 +268,7 @@ export interface StacksView {
 }
 
 /** 栈的提醒（「现在」页）。 */
-export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck";
+export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm";
 
 export interface StackNoticeInfo {
   reason: StackNoticeReason;
@@ -249,8 +277,10 @@ export interface StackNoticeInfo {
   branch: string;
   /** 这一层的 ticket（提醒上「打开 ticket」用）。 */
   ticketKey?: string | null;
-  /** conflict：冲突文件；stuck：最近的原因。 */
+  /** conflict：冲突文件；stuck：最近的原因；confirm：ready_pr 或 handoff。 */
   files?: string[];
+  /** confirm：等确认的几层。 */
+  branches?: string[];
   detail?: string | null;
   /** draft_stale：已经多少天；behind：落后多少天。 */
   days?: number;
