@@ -1,7 +1,7 @@
 import { Terminal } from "@xterm/headless";
 
 /** 攒着没解析的输出超过这么多（字符）就不再留：下次有人看屏幕时用回放尾部（tail）重建（BTL-277）。 */
-export const SCREEN_PENDING_LIMIT = 256 * 1024;
+export const SCREEN_PENDING_LIMIT = 64 * 1024;
 
 type Step = { data: string } | { cols: number; rows: number };
 

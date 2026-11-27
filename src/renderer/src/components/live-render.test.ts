@@ -127,4 +127,16 @@ describe("live store + memo: only what changed re-renders (BTL-277)", () => {
     expect(count("TicketButton")).toBe(0);
     expect(container.querySelector(".sidebar")?.textContent).toContain("改名了");
   });
+
+  it("a nested field changing (one ticket's title inside a feature) still reaches the page, and only that ticket re-renders", async () => {
+    const f = feature(2, "idle");
+    (f.tickets[0] as { title: string }).title = "嵌套字段改了";
+    data.features[1] = f;
+    const untouched = store.getState().features[0];
+    await act(async () => void (await store.refresh()));
+    expect(store.getState().features[1].tickets[0].title).toBe("嵌套字段改了");
+    expect(store.getState().features[0]).toBe(untouched);
+    expect(count("TicketButton")).toBe(1);
+    expect(container.querySelector(".sidebar")?.textContent).toContain("嵌套字段改了");
+  });
 });
