@@ -41,6 +41,15 @@ export function closeOutcome(r: CloseLeftoversResult): CloseOutcome {
 }
 
 /**
+ * 关闭框提交时要关哪些 PR：只关勾了的、而且是这次列出来能关的。一个都没勾就不要求关 PR（BTL-270 审查）：
+ * 关不了的那些预览里已经写明了原因，用户看过了，提交后不再当作「没处理完的」列一遍；只是没勾能关的，也不算没处理完。
+ */
+export function closePrsRequest(preview: ClosePreview | null, picked: ReadonlySet<string>): { closePrs: boolean; prUrls: string[] } {
+  const prUrls = (preview?.closable ?? []).map((p) => p.url).filter((u) => picked.has(u));
+  return { closePrs: prUrls.length > 0, prUrls };
+}
+
+/**
  * 重试只试上次没处理完、而且再试可能成的：gh 失败的、开关关着的 PR，没结束的 session。关不了的那几类（不是这个 ticket 的分支、
  * 别的 ticket 也在用、读不到）再试也一样，不送（BTL-270 审查）。都是这种的时候是 null，重试按钮不可点。
  */

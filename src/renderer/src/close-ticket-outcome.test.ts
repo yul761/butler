@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeOutcome, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
+import { closeOutcome, closePrsRequest, retryRequest, type CloseLeftoversResult } from "./close-ticket-outcome";
 
 const base: CloseLeftoversResult = { closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false };
 
@@ -39,5 +39,24 @@ describe("closeOutcome (BTL-270 close dialog)", () => {
     // 都是关不了的：没东西可重试。
     expect(retryRequest({ prErrors: prErrors.slice(2), sessionErrors: [] })).toBeNull();
     expect(retryRequest({ prErrors: prErrors.slice(2), sessionErrors: [{ id: "s" }] })).toEqual({ prUrls: [], sessionIds: ["s"] });
+  });
+});
+
+// BTL-270 审查（建议 4）：只有关不了的 PR、什么都没勾时，提交后不再把它们当作没处理完的再列一遍。
+describe("closePrsRequest (what the close dialog asks to close)", () => {
+  const preview = {
+    closable: [{ url: "https://github.com/o/r/pull/1", number: 1 }, { url: "https://github.com/o/r/pull/2", number: 2 }],
+    unclosable: [{ url: "https://github.com/o/r/pull/9", error: "e", kind: "not_own_branch" as const }],
+  };
+  it("asks to close only the ticked PRs that the preview listed as closable", () => {
+    expect(closePrsRequest(preview, new Set(["https://github.com/o/r/pull/2", "https://github.com/o/r/pull/9", "https://github.com/o/r/pull/5"])))
+      .toEqual({ closePrs: true, prUrls: ["https://github.com/o/r/pull/2"] });
+  });
+  it("with nothing ticked asks to close no PR, so PRs it can't close are not listed again as leftovers", () => {
+    expect(closePrsRequest({ closable: [], unclosable: preview.unclosable }, new Set())).toEqual({ closePrs: false, prUrls: [] });
+    expect(closePrsRequest(preview, new Set())).toEqual({ closePrs: false, prUrls: [] });
+    expect(closePrsRequest(null, new Set())).toEqual({ closePrs: false, prUrls: [] });
+    // 不要求关 PR 时结果里没有 PR 的错误：直接算完成。
+    expect(closeOutcome({ closedPrs: [], prErrors: [], endedSessions: [], sessionErrors: [], reopenedMeanwhile: false })).toEqual({ done: true, reopenedMeanwhile: false });
   });
 });

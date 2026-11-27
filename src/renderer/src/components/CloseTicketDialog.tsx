@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { REASON_LIMIT } from "../../../shared/control";
 import type { Ticket } from "../../../shared/types";
 import { api } from "../api";
-import { closeOutcome, retryRequest, type CloseLeftoversResult, type ClosePreview, type ClosePrError } from "../close-ticket-outcome";
+import { closeOutcome, closePrsRequest, retryRequest, type CloseLeftoversResult, type ClosePreview, type ClosePrError } from "../close-ticket-outcome";
 import { S } from "../strings";
 
 type Leftovers = { prErrors: ClosePrError[]; sessionErrors: { id: string; error: string }[] };
@@ -83,10 +83,7 @@ export function CloseTicketDialog({ ticket, onClose, onNotice }: { ticket: Ticke
   function submit(e: FormEvent) {
     e.preventDefault();
     if (empty || busy || tooLong) return;
-    // 只关勾了的、而且是这次列出来能关的。
-    const prUrls = (preview?.closable ?? []).map((p) => p.url).filter((u) => picked.has(u));
-    // 关不了的 PR 在结果里照样列出来（它们还开着），所以列表里有东西就要 closePrs。
-    const closePrs = prUrls.length > 0 || (preview?.unclosable.length ?? 0) > 0;
+    const { closePrs, prUrls } = closePrsRequest(preview, picked);
     void run(() => api.closeTicket(ticket.key, { reason, closePrs, endSessions, prUrls }));
   }
 
