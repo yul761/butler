@@ -669,9 +669,9 @@ describe("StackService triggers", () => {
     const x = g(w.hub, "rev-parse", "HEAD");
     w.pushMain("b.txt", "main's b\n");
     await w.svc.tick();
-    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm", detail: { confirm: { why: "remote_ahead", branches: ["b"] } } });
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm", detail: { confirm: { why: "remote_ahead", branches: ["b"], push: true, toSession: true } } });
     expect(w.delivered).toEqual([]);
-    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "confirm", detail: "remote_ahead", branches: ["b"] }));
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "confirm", detail: "remote_ahead", branches: ["b"], push: true, toSession: true }));
     // 用户确认：交给 session，但不给推送命令
     await w.svc.rebaseNow(id);
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "conflict" });
@@ -680,6 +680,19 @@ describe("StackService triggers", () => {
     expect(w.delivered[0]!.text).toContain(x.slice(0, 7));
     expect(w.delivered[0]!.text).toMatch(/先不要推/);
     expect(g(w.remote, "rev-parse", "b")).toBe(x);
+  });
+
+  it("the remote-ahead confirm records that pushing is off and conflicts stay with the user, for its text (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false, conflictToSession: false }, allow: (k) => k !== "force_push" });
+    const id = await defineAll(w);
+    g(w.hub, "fetch", "-q", "origin");
+    g(w.hub, "checkout", "-q", "-B", "b", "origin/b");
+    commit(w.hub, "suggestion.txt", "s\n", "Apply suggestion");
+    g(w.hub, "push", "-q", "origin", "b");
+    w.pushMain("b.txt", "main's b\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "needs_confirm", detail: { confirm: { why: "remote_ahead", push: false, toSession: false } } });
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "confirm", detail: "remote_ahead", push: false, toSession: false }));
   });
 
   it("a resent conflict keeps the lease it was handed with, even after the remote moved (BTL-278)", async () => {
@@ -1358,6 +1371,7 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
       await w.svc.tick();
     }
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringContaining("can't tell which remote c is pushed to") });
+    expect(w.repoT.lastRun(id)!.reason).toContain("git config branch.c.pushRemote <remote>");
     expect(starts).toBe(1);
     expect(w.tips(BRANCHES)).toEqual(local);
     // 用户说了推到哪里（branch.c.pushRemote）：一小时后重试时接着跑，c 推到 other 上
@@ -1414,6 +1428,24 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.external.filter((e) => e.kind === "branch_push")).toEqual([]);
     expect(g(w.remote, "for-each-ref", "refs/heads/b")).toBe("");
     expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+  });
+
+  it("pushes a never-pushed new bottom to the remote branch.<b>.pushRemote names to open its PR, not to the trunk's remote (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    const fork = join(tempDir(), "fork.git");
+    g(tempDir(), "init", "-q", "--bare", fork);
+    g(w.repo, "remote", "add", "fork", fork);
+    g(w.repo, "config", "branch.b.pushRemote", "fork");
+    g(w.remote, "branch", "-D", "b");
+    g(w.repo, "update-ref", "-d", "refs/remotes/origin/b");
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "bottom_merged", outcome: "rebased" });
+    expect(g(fork, "rev-parse", "b")).toBe(w.tip("b"));
+    expect(g(w.remote, "for-each-ref", "refs/heads/b")).toBe("");
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
   });
 
   it("pushes a layer to the remote of its PR's head repository, even when origin has a branch of that name too (BTL-278)", async () => {

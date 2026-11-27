@@ -862,7 +862,7 @@ export class StackService {
    */
   private async ambiguousPushRemote(stack: StackRow, changed: NewTip[]): Promise<string | null> {
     for (const t of changed) {
-      if ((await this.pushTarget(stack, t.branch)).ambiguous) return `can't tell which remote ${t.branch} is pushed to`;
+      if ((await this.pushTarget(stack, t.branch)).ambiguous) return `can't tell which remote ${t.branch} is pushed to (it is only on another remote); say which with git config branch.${t.branch}.pushRemote <remote>`;
     }
     return null;
   }
