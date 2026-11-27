@@ -67,6 +67,7 @@ import { UsageRepo } from "./db/usage-repo";
 import { execHeadlessJson } from "./handoff/headless-exec";
 import { headlessUsageRow } from "./usage/headless-usage";
 import { UsageScanner, usageScanMs } from "./usage/usage-scanner";
+import { TranscriptHub } from "./sessions/transcript-hub";
 import { HoldWatcher } from "./gate/hold-watcher";
 import { HOLD_CHECK_MS, locateRepo, MergeGate } from "./gate/merge-gate";
 import { BranchOwnership } from "./prwatch/branch-owners";
@@ -271,7 +272,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, prBatch, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { RepoRenamesRepo } from "./db/repo-renames-repo";
 import { RENAME_RETRY_MS, RepoRenames } from "./tickets/repo-renames";
 import { LessonsRepo } from "./db/lessons-repo";
@@ -793,8 +794,10 @@ async function bootstrap(): Promise<void> {
       logger("recording headless usage failed", e);
     }
   };
+  // 每个 transcript 只读一次、只解析一次，交给用量、活动、对话另存三个消费者（BTL-276）。
+  const transcriptHub = new TranscriptHub({ log: logger });
   const usageScanner = new UsageScanner({
-    repo: usageRepo,
+    repo: usageRepo, hub: transcriptHub,
     sessionIds: () => pty.openIds().map((t) => sessions.head(t)).filter((s) => s?.origin === "shipherd").map((s) => s!.id),
     transcriptFile: (id) => transcriptLocator.find(id),
     // 扫完一遍：成本熔断按新用量看一遍（工作流 L）。
@@ -1435,7 +1438,7 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   const activityMonitor = new ActivityMonitor({
-    sessions, tickets, features, pty,
+    sessions, tickets, features, pty, hub: transcriptHub,
     transcriptFile: (id) => transcriptLocator.find(id),
     // 子孙进程的 CPU 从和内存采样共用的进程表里读（BTL-275）：原来每个 session 每次探测各起一个 ps。
     procTree: (() => {
@@ -2035,7 +2038,7 @@ async function bootstrap(): Promise<void> {
   const convAppended = (root: string): void => safeSend(IPC.convAppended, root);
   const conv = new ConversationStore({ repo: convRepo, sessions, onAppended: convAppended, now: Date.now });
   const convIngester = new ConvIngester({
-    repo: convRepo, sessions, onAppended: convAppended, now: Date.now, log: (m) => logger(m),
+    repo: convRepo, sessions, onAppended: convAppended, now: Date.now, log: (m) => logger(m), hub: transcriptHub,
     transcriptOf: (id) => transcriptLocator.find(id),
     // 开着终端的 head；不是对话另存 target 的（没认领的外部 session）由 ConvIngester 自己跳过。
     openHeads: () => [...new Set(pty.openIds().map((t) => sessions.head(t)?.id).filter((id): id is string => !!id))],
@@ -2723,7 +2726,7 @@ async function bootstrap(): Promise<void> {
     home: homedir(),
     slugOf: (path) => repoIdentity.slugOf(path),
     linker: prLinker,
-    gh: { prStatus: prRead, prsForBranch, branchRuns, failedLogDetail, reviewComments, reviewAuthors },
+    gh: { prStatus: prRead, prsForBranch, branchRuns, failedLogDetail, reviewComments, reviewAuthors, prBatch },
     onSlugMoved: (from, to) => repoRenames.suggest(from, to),
     git: { firstCommitAt: git.firstCommitAt },
     stages: prStages,

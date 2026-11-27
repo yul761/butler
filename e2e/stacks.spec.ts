@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { S } from "../src/renderer/src/strings";
-import { completeWizard, expect, type FakeGhFixture, ghCalls, makeGitRepo, newButton, openAllWorkMore, openSettingsGroup, type PrViewFixture, terminalText, test, unsupportedGhCalls, openTicketTab } from "./fixtures";
+import { completeWizard, expect, type FakeGhFixture, ghCalls, ghReadPr, makeGitRepo, newButton, openAllWorkMore, openSettingsGroup, type PrViewFixture, terminalText, test, unsupportedGhCalls, openTicketTab } from "./fixtures";
 
 const git = (cwd: string, ...a: string[]): string =>
   execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "-c", "commit.gpgsign=false", ...a], { cwd, encoding: "utf8" }).trim();
@@ -100,7 +100,7 @@ test("when the bottom of a stack merges, the stack is rebased and the next layer
   await expect(stacks.getByTestId(`stack-layer-${B1}-state`)).toHaveText(S.sk.state.ready, { timeout: 60_000 });
   await expect(stacks.getByTestId(`stack-layer-${B2}-state`)).toHaveText(S.sk.state.draft);
   // PR watcher 读过一次开着的 #51，合并才是一次变化。
-  await expect.poll(() => ghCalls(s).some((a) => a[0] === "pr" && a[1] === "view" && a[2] === URL51), { timeout: 60_000 }).toBe(true);
+  await expect.poll(() => ghReadPr(s, URL51), { timeout: 60_000 }).toBe(true);
 
   // 在「GitHub」上 squash 合并 #51：另一个 clone 里把 E2E-1 squash 进 main，推回裸仓库。
   const hub = join(s.dir, "hub");

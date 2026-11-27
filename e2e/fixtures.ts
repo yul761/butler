@@ -71,6 +71,12 @@ export interface PrViewFixture extends BranchPrFixture {
   reviewRequests?: ({ login: string } | { slug: string })[];
   mergeable?: string;
   mergeStateStatus?: string;
+  /** 只给假 gh 的批量读（BTL-276）：列表实际有这么长（比给出来的多，批量读读不全）；gh pr view 不输出。 */
+  fakeTotals?: { comments?: number; reviews?: number; labels?: number; reviewRequests?: number };
+  /** 只给假 gh 的批量读：检查还有下一页。 */
+  fakeChecksHasNextPage?: boolean;
+  /** 批量读的 updatedAt；没给时假 gh 按内容算。 */
+  updatedAt?: string;
 }
 
 /** 假 gh（e2e/fake-gh/fake-gh.cjs）的数据：branches 按分支名，prs 按 prUrlKey 形式的链接（小写、没有末尾斜杠；gh pr view <号> 取链接以 /pull/<号> 结尾的第一项）。 */
@@ -103,6 +109,19 @@ export interface FakeGhFixture {
 export function ghCalls(s: Sandbox): string[][] {
   if (!existsSync(s.ghLog)) return [];
   return readFileSync(s.ghLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as unknown).filter((v): v is string[] => Array.isArray(v));
+}
+
+/**
+ * 假 gh 读过这个 PR 没有：gh pr view <链接>，或者批量读（BTL-276）里 <owner>/<name> 的 GraphQL 查询带了这个号的别名。
+ */
+export function ghReadPr(s: Sandbox, url: string): boolean {
+  const m = /\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
+  if (!m) throw new Error(`not a PR link: ${url}`);
+  const [, owner, name, n] = m;
+  return ghCalls(s).some((a) =>
+    (a[0] === "pr" && a[1] === "view" && a[2]?.toLowerCase() === url.toLowerCase()) ||
+    (a[0] === "api" && a[1] === "graphql" && a.some((x) => x.toLowerCase() === `owner=${owner}`.toLowerCase()) && a.some((x) => x.toLowerCase() === `name=${name}`.toLowerCase()) && a.some((x) => x.startsWith("query=") && x.includes(`p${n}: pullRequest(number: ${n})`))),
+  );
 }
 
 /**

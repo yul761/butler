@@ -7,6 +7,7 @@ import { setLang } from "../i18n";
 import { tempDir } from "../test-utils";
 import { ACTIVITY_TICK_MS, ActivityMonitor, activityChange, activityIntervals, type ActivityDeps, deriveActivity, describeActivity } from "./activity-monitor";
 import type { WatchFn } from "./transcript-watch";
+import { TranscriptHub } from "./transcript-hub";
 import { applyEntry, newTranscriptState } from "./activity-parse";
 import { stripAnsi } from "./pty-manager";
 import { dialogOnScreen, permissionOnScreen } from "./screen";
@@ -1519,6 +1520,20 @@ describe("activityIntervals", () => {
 });
 
 describe("ActivityMonitor lifecycle", () => {
+  it("leaves no transcript reader on the shared hub when it stops while a refresh is still in flight (BTL-276)", async () => {
+    const hub = new TranscriptHub();
+    // 刷新走到要读 transcript 的时候，应用正好退出。
+    let stopNow: (() => void) | null = null;
+    const h = harness({ hub, transcriptFile: (id) => (stopNow?.(), join(h.dir, `${id}.jsonl`)) });
+    h.openSession("s1");
+    h.busy("s1");
+    const file = join(h.dir, "s1.jsonl");
+    stopNow = () => h.monitor.stop();
+    await h.monitor.tick(1000);
+    await flush();
+    expect(hub.sinkKeys(file)).toEqual([]);
+  });
+
   it("refreshes on the configured interval", async () => {
     vi.useFakeTimers();
     const h = harness({ intervals: { tickMs: 200, stuckCheckMs: 1000 } });

@@ -3,7 +3,7 @@ import type { BranchWatchRepo, BranchWatchRow } from "../db/branch-watch-repo";
 import type { PrStageRepo } from "../db/pr-stage-repo";
 import { PR_GONE_RETRY_MS, prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
-  GH_NOT_FOUND, latestReviewers, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLogDetail, type prRead, type prsForBranch, type reviewAuthors,
+  GH_NOT_FOUND, latestReviewers, prBatchable, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLogDetail, type prBatch, type prRead, type prsForBranch, type reviewAuthors,
   type ReviewAuthors, type reviewComments,
 } from "../tickets/gh";
 import { prUrlParts } from "../../shared/pr-url";
@@ -39,6 +39,16 @@ const SOON_MS = 1000;
 const CACHE_FRESH_MS = 60_000;
 /** 从没读成功过的 PR 读失败了：第一次等这么久再试，之后每次翻倍、最多 PR_SLOW_MS（读过的按 checkedAt 排）。 */
 const UNREAD_RETRY_MS = 60_000;
+/** 一次批量 GraphQL 的超时（一次读一个仓库所有到期的 PR，比单个 gh pr view 慢）。 */
+export const PR_BATCH_TIMEOUT_MS = 15_000;
+/** 一次全读最多这么多个 PR（便宜的一次读完这一轮所有的，最多 PR_WATCH_MAX）。 */
+export const PR_BATCH_FULL_MAX = 10;
+/** 便宜字段没变也这么久全读一次：指纹看不到的变化（例如重跑后一样失败的日志）不会一直停在旧的。 */
+export const PR_FULL_REFRESH_MS = 30 * 60_000;
+/** GraphQL 剩余点数低的时候，定期全读放宽到这么久一次（变了照样马上全读）。 */
+export const PR_FULL_REFRESH_LOW_MS = 4 * PR_FULL_REFRESH_MS;
+/** GraphQL 剩余点数低于这个：定期全读放宽到 PR_FULL_REFRESH_LOW_MS，并记一次日志。 */
+export const PR_RATE_LOW = 500;
 /** 有归属的分支（不是 ticket 分支）最多这么久列一次 PR。 */
 export const OWNED_LIST_MS = 5 * 60_000;
 /** 这么久之前推的分支不再去列。 */
@@ -64,6 +74,8 @@ export interface PrWatcherDeps {
     /** 读一个 PR：GH_NOT_FOUND 是 GitHub 说仓库看得见、没有这个 PR，null 是 gh 失败（包括仓库解析不到）。 */
     prStatus: typeof prRead; prsForBranch: typeof prsForBranch; branchRuns: typeof branchRuns; failedLogDetail: typeof failedLogDetail;
     reviewComments: typeof reviewComments; reviewAuthors: typeof reviewAuthors;
+    /** 一个仓库的到期 PR 一次 GraphQL 读完（BTL-276）。没有时一个一个 gh pr view。 */
+    prBatch?: typeof prBatch;
   };
   git: { firstCommitAt: typeof firstCommitAt };
   stages: Pick<PrStageRepo, "has" | "add" | "lastCi">;
@@ -103,6 +115,13 @@ interface Unread {
   notFound: boolean;
 }
 
+/** 批量读到的一个 PR：got 是读到的结果；same 是便宜字段和上次全读时一样（用的是上次全读的结果，失败日志也可以沿用）。 */
+/**
+ * 批量读给 poll 的结果：got 是读到的（same：便宜字段和缓存的一样，用的是缓存）；
+ * view 是便宜字段读到了、但要 poll 自己 gh pr view（全读失败、这个 PR 出错、列表太长读不全），读到后按这个指纹记进缓存（wide：列表太长）。
+ */
+type Prefetched = { got: PrStatus | typeof GH_NOT_FOUND; same: boolean } | { view: { sig: string; wide: boolean } };
+
 const sameChecks = (a: CiCheck[], b: CiCheck[]) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
@@ -131,6 +150,13 @@ export class PrWatcher {
    * error 是上一次的原因：同一个 run 同一种失败只记一次日志。这个 run 又跑起来（重跑）、或取成功了就删掉。只在内存里。
    */
   private readonly logFailures = new Map<number, { at: number; delay: number; tries: number; error: string; done: boolean; missing: boolean }>();
+  /**
+   * 批量读的缓存（键 PR URL）：上次全读的结果、那时便宜字段的指纹、全读的时间、算出来的失败检查（带日志）。
+   * 便宜字段没变就用它，不再全读、不再取日志。行没了就删掉。只在内存里（重启后第一轮全读）。
+   */
+  private readonly prCache = new Map<string, { sig: string; pr: PrStatus; fullAt: number; failed: CiCheck[] | null; wide: boolean }>();
+  /** 上次记「GraphQL 点数不多了」日志时的重置时间：同一个窗口只记一次。 */
+  private rateLoggedFor: number | null = null;
 
   constructor(private readonly d: PrWatcherDeps) {}
 
@@ -290,6 +316,7 @@ export class PrWatcher {
       );
     const urls = new Set(rows.map((r) => r.url));
     for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);
+    for (const u of this.prCache.keys()) if (!urls.has(u)) this.prCache.delete(u);
     const polls = prPolls(rows, {
       repoOf: (id) => this.d.repoOf(id), ghWorkDir: (r) => this.d.ghWorkDir(r), home: this.d.home, sessionOpen: (k, id) => this.d.sessionOpen(k, id),
     });
@@ -301,7 +328,18 @@ export class PrWatcher {
       }),
     );
     const unread: Unread[] = [];
-    await Promise.all(due.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, unread, marks))));
+    // 每个仓库批量读完就开始读它的 PR，不等别的仓库。
+    const groups = this.d.gh.prBatch ? batchGroups(due) : { bySlug: new Map<string, BatchGroup>(), rest: due };
+    await Promise.all([
+      ...groups.rest.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, unread, marks))),
+      ...[...groups.bySlug].map(async ([slug, g]) => {
+        let pre = new Map<string, Prefetched>();
+        await this.part(`batch-reading the PRs of ${slug}`, async () => {
+          pre = await this.prefetch(slug, g, retryGivenUp);
+        });
+        await Promise.all(g.polls.map((p) => this.part(`reading ${p.url}`, () => this.poll(p, unread, marks, pre.get(p.url)))));
+      }),
+    ]);
     // 这一轮读了两个以上、全都是 gh 失败：多半是 gh 离线 / 没登录 / 换了看不到这些仓库的账号 / 网络断了，不是这些 PR 的问题，不算进失败次数。
     // 仓库解析不到也算 gh 失败（私有仓库对当前账号就是这么回答的）。只有「仓库看得见、没有这个 PR」（GH_NOT_FOUND）
     // 不算：有一个这样的，gh 就是在线、看得见的；它们自己一定计数。
@@ -333,10 +371,95 @@ export class PrWatcher {
     }
   }
 
-  /** 读一个 PR，写进链接它的每个 ticket 的行。读失败的放进 unread，整轮读完再记（要先知道是不是整轮都失败了）。 */
-  private async poll(p: PrPoll, unread: Unread[], marks: Marks): Promise<void> {
-    const got = await this.gh(() => this.d.gh.prStatus(p.cwd, p.url, PR_GH_TIMEOUT_MS));
+  /**
+   * 批量读一个仓库到期的 PR（BTL-276）：一次便宜的 GraphQL（指纹）；指纹变了、没缓存、要重试放弃了的、太久没全读的，再全读（每 PR_BATCH_FULL_MAX 个一次）。
+   * 一个都没缓存（刚启动）就不先读便宜的，直接全读。返回 URL → 结果；没在里面的（整个调用失败、这个 PR 单独出错）由 poll 照原来的 gh pr view 读。
+   */
+  private async prefetch(slug: string, g: BatchGroup, retryGivenUp: Forced): Promise<Map<string, Prefetched>> {
+    const out = new Map<string, Prefetched>();
+    const batch = this.d.gh.prBatch;
+    if (!batch) return out;
+    const numbers = [...g.byNumber.keys()];
+    const notFound = (n: number) => {
+      for (const p of g.byNumber.get(n)!) {
+        this.prCache.delete(p.url);
+        out.set(p.url, { got: GH_NOT_FOUND, same: false });
+      }
+    };
+    const view = (n: number, sig: string, wide: boolean) => {
+      for (const p of g.byNumber.get(n)!) out.set(p.url, { view: { sig, wide } });
+    };
+    const full: number[] = [];
+    const sigOf = new Map<number, string>();
+    if (!numbers.some((n) => g.byNumber.get(n)!.some((p) => this.prCache.has(p.url)))) {
+      full.push(...numbers);
+    } else {
+      const cheap = await this.gh(() => batch(g.cwd, slug, numbers, "cheap", PR_BATCH_TIMEOUT_MS));
+      if (!cheap) {
+        this.d.log(`pr watch: batch-reading the PRs of ${slug} failed; reading them one by one`);
+        return out;
+      }
+      const ttl = this.noteRate(cheap.rate) ? PR_FULL_REFRESH_LOW_MS : PR_FULL_REFRESH_MS;
+      const now = this.d.now();
+      for (const n of numbers) {
+        const item = cheap.prs.get(n);
+        const polls = g.byNumber.get(n)!;
+        if (item === GH_NOT_FOUND) notFound(n);
+        else if (item) {
+          const stale = polls.some((p) => {
+            const c = this.prCache.get(p.url);
+            return !c || c.sig !== item.sig || now - c.fullAt >= ttl || p.rows.some((r) => retryGivenUp(r.ticketKey, r.repoId));
+          });
+          if (!stale) for (const p of polls) out.set(p.url, { got: this.prCache.get(p.url)!.pr, same: true });
+          // 列表太长、全读读不全的：直接 gh pr view，不白读一次。
+          else if (polls.some((p) => this.prCache.get(p.url)?.wide)) view(n, item.sig, true);
+          else {
+            full.push(n);
+            sigOf.set(n, item.sig);
+          }
+        }
+      }
+    }
+    for (let i = 0; i < full.length; i += PR_BATCH_FULL_MAX) {
+      const chunk = full.slice(i, i + PR_BATCH_FULL_MAX);
+      const got = await this.gh(() => batch(g.cwd, slug, chunk, "full", PR_BATCH_TIMEOUT_MS));
+      if (!got) this.d.log(`pr watch: batch-reading ${chunk.length} PR(s) of ${slug} in full failed; reading them one by one`);
+      else this.noteRate(got.rate);
+      for (const n of chunk) {
+        const item = got?.prs.get(n);
+        if (item === GH_NOT_FOUND) notFound(n);
+        else if (item?.pr) {
+          for (const p of g.byNumber.get(n)!) {
+            this.prCache.set(p.url, { sig: item.sig, pr: item.pr, fullAt: this.d.now(), failed: null, wide: false });
+            out.set(p.url, { got: item.pr, same: false });
+          }
+        } else if (item) view(n, item.sig, true);
+        else if (sigOf.has(n)) view(n, sigOf.get(n)!, false);
+      }
+    }
+    return out;
+  }
+
+  /** GraphQL 的剩余点数：低了记一次日志（每个重置窗口一次），返回是不是低了。 */
+  private noteRate(rate: { remaining: number; resetAt: number | null } | null): boolean {
+    if (!rate || rate.remaining >= PR_RATE_LOW) return false;
+    if (this.rateLoggedFor !== rate.resetAt) {
+      this.rateLoggedFor = rate.resetAt;
+      const at = rate.resetAt === null ? "" : ` until ${new Date(rate.resetAt).toISOString()}`;
+      this.d.log(`pr watch: GitHub GraphQL points are low (${rate.remaining} left${at}); re-reading unchanged PRs less often`);
+    }
+    return true;
+  }
+
+  /** 读一个 PR，写进链接它的每个 ticket 的行。读失败的放进 unread，整轮读完再记（要先知道是不是整轮都失败了）。pre：批量读到的。 */
+  private async poll(p: PrPoll, unread: Unread[], marks: Marks, pre?: Prefetched): Promise<void> {
+    const got = pre && "got" in pre ? pre.got : await this.gh(() => this.d.gh.prStatus(p.cwd, p.url, PR_GH_TIMEOUT_MS));
     const now = this.d.now();
+    // gh pr view 读的：便宜字段这一轮读到了就按它的指纹记进缓存（比缓存里的新）；没读到就扔掉缓存，免得下一轮指纹碰巧一样时用了旧的。
+    if (!(pre && "got" in pre)) {
+      if (pre && "view" in pre && got !== null && got !== GH_NOT_FOUND) this.prCache.set(p.url, { sig: pre.view.sig, pr: got, fullAt: now, failed: null, wide: pre.view.wide });
+      else this.prCache.delete(p.url);
+    }
     if (got === null || got === GH_NOT_FOUND) {
       const notFound = got === GH_NOT_FOUND;
       this.d.log(`pr watch: reading ${p.url} failed${notFound ? " (not found)" : ""}`);
@@ -363,7 +486,11 @@ export class PrWatcher {
     const open = pr.state === "OPEN";
     const wasOpen = open || p.rows.some((r) => r.state === "open" && r.checkedAt > 0);
     this.runningRuns(pr.checks);
-    const failed = pr.ci !== "failing" ? [] : open ? await this.failedWithLogs(p.cwd, pr.checks, p.slug) : pr.checks.filter((c) => c.state === "failing").map((c) => ({ ...c }));
+    // 批量读里便宜字段没变：上次取到的日志接着用，只取还没取到的（CI 没变，同一个 run 的日志也没变）。
+    const cached = this.prCache.get(p.url);
+    const known = pre && "got" in pre && pre.same && cached?.pr === pr ? cached.failed : null;
+    const failed = pr.ci !== "failing" ? [] : open ? await this.failedWithLogs(p.cwd, pr.checks, p.slug, known) : pr.checks.filter((c) => c.state === "failing").map((c) => ({ ...c }));
+    if (cached?.pr === pr) cached.failed = failed;
     const inline = wasOpen ? await this.inlineComments(p, pr) : [];
     const bots = wasOpen ? await this.botsOf(p, pr) : null;
     for (const r of p.rows) this.apply(r, pr, failed, inline, bots, now, marks);
@@ -610,14 +737,24 @@ export class PrWatcher {
    * 失败的检查；最多取 3 个 run 的日志。同一个 run 的几个 job 共用一份日志，只取一次、挂在第一个上，免得重复。
    * 还有 job 在跑的 run 不取（gh 要等整个 run 跑完才给日志）；取失败过的 run 按 logFailures 退避或不再取，不占这 3 个的名额。
    */
-  private async failedWithLogs(cwd: string, checks: CiCheck[], repo: string | null): Promise<CiCheck[]> {
+  private async failedWithLogs(cwd: string, checks: CiCheck[], repo: string | null, known: CiCheck[] | null = null): Promise<CiCheck[]> {
     const running = this.runningRuns(checks);
     const now = this.d.now();
     const fetched = new Set<number>();
     const out: CiCheck[] = [];
+    // 上次取到的日志（批量读里 CI 没变时）：按 run 沿用，不再取，也不占名额。
+    const logOf = new Map<number, string>();
+    for (const k of known ?? []) if (k.runId !== null && k.log !== undefined && !logOf.has(k.runId)) logOf.set(k.runId, k.log);
+    const given = new Set<number>();
     for (const c of checks) {
       if (c.state !== "failing") continue;
       const runId = c.runId;
+      if (runId !== null && logOf.has(runId)) {
+        // 和取到时一样：同一个 run 只挂在第一个失败的检查上
+        out.push(given.has(runId) ? { ...c } : { ...c, log: logOf.get(runId) });
+        given.add(runId);
+        continue;
+      }
       const failure = runId === null ? undefined : this.logFailures.get(runId);
       const skip = runId === null || running.has(runId) || (failure !== undefined && (failure.done || now < failure.at));
       if (skip || fetched.has(runId) || fetched.size >= FAILED_LOGS_MAX) {
@@ -704,4 +841,28 @@ export function prStatusChanged(prev: StatusFields & Pick<TicketPr, "statusChang
   const merge = (a: string | null, b: string | null) => knownMerge(a) !== null && knownMerge(b) !== null && knownMerge(a) !== knownMerge(b);
   return prev.isDraft !== next.isDraft || merge(prev.mergeable, next.mergeable) || merge(prev.mergeState, next.mergeState)
     || reviewerKey(prev.reviewers) !== reviewerKey(next.reviewers) || requestKey(prev.reviewRequests) !== requestKey(next.reviewRequests);
+}
+
+interface BatchGroup {
+  cwd: string;
+  polls: PrPoll[];
+  byNumber: Map<number, PrPoll[]>;
+}
+
+/** 到期的 PR 按仓库分组（批量读用）；URL 认不出仓库的、PR 号放不进 GraphQL 的（prBatchable）放进 rest，照原来一个个读。 */
+function batchGroups(due: PrPoll[]): { bySlug: Map<string, BatchGroup>; rest: PrPoll[] } {
+  const bySlug = new Map<string, BatchGroup>();
+  const rest: PrPoll[] = [];
+  for (const p of due) {
+    const parts = prUrlParts(p.url);
+    if (!parts || !prBatchable(parts.number)) {
+      rest.push(p);
+      continue;
+    }
+    let g = bySlug.get(parts.slug);
+    if (!g) bySlug.set(parts.slug, (g = { cwd: p.cwd, polls: [], byNumber: new Map() }));
+    g.polls.push(p);
+    g.byNumber.set(parts.number, [...(g.byNumber.get(parts.number) ?? []), p]);
+  }
+  return { bySlug, rest };
 }

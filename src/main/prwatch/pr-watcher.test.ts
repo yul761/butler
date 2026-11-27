@@ -4,7 +4,7 @@ import { PrStageRepo, type StageEvent } from "../db/pr-stage-repo";
 import { PR_NOT_FOUND_GIVE_UP, PR_NOT_FOUND_MIN_MS, PR_READ_GIVE_UP, PR_READ_RETRY_MS, TicketPrsRepo, type NewPrLink } from "../db/ticket-prs-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { memDb } from "../test-utils";
-import type { BranchPr, BranchRuns, CiCheck, PrComment, PrStatus } from "../tickets/gh";
+import { GH_NOT_FOUND, type BranchPr, type BranchRuns, type CiCheck, type PrBatchItem, type PrComment, type PrStatus } from "../tickets/gh";
 import type * as Gh from "../tickets/gh";
 import type * as Git from "../tickets/git";
 import { BranchOwnersRepo } from "../db/branch-owners-repo";
@@ -13,7 +13,11 @@ import { CiDelivery, pickRecipient } from "./ci-delivery";
 import { PrLinker } from "./pr-links";
 import { derivePrStages } from "./pr-stages";
 import { PR_FAST_MS, PR_SLOW_MS, PR_WATCH_MAX } from "./pr-schedule";
-import { CI_LOG_LINES, CI_LOG_RETRY_MAX_MS, CI_LOG_RETRY_MS, CI_LOG_TRIES_MAX, MERGED_RECENT_MS, PR_GH_TIMEOUT_MS, prStatusChanged, PrWatcher, type PrWatcherDeps } from "./pr-watcher";
+import {
+  CI_LOG_LINES, CI_LOG_RETRY_MAX_MS, CI_LOG_RETRY_MS, CI_LOG_TRIES_MAX, MERGED_RECENT_MS, PR_BATCH_FULL_MAX, PR_BATCH_TIMEOUT_MS, PR_FULL_REFRESH_LOW_MS, PR_FULL_REFRESH_MS,
+  PR_GH_TIMEOUT_MS, PR_RATE_LOW,
+  prStatusChanged, PrWatcher, type PrWatcherDeps,
+} from "./pr-watcher";
 
 const url = (n: number, repo = "app") => `https://github.com/o/${repo}/pull/${n}`;
 const check = (name: string, state: CiCheck["state"], runId: number | null = null): CiCheck => ({ name, state, runId });
@@ -1434,5 +1438,381 @@ describe("PrWatcher.statusOfMany (BTL-275)", () => {
     expect(many.get("BTL-1")!.map((p) => p.number).sort()).toEqual([7, 8]);
     expect(many.get("BTL-2")).toEqual([expect.objectContaining({ prId: null, branch: "x", ci: "failing" })]);
     expect(many.get("BTL-3")).toEqual([]);
+  });
+});
+
+/**
+ * 批量读的假 gh（BTL-276）：GitHub 上的 PR 是 remote 里的（按号），"nf" 是 GitHub 说没有，null 是这个 PR 出错。
+ * 指纹按 head、CI、状态、review、评论数、检查算（和真的便宜字段一样，变了就不同）。fail 为 true 时整个调用失败，failFull 只让全读失败；
+ * wide 里的号列表太长、全读读不全（pr 为 null）。
+ */
+function batchGh(remote: Map<number, PrStatus | "nf" | null>, o: { fail?: () => boolean; failFull?: () => boolean; wide?: Set<number>; rate?: () => number } = {}) {
+  return vi.fn<typeof Gh.prBatch>(async (_cwd, _slug, numbers, mode) => {
+    if (o.fail?.() || (mode === "full" && o.failFull?.())) return null;
+    const prs = new Map<number, PrBatchItem>();
+    for (const n of numbers) {
+      const v = remote.get(n);
+      if (v === "nf") prs.set(n, GH_NOT_FOUND);
+      else if (!v) prs.set(n, null);
+      else prs.set(n, { sig: JSON.stringify([v.url, v.headSha, v.ci, v.state, v.review, v.comments.length, v.checks]), pr: mode === "full" && !o.wide?.has(n) ? v : null });
+    }
+    return { prs, rate: o.rate ? { cost: 1, remaining: o.rate(), resetAt: 5 } : null };
+  });
+}
+
+describe("PrWatcher: batch-reading PRs with GraphQL (BTL-276)", () => {
+  function batched(remote: Map<number, PrStatus | "nf" | null>, o: Parameters<typeof batchGh>[1] = {}, more: Partial<PrWatcherDeps> = {}) {
+    const s = setup();
+    const prBatch = batchGh(remote, o);
+    const w = new PrWatcher({ ...s.deps, gh: { ...s.gh, prBatch }, ...more });
+    const modes = () => prBatch.mock.calls.map((c) => `${c[3]}:${c[2].join(",")}`);
+    return { ...s, w, prBatch, modes };
+  }
+
+  it("reads every due PR of a repo in one GraphQL call, not one gh pr view each (nothing cached yet: no cheap call first)", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()], [8, pr({ number: 8, url: url(8), ci: "passing", checks: [check("test", "passing", 3)] })]]);
+    const s = batched(remote);
+    const a = s.link();
+    const b = s.link({ url: url(8), number: 8 });
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7,8"]);
+    expect(s.prBatch).toHaveBeenCalledWith("/w/r/app", "o/app", [7, 8], "full", PR_BATCH_TIMEOUT_MS);
+    expect(s.gh.prStatus).not.toHaveBeenCalled();
+    expect(s.prs.get(a.id)).toMatchObject({ state: "open", ci: "pending", headSha: "a1", checkedAt: s.now() });
+    expect(s.prs.get(b.id)).toMatchObject({ ci: "passing" });
+    expect(s.deps.onPrChanged).toHaveBeenCalledWith("BTL-1");
+  });
+
+  it("does not read a PR in full again while its cheap fields stay the same, and reads it at once when they change", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote);
+    const row = s.link();
+    await s.w.check();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7", "cheap:7"]);
+    expect(s.prs.get(row.id)).toMatchObject({ checkedAt: s.now(), readError: false });
+    remote.set(7, pr({ headSha: "b2" }));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes().slice(2)).toEqual(["cheap:7", "full:7"]);
+    expect(s.prs.get(row.id)).toMatchObject({ headSha: "b2" });
+  });
+
+  it("forwards a new comment, which changes the cheap fields, the same as before", async () => {
+    const onHumanComment = vi.fn();
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote, {}, { onHumanComment });
+    s.link();
+    await s.w.check();
+    remote.set(7, pr({ comments: [{ id: "C1", author: "alice", body: "x", createdAt: 6, url: null, path: null, line: null, reviewId: null }] }));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(onHumanComment).toHaveBeenCalledWith("BTL-1", 7, 1);
+  });
+
+  it("keeps the failed logs it already has while the CI stays the same, and fetches them again once it changes", async () => {
+    const failing = (sha: string) => pr({ headSha: sha, ci: "failing", checks: [check("a", "failing", 1), check("b", "failing", 2)] });
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, failing("a1")]]);
+    const s = batched(remote);
+    const row = s.link();
+    await s.w.check();
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 3; i++) {
+      s.advance(PR_SLOW_MS);
+      await s.w.check();
+    }
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(2);
+    expect(s.prs.get(row.id)?.failed.map((c) => c.log)).toEqual(["log of 1", "log of 2"]);
+    remote.set(7, failing("b2"));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.gh.failedLogDetail).toHaveBeenCalledTimes(4);
+  });
+
+  it("still fetches a log it could not get last time, without fetching the ones it has", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr({ ci: "failing", checks: [check("a", "failing", 1), check("b", "failing", 2)] })]]);
+    const s = batched(remote);
+    s.gh.failedLogDetail.mockImplementation(async (_c, runId) => (runId === 2 ? logFailed("HTTP 502") : logOk(`log of ${runId}`)));
+    s.link();
+    await s.w.check();
+    s.gh.failedLogDetail.mockClear();
+    s.advance(CI_LOG_RETRY_MS);
+    await s.w.check();
+    expect(s.gh.failedLogDetail.mock.calls.map((c) => c[1])).toEqual([2]);
+  });
+
+  it("reads every PR in full again after PR_FULL_REFRESH_MS, and only after PR_FULL_REFRESH_LOW_MS while GraphQL points are low", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    let points = 5000;
+    const s = batched(remote, { rate: () => points });
+    s.link();
+    await s.w.check();
+    s.advance(PR_FULL_REFRESH_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7", "cheap:7", "full:7"]);
+    points = PR_RATE_LOW - 1;
+    s.advance(PR_FULL_REFRESH_MS);
+    await s.w.check();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes().slice(3)).toEqual(["cheap:7", "cheap:7"]);
+    s.advance(PR_FULL_REFRESH_LOW_MS - PR_FULL_REFRESH_MS - PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes().slice(5)).toEqual(["cheap:7", "full:7"]);
+    expect(s.deps.log.mock.calls.filter((c) => String(c[0]).includes("GraphQL points are low"))).toHaveLength(1);
+  });
+
+  it("reads in full when the user refreshes, even if nothing changed", async () => {
+    vi.useFakeTimers();
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote);
+    s.link();
+    await s.w.check();
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.modes()).toEqual(["full:7", "cheap:7", "full:7"]);
+  });
+
+  it("falls back to gh pr view for every PR when the batch call fails, and for one PR when only it fails", async () => {
+    let fail = true;
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()], [8, null]]);
+    const s = batched(remote, { fail: () => fail });
+    s.link();
+    s.link({ url: url(8), number: 8 });
+    s.gh.prStatus.mockImplementation(async (_cwd, u) => pr({ number: u === url(7) ? 7 : 8, url: u }));
+    await s.w.check();
+    expect(s.gh.prStatus.mock.calls.map((c) => c[1]).sort()).toEqual([url(7), url(8)]);
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("reading them one by one"));
+    fail = false;
+    s.gh.prStatus.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.gh.prStatus.mock.calls.map((c) => c[1])).toEqual([url(8)]);
+  });
+
+  it("counts a PR GitHub says does not exist as not found, so a round of them is no outage", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[25, "nf"], [26, "nf"]]);
+    const s = batched(remote);
+    const a = s.link({ url: url(25, "gone"), slug: "o/gone", number: 25, repoId: null, source: "handoff" });
+    const b = s.link({ url: url(26, "gone"), slug: "o/gone", number: 26, repoId: null, source: "handoff" });
+    await s.w.check();
+    expect(s.gh.prStatus).not.toHaveBeenCalled();
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readFailures: 1, readNotFound: 1 });
+    expect(s.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("gh offline"));
+  });
+
+  it("counts one PR GitHub says does not exist inside a batch that read the others (BTL-261 rules), and leaves it out of the batch once it is gone", async () => {
+    vi.useFakeTimers();
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()], [25, "nf"]]);
+    const s = batched(remote);
+    const ok = s.link();
+    const bad = s.link({ url: url(25), number: 25 });
+    await s.w.check();
+    // 部分 data 加一条 NOT_FOUND：好的照常读，坏的单独计一次「不存在」，整批不算失败、也不算离线，也没退回 gh pr view。
+    expect(s.gh.prStatus).not.toHaveBeenCalled();
+    expect(s.prs.get(ok.id)).toMatchObject({ readError: false, readFailures: 0, headSha: "a1" });
+    expect(s.prs.get(bad.id)).toMatchObject({ readFailures: 1, readNotFound: 1, readNotFoundSince: s.now(), readGoneAt: null });
+    expect(s.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("gh offline"));
+    expect(s.deps.log).not.toHaveBeenCalledWith(expect.stringContaining("reading them one by one"));
+    for (let i = 1; i < PR_NOT_FOUND_GIVE_UP; i++) {
+      s.advance(PR_NOT_FOUND_MIN_MS);
+      await s.w.check();
+    }
+    expect(s.prs.get(bad.id)).toMatchObject({ readNotFound: PR_NOT_FOUND_GIVE_UP, readGoneAt: s.now() });
+    expect(s.prs.get(ok.id)).toMatchObject({ readError: false, readNotFound: 0, readGoneAt: null });
+    // gone 了：之后的批量查询里没有它；总控扫 epic（不强制）也不查。
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    s.w.soonTicket("BTL-1", { retryGivenUp: false });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.prBatch.mock.calls.length).toBeGreaterThan(0);
+    for (const c of s.prBatch.mock.calls) expect(c[2]).not.toContain(25);
+  });
+
+  it("keeps the PR gh pr view read when the full batch read failed, so a later round never serves the older cached read", async () => {
+    let failFull = false;
+    const failing = (sha: string, id: number) => pr({ headSha: sha, ci: "failing", checks: [check("a", "failing", id)] });
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, failing("a1", 1)]]);
+    const s = batched(remote, { failFull: () => failFull });
+    s.gh.prStatus.mockImplementation(async () => remote.get(7) as PrStatus);
+    const row = s.link();
+    await s.w.check();
+    // CI 重跑、换了 run：便宜字段变了，全读失败，退回 gh pr view 读到新的。
+    failFull = true;
+    remote.set(7, failing("a1", 2));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    expect(s.prs.get(row.id)?.failed.map((c) => c.runId)).toEqual([2]);
+    // 之后没变：用的是 gh pr view 读到的那份（不是第一轮的旧缓存），也不再全读、不再 gh pr view、不再取日志。
+    failFull = false;
+    s.gh.failedLogDetail.mockClear();
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["cheap:7"]);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    expect(s.gh.failedLogDetail).not.toHaveBeenCalled();
+    expect(s.prs.get(row.id)?.failed.map((c) => [c.runId, c.log])).toEqual([[2, "log of 2"]]);
+  });
+
+  it("drops the cache when even the cheap read failed, and reads in full next time", async () => {
+    let fail = false;
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote, { fail: () => fail });
+    s.gh.prStatus.mockImplementation(async () => remote.get(7) as PrStatus);
+    s.link();
+    await s.w.check();
+    fail = true;
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    fail = false;
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7"]);
+  });
+
+  it("reads a PR whose lists are too long for one batch with gh pr view, without a wasted full read, and only when it changed", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote, { wide: new Set([7]) });
+    s.gh.prStatus.mockImplementation(async () => remote.get(7) as PrStatus);
+    const row = s.link();
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7"]);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7", "cheap:7"]);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(1);
+    remote.set(7, pr({ headSha: "b2" }));
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7", "cheap:7", "cheap:7"]);
+    expect(s.gh.prStatus).toHaveBeenCalledTimes(2);
+    expect(s.prs.get(row.id)).toMatchObject({ headSha: "b2" });
+  });
+
+  it("treats a round where the batch and every fallback read fail as an outage, counting nothing", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()], [8, pr({ number: 8, url: url(8) })]]);
+    let fail = false;
+    const s = batched(remote, { fail: () => fail });
+    const a = s.link();
+    const b = s.link({ url: url(8), number: 8 });
+    await s.w.check();
+    fail = true;
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    for (const r of [a, b]) expect(s.prs.get(r.id)).toMatchObject({ readError: true, readFailures: 0 });
+    expect(s.deps.log).toHaveBeenCalledWith(expect.stringContaining("gh offline"));
+  });
+
+  it("reports a renamed repo when the batch read gives the PR's new URL (BTL-261)", async () => {
+    const onSlugMoved = vi.fn<(from: string, to: string) => void>();
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr({ url: url(7, "app2") })]]);
+    const s = batched(remote, {}, { onSlugMoved });
+    s.link();
+    await s.w.check();
+    expect(onSlugMoved).toHaveBeenCalledWith("o/app", "o/app2");
+  });
+
+  it("reports a renamed repo when only the URL changed since the last full read, through the cheap read (BTL-261)", async () => {
+    const onSlugMoved = vi.fn<(from: string, to: string) => void>();
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote, {}, { onSlugMoved });
+    s.link();
+    await s.w.check();
+    expect(onSlugMoved).not.toHaveBeenCalled();
+    remote.set(7, pr({ url: url(7, "app2") }));
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["cheap:7", "full:7"]);
+    expect(onSlugMoved).toHaveBeenCalledWith("o/app", "o/app2");
+  });
+
+  it("statusOfMany (BTL-275) shows what each batched round read: a cache hit refreshes checkedAt, a change seen by the cheap read lands after the full read", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr({ ci: "pending" })]]);
+    const s = batched(remote);
+    s.link();
+    await s.w.check();
+    const first = s.w.statusOfMany(["BTL-1"]).get("BTL-1")!;
+    expect(first.map((p) => [p.number, p.ci])).toEqual([[7, "pending"]]);
+    // 便宜读：没变，用缓存，但这一轮的读取时间照写进库。
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["cheap:7"]);
+    const hit = s.w.statusOfMany(["BTL-1"]).get("BTL-1")!;
+    expect(hit[0].checkedAt).toBeGreaterThan(first[0].checkedAt);
+    expect(hit[0].ci).toBe("pending");
+    // 便宜读发现 CI 变了：全读以后 statusOfMany 给的是新的，和 statusOf 一样。
+    remote.set(7, pr({ ci: "passing" }));
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(s.modes()).toEqual(["cheap:7", "full:7"]);
+    expect(s.w.statusOfMany(["BTL-1"]).get("BTL-1")!.map((p) => p.ci)).toEqual(["passing"]);
+    expect(s.w.statusOfMany(["BTL-1"]).get("BTL-1")).toEqual(s.w.statusOf("BTL-1"));
+  });
+
+  it("reads a PR whose number GraphQL cannot take on its own with gh pr view, not in the batch", async () => {
+    const big = 2 ** 31;
+    const remote = new Map<number, PrStatus | "nf" | null>([[7, pr()]]);
+    const s = batched(remote);
+    s.link();
+    s.link({ url: url(big), number: big });
+    await s.w.check();
+    expect(s.modes()).toEqual(["full:7"]);
+    expect(s.gh.prStatus).toHaveBeenCalledWith("/w/r/app", url(big), expect.any(Number));
+  });
+
+  it("asks one batch per repo, and reads at most PR_BATCH_FULL_MAX PRs in full per call", async () => {
+    const remote = new Map<number, PrStatus | "nf" | null>();
+    const s = batched(remote);
+    for (let n = 1; n <= PR_BATCH_FULL_MAX + 2; n++) {
+      remote.set(n, pr({ number: n, url: url(n) }));
+      s.link({ url: url(n), number: n });
+    }
+    remote.set(99, pr({ number: 99, url: url(99, "web") }));
+    s.link({ url: url(99, "web"), slug: "o/web", number: 99, repoId: null, source: "handoff" });
+    await s.w.check();
+    const calls = () => s.prBatch.mock.calls.map((c) => [c[1], c[3], c[2].length]);
+    expect(calls().filter((c) => c[0] === "o/app").map((c) => c[2])).toEqual([PR_BATCH_FULL_MAX, 2]);
+    expect(calls().filter((c) => c[0] === "o/web")).toEqual([["o/web", "full", 1]]);
+    s.prBatch.mockClear();
+    s.advance(PR_SLOW_MS);
+    await s.w.check();
+    expect(calls().sort()).toEqual([["o/app", "cheap", PR_BATCH_FULL_MAX + 2], ["o/web", "cheap", 1]]);
+  });
+
+  it("starts far fewer gh processes than one gh pr view per PR (the numbers in the PR description)", async () => {
+    // 一个仓库 6 个开着的 PR，session 开着：4 个 CI 在跑（每分钟查），2 个 CI 挂了（各 2 个失败的 run，5 分钟查一次）；
+    // 其中一个在跑的 PR 每 10 分钟多一条评论。跑 30 分钟，每分钟一轮。
+    const run = async (useBatch: boolean) => {
+      const remote = new Map<number, PrStatus | "nf" | null>();
+      for (let n = 1; n <= 6; n++) {
+        remote.set(n, n <= 4 ? pr({ number: n, url: url(n) }) : pr({ number: n, url: url(n), ci: "failing", checks: [check("a", "failing", n * 10), check("b", "failing", n * 10 + 1)] }));
+      }
+      const s = useBatch ? batched(remote) : (() => { const x = setup(); return { ...x, prBatch: null }; })();
+      s.gh.prStatus.mockImplementation(async (_cwd, u) => remote.get(Number(u.split("/").pop())) as PrStatus);
+      for (let n = 1; n <= 6; n++) s.link({ url: url(n), number: n });
+      for (let m = 0; m < 30; m++) {
+        if (m > 0 && m % 10 === 0) {
+          const p = remote.get(1) as PrStatus;
+          remote.set(1, { ...p, comments: [...p.comments, { id: `C${m}`, author: "alice", body: "x", createdAt: m, url: null, path: null, line: null, reviewId: null }] });
+        }
+        await s.w.check();
+        s.advance(PR_FAST_MS);
+      }
+      return s.gh.prStatus.mock.calls.length + (s.prBatch?.mock.calls.length ?? 0) + s.gh.failedLogDetail.mock.calls.length;
+    };
+    const before = await run(false);
+    const after = await run(true);
+    // 改前：在跑的 4 个每分钟一次（120）+ 挂了的 2 个每 5 分钟一次（12）+ 每次 2 个日志（24）= 156，约 5.2 个/分钟
+    // 改后：第一轮一次全读，之后每分钟一次便宜的（29）+ 第 10 和 20 分钟的评论各一次全读（2）+ 日志只取一次（4）= 36，约 1.2 个/分钟
+    expect({ before, after }).toEqual({ before: 156, after: 36 });
   });
 });

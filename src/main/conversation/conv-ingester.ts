@@ -3,10 +3,10 @@ import type { Session } from "../../shared/types";
 import type { ConvRepo, ConvTurn, QaBy, TurnKind } from "../db/conv-repo";
 import type { SessionsRepo } from "../db/sessions-repo";
 import { WATCH_DEBOUNCE_MS } from "../sessions/activity-monitor";
-import { DebouncedWatch, type WatchFn } from "../sessions/transcript-watch";
-import { capText, convEntriesOf, type ConvEntry, type UserOpen } from "./conv-parse";
+import { TranscriptHub, type TailLine, type TailSink, type TailStat } from "../sessions/transcript-hub";
+import type { WatchFn } from "../sessions/transcript-watch";
+import { capText, convEntriesOfValue, type ConvEntry, type UserOpen } from "./conv-parse";
 import { isQuestionLike, ruleQa, type ConvQaVerdict } from "./conv-qa";
-import { readChunk } from "./jsonl-reader";
 import { inoText, sameIno } from "./ino";
 import { perfOp } from "../diag/perf-stats";
 
@@ -57,6 +57,8 @@ export interface ConvIngesterDeps {
   judge: (turn: { question: string; answer: string }, session: { cwd: string; ticketKey: string | null }) => Promise<ConvQaVerdict>;
   watch?: WatchFn;
   timers?: { setInterval: typeof setInterval; clearInterval: typeof clearInterval };
+  /** 和活动、用量共用的 transcript 读取（BTL-276）；没给时自己建一个（用 chunkBytes / maxLineBytes）。 */
+  hub?: TranscriptHub;
 }
 
 const KIND_OF: Record<UserOpen, TurnKind> = { user: "user", relay: "silent", silent: "silent", handoff: "handoff" };
@@ -64,7 +66,13 @@ const KIND_OF: Record<UserOpen, TurnKind> = { user: "user", relay: "silent", sil
 export class ConvIngester {
   private readonly chains = new Map<string, Promise<void>>();
   private readonly parents = new Map<string, Map<string, number>>();
-  private readonly watches = new Map<string, { file: string; w: DebouncedWatch }>();
+  /** 开着的 head：共用的监视，和一直挂在 hub 上的读取（别的消费者读到新内容时也顺带交给这里）。 */
+  private readonly watches = new Map<string, { file: string; w: { ensure(): boolean; close(): void }; detach: () => void }>();
+  private readonly hub: TranscriptHub;
+  /** 读进了新消息、改了结论的链根，等这次读完告诉 onAppended。 */
+  private readonly touched = new Set<string>();
+  /** 正在 run() 的 session：它读完自己收尾，hub 那边不用再收一次。 */
+  private readonly inRun = new Set<string>();
   private intervals: ReturnType<typeof setInterval>[] = [];
   private stopped = false;
   private judging = false;
@@ -77,7 +85,9 @@ export class ConvIngester {
    */
   private readonly needsJudge = new Map<number, string>();
 
-  constructor(private readonly d: ConvIngesterDeps) {}
+  constructor(private readonly d: ConvIngesterDeps) {
+    this.hub = d.hub ?? new TranscriptHub({ chunkBytes: d.chunkBytes, maxLineBytes: d.maxLineBytes, log: (m) => d.log?.(m) });
+  }
 
   /** 马上 sweep 一次，然后起 tick 和 sweep 两个定时器。 */
   start(): void {
@@ -96,7 +106,10 @@ export class ConvIngester {
     const t = this.d.timers ?? { setInterval, clearInterval };
     for (const iv of this.intervals) t.clearInterval(iv);
     this.intervals = [];
-    for (const { w } of this.watches.values()) w.close();
+    for (const { w, detach } of this.watches.values()) {
+      w.close();
+      detach();
+    }
     this.watches.clear();
   }
 
@@ -122,9 +135,10 @@ export class ConvIngester {
   private async tickOnce(): Promise<void> {
     if (this.stopped) return;
     const heads = new Set(this.d.openHeads().filter((h) => isConvTarget(this.d.sessions.get(h))));
-    for (const [h, { w }] of this.watches) {
+    for (const [h, { w, detach }] of this.watches) {
       if (!heads.has(h)) {
         w.close();
+        detach();
         this.watches.delete(h);
       }
     }
@@ -135,10 +149,15 @@ export class ConvIngester {
       let entry = this.watches.get(h);
       if (entry && entry.file !== file) {
         entry.w.close();
+        entry.detach();
         entry = undefined;
       }
       if (!entry) {
-        entry = { file, w: new DebouncedWatch(file, { delayMs: WATCH_DEBOUNCE_MS, onChange: () => void this.ingest(h), watch: this.d.watch, log: (m) => this.d.log?.(m) }) };
+        entry = {
+          file,
+          w: this.hub.watch(file, "conv", { delayMs: WATCH_DEBOUNCE_MS, onChange: () => void this.ingest(h), watch: this.d.watch, log: (m) => this.d.log?.(m) }),
+          detach: this.hub.attach(file, `conv:${h}`, this.sink(h, file)),
+        };
         this.watches.set(h, entry);
       }
       entry.w.ensure();
@@ -325,63 +344,125 @@ export class ConvIngester {
 
   private async run(id: string): Promise<void> {
     if (this.stopped) return;
-    const touched = new Set<string>();
+    this.inRun.add(id);
     try {
-      await this.readAll(id, touched);
+      await this.readAll(id);
     } catch (e) {
       this.parents.delete(id);
       this.d.log?.(`conv ingest ${id}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      this.inRun.delete(id);
     }
+    this.afterRead();
+  }
+
+  /** 读完一次以后：规则判一遍，告诉 onAppended，跑判断队列。 */
+  private afterRead(): void {
     if (!this.stopped) this.applyRules();
-    for (const root of touched) this.appended(root);
+    const roots = [...this.touched];
+    this.touched.clear();
+    for (const root of roots) this.appended(root);
     void this.runJudges();
   }
 
-  private async readAll(id: string, touched: Set<string>): Promise<void> {
+  /** 先读到、后连上 replaced_by：整段搬到链根下。transcript 已经没了也要搬（PR #60 review 4）。返回链根和（搬过以后的）游标。 */
+  private rooted(id: string): { root: string; cursor: ReturnType<ConvRepo["cursor"]>; moved: boolean } {
     const { repo } = this.d;
     const root = this.d.sessions.rootOf(id) ?? id;
     let cursor = repo.cursor(id);
-    if (cursor && cursor.rootSessionId !== root) {
-      // 先读到、后连上 replaced_by：整段搬到链根下。transcript 已经没了也要搬（PR #60 review 4）。
+    const moved = cursor !== null && cursor.rootSessionId !== root;
+    if (moved) {
       repo.reroot(id, root);
-      touched.add(root);
+      this.touched.add(root);
       cursor = repo.cursor(id);
     }
+    return { root, cursor, moved };
+  }
+
+  private async readAll(id: string): Promise<void> {
+    this.rooted(id);
     const file = this.d.transcriptOf(id);
     if (!file) return;
-    let openTurnId = cursor?.openTurnId ?? null;
-    let from = { ino: cursor?.ino ?? null, offset: cursor?.offset ?? 0 };
-    for (;;) {
-      if (this.stopped) return;
-      const chunk = await readChunk(file, from, { chunkBytes: this.d.chunkBytes, maxLineBytes: this.d.maxLineBytes });
-      if (!chunk || this.stopped) return;
-      if (chunk.reset) {
-        // 文件换了或变短了，从头重读：游标里记的「打开的轮」不能拿来结束（第一行 user 会把它按文件开头的时间结束掉）。
-        openTurnId = null;
-        this.parents.delete(id);
-      }
-      if (chunk.skipped > 0) this.d.log?.(`conv ingest ${id}: skipped ${chunk.skipped} line(s) over the size limit at byte ${chunk.start}`);
-      if (chunk.lines.length === 0 && chunk.skipped === 0) return;
-      let changed = false;
-      try {
-        perfOp("conv.ingest", () => repo.transaction(() => {
-          for (const line of chunk.lines) {
-            for (const e of convEntriesOf(line)) {
-              const r = this.apply(id, root, e, openTurnId);
-              openTurnId = r.openTurnId;
-              changed ||= r.changed;
-            }
-          }
-          repo.saveCursor({ sessionId: id, rootSessionId: root, file, ino: chunk.ino, offset: chunk.next, openTurnId, updatedAt: this.d.now() });
-        }));
-      } catch (e) {
-        // 事务回滚了：parentMap 里可能有指向回滚掉的轮的 id。
-        this.parents.delete(id);
-        throw e;
-      }
-      if (changed) touched.add(root);
-      from = { ino: chunk.ino, offset: chunk.next };
+    // 开着的 head 一直挂在 hub 上；别的（链上的旧段、刚关掉的）这次读的时候挂一下。
+    // 监视还挂在旧文件上（transcript 换了路径）：撤掉，免得两个读取共用一个游标、来回从头读；tickOnce 会在新文件上挂回来。
+    const own = this.watches.get(id);
+    if (own && own.file !== file) {
+      own.w.close();
+      own.detach();
+      this.watches.delete(id);
     }
+    const detach = own?.file === file ? null : this.hub.attach(file, `conv:${id}`, this.sink(id, file));
+    try {
+      await this.hub.pump(file, `conv:${id}`);
+    } finally {
+      detach?.();
+    }
+  }
+
+  /**
+   * 这个 session 在 hub 上的读取：游标在库里（字节位置、inode、打开的那一轮）。inode 变了或文件比游标短就从头读：
+   * 当场把重置后的游标（新 inode、偏移 0、没有打开的轮）存下，这次读不到完整的行也一样。每块一个事务，事务里存游标。
+   */
+  private sink(id: string, file: string): TailSink {
+    const { repo } = this.d;
+    let root = id;
+    let openTurnId: number | null = null;
+    let fed = false;
+    let failed = false;
+    return {
+      begin: (st: TailStat) => {
+        if (this.stopped) return null;
+        failed = false;
+        const r = this.rooted(id);
+        root = r.root;
+        // 这次搬到了新的链根下：就算没有新行，也要收尾（onAppended）。
+        if (r.moved) fed = true;
+        const c = r.cursor;
+        const reset = c !== null && ((c.ino !== null && !sameIno(c.ino, st.ino)) || st.size < c.offset);
+        openTurnId = reset ? null : (c?.openTurnId ?? null);
+        if (reset) {
+          // 文件换了或变短了，从头重读：游标里记的「打开的轮」不能拿来结束（第一行 user 会把它按文件开头的时间结束掉）。
+          this.parents.delete(id);
+          repo.saveCursor({ sessionId: id, rootSessionId: root, file, ino: st.ino, offset: 0, openTurnId: null, updatedAt: this.d.now() });
+        }
+        return { offset: reset ? 0 : (c?.offset ?? 0) };
+      },
+      lines: (lines: TailLine[], next: number, st: TailStat) => {
+        if (this.stopped) return false;
+        // 两块之间可能连上了 replaced_by（run() 里搬过）：按现在的链根写。
+        root = this.rooted(id).root;
+        const skipped = lines.filter((l) => l.skipped);
+        if (skipped.length > 0) this.d.log?.(`conv ingest ${id}: skipped ${skipped.length} line(s) over the size limit at byte ${skipped[0].start}`);
+        let changed = false;
+        try {
+          perfOp("conv.ingest", () => repo.transaction(() => {
+            for (const l of lines) {
+              if (l.skipped || !l.text) continue;
+              for (const e of convEntriesOfValue(l.json(), l.text)) {
+                const r = this.apply(id, root, e, openTurnId);
+                openTurnId = r.openTurnId;
+                changed ||= r.changed;
+              }
+            }
+            repo.saveCursor({ sessionId: id, rootSessionId: root, file, ino: st.ino, offset: next, openTurnId, updatedAt: this.d.now() });
+          }));
+        } catch (e) {
+          // 事务回滚了：parentMap 里可能有指向回滚掉的轮的 id。游标没动，下次从这里再读。
+          this.parents.delete(id);
+          if (!failed) this.d.log?.(`conv ingest ${id}: ${e instanceof Error ? e.message : String(e)}`);
+          failed = true;
+          return false;
+        }
+        if (changed) this.touched.add(root);
+        fed = true;
+      },
+      end: () => {
+        // 别的消费者读到的新内容：这里收尾（run() 里读的由 run() 收）。
+        if (!fed) return;
+        fed = false;
+        if (!this.inRun.has(id)) this.afterRead();
+      },
+    };
   }
 
   private parentMap(id: string): Map<string, number> {
