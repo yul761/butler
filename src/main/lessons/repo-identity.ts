@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { gitBinary, GIT_SAFE_ARGS } from "../util/git-path";
@@ -20,21 +20,52 @@ export function defaultGit(path: string, exec: typeof execFileSync = execFileSyn
   }
 }
 
+/** defaultGit 的异步版（BTL-275）：不阻塞主线程。确定没有这个 remote（退出码 2）为 null，其他失败 reject。 */
+export function defaultGitAsync(path: string, remote = "origin"): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    let bin: string;
+    try {
+      bin = gitBinary();
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    execFile(bin, [...GIT_SAFE_ARGS, "-C", path, "remote", "get-url", remote], { timeout: 3000, encoding: "utf8", windowsHide: true }, (err, stdout) => {
+      if (!err) resolve(stdout.trim());
+      else if ((err as { code?: unknown }).code === 2) resolve(null);
+      else reject(err);
+    });
+  });
+}
+
+/** warm 同时最多起几个 git。 */
+const WARM_PARALLEL = 4;
+
 /**
  * 仓库路径 -> 仓库身份（来自 origin remote；remoteSlugsOf 另外看 upstream）。成功的结果、“确定没有 origin”和“存在但不是 git 仓库”按路径缓存，app 运行期间不过期；路径不存在、超时和出错不缓存。
  * 给的是改名后的名字（canonical，BTL-261）：仓库在 GitHub 上改了名，本地 origin 还是旧名字也照样能用，不能让各处按旧名字再写进库里。缓存的是 remote 原样的。
  */
 export class RepoIdentity {
   private readonly git: (path: string) => string | null;
+  private readonly asyncGit: (path: string) => Promise<string | null>;
   private readonly upstreamGit: (path: string) => string | null;
   private readonly exists: (p: string) => boolean;
   private readonly cache = new Map<string, string | null>();
   private readonly upstreamCache = new Map<string, string | null>();
   private canonical: (slug: string) => string;
 
-  constructor(d: { git?: (path: string) => string | null; upstreamGit?: (path: string) => string | null; exists?: (p: string) => boolean; canonical?: (slug: string) => string } = {}) {
+  constructor(
+    d: {
+      git?: (path: string) => string | null;
+      asyncGit?: (path: string) => Promise<string | null>;
+      upstreamGit?: (path: string) => string | null;
+      exists?: (p: string) => boolean;
+      canonical?: (slug: string) => string;
+    } = {},
+  ) {
     this.canonical = d.canonical ?? ((s) => s);
     this.git = d.git ?? defaultGit;
+    this.asyncGit = d.asyncGit ?? defaultGitAsync;
     this.upstreamGit = d.upstreamGit ?? ((p) => defaultGit(p, execFileSync, "upstream"));
     this.exists = d.exists ?? existsSync;
   }
@@ -78,6 +109,32 @@ export class RepoIdentity {
     const slug = url ? parseRemoteSlug(url) : null;
     cache.set(path, slug);
     return slug;
+  }
+
+  /**
+   * 先在后台把这些路径的 origin 查好（BTL-275）：第一次 lessons:state 原来对每个已知仓库同步起一次 git（3 秒超时），
+   * 十几个仓库就卡主线程上百毫秒。规则同 slugOf：路径不在的跳过、不是仓库的直接记 null、失败的不缓存（之后 slugOf 照旧同步重试）。
+   * 等 git 的时候 slugOf 先记下了的，不拿这次的结果覆盖。
+   */
+  async warm(paths: Iterable<string>): Promise<void> {
+    const todo = [...new Set(paths)].filter((p) => !this.cache.has(p) && this.exists(p));
+    const next = async (): Promise<void> => {
+      for (let p = todo.shift(); p !== undefined; p = todo.shift()) {
+        if (this.cache.has(p)) continue;
+        if (!this.exists(join(p, ".git"))) {
+          this.cache.set(p, null);
+          continue;
+        }
+        let url: string | null;
+        try {
+          url = await this.asyncGit(p);
+        } catch {
+          continue;
+        }
+        if (!this.cache.has(p)) this.cache.set(p, url ? parseRemoteSlug(url) : null);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(WARM_PARALLEL, todo.length) }, next));
   }
 
   /** 页面用：解析不出时说明原因。 */

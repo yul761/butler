@@ -89,6 +89,24 @@ export class FeatureHandoffsRepo {
     return this.listByFeature(featureId, 1)[0] ?? null;
   }
 
+  /** latest() 的批量版（BTL-275）：几个 epic 一次查。没有汇总的不在 Map 里。 */
+  latestMany(featureIds: readonly number[]): Map<number, FeatureHandoffRecord> {
+    const out = new Map<number, FeatureHandoffRecord>();
+    if (featureIds.length === 0) return out;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM feature_handoffs WHERE id IN (
+           SELECT (SELECT h.id FROM feature_handoffs h WHERE h.feature_id = f.value ORDER BY h.created_at DESC, h.id DESC LIMIT 1)
+           FROM json_each(?) f)`,
+      )
+      .all(JSON.stringify(featureIds)) as unknown as FeatureHandoffRow[];
+    for (const r of rows) {
+      const rec = toRecord(r);
+      out.set(rec.featureId, rec);
+    }
+    return out;
+  }
+
   /** 最新的一条完整汇总；payload 读不出来的行跳过，取下一条。 */
   latestValid(featureId: number): FeatureHandoffRecord | null {
     const rows = this.db

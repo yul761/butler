@@ -612,3 +612,25 @@ describe("the Shipherd 总控 session (BTL-190 5)", () => {
     expect(row().status).toBe("stuck");
   });
 });
+
+describe("featureViews reads blocks and summaries once for all epics (BTL-275)", () => {
+  it("each epic gets its own tickets, blocks and latest summary, from one batched read each", async () => {
+    const s = await setup();
+    const other = await s.featureService.create({ name: "search", repoPaths: [s.frontend] });
+    await s.ticketService.create({ key: "SRC-1", featureId: other.id, repoPaths: [s.frontend], workMode: "branch" });
+    s.blocks.insert({ featureId: s.feature.id, name: "Pay", description: null, createdAt: 1 });
+    s.blocks.insert({ featureId: other.id, name: "Index", description: null, createdAt: 1 });
+    const summary = { summary: "x", blockers: [], next_steps: [], decisions: [], open_questions: [] };
+    s.featureHandoffs.insert({ featureId: other.id, sessionId: null, trigger: "manual", createdAt: 3, payload: summary, rawText: null });
+    const list = vi.spyOn(s.blocks, "list");
+    const listMany = vi.spyOn(s.blocks, "listMany");
+    const latest = vi.spyOn(s.featureHandoffs, "latest");
+    const latestMany = vi.spyOn(s.featureHandoffs, "latestMany");
+    const byId = new Map(s.service.featureViews().map((f) => [f.id, f]));
+    expect(byId.get(s.feature.id)).toMatchObject({ blocks: [expect.objectContaining({ name: "Pay" })], summary: null });
+    expect(byId.get(s.feature.id)!.tickets.map((t) => t.key)).toEqual(["DMS-1", "DMS-2"]);
+    expect(byId.get(other.id)).toMatchObject({ blocks: [expect.objectContaining({ name: "Index" })], summary: expect.objectContaining({ createdAt: 3 }) });
+    expect(byId.get(other.id)!.tickets.map((t) => t.key)).toEqual(["SRC-1"]);
+    expect([list.mock.calls.length, latest.mock.calls.length, listMany.mock.calls.length, latestMany.mock.calls.length]).toEqual([0, 0, 1, 1]);
+  });
+});

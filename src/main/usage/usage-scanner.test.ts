@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { UsageRepo } from "../db/usage-repo";
 import { memDb, tempDir } from "../test-utils";
 import { subagentsDir, USAGE_SCAN_MS, UsageScanner, usageScanMs } from "./usage-scanner";
@@ -65,6 +65,36 @@ describe("UsageScanner", () => {
     appendFileSync(file("s1"), full.slice(40));
     await scanner.scanAll();
     expect(repo.since(0)).toHaveLength(1);
+  });
+
+  it("does not write the cursor again when nothing changed, but does when only a half line grew (BTL-275)", async () => {
+    const { file, scanner, repo } = setup();
+    writeFileSync(file("s1"), line("a"));
+    await scanner.scanAll();
+    const set = vi.spyOn(repo, "setCursor");
+    await scanner.scanAll();
+    await scanner.scanAll();
+    expect(set).not.toHaveBeenCalled();
+    // 只多了半行：读不出新的一轮，但大小变了要记下（下次才能发现文件变短）
+    appendFileSync(file("s1"), line("b").slice(0, 30));
+    await scanner.scanAll();
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(repo.cursor(file("s1"))).toEqual({ offset: line("a").length, size: line("a").length + 30 });
+    set.mockClear();
+    await scanner.scanAll();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("a file truncated in place is recorded at once even when it is now empty, then read from the start (BTL-275)", async () => {
+    const { file, scanner, repo } = setup();
+    writeFileSync(file("s1"), line("a", "x".repeat(300)));
+    await scanner.scanAll();
+    truncateSync(file("s1"), 0);
+    await scanner.scanAll();
+    expect(repo.cursor(file("s1"))).toEqual({ offset: 0, size: 0 });
+    writeFileSync(file("s1"), line("b", "y".repeat(400)));
+    await scanner.scanAll();
+    expect(repo.since(0).map((r) => r.messageId).sort()).toEqual(["a", "b"]);
   });
 
   it("restarts from zero when the file shrinks", async () => {

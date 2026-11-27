@@ -18,6 +18,8 @@ export interface ProcInfo {
   args: string;
   /** 进程组（ps 的 pgid）；Windows 上没有。claude 的 Bash 工具用 `&` / nohup 起的进程被收养走以后还留在原来那个 shell 的组里，孤儿清理靠它认。 */
   pgid?: number;
+  /** 累计 CPU 毫秒（ps 的 cputime）；Windows 上没有。活动探测看子孙进程有没有在用 CPU（BTL-275：和内存采样共用这一张表）。 */
+  cpuMs?: number;
 }
 
 export type ProcTable = Map<number, ProcInfo>;
@@ -28,10 +30,18 @@ export interface TreeProc extends ProcInfo {
 }
 
 /**
- * `ps -A -o pid=,ppid=,pgid=,rss=,lstart=,args=`：lstart 是 C 区域设置下的 5 段（Mon Nov 17 09:00:00 2026）。
- * 只有三个数字（没有 pgid 这一栏）的输出也能读。
+ * `ps -A -o pid=,ppid=,pgid=,rss=,cputime=,lstart=,args=`：lstart 是 C 区域设置下的 5 段（Mon Nov 17 09:00:00 2026）。
+ * 只有三个数字（没有 pgid 这一栏）、没有 cputime 这一栏的输出也能读。
  */
-const PS_LINE = /^\s*(\d+)\s+(\d+)\s+(?:(\d+)\s+)?(\d+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s?(.*)$/;
+const PS_LINE = /^\s*(\d+)\s+(\d+)\s+(?:(\d+)\s+)?(\d+)\s+(?:((?:\d+-)?(?:\d+:)?\d+:\d+(?:\.\d+)?)\s+)?(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s?(.*)$/;
+
+/** ps 的 cputime：`0:03.50`、`1:02:03`、`1-02:03:04`；解析不了返回 null。 */
+export function parseCpuTime(s: string): number | null {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(s);
+  if (!m) return null;
+  const [, d, h, min, sec] = m;
+  return Math.round((Number(d ?? 0) * 86400 + Number(h ?? 0) * 3600 + Number(min) * 60 + Number(sec)) * 1000);
+}
 
 export function parsePsTable(out: string): ProcTable {
   const t: ProcTable = new Map();
@@ -39,8 +49,10 @@ export function parsePsTable(out: string): ProcTable {
     const m = PS_LINE.exec(line);
     if (!m) continue;
     const pid = Number(m[1]);
-    const info: ProcInfo = { pid, ppid: Number(m[2]), rssKb: Number(m[4]), start: m[5].replace(/\s+/g, " "), args: m[6].trim() };
+    const info: ProcInfo = { pid, ppid: Number(m[2]), rssKb: Number(m[4]), start: m[6].replace(/\s+/g, " "), args: m[7].trim() };
     if (m[3] !== undefined) info.pgid = Number(m[3]);
+    const cpu = m[5] === undefined ? null : parseCpuTime(m[5]);
+    if (cpu !== null) info.cpuMs = cpu;
     t.set(pid, info);
   }
   return t;
@@ -100,7 +112,7 @@ function describeRunError(e: unknown): string {
 export async function readProcTable(platform: NodeJS.Platform = process.platform, run: RunCommand = runCommand, fail: (reason: string) => void = () => {}): Promise<ProcTable | null> {
   const win = platform === "win32";
   const cmd = win ? powershellExe() : "ps";
-  const args = win ? ["-NoProfile", "-NonInteractive", "-Command", WIN_SCRIPT] : ["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,args="];
+  const args = win ? ["-NoProfile", "-NonInteractive", "-Command", WIN_SCRIPT] : ["-A", "-o", "pid=,ppid=,pgid=,rss=,cputime=,lstart=,args="];
   let out: string;
   try {
     out = await run(cmd, args);
@@ -130,6 +142,42 @@ export function procTableReader(platform: NodeJS.Platform, log: (msg: string) =>
       last = null;
     }
     return t;
+  };
+}
+
+/** 一张进程表和开始读它的时间（BTL-275）：读者据此判断这张表比自己上次用的新还是旧。 */
+export interface TimedProcTable {
+  at: number;
+  table: ProcTable;
+}
+
+/** 每次现读，带上开始读的时间。读失败为 null。 */
+export function timedProcTable(read: () => Promise<ProcTable | null>, now: () => number): () => Promise<TimedProcTable | null> {
+  return async () => {
+    const at = now();
+    const table = await read();
+    return table ? { at, table } : null;
+  };
+}
+
+/**
+ * 一张最多 ttlMs 旧的进程表，给只看个大概的读者共用（BTL-275）：内存采样每分钟一次，活动探测每个在跑后台命令的 session 各一次，
+ * 原来各起各的 ps。正在读的那次大家等同一个结果；读失败（null）不留，下一个读者重读。
+ * 孤儿清理、休眠要杀进程，要现读的表，不用这个。
+ */
+export function sharedProcTable(read: () => Promise<ProcTable | null>, o: { ttlMs: number; now: () => number }): () => Promise<TimedProcTable | null> {
+  let kept: TimedProcTable | null = null;
+  let inFlight: Promise<TimedProcTable | null> | null = null;
+  return () => {
+    const at = o.now();
+    if (kept && at - kept.at < o.ttlMs) return Promise.resolve(kept);
+    inFlight ??= read()
+      .then((table) => {
+        kept = table ? { at, table } : null;
+        return kept;
+      })
+      .finally(() => (inFlight = null));
+    return inFlight;
   };
 }
 

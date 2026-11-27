@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -229,10 +229,11 @@ describe("TranscriptLocator (BTL-242)", () => {
     expect(scans()).toBe(1);
   });
 
-  it("does not remember a miss, and forgets a file that moved", () => {
+  it("retries a miss once the hook says the session started, and forgets a file that moved", () => {
     const { loc, files, scans } = make();
     expect(loc.find("s3")).toBeNull();
     files.add("/p/c/s3.jsonl");
+    loc.forget("s3");
     expect(loc.find("s3")).toBe("/p/c/s3.jsonl");
     files.delete("/p/c/s3.jsonl");
     files.add("/p/d/s3.jsonl");
@@ -240,6 +241,70 @@ describe("TranscriptLocator (BTL-242)", () => {
     files.delete("/p/d/s3.jsonl");
     expect(loc.state("s3")).toBe("absent");
     expect(scans()).toBe(4);
+  });
+
+  describe("a session without a transcript yet (BTL-275)", () => {
+    // Windows 上 join 拼出反斜杠：期望的路径也用 join 拼。
+    const inCwdDir = join("/p", "-Users-me-my-repo", "s1.jsonl");
+    const elsewhere = join("/p", "elsewhere", "s2.jsonl");
+    function hinted() {
+      const files = new Set<string>();
+      let scans = 0;
+      let now = 1_000;
+      const scan = (_dir: string, id: string) => {
+        scans++;
+        return [...files].find((f) => f.endsWith(`${sep}${id}.jsonl`)) ?? null;
+      };
+      const state = (dir: string, id: string) => (scan(dir, id) ? "present" : "absent") as "present" | "absent";
+      const cwds = new Map<string, string>([["s1", "/Users/me/my.repo"]]);
+      const loc = new TranscriptLocator("/p", 2000, (f) => files.has(f), scan, state, { cwdOf: (id) => cwds.get(id) ?? null, missMs: 20_000, now: () => now });
+      return { loc, files, scans: () => scans, advance: (ms: number) => void (now += ms) };
+    }
+
+    it("looks in the folder Claude Code names after the session's cwd first, without scanning every project", () => {
+      const w = hinted();
+      w.files.add(inCwdDir);
+      expect(w.loc.find("s1")).toBe(inCwdDir);
+      expect(w.scans()).toBe(0);
+    });
+
+    it("scans for a miss at most once per window; the cwd folder is still checked every time", () => {
+      const w = hinted();
+      expect(w.loc.find("s1")).toBeNull();
+      expect(w.loc.find("s1")).toBeNull();
+      expect(w.scans()).toBe(1);
+      // 记录文件在 cwd 推出的目录里出现了：不用等窗口过去
+      w.files.add(inCwdDir);
+      expect(w.loc.find("s1")).toBe(inCwdDir);
+      expect(w.scans()).toBe(1);
+    });
+
+    it("a transcript somewhere else (cwd unknown) is found once the window has passed", () => {
+      const w = hinted();
+      expect(w.loc.find("s2")).toBeNull();
+      w.files.add(elsewhere);
+      w.advance(19_000);
+      expect(w.loc.find("s2")).toBeNull();
+      w.advance(2_000);
+      expect(w.loc.find("s2")).toBe(elsewhere);
+      expect(w.scans()).toBe(2);
+    });
+
+    it("forget (SessionStart / UserPromptSubmit) drops the remembered miss at once", () => {
+      const w = hinted();
+      expect(w.loc.find("s2")).toBeNull();
+      w.files.add(elsewhere);
+      w.loc.forget("s2");
+      expect(w.loc.find("s2")).toBe(elsewhere);
+    });
+
+    it("state() never answers from a remembered miss (absent deletes rows)", () => {
+      const w = hinted();
+      expect(w.loc.find("s2")).toBeNull();
+      w.files.add(elsewhere);
+      expect(w.loc.state("s2")).toBe("present");
+      expect(w.loc.find("s2")).toBe(elsewhere);
+    });
   });
 
   it("keeps at most max entries, dropping the least recently used", () => {

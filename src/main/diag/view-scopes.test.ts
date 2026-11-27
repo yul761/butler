@@ -8,12 +8,19 @@ describe("SCOPE_INVALIDATES", () => {
   });
 
   it("an activity change drops the views that read activity and keeps the ticket list", () => {
-    expect(SCOPE_INVALIDATES.activity).toEqual([VIEW_KEYS.features, VIEW_KEYS.turnInput]);
+    expect(SCOPE_INVALIDATES.activity).toEqual([VIEW_KEYS.features, VIEW_KEYS.turnInput, VIEW_KEYS.now]);
   });
 
-  it("a memory sample or more output keeps every view", () => {
-    expect(SCOPE_INVALIDATES.procs).toEqual([]);
-    expect(SCOPE_INVALIDATES.output).toEqual([]);
+  it("a memory sample or more output keeps every view but the Now page (BTL-275: it shows memory readings and recent activity)", () => {
+    expect(SCOPE_INVALIDATES.procs).toEqual([VIEW_KEYS.now]);
+    expect(SCOPE_INVALIDATES.output).toEqual([VIEW_KEYS.now]);
+  });
+
+  it("every scope drops the Now page, so a refetch after any state:changed builds it afresh (BTL-275)", () => {
+    for (const s of STATE_SCOPES) {
+      const keys = SCOPE_INVALIDATES[s];
+      if (keys !== undefined) expect(keys, s).toContain(VIEW_KEYS.now);
+    }
   });
 
   it("every scope that drops a view also drops the views built from it", () => {

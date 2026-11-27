@@ -2,7 +2,7 @@
 // 调之前和调完都作废视图缓存。认错成写只是少用一次缓存；所以拿不准的一律不算只读。
 const READ_LAST = new Set([
   "list", "view", "get", "status", "state", "summary", "snapshot", "since", "history", "limits", "hits", "rules", "search", "batches", "runs",
-  "pending", "stats", "archived", "glance", "unclaimed", "messages", "breakers", "violations", "queue", "events", "language", "why", "board",
+  "pending", "stats", "archived", "glance", "unclaimed", "unclaimedCount", "messages", "breakers", "violations", "queue", "events", "language", "why", "board",
   "assessment", "reports",
 ]);
 

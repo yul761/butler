@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { descendantCpuMs, hasLiveShell, parsePsOutput, sampleProcTree } from "./proc-tree";
+import { descendantCpuMs, hasLiveShell, parsePsOutput, sampleProcTree, sampleFromTable } from "./proc-tree";
 
 describe("parsePsOutput", () => {
   it("parses the cputime formats ps prints", () => {
@@ -57,6 +57,23 @@ describe("hasLiveShell", () => {
   });
   it("only looks below the root", () => {
     expect(hasLiveShell(100, parsePsOutput(`${CLAUDE_TREE}\n200 1 0:00.10 /bin/zsh -l`), ["git push"])).toBe(false);
+  });
+});
+
+describe("sampleFromTable (BTL-275): the same answer from the shared process table", () => {
+  it("matches sampleProcTree on the same processes, and is null when the table has no CPU times (Windows) or is missing", async () => {
+    const ps = "1 0 0:10.00 claude\n2 1 0:02.00 /bin/zsh -c git push\n3 2 0:01.50 git push\n";
+    const table = new Map([
+      [1, { pid: 1, ppid: 0, rssKb: 1, cpuMs: 10_000, start: "s", args: "claude" }],
+      [2, { pid: 2, ppid: 1, rssKb: 1, cpuMs: 2000, start: "s", args: "/bin/zsh -c git push" }],
+      [3, { pid: 3, ppid: 2, rssKb: 1, cpuMs: 1500, start: "s", args: "git push" }],
+    ]);
+    for (const commands of [["git push"], ["npm test"], []]) {
+      expect(sampleFromTable(1, commands, table)).toEqual(await sampleProcTree(1, commands, "darwin", async () => ps));
+    }
+    const noCpu = new Map([[1, { pid: 1, ppid: 0, rssKb: 1, start: "s", args: "claude" }]]);
+    expect(sampleFromTable(1, ["x"], noCpu)).toEqual({ cpuMs: null, liveShell: null });
+    expect(sampleFromTable(1, ["x"], null)).toEqual({ cpuMs: null, liveShell: null });
   });
 });
 

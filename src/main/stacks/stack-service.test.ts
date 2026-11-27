@@ -808,3 +808,127 @@ describe("StackService for other workstreams", () => {
     expect(v.stacks[0]).toMatchObject({ id, autoRebase: true, layers: [{ branch: "a", ticketTitle: "title a" }, {}, {}, {}] });
   });
 });
+
+/**
+ * 空闲时栈 tick 的开销（BTL-275 基准，只在 SHIPHERD_PERF_BENCH=1 时跑）：栈什么都没变，每分钟一次 tick，
+ * 发了几次 onChange（每次都是整个界面重取）、起了几个 git、每次多久。git 经一个包装脚本数次数。
+ */
+/** 数这之后起了几个 git（换成一个记次数的包装脚本）。只在非 Windows 上用。 */
+async function countGits(): Promise<{ n: () => number; done: () => void }> {
+  const { setGitBinary, resetGitBinary } = await import("../util/git-path");
+  const dir = tempDir("shipherd-gitcount-");
+  const log = join(dir, "calls");
+  const wrapper = join(dir, "git");
+  writeFileSync(log, "");
+  writeFileSync(wrapper, `#!/bin/sh\necho x >> "${log}"\nexec /usr/bin/env git "$@"\n`, { mode: 0o755 });
+  setGitBinary(wrapper);
+  const { readFileSync } = await import("node:fs");
+  return { n: () => readFileSync(log, "utf8").split("\n").filter(Boolean).length, done: resetGitBinary };
+}
+
+describe.skipIf(process.platform === "win32")("an idle tick (BTL-275)", () => {
+  it("with nothing changed sends no onChange and asks git once per stack; a trunk that moved notifies", async () => {
+    const w = world({ autoRebase: false });
+    await defineAll(w);
+    let changes = 0;
+    w.deps.onChange = () => void changes++;
+    await w.svc.tick();
+    expect(changes).toBe(1); // 第一次 tick 总是发
+    changes = 0;
+    const gits = await countGits();
+    try {
+      for (let i = 0; i < 3; i++) {
+        w.advance(60_000);
+        await w.svc.tick();
+      }
+      expect(changes).toBe(0);
+      expect(gits.n()).toBe(3);
+    } finally {
+      gits.done();
+    }
+    w.pushMain("x.txt", "x\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(changes).toBe(1);
+    expect((await w.svc.view({ featureId: null })).stacks[0]!.layers[0]!.behind).toBe(1);
+  });
+
+  it("with autoRebase on and nothing to do: no onChange, one git per tick; a new commit on a layer still rebases and notifies", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    let changes = 0;
+    w.deps.onChange = () => void changes++;
+    await w.svc.tick();
+    w.advance(60_000);
+    await w.svc.tick();
+    changes = 0;
+    const gits = await countGits();
+    try {
+      for (let i = 0; i < 3; i++) {
+        w.advance(60_000);
+        await w.svc.tick();
+      }
+      expect(changes).toBe(0);
+      expect(gits.n()).toBe(3);
+    } finally {
+      gits.done();
+    }
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b-more.txt", "more\n", "b more");
+    g(w.repo, "checkout", "-q", "main");
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "layer_commits", outcome: "rebased" });
+    expect(changes).toBeGreaterThan(0);
+  });
+
+  it("a notice that appears only because time passed still notifies", async () => {
+    const w = world({ autoRebase: false, policy: { behindCommits: 100, behindDays: 1 } });
+    await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    const behindNow = () => w.svc.notices().some((n) => n.reason === "behind");
+    let changes = 0;
+    w.deps.onChange = () => void changes++;
+    // 一直往后推：落后天数一跨过 behindDays，提醒出来的那次 tick 要发
+    for (let i = 0; i < 40 && !behindNow(); i++) {
+      w.advance(86_400_000);
+      changes = 0;
+      await w.svc.tick();
+    }
+    expect(behindNow()).toBe(true);
+    expect(changes).toBe(1);
+  });
+});
+
+describe.skipIf(process.env.SHIPHERD_PERF_BENCH !== "1" || process.platform === "win32")("idle tick bench (BTL-275)", () => {
+  it.each([["autoRebase on", true], ["autoRebase off", false]] as const)("an unchanged 4-layer stack (%s)", async (_n, autoRebase) => {
+    const { setGitBinary, resetGitBinary } = await import("../util/git-path");
+    const dir = tempDir("shipherd-gitcount-");
+    const log = join(dir, "calls");
+    const wrapper = join(dir, "git");
+    writeFileSync(wrapper, `#!/bin/sh\necho x >> "${log}"\nexec /usr/bin/env git "$@"\n`, { mode: 0o755 });
+    const w = world({ autoRebase });
+    await defineAll(w);
+    let changes = 0;
+    w.deps.onChange = () => void changes++;
+    await w.svc.tick(); // 第一次：建基线
+    setGitBinary(wrapper);
+    try {
+      changes = 0;
+      writeFileSync(log, "");
+      const n = 10;
+      const t0 = performance.now();
+      for (let i = 0; i < n; i++) {
+        w.advance(60_000);
+        await w.svc.tick();
+      }
+      const ms = (performance.now() - t0) / n;
+      const gits = (await import("node:fs")).readFileSync(log, "utf8").split("\n").filter(Boolean).length;
+      console.log(`[idle-bench] stack tick (${_n}): ${changes}/${n} ticks sent onChange, ${(gits / n).toFixed(1)} git per tick, ${ms.toFixed(1)} ms per tick`);
+    } finally {
+      resetGitBinary();
+    }
+  });
+});

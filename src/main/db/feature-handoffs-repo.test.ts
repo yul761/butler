@@ -70,3 +70,22 @@ describe("FeatureHandoffsRepo", () => {
     expect(repo.latestValid(featureId)).toBeNull();
   });
 });
+
+describe("FeatureHandoffsRepo.latestMany (BTL-275)", () => {
+  it("is latest() for several epics in one query: newest created_at, then the higher id; degraded ones count", () => {
+    const { db, featureId: a, repo } = setup();
+    const b = new FeaturesRepo(db).insert({ name: "b", workspaceDir: "/w/b", createdAt: 1 });
+    const none = new FeaturesRepo(db).insert({ name: "c", workspaceDir: "/w/c", createdAt: 1 });
+    repo.insert(base(a, { createdAt: 10 }));
+    repo.insert(base(a, { createdAt: 30, payload: null, rawText: "bad" }));
+    repo.insert(base(a, { createdAt: 20 }));
+    repo.insert(base(b, { createdAt: 5 }));
+    repo.insert(base(b, { createdAt: 5, trigger: "refresh" }));
+    const many = repo.latestMany([a, b, none]);
+    expect(many.get(a)).toEqual(repo.latest(a));
+    expect(many.get(a)).toMatchObject({ createdAt: 30, degraded: true });
+    expect(many.get(b)).toEqual(repo.latest(b));
+    expect(many.has(none)).toBe(false);
+    expect(repo.latestMany([]).size).toBe(0);
+  });
+});

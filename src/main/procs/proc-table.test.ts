@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, procTableReader, readProcTable, shortName, summarize, treeOf, type ProcTable } from "./proc-table";
+import { classifyTree, compareStart, parsePsTable, parseWinTable, powershellExe, procTableReader, readProcTable, sharedProcTable, shortName, summarize, treeOf, type ProcTable } from "./proc-table";
 
 const PS = [
   "  100     1  50000 Mon Nov 17 09:00:00 2026 /Applications/Shipherd.app/Contents/MacOS/Shipherd",
@@ -31,6 +31,56 @@ describe("parsePsTable with a pgid column", () => {
     expect(t.get(112)).toEqual({ pid: 112, ppid: 1, pgid: 111, rssKb: 90000, start: "Mon Nov 17 09:01:02 2026", args: "node /r/vite" });
     expect(t.get(113)?.pgid).toBeUndefined();
     expect(t.get(113)?.rssKb).toBe(9000);
+  });
+});
+
+describe("parsePsTable with a cputime column (BTL-275)", () => {
+  it("reads the CPU time too, in every form ps prints it; lines without it still parse", () => {
+    const t = parsePsTable(
+      [
+        "  112     1   111  90000     0:03.50 Mon Nov 17 09:01:02 2026 node /r/vite",
+        "  113   112   111   9000  1:02:03 Mon Nov 17 09:01:03 2026 x 1:00",
+        "  114   112  9000 1-02:03:04 Mon Nov 17 09:01:03 2026 y",
+        "  115   112   111   9000 Mon Nov 17 09:01:03 2026 z",
+      ].join("\n"),
+    );
+    expect(t.get(112)).toEqual({ pid: 112, ppid: 1, pgid: 111, rssKb: 90000, cpuMs: 3500, start: "Mon Nov 17 09:01:02 2026", args: "node /r/vite" });
+    expect(t.get(113)).toMatchObject({ cpuMs: 3723000, args: "x 1:00" });
+    expect(t.get(114)).toMatchObject({ rssKb: 9000, cpuMs: 93784000, args: "y" });
+    expect(t.get(114)?.pgid).toBeUndefined();
+    expect(t.get(115)?.cpuMs).toBeUndefined();
+  });
+});
+
+describe("sharedProcTable (BTL-275): one ps for the activity probe and the memory sample", () => {
+  it("reuses a table for ttlMs, shares a read in flight, and does not keep a failed read", async () => {
+    let t = 0;
+    let reads = 0;
+    let fail = false;
+    const gate: { release?: () => void } = {};
+    const read = async (): Promise<ProcTable | null> => {
+      reads++;
+      if (!gate.release) await new Promise<void>((r) => (gate.release = r));
+      return fail ? null : new Map([[reads, { pid: reads, ppid: 0, rssKb: 1, start: "s", args: "a" }]]);
+    };
+    const shared = sharedProcTable(read, { ttlMs: 5000, now: () => t });
+    const [a, b] = [shared(), shared()];
+    gate.release!();
+    expect(await a).toBe(await b);
+    expect((await a)?.at).toBe(0);
+    expect(reads).toBe(1);
+    t = 4999;
+    expect(await shared()).toBe(await a);
+    t = 5000;
+    const c = await shared();
+    expect(c).not.toBe(await a);
+    expect(c?.at).toBe(5000);
+    expect(reads).toBe(2);
+    fail = true;
+    t = 20_000;
+    expect(await shared()).toBeNull();
+    expect(await shared()).toBeNull();
+    expect(reads).toBe(4);
   });
 });
 
@@ -151,7 +201,7 @@ describe("readProcTable", () => {
       return PS;
     });
     expect(calls[0].cmd).toBe("ps");
-    expect(calls[0].args).toEqual(["-A", "-o", "pid=,ppid=,pgid=,rss=,lstart=,args="]);
+    expect(calls[0].args).toEqual(["-A", "-o", "pid=,ppid=,pgid=,rss=,cputime=,lstart=,args="]);
     expect(t?.size).toBe(12);
   });
 

@@ -86,6 +86,29 @@ export async function revParse(cwd: string, ref: string): Promise<string | null>
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
+/**
+ * 几个完整的 ref 一次读（BTL-275：栈 tick 原来每层、trunk 各起一个 rev-parse）。只认完全相同的名字（for-each-ref 的模式按前缀和通配匹配，
+ * 结果再按名字过滤）；名字里有通配符的单独 revParse。标签取它指向的提交，同 revParse 的 ^{commit}。不存在的不在结果里。
+ */
+export async function refTips(cwd: string, refs: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const plain = [...new Set(refs.filter((r) => !/[*?[\\]/.test(r)))];
+  for (const r of refs.filter((x) => !plain.includes(x))) {
+    const sha = await revParse(cwd, r);
+    if (sha) out.set(r, sha);
+  }
+  if (plain.length === 0) return out;
+  const want = new Set(plain);
+  const lines = await gitOk(cwd, ["for-each-ref", "--format=%(refname)%09%(objectname)%09%(*objectname)%09%(objecttype)%09%(*objecttype)", ...plain]);
+  for (const line of lines.split(/\r?\n/)) {
+    const [name, sha, peeled, type, peeledType] = line.split("\t");
+    if (!name || !want.has(name)) continue;
+    if (type === "commit") out.set(name, sha!);
+    else if (peeledType === "commit") out.set(name, peeled!);
+  }
+  return out;
+}
+
 /** a 是不是 b 的祖先（相等也算）。 */
 export async function isAncestor(cwd: string, a: string, b: string): Promise<boolean> {
   const r = await runGit(cwd, ["merge-base", "--is-ancestor", a, b]);

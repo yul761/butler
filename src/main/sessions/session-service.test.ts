@@ -2,7 +2,7 @@ import type { CheckAbsenceReason } from "../../shared/checks";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import type { TicketRepo } from "../../shared/types";
 import { FeaturesRepo } from "../db/features-repo";
@@ -486,6 +486,20 @@ describe("SessionService views", () => {
     const { service, sessions } = await setup();
     sessions.insertIfAbsent({ id: "u1", ticketKey: null, cwd: "/w", origin: "discovered", lastActivityAt: 900, createdAt: 900 });
     expect(service.unclaimed()).toEqual([]);
+    expect(service.unclaimedCount()).toBe(0);
+  });
+
+  it("unclaimedCount is unclaimed().length without building the list (BTL-275)", async () => {
+    const { service, sessions, settings } = await setup();
+    settings.set("showOutsideSessions", "1");
+    for (const id of ["u1", "u2", "u3"]) sessions.insertIfAbsent({ id, ticketKey: null, cwd: "/w", origin: "discovered", lastActivityAt: 900, createdAt: 900 });
+    // 7 天之前的不算
+    sessions.insertIfAbsent({ id: "old", ticketKey: null, cwd: "/w", origin: "discovered", lastActivityAt: -1e12, createdAt: -1e12 });
+    service.dismiss("u3");
+    const list = vi.spyOn(sessions, "listUnclaimed");
+    expect(service.unclaimedCount()).toBe(2);
+    expect(list).not.toHaveBeenCalled();
+    expect(service.unclaimedCount()).toBe(service.unclaimed().length);
   });
 
   it("unclaimed suggests tickets and claim/dismiss work", async () => {

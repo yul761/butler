@@ -947,6 +947,28 @@ describe("PrWatcher: branches", () => {
     expect(s.w.statusOf("BTL-1")).toEqual([expect.objectContaining({ prId: null, readError: true, ci: "passing" })]);
   });
 
+  it("a branch read that recovers while the branch has an open PR notifies (the stack tick no longer refreshes every minute, BTL-275)", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.link();
+    s.gh.prStatus.mockResolvedValue(pr());
+    await s.w.check();
+    // 分支检查上次列 PR 失败了；之后一次强制检查（分支有开着的 PR 时只有强制的才查）列成功
+    s.branches.upsert({ repoId: s.repoId, ticketKey: "BTL-1", branch: "b", ci: "unknown", headSha: null, failed: [], readError: true, checkedAt: s.now() });
+    s.gh.prsForBranch.mockResolvedValue([listed(7)]);
+    s.deps.notify.mockClear();
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.gh.prsForBranch).toHaveBeenCalled();
+    expect(s.branches.get(s.repoId)).toMatchObject({ readError: false });
+    expect(s.deps.notify).toHaveBeenCalledTimes(1);
+    // 再强制查一次还是好的：没变，不通知
+    s.deps.notify.mockClear();
+    s.w.soonTicket("BTL-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(s.deps.notify).not.toHaveBeenCalled();
+  });
+
   it("an open PR Shipherd gave up reading still counts as the branch's open PR: the branch check stays paused", async () => {
     const s = setup();
     const row = s.link();
@@ -1388,5 +1410,29 @@ describe("PrWatcher.onPrRead (workstream I)", () => {
     expect(status.headSha).toBe("zz9");
     expect(where).toEqual({ cwd: "/w/r/app", slug: "o/app" });
     release();
+  });
+});
+
+describe("PrWatcher.statusOfMany (BTL-275)", () => {
+  it("is statusOf() for several tickets from one PR read and one branch read", () => {
+    const s = setup();
+    s.addTicket("BTL-2");
+    const r2 = s.addRepo("BTL-2", "api", "x");
+    s.addTicket("BTL-3");
+    s.link();
+    s.link({ url: url(8), number: 8, state: "merged" });
+    // BTL-1 的分支上有开着的 PR：分支行不另出；BTL-2 只有分支行；没读过的分支行不出。
+    s.branches.upsert({ repoId: s.repoId, ticketKey: "BTL-1", branch: "b", ci: "passing", headSha: "h1", failed: [], readError: false, checkedAt: 5 });
+    s.branches.upsert({ repoId: r2, ticketKey: "BTL-2", branch: "x", ci: "failing", headSha: "h2", failed: [], readError: false, checkedAt: 5 });
+    const byTicket = vi.spyOn(s.prs, "byTicket");
+    const branchesByTicket = vi.spyOn(s.branches, "byTicket");
+    const many = s.w.statusOfMany(["BTL-1", "BTL-2", "BTL-3", "BTL-1"]);
+    expect([byTicket.mock.calls.length, branchesByTicket.mock.calls.length]).toEqual([0, 0]);
+    byTicket.mockRestore();
+    branchesByTicket.mockRestore();
+    for (const key of ["BTL-1", "BTL-2", "BTL-3"]) expect(many.get(key)).toEqual(s.w.statusOf(key));
+    expect(many.get("BTL-1")!.map((p) => p.number).sort()).toEqual([7, 8]);
+    expect(many.get("BTL-2")).toEqual([expect.objectContaining({ prId: null, branch: "x", ci: "failing" })]);
+    expect(many.get("BTL-3")).toEqual([]);
   });
 });

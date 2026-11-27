@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { parseCpuTime, type ProcTable, type TimedProcTable } from "../procs/proc-table";
 
 export interface ProcEntry {
   ppid: number;
@@ -13,14 +14,6 @@ export interface ProcSample {
   cpuMs: number | null;
   /** 子孙里还有没有跑后台命令的 shell（MCP server 不算）；没问（没有后台命令）或读不到时为 null。 */
   liveShell: boolean | null;
-}
-
-/** ps 的 cputime：`0:03.50`、`1:02:03`、`1-02:03:04`；解析不了返回 null。 */
-function parseCpuTime(s: string): number | null {
-  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(s);
-  if (!m) return null;
-  const [, d, h, min, sec] = m;
-  return Math.round((Number(d ?? 0) * 86400 + Number(h ?? 0) * 3600 + Number(min) * 60 + Number(sec)) * 1000);
 }
 
 /** 解析 `ps -A -o pid=,ppid=,cputime=,args=` 的输出（args 可以没有），格式不对的行跳过。 */
@@ -119,4 +112,40 @@ export async function sampleProcTree(
   } catch {
     return { cpuMs: null, liveShell: null };
   }
+}
+
+/**
+ * 和 sampleProcTree 一样的读数，用一张已经读好的整张进程表（BTL-275：和内存采样共用，不再每个 session 各起一个 ps）。
+ * 表读不到、或者表里没有 CPU 时间（Windows），两项都是 null。
+ */
+export function sampleFromTable(rootPid: number, commands: string[], table: ProcTable | null): ProcSample {
+  const entries = new Map<number, ProcEntry>();
+  for (const [pid, p] of table ?? []) if (p.cpuMs !== undefined) entries.set(pid, { ppid: p.ppid, cpuMs: p.cpuMs, args: p.args });
+  if (entries.size === 0) return { cpuMs: null, liveShell: null };
+  return { cpuMs: descendantCpuMs(rootPid, entries), liveShell: commands.length ? hasLiveShell(rootPid, entries, commands) : null };
+}
+
+/**
+ * 活动监控的 procTree：只看 CPU 时从共用的进程表里读；win32 上照旧不读（原来就不读，这里不为它多起 PowerShell）。
+ * 两种情况现读（fresh）：要看后台命令的 shell 还在不在（共用的表可能是 shell 起来之前读的，判成「没了」以后就不再问，会一直错）；
+ * 共用的表不比这个 session 上次用的那张新（同一张表 CPU 增量是 0，看着像没在动；更旧的表 CPU 读数会倒退）。
+ * 每个 session 只记上次那张表的读表时间，不留整张表。
+ */
+export function procTreeFrom(
+  shared: () => Promise<TimedProcTable | null>,
+  platform: NodeJS.Platform = process.platform,
+  fresh: () => Promise<TimedProcTable | null> = shared,
+): (rootPid: number, commands: string[]) => Promise<ProcSample> {
+  const lastAt = new Map<number, number>();
+  return async (rootPid, commands) => {
+    if (platform === "win32") return { cpuMs: null, liveShell: null };
+    const prev = lastAt.get(rootPid);
+    let got = commands.length ? null : await shared().catch(() => null);
+    if (!got || (prev !== undefined && got.at <= prev)) got = await fresh().catch(() => null);
+    if (got) {
+      if (lastAt.size >= 500 && !lastAt.has(rootPid)) lastAt.clear();
+      lastAt.set(rootPid, got.at);
+    }
+    return sampleFromTable(rootPid, commands, got?.table ?? null);
+  };
 }

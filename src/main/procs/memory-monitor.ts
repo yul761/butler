@@ -64,7 +64,7 @@ export interface MemoryMonitorDeps {
   enabled(): boolean;
   /** 「内存监控」开着：记 sessions.mem_kb、写历史、「现在」页显示。 */
   recordOn(): boolean;
-  sessions: { setMemory(id: string, kb: number, at: number): void };
+  sessions: { setMemoryMany(rows: readonly { id: string; kb: number; at: number }[]): void };
   samples: { insertMany(rows: MemorySampleRow[]): void; prune(before: number): number; since(since: number): MemorySampleRow[] };
   now(): number;
   log(msg: string, err?: unknown): void;
@@ -252,7 +252,7 @@ export class MemoryMonitor {
     }
     this.latest = new Map(s.terms.map((t) => [t.head, { ...t.summary, at: s.at }]));
     this.snap = s.snapshot;
-    for (const t of s.terms) this.d.sessions.setMemory(t.head, t.summary.totalKb, s.at);
+    this.d.sessions.setMemoryMany(s.terms.map((t) => ({ id: t.head, kb: t.summary.totalKb, at: s.at })));
     this.count++;
     if (this.count % HISTORY_EVERY === 1) {
       const rows: MemorySampleRow[] = [

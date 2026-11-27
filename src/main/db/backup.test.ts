@@ -78,6 +78,19 @@ describe("openDatabase: backup before migrating (BTL-262)", () => {
     if (process.platform !== "win32") expect(fsLog.synced).toContainEqual([dir, "r"]);
   });
 
+  it("after migrating, the connection runs with synchronous=NORMAL; the backup before it is still fsynced (BTL-275)", () => {
+    const dir = tempDir("shipherd-backup-");
+    const file = dbAt(dir, LATEST - 1);
+    fsLog.synced.length = 0;
+    const db = openDatabase(file);
+    expect((db.prepare("PRAGMA synchronous").get() as { synchronous: number }).synchronous).toBe(1);
+    db.close();
+    expect(fsLog.synced).toContainEqual([`${join(dir, `app.db.pre-v${LATEST - 1}`)}.tmp`, "r+"]);
+    const fresh = openDatabase(join(tempDir("shipherd-backup-"), "app.db"));
+    expect((fresh.prepare("PRAGMA synchronous").get() as { synchronous: number }).synchronous).toBe(1);
+    fresh.close();
+  });
+
   it("a new database (version 0), one already at the latest version, and :memory: are not backed up", () => {
     const dir = tempDir("shipherd-backup-");
     openDatabase(join(dir, "app.db")).close();

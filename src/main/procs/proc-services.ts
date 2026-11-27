@@ -8,7 +8,7 @@ import { MemoryMonitor, sampleIntervalMs, type AppMetric, type MonitorSample } f
 import { MemoryRefresh } from "./memory-refresh";
 import { OrphanSweeper, platformKill } from "./orphans";
 import { platformBackend, PriorityManager } from "./priority";
-import { procTableReader } from "./proc-table";
+import { procTableReader, sharedProcTable, type RunCommand, type TimedProcTable } from "./proc-table";
 import { readSystemMemory } from "./system-memory";
 
 /**
@@ -17,7 +17,7 @@ import { readSystemMemory } from "./system-memory";
  */
 export interface ProcServicesDeps {
   settings: SettingsRepo;
-  sessions: Pick<SessionsRepo, "head" | "setMemory">;
+  sessions: Pick<SessionsRepo, "head" | "setMemoryMany">;
   samples: MemorySamplesRepo;
   pty: { openIds(): string[]; pid(termId: string): number | null };
   activity: (head: string) => SessionActivity | null;
@@ -35,6 +35,9 @@ export interface ProcServicesDeps {
   /** 别的功能也要采样（内存紧张时休眠要系统的空闲内存）。 */
   sampleNeeded?: () => boolean;
   platform?: NodeJS.Platform;
+  /** 跑 ps / PowerShell（测试换掉它）。 */
+  run?: RunCommand;
+  now?: () => number;
   log: (msg: string, err?: unknown) => void;
   /** 「现在」页的内存读数变了：发 stateChanged。 */
   changed: () => void;
@@ -44,6 +47,8 @@ export interface ProcServices {
   monitor: MemoryMonitor;
   priority: PriorityManager;
   orphans: OrphanSweeper;
+  /** 最多 5 秒旧的整张进程表，和内存采样共用（BTL-275）：活动探测从这里读子孙进程的 CPU。要杀进程的地方别用它。 */
+  table(): Promise<TimedProcTable | null>;
   /** 渲染进程报的终端可见性。出现在屏幕上时那棵树马上恢复优先级。 */
   terminalVisible(termId: string, visible: boolean): void;
   /** claude 收下一条输入（UserPromptSubmit）或者用户在终端里打字：马上恢复优先级。 */
@@ -64,11 +69,16 @@ export interface ProcServices {
 /** 停着：回合结束、没有后台命令、没在等确认。 */
 export const idleActivity = (a: SessionActivity | null): boolean => a !== null && !isWorking(a) && a.kind !== "approval" && !a.background;
 
+/** 共用进程表能旧多久。 */
+export const SHARED_TABLE_MS = 5_000;
+
 export function createProcServices(d: ProcServicesDeps): ProcServices {
   const platform = d.platform ?? process.platform;
   const visible = new Set<string>();
   // 采样和孤儿清理共用一个：失败原因只记一次。
-  const readTable = procTableReader(platform, (m) => d.log(m));
+  const readTable = procTableReader(platform, (m) => d.log(m), d.run);
+  // 内存采样和活动探测共用一张最多 5 秒旧的表（BTL-275）；孤儿清理每次现读（要按它杀进程）。
+  const table = sharedProcTable(readTable, { ttlMs: SHARED_TABLE_MS, now: d.now ?? Date.now });
   const monitor = new MemoryMonitor({
     terms: () =>
       d.pty.openIds().flatMap((termId) => {
@@ -78,7 +88,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
       }),
     appMetrics: d.appMetrics,
     mainPid: process.pid,
-    readTable,
+    readTable: () => table().then((t) => t?.table ?? null),
     readSystem: () => readSystemMemory(platform),
     enabled: () => memoryMonitorOn(d.settings) || backgroundPriorityOn(d.settings) || orphanCleanupOn(d.settings) || !!d.sampleNeeded?.(),
     recordOn: () => memoryMonitorOn(d.settings),
@@ -125,6 +135,7 @@ export function createProcServices(d: ProcServicesDeps): ProcServices {
     monitor,
     priority,
     orphans,
+    table,
     terminalVisible: (termId, v) => {
       if (v) {
         visible.add(termId);

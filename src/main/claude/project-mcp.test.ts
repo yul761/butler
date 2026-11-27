@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tempDir } from "../test-utils";
@@ -629,5 +629,106 @@ describe("projectMcpApprovalSettings: interactive sessions use the same approval
     writeFileSync(s.mcpDir, "not a dir");
     expect(projectMcpApprovalSettings([s.repo], s.p)).toBeNull();
     expect(s.logs.some((l) => l.includes("approval settings not written"))).toBe(true);
+  });
+});
+
+describe("opening a session does not re-read and re-ask what has not changed (BTL-275)", () => {
+  const read = (file: string) => JSON.parse(readFileSync(file, "utf8")) as { enabledMcpjsonServers: string[] };
+  /** 把修改时间挪到一分钟前：刚写的文件（RECENT_WRITE_MS 以内）故意不缓存。 */
+  const age = (file: string) => {
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(file, past, past);
+  };
+  /** 照样真的跑 git，只数 rev-parse 的次数。 */
+  const countRevParse = async () => {
+    const real = (await vi.importActual<typeof import("node:child_process")>("node:child_process")).spawnSync as (...a: unknown[]) => unknown;
+    const calls = { n: 0 };
+    mocks.spawnSync = (...a: unknown[]) => {
+      if ((a[1] as string[]).includes("rev-parse")) calls.n++;
+      return real(...a);
+    };
+    return calls;
+  };
+
+  it("parses ~/.claude.json once while it is unchanged, and again as soon as it changes", () => {
+    const s = setup();
+    s.writeClaudeJson({ enabledMcpjsonServers: ["one"] });
+    age(s.paths.claudeJson);
+    const parse = vi.spyOn(JSON, "parse");
+    const big = () => parse.mock.calls.filter(([text]) => typeof text === "string" && text.includes('"/other"')).length;
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enabledMcpjsonServers).toEqual(["one"]);
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enabledMcpjsonServers).toEqual(["one"]);
+    expect(big()).toBe(1);
+    // 同样长度、不同内容：也要重读
+    s.writeClaudeJson({ enabledMcpjsonServers: ["two"] });
+    expect(read(projectMcpApprovalSettings([s.repo], s.p)!).enabledMcpjsonServers).toEqual(["two"]);
+    expect(big()).toBe(2);
+    parse.mockRestore();
+  });
+
+  it("does not cache a ~/.claude.json written in the last 2 seconds (a 1-second mtime could hide a same-size edit)", () => {
+    const s = setup();
+    s.writeClaudeJson({ enabledMcpjsonServers: ["one"] });
+    const parse = vi.spyOn(JSON, "parse");
+    const big = () => parse.mock.calls.filter(([text]) => typeof text === "string" && text.includes('"/other"')).length;
+    projectMcpApprovalSettings([s.repo], s.p);
+    projectMcpApprovalSettings([s.repo], s.p);
+    expect(big()).toBe(2);
+    // 放够时间以后才缓存
+    age(s.paths.claudeJson);
+    projectMcpApprovalSettings([s.repo], s.p);
+    projectMcpApprovalSettings([s.repo], s.p);
+    expect(big()).toBe(3);
+    parse.mockRestore();
+  });
+
+  it("asks git for a worktree's main checkout once, and again when the worktree is re-created for another repo at the same path", async () => {
+    const s = setup();
+    mkdirSync(s.repo, { recursive: true });
+    s.gitInit();
+    s.git("commit", "-q", "--allow-empty", "-m", "init");
+    const worktree = join(s.root, "worktree");
+    s.git("worktree", "add", "-q", "-b", "wt", worktree);
+    // 仓库 B：同名分支，用户批准过的不一样
+    const other = join(s.root, "other");
+    mkdirSync(other);
+    const gb = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: other, stdio: "pipe" });
+    gb("init", "-q");
+    gb("commit", "-q", "--allow-empty", "-m", "init");
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { enabledMcpjsonServers: ["a-only"] }, [other]: { enabledMcpjsonServers: ["b-only"] } } }));
+    age(join(worktree, ".git"));
+    const revParse = await countRevParse();
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["a-only"]);
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["a-only"]);
+    expect(revParse.n).toBe(1);
+    // 同一个路径换成仓库 B 的 worktree：A 的批准不能带过来
+    s.git("worktree", "remove", "--force", worktree);
+    gb("worktree", "add", "-q", "-b", "wt", worktree);
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["b-only"]);
+    expect(revParse.n).toBe(2);
+  });
+
+  it("asks git again when the main checkout was moved away and another repo now sits at its path (that repo's approvals must not apply)", async () => {
+    const s = setup();
+    mkdirSync(s.repo, { recursive: true });
+    s.gitInit();
+    s.git("commit", "-q", "--allow-empty", "-m", "init");
+    const worktree = join(s.root, "worktree");
+    s.git("worktree", "add", "-q", "-b", "wt", worktree);
+    age(join(worktree, ".git"));
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { enabledMcpjsonServers: ["a-only"] } } }));
+    const revParse = await countRevParse();
+    expect(read(projectMcpApprovalSettings([worktree], s.p)!).enabledMcpjsonServers).toEqual(["a-only"]);
+    expect(revParse.n).toBe(1);
+    // A 挪走，原路径上新建仓库 B，用户给 B 批了全部；worktree 的 .git 文件一个字没变
+    renameSync(s.repo, join(s.root, "repo-moved"));
+    mkdirSync(s.repo);
+    execFileSync("git", ["init", "-q"], { cwd: s.repo, stdio: "pipe" });
+    writeFileSync(s.paths.claudeJson, JSON.stringify({ projects: { [s.repo]: { enableAllProjectMcpServers: true, enabledMcpjsonServers: ["b-only"] } } }));
+    const out = projectMcpApprovalSettings([worktree], s.p);
+    expect(revParse.n).toBe(2);
+    const servers = out ? read(out).enabledMcpjsonServers : [];
+    expect(servers).not.toContain("b-only");
+    expect(out ? (JSON.parse(readFileSync(out, "utf8")) as { enableAllProjectMcpServers?: boolean }).enableAllProjectMcpServers : undefined).not.toBe(true);
   });
 });

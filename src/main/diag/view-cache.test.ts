@@ -96,3 +96,30 @@ describe("ViewCache", () => {
     expect(m).toBe(1);
   });
 });
+
+describe("ViewCache.getFor (BTL-275): a view that also depends on its argument", () => {
+  it("reuses the cached one only for the same argument, and rebuilds when it changes", () => {
+    const { c } = make();
+    let n = 0;
+    const get = (arg: string) => c.getFor("now", arg, () => `${arg}:${++n}`);
+    expect(get("a")).toBe("a:1");
+    expect(get("a")).toBe("a:1");
+    expect(get("b")).toBe("b:2");
+    expect(get("b")).toBe("b:2");
+    c.invalidate(["now"]);
+    expect(get("b")).toBe("b:3");
+  });
+
+  it("still expires after the ttl and on a full invalidation", () => {
+    const { c, at } = make(1000);
+    let n = 0;
+    const get = () => c.getFor("now", "x", () => ++n);
+    expect(get()).toBe(1);
+    at(999);
+    expect(get()).toBe(1);
+    at(1000);
+    expect(get()).toBe(2);
+    c.invalidate();
+    expect(get()).toBe(3);
+  });
+});

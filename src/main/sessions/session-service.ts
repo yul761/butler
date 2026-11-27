@@ -8,6 +8,7 @@ import {
   effectiveStatus,
   type Feature,
   type FeatureHandoffRecord,
+  type Block,
   type FeatureView,
   type OpenShipherdSessionRequest,
   type ShipherdView,
@@ -97,9 +98,9 @@ export interface SessionServiceDeps {
   /** feature（设计文档 2026-10-26）；不给就没有 feature 总控。 */
   features?: FeaturesRepo;
   /** epic 里的 feature（BTL-246，内部叫 block）；不给 FeatureView 里 blocks 是空的。 */
-  blocks?: Pick<BlocksRepo, "list">;
+  blocks?: Pick<BlocksRepo, "listMany">;
   /** feature 汇总（设计文档 2026-10-28）；不给 FeatureView 里 summary 为 null。 */
-  featureHandoffs?: Pick<FeatureHandoffsRepo, "latest" | "latestValid">;
+  featureHandoffs?: Pick<FeatureHandoffsRepo, "latest" | "latestMany" | "latestValid">;
   /** 取 ticket 的最新有效 handoff 里的 PR；不给就都是 []。 */
   handoffs?: Pick<HandoffsRepo, "knownPrs">;
   /** session 此刻的活动（ActivityMonitor）；不给 FeatureView 里 activity 是空的。 */
@@ -813,10 +814,16 @@ export class SessionService {
         const byFeature = this.d.sessions.listByFeatures(features.map((f) => f.id));
         return { byFeature, roots: this.d.sessions.rootsOf([...byFeature.values()].flat().filter((s) => !s.replacedBy).map((s) => s.id)) };
       });
+      // 每个 epic 的 feature、最新汇总一次取；ticket 按 epic 分一次组（BTL-275：原来每个 epic 各查两次、各扫一遍所有 ticket）。
+      const ids = features.map((f) => f.id);
+      const blocks = p.run("blocks", () => this.d.blocks?.listMany(ids) ?? new Map<number, Block[]>());
+      const summaries = p.run("summary", () => this.d.featureHandoffs?.latestMany(ids) ?? new Map<number, FeatureHandoffRecord>());
+      const ticketsOf = new Map<number, TicketView[]>();
+      for (const t of tickets) if (t.featureId !== null) (ticketsOf.get(t.featureId) ?? ticketsOf.set(t.featureId, []).get(t.featureId)!).push(t);
       const out = features.map((f) => {
         const { sessions, hiddenSessions } = this.split(byFeature.get(f.id) ?? [], heads, roots);
         // 按建立顺序（和 list_tickets 一样），不是单独 ticket 列表的最新在前。
-        const own = tickets.filter((t) => t.featureId === f.id).sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
+        const own = [...(ticketsOf.get(f.id) ?? [])].sort((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
         const ticketPrs: Record<string, Pr[]> = {};
         const activity: Record<string, SessionActivity> = {};
         for (const t of own) {
@@ -825,9 +832,9 @@ export class SessionService {
           if (a) activity[t.key] = a;
         }
         return {
-          ...f, tickets: own, blocks: p.run("blocks", () => this.d.blocks?.list(f.id) ?? []), sessions, hiddenSessions,
+          ...f, tickets: own, blocks: blocks.get(f.id) ?? [], sessions, hiddenSessions,
           waiting: sessions.some((s) => s.waitingForInput) || own.some((t) => t.waiting),
-          summary: p.run("summary", () => this.d.featureHandoffs?.latest(f.id) ?? null), ticketPrs, activity,
+          summary: summaries.get(f.id) ?? null, ticketPrs, activity,
         };
       });
       return out;
@@ -884,6 +891,11 @@ export class SessionService {
       const key = suggestTicket(s, pattern);
       return { ...s, suggestedTicket: key, suggestionExists: !!key && !!this.d.tickets.get(key) };
     });
+  }
+
+  /** 未认领的个数（BTL-275）：同 unclaimed().length，不拼列表、不猜 ticket。 */
+  unclaimedCount(): number {
+    return outsideSessionsOn(this.d.settings) ? this.d.sessions.countUnclaimed(this.d.now() - UNCLAIMED_WINDOW_MS) : 0;
   }
 
   /** 认领：session 的目录落在 ticket 的某个仓库里，就记成那个仓库的 session。 */

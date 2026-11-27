@@ -18,6 +18,8 @@ import { M } from "../strings";
 export const REPLY_WAIT_MS = 24 * 3600_000;
 /** 消息留这么久，之后删掉（还在排队的也删：目标一个月都没再打开）。 */
 export const MESSAGE_KEEP_MS = 30 * 24 * 3600_000;
+/** 旧消息多久清一次（BTL-275）：要留 30 天，原来每 10 秒一个 DELETE。 */
+export const PRUNE_EVERY_MS = 10 * 60_000;
 /** hook 认领了这么久还没写出去（崩了）：放回去，下一次工具调用再送。 */
 export const TAKEN_STALE_MS = 60_000;
 /** 主进程认领了这么久（直接输入的结果一直没回来，Shipherd 上次崩在这里）：放回去。deliver 最多等 1 分钟。 */
@@ -125,6 +127,8 @@ const revOf = (m: Pick<SessionMessage, "body">): string => createHash("sha1").up
 const EXPECTS_REPLY: ReadonlySet<MessageKind> = new Set(["instruction", "shipherd"]);
 
 export class Mailbox {
+  /** 上次清旧消息的时间（BTL-275）。 */
+  private prunedAt: number | null = null;
   private readonly fs: MailboxFs;
   /** 正在直接输入的终端：同一个终端不同时送两段。 */
   private readonly inputting = new Set<string>();
@@ -602,7 +606,11 @@ export class Mailbox {
         else this.termExited(t);
       }
       for (const t of open) this.syncTerm(t);
-      if (this.d.repo.prune(this.d.now() - MESSAGE_KEEP_MS) > 0) this.d.notify();
+      const now = this.d.now();
+      if (this.prunedAt === null || now - this.prunedAt >= PRUNE_EVERY_MS) {
+        this.prunedAt = now;
+        if (this.d.repo.prune(now - MESSAGE_KEEP_MS) > 0) this.d.notify();
+      }
       const heads = new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)));
       for (const h of heads) await this.flush(h);
     } catch (e) {

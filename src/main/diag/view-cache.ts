@@ -43,6 +43,14 @@ export class ViewCache {
     return value;
   }
 
+  /** 视图还取决于一个参数（BTL-275：now:view 带着最近的合并）：参数（签名）一样才用缓存的，不一样就重拼、换掉。 */
+  getFor<T>(key: string, sig: string, build: () => T): T {
+    const hit = this.get(key, () => ({ sig, value: build() }));
+    if (hit.sig === sig) return hit.value;
+    this.entries.delete(key);
+    return this.get(key, () => ({ sig, value: build() })).value;
+  }
+
   wrap<T>(key: string, build: () => T): () => T {
     return () => this.get(key, build);
   }

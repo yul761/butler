@@ -37,7 +37,7 @@ function setup(over: Partial<MemoryMonitorDeps> = {}) {
     readSystem: async () => ({ totalKb: 1000, freeKb: 250, freePercent: 25, source: "os" }),
     enabled: () => true,
     recordOn: () => record,
-    sessions: { setMemory: (id, kb) => void (mem[id] = kb) },
+    sessions: { setMemoryMany: (rows) => rows.forEach((r) => void (mem[r.id] = r.kb)) },
     samples,
     now: () => now,
     log: () => {},

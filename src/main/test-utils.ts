@@ -49,6 +49,7 @@ export function memDb(): Db {
   db.deserialize(migratedDb);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   migrate(db);
+  db.exec("PRAGMA synchronous = NORMAL;");
   return db;
 }
 

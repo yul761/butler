@@ -95,6 +95,7 @@ export class UsageScanner {
         const cur = this.d.repo.cursor(file);
         // 文件比记录的短：被截断或换了，从头来
         let offset = cur && size >= cur.size && size >= cur.offset ? cur.offset : 0;
+        let stored = cur;
         while (offset < size) {
           // 一行比一块还长时，逐步加大读取范围，直到出现换行或读到文件末尾
           let len = Math.min(chunk, size - offset);
@@ -117,9 +118,10 @@ export class UsageScanner {
           if (rows.length) this.d.repo.record(rows);
           offset += end + 1;
           this.d.repo.setCursor(file, offset, size);
+          stored = { offset, size };
         }
-        // 没有新内容或只剩半行时也记下当前大小，下次才能发现文件变短
-        this.d.repo.setCursor(file, offset, size);
+        // 没有新内容或只剩半行时也记下当前大小，下次才能发现文件变短；和库里的一样就不再写（BTL-275：每 30 秒每个文件一次空写）
+        if (stored?.offset !== offset || stored.size !== size) this.d.repo.setCursor(file, offset, size);
       } finally {
         await fh.close();
       }
