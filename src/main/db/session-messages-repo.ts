@@ -151,6 +151,12 @@ export class SessionMessagesRepo {
     return changed;
   }
 
+  /** 这几条（还排着的）的「还没送到」回执撤回了：清掉记号，按现在的原因重发。 */
+  clearStuckReceipt(ids: string[]): void {
+    const stmt = this.db.prepare(`UPDATE session_messages SET stuck_receipt_at = NULL WHERE id = ? AND status = 'queued'`);
+    for (const id of ids) stmt.run(id);
+  }
+
   /** 记下已经给这几条发过「还没送到」的回执。 */
   setStuckReceipt(ids: string[], at: number): void {
     const stmt = this.db.prepare(`UPDATE session_messages SET stuck_receipt_at = ? WHERE id = ? AND stuck_receipt_at IS NULL`);

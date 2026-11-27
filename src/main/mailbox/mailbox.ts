@@ -36,6 +36,11 @@ export const SETTLE_MS = 15_000;
 const USER_REASONS: ReadonlySet<MailboxBlockReason> = new Set(["typing", "draft"]);
 /** 卡这么久的回执 ref：同一对（发件人、收件人）只排一条，送到前按 ref 换成最新的。 */
 const stuckRef = (to: string, from: string): string => `stuck:${to}:${from}`;
+/** 「还没送到」回执说的是哪几条（回执 meta 里存的原消息 id）。 */
+const receiptIds = (m: SessionMessage): string[] => {
+  const ids = (m.meta as { ids?: unknown } | null)?.ids;
+  return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
+};
 
 /** 列表里最多几条。 */
 export const RECENT_MESSAGES = 30;
@@ -278,6 +283,12 @@ export class Mailbox {
     const changed = this.d.repo.setBlocked(list.map((m) => m.id), reason, this.d.now());
     if (changed.length === 0) return;
     this.d.log(`mailbox: ${head} blocked (${reason}): ${changed.length} message(s) waiting`);
+    // 原因变了：还排着的回执说的是旧原因和旧 ETA，撤回；这几条按现在的原因重新算回执（下一次 tick）。
+    for (const receipt of this.queuedStuckReceipts(new Set(changed))) {
+      this.withdraw(receipt.ref!);
+      this.d.repo.clearStuckReceipt(receiptIds(receipt));
+      this.d.log(`mailbox: ${head}: the reason changed to ${reason}; withdrew the stale stuck receipt ${receipt.id}`);
+    }
     this.d.notify();
   }
 
@@ -295,6 +306,7 @@ export class Mailbox {
       this.dropFile(term, m.id);
       this.syncTerm(term);
     }
+    this.settleStuckReceipts(m.id);
     this.d.notify();
   }
 
@@ -471,7 +483,7 @@ export class Mailbox {
     } catch (e) {
       this.d.log(`mailbox: delivered callback for ${m.id} failed`, e);
     }
-    if (m.fromSession !== null) this.withdrawStuckReceipt(target, m.fromSession);
+    this.settleStuckReceipts(m.id);
     // 送达的记账晚于对方停下来（假 claude、很短的一轮）：马上补查一次回复。
     if (m.expectsReply && (this.stoppedAt.get(target) ?? -Infinity) >= at) {
       void this.checkReplies(target).catch((e: unknown) => this.d.log(`mailbox: late reply check for ${target} failed`, e));
@@ -818,15 +830,20 @@ export class Mailbox {
     }
   }
 
-  /** 发件人发给 target 的消息都送到了：还排着的「还没送到」回执已经过时，撤回（仓库规则 8）。 */
-  private withdrawStuckReceipt(target: string, from: string): void {
-    const ref = stuckRef(target, from);
-    const receipt = this.d.repo.queuedByRef(ref);
-    if (!receipt) return;
-    const meta = receipt.meta as { ids?: unknown } | null;
-    const ids = Array.isArray(meta?.ids) ? meta.ids.filter((x): x is string => typeof x === "string") : [];
-    if (ids.some((id) => this.d.repo.get(id)?.status === "queued")) return;
-    this.withdraw(ref);
+  /**
+   * 还排着、说到了这几条的「还没送到」回执。按回执 meta 里存的原消息 id 找，不按现在的 head 拼 ref：
+   * 目标在回执排队期间换新了（head 变了），照样找得到。
+   */
+  private queuedStuckReceipts(ids: Set<string>): SessionMessage[] {
+    return this.d.repo.queued().filter((m) => m.ref?.startsWith("stuck:") === true && receiptIds(m).some((id) => ids.has(id)));
+  }
+
+  /** 这一条不排了（送到了、撤回了）：说到它的回执里的消息都不排了，回执就过时了，撤回（仓库规则 8）。 */
+  private settleStuckReceipts(id: string): void {
+    for (const receipt of this.queuedStuckReceipts(new Set([id]))) {
+      if (receiptIds(receipt).some((x) => this.d.repo.get(x)?.status === "queued")) continue;
+      this.withdraw(receipt.ref!);
+    }
   }
 
   /** 给 send_message、list_sessions 用的一句话：送到了，或者为什么还没送到、什么时候能送到。 */

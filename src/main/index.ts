@@ -2147,7 +2147,10 @@ async function bootstrap(): Promise<void> {
   const mailboxFromController = (m: SessionMessage, headId: string): boolean => {
     const from = m.fromSession === null ? null : sessions.head(m.fromSession);
     const to = sessions.head(headId);
-    return !!from && !!to && isControllerOf(from, to, (key) => tickets.get(key)?.featureId ?? null);
+    // 和 featureSend 同一个判断、同一份数据：epic 没归档、ticket 是 listByFeature 列出来的。
+    const ownKeys = (featureId: number): Set<string> | null =>
+      features.get(featureId)?.archivedAt === null ? new Set(tickets.listByFeature(featureId).map((t) => t.key)) : null;
+    return !!from && !!to && isControllerOf(from, to, ownKeys);
   };
   /** 这个 head 有别的 session 发来、还排着的消息（约定广播不算）。 */
   const hasSessionMail = (headId: string): boolean =>
@@ -4121,6 +4124,8 @@ async function bootstrap(): Promise<void> {
   powerMonitor.on("resume", () => {
     // 睡着的时间不算闲置（BTL-190 第 8 点）：不然一开盖子所有 session 一起被关。
     sessionCleanup.resumed();
+    // 「凭屏幕证据当它停着」也一样（BTL-269 B）：不然醒来第一次检查就把睡着的时间当成安静，马上往里送。
+    idleEvidence.resumed();
     void checkSchedule("resume");
   });
   powerMonitor.on("unlock-screen", () => void checkSchedule("unlock"));

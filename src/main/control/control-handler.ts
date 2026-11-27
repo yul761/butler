@@ -25,6 +25,7 @@ import { startRefresh, type SessionRefresher } from "../sessions/session-refresh
 import { DEFAULT_TICKET_PATTERN } from "../tickets/ticket-key";
 import { samePath, TicketError, type TicketService } from "../tickets/ticket-service";
 import type { Mailbox } from "../mailbox/mailbox";
+import { featureOwns } from "../mailbox/controller";
 import type { ResumeStart, WakeState } from "../sessions/resumer";
 
 export interface ControlHandlerDeps {
@@ -421,7 +422,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     if (!h || h.featureId !== f.id || !h.coordinator || !d.sessionService.termIdOf(h.id)) return fail(M().ctlInboxNotYours);
     const keys = new Set(own.map((t) => t.key));
     const t = d.sessions.head(req.session);
-    const belongs = !!t && !t.dismissed && (t.ticketKey !== null ? keys.has(t.ticketKey) : t.featureId === f.id && t.fixesSession !== null);
+    const belongs = !!t && !t.dismissed && featureOwns(f.id, keys, t);
     if (!t || !belongs) return fail(M().mailboxNotYours(req.session));
     const interrupt = req.interrupt === true;
     const body = sanitizeTask(M().mailboxInstruction(M().shipherdTargetFeature(f.name), req.text, interrupt));
@@ -504,7 +505,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     if (req.op === "end_session" || req.op === "refresh_session") {
       // ticket 的 session 和这个 feature 的修复 session；feature 的总控不归总控关，也不归它换新（修复 session 换新会被拒绝）。
       const keys = new Set(own.map((t) => t.key));
-      const belongs = (s: Session) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id && s.fixesSession !== null);
+      const belongs = (s: Session) => featureOwns(f.id, keys, s);
       return req.op === "end_session" ? endSession(req, belongs) : refreshSession(req, belongs);
     }
 

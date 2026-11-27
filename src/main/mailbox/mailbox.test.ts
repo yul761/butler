@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, utimesSync } from "node:fs";
+import { M } from "../strings";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -707,6 +708,55 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     w.busyReason.delete("t1");
     await w.mb.tick();
     expect(w.repo.get(id)!.status).toBe("delivered");
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+  });
+
+  it("withdraws the stuck receipt when the message goes in after the target was refreshed (its head changed while the receipt waited)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", false);
+    w.busyReason.set("t1", "unsure");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "do it" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toHaveLength(1);
+    // 目标换新：head 变成 t1b（终端还是同一个）。
+    w.sessions.set("t1b", { id: "t1b", waitingForInput: true });
+    w.sessions.get("t1")!.replacedBy = "t1b";
+    w.busyReason.delete("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.status).toBe("delivered");
+    expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
+  });
+
+  it("when the reason changes, the queued receipt with the old reason is withdrawn and a receipt with the new reason replaces it", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("coord", false);
+    w.busyReason.set("t1", "unsure");
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "do it" });
+    await flushPromises();
+    w.tick(STUCK_RECEIPT_MS + 1000);
+    await w.mb.tick();
+    const [old] = w.repo.queued().filter((m) => m.toSession === "coord");
+    expect(old.body).toContain("屏幕上看已经停了");
+    // 终端关了：原因从 unsure 变成 closed。
+    w.terms.delete("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedReason).toBe("closed");
+    expect(w.repo.get(old.id)).toBeNull();
+    const receipts = w.repo.queued().filter((m) => m.toSession === "coord");
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].body).not.toContain("屏幕上看已经停了");
+    expect(receipts[0].body).toContain(M().mailboxBlocked.closed);
+    // 原因换成用户在打字：旧回执撤回，不再发新的（打字不发回执）。
+    w.terms.set("t1", "t1");
+    w.busyReason.delete("t1");
+    w.setWaiting("t1", true);
+    w.typing.add("t1");
+    await w.mb.tick();
+    expect(w.repo.get(id)!.blockedReason).toBe("typing");
     expect(w.repo.queued().filter((m) => m.toSession === "coord")).toEqual([]);
   });
 

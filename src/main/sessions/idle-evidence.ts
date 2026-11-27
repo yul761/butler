@@ -26,6 +26,8 @@ export interface IdleEvidenceDeps {
 export class IdleEvidence {
   /** 每个终端上一次看到的「输入框以上的内容」的指纹和从什么时候开始没变。 */
   private readonly stable = new Map<string, { hash: string; since: number }>();
+  /** 机器上一次睡醒的时间：睡着的时间不算安静（和 sessionCleanup.resumed 一样），安静从醒来起重新算。 */
+  private resumedAt = -Infinity;
 
   constructor(private readonly d: IdleEvidenceDeps) {}
 
@@ -39,10 +41,15 @@ export class IdleEvidence {
     const empty = inputBoxEmpty(lines) === true;
     if (!empty || working || permissionOnScreen(lines) || dialogOnScreen(lines)) return { idle: false, working, looksIdle: false };
     const out = this.d.lastOutputAt(termId);
-    const outputQuiet = (out > 0 && now - out >= quiet) || stableFor >= quiet;
+    const outputQuiet = (out > 0 && now - Math.max(out, this.resumedAt) >= quiet) || stableFor >= quiet;
     const grew = this.d.transcriptGrewAt(headId);
-    const transcriptQuiet = grew === null || now - grew >= quiet;
+    const transcriptQuiet = now - Math.max(grew ?? -Infinity, this.resumedAt) >= quiet;
     return { idle: outputQuiet && transcriptQuiet, working: false, looksIdle: true };
+  }
+
+  /** 机器睡醒了（powerMonitor resume）：输出、transcript、屏幕的安静都从现在起重新算。 */
+  resumed(): void {
+    this.resumedAt = this.d.now();
   }
 
   /** 终端关了：忘掉它。 */
@@ -53,7 +60,7 @@ export class IdleEvidence {
   private stableFor(termId: string, lines: string[], now: number): number {
     const hash = createHash("sha1").update((aboveInputBox(lines) ?? lines).join("\n")).digest("hex");
     const prev = this.stable.get(termId);
-    if (prev?.hash === hash) return now - prev.since;
+    if (prev?.hash === hash) return now - Math.max(prev.since, this.resumedAt);
     this.stable.set(termId, { hash, since: now });
     return 0;
   }

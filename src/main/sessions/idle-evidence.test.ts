@@ -22,6 +22,21 @@ describe("IdleEvidence (BTL-269 B)", () => {
     expect(check().idle).toBe(true);
   });
 
+  it("time asleep is not quiet: the first check after waking is not idle; quiet counts again from the wake-up", () => {
+    const { w, e, check } = world(idle);
+    check(); // 睡前看过一次屏幕
+    // 睡了 10 分钟（期间没有检查），醒来。
+    w.now += 10 * 60_000;
+    e.resumed();
+    expect(check()).toEqual({ idle: false, working: false, looksIdle: true });
+    w.grew = null;
+    expect(check().idle).toBe(false);
+    w.now += IDLE_QUIET_MS - 1;
+    expect(check().idle).toBe(false);
+    w.now += 1;
+    expect(check().idle).toBe(true);
+  });
+
   it("a spinner line is working, not idle", () => {
     const { w, check } = world(["✻ Thinking… (3s · esc to interrupt)", ...idle]);
     w.now += 60_000;
