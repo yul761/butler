@@ -266,14 +266,19 @@ function draftsOf(e: Line): Draft[] {
 
 /** transcript 的一行 → entries（规则见文件头）。永不抛错。 */
 export function convEntriesOf(line: string): ConvEntry[] {
-  let e: Line;
+  let v: unknown;
   try {
-    const v = JSON.parse(line) as unknown;
-    if (!v || typeof v !== "object" || Array.isArray(v)) return [];
-    e = v as Line;
+    v = JSON.parse(line);
   } catch {
     return [];
   }
+  return convEntriesOfValue(v, line);
+}
+
+/** 同 convEntriesOf，JSON 已经解析好了（TranscriptHub 每行只解析一次）；line 是原文，没有 uuid 时按它算 key。 */
+export function convEntriesOfValue(v: unknown, line: string): ConvEntry[] {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return [];
+  const e = v as Line;
   if (e.type !== "user" && e.type !== "assistant") return [];
   if (e.isSidechain === true) return [];
   const base = typeof e.uuid === "string" && e.uuid ? e.uuid : `h:${sha1(line)}`;

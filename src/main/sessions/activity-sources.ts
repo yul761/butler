@@ -3,6 +3,7 @@ import { lstat, open, readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { applyEntry, newTranscriptState, type TranscriptState } from "./activity-parse";
 import { stripAnsi } from "./pty-manager";
+import { TranscriptHub, type TailLine, type TailSink, type TailStat } from "./transcript-hub";
 
 const MB = 1024 * 1024;
 /** transcript 的时间和文件修改时间之间留的余量。 */
@@ -11,8 +12,9 @@ const MTIME_SLACK_MS = 2000;
 /**
  * 增量读取 transcript：每次从上次的偏移继续，只处理完整的行。
  * 文件变短、或者换成了另一个文件（轮转，inode 变了）就从头重建；第一次读时文件太大只读尾部，丢掉开头的半行。
+ * 字节由 TranscriptHub 读、解析（BTL-276：和对话另存、用量共用一次读取）；没给 hub 时自己用一个。
  */
-export class TranscriptTail {
+export class TranscriptTail implements TailSink {
   private offset = 0;
   /** 正在丢弃一行的剩余部分（从文件中间开始读时，第一段是半行）。 */
   private skipping = false;
@@ -20,43 +22,55 @@ export class TranscriptTail {
   /** 上一次读成功时的文件大小：一时读不了不能当成文件变了。 */
   private lastSize = 0;
   /** 上一次读到的文件的 inode；还没读过为 null。 */
-  private ino: bigint | null = null;
+  private ino: string | null = null;
   /** 从头重建过几次（截短或轮转）：调用方据此知道重读出来的旧事件不是新的。 */
   restarts = 0;
+  private readonly hub: TranscriptHub;
+  private readonly detach: () => void;
 
   constructor(
     private readonly file: string,
     private readonly maxInitialBytes = 4 * MB,
-  ) {}
+    hub?: TranscriptHub,
+  ) {
+    this.hub = hub ?? new TranscriptHub();
+    this.detach = this.hub.attach(file, "activity", this);
+  }
 
   async read(): Promise<{ state: TranscriptState; size: number }> {
-    try {
-      const fh = await open(this.file, "r");
-      try {
-        const st = await fh.stat({ bigint: true });
-        const size = Number(st.size);
-        const rotated = this.ino !== null && st.ino !== this.ino;
-        this.ino = st.ino;
-        if (size < this.offset || rotated) this.reset();
-        if (size - this.offset > this.maxInitialBytes) {
-          // 第一次读，或一次涨了太多：只看尾部，状态可能不全，但内存有界
-          this.offset = size - this.maxInitialBytes;
-          this.skipping = this.offset > 0;
-        }
-        const len = size - this.offset;
-        if (len > 0) {
-          const buf = Buffer.alloc(len);
-          const { bytesRead } = await fh.read(buf, 0, len, this.offset);
-          this.consume(buf.subarray(0, bytesRead));
-        }
-        this.lastSize = size;
-        return { state: this.state, size };
-      } finally {
-        await fh.close();
-      }
-    } catch {
-      return { state: this.state, size: this.lastSize };
+    const st = await this.hub.pump(this.file);
+    return { state: this.state, size: st ? st.size : this.lastSize };
+  }
+
+  /** 不再读这个文件（session 不跟踪了）。 */
+  close(): void {
+    this.detach();
+  }
+
+  begin(st: TailStat): { offset: number; skipPartial: boolean } {
+    const rotated = this.ino !== null && st.ino !== this.ino;
+    this.ino = st.ino;
+    if (st.size < this.offset || rotated) this.reset();
+    if (st.size - this.offset > this.maxInitialBytes) {
+      // 第一次读，或一次涨了太多：只看尾部，状态可能不全，但内存有界
+      this.offset = st.size - this.maxInitialBytes;
+      this.skipping = this.offset > 0;
     }
+    return { offset: this.offset, skipPartial: this.skipping };
+  }
+
+  lines(lines: TailLine[], next: number): void {
+    for (const l of lines) {
+      const v = l.json();
+      if (v !== undefined) applyEntry(this.state, v);
+    }
+    // 末尾没有换行的半行留到下次
+    this.offset = next;
+    this.skipping = false;
+  }
+
+  end(st: TailStat | null): void {
+    if (st) this.lastSize = st.size;
   }
 
   private reset(): void {
@@ -64,27 +78,6 @@ export class TranscriptTail {
     this.offset = 0;
     this.skipping = false;
     this.state = newTranscriptState();
-  }
-
-  private consume(buf: Buffer): void {
-    let pos = 0;
-    for (let nl = buf.indexOf(0x0a, pos); nl !== -1; nl = buf.indexOf(0x0a, pos)) {
-      if (this.skipping) this.skipping = false;
-      else this.applyLine(buf.subarray(pos, nl).toString("utf8"));
-      pos = nl + 1;
-    }
-    // 末尾没有换行的半行留到下次；正在丢弃的半行直接略过
-    this.offset += this.skipping ? buf.length : pos;
-  }
-
-  private applyLine(line: string): void {
-    const t = line.trim();
-    if (!t) return;
-    try {
-      applyEntry(this.state, JSON.parse(t));
-    } catch {
-      // 坏行忽略
-    }
   }
 }
 

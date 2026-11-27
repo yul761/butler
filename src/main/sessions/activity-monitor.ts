@@ -13,7 +13,8 @@ import { sampleProcTree, type ProcSample } from "./proc-tree";
 import { stripAnsi, type PtySnapshot } from "./pty-manager";
 import type { StuckInput } from "./stuck-judge";
 import { cpuQuiet, STUCK_CHECK_MS, StuckTracker, type StuckVerdict } from "./stuck-tracker";
-import { DebouncedWatch, type WatchFn } from "./transcript-watch";
+import { TranscriptHub } from "./transcript-hub";
+import type { WatchFn } from "./transcript-watch";
 
 /** 活动刷新的间隔：transcript 有 fs.watch 盯着（BTL-190 第 7 点），这个 tick 是退路。 */
 export const ACTIVITY_TICK_MS = 10_000;
@@ -128,6 +129,8 @@ export interface ActivityDeps {
   watch?: WatchFn | null;
   /** 默认 300ms。 */
   watchDebounceMs?: number;
+  /** 和对话另存、用量共用的 transcript 读取（BTL-276）；没给时自己建一个。 */
+  hub?: TranscriptHub;
   /** 一次卡住只调一次。 */
   onStuck: (info: StuckInfo) => void;
   now: () => number;
@@ -223,8 +226,8 @@ interface Tracked {
   /** 进程树里还有没有这些后台任务的 shell；还没问过、读不到为 null（照旧算在跑）。 */
   shellAlive: boolean | null;
   shellCheckedAt: number;
-  /** 盯着 transcript 的 fs.watch；还没找到文件时为 null。 */
-  watch: DebouncedWatch | null;
+  /** 盯着 transcript 的 fs.watch（和别的消费者共用一个）；还没找到文件时为 null。 */
+  watch: { ensure(): boolean; close(): void } | null;
   /** 最近的工具调用（含记忆读写），从旧到新，最多 RECENT_TOOLS 条。 */
   recent: ActivityEvent[];
   /** 比这早的记录不推给界面：开始跟踪的时间，文件截短或轮转以后是那一刻。 */
@@ -266,10 +269,13 @@ export class ActivityMonitor {
   private ticking = false;
   private stopped = false;
 
+  private readonly hub: TranscriptHub;
+
   constructor(private readonly d: ActivityDeps) {
     this.tickMs = d.intervals?.tickMs ?? ACTIVITY_TICK_MS;
     this.stuckCheckMs = d.intervals?.stuckCheckMs ?? STUCK_CHECK_MS;
     this.tracker = new StuckTracker(this.stuckCheckMs);
+    this.hub = d.hub ?? new TranscriptHub();
   }
 
   start(): void {
@@ -283,7 +289,10 @@ export class ActivityMonitor {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    for (const t of this.tracked.values()) t.watch?.close();
+    for (const t of this.tracked.values()) {
+      t.watch?.close();
+      t.tail?.close();
+    }
   }
 
   async tick(now: number): Promise<void> {
@@ -400,6 +409,7 @@ export class ActivityMonitor {
     for (const [id, t] of this.tracked) {
       if (live.has(id)) continue;
       t.watch?.close();
+      t.tail?.close();
       this.tracked.delete(id);
       this.tracker.forget(id);
       this.wanted.delete(id);
@@ -474,7 +484,7 @@ export class ActivityMonitor {
   private watchTranscript(t: Tracked): void {
     if (!t.file || this.d.watch === null || this.stopped) return;
     const id = t.id;
-    t.watch ??= new DebouncedWatch(t.file, {
+    t.watch ??= this.hub.watch(t.file, "activity", {
       delayMs: this.d.watchDebounceMs ?? WATCH_DEBOUNCE_MS,
       onChange: () => void this.refreshSession(id),
       watch: this.d.watch,
@@ -554,8 +564,9 @@ export class ActivityMonitor {
 
   private async readTranscript(t: Tracked): Promise<{ state: TranscriptState; size: number }> {
     t.file ??= this.d.transcriptFile(t.id);
-    if (!t.file) return { state: newTranscriptState(), size: 0 };
-    t.tail ??= new TranscriptTail(t.file);
+    // 已经停了、或者这个 session 已经不跟踪了（还在途的一次刷新）：不再新挂 tail，挂上就没人关了。
+    if (!t.file || this.stopped || this.tracked.get(t.id) !== t) return { state: newTranscriptState(), size: 0 };
+    t.tail ??= new TranscriptTail(t.file, undefined, this.hub);
     return t.tail.read();
   }
 

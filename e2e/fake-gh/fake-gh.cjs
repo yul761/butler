@@ -28,6 +28,13 @@
 //   更新提示（BTL-253）：
 //     api repos/<owner>/<repo>/releases/latest：fixture 的 release（GitHub releases API 的字段：tag_name、html_url、body、draft、prerelease、published_at），
 //       没有就和真 gh 一样打 HTTP 404 退出 1（还没发布过 release）；
+//   批量读 PR（BTL-276）：
+//     api graphql -f query=…p<号>: pullRequest(number: <号>)… -f owner=… -f name=…：每个别名从 prs 里找（链接以 /<owner>/<name>/pull/<号> 结尾），
+//       转成 GraphQL 节点（updatedAt 是那份 fixture 除了 CI、合并状态以外的指纹：和真 GitHub 一样，CI、合并状态变了 updatedAt 不变，
+//       要靠检查的 id / 结果看出来）；查询里有 allReviews: 时给全部字段。没有的 PR 和真 GitHub 一样：
+//       别名为 null、errors 里一条 NOT_FOUND，JSON 照打、退出 1；
+//     api <路径> -i [-H If-None-Match: <etag>]（带 ETag 的 REST）：…/pulls/<n>/comments|reviews?per_page=100 是 []，…/actions/runs?… 是 {workflow_runs: []}；
+//       头里带 Etag（内容的指纹），If-None-Match 对上了回 304（头照打、退出 1），和真 gh 一样；
 //   仓库改名（BTL-261）：
 //     repo view <owner/repo> --json nameWithOwner：fixture 的 renames[小写 slug]（改名后的名字），没有就是它自己（没改过名）；
 //   其余一律退出 1，并往 FAKE_GH_LOG 追加一行 {"unsupported": 参数}：测试结束时 unsupportedGhCalls 会把它们找出来，
@@ -71,6 +78,53 @@ const field = (key) => {
   return undefined;
 };
 
+const crypto = require("node:crypto");
+const hash = (v) => crypto.createHash("sha1").update(JSON.stringify(v)).digest("hex").slice(0, 16);
+const API_PULL_PAGE = /^repos\/\{owner\}\/\{repo\}\/pulls\/\d+\/(comments|reviews)\?per_page=100$/;
+const API_RUNS = /^repos\/\{owner\}\/\{repo\}\/actions\/runs\?branch=[^&]+&per_page=20$/;
+/** gh api -i：状态行、头、空行、正文；带的 If-None-Match 对上了回 304。 */
+const http = (body) => {
+  const etag = `"${hash(body)}"`;
+  const h = flag("-H");
+  if (h !== undefined && h.replace(/^If-None-Match:\s*/i, "") === etag) {
+    process.stdout.write(`HTTP/2.0 304 Not Modified\nEtag: ${etag}\n\n`);
+    process.stderr.write("gh: HTTP 304\n");
+    process.exit(1);
+  }
+  process.stdout.write(`HTTP/2.0 200 OK\nContent-Type: application/json; charset=utf-8\nEtag: ${etag}\n\n${JSON.stringify(body)}`);
+};
+/** gh pr view 形状的 fixture → GraphQL 的 PullRequest 节点（prBatch 读的形状）。 */
+const prNode = (pr, full) => {
+  const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
+  const stateOf = (c) => (c.__typename === "StatusContext" ? String(c.state || "PENDING").toUpperCase() : String(c.status).toUpperCase() !== "COMPLETED" ? "PENDING" : String(c.conclusion || "SUCCESS").toUpperCase());
+  const bad = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+  const states = checks.map(stateOf);
+  const rollupState = states.some((x) => bad.has(x)) ? "FAILURE" : states.some((x) => x === "PENDING") ? "PENDING" : "SUCCESS";
+  const rest = { ...pr };
+  for (const k of ["statusCheckRollup", "mergeable", "mergeStateStatus"]) delete rest[k];
+  const list = (v) => (Array.isArray(v) ? v : []);
+  // check run 的 id：链接里的 job id，没有就按内容算一个（重跑换了结果 / 链接就换 id）。
+  const idOf = (c) => Number(/\/job\/(\d+)/.exec(c.detailsUrl ?? "")?.[1] ?? parseInt(hash(c).slice(0, 8), 16));
+  const ids = checks.map((c) => (c.__typename === "StatusContext" ? { __typename: "StatusContext", context: c.context, state: c.state } : { __typename: "CheckRun", databaseId: idOf(c), status: c.status, conclusion: c.conclusion ?? null }));
+  const node = {
+    number: pr.number, url: pr.url, state: pr.state, updatedAt: `fake-${hash(rest)}`, headRefOid: pr.headRefOid, isDraft: pr.isDraft === true,
+    reviewDecision: pr.reviewDecision ?? null, mergeable: pr.mergeable ?? null, mergeStateStatus: pr.mergeStateStatus ?? null,
+    comments: { totalCount: list(pr.comments).length }, reviews: { totalCount: list(pr.reviews).length },
+    tip: { nodes: [{ commit: { statusCheckRollup: checks.length === 0 ? null : { state: rollupState, contexts: { totalCount: checks.length, nodes: ids } } } }] },
+  };
+  if (!full) return node;
+  return {
+    ...node, headRefName: pr.headRefName ?? "", createdAt: pr.createdAt ?? null, mergedAt: pr.mergedAt ?? null, closedAt: pr.closedAt ?? null,
+    baseRefName: pr.baseRefName ?? null, title: pr.title ?? null, body: pr.body ?? null, author: pr.author ?? null,
+    labels: { totalCount: list(pr.labels).length, nodes: list(pr.labels) },
+    reviewRequests: { totalCount: list(pr.reviewRequests).length, nodes: list(pr.reviewRequests).map((x) => ({ requestedReviewer: { __typename: x.slug ? "Team" : "User", ...x } })) },
+    allReviews: { totalCount: list(pr.reviews).length, nodes: list(pr.reviews) },
+    allComments: { totalCount: list(pr.comments).length, nodes: list(pr.comments) },
+    commits: { nodes: list(pr.commits).map((c) => ({ commit: c })) },
+    head: { nodes: [{ commit: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false }, nodes: checks } } } }] },
+  };
+};
+
 const [cmd, sub, ref] = args;
 if (cmd === "--version") {
   process.stdout.write("gh version 2.83.0 (fake)\n");
@@ -112,6 +166,25 @@ if (cmd === "--version") {
   out(release);
 } else if (cmd === "api" && API_PULL.test(sub ?? "")) {
   // 行内评论、review 列表：没有。
+} else if (cmd === "api" && sub === "graphql" && /pullRequest\(number: \d+\)/.test(field("query") ?? "") && field("owner") !== undefined && field("name") !== undefined) {
+  const query = field("query");
+  const full = query.includes("allReviews:");
+  const tail = `/${field("owner")}/${field("name")}/pull/`.toLowerCase();
+  const prs = Object.entries(fixture().prs);
+  const repository = {};
+  const errors = [];
+  for (const m of query.matchAll(/p(\d+): pullRequest\(number: (\d+)\)/g)) {
+    const pr = prs.find(([url]) => url.endsWith(`${tail}${m[2]}`))?.[1];
+    repository[`p${m[1]}`] = pr ? prNode(pr, full) : null;
+    if (!pr) errors.push({ type: "NOT_FOUND", path: ["repository", `p${m[1]}`], message: `Could not resolve to a PullRequest with the number of ${m[2]}.` });
+  }
+  out({ data: { rateLimit: { cost: 1, remaining: 4999, resetAt: "2099-01-01T00:00:00Z" }, repository }, ...(errors.length > 0 && { errors }) });
+  if (errors.length > 0) process.exit(1);
+} else if (cmd === "api" && API_PULL_PAGE.test(sub ?? "") && args.includes("-i")) {
+  // 行内评论、review 列表：没有。
+  http([]);
+} else if (cmd === "api" && API_RUNS.test(sub ?? "") && args.includes("-i")) {
+  http({ total_count: 0, workflow_runs: [] });
 } else if (cmd === "api" && sub === "graphql" && /^\s*query/.test(field("query") ?? "") && field("number") !== undefined) {
   out({ data: { repository: { pullRequest: { reviewThreads: { nodes: fixture().threads[field("number")] ?? [] } } } } });
 } else if (cmd === "api" && sub === "graphql" && /^\s*mutation/.test(field("query") ?? "") && field("id") !== undefined) {

@@ -51,6 +51,11 @@ export function parseUsageLine(line: string): UsageTurn | null {
   } catch {
     return null;
   }
+  return usageOfValue(obj);
+}
+
+/** 同 parseUsageLine，JSON 已经解析好了（TranscriptHub 每行只解析一次）。 */
+export function usageOfValue(obj: unknown): UsageTurn | null {
   if (!isObj(obj) || obj.type !== "assistant") return null;
   const msg = obj.message;
   if (!isObj(msg)) return null;

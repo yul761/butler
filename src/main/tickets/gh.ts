@@ -250,15 +250,17 @@ function runGh(cwd: string, args: string[], timeoutMs: number, maxBuffer: number
  */
 export function runGhDetail(
   cwd: string, args: string[], timeoutMs: number, maxBuffer: number, env?: NodeJS.ProcessEnv,
-): Promise<{ stdout: string | null; stderr: string; spawnError?: string | null; timedOut?: boolean }> {
+): Promise<{ stdout: string | null; stderr: string; spawnError?: string | null; timedOut?: boolean; raw?: string }> {
   const bin = ghBinary();
-  if (bin === null) return Promise.resolve({ stdout: null, stderr: "", spawnError: "ENOENT", timedOut: false });
+  if (bin === null) return Promise.resolve({ stdout: null, stderr: "", spawnError: "ENOENT", timedOut: false, raw: "" });
   return new Promise((done) => {
     execFile(bin, args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer, ...(env ? { env: { ...process.env, ...env } } : {}) }, (err, stdout, stderr) => {
       const e = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;
       done({
         stdout: e ? null : String(stdout),
         stderr: String(stderr ?? ""),
+        // 退出码不是 0 时也有用的输出：GraphQL 部分出错（gh 退出 1，JSON 照打）、gh api -i 的 304。
+        raw: String(stdout ?? ""),
         spawnError: e && typeof e.code === "string" ? e.code : null,
         // 超过 maxBuffer 时 Node 也会杀掉进程（killed）：那不是超时。
         timedOut: e?.killed === true && e.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
@@ -484,7 +486,11 @@ export async function prsForBranch(cwd: string, branch: string, timeoutMs: numbe
 }
 
 function parsePr(text: string | null): PrStatus | null {
-  const j = parseJson(text);
+  return parsePrObject(parseJson(text));
+}
+
+/** gh pr view --json PR_FIELDS 那个形状的对象 → PrStatus；批量 GraphQL 读到的先转成这个形状（prBatch）。 */
+function parsePrObject(j: unknown): PrStatus | null {
   if (typeof j !== "object" || j === null) return null;
   const r = j as Record<string, unknown>;
   if (typeof r.number !== "number" || typeof r.url !== "string" || typeof r.headRefOid !== "string") return null;
@@ -543,12 +549,12 @@ export async function reviewComments(cwd: string, number: number, timeoutMs: num
 /** 同 reviewComments，另外带回两次 gh 调用的 stderr。 */
 async function reviewCommentsDetail(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<{ data: PrComment[] | null; stderr: string }> {
   const env = repoEnv(repo);
-  const c = await runGhDetail(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/comments`, "--paginate", "--jq", ".[]"], timeoutMs, 8 * 1024 * 1024, env);
-  const j = parseLines(c.stdout);
+  const c = await restList(cwd, `repos/{owner}/{repo}/pulls/${number}/comments`, ".[]", timeoutMs, env);
+  const j = c.data;
   if (j === null) return { data: null, stderr: c.stderr };
-  const rv = await runGhDetail(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {id, node_id}"], timeoutMs, 8 * 1024 * 1024, env);
+  const rv = await restList(cwd, `repos/{owner}/{repo}/pulls/${number}/reviews`, ".[] | {id, node_id}", timeoutMs, env);
   const stderr = joinStderr(c.stderr, rv.stderr);
-  const reviews = parseLines(rv.stdout);
+  const reviews = rv.data;
   if (reviews === null) return { data: null, stderr };
   const nodeOf = new Map<number, string>();
   for (const item of reviews) {
@@ -589,8 +595,8 @@ export async function reviewAuthors(cwd: string, number: number, timeoutMs: numb
 
 /** 同 reviewAuthors，另外带回 stderr。 */
 async function reviewAuthorsDetail(cwd: string, number: number, timeoutMs: number, repo?: string | null): Promise<{ data: ReviewAuthors | null; stderr: string }> {
-  const res = await runGhDetail(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[] | {node_id, user: {login: .user.login, type: .user.type}}"], timeoutMs, 8 * 1024 * 1024, repoEnv(repo));
-  const rows = parseLines(res.stdout);
+  const res = await restList(cwd, `repos/{owner}/{repo}/pulls/${number}/reviews`, ".[] | {node_id, user: {login: .user.login, type: .user.type}}", timeoutMs, repoEnv(repo));
+  const rows = res.data;
   if (rows === null) return { data: null, stderr: res.stderr };
   const out: ReviewAuthors = { botReviewIds: new Set(), botLogins: new Set() };
   for (const item of rows) {
@@ -605,14 +611,17 @@ async function reviewAuthorsDetail(cwd: string, number: number, timeoutMs: numbe
 
 /** gh run list --branch：只看最新的 headSha（列表按时间倒序，第一条即最新）。没有 run 返回 null。 */
 export async function branchRuns(cwd: string, branch: string, timeoutMs: number): Promise<BranchRuns | null> {
-  const j = parseJson(await runGh(cwd, ["run", "list", "--branch", branch, "--limit", "20", "--json", "databaseId,headSha,status,conclusion,workflowName"], timeoutMs, 1024 * 1024));
-  if (!Array.isArray(j)) return null;
-  const runs = j.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null && typeof (x as Record<string, unknown>).headSha === "string");
+  // REST 带 ETag（BTL-276）：没变时 304，不占限额。和 gh run list --branch --limit 20 一样：按时间倒序的最近 20 个。
+  // 只要第一页（不翻页）：有下一页也照样记 ETag。
+  const got = await ghApiGet(cwd, `repos/{owner}/{repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=20`, timeoutMs, 4 * 1024 * 1024, undefined, { firstPageOnly: true });
+  const list = obj(got === "timeout" ? null : got?.body)?.workflow_runs;
+  if (!Array.isArray(list)) return null;
+  const runs = list.filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null && typeof (x as Record<string, unknown>).head_sha === "string");
   if (runs.length === 0) return null;
-  const headSha = runs[0].headSha as string;
+  const headSha = runs[0].head_sha as string;
   const checks: CiCheck[] = runs
-    .filter((r) => r.headSha === headSha)
-    .map((r) => ({ name: str(r.workflowName), state: runState(r.status, r.conclusion), runId: typeof r.databaseId === "number" ? r.databaseId : null }));
+    .filter((r) => r.head_sha === headSha)
+    .map((r) => ({ name: str(r.name), state: runState(r.status, r.conclusion), runId: typeof r.id === "number" ? r.id : null }));
   return { headSha, checks, ci: ciOf(checks) };
 }
 
@@ -893,4 +902,207 @@ export function editPrBody(o: { cwd: string; ref: string; body: string; timeoutM
     });
     child.stdin?.end(o.body);
   });
+}
+
+// ---- 带 ETag 的 REST（BTL-276） ----
+
+/** 记着这么多个 REST 响应的 ETag 和内容，多了丢最早的。 */
+const ETAG_MAX = 500;
+const etags = new Map<string, { etag: string; body: unknown }>();
+
+/** 测试用：清掉 ETag 缓存。 */
+export function resetGhEtags(): void {
+  etags.clear();
+}
+
+/** gh api -i 的输出：状态行、头、空行、正文。 */
+function parseHttp(raw: string): { status: number; headers: Map<string, string>; body: string } | null {
+  const m = /^HTTP\/\S+\s+(\d{3})[^\n]*\n/.exec(raw);
+  if (!m) return null;
+  const sep = /\r?\n\r?\n/.exec(raw);
+  const head = sep ? raw.slice(0, sep.index) : raw;
+  const body = sep ? raw.slice(sep.index + sep[0].length) : "";
+  const headers = new Map<string, string>();
+  for (const line of head.split(/\r?\n/).slice(1)) {
+    const i = line.indexOf(":");
+    if (i > 0) headers.set(line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim());
+  }
+  return { status: Number(m[1]), headers, body };
+}
+
+/**
+ * gh api <path> 的 GET，带上次的 ETag（If-None-Match）：没变时 GitHub 回 304，不算进限额，用上次的内容。
+ * 返回正文（JSON）和有没有下一页（Link rel="next"）；失败、不是 JSON 返回 null，超时、起不来返回 "timeout"。path 里的 {owner}/{repo} 由 gh 按 cwd / GH_REPO 填。
+ * 有下一页的默认不记 ETag（调用方要翻页，第一页的 304 没用）；firstPageOnly：调用方只要第一页，照记。
+ */
+export async function ghApiGet(
+  cwd: string, path: string, timeoutMs: number, maxBuffer: number, env?: NodeJS.ProcessEnv, o: { firstPageOnly?: boolean } = {},
+): Promise<{ body: unknown; next: boolean; stderr: string } | "timeout" | null> {
+  const key = `${cwd}\0${env?.GH_HOST ?? ""}\0${env?.GH_REPO ?? ""}\0${path}`;
+  const known = etags.get(key);
+  const args = ["api", path, "-i", ...(known ? ["-H", `If-None-Match: ${known.etag}`] : [])];
+  const r = await runGhDetail(cwd, args, timeoutMs, maxBuffer, env);
+  if (r.timedOut || r.spawnError) return "timeout";
+  const http = parseHttp(r.raw ?? r.stdout ?? "");
+  if (!http) return null;
+  if (http.status === 304 && known) {
+    etags.delete(key);
+    etags.set(key, known);
+    return { body: known.body, next: false, stderr: r.stderr };
+  }
+  if (http.status !== 200 || r.stdout === null) return null;
+  const body = parseJson(http.body);
+  if (body === null) return null;
+  const next = /<[^>]*>;\s*rel="next"/.test(http.headers.get("link") ?? "");
+  const etag = http.headers.get("etag");
+  etags.delete(key);
+  if (etag && (!next || o.firstPageOnly)) {
+    etags.set(key, { etag, body });
+    if (etags.size > ETAG_MAX) etags.delete(etags.keys().next().value as string);
+  }
+  return { body, next, stderr: r.stderr };
+}
+
+/**
+ * REST 列表：先按一页 100 个带 ETag 取；不止一页时退回原来的 --paginate --jq（jq 只是挑字段，挑出来的是全对象的子集）。
+ * data 为 null 是失败。
+ */
+async function restList(cwd: string, path: string, jq: string, timeoutMs: number, env?: NodeJS.ProcessEnv): Promise<{ data: unknown[] | null; stderr: string }> {
+  const one = await ghApiGet(cwd, `${path}?per_page=100`, timeoutMs, 8 * 1024 * 1024, env);
+  // 超时、起不来：不再翻页重试一遍（又要等一个超时），算读失败。
+  if (one === "timeout") return { data: null, stderr: "" };
+  if (one && !one.next && Array.isArray(one.body)) return { data: one.body, stderr: one.stderr };
+  const r = await runGhDetail(cwd, ["api", path, "--paginate", "--jq", jq], timeoutMs, 8 * 1024 * 1024, env);
+  return { data: parseLines(r.stdout), stderr: joinStderr(one?.stderr ?? "", r.stderr) };
+}
+
+// ---- 批量读 PR（BTL-276） ----
+
+/** 一次批量读里每个 PR 的结果：sig 是便宜字段的指纹（变了才要全读）；pr 只有全读才有（截断了也是 null，调用方单独读）。 */
+export type PrBatchItem = { sig: string; pr: PrStatus | null } | typeof GH_NOT_FOUND | null;
+export interface PrBatchResult {
+  /** 没出现的号、值为 null：这个 PR 这次没读到，调用方退回 gh pr view。 */
+  prs: Map<number, PrBatchItem>;
+  rate: { cost: number; remaining: number; resetAt: number | null } | null;
+}
+
+/** 全读里列表最多取这么多；超过（totalCount 更大、还有下一页）就当没读到，退回 gh pr view。 */
+const BATCH_LIST_MAX = 100;
+
+// 便宜字段：updatedAt 不跟着 CI、合并状态变，同一秒里的第二条评论也不一定变，所以另带评论 / review 的条数和每个检查的 id 与结果
+// （重跑会换新的 check run id；两个检查互换结果也看得出来）。点数按连接算、不按条数，这些几乎不多花。
+const CHEAP_FIELDS = `number url state updatedAt headRefOid isDraft reviewDecision mergeable mergeStateStatus
+  comments { totalCount } reviews { totalCount }
+  tip: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${BATCH_LIST_MAX}) { totalCount nodes { __typename
+    ... on CheckRun { databaseId status conclusion } ... on StatusContext { context state } } } } } } }`;
+const FULL_FIELDS = `headRefName createdAt mergedAt closedAt baseRefName title body author { login }
+  labels(first: ${BATCH_LIST_MAX}) { totalCount nodes { name } }
+  reviewRequests(first: ${BATCH_LIST_MAX}) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Mannequin { login } ... on Team { slug name } } } }
+  allReviews: reviews(first: ${BATCH_LIST_MAX}) { totalCount nodes { id author { login } state body submittedAt } }
+  allComments: comments(first: ${BATCH_LIST_MAX}) { totalCount nodes { id author { login } body createdAt url } }
+  commits(first: ${BATCH_LIST_MAX}) { nodes { commit { authoredDate } } }
+  head: commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: ${BATCH_LIST_MAX}) { pageInfo { hasNextPage } nodes { __typename
+    ... on CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state targetUrl } } } } } } }`;
+
+/** 这个仓库这些 PR 的一个 GraphQL 查询：每个 PR 一个别名 p<号>。 */
+export function prBatchQuery(numbers: number[], mode: "cheap" | "full"): string {
+  const fields = mode === "full" ? `${CHEAP_FIELDS}\n  ${FULL_FIELDS}` : CHEAP_FIELDS;
+  const prs = numbers.map((n) => `    p${n}: pullRequest(number: ${n}) { ...F }`).join("\n");
+  return `query($owner: String!, $name: String!) {\n  rateLimit { cost remaining resetAt }\n  repository(owner: $owner, name: $name) {\n${prs}\n  }\n}\nfragment F on PullRequest {\n  ${fields}\n}`;
+}
+
+const nodesOf = (v: unknown): unknown[] => {
+  const n = obj(v)?.nodes;
+  return Array.isArray(n) ? n : [];
+};
+const truncated = (v: unknown): boolean => {
+  const t = obj(v)?.totalCount;
+  return typeof t === "number" && t > BATCH_LIST_MAX;
+};
+
+/** 便宜字段的指纹：状态、更新时间、head、draft、review 结论、合并状态、评论 / review 条数、CI 汇总和每个检查（id、状态、结果）。 */
+function prSigOf(n: Record<string, unknown>): string {
+  const r = obj(obj(obj(nodesOf(n.tip)[0])?.commit)?.statusCheckRollup);
+  const ctx = obj(r?.contexts);
+  const checks = nodesOf(ctx).map((x) => {
+    const c = obj(x);
+    return c?.__typename === "StatusContext" ? `s:${str(c.context)}:${str(c.state)}` : `c:${String(c?.databaseId ?? "")}:${str(c?.status)}:${str(c?.conclusion)}`;
+  }).sort();
+  const count = (v: unknown) => (typeof obj(v)?.totalCount === "number" ? obj(v)!.totalCount : null);
+  return JSON.stringify([
+    n.state, n.updatedAt, n.headRefOid, n.isDraft, n.reviewDecision, n.mergeable, n.mergeStateStatus,
+    count(n.comments), count(n.reviews), r ? r.state : null, count(ctx), checks,
+  ]);
+}
+
+/** 全读的节点 → gh pr view --json 的形状；列表被截断了返回 null。 */
+function prViewShape(n: Record<string, unknown>): Record<string, unknown> | null {
+  const contexts = obj(obj(obj(nodesOf(n.head)[0])?.commit)?.statusCheckRollup)?.contexts;
+  if (obj(obj(contexts)?.pageInfo)?.hasNextPage === true) return null;
+  if ([n.labels, n.reviewRequests, n.allReviews, n.allComments].some(truncated)) return null;
+  return {
+    ...n,
+    labels: nodesOf(n.labels),
+    reviewRequests: nodesOf(n.reviewRequests).map((x) => obj(x)?.requestedReviewer).filter((x) => x != null),
+    reviews: nodesOf(n.allReviews),
+    comments: nodesOf(n.allComments),
+    // 按时间顺序的前 100 个：最早的那个一定在里面（firstCommitOf 只要它）。
+    commits: nodesOf(n.commits).map((x) => obj(x)?.commit).filter((x) => x != null),
+    statusCheckRollup: nodesOf(contexts),
+  };
+}
+
+/**
+ * 一个仓库的一批 PR，一次 gh api graphql（每个 PR 一个别名）。cheap 只取便宜字段（指纹），full 另外取 gh pr view 要的全部字段。
+ * 某个 PR「没有这个 PR」（NOT_FOUND，和 ghPrNotFound 一样认）→ GH_NOT_FOUND；它别的错、截断了 → null（调用方单独读）。
+ * 整个调用失败（gh 失败、超时、不是 JSON、仓库解析不到）返回 null：调用方全部退回 gh pr view。
+ */
+export async function prBatch(cwd: string, slug: string, numbers: number[], mode: "cheap" | "full", timeoutMs: number): Promise<PrBatchResult | null> {
+  const parts = slug.split("/");
+  if (numbers.length === 0 || parts.length < 2) return null;
+  const [owner, name] = parts.slice(-2);
+  const r = await runGhDetail(
+    cwd, ["api", "graphql", "-f", `query=${prBatchQuery(numbers, mode)}`, "-f", `owner=${owner}`, "-f", `name=${name}`], timeoutMs, 16 * 1024 * 1024, repoEnv(slug),
+  );
+  if (r.timedOut || r.spawnError) return null;
+  // 有 PR 出错时 gh 退出 1，但 JSON 照样打在 stdout 上。
+  return prBatchResult(r.stdout ?? r.raw ?? null, numbers, mode);
+}
+
+/** 纯函数：prBatch 的输出 → 每个 PR 的结果（见 prBatch）。 */
+export function prBatchResult(text: string | null, numbers: number[], mode: "cheap" | "full"): PrBatchResult | null {
+  const j = obj(parseJson(text));
+  const repo = obj(obj(j?.data)?.repository);
+  if (!repo) return null;
+  const rl = obj(obj(j?.data)?.rateLimit);
+  const rate = rl && typeof rl.remaining === "number" ? { cost: typeof rl.cost === "number" ? rl.cost : 0, remaining: rl.remaining, resetAt: timeOf(rl.resetAt) } : null;
+  const errorOf = new Map<number, string>();
+  for (const e of Array.isArray(j?.errors) ? j.errors : []) {
+    const path = obj(e)?.path;
+    const alias = Array.isArray(path) && path[0] === "repository" && typeof path[1] === "string" ? /^p(\d+)$/.exec(path[1]) : null;
+    if (!alias) return null; // 不是某个 PR 的错（仓库、查询本身）：整个不算
+    const n = Number(alias[1]);
+    errorOf.set(n, `${errorOf.get(n) ?? ""} ${str(obj(e)?.type)} ${str(obj(e)?.message)}`);
+  }
+  const prs = new Map<number, PrBatchItem>();
+  for (const n of numbers) {
+    const node = obj(repo[`p${n}`]);
+    const err = errorOf.get(n);
+    if (!node) {
+      prs.set(n, err !== undefined && ghPrNotFound(err) ? GH_NOT_FOUND : null);
+      continue;
+    }
+    if (err !== undefined) {
+      prs.set(n, null);
+      continue;
+    }
+    const sig = prSigOf(node);
+    if (mode === "cheap") {
+      prs.set(n, { sig, pr: null });
+      continue;
+    }
+    const shape = prViewShape(node);
+    prs.set(n, { sig, pr: shape ? parsePrObject(shape) : null });
+  }
+  return { prs, rate };
 }
