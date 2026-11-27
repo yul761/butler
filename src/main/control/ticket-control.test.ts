@@ -7,14 +7,14 @@ import { FollowupsRepo } from "../db/followups-repo";
 import { TicketsRepo } from "../db/tickets-repo";
 import { M } from "../strings";
 import { insertTicket, memDb } from "../test-utils";
-import { closeTicket, reopenTicket, setTicketStatus, type TicketCloseDeps } from "../tickets/ticket-close";
+import { closeTicket, reopenTicket, setTicketStatus, type OpenPrs, type TicketCloseDeps } from "../tickets/ticket-close";
 import { TicketControl, type TicketControlScope } from "./ticket-control";
 
 const followup = (id: string, ticketKey: string, o: Partial<Followup> = {}): Followup => ({
   id, ticketKey, kind: "doc", description: id, trigger: "none", dueDate: null, status: "open", snoozedUntil: null, source: "session", createdAt: 1, doneAt: null, ...o,
 });
 
-function setup(o: { openPrs?: TicketCloseDeps["openPrs"]; closePr?: TicketCloseDeps["closePr"] } = {}) {
+function setup(o: { openPrs?: () => OpenPrs; closePr?: TicketCloseDeps["closePr"] } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const followups = new FollowupsRepo(db);
@@ -36,7 +36,7 @@ function setup(o: { openPrs?: TicketCloseDeps["openPrs"]; closePr?: TicketCloseD
   const notify = vi.fn();
   const refreshSources: string[] = [];
   const closeDeps: TicketCloseDeps = {
-    tickets, followups, transaction: (fn) => withTransaction(db, fn), openPrs: o.openPrs ?? (() => ({ closable: [], unclosable: [] })), closePr: o.closePr ?? (async () => "closed"), liveSessions: () => [],
+    tickets, followups, transaction: (fn) => withTransaction(db, fn), openPrs: async () => (o.openPrs ? o.openPrs() : { closable: [], unclosable: [] }), closePr: o.closePr ?? (async () => "closed"), liveSessions: () => [],
     endSession: () => ({ ok: true }), rederive, refreshPrs: (_k, source) => void refreshSources.push(source), notify, now: () => 5, log: () => {},
   };
   const control = new TicketControl({

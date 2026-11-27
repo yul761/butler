@@ -286,7 +286,7 @@ export interface IpcDeps {
     retry(key: string, o: RetryCloseOptions): Promise<RetryCloseResult>;
     setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null, source: "user"): SetStatusResult;
     /** 关闭框里列的开着的 PR：能关的、关不了的和原因。 */
-    preview(key: string): ClosePreview | null;
+    preview(key: string): Promise<ClosePreview | null>;
   };
   detectTrackerTools: () => Promise<McpProbe>;
   /** 设置 › 功能：三张策略表各读一次（UI 重做第 6 层）。 */
@@ -379,10 +379,10 @@ export function registerIpc(d: IpcDeps): void {
     }
     return r;
   });
-  handle(IPC.ticketsClosePreview, (rawKey: unknown) => {
+  handle(IPC.ticketsClosePreview, async (rawKey: unknown) => {
     const key = ticketKeyArg(rawKey);
     if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
-    const r = d.ticketClose.preview(key);
+    const r = await d.ticketClose.preview(key);
     if (!r) throw new TicketError("not_found", M().ctlNoTicket(key));
     return r;
   });

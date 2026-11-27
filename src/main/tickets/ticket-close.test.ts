@@ -24,7 +24,7 @@ function setup(o: { prs?: ClosablePr[]; unclosable?: OpenPrs["unclosable"]; sess
   const d: TicketCloseDeps = {
     tickets, followups,
     transaction: (fn) => withTransaction(db, fn),
-    openPrs: () => ({ closable: o.prs ?? [], unclosable: o.unclosable ?? [] }),
+    openPrs: async () => ({ closable: o.prs ?? [], unclosable: o.unclosable ?? [] }),
     closePr: o.closePr ?? (async (pr) => (calls.push(`close ${pr.url}`), "closed")),
     liveSessions: () => o.sessions ?? [],
     endSession: o.endSession ?? ((s) => (calls.push(`end ${s.id}`), { ok: true })),
@@ -294,6 +294,15 @@ describe("classifyOpenPrs (which open PRs closing a ticket may close)", () => {
     ]);
   });
 
+  it("a PR from a public branch (publicBranch) or whose head is its own target branch is not the ticket's own, even when ownBranch says yes (BTL-270 review)", () => {
+    const rows = [row(1, { headBranch: "main", baseBranch: "release" }), row(2, { headBranch: "release", baseBranch: "release" }), row(3, { headBranch: "t", baseBranch: "main" })];
+    const r = classifyOpenPrs(rows, {
+      givenUp: (x) => x.gaveUp, ownBranch: () => true, publicBranch: (_id, b) => b === "main", sharedWith: () => null, ghDir: () => "/r",
+    });
+    expect(r.closable.map((p) => p.number)).toEqual([3]);
+    expect(r.unclosable.map((u) => [u.number, u.kind])).toEqual([[1, "not_own_branch"], [2, "not_own_branch"]]);
+  });
+
   it("asks ownBranch with the PR's repo and head branch", () => {
     const asked: string[] = [];
     classify([row(1, { repoId: 7, headBranch: "x" })], (repoId, b) => (asked.push(`${repoId}:${b}`), true));
@@ -302,16 +311,16 @@ describe("classifyOpenPrs (which open PRs closing a ticket may close)", () => {
 });
 
 describe("closePreview (what the close dialog lists before anything is closed)", () => {
-  it("lists the closable PRs to tick and the unclosable ones with a reason in the current language", () => {
+  it("lists the closable PRs to tick and the unclosable ones with a reason in the current language", async () => {
     const { d } = setup({
       prs: [{ url: "https://github.com/o/r/pull/1", number: 1, slug: "o/r", cwd: "/r" }],
       unclosable: [{ url: "https://github.com/o/r/pull/8", number: 8, kind: "shared", ticket: "T-2" }],
     });
-    expect(closePreview(d, "T-1")).toEqual({
+    expect(await closePreview(d, "T-1")).toEqual({
       closable: [{ url: "https://github.com/o/r/pull/1", number: 1 }],
       unclosable: [{ url: "https://github.com/o/r/pull/8", kind: "shared", ticket: "T-2", error: M().ticketClosePrWhy("shared", "T-2") }],
     });
-    expect(closePreview(d, "NOPE")).toBeNull();
+    expect(await closePreview(d, "NOPE")).toBeNull();
   });
 });
 

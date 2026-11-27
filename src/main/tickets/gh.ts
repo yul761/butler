@@ -455,6 +455,26 @@ export async function prRead(cwd: string, ref: string, timeoutMs: number): Promi
   return parsePr(r.stdout);
 }
 
+/** 关 PR 之前核对的：head 在不在 fork 上（isCrossRepository）、head 分支、还开着没有（BTL-270 审查）。 */
+export interface PrHead {
+  crossRepo: boolean;
+  headBranch: string;
+  open: boolean;
+}
+
+/** gh pr view <ref> --json isCrossRepository,headRefName,state 的输出 → PrHead；不对就是 null。 */
+export function parsePrHead(text: string | null): PrHead | null {
+  const j = obj(parseJson(text));
+  if (!j || typeof j.isCrossRepository !== "boolean" || typeof j.headRefName !== "string" || typeof j.state !== "string") return null;
+  return { crossRepo: j.isCrossRepository, headBranch: j.headRefName, open: j.state === "OPEN" };
+}
+
+/** 关 ticket 时核对一个 PR 的 head（fork 上的同名分支不是 ticket 自己的）。gh 失败、超时、输出不对都返回 null。 */
+export async function prHead(cwd: string, ref: string, timeoutMs: number): Promise<PrHead | null> {
+  const r = await runGhDetail(cwd, ["pr", "view", ref, "--json", "isCrossRepository,headRefName,state"], timeoutMs, 1024 * 1024);
+  return parsePrHead(r.stdout);
+}
+
 /**
  * gh repo view <slug>：GitHub 上这个仓库现在的 slug（小写；github.com 以外的主机带主机名，和 parseRemoteSlug 一样）。
  * 改过名、转过 owner 的，GitHub 跳转到新名字，返回的就和传进来的不一样。GH_NOT_FOUND：仓库不在了或看不到；null：gh 失败。

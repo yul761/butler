@@ -59,6 +59,8 @@ test("when a PR fails to close, the dialog stays open with the reason and retryi
       [url]: {
         number: 44, url, state: "OPEN", headRefName: "feature/E2E-12", createdAt: "2026-11-18T08:00:00Z", mergedAt: null, closedAt: null,
         isDraft: false, reviewDecision: "", headRefOid: "eeee5555eeee", author: { login: "dev" }, reviews: [], comments: [], commits: [], statusCheckRollup: [],
+        // 关之前核对 head 在不在 fork 上（BTL-270 审查）。
+        isCrossRepository: false,
       },
     },
   });

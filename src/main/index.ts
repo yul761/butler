@@ -269,10 +269,10 @@ import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
 import { StackService, type OwnedBranch } from "./stacks/stack-service";
 import { StackControl } from "./control/stack-control";
-import { endSessionRefusal } from "./control/end-guard";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
-import { classifyOpenPrs, closePreview, closeTicket, prRefreshOptions, reopenTicket, retryClose, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
+import { closeWiring } from "./tickets/ticket-close-wiring";
+import { closePreview, closeTicket, prRefreshOptions, reopenTicket, retryClose, setTicketStatus, type TicketCloseDeps } from "./tickets/ticket-close";
 import { prClose } from "./stacks/gh-stack";
 import { classifyCommentsByModel } from "./loop/comment-model";
 import { LoopPolicies } from "./loop/policies";
@@ -281,7 +281,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, prBatch, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prHead, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, prBatch, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
 import { RepoRenamesRepo } from "./db/repo-renames-repo";
 import { RENAME_RETRY_MS, RepoRenames } from "./tickets/repo-renames";
 import { LessonsRepo } from "./db/lessons-repo";
@@ -3657,57 +3657,29 @@ async function bootstrap(): Promise<void> {
   const ticketCloseDeps: TicketCloseDeps = {
     tickets, followups,
     transaction: (fn) => withTransaction(db, fn),
-    // 读过、没放弃、在 ticket 自己仓库里、head 分支是这个 ticket 自己的分支的开着的 PR 能关（在那个仓库的 gh 目录里跑）；
-    // 其余看着开着的照样报出来、写明原因，不当作关完了（classifyOpenPrs）。
-    openPrs: (key) => {
-      const t = tickets.get(key);
-      return classifyOpenPrs<TicketPr>(ticketPrs.byTicket(key), {
-        givenUp: (p) => prGivenUp(p),
-        // ticket 仓库的分支，和 session 推过、记了归属的分支（worktree 里的子 session）。
-        ownBranch: (repoId, branch) => (t?.repos.some((r) => r.id === repoId && r.branch === branch) ?? false) || branchOwners.get(key, repoId, branch) !== null,
-        // 同一个 PR 也挂在别的还没关的 ticket 上：不替那个 ticket 关。
-        sharedWith: (p) => ticketPrs.byUrl(p.url).map((r) => r.ticketKey).find((k) => k !== key && tickets.get(k)?.statusManual !== "closed") ?? null,
-        ghDir: prGhDir,
-      });
-    },
-    // 用户在关闭框里勾了要关的：照做，审计里记一笔（和 stacks 关草稿 PR 同一类）。总控、路由发起的和别的对外动作一样看开关。
-    closePr: async (pr, reason, o) => {
-      const detail = { scope: { repoSlug: pr.slug, ticketKey: o.key }, target: pr.url, summary: `close #${pr.number} (ticket closed)`, payload: reason };
-      const run = () => prClose(pr.cwd, pr.slug, pr.number, M().ticketClosePrComment(reason));
-      if (o.source !== "user") return (await externalActions.attempt("pr_open", detail, run)).ran ? "closed" : "skipped";
-      try {
-        await run();
-        externalActions.record("pr_open", { ...detail, outcome: "done" });
-        return "closed";
-      } catch (e) {
-        externalActions.record("pr_open", { ...detail, outcome: "failed", error: e instanceof Error ? e.message : String(e) });
-        throw e;
-      }
-    },
+    // 哪些开着的 PR 能关、怎么关、怎么结束 session：tickets/ticket-close-wiring.ts（单独测）。
+    ...closeWiring({
+      tickets, ticketPrs, branchOwners, ghDir: prGhDir, defaultBranch: (repo) => git.defaultBranch(repo), prHead, prClose, external: externalActions,
+      sessions: {
+        activityKind: (id) => activityMonitor.get(id)?.kind ?? null,
+        waitingForInput: (id) => sessions.get(id)?.waitingForInput ?? false,
+        screenNeedsUser: (termId) => pty.screenNeedsUser(termId),
+        setUserEnded: (id, at) => sessions.setUserEnded(id, at),
+        kill: (termId) => pty.kill(termId),
+        forgetHibernated: (id) => {
+          hibernator?.forget(id, "ended by ticket close");
+          const h = sessions.get(id);
+          if (h?.waitingForInput) sessions.setWaiting(id, false, h.lastActivityAt ?? 0);
+        },
+      },
+      now: Date.now,
+      log: logger,
+    }),
     liveSessions: (key) =>
       sessions.listByTicket(key)
         .filter((s) => sessions.head(s.id)?.id === s.id)
         .map((s) => ({ id: s.id, termId: sessionService.termIdOf(s.id), hibernated: isHibernated(s.id) }))
         .filter((s) => s.termId !== null || s.hibernated),
-    // 关终端并记成用户结束的（不会被自动恢复）；休眠着的不再唤醒。用户自己勾的和点 × 一样；
-    // 总控、路由发起的和 end_session 一样：正在干活、屏幕上有等用户回答的确认，不关。
-    endSession: (s, source) => {
-      if (s.termId && source !== "user") {
-        const termId = s.termId;
-        const refusal = endSessionRefusal(s.id, {
-          kind: activityMonitor.get(s.id)?.kind ?? null, waitingForInput: sessions.get(s.id)?.waitingForInput ?? false, screenNeedsUser: () => pty.screenNeedsUser(termId),
-        });
-        if (refusal) return { ok: false, error: refusal };
-      }
-      sessions.setUserEnded(s.id, Date.now());
-      if (s.termId) pty.kill(s.termId);
-      else if (s.hibernated) {
-        hibernator?.forget(s.id, "ended by ticket close");
-        const h = sessions.get(s.id);
-        if (h?.waitingForInput) sessions.setWaiting(s.id, false, h.lastActivityAt ?? 0);
-      }
-      return { ok: true };
-    },
     rederive: (key) => {
       rederiveTicketStatus({ tickets, handoffs, followups, now: Date.now, linkedOpen, givenUpPrs, shipherdClosedPrs, foreignPr }, key);
       void memory.syncTicket(key);

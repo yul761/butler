@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, ghApiGet, prBatch, prBatchable, PR_BATCH_CHUNK, prBatchQuery, prBatchResult, GH_NOT_FOUND } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, ghApiGet, prBatch, prBatchable, PR_BATCH_CHUNK, prBatchQuery, prBatchResult, GH_NOT_FOUND, parsePrHead } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -814,5 +814,16 @@ printf '%s' "$q" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",(
     expect(r?.rate).toMatchObject({ remaining: 4000 });
     expect([0, -1, 1.5, 2 ** 31, Number.NaN].some(prBatchable)).toBe(false);
     expect(prBatchable(2 ** 31 - 1)).toBe(true);
+  });
+});
+
+// BTL-270 审查：关 PR 之前核对 head 在不在 fork 上。
+describe("parsePrHead", () => {
+  it("reads isCrossRepository, the head branch and whether it is open; anything malformed is null", () => {
+    expect(parsePrHead(JSON.stringify({ isCrossRepository: true, headRefName: "main", state: "OPEN" }))).toEqual({ crossRepo: true, headBranch: "main", open: true });
+    expect(parsePrHead(JSON.stringify({ isCrossRepository: false, headRefName: "t-1", state: "CLOSED" }))).toEqual({ crossRepo: false, headBranch: "t-1", open: false });
+    expect(parsePrHead(JSON.stringify({ headRefName: "t-1", state: "OPEN" }))).toBeNull();
+    expect(parsePrHead("not json")).toBeNull();
+    expect(parsePrHead(null)).toBeNull();
   });
 });

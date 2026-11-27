@@ -51,18 +51,23 @@ export interface OpenPrRow {
   slug: string;
   repoId: number | null;
   headBranch: string | null;
+  /** PR 的目标分支（读到过的话）。 */
+  baseBranch?: string | null;
   state: "open" | "merged" | "closed";
   checkedAt: number;
 }
 
 /**
  * 关 ticket 时哪些开着的 PR 能关（BTL-270 审查）：读过的、没放弃的、在 ticket 自己仓库里的、head 分支是这个 ticket 自己的分支
- * （ticket 仓库的分支、session 推过的有归属的分支）、而且没挂在别的还没关的 ticket 上。其余报出来，写明为什么不关：
- * 不替别人关 PR、不往别人的 PR 上发公开评论。
+ * （ticket 仓库的分支、session 推过的有归属的分支）、而且没挂在别的 ticket 上。其余报出来，写明为什么不关：
+ * 不替别人关 PR、不往别人的 PR 上发公开评论。head 是公共分支（publicBranch：仓库的默认分支、main / master）或者就是 PR 的目标分支的，
+ * 就算 ticket 记的分支也叫这个名字也不是它自己的（BTL-270 审查）。fork 上的同名分支由调用方关之前核对（verifyHeads）。
  */
 export function classifyOpenPrs<R extends OpenPrRow>(rows: readonly R[], c: {
   givenUp(r: R): boolean;
   ownBranch(repoId: number, branch: string): boolean;
+  /** 这个仓库的公共分支（默认分支等）：从这里开的 PR 不是哪个 ticket 自己的。 */
+  publicBranch?(repoId: number, branch: string): boolean;
   sharedWith(r: R): string | null;
   ghDir(r: R): string;
 }): OpenPrs {
@@ -74,7 +79,9 @@ export function classifyOpenPrs<R extends OpenPrRow>(rows: readonly R[], c: {
     if (r.checkedAt === 0) no("never_read");
     else if (c.givenUp(r)) no("given_up");
     else if (r.repoId === null) no("foreign");
-    else if (r.headBranch === null || !c.ownBranch(r.repoId, r.headBranch)) no("not_own_branch");
+    else if (
+      r.headBranch === null || r.headBranch === (r.baseBranch ?? null) || (c.publicBranch?.(r.repoId, r.headBranch) ?? false) || !c.ownBranch(r.repoId, r.headBranch)
+    ) no("not_own_branch");
     else {
       const other = c.sharedWith(r);
       if (other) no("shared", other);
@@ -100,9 +107,9 @@ export interface ClosePreview {
 }
 
 /** 关闭框打开时：这个 ticket 开着的 PR 里哪些能关、哪些不能（原因写成当前语言）。没有这个 ticket 时为 null。 */
-export function closePreview(d: Pick<TicketCloseDeps, "tickets" | "openPrs">, key: string): ClosePreview | null {
+export async function closePreview(d: Pick<TicketCloseDeps, "tickets" | "openPrs">, key: string): Promise<ClosePreview | null> {
   if (!d.tickets.get(key)) return null;
-  const open = d.openPrs(key);
+  const open = await d.openPrs(key);
   return { closable: open.closable.map((p) => ({ url: p.url, number: p.number })), unclosable: open.unclosable.map(unclosableError) };
 }
 
@@ -122,7 +129,8 @@ export interface TicketCloseDeps {
   followups: Pick<FollowupsRepo, "ignoreForClose" | "restoreAfterReopen">;
   transaction<T>(fn: () => T): T;
   /** 这个 ticket 开着的 PR：能关的和关不了的（classifyOpenPrs）。 */
-  openPrs(key: string): OpenPrs;
+  /** 要核对 gh（默认分支、head 在不在 fork 上），所以是异步的。 */
+  openPrs(key: string): Promise<OpenPrs>;
   /** 关一个 PR：closed 关了；skipped 开关关着没跑（抛错是 gh 失败）。key 是审计里记的 ticket。 */
   closePr(pr: ClosablePr, reason: string, o: { key: string; source: TicketCloseSource }): Promise<"closed" | "skipped">;
   /** 这个 ticket 开着终端或休眠着的 session。 */
@@ -191,7 +199,7 @@ export async function closeTicket(d: TicketCloseDeps, key: string, o: CloseOptio
   // 总控、路由要关 PR 必须点名：PR 的评论是公开发到 GitHub 的，不让它一句「全关」就关掉没看过的 PR。
   // ticket 也先不关：关了以后就不能再带 prUrls 关一次（already_closed），只能请用户在关闭框里重试。
   if (o.closePrs && o.source !== "user" && o.prUrls === undefined) {
-    const p = closePreview(d, key)!;
+    const p = (await closePreview(d, key))!;
     return { ok: false, error: "pick_prs", ticket: key, closable: p.closable, prErrors: p.unclosable };
   }
   const ignoredFollowups = d.transaction(() => {
@@ -253,7 +261,7 @@ async function closeLeftovers(d: TicketCloseDeps, key: string, reason: string, o
   const stillClosed = () => d.tickets.get(key)?.statusManual === "closed";
   let reopenedMeanwhile = false;
   if (o.closePrs) {
-    const open = d.openPrs(key);
+    const open = await d.openPrs(key);
     const wanted = (url: string) => !o.onlyPrs || o.onlyPrs.has(prUrlKey(url));
     for (const u of open.unclosable) if (wanted(u.url)) prErrors.push(unclosableError(u));
     for (const pr of open.closable) {
