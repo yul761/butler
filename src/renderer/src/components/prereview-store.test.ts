@@ -63,6 +63,29 @@ describe("PreReviewStore (BTL-271)", () => {
     expect(t.listening()).toBe(false);
   });
 
+  it("a badge mounted again refetches: it missed the state changes while it was off the page", async () => {
+    const t = setup();
+    const off = t.store.subscribe(() => {});
+    const a = t.store.hold("tickets", "T-1");
+    await t.flush();
+    // 去设置页：徽标全卸下，连 stateChanged 都不听了；这期间预审跑完了。
+    a();
+    off();
+    const n = t.calls.length;
+    const off2 = t.store.subscribe(() => {});
+    const a2 = t.store.hold("tickets", "T-1");
+    // 重取完成之前先显示旧的，不闪成「还没取到」。
+    expect(t.store.ticket("T-1")).toBeDefined();
+    await t.flush();
+    expect(t.calls.slice(n)).toEqual([{ tickets: ["T-1"], sessions: [], prs: [] }]);
+    // 同一枚徽标一直挂着、另一枚再挂上同一个 id，不多取。
+    t.store.hold("tickets", "T-1")();
+    await t.flush();
+    expect(t.calls.length).toBe(n + 1);
+    a2();
+    off2();
+  });
+
   it("two badges for the same ticket: one going away keeps the other", async () => {
     const t = setup();
     const off = t.store.subscribe(() => {});

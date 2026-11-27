@@ -59,6 +59,8 @@ const preReviewIdOf = (j: BgJob): number | null => {
   return Number.isFinite(id) && id > 0 ? id : null;
 };
 
+/** 还没出结论的（在跑、排队、停着）。 */
+const isActive = (s: PreReviewBadge["state"]): boolean => s === "running" || s === "queued" || s === "paused";
 const asReason = (g: BgGate): PreReviewPauseReason | null => (g.run ? null : g.reason);
 
 const finishedState = (b: PreReviewBrief): "clean" | "violations" | "error" =>
@@ -183,8 +185,16 @@ export class PreReviewStatusService {
     }
     const out = new Map<K, PreReviewBadge>();
     for (const [k, list] of by) {
-      const best = mostUrgentBadge(list);
-      if (best) out.set(k, best);
+      // 一个 key 可能有几组（换新链上的新旧 id）：结论只留最新的一次，不能让旧的「违反」压过新的「通过」；排队、在跑的照旧优先。
+      const active = list.filter((b) => isActive(b.state));
+      const newest = list.filter((b) => !isActive(b.state)).reduce<PreReviewBadge | null>((m, b) => (!m || (b.id ?? 0) > (m.id ?? 0) ? b : m), null);
+      const best = mostUrgentBadge(newest ? [...active, newest] : active);
+      if (!best) continue;
+      // 在跑的那组自己没有上一次结论时，用整条链上最新的那次。
+      const prevId = best.last?.id ?? 0;
+      if (best !== newest && newest && newest.id !== null && newest.id > prevId && (newest.state === "clean" || newest.state === "violations" || newest.state === "error") && newest.headSha !== null) {
+        out.set(k, { ...best, last: { state: newest.state, id: newest.id, violations: newest.violations, headSha: newest.headSha, finishedAt: newest.finishedAt } });
+      } else out.set(k, best);
     }
     return out;
   }

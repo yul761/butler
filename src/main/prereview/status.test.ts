@@ -214,4 +214,17 @@ describe("PreReviewStatusService (BTL-271)", () => {
     // 没换新的照旧；同一次查询里旧 id 归新 id，不重复出现。
     expect([...t.status.forSessions(["new", "s9"]).keys()]).toEqual(["new"]);
   });
+
+  it("across a refresh chain the newest verdict wins, not the old violations", () => {
+    const t = setup();
+    const a = t.enqueue({ ticket: "T-1", session: "old", head: sha("a") });
+    t.finish(a.id, t.start(a.id).id, { verdict: "violations", violations: [must("x")] });
+    t.chains.set("new", ["new", "old"]);
+    // 新 session 又交了一次，还在跑：上一次的结论来自旧 id。
+    const b = t.enqueue({ ticket: "T-1", session: "new", head: sha("b") });
+    const job = t.start(b.id);
+    expect(t.status.forSessions(["new"]).get("new")).toMatchObject({ state: "running", id: b.id, last: { state: "violations", id: a.id } });
+    t.finish(b.id, job.id, { verdict: "clean" });
+    expect(t.status.forSessions(["new"]).get("new")).toMatchObject({ state: "clean", id: b.id });
+  });
 });
