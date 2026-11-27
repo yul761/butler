@@ -1,6 +1,7 @@
 import type { Handoff, Pr } from "../../shared/handoff";
 import { dedupeHandoffPrs } from "../../shared/pr-memory";
 import { prUrlKey } from "../../shared/pr-url";
+import { needsDecision } from "../../shared/types";
 import { prGivenUp, type TicketPr } from "../db/ticket-prs-repo";
 
 /** 同一个 PR：按链接认（去掉末尾斜杠、不分大小写）。 */
@@ -42,11 +43,14 @@ export function prHandoff(
   // 模型明确说 active（又开始干了）、已经合并过（done / merged_pending_followup）、blocked 并列了原因的不改，和 deriveStatus 一致。
   const byShipherd = new Set(rows.filter((r) => (r.shipherdClosedAt ?? null) !== null).map((r) => prUrlKey(r.url)));
   const counted = prs.filter((p) => !byShipherd.has(prUrlKey(p.url)));
-  const blockedWithReasons = base.status === "blocked" && (base.blockers?.length ?? 0) > 0;
-  const decidable = base.status === "in_review" || base.status === "needs_decision" || (base.status === "blocked" && !blockedWithReasons);
-  const decide = decidable && counted.length > 0 && counted.every((p) => p.state === "closed");
+  const allClosed = counted.length > 0 && counted.every((p) => p.state === "closed");
+  // 模型报的 closed 和 deriveStatus 一样当成要你决定。
+  const prior = base.status === "closed" ? "needs_decision" : base.status;
+  const decide = needsDecision({
+    status: prior, blockedWithReasons: base.status === "blocked" && (base.blockers?.length ?? 0) > 0, openPrs: anyOpen ? 1 : 0, allClosed,
+  });
   // 等决定时又有了开着的 PR（重开了、另开了一个）：回到 review。
-  const reopened = base.status === "needs_decision" && anyOpen;
+  const reopened = prior === "needs_decision" && anyOpen;
   const status = promote ? "done" : decide ? "needs_decision" : reopened ? "in_review" : base.status;
-  return { prs, status, sourceRef: `prwatch:${ticketKey}:${signature}@${base.id}`, clearBlockers: decide };
+  return { prs, status, sourceRef: `prwatch:${ticketKey}:${signature}@${base.id}`, clearBlockers: decide && allClosed };
 }

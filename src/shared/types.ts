@@ -37,11 +37,31 @@ export type UnclosablePrKind = (typeof UNCLOSABLE_PR_KINDS)[number];
 export type ClosePrErrorKind = "failed" | "skipped" | UnclosablePrKind;
 /** 重试有意义的：gh 失败、开关关着。关不了的那几类再试也一样。 */
 export const RETRYABLE_CLOSE_PR_ERRORS: readonly ClosePrErrorKind[] = ["failed", "skipped"];
+/** needsDecision 看的事实。status 是 PR 之前的状态（模型报的、或者存着的）；模型报的 closed 由调用方先当成 needs_decision。 */
+export interface DecisionFacts {
+  status: TicketStatus;
+  /** 状态是 blocked 而且列了 blockers：卡住优先，不算等决定。别的状态带的 blockers 是对着关掉的 PR 说的，不算。 */
+  blockedWithReasons: boolean;
+  /** 开着的 PR 数（存的状态还没跟上时也按 PR 算）。 */
+  openPrs: number;
+  /** 算数的 PR（去掉放弃读的、Shipherd 自己关的、别处的）至少一个，而且全都关了没合。 */
+  allClosed: boolean;
+}
+
 /**
- * 这时候是不是真的在等人决定（BTL-270）：状态是 needs_decision，而且没有开着的 PR。存的状态还没跟上
- * （GitHub 上重开了、另开了一个，下一轮读才改）时，有开着的 PR 就按 PR 算，不再说要你决定。看板和进度页共用。
+ * 「要你决定还做不做」的唯一判断（BTL-270 审查）：deriveStatus 的第 5 条、prHandoff 的待决定 / 重开、看板和进度页的 awaitsDecision 都用它。
+ * 有开着的 PR 不算（GitHub 上重开了、另开了一个，下一轮读才改）；blocked 列了原因的不算；已经是 needs_decision 的接着算；
+ * in_review、没列原因的 blocked，PR 全都关了没合时算。active（又开始干了）、合并过了的、closed（手动关了）都不算。
  */
-export const awaitsDecision = (status: TicketStatus, openPrs: number): boolean => status === "needs_decision" && openPrs === 0;
+export function needsDecision(f: DecisionFacts): boolean {
+  if (f.openPrs > 0) return false;
+  if (f.status === "blocked" && f.blockedWithReasons) return false;
+  if (f.status === "needs_decision") return true;
+  return f.allClosed && (f.status === "in_review" || f.status === "blocked");
+}
+
+/** 这时候是不是真的在等人决定：存着的状态加上开着的 PR 数，按 needsDecision 判断。看板和进度页共用。 */
+export const awaitsDecision = (status: TicketStatus, openPrs: number): boolean => needsDecision({ status, blockedWithReasons: false, openPrs, allClosed: false });
 export type WorkMode = "worktree" | "branch";
 
 /** ticket 涉及的一个仓库：各自的工作方式和分支（设计文档 2026-10-23 多仓库 ticket）。 */

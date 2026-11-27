@@ -1,6 +1,6 @@
 import type { Handoff, Pr } from "../../shared/handoff";
 import { prUrlKey } from "../../shared/pr-url";
-import type { TicketStatus } from "../../shared/types";
+import { needsDecision, type TicketStatus } from "../../shared/types";
 import { combinedPr } from "./prs";
 
 export type StatusInput = Pick<Handoff, "status" | "prs" | "blockers">;
@@ -49,7 +49,9 @@ export function deriveStatus(h: StatusInput, openFollowups: number, ctx: StatusC
   // 这次没报 PR（rederive 把 handoff 的 PR 都当记着的传进来）：看记着的 PR 是不是全关了，不然重算一次又回到旧的 blocked / in_review。
   const settled = pr ?? combinedPr(kept(ctx.remembered));
   if (h.status === "blocked" && h.blockers.length > 0) return "blocked";
-  if (h.status === "needs_decision" || h.status === "closed" || (settled?.state === "closed" && h.status !== "active")) return "needs_decision";
+  // 模型报 closed（它关不了 ticket，只能说这件事不做了）：当成要你决定。
+  const status = h.status === "closed" ? "needs_decision" : h.status;
+  if (needsDecision({ status, blockedWithReasons: false, openPrs: 0, allClosed: settled?.state === "closed" })) return "needs_decision";
   if (h.status === "blocked" || h.blockers.length > 0) return "blocked";
   return h.status === "in_review" ? "in_review" : "active";
 }
