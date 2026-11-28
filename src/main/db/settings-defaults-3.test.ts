@@ -6,6 +6,7 @@ import { INTAKE_POLICY_DEFAULTS } from "../../shared/intake";
 import { LOOP_POLICY_DEFAULTS } from "../../shared/loop-policy";
 import { STACK_POLICY_DEFAULTS } from "../../shared/stacks";
 import { SETTING_DEFAULTS } from "./settings-repo";
+import { FLOW_DAILY_ASKS } from "../../shared/infoflow";
 
 /**
  * 工作流 R（总设计第 2、8 节）：什么都不配置的用户看到的是 2.1.0 的行为。3.0.0 里每个会自己动起来的新功能，
@@ -30,6 +31,10 @@ describe("3.0.0 defaults: nothing new acts on its own", () => {
     expect(SETTING_DEFAULTS.automationLevel).toBe("manual");
     // 唯一的例外（BTL-253，计划 BTL-250 第 2 条）：更新检查默认开。它只读（gh api …/releases/latest），不在 GitHub 上留下任何东西。
     expect(SETTING_DEFAULTS.updateCheckEnabled).toBe("1");
+    // BTL-272：信息流转按用户要求默认开。只写记忆和信箱、改 Shipherd 自己的状态（能撤销），不在 GitHub 上动任何东西；关 PR 一律先问。
+    expect(SETTING_DEFAULTS.flowExtract).toBe("1");
+    expect(SETTING_DEFAULTS.flowAutoApply).toBe("1");
+    expect(SETTING_DEFAULTS.flowDailyAsks).toBe(String(FLOW_DAILY_ASKS));
   });
 
   it("keeps every new policy's own switch off", () => {

@@ -27,7 +27,7 @@ const toRepo = (r: FeatureRepoRow): FeatureRepo => ({ id: Number(r.id), featureI
 /** 有 feature_id 列、指着 epic 的表（feature_repos 除外，它跟着 epic 一起删）。有一行指着就不算空 epic。 */
 export const FEATURE_REFS = [
   "tickets", "sessions", "blocks", "session_messages", "feature_handoffs", "epic_history", "epic_memory_archive",
-  "inbox_items", "pr_stage_events", "stacks", "fork_discussions", "shipherd_messages",
+  "inbox_items", "pr_stage_events", "stacks", "fork_discussions", "shipherd_messages", "infoflow_items",
 ] as const;
 
 export class FeaturesRepo {

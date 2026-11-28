@@ -768,3 +768,14 @@ ul.plain > li { margin: 6px 0; overflow-wrap: anywhere; }
 /* 发送反馈（BTL-254） */
 .modal.feedback-dialog.wide { width: min(760px, calc(100vw - 48px)); }
 .feedback-preview { max-height: 50vh; overflow: auto; margin: 0; padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; border: 1px solid var(--border); border-radius: 6px; user-select: text; }
+
+/* 信息流转（BTL-272） */
+.flow-item { border-bottom: 1px solid var(--border); padding: 8px 0; }
+.flow-item > p.muted { margin: 2px 0; overflow-wrap: anywhere; }
+.flow-action { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
+.flow-item .badge.importance-high { color: var(--danger); }
+.flow-original-text { margin: 4px 0 0 12px; padding-left: 8px; border-left: 2px solid var(--border); }
+.flow-msg p { margin: 2px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto; }
+/* 信息流转折起的那一块：样子和「消息」一样，但不用同一个类，免得按 .messages-box 找「消息」时找到两个。 */
+.flow-summary { margin-top: 12px; }
+.flow-summary > summary { cursor: pointer; color: var(--muted); }

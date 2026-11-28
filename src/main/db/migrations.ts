@@ -1736,5 +1736,110 @@ export const MIGRATIONS: string[] = [
     "last_attempt_at INTEGER",
     "last_attempt TEXT",
   ]),
+  // 65（BTL-272）：信息流转。每轮对话结束后抽要点：infoflow_turns 记每一轮处理过没有（不论结果，处理过就不再抽；
+  // retry 是执行出错、过一会儿再试，attempts 记试了几次；capped 是今天问模型的次数到上限了、等着，老化了记 skipped / capped）；
+  // infoflow_items 是抽出来的要点（来源 session 和轮、写进哪一级记忆；area 是去重比较的范围，routable 为 0 只记不发，
+  // note 是写进记忆的那一整条（带来源注记，撤销时只忘这一条），change_raw 是模型给的状态变化，followed_at 是记完、发完的时间：为空的重启后接着做）；infoflow_deliveries 是发给了谁（信箱消息 id）；
+  // infoflow_actions 是要同步到 Shipherd 的状态变化（自动执行的、等确认的，撤销用的旧状态）；infoflow_asks 是每次问模型的时间（每天的上限按它数）。
+  // 信箱加一种消息 fact（从对话里抽出来的要点），重建 session_messages 换掉 kind 的 CHECK（BTL-269 加的 blocked_reason / blocked_since / stuck_receipt_at、BTL-279 加的 attempts / last_attempt_at / last_attempt 照搬，INSERT 写明列名）。conv_turns 按结束时间加索引（找刚结束的轮）。
+  `
+  CREATE TABLE infoflow_turns (
+    turn_id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('skipped','done','failed','retry','capped')),
+    reason TEXT,
+    items INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    at INTEGER NOT NULL);
+  CREATE INDEX infoflow_turns_at ON infoflow_turns (at);
+  CREATE TABLE infoflow_asks (id INTEGER PRIMARY KEY, at INTEGER NOT NULL);
+  CREATE INDEX infoflow_asks_at ON infoflow_asks (at);
+  CREATE TABLE infoflow_items (
+    id INTEGER PRIMARY KEY,
+    turn_id INTEGER NOT NULL,
+    idx INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    root_session_id TEXT NOT NULL,
+    feature_id INTEGER,
+    target_features TEXT NOT NULL DEFAULT '[]',
+    text TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('decision','convention','constraint','state_change','fyi')),
+    speaker TEXT NOT NULL CHECK (speaker IN ('user','agent')),
+    quote TEXT NOT NULL DEFAULT '',
+    targets TEXT NOT NULL,
+    importance TEXT NOT NULL CHECK (importance IN ('high','normal','low')),
+    confidence REAL NOT NULL,
+    scope TEXT,
+    memory TEXT NOT NULL CHECK (memory IN ('written','dup','full','failed','skipped','disabled','pending','held','dropped','retracted')),
+    dup_of TEXT,
+    note TEXT,
+    area TEXT NOT NULL DEFAULT 'workspace',
+    routable INTEGER NOT NULL DEFAULT 1,
+    change_raw TEXT,
+    followed_at INTEGER,
+    created_at INTEGER NOT NULL,
+    UNIQUE (turn_id, idx));
+  CREATE INDEX infoflow_items_created ON infoflow_items (created_at);
+  CREATE INDEX infoflow_items_unfollowed ON infoflow_items (created_at) WHERE followed_at IS NULL;
+  CREATE INDEX infoflow_items_feature ON infoflow_items (feature_id, created_at);
+  CREATE TABLE infoflow_deliveries (
+    item_id INTEGER NOT NULL REFERENCES infoflow_items(id) ON DELETE CASCADE,
+    to_session TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (item_id, to_session));
+  CREATE TABLE infoflow_actions (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL UNIQUE REFERENCES infoflow_items(id) ON DELETE CASCADE,
+    change TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('auto','confirm')),
+    state TEXT NOT NULL CHECK (state IN ('pending','applied','partial','already','rejected','undone','failed','stale')),
+    undo TEXT,
+    error TEXT,
+    leftovers TEXT,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER,
+    dismissed_at INTEGER);
+  CREATE INDEX infoflow_actions_signature ON infoflow_actions (signature, created_at);
+  CREATE INDEX infoflow_actions_state ON infoflow_actions (state);
+  CREATE INDEX conv_turns_ended ON conv_turns (ended_at) WHERE ended_at IS NOT NULL;
+  CREATE TABLE session_messages_new (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('instruction','report','answer','shipherd','reply','review','comments','convention','ci','merge','stack','patrol','cost','refresh','user','fact')),
+    from_session TEXT,
+    to_session TEXT NOT NULL,
+    feature_id INTEGER,
+    body TEXT NOT NULL,
+    interrupt INTEGER NOT NULL DEFAULT 0,
+    ref TEXT,
+    meta TEXT,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','delivered','replied')),
+    via TEXT CHECK (via IN ('hook','input')),
+    expects_reply INTEGER NOT NULL DEFAULT 0,
+    base_reply_id TEXT,
+    reply_text TEXT,
+    queued_at INTEGER NOT NULL,
+    delivered_at INTEGER,
+    replied_at INTEGER,
+    blocked_reason TEXT,
+    blocked_since INTEGER,
+    stuck_receipt_at INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER,
+    last_attempt TEXT
+  );
+  INSERT INTO session_messages_new (id, kind, from_session, to_session, feature_id, body, interrupt, ref, meta, status, via,
+    expects_reply, base_reply_id, reply_text, queued_at, delivered_at, replied_at, blocked_reason, blocked_since, stuck_receipt_at,
+    attempts, last_attempt_at, last_attempt)
+    SELECT id, kind, from_session, to_session, feature_id, body, interrupt, ref, meta, status, via,
+    expects_reply, base_reply_id, reply_text, queued_at, delivered_at, replied_at, blocked_reason, blocked_since, stuck_receipt_at,
+    attempts, last_attempt_at, last_attempt FROM session_messages ORDER BY rowid;
+  DROP TABLE session_messages;
+  ALTER TABLE session_messages_new RENAME TO session_messages;
+  CREATE INDEX session_messages_status ON session_messages (status, to_session);
+  CREATE INDEX session_messages_queued_at ON session_messages (queued_at);
+  CREATE UNIQUE INDEX session_messages_queued_ref ON session_messages (ref) WHERE ref IS NOT NULL AND status = 'queued';
+  `,
 ];
 

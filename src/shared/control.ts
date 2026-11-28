@@ -519,6 +519,12 @@ export function sanitizeTask(text: string): string {
 /** taskMessage 的固定开头；界面上显示会话名时要认得它。 */
 export const TASK_PREFIX = { zh: "总控 session 交给你的任务：", en: "Task from the coordinator session:" } as const;
 
+/** 这段话是总控（或者 Shipherd 的需求入口）交给 session 的任务，不是用户在终端里打的。 */
+export function isTaskMessage(text: string): boolean {
+  const t = text.trimStart();
+  return Object.values(TASK_PREFIX).some((p) => t.startsWith(p));
+}
+
 /**
  * 交给子 session 的第一条消息：固定的开头加上任务。任务本身可能以 ! 或 / 开头（claude 的 bash 模式、斜杠命令，不经过权限确认），
  * 有了开头它永远只是一段普通的提示。

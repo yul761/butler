@@ -4,13 +4,14 @@ import { describe, expect, it } from "vitest";
 import type { LessonAction } from "../../shared/lessons";
 import { backgroundActionArg, costSetArg, costSubjectArg } from "./validate";
 import { convListOptsArg, convQueryArg, convRootArg } from "./validate";
-import { devMessageArg, forkIdArg, forkQuestionArg, reportsPageArg } from "./validate";
+import { devMessageArg, forkIdArg, forkQuestionArg, messageIdArg, reportsPageArg } from "./validate";
 import { TASK_LIMIT } from "../../shared/control";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
 import { availabilityActionArg, boolArg, addRepoArg, CLOSE_RETRY_MAX, closeRetryArg, closeTicketArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { flowActArg, flowIdArg, flowScopeArg } from "./validate";
 import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 describe("memory IPC arguments", () => {
@@ -597,5 +598,30 @@ describe("closeTicketArg (BTL-270)", () => {
     expect(() => closeRetryArg({ sessionIds: ["a b"] })).toThrow();
     expect(() => closeRetryArg({ prUrls: "x" })).toThrow();
     expect(() => closeRetryArg(null)).toThrow();
+  });
+});
+
+describe("info flow args (BTL-272)", () => {
+  it("accepts a scope, an id and one of the four acts, and nothing else", () => {
+    expect(flowScopeArg({ all: true })).toEqual({ all: true });
+    expect(flowScopeArg({ featureId: 3 })).toEqual({ featureId: 3 });
+    for (const bad of [null, {}, { all: "yes" }, { featureId: -1 }, "all"]) expect(() => flowScopeArg(bad)).toThrow();
+    expect(flowIdArg(7)).toBe(7);
+    for (const bad of [0, -2, 1.5, "7", null]) expect(() => flowIdArg(bad)).toThrow();
+    for (const ok of ["apply", "reject", "undo", "dismiss"]) expect(flowActArg(ok)).toBe(ok);
+    for (const bad of ["delete", "", 1, null]) expect(() => flowActArg(bad)).toThrow();
+  });
+});
+
+describe("messageIdArg (BTL-269 mailbox message ids)", () => {
+  it("accepts a UUID and other safe ids", () => {
+    expect(messageIdArg("0b6f3c1e-8f2a-4d6b-9c1e-2f3a4b5c6d7e")).toBe("0b6f3c1e-8f2a-4d6b-9c1e-2f3a4b5c6d7e");
+    expect(messageIdArg("a")).toBe("a");
+    expect(messageIdArg("x".repeat(100))).toBe("x".repeat(100));
+  });
+  it("rejects anything else: not a string, empty, too long, unsafe characters", () => {
+    for (const v of [undefined, null, 1, {}, ["a"], "", "x".repeat(101), "a b", "a/b", "../x", "a;b", "a\nb", "ａ"]) {
+      expect(() => messageIdArg(v), JSON.stringify(v)).toThrow("invalid message id");
+    }
   });
 });

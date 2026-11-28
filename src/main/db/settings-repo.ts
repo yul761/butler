@@ -208,6 +208,12 @@ export const SETTING_DEFAULTS = {
   updateSkippedVersion: "",
   /** BTL-256：重启后自动恢复之前在工作的 session（总控管的）。默认关。 */
   autoResumeAfterRestart: "0",
+  /** BTL-272：每轮对话结束后抽要点、写记忆、发给要知道的 session。默认开（用户要求；只写记忆和信箱，不对外）。 */
+  flowExtract: "1",
+  /** BTL-272：对话里用户明确说的、能撤销的状态变化（关 ticket、换 feature、先做哪个）直接同步。默认开；关掉就一律等你确认。 */
+  flowAutoApply: "1",
+  /** BTL-272：抽要点最近 24 小时最多问模型几次（和 shared/infoflow 的 FLOW_DAILY_ASKS 一样）。 */
+  flowDailyAsks: "300",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;

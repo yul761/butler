@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { NowNotice } from "../../shared/types";
 import { S, STRINGS } from "./strings";
 import { availabilityButtons, availabilityRows, ciReasonText, limitLine, noticeText, openCommentsNotice, resetClock } from "./availability-view";
 import { pickTab } from "./page-tabs";
@@ -161,5 +162,56 @@ describe("approval notice (UI redesign layer 1)", () => {
     const startup = noticeText({ kind: "approval", target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录", startup: true }, S, 0);
     expect(startup).toEqual({ text: S.noticeApproval("登录", true), actions: ["open"] });
     expect(startup.text).toContain("MCP server");
+  });
+});
+
+describe("behalf_answered notice (BTL-269 A2)", () => {
+  it("shows who answered what, and offers correct, open and dismiss", () => {
+    const n: NowNotice = { kind: "behalf_answered", askId: 7, question: "用哪个库？", answer: "pnpm", by: "epic 总控", at: 1, target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" };
+    for (const L of [STRINGS.zh, STRINGS.en]) {
+      expect(noticeText(n, L, 0)).toEqual({ text: L.noticeBehalf("epic 总控", "用哪个库？", "pnpm", "登录"), actions: ["correct", "open", "dismiss"] });
+    }
+  });
+});
+
+describe("info flow notices (BTL-272)", () => {
+  it("asks before syncing and offers undo after, in both languages", () => {
+    const p = { kind: "flow_proposal", actionId: 3, label: "关掉 BTL-12", source: "epic 总控", text: "BTL-12 不做了", at: 1 } as const;
+    const s = { kind: "flow_synced", actionId: 4, label: "关掉 BTL-12", source: "epic 总控", at: 1 } as const;
+    for (const L of [STRINGS.zh, STRINGS.en]) {
+      expect(noticeText(p, L, 0)).toEqual({ text: L.infoflow.proposal("epic 总控", "关掉 BTL-12"), actions: ["flowApply", "flowReject"] });
+      const partial: NowNotice = {
+        kind: "flow_partial", actionId: 2, label: "关掉 BTL-12", source: "epic 总控", at: 0,
+        leftovers: { prErrors: [{ url: "#41", error: "off", kind: "skipped" }], sessionErrors: [] },
+      };
+      expect(noticeText(partial, L, 0)).toEqual({ text: L.infoflow.partial("关掉 BTL-12", L.infoflow.leftPr("#41", L.tc.prKind.skipped, "off")), actions: ["flowRetry", "flowAccept", "undo"] });
+      const stuck: NowNotice = { ...partial, leftovers: { prErrors: [{ url: "#41", error: "BTL-13", kind: "shared" }], sessionErrors: [] } };
+      expect(noticeText(stuck, L, 0).actions).toEqual(["flowAccept", "undo"]);
+      // 关的时候别人先关了 ticket（BTL-270 的 closedMeanwhile 是 failed）：写明是别人关的、没处理成的原因，不给撤销。
+      const meanwhile: NowNotice = { ...partial, leftovers: { ...partial.leftovers, closedMeanwhile: true } };
+      expect(noticeText(meanwhile, L, 0)).toEqual({
+        text: L.infoflow.partialClosedMeanwhile("关掉 BTL-12", L.infoflow.leftPr("#41", L.tc.prKind.skipped, "off")), actions: ["flowRetry", "flowAccept"],
+      });
+      expect(noticeText({ ...stuck, leftovers: { ...stuck.leftovers, closedMeanwhile: true } }, L, 0).actions).toEqual(["flowAccept"]);
+      expect(noticeText(s, L, 0)).toEqual({ text: L.infoflow.synced("关掉 BTL-12"), actions: ["undo", "dismiss"] });
+    }
+    expect(noticeText(s, STRINGS.zh, 0).text).toContain("已替你同步");
+  });
+
+  it("says the daily cap was reached and when it goes on, with no buttons", () => {
+    const now = new Date(2026, 10, 27, 9, 0).getTime();
+    const c: NowNotice = { kind: "flow_capped", used: 300, cap: 300, resumesAt: now + 3 * 3600_000, dropped: 0 };
+    for (const L of [STRINGS.zh, STRINGS.en]) {
+      const r = noticeText(c, L, now);
+      expect(r.actions).toEqual([]);
+      expect(r.text).toContain("300");
+      expect(r.text).toContain("12:00");
+    }
+    expect(noticeText({ ...c, resumesAt: null }, STRINGS.zh, now).text).not.toContain("以后接着");
+    // 等太久丢掉的轮：说清丢了几轮；没丢的不提。
+    expect(noticeText(c, STRINGS.zh, now).text).not.toContain("不再处理");
+    expect(noticeText({ ...c, dropped: 4 }, STRINGS.zh, now).text).toContain("已经有 4 轮等太久、不再处理了");
+    expect(noticeText({ ...c, dropped: 4 }, STRINGS.en, now).text).toContain("4 rounds waited too long and were dropped");
+    expect(noticeText({ ...c, dropped: 1 }, STRINGS.en, now).text).toContain("1 round waited too long and was dropped");
   });
 });

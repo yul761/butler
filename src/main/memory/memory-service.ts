@@ -442,26 +442,67 @@ export class MemoryService {
    * 走写入队列，永不 reject：失败只写日志，返回 "failed"。
    */
   rememberText(scope: string, text: string): Promise<RememberWriteResult> {
-    return this.enqueue<RememberWriteResult>(
+    return this.rememberUnlessDup(scope, text, null).then((r) => (r.result === "dup" ? "written" : r.result));
+  }
+
+  /**
+   * 同 rememberText，但先拿这个范围现有的条目问 findDup：它说已经有了（返回那一条）就不写，结果是 dup。
+   * 查和写在同一个写入队列的任务里，两条同样的话前后脚来也只写一次（信息流转，BTL-272）。
+   */
+  rememberUnlessDup(
+    scope: string,
+    text: string,
+    findDup: ((existing: readonly string[]) => string | null) | null,
+  ): Promise<{ result: RememberWriteResult | "dup"; dupOf: string | null }> {
+    return this.enqueue<{ result: RememberWriteResult | "dup"; dupOf: string | null }>(
       `memory rememberText ${scope}`,
       async () => {
-        if (!this.d.enabled()) return "disabled";
+        if (!this.d.enabled()) return { result: "disabled", dupOf: null };
         const body = plainNoteBody(text);
-        if (!body) return "failed";
+        if (!body) return { result: "failed", dupOf: null };
         return withScope({ dataDir: this.d.dataDir, scope }, async (s) => {
-          const slots = slotGuard(s);
-          for (let v = 1; v <= MAX_NOTE_VARIANT; v++) {
-            if (!(await slots.take())) return "full";
-            const t = v === 1 ? body : `${body} #${v}`;
-            await s.remember(t);
-            if ((await s.facts()).some((i) => i.text === t)) return "written";
-          }
-          this.log(`memory rememberText ${scope}: stays hidden after ${MAX_NOTE_VARIANT} variants`);
-          return "failed";
+          const dupOf = findDup ? findDup((await s.facts()).map((i) => i.text)) : null;
+          if (dupOf !== null) return { result: "dup" as const, dupOf };
+          return { result: await this.writeNote(s, scope, body), dupOf: null };
         });
       },
-      "failed",
+      { result: "failed", dupOf: null },
     );
+  }
+
+  /**
+   * 忘掉这个范围里 match 认出来的纯文本笔记（信息流转撤销同步时，BTL-272）。走写入队列，和 rememberUnlessDup 不会交错。
+   * 返回忘了几条；记忆关着或者出错为 null（永不 reject）。StateCore 的审计链里还在。
+   */
+  forgetText(scope: string, match: (text: string) => boolean): Promise<number | null> {
+    return this.enqueue<number | null>(
+      `memory forgetText ${scope}`,
+      async () => {
+        if (!this.d.enabled()) return null;
+        return withScope({ dataDir: this.d.dataDir, scope }, async (s) => {
+          let n = 0;
+          for (const i of await s.facts()) {
+            if (!match(i.text)) continue;
+            await s.forget(i.factKey);
+            n++;
+          }
+          return n;
+        });
+      },
+      null,
+    );
+  }
+
+  private async writeNote(s: ScopeHandle, scope: string, body: string): Promise<RememberWriteResult> {
+    const slots = slotGuard(s);
+    for (let v = 1; v <= MAX_NOTE_VARIANT; v++) {
+      if (!(await slots.take())) return "full";
+      const t = v === 1 ? body : `${body} #${v}`;
+      await s.remember(t);
+      if ((await s.facts()).some((i) => i.text === t)) return "written";
+    }
+    this.log(`memory rememberText ${scope}: stays hidden after ${MAX_NOTE_VARIANT} variants`);
+    return "failed";
   }
 
   /** 一条记忆（或交接）的版本链。 */

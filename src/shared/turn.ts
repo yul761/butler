@@ -152,6 +152,9 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "cost": return n.breaker.state === "paused";
     case "stack": return n.stack.reason === "conflict" || n.stack.reason === "stuck";
     case "intake": return INTAKE_DECISION_STATES.includes(n.item.state);
+    case "flow_proposal":
+    case "flow_partial":
+      return true;
     case "lessons_paused":
     case "lessons_failing":
     case "shared_mcp_failed":
@@ -159,6 +162,8 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "check_promoted":
     case "check_demoted":
     case "behalf_answered": // 总控已经替你答了（BTL-269 A2）：给你看一眼、可以改，不是非你不可。
+    case "flow_synced":
+    case "flow_capped":
       return false;
   }
 }

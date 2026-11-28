@@ -6,7 +6,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unl
 import { join } from "node:path";
 import { MESSAGE_LIMIT, sanitizeTask, TASK_LIMIT } from "../../shared/control";
 import {
-  DONE_SUFFIX, MAIN_SUFFIX, MSG_SUFFIX, messageFileName, messageIdOf, TAKEN_SUFFIX, type MailboxFile,
+  DONE_SUFFIX, MAIN_SUFFIX, MSG_SUFFIX, messageFileName, messageIdOf, TAKEN_SUFFIX, wakesTarget, type MailboxFile,
 } from "../../shared/mailbox";
 import { PATROL_ETA_REASONS, type MailboxAttempt, type MailboxBlockReason, type MessageKind, type MessageScope, type MessageView, type Session } from "../../shared/types";
 import type { NewSessionMessage, SessionMessage, SessionMessagesRepo } from "../db/session-messages-repo";
@@ -746,7 +746,7 @@ export class Mailbox {
       }
       if (queued.length > 0) {
         this.block(head, queued, this.d.hibernated?.(head) ? "hibernated" : "closed");
-        if (this.d.wake && queued.some((m) => m.kind !== "convention")) this.d.wake(head);
+        if (this.d.wake && queued.some(wakesTarget)) this.d.wake(head);
       }
       // 改投的那几条放到最后再送（BTL-279 review）：往 next 里贴最多要一分钟，等完再按之前读的状态挡 head、叫醒它就过时了。
       if (next !== null) await this.flush(next);

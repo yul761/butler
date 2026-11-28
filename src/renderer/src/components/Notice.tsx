@@ -21,6 +21,7 @@ export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; no
   // 权限确认（第 1 层补的 approval）的按钮叫「去看看」，落到那个 session 的终端。
   const label: Record<NoticeAction, string> = { correct: S.noticeBehalfCorrect, resume: S.noticeResume, retry: S.noticeRetry, health: S.noticeHealth, lessons: S.noticeLessons, open: n.kind === "approval" ? S.hm.act.look : S.noticeOpen, routing: S.rt.nowOpen, resend: S.noticeResend, raise: S.cs.raise, comments: S.lp.noticeOpen, stacks: S.sk.noticeOpen, undo: S.bt.undo, checks: S.bt.open, dismiss: S.bt.dismiss,
     intake: S.ik.noticeOpen, intakeStart: S.ik.actions.start, intakeSkip: S.ik.actions.skip, intakeParallel: S.ik.actions.allowParallel,
+    flowApply: S.infoflow.apply, flowReject: S.infoflow.reject, flowRetry: S.infoflow.retry, flowAccept: S.infoflow.accept,
   };
   // 重发的结果（CI 结果未能送达）：送到了提醒会在下一次刷新时消失，没送到写上为什么。
   const [result, setResult] = useState<string | null>(null);
@@ -63,6 +64,11 @@ export function Notice({ notice: n, now, onOpen, onGo }: { notice: NowNotice; no
         setResult(null);
         void api.backtestAct({ op: "undo", batchId: n.batchId }).then((r) => setResult(r.ok ? S.bt.undone : btError(r.error, S)), reportError);
       } else if (a === "dismiss") void api.backtestAct({ op: "dismissNotice", eventId: n.eventId }).catch(reportError);
+    } else if (n.kind === "flow_proposal" || n.kind === "flow_synced" || n.kind === "flow_partial") {
+      // 信息流转（BTL-272）：结果在下一次刷新时体现（提醒消失、或者剩下的原因更新）；没做成的写一句。
+      setResult(null);
+      const what = a === "flowApply" ? "apply" : a === "flowReject" ? "reject" : a === "flowRetry" ? "retry" : a === "flowAccept" ? "accept" : a === "undo" ? "undo" : "dismiss";
+      void api.infoflowAct(n.actionId, what).then((ok) => ok || setResult(S.infoflow.actFailed), reportError);
     } else if (n.kind === "intake" && a !== "intake") {
       setResult(null);
       const op = a === "intakeStart" ? "start" : a === "intakeSkip" ? "skip" : "allowParallel";

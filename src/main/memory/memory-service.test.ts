@@ -312,6 +312,35 @@ describe("MemoryService.rememberText and recallText (fork light mode)", () => {
     expect(texts).toContain("[decision:db] 用 PostgreSQL");
   });
 
+  it("skips a fact that is already there, checking inside the write queue (BTL-272)", async () => {
+    const t = setup();
+    expect(await t.memory.rememberText("ticket:PROJ-1", "接口一律分页")).toBe("written");
+    const seen: string[][] = [];
+    const dup = (e: readonly string[]) => {
+      seen.push([...e]);
+      return e.find((x) => x.includes("分页")) ?? null;
+    };
+    const [a, b] = await Promise.all([
+      t.memory.rememberUnlessDup("ticket:PROJ-1", "导出放右上角", (e) => e.find((x) => x.includes("右上角")) ?? null),
+      t.memory.rememberUnlessDup("ticket:PROJ-1", "导出放右上角。", (e) => e.find((x) => x.includes("右上角")) ?? null),
+    ]);
+    expect([a.result, b.result]).toEqual(["written", "dup"]);
+    expect(b.dupOf).toBe("导出放右上角");
+    expect(await t.memory.rememberUnlessDup("ticket:PROJ-1", "接口分页", dup)).toEqual({ result: "dup", dupOf: "接口一律分页" });
+    expect((await t.texts()).sort()).toEqual(["导出放右上角", "接口一律分页"]);
+  });
+
+  it("forgets only the notes the matcher picks, and returns null when memory is off (BTL-272)", async () => {
+    const t = setup();
+    await t.memory.rememberText("ticket:PROJ-1", "BTL-12 不做了（来自 S 的对话）");
+    await t.memory.rememberText("ticket:PROJ-1", "导出放右上角");
+    expect(await t.memory.forgetText("ticket:PROJ-1", (x) => x.startsWith("BTL-12"))).toBe(1);
+    expect(await t.texts()).toEqual(["导出放右上角"]);
+    expect(await t.memory.forgetText("ticket:PROJ-1", () => false)).toBe(0);
+    const off = setup({ enabled: false });
+    expect(await off.memory.forgetText("ticket:PROJ-1", () => true)).toBeNull();
+  });
+
   it("cuts the text to NOTE_BODY_LIMIT", async () => {
     const t = setup();
     expect(await t.memory.rememberText("ticket:PROJ-1", "字".repeat(NOTE_BODY_LIMIT + 50))).toBe("written");

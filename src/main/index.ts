@@ -26,7 +26,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
+import { buildNotices, ciNotices, collectNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
 import { readBgSettings } from "./background/bg-settings";
@@ -94,6 +94,7 @@ import { SessionMessagesRepo, type SessionMessage } from "./db/session-messages-
 import { Mailbox, MAILBOX_BODY_LIMIT, type AwaitingUser } from "./mailbox/mailbox";
 import { broadcastConvention } from "./mailbox/broadcast";
 import { sessionName } from "./mailbox/names";
+import { hasSessionMail as sessionMailWakes, headsWithWakingMail } from "./mailbox/wake";
 import { ExternalAuditRepo } from "./db/external-audit-repo";
 import { ExternalActions } from "./external/actions";
 import { buildProgress } from "./progress/progress-view";
@@ -177,6 +178,10 @@ import { writeRefreshTail } from "./sessions/refresh-tail";
 import { ConvRepo } from "./db/conv-repo";
 import { ConvIngester } from "./conversation/conv-ingester";
 import { judgeConvQa } from "./conversation/conv-qa";
+import { InfoflowRepo } from "./db/infoflow-repo";
+import { extractTurn } from "./infoflow/extract";
+import { InfoflowService } from "./infoflow/infoflow-service";
+import { infoflowLookups, infoflowTicketActions } from "./infoflow/wiring";
 import { ConversationStore, RECENT_QA_CHARS, withRecentQa } from "./conversation/conversation-store";
 import { ForkDiscussionsRepo } from "./db/fork-discussions-repo";
 import { DevSender } from "./fork/dev-send";
@@ -209,7 +214,7 @@ import { ReviewRequestsRepo } from "./db/review-requests-repo";
 import { REVIEW_AWAY_IDLE_SECONDS, ReviewRequestPoller, bindFocusCatchUp } from "./prwatch/review-requests";
 import {
   baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, auditRetentionDays, memoryOn,
-  memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
+  flowDailyAsks, memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
 import { evidenceGuideLines, type GuideRepo } from "./prereview/guide-lines";
 import { PreReviewService } from "./prereview/service";
@@ -2188,8 +2193,8 @@ async function bootstrap(): Promise<void> {
   /** 这条消息是收件人自己的总控发的（BTL-269 A：「需要你」时也送进去）。 */
   const mailboxFromController = (m: SessionMessage, headId: string): boolean => mailboxControls(m.fromSession, headId);
   /** 这个 head 有别的 session 发来、还排着的消息（约定广播不算）。 */
-  const hasSessionMail = (headId: string): boolean =>
-    messagesRepo.queued().some((m) => m.fromSession !== null && m.kind !== "convention" && (sessions.head(m.toSession)?.id ?? m.toSession) === headId);
+  const headOf = (id: string): string => sessions.head(id)?.id ?? id;
+  const hasSessionMail = (headId: string): boolean => sessionMailWakes(messagesRepo.queued(), headOf, headId);
   /** 全局总控在做巡检那一轮（BTL-279 复核建议 3）：这一轮 send_message 发的不把用户点 × 关掉的 epic 总控拉起来。 */
   const patrolTurns = new PatrolTurns(Date.now);
   const mailbox = new Mailbox({
@@ -2260,6 +2265,46 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   mailboxDiagnostics = () => mailbox.diagnostics();
+  // 信息流转（BTL-272）：每轮说完抽要点，写进最小一级记忆，发给该知道的 session，对话里说的状态变化同步进 Shipherd。
+  // 关 ticket 用 BTL-270 的 closeTicket（来源记 routing），重新打开用 reopenTicket；ticketClose 在后面定义，执行时才用到。
+  const flowLookups = infoflowLookups({
+    tickets, features, blocks, sessions,
+    live: (id) => pty.isOpen(id) || isHibernated(id),
+    closed: (t) => effectiveStatus(t) === "closed",
+  });
+  const infoflow = new InfoflowService({
+    repo: new InfoflowRepo(db),
+    conv: convRepo,
+    head: (id) => sessions.head(id),
+    enabled: () => settings.get("flowExtract") !== "0",
+    autoApply: () => settings.get("flowAutoApply") !== "0",
+    dailyAsks: () => flowDailyAsks(settings),
+    nameOf: mailboxName,
+    ...flowLookups,
+    extract: (ctx, turn, o) => extractTurn({ ...judgeDeps, timeoutMs: 90_000 }, ctx, turn, o),
+    cwdOf: (s) => (existsSync(s.cwd) ? s.cwd : paths.home),
+    paused: (id) => costBreaker?.sessionPaused(id) ?? false,
+    remember: (scope, text, findDup) => memory.rememberUnlessDup(scope, text, findDup),
+    forget: (scope, match) => memory.forgetText(scope, match),
+    // epic 不从来源带（null）：信箱按收件人算，发到别的 epic 的消息归在收件人那边。
+    send: (m) => mailbox.send({ kind: "fact", from: m.from, to: m.to, featureId: null, body: m.body, ref: m.ref, meta: m.meta }),
+    withdraw: (ref) => mailbox.withdraw(ref),
+    act: infoflowTicketActions({
+      tickets, blocks, notify,
+      closer: {
+        close: (key, reason, closePrs, prUrls) => ticketClose.close(key, { reason, source: "routing", closePrs, ...(prUrls && { prUrls }), endSessions: false }),
+        preview: async (key) => ticketClose.preview(key),
+        retry: (key, o) => ticketClose.retry(key, o),
+        reopen: async (key) => ticketClose.reopen(key, "routing"),
+      },
+    }),
+    strings: () => M().infoflow,
+    notify,
+    now: Date.now,
+    log: logger,
+    // 只给 e2e 用：不想等 20 秒的安静期、30 秒一遍。
+    settleMs: Number(process.env.SHIPHERD_FLOW_SETTLE_MS) || undefined,
+  });
   const inboxRepo = new InboxRepo(db);
   const inboxService: InboxService = new InboxService({
     repo: inboxRepo,
@@ -3460,7 +3505,7 @@ async function bootstrap(): Promise<void> {
         seen.add(h.id);
         return !h.hibernatedAt && h.userEndedAt == null && resumable(h, resumableCtx) ? [h] : [];
       });
-      const mail = new Set(messagesRepo.queued().flatMap((m) => (m.kind === "convention" ? [] : [sessions.head(m.toSession)?.id ?? m.toSession])));
+      const mail = headsWithWakingMail(messagesRepo.queued(), (id) => sessions.head(id)?.id ?? id);
       const order = restartOrder(heads, (id) => mail.has(id), (h) => h.ticketKey !== null && prWatcher.statusOf(h.ticketKey).some((p) => p.state === "open" || p.state === null));
       logger(`resume after restart: ${order.length} of ${openAtLastQuit.length} session(s) open at the last quit`);
       const r = await theResumer.resumeAll(order);
@@ -3503,21 +3548,23 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /** 「现在」页和「谁该动」看板共用的一份 Shipherd 提醒。 */
-  const currentNotices = (): NowNotice[] => [
-    ...buildNotices({
-      availability: availability.view(),
-      recentRuns: lessonRuns.recentFinished(20),
-      routing: routing.attention(),
-      sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
-    }),
-    ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
-    ...costNotices(costBreaker?.views() ?? [], costTargetOf),
-    ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
-    ...stackNotices(stackService.notices()),
-    ...backtest.notices(),
-    ...intakeNotices(intake.notices()),
-    ...inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
-  ];
+  const currentNotices = (): NowNotice[] =>
+    collectNotices({
+      built: buildNotices({
+        availability: availability.view(),
+        recentRuns: lessonRuns.recentFinished(20),
+        routing: routing.attention(),
+        sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
+      }),
+      ci: ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
+      cost: costNotices(costBreaker?.views() ?? [], costTargetOf),
+      comments: commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
+      stack: stackNotices(stackService.notices()),
+      backtest: backtest.notices(),
+      intake: intakeNotices(intake.notices()),
+      behalf: inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
+      infoflow: infoflow.notices(),
+    });
   // 请你 review 的 PR（UI 重做第 1 层，计划 R9）：gh search 的结果整体替换进 review_requests。
   const reviewRequests = new ReviewRequestsRepo(db);
   let unbindReviewFocus: (() => void) | null = null;
@@ -3623,6 +3670,13 @@ async function bootstrap(): Promise<void> {
     if (key.startsWith("intake")) intakePollSoon();
     // 打开「显示 Shipherd 之外开的 session」：马上扫一次，不等 5 分钟的定时（BTL-244）。
     if (key === "showOutsideSessions") void runDiscovery();
+    // 关掉「自动抽要点」：马上跑一遍，把还在排队的要点撤回（BTL-272）。
+    if (key === "flowExtract") infoflow.poke();
+    // 改了每天的上限：马上跑一遍（调高了就接着问），「现在」页马上刷新（还在上限时，次数、上限、什么时候接着也跟着变）。
+    if (key === "flowDailyAsks") {
+      infoflow.poke();
+      notify();
+    }
   };
   automationHooks.settingChanged = onSettingChanged;
   // 三族策略的读写入口：设置 › 自动化的开关、套用档位预设、register 的 loop / stacks / intake 用同一份。
@@ -3747,6 +3801,7 @@ async function bootstrap(): Promise<void> {
     diag: diag ?? undefined,
     ticketClose,
     feedback,
+    infoflow,
     userEnded: (termId) => {
       const h = sessions.head(termId);
       if (h) sessions.setUserEnded(h.id, Date.now());
@@ -4228,6 +4283,7 @@ async function bootstrap(): Promise<void> {
     .catch((e: unknown) => logger("lessons: starting the runner failed", e));
   activityMonitor.start();
   convIngester.start();
+  infoflow.start(Number(process.env.SHIPHERD_FLOW_TICK_MS) || undefined);
   procServices.start();
   usageScanner.start(usageScanMs(process.env));
   bgScheduler.start();
@@ -4375,6 +4431,7 @@ async function bootstrap(): Promise<void> {
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     convIngester.stop();
+    infoflow.stop();
     void procServices.stop();
     usageScanner.stop();
     if (costCheckTimer) clearTimeout(costCheckTimer);

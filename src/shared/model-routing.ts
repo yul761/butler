@@ -23,7 +23,7 @@ export function isTier(v: unknown): v is Tier {
 
 /** 所有后台任务的 id。调用方还不存在的也先登记（契约 4.1），之后的工作流只 import。 */
 export const TASK_IDS = [
-  "needs_you", "stuck_judge", "conv_qa",
+  "needs_you", "stuck_judge", "conv_qa", "conv_relay",
   "handoff", "feature_summary",
   "handoff_refresh",
   "lesson_analyze", "lesson_enrich", "lesson_cluster", "lesson_conflict", "lesson_clarity", "lesson_sample_review", "lesson_classify", "lesson_merge",
@@ -71,6 +71,7 @@ export const TASKS: Readonly<Record<TaskId, TaskDef>> = Object.fromEntries(
     t("needs_you", "low", "fallback", { legacy: "haiku" }),
     t("stuck_judge", "low", "fallback", { legacy: "haiku" }),
     t("conv_qa", "low", "fallback", { legacy: "haiku" }),
+    t("conv_relay", "low", "fallback", { legacy: "haiku" }),
     t("handoff", "session", "wait", { legacy: "session" }),
     t("feature_summary", "session", "wait", { legacy: "session" }),
     t("handoff_refresh", "mid", "fallback", { legacy: "sonnet" }),

@@ -9,6 +9,7 @@ import { S } from "../strings";
 import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
 import { Messages } from "./MessageList";
+import { InfoFlowPanel } from "./InfoFlow";
 import { FeatureSummaryTab, type SummaryRunMessage } from "./FeatureSummaryTab";
 import { EpicLevel } from "./EpicLevel";
 import { NewTicketDialog } from "./NewTicketDialog";
@@ -177,6 +178,8 @@ export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSessi
             label: <>{S.lay.tabSummary}{blockers > 0 && <span className="blocker">{S.featureBlockedCount(blockers)}</span>}</>,
             content: <FeatureSummaryTab feature={feature} onOpenTicket={onOpenTicket} onRun={runSummary} />,
           },
+          // 信息流转（BTL-272）：这个 epic 的对话里抽出来的要点、发给了谁、同步了什么。
+          { id: "infoflow", label: S.infoflow.tab, content: <InfoFlowPanel scope={{ featureId: feature.id }} /> },
         ]}
       />
       {newTicket && (

@@ -43,3 +43,13 @@ export function mailboxHookCommand(hook: string, dir: string, platform: NodeJS.P
   const d = dq(platform === "win32" ? dir.replace(/\\/g, "/") : dir);
   return `[ ! -d "${d}/\${SHIPHERD_SESSION:-_}" ] || exec ${hook} mailbox "${d}"`;
 }
+
+/**
+ * 排着这条消息时要不要叫醒目标（休眠着的叫醒；总控开的、真关了的在后台恢复）。约定广播不叫；信息流转的要点（fact，BTL-272）
+ * 只有重要的（meta.wake 为 true）才叫，其余排着等下次打开。
+ */
+export function wakesTarget(m: { kind: string; meta?: unknown }): boolean {
+  if (m.kind === "convention") return false;
+  if (m.kind === "fact") return !!m.meta && typeof m.meta === "object" && (m.meta as { wake?: unknown }).wake === true;
+  return true;
+}

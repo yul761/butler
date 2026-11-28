@@ -203,6 +203,7 @@ const ZH = {
   automationLevel: "自动化档位只能是 manual（手动）或 semi（半自动）",
   memoryPressureFreePercent: "内存紧张的线是 1 到 50 之间的整数（可用内存的百分比）",
   preReviewConcurrency: "预审并发数是 1 到 8 之间的整数",
+  flowDailyAsks: "抽要点每天问模型的上限是 1 到 10000 之间的整数",
   claudePathAbsolute: "claude 路径必须是绝对路径，例如 /usr/local/bin/claude；留空则自动查找",
   language: "语言只能是 auto、zh 或 en",
   reviewRequestScope: "请你 review 的范围只能是 all 或 registered",
@@ -819,6 +820,32 @@ const ZH = {
   mailboxQueued: (why: string, eta: string, minutes: number) => `消息排在它的信箱里，还没送到：${why}${minutes > 0 ? `（已经 ${minutes} 分钟）` : ""}。${eta}。`,
   mailboxStuckReceipt: (name: string, ids: string[], minutes: number, why: string, eta: string) =>
     `【回执】你发给 ${name} 的消息 ${ids.join("、")} 排了 ${minutes} 分钟还没送到：${why}。${eta}。不用重发；急的话请用户在消息列表里点「现在送进去」。`,
+  // 信息流转（BTL-272）
+  infoflow: {
+    fact: (who: string, kind: string, text: string) => `【要点 · ${kind} · ${who}】从 ${who} 的对话里抽出来、你这边要知道的：\n${text}`,
+    synced: (who: string, label: string) => `【已替用户同步 · ${who}】用户在 ${who} 里说的，Shipherd 已经照做：${label}。不对的话用户会撤销。`,
+    confirmed: (who: string, label: string) => `【已同步 · ${who}】${who} 里提到的，用户确认了，Shipherd 已经照做：${label}。`,
+    undone: (who: string, label: string) => `【已撤销 · ${who}】刚才同步的「${label}」用户撤销了，按原来的来。`,
+    source: (who: string) => `（来自 ${who} 的对话）`,
+    kinds: { decision: "决定", convention: "约定", constraint: "限制", state_change: "状态变化", fyi: "知会" } as Record<string, string>,
+    closeTicket: (key: string, reason: string) => `关掉 ${key}${reason ? `（${reason}）` : ""}`,
+    closeTicketPrs: (key: string, reason: string, prs: string[], cannot: string[]) =>
+      `关掉 ${key}${prs.length ? ` 和它的 PR ${prs.join("、")}` : "（没有能关的 PR）"}${reason ? `（${reason}）` : ""}${cannot.length ? `；关不了：${cannot.join("；")}` : ""}`,
+    setFeature: (key: string, feature: string | null) => (feature === null ? `${key} 移出 feature` : `${key} 换到 feature ${feature}`),
+    prioritize: (feature: string) => `feature ${feature} 先做`,
+    closeReason: "对话里说不做了",
+    prFailed: (urls: string) => `ticket 关了，但有 PR 没关上：${urls}`,
+    closedMeanwhile: {
+      prs: "别人先关了这个 ticket，这次只关了点名的 PR",
+      sessions: "别人先关了这个 ticket，这次只结束了它的 session",
+      both: "别人先关了这个 ticket，这次只关了点名的 PR、结束了 session",
+      nothing: "别人先关了这个 ticket，没有要再做的",
+    },
+    closedMeanwhileFailed: (urls: string) => `别人先关了这个 ticket，这些没处理成：${urls}`,
+    prsChanged: "要关的 PR 变了，按现在这份再确认一次",
+    unclosable: (pr: string, error: string) => `${pr}：${error}`,
+    interrupted: "上次关到一半 Shipherd 退出了，这个 PR 还开着",
+  },
 };
 
 export type MainStrings = typeof ZH;
@@ -994,6 +1021,7 @@ const EN: MainStrings = {
   automationLevel: "The automation level must be manual or semi",
   memoryPressureFreePercent: "The memory pressure line must be a whole number from 1 to 50 (percent of memory free)",
   preReviewConcurrency: "Pre-review concurrency must be a whole number from 1 to 8",
+  flowDailyAsks: "The daily limit on model asks for info flow must be a whole number from 1 to 10000",
   claudePathAbsolute: "The claude path must be absolute, for example /usr/local/bin/claude; leave it empty to find it automatically",
   language: "The language can only be auto, zh or en",
   reviewRequestScope: "The review request scope can only be all or registered",
@@ -1569,6 +1597,32 @@ const EN: MainStrings = {
   mailboxQueued: (why: string, eta: string, minutes: number) => `The message is queued in its mailbox and has not gone in yet: ${why}${minutes > 0 ? ` (for ${minutes} min)` : ""}. ${eta}.`,
   mailboxStuckReceipt: (name: string, ids: string[], minutes: number, why: string, eta: string) =>
     `[Receipt] Your message ${ids.join(", ")} to ${name} has been queued for ${minutes} min and has not gone in: ${why}. ${eta}. No need to resend; if it is urgent, ask the user to click "Deliver now" in the message list.`,
+  // Info flow (BTL-272)
+  infoflow: {
+    fact: (who: string, kind: string, text: string) => `[Note · ${kind} · ${who}] Picked up from ${who}'s conversation, for you to know:\n${text}`,
+    synced: (who: string, label: string) => `[Synced for the user · ${who}] The user said this in ${who}, and Shipherd did it: ${label}. The user will undo it if it's wrong.`,
+    confirmed: (who: string, label: string) => `[Synced · ${who}] Mentioned in ${who}, the user confirmed it, and Shipherd did it: ${label}.`,
+    undone: (who: string, label: string) => `[Undone · ${who}] The user undid "${label}", which was synced earlier. Go back to how it was.`,
+    source: (who: string) => ` (from ${who}'s conversation)`,
+    kinds: { decision: "decision", convention: "convention", constraint: "constraint", state_change: "state change", fyi: "FYI" } as Record<string, string>,
+    closeTicket: (key: string, reason: string) => `Close ${key}${reason ? ` (${reason})` : ""}`,
+    closeTicketPrs: (key: string, reason: string, prs: string[], cannot: string[]) =>
+      `Close ${key}${prs.length ? ` and its PRs ${prs.join(", ")}` : " (no PR it can close)"}${reason ? ` (${reason})` : ""}${cannot.length ? `; can't close: ${cannot.join("; ")}` : ""}`,
+    setFeature: (key: string, feature: string | null) => (feature === null ? `Take ${key} out of its feature` : `Move ${key} to feature ${feature}`),
+    prioritize: (feature: string) => `Do feature ${feature} first`,
+    closeReason: "Dropped in conversation",
+    prFailed: (urls: string) => `The ticket is closed, but some PRs weren't: ${urls}`,
+    closedMeanwhile: {
+      prs: "Someone else closed this ticket first; this only closed the PRs it named",
+      sessions: "Someone else closed this ticket first; this only ended its sessions",
+      both: "Someone else closed this ticket first; this only closed the PRs it named and ended its sessions",
+      nothing: "Someone else closed this ticket first; nothing left to do",
+    },
+    closedMeanwhileFailed: (urls: string) => `Someone else closed this ticket first, and these didn't go through: ${urls}`,
+    prsChanged: "The PRs to close changed; confirm again with this list",
+    unclosable: (pr: string, error: string) => `${pr}: ${error}`,
+    interrupted: "Shipherd quit halfway through closing; this PR is still open",
+  },
 };
 
 export const MAIN_STRINGS: Record<Lang, MainStrings> = { zh: ZH, en: EN };
