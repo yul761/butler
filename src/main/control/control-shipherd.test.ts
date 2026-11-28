@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { SessionActivity } from "../../shared/activity";
 import type { ShipherdControlRequest, ControlResult } from "../../shared/control";
 import type { FeatureStatusRow, InboxView, PrDetail, Session, WatchedPr } from "../../shared/types";
+import type { SessionMessage } from "../db/session-messages-repo";
+import { PatrolTurns } from "../schedule/patrol-turns";
 import { BlocksRepo } from "../db/blocks-repo";
 import { FeaturesRepo } from "../db/features-repo";
 import { SessionsRepo } from "../db/sessions-repo";
@@ -10,7 +12,7 @@ import { TicketsRepo } from "../db/tickets-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionMessagesRepo } from "../db/session-messages-repo";
@@ -24,7 +26,7 @@ import type { TicketPr } from "../db/ticket-prs-repo";
 import { noPreReview, type PreReviewBadge, type PreReviewQueueItem, type PreReviewTicketStatus, type PreReviewView } from "../../shared/prereview";
 
 /** Shipherd 总控（BTL-190 第 5 点）：三个 feature（一个归档了）、四个 ticket（一个归档了）和各种 session。 */
-function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"]; assessment?: boolean; preReviewOps?: PreReviewOps; patrolling?: (id: string) => boolean } = {}) {
+function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"]; assessment?: boolean; preReviewOps?: PreReviewOps; patrolling?: (id: string) => boolean; patrolTurns?: PatrolTurns } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -85,8 +87,12 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
   let now = 1_000;
   const interrupts: string[] = [];
   const repo = new SessionMessagesRepo(db);
+  const mailboxRoot = mkdtempSync(join(tmpdir(), "cb-mbox-"));
+  // 和 index.ts 一样把送到的消息交给 PatrolTurns（BTL-279 第五轮）。
+  const patrolTurns = o.patrolTurns;
   const mailbox = new Mailbox({
-    repo, root: mkdtempSync(join(tmpdir(), "cb-mbox-")),
+    repo, root: mailboxRoot,
+    ...(patrolTurns && { delivered: (m: SessionMessage) => patrolTurns.messageDelivered(sessions.head(m.toSession)?.id ?? m.toSession, m) }),
     head: (id) => sessions.head(id), termOf: (id) => {
       const h = sessions.head(id)?.id ?? id;
       return open.has(h) ? h : null;
@@ -137,6 +143,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
         inbox: { view: () => inboxView },
         shipherdSessions: () => ["bt"],
         ...(o.patrolling && { patrolling: o.patrolling }),
+        ...(patrolTurns && { patrolling: (id: string) => patrolTurns.active(id) }),
         progress: (f) => (progressCalls.push(f), progressView),
         ...(!o.noMetrics && { metrics: (days: number | undefined) => (metricsCalls.push(days), { days: days ?? 30 } as never) }),
         ...(o.assessment && {
@@ -159,7 +166,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
   const call = (req: Record<string, unknown>) => handle({ ...base, ...req } as ShipherdControlRequest);
   return {
     awaiting, handle, call, base, checkout, docs, payment, cart, sessions, features, open, activities, needs, delivered, refreshed, opened, submitted, inboxView, asked, setGuard: (f: typeof guardCheck) => (guardCheck = f),
-    prs, replies, mailbox, repo, interrupts, progressCalls, metricsCalls, summaryState, setNow: (t: number) => (now = t),
+    prs, replies, mailbox, mailboxRoot, repo, interrupts, progressCalls, metricsCalls, summaryState, setNow: (t: number) => (now = t),
   };
 }
 
@@ -473,6 +480,41 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
     await tick();
     expect(submitted).toEqual([]);
     expect(repo.get(r.requestId)).toMatchObject({ status: "queued", toSession: "dc", meta: { auto: "patrol" } });
+  });
+
+  it("a patrol queued while the Shipherd control is busy is never written as a hook file: it is typed in once the control stops, that turn is the patrol turn, and a send to an epic coordinator the user closed says ended_by_user (BTL-279 fifth review)", async () => {
+    let now = 5_000;
+    const turns = new PatrolTurns(() => now);
+    const { call, mailbox, mailboxRoot, repo, sessions, opened, delivered, setGuard, setNow } = setup({ patrolTurns: turns });
+    setNow(now);
+    sessions.setUserEnded("dc", 123);
+    let busy = true;
+    setGuard((id) => (busy && id === "bt" ? { ok: false, block: "busy", busy: "turn" } : { ok: true, termId: id, headId: id }));
+    const files = () => (existsSync(join(mailboxRoot, "bt")) ? readdirSync(join(mailboxRoot, "bt")) : []);
+    const patrol = mailbox.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "每日巡检", ref: "patrol:1" });
+    await tick();
+    // 在忙：巡检不写成 hook 文件，不会在别人那一轮中间读到。
+    expect(files()).toEqual([]);
+    expect(repo.get(patrol.id)?.status).toBe("queued");
+    // 别的消息在忙时照样走 hook。
+    const other = mailbox.send({ kind: "shipherd", from: null, to: "bt", featureId: null, body: "别的" });
+    await tick();
+    expect(files().filter((n) => n.includes(other.id))).toHaveLength(1);
+    expect(files().filter((n) => n.includes(patrol.id))).toEqual([]);
+    expect(turns.active("bt")).toBe(false);
+    // 停下来了：直接输入，自成一轮，这一轮就是巡检。
+    busy = false;
+    now += 1000;
+    setNow(now);
+    sessions.setWaiting("bt", true, now);
+    await mailbox.flush("bt");
+    expect(delivered.map(([t, text]) => t === "bt" && text.includes("每日巡检"))).toContain(true);
+    expect(repo.get(patrol.id)).toMatchObject({ status: "delivered", via: "input" });
+    expect(turns.active("bt")).toBe(true);
+    const r = value<{ requestId: string; wake?: string; opened?: string }>(await call({ op: "send_message", epic: "docs", text: "看一下" }));
+    expect(r).toMatchObject({ sessionId: "dc", wake: "ended_by_user" });
+    expect(opened).toEqual([]);
+    expect(repo.get(r.requestId)?.meta).toEqual({ auto: "patrol" });
   });
 
   it("a patrol-turn send still opens a coordinator that closed on its own (not by the user), and the send is still marked as a patrol send (BTL-279 review)", async () => {

@@ -479,12 +479,16 @@ export class Mailbox {
     return age > AGE_NOTE_MS ? `${M().mailboxAge(Math.round(age / 60_000))}\n${m.body}` : m.body;
   }
 
-  /** 让这个终端的投影和库对上：缺的写上、不该有的 .json 删掉；一条都没有就把目录删掉（hook 的判断就是看目录在不在）。 */
+  /**
+   * 让这个终端的投影和库对上：缺的写上、不该有的 .json 删掉；一条都没有就把目录删掉（hook 的判断就是看目录在不在）。
+   * 巡检（kind patrol）不写：只在总控停下来时直接输入、自成一轮（BTL-279 第五轮）。hook 把它带进别人那一轮的话，那一轮不算巡检，
+   * 巡检时发给用户关掉的 epic 总控的消息就会把它拉起来。
+   */
   syncTerm(termId: string): void {
     try {
       const head = this.d.head(termId);
       const dir = this.dirOf(termId);
-      const want = head && !this.d.held?.(head.id) ? this.queuedFor(head.id).filter((m) => !this.interrupting.has(m.id) && !this.inFlight.has(m.id)) : [];
+      const want = head && !this.d.held?.(head.id) ? this.queuedFor(head.id).filter((m) => m.kind !== "patrol" && !this.interrupting.has(m.id) && !this.inFlight.has(m.id)) : [];
       const names = this.list(dir);
       const present = new Set<string>();
       for (const n of names) {

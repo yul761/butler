@@ -157,6 +157,28 @@ describe("Mailbox", () => {
     expect(w.dirFiles("t1")).toHaveLength(1);
   });
 
+  it("a patrol never goes through the hook, even after a sweep or a rebuild: it waits for the stop and is typed in; other kinds still go through the hook (BTL-279 fifth review)", async () => {
+    const w = world();
+    w.add("bt", false);
+    const patrol = w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+    await flushPromises();
+    expect(w.dirFiles("bt")).toBeNull();
+    w.mb.sweep("bt");
+    w.mb.rebuild();
+    expect(w.dirFiles("bt")).toBeNull();
+    expect(w.hook("bt").out).toBe("");
+    w.mb.send(msg("bt", "CI failed"));
+    await flushPromises();
+    const ctx = JSON.parse(w.hook("bt").out).hookSpecificOutput.additionalContext as string;
+    expect(ctx).toContain("CI failed");
+    expect(ctx).not.toContain("daily patrol");
+    expect(w.repo.get(patrol.id)?.status).toBe("queued");
+    w.setWaiting("bt", true);
+    await w.mb.stopped("bt");
+    expect(w.delivered.map((d) => d.text).join("\n")).toContain("daily patrol");
+    expect(w.deliveredMsgs).toContainEqual({ id: patrol.id, via: "input" });
+  });
+
   it("types the user's own words in as they are, never batched with Shipherd's messages; through the hook they carry a note", async () => {
     const w = world();
     w.add("t1", true);

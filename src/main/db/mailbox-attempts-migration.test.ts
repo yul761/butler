@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { addMissingColumns, DatabaseBackupError, MigrationOrderError, migrate, NewerDatabaseError, olderBackup, openDatabase, startupErrorText } from "./database";
@@ -161,6 +161,48 @@ describe("migration order: which backup to point at, and when there is none (BTL
       } finally {
         setLang("zh");
       }
+    });
+  });
+
+  it("openDatabase with no copy either (the backup failed and the user chose to go on): the hint has copy null and the message never mentions one (BTL-279 fifth review, D5)", () => {
+    inTemp((dir) => {
+      const file = branchDb(dir);
+      // 临时文件的位置是个目录：VACUUM INTO 之前就删不掉，备份失败，pre-v<M> 没写出来。
+      mkdirSync(join(dir, `app.db.pre-v${M}.tmp`));
+      const failures: string[] = [];
+      let e: unknown;
+      try {
+        openDatabase(file, { onBackupFailed: (f) => (failures.push(f.backup), true) });
+      } catch (x) {
+        e = x;
+      }
+      expect(failures).toEqual([join(dir, `app.db.pre-v${M}`)]);
+      expect(existsSync(join(dir, `app.db.pre-v${M}`))).toBe(false);
+      expect(e).toBeInstanceOf(MigrationOrderError);
+      const order = e as MigrationOrderError;
+      expect(order.hint).toEqual({ dir: resolve(dir), copy: null });
+      expect(order.message).toContain(resolve(dir));
+      expect(order.message).not.toMatch(/pre-v|副本/);
+    });
+  });
+
+  it("data a branch build upgraded with this step earlier: the message names the data version the step was reached at, and the hint points at the older backup (BTL-279 fifth review, D10)", () => {
+    inTemp((dir) => {
+      // 分支版本把这一步排在第 M-1 步：库停在 M-1，再往下 main 的第 M-1、M 步还没跑过。
+      const file = join(dir, "app.db");
+      const db = new DatabaseSync(file);
+      for (let i = 0; i < M - 2; i++) db.exec(MIGRATIONS[i]);
+      db.exec(MIGRATIONS[M]);
+      db.exec(`PRAGMA user_version = ${M - 1}`);
+      db.close();
+      writeFileSync(join(dir, `app.db.pre-v${M - 4}`), "");
+      const e = orderError(file);
+      // migrate 每一步都先把 user_version 推到这一步之前：报错时 found 就是走到这一步时的数据版本（第 M-1 步已经提交了）。
+      expect([e.found, e.index]).toEqual([M, M]);
+      expect(e.message).toContain(`${M}`);
+      expect(e.message).toMatch(new RegExp(`(数据版本 ${M}，第 ${M + 1} 步|data version ${M}; the columns step ${M + 1})`));
+      expect(e.backup).toBe(join(dir, `app.db.pre-v${M - 4}`));
+      expect(existsSync(join(dir, `app.db.pre-v${M - 1}`))).toBe(true);
     });
   });
 
