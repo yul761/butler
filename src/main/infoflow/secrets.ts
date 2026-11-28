@@ -339,18 +339,16 @@ const cells = (line: string): string[] => {
   return out;
 };
 
-/** 一格整格打码，两边的空白留着。空的、已经打过码的不动。 */
-const maskCell = (cell: string): string => {
-  let a = 0;
-  let b = cell.length;
-  while (a < b && isSpace(cell.charCodeAt(a))) a++;
-  while (b > a && isSpace(cell.charCodeAt(b - 1))) b--;
-  if (a === b || cell.slice(a, b) === SECRET_MASK) return cell;
-  return cell.slice(0, a) + SECRET_MASK + cell.slice(b);
-};
+
+/**
+ * HEADER_KEY、HEADER_RUN（还有拆开驼峰以后的 HEADER_KEY）认得出的键名都含这里的某一段（不看大小写；拆驼峰只插空格，不会多出字）。
+ * 一行里一段都没有就不用逐格试：很多个短格子、每行下面都跟着分隔行的表格，每格跑三五条正则，200KB 约 13ms。
+ */
+const HEADER_HINT = /pass|pwd|secret|token|key|credential|auth|密码|口令|密钥|令牌/i;
 
 /** 一行里是密钥类键名的那几格的下标（从小到大）。 */
 const headerCols = (line: string): number[] => {
+  if (!HEADER_HINT.test(line)) return [];
   const out: number[] = [];
   cells(line).forEach((c, k) => {
     const t = c.trim();
@@ -367,15 +365,6 @@ const headerCols = (line: string): number[] => {
   return out;
 };
 
-/**
- * 把一行里 cols 那几列整格打码。按这行的格子走（不按 cols 走）：cols 可能比这行宽得多（很宽的表头下面很多短行），
- * 每行的花销不超过这行的长度。
- */
-const maskRow = (line: string, cols: Set<number>): string => {
-  const row = cells(line);
-  for (let k = 0; k < row.length; k++) if (cols.has(k)) row[k] = maskCell(row[k]);
-  return row.join("|");
-};
 
 /**
  * 表头是键名、值在下面几行的表格（| user | password |、mysql 的查询结果）：一张表里第一个下一行是分隔行的行是表头，
@@ -388,37 +377,99 @@ const maskRow = (line: string, cols: Set<number>): string => {
  */
 const maskTables = (s: string): string => {
   if (!s.includes("|")) return s;
-  // 切开后偶数下标是行，奇数下标是换行符（原样拼回去）。
-  const parts = s.split(/(\r\n|\r|\n)/);
-  const lineAt = (i: number): string | undefined => (i >= 0 && i * 2 < parts.length ? parts[i * 2] : undefined);
-  const isRule = (line: string | undefined): boolean => line !== undefined && TABLE_RULE.test(line);
+  // 全按下标在 s 上扫，不切行、不建格子数组：三万多行的短表格上，每行切一次、拆一次、join 一次就要好几毫秒。
+  // 按换行切成行：starts[k]、ends[k] 是第 k 行（不含换行符）。
+  const starts: number[] = [];
+  const ends: number[] = [];
+  for (let i = 0; ; ) {
+    let j = i;
+    for (; j < s.length; j++) {
+      const c = s.charCodeAt(j);
+      if (c === 10 || c === 13) break;
+    }
+    starts.push(i);
+    ends.push(j);
+    if (j >= s.length) break;
+    i = s.charCodeAt(j) === 13 && s.charCodeAt(j + 1) === 10 ? j + 2 : j + 1;
+  }
+  const n = starts.length;
+  const hasBar = (k: number): boolean => {
+    for (let i = starts[k]; i < ends[k]; i++) if (s.charCodeAt(i) === 124) return true;
+    return false;
+  };
+  // 分隔行一定含 - 或 =：先按字符找一遍，没有就不切行、不跑正则。
+  const isRule = (k: number): boolean => {
+    for (let i = starts[k]; i < ends[k]; i++) {
+      const c = s.charCodeAt(i);
+      if (c === 45 || c === 61) return TABLE_RULE.test(s.slice(starts[k], ends[k]));
+    }
+    return false;
+  };
   /** 这张表的密钥列；inTable：已经读过表头。 */
   let cols = new Set<number>();
   let inTable = false;
-  const n = (parts.length + 1) / 2;
-  for (let i = 0; i < n; i++) {
-    const line = parts[i * 2];
-    if (TABLE_RULE.test(line)) continue;
-    if (!line.includes("|")) {
-      cols = new Set();
-      inTable = false;
-      continue;
-    }
-    const next = lineAt(i + 1);
-    const ruleBelow = isRule(next);
-    if (!inTable) {
-      if (ruleBelow) {
-        inTable = true;
-        cols = new Set(headerCols(line));
+  // 打过码的格子和中间没动的部分攒在数组里最后一次 join：一路 += 拼出来的字符串，后面第一条正则还要先把它摊平。
+  const out: string[] = [];
+  let last = 0;
+  /**
+   * 第 k 行里 cols 那几格整格打码（格子按没转义的 | 切，和 cells 一样；前后空白留着，空格子和已经打过的不动）。
+   * 按这行的格子走（不按 cols 走）：cols 可能比这行宽得多（很宽的表头下面很多短行），每行的花销不超过这行的长度。
+   */
+  const maskRow = (k: number): void => {
+    let col = 0;
+    let from = starts[k];
+    const end = ends[k];
+    for (let i = from; i <= end; i++) {
+      const c = i < end ? s.charCodeAt(i) : 124;
+      if (c === 92 && i < end) {
+        // 转义的下一个字符跳过；行尾的 \ 后面没有字符，下一轮照样走到行尾那格。
+        i = Math.min(i + 1, end - 1);
+        continue;
       }
-      continue;
+      if (c !== 124) continue;
+      if (cols.has(col)) {
+        let x = from;
+        let y = Math.min(i, end);
+        while (x < y && isSpace(s.charCodeAt(x))) x++;
+        while (y > x && isSpace(s.charCodeAt(y - 1))) y--;
+        if (x < y && !(y - x === SECRET_MASK.length && s.startsWith(SECRET_MASK, x))) {
+          out.push(s.slice(last, x), SECRET_MASK);
+          last = y;
+        }
+      }
+      col++;
+      from = i + 1;
     }
-    if (cols.size > 0) parts[i * 2] = maskRow(line, cols);
-    // 只往集合里加这行的键名列（不重建、不排序）：很宽的表头下面每行都并一次时，重建是平方级（200KB 约 8s）。
-    if (ruleBelow) for (const k of headerCols(line)) cols.add(k);
+  };
+  // 每行只测一次是不是分隔行：这一行的结果留给下一轮当「这一行」用。
+  let isRuleLine = isRule(0);
+  for (let k = 0; k < n; k++) {
+    const ruleBelow = k + 1 < n && isRule(k + 1);
+    if (!isRuleLine) {
+      if (!hasBar(k)) {
+        cols = new Set();
+        inTable = false;
+      } else if (!inTable) {
+        if (ruleBelow) {
+          inTable = true;
+          cols = new Set(headerCols(s.slice(starts[k], ends[k])));
+        }
+      } else {
+        if (cols.size > 0) maskRow(k);
+        // 只往集合里加这行的键名列（不重建、不排序）：很宽的表头下面每行都并一次时，重建是平方级（200KB 约 8s）。
+        if (ruleBelow) for (const c of headerCols(s.slice(starts[k], ends[k]))) cols.add(c);
+      }
+    }
+    isRuleLine = ruleBelow;
   }
-  return parts.join("");
+  if (last === 0) return s;
+  out.push(s.slice(last));
+  return out.join("");
 };
+
+/** Cookie 头的开头（Cookie:、Set-Cookie:），和在它前面停下的先行断言。 */
+const COOKIE = String.raw`\b(?:Set-)?Cookie\s*:`;
+const NOT_COOKIE = `(?!${COOKIE})`;
 
 const RULES: Rule[] = [
   // 私钥 / 证书块：BEGIN 到 END 整段（没有 END 就到结尾）。
@@ -457,9 +508,11 @@ const RULES: Rule[] = [
   { re: /(?<=\bAuthorization["']?\s{0,16}[:=]\s{0,16}["']?)Basic\s+[A-Za-z0-9+/=]{8,}/gi },
   { re: /\bBasic\s+(?=[A-Za-z]*[0-9+/=])[A-Za-z0-9+/=]{8,}/gi },
   // Cookie 头：打掉 name=value; name=value 这一串，后面的话留着。名字限 128 字：不然很多个 Cookie: 时每个都扫到结尾。
-  { re: /(\b(?:Set-)?Cookie\s*:\s*)(?!\[REDACTED\])[^\s=;]{1,128}=[^\s;]*(?:;\s*[^\s=;]{1,128}=[^\s;]*)*/gi },
-  // 后面没有 name=：退回到打掉带数字的长串（Cookie: abc123secretvalue）。先行断言限 128 字。
-  { re: /(\b(?:Set-)?Cookie\s*:\s*)(?!\[REDACTED\])(?=[^\s;]{0,128}\d)(?=[^\s;]{0,128}[A-Za-z])[^\s;]{8,}/gi },
+  // 名字扫到下一个能起跑的 Cookie: 就停（NOT_COOKIE）：不然很多个挨着的 Cookie: 每个都往后扫 128 字再失败，200KB 约 8ms（CI 上翻几倍）。
+  // 停下来的那一段交给下一个 Cookie: 自己去打。
+  { re: new RegExp(String.raw`(${COOKIE}\s*)(?!\[REDACTED\])(?:${NOT_COOKIE}[^\s=;]){1,128}=[^\s;]*(?:;\s*[^\s=;]{1,128}=[^\s;]*)*`, "gi") },
+  // 后面没有 name=：退回到打掉带数字的长串（Cookie: abc123secretvalue）。先行断言限 128 字，也是扫到下一个 Cookie: 就停。
+  { re: new RegExp(String.raw`(${COOKIE}\s*)(?!\[REDACTED\])(?=(?:${NOT_COOKIE}[^\s;]){0,128}\d)(?=(?:${NOT_COOKIE}[^\s;]){0,128}[A-Za-z])[^\s;]{8,}`, "gi") },
   // 命令行：curl -u user:pass / --user user:pass 只换密码；--password xxx、--token xxx（空格或 = 分隔）；docker login -p xxx；
   // mysql -pxxx / -p'two words'（只认 mysql、mysqldump、mariadb、mysqladmin 后面的 -p：mkdir -pv、gcc -pthread 不算）；
   // sshpass -p xxx（-p 和值之间可以有空格）。引号没闭合的到行尾。
@@ -531,27 +584,36 @@ const RULES: Rule[] = [
  * 规则本来就认的全角标点（：当分隔符，，；当值的结尾，！？（）和半角的一样算进值）：不用换，原样留着，中文的话不变样。
  */
 const KEPT_FULLWIDTH = "！（），：；？";
-/**
- * 要先规范化的行：有别的全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂），零宽字符（U+200B–200D、U+2060、U+FEFF），
- * 或者框线字符（U+2500–257F，psql 的 │ ─ ┼）。m 标志下 ^ 只在行首起跑、. 不跨行：每行最多扫一遍，线性。
- */
-const NEEDS_NORMALIZE = new RegExp(String.raw`^.*(?:(?![${KEPT_FULLWIDTH}])[\uff01-\uff5e]|[\u200b-\u200d\u2060\ufeff\u2500-\u257f]).*$`, "gm");
-const FULLWIDTH = new RegExp(String.raw`(?![${KEPT_FULLWIDTH}])[\uff01-\uff5e]`, "g");
+const KEPT_CODES = new Set([...KEPT_FULLWIDTH].map((c) => c.charCodeAt(0)));
 /** 竖线类框线字符换成 |，横线换成 -，别的（交叉、拐角、T 形）换成 +：psql 的 unicode 边框变成 mysql 那种 +---+、| a |。 */
-const BOX_V = /[│┃║╎╏┆┇┊┋]/g;
-const BOX_H = /[─━═╌╍┄┅┈┉]/g;
-const BOX_X = /[\u2500-\u257f]/g;
+const BOX_V = new Set([..."│┃║╎╏┆┇┊┋"].map((c) => c.charCodeAt(0)));
+const BOX_H = new Set([..."─━═╌╍┄┅┈┉"].map((c) => c.charCodeAt(0)));
+/** 零宽字符：U+200B–200D、U+2060、U+FEFF。 */
+const isZeroWidth = (c: number): boolean => (c >= 0x200b && c <= 0x200d) || c === 0x2060 || c === 0xfeff;
+
 /**
- * 一行规范化：全角 ASCII 换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），去掉零宽字符，框线换成 | - +。
- * 每个字换成一个字或去掉。
+ * 规范化：别的全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂）换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），
+ * 去掉零宽字符，框线字符（U+2500–257F，psql 的 │ ─ ┼）换成 | - +。每个字换成一个字或去掉，别的字不动。
+ * 一个字一个字扫一遍，不用正则回调：每行一次回调的写法在三万多行的短表格上要 7ms（CI 上过了 50ms），这样约 1ms。
+ * 一个要换的字都没有就返回原来那个串（调用方用 === 判断）。
  */
-const normalizeLine = (line: string): string =>
-  line
-    .replace(FULLWIDTH, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-    .replace(/[\u200b-\u200d\u2060\ufeff]/g, "")
-    .replace(BOX_V, "|")
-    .replace(BOX_H, "-")
-    .replace(BOX_X, "+");
+function normalize(s: string): string {
+  let out = "";
+  let last = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    let to: string;
+    if (c >= 0xff01 && c <= 0xff5e) {
+      if (KEPT_CODES.has(c)) continue;
+      to = String.fromCharCode(c - 0xfee0);
+    } else if (isZeroWidth(c)) to = "";
+    else if (c >= 0x2500 && c <= 0x257f) to = BOX_V.has(c) ? "|" : BOX_H.has(c) ? "-" : "+";
+    else continue;
+    out += s.slice(last, i) + to;
+    last = i + 1;
+  }
+  return last === 0 ? s : out + s.slice(last);
+}
 
 /** 按顺序跑表头表格和每条规则。 */
 const maskRules = (s: string): string => {
@@ -583,15 +645,14 @@ const maskRules = (s: string): string => {
 
 /**
  * 把能认出来的密钥换成 SECRET_MASK。
- * 有全角字母符号、零宽或框线字符的行先规范化（normalizeLine）再打码：打了码的，输出用规范化以后的文本
+ * 有全角字母符号、零宽或框线字符的先规范化（normalize）再打码：打了码的，输出用规范化以后的文本
  * （这几行的全角字母、＝、框线会变成半角，中文标点不动；存进记忆的是规范化文本）。什么都没打的原样返回原文，一个字都不改
  * （hasSecret 不会因为一个全角字母就说有密钥）。规范化只把字换得更像 ASCII（规则都是按 ASCII 写的），原文认得出的
  * 规范化以后也认得出，所以不再按原文打一遍（再打一遍最慢的输入要翻倍，200KB 约 38ms）。没有这些字符的文本不规范化。
  */
 export function maskSecrets(s: string): string {
-  NEEDS_NORMALIZE.lastIndex = 0;
-  if (!NEEDS_NORMALIZE.test(s)) return maskRules(s);
-  const normalized = s.replace(NEEDS_NORMALIZE, normalizeLine);
+  const normalized = normalize(s);
+  if (normalized === s) return maskRules(s);
   const masked = maskRules(normalized);
   return masked === normalized ? s : masked;
 }

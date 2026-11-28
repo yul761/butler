@@ -841,5 +841,53 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
     // 不带 _ 的 auth 不算（author、authority）。
     expect(maskSecrets("| author | name |\n|---|---|\n| v4lue | bob |")).toContain("v4lue");
   });
+
+  it("CI timing fix: a Cookie name stops at the next Cookie:, the next one masks the rest", () => {
+    // 名字扫到下一个能起跑的 Cookie: 就停：停下来的那一段由下一个 Cookie: 打掉，一个字也不留。
+    for (const s of ["Cookie: a-Cookie: b=s3cretvalue", "Cookie: a-Cookie:b=s3cretvalue", "Set-Cookie: x;Set-Cookie: sid=s3cretvalue", "cookie: a:Cookie: sid=s3cretvalue"]) {
+      expect(maskSecrets(s), s).not.toContain("s3cretvalue");
+    }
+    // 没有 name= 的兜底规则也一样：带数字的长串在下一个 Cookie: 后面照打。
+    expect(maskSecrets("Cookie: abc-Cookie:x1yz5678secret")).not.toContain("x1yz5678secret");
+    // 字母紧挨着的 Cookie（aCookie:）不是新的起点，名字接着往后扫：整个 name=value 打掉。
+    expect(maskSecrets("Cookie: aCookie:b=s3cretvalue")).not.toContain("s3cretvalue");
+    // 词中间的 Cookie（fortuneCookie:）不是 Cookie 头。
+    expect(maskSecrets("fortuneCookie: flavor=lemon")).toBe("fortuneCookie: flavor=lemon");
+    // 名字 128 字以内照常认，前面的话留着。
+    expect(maskSecrets(`see Cookie: ${"n".repeat(128)}=s3cretvalue here`)).toBe(`see Cookie: ${SECRET_MASK} here`);
+  });
+
+  it("CI timing fix: tables with CRLF, lone CR and mixed line breaks still mask the key column", () => {
+    for (const br of ["\r\n", "\r", "\n"]) {
+      const t = ["| user | password |", "|---|---|", "| bob | v4lue1 |", "| amy | v4lue2 |", "", "| v4lue3 |"].join(br);
+      const out = maskSecrets(t);
+      expect(out, JSON.stringify(br)).not.toMatch(/v4lue[12]/);
+      // 空行把表格断开：后面那张没有表头，v4lue3 留着；换行符原样留着。
+      expect(out).toContain("v4lue3");
+      expect(out.split(br).length).toBe(6);
+    }
+    // 混着用的换行，最后一行没有换行。
+    expect(maskSecrets("| token |\r\n|-|\r| v4lue |\n| v4lue2 |")).toBe(`| token |\r\n|-|\r| ${SECRET_MASK} |\n| ${SECRET_MASK} |`);
+    // 转义的 \| 不切格；行尾的 \ 也照样算进最后一格。
+    expect(maskSecrets("| token | n |\n|-|-|\n| a\\|b | c |\n| abc\\")).toBe(`| token | n |\n|-|-|\n| ${SECRET_MASK} | c |\n| ${SECRET_MASK}`);
+    // 空格子不打（没有值可漏），已经打过的格子不重复打。
+    const empty = "| user | password |\n|---|---|\n| bob |  |\n| amy ||";
+    expect(maskSecrets(empty)).toBe(empty);
+    // 一行都不用打的表格原样返回。
+    const plain = "| user | name |\r\n|---|---|\r\n| bob | amy |";
+    expect(maskSecrets(plain)).toBe(plain);
+  });
+
+  it("CI timing fix: every zero-width character is dropped before masking (U+200B, U+200C, U+200D, U+2060, U+FEFF)", () => {
+    for (const z of ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"]) {
+      expect(maskSecrets(`pass${z}word=hunter2x`), JSON.stringify(z)).toBe(`password=${SECRET_MASK}`);
+    }
+  });
+
+  it("CI timing fix: a header row needs one of the hint words, and every key-name form still has one", () => {
+    for (const h of ["Password", "passwd", "PassPhrase", "pass word", "userpwd", "Secret", "accessToken", "APIKey", "api_key", "Credentials", "X_AUTH", "authentication_string", "数据库密码", "口令", "密钥", "令牌"]) {
+      expect(maskSecrets(`| ${h} | name |\n|---|---|\n| v4lue | bob |`), h).not.toContain("v4lue");
+    }
+  });
 });
 
