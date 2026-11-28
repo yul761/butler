@@ -391,6 +391,31 @@ describe("ActivityMonitor activity", () => {
     expect(h.monitor.lastReplyOf("s1")).toBeNull();
   });
 
+  it("turnClosed: true once the transcript shows the turn ended, false again on a new user prompt, and false before any transcript was read (BTL-279 fourth review)", async () => {
+    const h = harness();
+    h.openSession("s1");
+    h.transcript("s1", endTurn());
+    // 还没读过（没 tick）：不算结束。
+    expect(h.monitor.turnClosed("s1")).toBe(false);
+    expect(h.monitor.turnClosed("nope")).toBe(false);
+    await h.beat();
+    expect(h.monitor.turnClosed("s1")).toBe(true);
+    // 用户又说了一句：新的一轮开着。
+    h.transcript("s1", { type: "user", timestamp: AT, message: { role: "user", content: "再看一下" } });
+    await h.beat();
+    expect(h.monitor.turnClosed("s1")).toBe(false);
+    h.transcript("s1", thinking());
+    await h.beat();
+    expect(h.monitor.turnClosed("s1")).toBe(false);
+    h.transcript("s1", endTurn());
+    await h.beat();
+    expect(h.monitor.turnClosed("s1")).toBe(true);
+    // 终端关了、不再跟着：不算结束。
+    h.open.delete("s1");
+    await h.beat();
+    expect(h.monitor.turnClosed("s1")).toBe(false);
+  });
+
   it("copes with no transcript file being found", async () => {
     const h = harness();
     h.deps.transcriptFile = () => null;

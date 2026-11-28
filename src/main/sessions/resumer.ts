@@ -53,6 +53,21 @@ export function resumable(h: Session, ctx: ResumableContext, insisted = false): 
   return h.featureId !== null && !ctx.epicArchived(h.featureId);
 }
 
+/**
+ * list_sessions 的 wake（BTL-279）：答的是「调用的这个总控现在发一条会怎样」。休眠着的是 hibernated；不然问 Resumer，
+ * 调用方是它的总控（和送信同一个判断 controls）时按总控发的算，epic 下别的协调者、不管它的调用方照常算（用户点 × 关的就是 ended_by_user）。
+ * 调用方在做巡检那一轮（patrolling）：它发的不拉起用户关掉的（复核建议 3），也不按总控发的算。没有 Resumer 时 not_managed。
+ */
+export function wakeStateFor(
+  id: string,
+  caller: string | null,
+  d: { hibernated(id: string): boolean; controls(caller: string | null, id: string): boolean; patrolling(caller: string): boolean; status: ((id: string, o: { asController: boolean }) => WakeState) | null },
+): WakeState {
+  if (d.hibernated(id)) return "hibernated";
+  if (!d.status) return "not_managed";
+  return d.status(id, { asController: d.controls(caller, id) && !(caller !== null && d.patrolling(caller)) });
+}
+
 /** 重启后恢复的顺序：有未读信箱消息的最先，然后是 ticket 有 PR 在等的，其余按最近活动。 */
 export function restartOrder(heads: Session[], hasMail: (headId: string) => boolean, prWaiting: (h: Session) => boolean): Session[] {
   const rank = (h: Session) => (hasMail(h.id) ? 0 : prWaiting(h) ? 1 : 2);

@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { backupBeforeMigrate, backupPath, type OnBackupFailed } from "./backup";
+import { basename, dirname, resolve } from "node:path";
+import { backupBeforeMigrate, backupPath, DatabaseBackupError, type OnBackupFailed } from "./backup";
 import { CHECKED_ADD_COLUMNS, MIGRATIONS } from "./migrations";
 import { M } from "../strings";
 
 export type Db = DatabaseSync;
-export { DatabaseBackupError } from "./backup";
+export { DatabaseBackupError };
 
 export interface OpenDatabaseOptions {
   log?: (msg: string) => void;
@@ -36,9 +37,10 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
     } catch (e) {
       // 迁移顺序对不上：指给用户装测试版本之前的那份备份（比现在版本旧、最新的一份；刚才那份 pre-v<current> 就是这份数据本身）。
       if (!(e instanceof MigrationOrderError) || file === ":memory:") throw e;
-      let backup: string | undefined;
-      for (let v = current - 1; v > 0 && backup === undefined; v--) if (existsSync(backupPath(file, v))) backup = backupPath(file, v);
-      throw new MigrationOrderError(e.found, e.index, backup);
+      const backup = olderBackup(file, current);
+      // 找不到更早的（第四轮复核）：说清数据目录在哪、pre-v<current> 只是现在这份的副本，让用户有下一步可走。
+      const copy = backupPath(file, current);
+      throw new MigrationOrderError(e.found, e.index, backup !== undefined ? { backup } : { dir: dirname(resolve(file)), copy: existsSync(copy) ? basename(copy) : null });
     }
     // WAL 下 NORMAL 是安全的（BTL-275）：断电最多丢最后几次提交，库不会坏；FULL 每次自动提交都在主线程 fsync 一次。
     // 迁移完才改：迁移和它前面的备份照旧在 FULL 下跑，备份自己还另外 fsync（backup.ts）。
@@ -48,6 +50,15 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
     throw e;
   }
   return db;
+}
+
+/**
+ * 比 current 旧、版本号最大的那份迁移前备份（MigrationOrderError 指给用户的）；没有就是 undefined。
+ * 每次备份后只留最新两份（KEEP_BACKUPS），平时这里最多看到一份；备份失败、用户选了不备份接着升时可能有好几份。
+ */
+export function olderBackup(file: string, current: number): string | undefined {
+  for (let v = current - 1; v > 0; v--) if (existsSync(backupPath(file, v))) return backupPath(file, v);
+  return undefined;
 }
 
 const uncached = new WeakMap<Db, (sql: string) => StatementSync>();
@@ -165,9 +176,25 @@ const ADD_COLUMN = /^ALTER TABLE (\w+) ADD COLUMN (\w+)\s+[^;\n]+;$/;
  * 宁可起不来：告诉用户换回装测试版本之前的备份。
  */
 export class MigrationOrderError extends Error {
-  constructor(readonly found: number, readonly index: number, readonly backup?: string) {
-    super(M().migrationOrder(found, index + 1) + (backup ? ` ${M().migrationOrderBackup(backup)}` : ""));
+  /** 指给用户的备份（比现在版本旧、最新的一份）。 */
+  readonly backup?: string;
+  /**
+   * hint：找到了更早的备份就是 { backup }；没找到就是数据目录和 pre-v<现在版本>（这次刚备份的、就是现在这份数据）的文件名。
+   * migrate 自己抛的没有 hint（它不知道文件在哪），openDatabase 补上再抛。
+   */
+  constructor(readonly found: number, readonly index: number, readonly hint?: { backup: string } | { dir: string; copy: string | null }) {
+    super(M().migrationOrder(found, index + 1) + (!hint ? "" : "backup" in hint ? ` ${M().migrationOrderBackup(hint.backup)}` : ` ${M().migrationOrderNoBackup(hint.dir, hint.copy)}`));
+    if (hint && "backup" in hint) this.backup = hint.backup;
   }
+}
+
+/**
+ * 启动失败时对话框里的那句话（BTL-262、4.3.0 复核）：数据比程序新、迁移顺序对不上、备份失败是给用户看的，只给它们自己的话，不贴调用栈；
+ * 别的错误给调用栈（报 bug 用）。
+ */
+export function startupErrorText(e: unknown): string {
+  if (e instanceof NewerDatabaseError || e instanceof DatabaseBackupError || e instanceof MigrationOrderError) return e.message;
+  return e instanceof Error ? (e.stack ?? e.message) : String(e);
 }
 
 /**
@@ -175,7 +202,7 @@ export class MigrationOrderError extends Error {
  * 照现在的顺序升上来的库，这几列不会已经在（同一列只有这一条加）；已经在了就是迁移顺序不同的版本动过这份数据：抛 MigrationOrderError，
  * 不跳过、不报看不懂的 duplicate column。
  */
-function addMissingColumns(db: Db, sql: string, index: number): void {
+export function addMissingColumns(db: Db, sql: string, index: number): void {
   const have = new Map<string, Set<string>>();
   const colsOf = (table: string): Set<string> => {
     let c = have.get(table);

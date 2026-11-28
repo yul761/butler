@@ -2,13 +2,17 @@
 export const PATROL_TURN_MAX_MS = 2 * 3600_000;
 
 /**
- * 全局总控正在做的是不是巡检那一轮（BTL-279 复核建议 3）：每日巡检的消息送到它以后、它下一次停下来之前。
+ * 全局总控正在做的是不是巡检那一轮（BTL-279 复核建议 3）：每日巡检的消息直接输入进去、自己开了一轮以后，到它下一次停下来之前。
  * 这段时间里它用 send_message 发给 epic 总控的，算巡检这类自动发送：不把用户点 × 关掉的 epic 总控拉起来（尊重 userEndedAt）；
  * 总控平时明确发的照旧（insisted）。
- * 从 Mailbox 记上送到的那一刻起算：hook 在一轮中间拿走的，hook 事件一到就清扫、记上；那个事件丢了的要等 Stop 时或下一次 tick 的清扫，
- * 这之前发的不算巡检（已知限制，巡检先看进度、收件箱，发消息在后面）。
- * Stop 时的清扫才记上的那一条（复核）：它送到的时间（hook 写下 .done 的时刻）不比这次停下晚，那一轮已经结束了，不再开一轮巡检，
- * 不然下一轮（可能是用户明确叫它做的）也会被当成巡检。
+ * 只认直接输入（via input）的（第四轮复核，总控定）：hook 在一轮中间送进去的，那一轮是用户或别人开的，用户叫全局总控做的事
+ * 不能因为巡检插进来就打不开 epic 总控。从粘贴的那一刻（Mailbox 记的 deliveredAt）算起。
+ * 停下之后才记上的不算：它送到的时间不比这次停下晚，那一轮已经结束了，不再开一轮巡检，不然下一轮也会被当成巡检。
+ * 终端退出（关掉、/exit、崩溃）时 forget：一轮跟着进程走，记录也不留着。
+ *
+ * 已知限制：
+ * - 标记只在内存里，Shipherd 重启后丢失；已经发出去的消息的标记存在库里（meta.auto）。
+ * - 用户在全局总控里 /exit、或者 claude 进程自己退出，和崩溃一样处理：有总控的消息时照常自动恢复（epic 总控也一样，总控定）。
  */
 export class PatrolTurns {
   private readonly since = new Map<string, number>();
@@ -17,7 +21,12 @@ export class PatrolTurns {
 
   constructor(private readonly now: () => number, private readonly maxMs = PATROL_TURN_MAX_MS) {}
 
-  /** 巡检消息在 at（送到的时间，hook 送的是 hook 写下的时刻）送到了这个 head。不比它最近一次停下晚的不算。 */
+  /** 送到了一条消息（Mailbox 的 delivered 回调）：直接输入进去的巡检消息开一轮巡检，别的都不算。 */
+  messageDelivered(headId: string, m: { kind: string; via: "hook" | "input" | null; deliveredAt: number | null }): void {
+    if (m.kind === "patrol" && m.via === "input") this.delivered(headId, m.deliveredAt ?? this.now());
+  }
+
+  /** 巡检消息在 at（粘贴的时刻）送到了这个 head。不比它最近一次停下晚的不算。 */
   delivered(headId: string, at: number): void {
     if (at <= (this.stoppedAt.get(headId) ?? -Infinity)) return;
     this.since.set(headId, Math.min(at, this.now()));
@@ -27,6 +36,17 @@ export class PatrolTurns {
   stopped(headId: string): void {
     this.since.delete(headId);
     this.stoppedAt.set(headId, this.now());
+  }
+
+  /** 这个 head 的终端退出了（或者 session 被移走）：两份记录都清掉。 */
+  forget(headId: string): void {
+    this.since.delete(headId);
+    this.stoppedAt.delete(headId);
+  }
+
+  /** 记着的 head 数（测试看 forget 有没有清干净）。 */
+  get size(): number {
+    return new Set([...this.since.keys(), ...this.stoppedAt.keys()]).size;
   }
 
   active(headId: string): boolean {

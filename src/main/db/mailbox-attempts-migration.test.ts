@@ -2,8 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { MigrationOrderError, migrate, openDatabase } from "./database";
+import { join, resolve } from "node:path";
+import { addMissingColumns, DatabaseBackupError, MigrationOrderError, migrate, NewerDatabaseError, olderBackup, openDatabase, startupErrorText } from "./database";
+import { CHECKED_ADD_COLUMNS } from "./migrations";
+import { setLang } from "../i18n";
 import { addColumns, MIGRATIONS } from "./migrations";
 import { SessionMessagesRepo } from "./session-messages-repo";
 
@@ -86,6 +88,115 @@ describe("mailbox attempts migration (BTL-279)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("migration order: which backup to point at, and when there is none (BTL-279 fourth review)", () => {
+  /** 一个被分支版本按另一个顺序升到 M 的 app.db（见上面复核复现）。 */
+  const branchDb = (dir: string): string => {
+    const file = join(dir, "app.db");
+    const db = new DatabaseSync(file);
+    for (let i = 0; i < M - 1; i++) db.exec(MIGRATIONS[i]);
+    db.exec(MIGRATIONS[M]);
+    db.exec(`PRAGMA user_version = ${M}`);
+    db.close();
+    return file;
+  };
+  const orderError = (file: string): MigrationOrderError => {
+    try {
+      openDatabase(file);
+    } catch (e) {
+      if (e instanceof MigrationOrderError) return e;
+      throw e;
+    }
+    throw new Error("opened");
+  };
+  const inTemp = (fn: (dir: string) => void) => {
+    const dir = mkdtempSync(join(tmpdir(), "shipherd-order-"));
+    try {
+      fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("points at the newest backup older than the data, never at pre-v<current> itself", () => {
+    inTemp((dir) => {
+      const file = join(dir, "app.db");
+      expect(olderBackup(file, 10)).toBeUndefined();
+      for (const v of [3, 7, 10, 12]) writeFileSync(join(dir, `app.db.pre-v${v}`), "");
+      expect(olderBackup(file, 10)).toBe(join(dir, "app.db.pre-v7"));
+      expect(olderBackup(file, 7)).toBe(join(dir, "app.db.pre-v3"));
+      expect(olderBackup(file, 3)).toBeUndefined();
+    });
+  });
+
+  it("openDatabase keeps the pre-test-build backup through pruning and points at it", () => {
+    inTemp((dir) => {
+      const file = branchDb(dir);
+      // 每次备份后只留最新两份：pre-v<M> 和装测试版本之前的那份。
+      writeFileSync(join(dir, `app.db.pre-v${M - 5}`), "");
+      writeFileSync(join(dir, `app.db.pre-v${M - 2}`), "");
+      const e = orderError(file);
+      expect(e.backup).toBe(join(dir, `app.db.pre-v${M - 2}`));
+      expect(e.message).toContain(`app.db.pre-v${M - 2}`);
+      // 再打开一次（用户没换备份就又点开了）：那份照样在、照样指给它。
+      expect(orderError(file).backup).toBe(join(dir, `app.db.pre-v${M - 2}`));
+    });
+  });
+
+  it("with no older backup, names the data folder and says pre-v<current> is only a copy of this data, in both languages", () => {
+    inTemp((dir) => {
+      const file = branchDb(dir);
+      try {
+        for (const [locale, words] of [["zh", /数据目录在 .*只是现在这份数据的副本.*装回那个测试版本/], ["en", /data folder is .*only a copy of the current data.*go back to that test build/]] as const) {
+          setLang(locale);
+          const e = orderError(file);
+          expect(e.backup).toBeUndefined();
+          expect(e.hint).toEqual({ dir: resolve(dir), copy: `app.db.pre-v${M}` });
+          expect(e.message).toContain(resolve(dir));
+          expect(e.message).toContain(`app.db.pre-v${M}`);
+          expect(e.message).toMatch(words);
+        }
+      } finally {
+        setLang("zh");
+      }
+    });
+  });
+
+  it("with no copy either (the user chose to upgrade without a backup), still names the data folder and mentions no copy", () => {
+    const e = new MigrationOrderError(M, M, { dir: "/data/shipherd", copy: null });
+    expect(e.message).toContain("/data/shipherd");
+    expect(e.message).not.toMatch(/pre-v|副本/);
+    expect(e.backup).toBeUndefined();
+  });
+
+  it("a checked migration line it cannot read throws instead of being skipped", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE t (a INTEGER)");
+    addMissingColumns(db, [CHECKED_ADD_COLUMNS, "ALTER TABLE t ADD COLUMN b TEXT;"].join("\n"), 0);
+    expect(cols(db, "t")).toEqual(["a", "b"]);
+    // 格式不对的一行排在能跑的一行后面：照样报错（migrate 在事务里跑，前面加的列跟着回滚）。
+    ["ALTER TABLE t ADD COLUMN c TEXT", "ALTER TABLE t DROP COLUMN b;", "UPDATE t SET a = 1;", ""].forEach((bad, i) => {
+      expect(() => addMissingColumns(db, [CHECKED_ADD_COLUMNS, `ALTER TABLE t ADD COLUMN d${i} TEXT;`, bad].join("\n"), 0), bad).toThrow(/not an addColumns migration line/);
+    });
+    expect(() => addMissingColumns(db, [CHECKED_ADD_COLUMNS, "ALTER TABLE nope ADD COLUMN d TEXT;"].join("\n"), 0)).toThrow(/no table nope/);
+  });
+});
+
+describe("startupErrorText (the startup failure dialog)", () => {
+  it("gives the user's own sentence for data errors, and the stack for anything else", () => {
+    const order = new MigrationOrderError(64, 64, { dir: "/d", copy: null });
+    expect(startupErrorText(order)).toBe(order.message);
+    expect(startupErrorText(order)).not.toMatch(/\n\s+at /);
+    const newer = new NewerDatabaseError(70, 64);
+    expect(startupErrorText(newer)).toBe(newer.message);
+    const backup = Object.create(DatabaseBackupError.prototype) as DatabaseBackupError;
+    Object.defineProperty(backup, "message", { value: "备份失败" });
+    expect(startupErrorText(backup)).toBe("备份失败");
+    const other = new Error("boom");
+    expect(startupErrorText(other)).toBe(other.stack);
+    expect(startupErrorText("plain")).toBe("plain");
   });
 });
 

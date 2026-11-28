@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Session } from "../../shared/types";
 import type { SessionMessage } from "../db/session-messages-repo";
-import { MAX_RESUME_ATTEMPTS, MEMORY_RETRY_MS, RESUME_RETRY_MS, Resumer, controllerMailSince, restartOrder, resumable, type ResumerDeps } from "./resumer";
+import { MAX_RESUME_ATTEMPTS, MEMORY_RETRY_MS, RESUME_RETRY_MS, Resumer, controllerMailSince, restartOrder, resumable, wakeStateFor, type ResumerDeps, type WakeState } from "./resumer";
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: "s1", ticketKey: "ABC-1", cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
@@ -422,5 +422,54 @@ describe("controllerMailSince (BTL-279)", () => {
     queued.push(m({ toSession: "s1", queuedAt: 1_000_200 }));
     await expect(r.request("s1", "mail")).resolves.toEqual({ state: "resuming" });
     expect(d.open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("wakeStateFor (list_sessions wake, BTL-279 fourth review)", () => {
+  /** 记下 status 被问时 asController 是什么；用户点 × 关掉的：总控发的会打开，别的不打开。 */
+  const deps = (o: { hibernated?: boolean; controls?: boolean; patrolling?: string[]; resumer?: boolean } = {}) => {
+    const asked: { id: string; asController: boolean }[] = [];
+    const patrolled: string[] = [];
+    return {
+      asked, patrolled,
+      d: {
+        hibernated: () => o.hibernated ?? false,
+        controls: (caller: string | null) => (o.controls ?? true) && caller !== null,
+        patrolling: (c: string) => (patrolled.push(c), (o.patrolling ?? []).includes(c)),
+        status: o.resumer === false ? null : (id: string, x: { asController: boolean }): WakeState => (asked.push({ id, ...x }), x.asController ? "resumes" : "ended_by_user"),
+      },
+    };
+  };
+
+  it("asks as the controller when the caller controls it and is not on its patrol turn", () => {
+    const x = deps();
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("resumes");
+    expect(x.asked).toEqual([{ id: "epic", asController: true }]);
+    expect(x.patrolled).toEqual(["bt"]);
+  });
+
+  it("a caller on its patrol turn is not asked as the controller: the epic coordinator the user closed stays closed", () => {
+    const x = deps({ patrolling: ["bt"] });
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("ended_by_user");
+    expect(x.asked).toEqual([{ id: "epic", asController: false }]);
+    // 别的调用方在巡检不影响这一个。
+    expect(wakeStateFor("epic", "other", deps({ patrolling: ["bt"] }).d)).toBe("resumes");
+  });
+
+  it("a caller that does not control it, or no caller, is not asked as the controller", () => {
+    const x = deps({ controls: false });
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("ended_by_user");
+    const y = deps();
+    expect(wakeStateFor("epic", null, y.d)).toBe("ended_by_user");
+    expect(y.asked).toEqual([{ id: "epic", asController: false }]);
+    expect(y.patrolled).toEqual([]);
+  });
+
+  it("hibernated wins over everything; no resumer means not_managed", () => {
+    const x = deps({ hibernated: true });
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("hibernated");
+    expect(x.asked).toEqual([]);
+    expect(wakeStateFor("epic", "bt", deps({ resumer: false }).d)).toBe("not_managed");
+    expect(wakeStateFor("epic", "bt", deps({ resumer: false, hibernated: true }).d)).toBe("hibernated");
   });
 });

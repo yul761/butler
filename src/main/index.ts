@@ -50,7 +50,7 @@ import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { MAILBOX_EVENT, mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
-import { DatabaseBackupError, MigrationOrderError, NewerDatabaseError, openDatabase, withTransaction } from "./db/database";
+import { DatabaseBackupError, openDatabase, startupErrorText, withTransaction } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
@@ -187,7 +187,7 @@ import { transcriptCostBase } from "./fork/cost-base";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
-import { Resumer, controllerMailSince, restartOrder, resumable } from "./sessions/resumer";
+import { Resumer, controllerMailSince, restartOrder, resumable, wakeStateFor } from "./sessions/resumer";
 import { childrenWorking } from "./sessions/managed-by";
 import { needsDiscovery, scanClaudeProjects, syncDiscovered, TranscriptLocator, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { fillBranchFromCwd, outsideSessionsOn } from "./sessions/outside-sessions";
@@ -859,6 +859,8 @@ async function bootstrap(): Promise<void> {
       // 信箱（BTL-245）：hook 已经写出去的记成送达，排着的留在库里，等下次打开再送；投影删掉。
       mailbox.termExited(id);
       idleEvidence.forget(id);
+      // 巡检那一轮跟着进程走（BTL-279 第四轮复核）：终端退出就不再算，停下的记录也不留着。
+      patrolTurns.forget(sessions.head(id)?.id ?? id);
       // 合并后因为这个终端还在跑而没清理的 worktree：终端一退出就再试（设计文档 2026-10-26）。
       const exitedHead = sessions.head(id);
       const exitedTicket = exitedHead?.ticketKey ?? null;
@@ -1611,7 +1613,11 @@ async function bootstrap(): Promise<void> {
       if (h?.userEndedAt != null) sessions.setUserEnded(h.id, null);
       resumer?.opened(termId);
     },
-    hidden: (id) => hibernator?.forget(id),
+    hidden: (id) => {
+      hibernator?.forget(id);
+      // 移走的 session 不再留巡检的记录（BTL-279 第四轮复核）。
+      patrolTurns.forget(sessions.head(id)?.id ?? id);
+    },
     recordEvent,
     log: logger,
   });
@@ -2244,7 +2250,7 @@ async function bootstrap(): Promise<void> {
       return sessions.listFeatureCoordinators(h.featureId).find((x) => x.id !== h.id && x.coordinator && x.replacedBy === null && !x.dismissed && gateTerm(x.id) !== null)?.id ?? null;
     },
     delivered: (m) => {
-      if (m.kind === "patrol") patrolTurns.delivered(sessions.head(m.toSession)?.id ?? m.toSession, m.deliveredAt ?? Date.now());
+      patrolTurns.messageDelivered(sessions.head(m.toSession)?.id ?? m.toSession, m);
       resumer?.delivered(m);
     },
     notify,
@@ -4142,8 +4148,15 @@ async function bootstrap(): Promise<void> {
       // 答的是「调用的这个总控现在发一条会怎样」（BTL-279）：和送信时同一个判断（mailboxControls）。epic 下列出的别的协调者、
       // 调用方不是它的总控时照常算（用户点 × 关的就是 ended_by_user）（BTL-279 second review）。
       // 调用方在做巡检那一轮：它发的不拉起用户关掉的（BTL-279 复核建议 3），答「用户结束了」。
-      wakeState: (id, caller) => (isHibernated(id) ? "hibernated"
-        : (resumer?.status(id, { asController: mailboxControls(caller, id) && !(caller !== null && patrolTurns.active(sessions.head(caller)?.id ?? caller)) }) ?? "not_managed")),
+      wakeState: (id, caller) => {
+        const r = resumer;
+        return wakeStateFor(id, caller, {
+          hibernated: isHibernated,
+          controls: mailboxControls,
+          patrolling: (c) => patrolTurns.active(sessions.head(c)?.id ?? c),
+          status: r ? (x, o) => r.status(x, o) : null,
+        });
+      },
       endHibernated: (id) => {
         const h = sessions.get(id);
         hibernator?.forget(id, "ended by end_session");
@@ -4450,8 +4463,7 @@ if (process.argv.includes("--smoke")) {
         return;
       }
       // 数据比程序新、迁移顺序对不上、备份失败：给一句能看懂的话，不贴调用栈。
-      const text = e instanceof NewerDatabaseError || e instanceof DatabaseBackupError || e instanceof MigrationOrderError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
-      dialog.showErrorBox(M().startupFailed, text);
+      dialog.showErrorBox(M().startupFailed, startupErrorText(e));
       app.exit(1);
     });
 }
