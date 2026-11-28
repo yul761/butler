@@ -461,6 +461,75 @@ describe("checking the order against the schema version `from` should have (BTL-
     expect(() => checkMigrationOrder(db, poison, 2, 4)).toThrow(/no_such_function/);
   });
 
+  it("the real migrations: upgrading normally from every version never builds the simulated schema (eighth review suggestion 1)", () => {
+    const db = new DatabaseSync(":memory:");
+    const simulatedAt: number[] = [];
+    for (let from = 0; from <= MIGRATIONS.length; from++) {
+      checkMigrationOrder(db, MIGRATIONS, from, MIGRATIONS.length, () => simulatedAt.push(from));
+      if (from < MIGRATIONS.length) migrate(db, from + 1);
+    }
+    expect(simulatedAt).toEqual([]);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: MIGRATIONS.length });
+    db.close();
+    // 回调本身是通的：v63 的库已经有 attempts（像 4.3.0 测试版本），检查最后一步就会建一次模拟库，然后拦下。
+    const branch = new DatabaseSync(":memory:");
+    migrate(branch);
+    branch.exec(`PRAGMA user_version = ${M}`);
+    const sims: number[] = [];
+    expect(() => checkMigrationOrder(branch, MIGRATIONS, M, MIGRATIONS.length, () => sims.push(1))).toThrow(MigrationOrderError);
+    expect(sims).toEqual([1]);
+    branch.close();
+  });
+
+  it("an index a pending step creates (no IF NOT EXISTS) that is already there, though version `from` should not have it: refuses before any step with the index wording, in both languages; one there at `from` or created IF NOT EXISTS is fine (eighth review suggestion 2)", () => {
+    const withIndex = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE v (a INTEGER);", "CREATE UNIQUE INDEX t_a ON t (a);"];
+    try {
+      for (const [locale, words] of [["zh", /第 4 步要建的索引已经在了.*没有接着升级/], ["en", /the indexes step 4 creates are already there.*did not upgrade any further/]] as const) {
+        setLang(locale);
+        const db = new DatabaseSync(":memory:");
+        db.exec("CREATE TABLE t (a INTEGER); CREATE TABLE u (a INTEGER); CREATE UNIQUE INDEX t_a ON t (a); PRAGMA user_version = 2;");
+        let e: unknown;
+        try {
+          migrate(db, undefined, withIndex);
+        } catch (x) {
+          e = x;
+        }
+        expect(e).toBeInstanceOf(MigrationOrderError);
+        expect([(e as MigrationOrderError).found, (e as MigrationOrderError).index, (e as MigrationOrderError).what]).toEqual([2, 3, "index"]);
+        expect((e as Error).message).toMatch(words);
+        // 第 3 步（建 v）没提交。
+        expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+        expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'v'").get()).toBeUndefined();
+        db.close();
+      }
+    } finally {
+      setLang("zh");
+    }
+    // 只有版本 from 之前的步骤建过这个名字才放过：待跑的前一步也建它，不算。
+    const pendingToo = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE INDEX t_a ON t (a); DROP INDEX t_a;", "CREATE INDEX t_a ON t (a);"];
+    const db1 = new DatabaseSync(":memory:");
+    db1.exec("CREATE TABLE t (a INTEGER); CREATE TABLE u (a INTEGER); CREATE INDEX t_a ON t (a); PRAGMA user_version = 2;");
+    expect(() => migrate(db1, undefined, pendingToo)).toThrow(MigrationOrderError);
+    expect(db1.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    // 版本 2 本来就有这个索引：重建表把它删了再建回来（像 v57 的 memory_samples_at），不报，也不模拟。名字不分大小写。
+    const legit = ["CREATE TABLE t (a INTEGER); CREATE INDEX T_a ON t (a);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE t_new (a INTEGER); DROP TABLE t; ALTER TABLE t_new RENAME TO t;", "CREATE INDEX t_A ON t (a);"];
+    const ok = new DatabaseSync(":memory:");
+    for (let i = 0; i < 2; i++) ok.exec(legit[i]);
+    ok.exec("PRAGMA user_version = 2");
+    const okSims: number[] = [];
+    checkMigrationOrder(ok, legit, 2, 4, () => okSims.push(1));
+    expect(okSims).toEqual([]);
+    expect(migrate(ok, undefined, legit)).toBe(4);
+    // 带 IF NOT EXISTS 的已经在了也能跑：不查，也不模拟。
+    const ine = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE INDEX IF NOT EXISTS t_a ON t (a);"];
+    const db2 = new DatabaseSync(":memory:");
+    db2.exec("CREATE TABLE t (a INTEGER); CREATE INDEX t_a ON t (a); PRAGMA user_version = 2;");
+    const sims: number[] = [];
+    checkMigrationOrder(db2, ine, 2, 3, () => sims.push(1));
+    expect(sims).toEqual([]);
+    expect(migrate(db2, undefined, ine)).toBe(3);
+  });
+
   it("only checks up to the target (surviving mutant M11): a column a later step adds being there already does not stop migrate(db, target)", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(list[0]);

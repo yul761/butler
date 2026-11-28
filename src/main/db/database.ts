@@ -181,6 +181,10 @@ export function migrate(db: Db, target?: number, list: readonly string[] = MIGRA
 
 /** 迁移里新建的表（CREATE TABLE [IF NOT EXISTS] 后面的名字；TEMP 表不在库里留下，不算）。 */
 const CREATE_TABLE = /\bCREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+["'`[]?(\w+)/gi;
+/** 迁移里新建的索引（CREATE [UNIQUE] INDEX 后面的名字）。带 IF NOT EXISTS 的已经在了也照样能跑，不算（第八轮复核建议 2）。 */
+const CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS\b)["'`[]?(\w+)/gi;
+/** 任何写法的 CREATE INDEX 后面的名字（看版本 from 之前的迁移有没有建过这个名字）。 */
+const ANY_CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`[]?(\w+)/gi;
 
 /**
  * 预检（BTL-279 第六、七轮）：从 from 升到 to 之前，一步都还没提交时，先查这份数据是不是被迁移顺序不同的版本动过。
@@ -190,14 +194,34 @@ const CREATE_TABLE = /\bCREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+["'`[]?(\w+)/g
  *（第七轮复核：#109 先合时它重建 session_messages，按 DDL 跳过这张表会漏掉 4.3.0 测试版本加过的 attempts 三列，
  * 重建把它们丢掉、BTL-270 永远不跑）。正常升级时库里没有这种列和表，不跑模拟。
  * 以前有过、被后面的步骤删掉再加回来的列和表，版本 from 时本来就有，不误报。
+ * 不带 IF NOT EXISTS 的 CREATE INDEX 要建的索引也一样查（第八轮复核建议 2），但只查 list[0..from) 里从没建过的名字：
+ * 重建表的迁移 DROP TABLE 会带走索引、再 CREATE INDEX 同名的建回来（v57 重建 memory_samples 和 memory_samples_at），
+ * 不先筛一下，从 v30–v56 正常升级的库每次都要跑一遍模拟。分支版本新加的索引都是新名字，照样查得到。
+ *
+ * 已知限制（查不到的写法，第八轮复核）：
+ * - ALTER TABLE … RENAME TO 的目标已经在了；不是 addColumns 写的普通 ALTER TABLE … ADD COLUMN，要加的列已经在了。
+ *   这两种照旧在那一步报 SQLite 自己的错、回滚那一步，前面的步骤已经提交了。
+ * - CREATE VIRTUAL TABLE；带 main. 之类库名前缀的表名、索引名。
+ * - 分支版本建了一个 list[0..from) 里建过、后来又删掉的同名索引。
+ * - 只查已经在了的，不查缺了的（比如开过一个多了迁移的分支版本，再用没合那个分支的版本打开）：另开 ticket。
+ * - 运行时建的表不在模拟里：conv_fts（conv-repo.ts 建的 FTS5 虚表）和它的影子表 conv_fts_data、conv_fts_idx 等。
+ *   以后哪条迁移要用 CREATE TABLE 建同名的表，正常升级上来的库也会被误报成顺序不对。
+ * onSimulate 只给测试用：每建一次模拟库调一次（守着「正常升级不建模拟库」）。
  */
-export function checkMigrationOrder(db: Db, list: readonly string[], from: number, to: number): void {
+export function checkMigrationOrder(db: Db, list: readonly string[], from: number, to: number, onSimulate?: () => void): void {
   const colsOf = (d: Db, t: string): Set<string> => new Set((d.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((r) => r.name.toLowerCase()));
-  const hasTable = (d: Db, t: string): boolean => d.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE").get(t) !== undefined;
+  const has = (d: Db, type: "table" | "index", name: string): boolean =>
+    d.prepare("SELECT 1 FROM sqlite_master WHERE type = ? AND name = ? COLLATE NOCASE").get(type, name) !== undefined;
   const have = new Map<string, Set<string>>();
+  let indexedBefore: Set<string> | undefined;
+  const indexCreatedBefore = (name: string): boolean => {
+    indexedBefore ??= new Set(list.slice(0, from).flatMap((sql) => [...sql.matchAll(ANY_CREATE_INDEX)].map((m) => m[1].toLowerCase())));
+    return indexedBefore.has(name.toLowerCase());
+  };
   let expected: DatabaseSync | undefined;
   const expectedDb = (): DatabaseSync => {
     if (!expected) {
+      onSimulate?.();
       expected = new DatabaseSync(":memory:");
       // 重建表的迁移要 DROP 被外键指着的表：内存库里没有数据，关掉外键照着跑就行。
       expected.exec("PRAGMA foreign_keys = OFF");
@@ -208,8 +232,11 @@ export function checkMigrationOrder(db: Db, list: readonly string[], from: numbe
   try {
     for (let i = from; i < to; i++) {
       if (!list[i].startsWith(CHECKED_ADD_COLUMNS)) {
-        for (const m of list[i].matchAll(CREATE_TABLE)) {
-          if (hasTable(db, m[1]) && !hasTable(expectedDb(), m[1])) throw new MigrationOrderError(from, i, undefined, "table");
+        for (const [re, type] of [[CREATE_TABLE, "table"], [CREATE_INDEX, "index"]] as const) {
+          for (const m of list[i].matchAll(re)) {
+            if (!has(db, type, m[1]) || (type === "index" && indexCreatedBefore(m[1]))) continue;
+            if (!has(expectedDb(), type, m[1])) throw new MigrationOrderError(from, i, undefined, type);
+          }
         }
         continue;
       }
@@ -231,9 +258,12 @@ export function checkMigrationOrder(db: Db, list: readonly string[], from: numbe
 /** addColumns 生成的那一行一条 ALTER TABLE … ADD COLUMN（名字只认 \\w）。 */
 const ADD_COLUMN = /^ALTER TABLE (\w+) ADD COLUMN (\w+)\s+[^;\n]+;$/;
 
+/** MigrationOrderError 说的是哪种已经在了：列、表还是索引。 */
+export type MigrationOrderWhat = "column" | "table" | "index";
+
 /**
- * 迁移顺序和这份数据走过的不一样（4.3.0 复核）：数据版本 found 还没到第 index+1 条，它加的列却已经在了，说明装过把这条排在更前面的
- * 测试版本。那个版本在这个位置跑的是这条，现在排在它前面的别的迁移这份数据就没跑过；接着升级会悄悄跳过它们，之后查询才出错。
+ * 迁移顺序和这份数据走过的不一样（4.3.0 复核）：数据版本 found 还没到第 index+1 条，它要加的列、要建的表或索引（what）却已经在了，
+ * 说明装过把这条排在更前面的测试版本（表是第七轮、索引是第八轮加的，见 checkMigrationOrder）。那个版本在这个位置跑的是这条，现在排在它前面的别的迁移这份数据就没跑过；接着升级会悄悄跳过它们，之后查询才出错。
  * 宁可起不来：告诉用户换回装测试版本之前的备份。
  */
 export class MigrationOrderError extends Error {
@@ -248,8 +278,8 @@ export class MigrationOrderError extends Error {
     readonly found: number,
     readonly index: number,
     readonly hint?: { backup: string } | { dir: string; copy: string | null; partial?: boolean },
-    /** 已经在了的是这一步要加的列，还是要建的表（第七轮，总控定：#109、#107 新建的表也查）。 */
-    readonly what: "column" | "table" = "column",
+    /** 已经在了的是这一步要加的列、要建的表（第七轮，总控定：#109、#107 新建的表也查），还是要建的索引（第八轮）。 */
+    readonly what: MigrationOrderWhat = "column",
   ) {
     super(
       M().migrationOrder(found, index + 1, what) +

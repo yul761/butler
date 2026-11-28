@@ -134,6 +134,31 @@ describe("PatrolTurns (BTL-279 review suggestion 3)", () => {
     expect(t.active("bt")).toBe(false);
   });
 
+  it("after the clock was turned back, the next stop moves the end mark back to now, so the following patrol opens a turn again (eighth review suggestion 4)", () => {
+    let now = 10_000;
+    const t = new PatrolTurns(() => now);
+    t.stopped("bt");
+    // 时钟往回拨了一小时：这一次巡检送到的时间比上次停下早，还是不算（停下以后没有新的一轮）。
+    now = 10_000 - 3600_000;
+    t.delivered("bt", now + 5);
+    expect(t.active("bt")).toBe(false);
+    // 它再停一次，停下的时间就按现在的钟算，不再沿用拨回去之前那个更晚的值。
+    now += 60;
+    t.stopped("bt");
+    now += 60;
+    t.delivered("bt", now);
+    expect(t.active("bt")).toBe(true);
+  });
+
+  it("a user delivery stamped later than now ends the turn no later than now, so a patrol typed in right after still opens one (eighth review suggestion 4)", () => {
+    let now = 1000;
+    const t = new PatrolTurns(() => now);
+    t.messageDelivered("bt", { kind: "user", via: "hook", deliveredAt: 5000 });
+    now = 1001;
+    t.messageDelivered("bt", { kind: "patrol", via: "input", deliveredAt: 1001 });
+    expect(t.active("bt")).toBe(true);
+  });
+
   it("forget drops both the open turn and the last stop of that head only (fourth review: nothing stays around after the terminal exits)", () => {
     const t = new PatrolTurns(() => 100);
     t.delivered("a", 100);

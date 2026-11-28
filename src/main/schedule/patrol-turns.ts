@@ -50,7 +50,8 @@ export class PatrolTurns {
 
   private end(headId: string, at: number): void {
     this.since.delete(headId);
-    this.endedAt.set(headId, Math.max(at, this.endedAt.get(headId) ?? -Infinity));
+    // 不超过 now（第八轮复核建议 4）：时钟往回拨过，或者 deliveredAt 比 now 晚时，不能把之后的巡检都挡在门外，回拨以后自己恢复。
+    this.endedAt.set(headId, Math.min(Math.max(at, this.endedAt.get(headId) ?? -Infinity), this.now()));
   }
 
   /** 这个 head 的终端退出了（或者 session 被移走）：两份记录都清掉。 */
