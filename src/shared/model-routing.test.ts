@@ -4,7 +4,7 @@ import { TASK_IDS, TASKS, effectiveRoute, isModelName, isTaskId, routingConfigur
 describe("task registry", () => {
   it("registers every task id of the master design table with its tier and policy", () => {
     const table: Record<string, [string, string]> = {
-      needs_you: ["low", "fallback"], stuck_judge: ["low", "fallback"], conv_qa: ["low", "fallback"],
+      needs_you: ["low", "fallback"], stuck_judge: ["low", "fallback"], conv_qa: ["low", "fallback"], conv_relay: ["low", "fallback"],
       handoff: ["session", "wait"], feature_summary: ["session", "wait"],
       handoff_refresh: ["mid", "fallback"],
       lesson_analyze: ["mid", "fallback"], lesson_enrich: ["mid", "fallback"], lesson_cluster: ["mid", "fallback"],

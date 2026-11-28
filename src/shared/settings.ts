@@ -102,6 +102,11 @@ export const EDITABLE_SETTINGS = [
   "updateCheckEnabled",
   // BTL-256：Shipherd 重启后把上次退出时在工作、在等回复的、总控管的 session 自动恢复。
   "autoResumeAfterRestart",
+  // BTL-272 信息流转：每轮对话结束后自动抽要点、写记忆、发给要知道的 session；关掉自动执行时状态变化一律等你确认。都默认开。
+  "flowExtract",
+  "flowAutoApply",
+  // BTL-272：最近 24 小时最多问模型几次（1–10000 的整数，默认 300）。到了就停，「现在」页上说一声。
+  "flowDailyAsks",
 ] as const;
 
 export type EditableSettingKey = (typeof EDITABLE_SETTINGS)[number];

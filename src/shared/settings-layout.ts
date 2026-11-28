@@ -50,6 +50,9 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   showOutsideSessions: basic,
   updateCheckEnabled: basic,
   autoResumeAfterRestart: basic,
+  flowExtract: basic,
+  flowAutoApply: basic,
+  flowDailyAsks: basic,
   // 自动化（tab id 仍是 features）：全局档位
   automationLevel: { tab: "features" },
   // 高级 › 定时与 handoff

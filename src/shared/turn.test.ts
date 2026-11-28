@@ -64,6 +64,9 @@ describe("noticeNeedsYou", () => {
     expect(noticeNeedsYou(intake("queued"))).toBe(false);
     // 总控已代答（BTL-269 A2）：只是告诉你一声，可以改，但不算等你。
     expect(noticeNeedsYou({ kind: "behalf_answered", askId: 1, question: "q", answer: "a", by: "c", at: 0, target: { page: "shipherd", sessionId: null }, title: null })).toBe(false);
+    // 信息流转（BTL-272）：等确认的要你动手；已替你同步的只是提示。
+    expect(noticeNeedsYou({ kind: "flow_proposal", actionId: 1, label: "x", source: "s", text: "t", at: 1 })).toBe(true);
+    expect(noticeNeedsYou({ kind: "flow_synced", actionId: 1, label: "x", source: "s", at: 1 })).toBe(false);
   });
 });
 

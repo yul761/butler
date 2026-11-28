@@ -1,6 +1,8 @@
 import type { AvailabilityView, LimitHit } from "../../shared/availability";
 import type { NowNotice, NowTarget } from "../../shared/types";
+import type { FlowLeftovers } from "../../shared/infoflow";
 import { costBreakerText } from "./cost-view";
+import { retryRequest } from "./close-ticket-outcome";
 import { stackNoticeText } from "./stack-view";
 import { btNoticeText } from "./backtest-view";
 import { intakeNoticeActions, intakeNoticeText } from "./intake-view";
@@ -24,7 +26,7 @@ export function limitLine(l: LimitHit, S: UiStrings, now: number): string {
   return l.resetsAt === null ? S.limitNoReset(kind) : S.limitUntil(kind, resetClock(l.resetsAt, now));
 }
 
-export type NoticeAction = "correct" | "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments" | "stacks" | "undo" | "checks" | "dismiss" | "intake" | "intakeStart" | "intakeSkip" | "intakeParallel";
+export type NoticeAction = "correct" | "resume" | "health" | "lessons" | "open" | "retry" | "routing" | "resend" | "raise" | "comments" | "stacks" | "undo" | "checks" | "dismiss" | "intake" | "intakeStart" | "intakeSkip" | "intakeParallel" | "flowApply" | "flowReject" | "flowRetry" | "flowAccept";
 
 /** CI 结论为什么没递出去，一句人话（工作流 W）。认不得的原样带上。 */
 export function ciReasonText(reason: string, S: UiStrings): string {
@@ -77,7 +79,28 @@ export function noticeText(n: NowNotice, S: UiStrings, now: number): { text: str
     case "intake": return { text: intakeNoticeText(n.item, S), actions: intakeNoticeActions(n.item) };
     // 总控替你答了（BTL-269 A2）：显示答案；可以改、打开那个 session、知道了。
     case "behalf_answered": return { text: S.noticeBehalf(n.by, n.question, n.answer, n.title), actions: ["correct", "open", "dismiss"] };
+    // 信息流转（BTL-272）：等确认的照做 / 不用；替你同步了的撤销 / 知道了。
+    case "flow_proposal": return { text: S.infoflow.proposal(n.source, n.label), actions: ["flowApply", "flowReject"] };
+    case "flow_synced": return { text: S.infoflow.synced(n.label), actions: ["undo", "dismiss"] };
+    // 今天问模型的次数到上限了：先停着，到点自己接着。
+    case "flow_capped": return { text: S.infoflow.capped(n.used, n.cap, n.resumesAt === null ? null : resetClock(n.resumesAt, now), n.dropped), actions: [] };
+    // 关了、还有 PR 没关上：不算同步完，逐条写原因；重试剩下的、就这样、撤销（重新打开）。
+    // 关的时候别人先关了 ticket（closedMeanwhile）：写明是别人关的，不给撤销（ticket 不是这里关的）。
+    case "flow_partial": {
+      const left = flowLeftoversText(n.leftovers, S);
+      const text = n.leftovers.closedMeanwhile ? S.infoflow.partialClosedMeanwhile(n.label, left) : S.infoflow.partial(n.label, left);
+      const undo: NoticeAction[] = n.leftovers.closedMeanwhile ? [] : ["undo"];
+      return { text, actions: retryRequest(n.leftovers) ? ["flowRetry", "flowAccept", ...undo] : ["flowAccept", ...undo] };
+    }
   }
+}
+
+/** 没处理完的逐条：「https://…/pull/41（gh 出错：…）」「session 1a2b3c4d（…）」。 */
+export function flowLeftoversText(l: FlowLeftovers, S: UiStrings): string {
+  return [
+    ...l.prErrors.map((p) => S.infoflow.leftPr(p.url, S.tc.prKind[p.kind], p.error)),
+    ...l.sessionErrors.map((e) => S.infoflow.leftSession(e.id.slice(0, 8), e.error)),
+  ].join(S.infoflow.listSep);
 }
 
 export type AvailabilityTone = "ok" | "warn" | "danger" | "muted";

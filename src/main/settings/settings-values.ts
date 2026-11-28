@@ -251,6 +251,8 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "showOutsideSessions":
     case "updateCheckEnabled":
     case "autoResumeAfterRestart":
+    case "flowExtract":
+    case "flowAutoApply":
     case "checksEnabled":
     case "memoryMonitor":
     case "backgroundPriority":
@@ -315,6 +317,11 @@ export function normalizeSetting(key: EditableSettingKey, value: string): string
     case "memoryPressureFreePercent": {
       const t = value.trim();
       if (!/^\d{1,2}$/.test(t) || Number(t) < 1 || Number(t) > MAX_PRESSURE_PERCENT) throw new SettingError(M().memoryPressureFreePercent);
+      return String(Number(t));
+    }
+    case "flowDailyAsks": {
+      const t = value.trim();
+      if (!FLOW_DAILY_ASKS_RE.test(t) || Number(t) < 1 || Number(t) > MAX_FLOW_DAILY_ASKS) throw new SettingError(M().flowDailyAsks);
       return String(Number(t));
     }
     case "refreshThresholdTokens": {
@@ -458,6 +465,16 @@ export function scheduleConfig(s: SettingsRepo): ScheduleConfig {
 /** 记忆开关（memoryEnabled）：只有明确存成 "0" 才算关（默认开）。所有读这个开关的地方都用它。 */
 export function memoryOn(s: Pick<SettingsRepo, "get">): boolean {
   return s.get("memoryEnabled") !== "0";
+}
+
+const FLOW_DAILY_ASKS_RE = /^\d{1,5}$/;
+const MAX_FLOW_DAILY_ASKS = 10_000;
+
+/** 抽要点最近 24 小时最多问模型几次（flowDailyAsks，BTL-272）：1–10000；存的值不合法时用默认的 300。 */
+export function flowDailyAsks(s: Pick<SettingsRepo, "get">): number {
+  const t = s.get("flowDailyAsks").trim();
+  const n = Number(t);
+  return FLOW_DAILY_ASKS_RE.test(t) && n >= 1 && n <= MAX_FLOW_DAILY_ASKS ? n : Number(SETTING_DEFAULTS.flowDailyAsks);
 }
 
 /** 换新阈值：0 或者最多 7 位的整数 token 数（大于任何模型的上下文）。 */

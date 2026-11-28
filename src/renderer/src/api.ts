@@ -1,3 +1,4 @@
+import type { FlowItemView, FlowScope, FlowTurnText } from "../../shared/infoflow";
 import type { AutomationLevel, AutomationState } from "../../shared/automation";
 import type { TicketGlance } from "../../shared/ticket-glance";
 import type { CloseLeftoversResult, ClosePreview } from "./close-ticket-outcome";
@@ -350,4 +351,8 @@ export const api = {
   /** 总控对话区的汇报分页：before 是上一页最早一条汇报的 id（不是时间），不给是最新一页。 */
   inboxReports: (scope: InboxScope, o: { before?: number; limit: number }) => call<{ reports: InboxItemView[]; hasMore: boolean }>(IPC.inboxReports, scope, o),
   onForkChanged: (cb: (rootSessionId: string) => void) => window.shipherd.on(IPC.forkChanged, cb),
+  /** 信息流转（BTL-272）：要点列表、那一轮的原话、对同步的状态变化照做 / 不用 / 撤销 / 知道了。 */
+  infoflowList: (scope: FlowScope) => call<FlowItemView[]>(IPC.infoflowList, scope),
+  infoflowTurn: (turnId: number) => call<FlowTurnText>(IPC.infoflowTurn, turnId),
+  infoflowAct: (actionId: number, what: "apply" | "reject" | "undo" | "dismiss" | "retry" | "accept") => call<boolean>(IPC.infoflowAct, actionId, what),
 };

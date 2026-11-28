@@ -796,6 +796,17 @@ describe("Mailbox", () => {
     expect(w.repo.queued()).toHaveLength(2);
   });
 
+  it("wakes a closed session for an important fact only (BTL-272)", async () => {
+    const w = world();
+    w.add("z", true, false);
+    w.mb.send({ kind: "fact", from: "a", to: "z", featureId: 1, body: "顺带知道一下", meta: { item: 1 } });
+    await flushPromises();
+    expect(w.woken).toEqual([]);
+    w.mb.send({ kind: "fact", from: "a", to: "z", featureId: 1, body: "BTL-12 不做了", meta: { item: 2, wake: true } });
+    await flushPromises();
+    expect(w.woken).toEqual(["z"]);
+  });
+
   it("tells the delivered callback about each message it delivers (BTL-256)", async () => {
     const w = world();
     w.add("t1", true);

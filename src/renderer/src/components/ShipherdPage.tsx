@@ -7,6 +7,7 @@ import { S } from "../strings";
 import { defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
 import { Messages } from "./MessageList";
+import { InfoFlowSummary } from "./InfoFlow";
 import { ControlSplit } from "./ScopeParts";
 import { SessionArea, SessionButton, useSessionPanes } from "./WorkspaceParts";
 import { LIVE_SCOPES } from "../state-bus";
@@ -129,7 +130,7 @@ function ShipherdArea({ view, focusSession }: Props & { view: ShipherdView }) {
           scope={{ all: true }}
           rootSessionId={defaultConvRoot(view.sessions)}
           sessions={view.sessions.map((s) => ({ id: s.rootId, label: S.shipherdSession }))}
-          footer={<Messages scope={{ shipherd: true }} />}
+          footer={<><Messages scope={{ shipherd: true }} /><InfoFlowSummary scope={{ all: true }} /></>}
         />
       }
     />

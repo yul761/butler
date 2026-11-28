@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { EditableSettingKey } from "../../shared/settings";
 import { SettingsRepo } from "../db/settings-repo";
 import { memDb } from "../test-utils";
+import { FLOW_DAILY_ASKS } from "../../shared/infoflow";
+import { MAIN_STRINGS } from "../strings";
 import {
   auditRetentionDays, isLoopbackHost, checkBranchTemplateFits, normalizeBranchTemplate, normalizeFlag, normalizeSetting, normalizeTicketPattern, parseTime, parseToolList,
   parseWorkingDays, shipherdPatrolTime, idleCloseMinutes, sessionAdmission, refreshThreshold, scheduleConfig, SettingError, trackerTools,
-  hibernateEndWatchersOn, hibernateMinutes, hibernateOn, memoryPressureFreePercent, memoryPressureOn, sharedMcpOn,
+  flowDailyAsks, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, memoryPressureFreePercent, memoryPressureOn, sharedMcpOn,
 } from "./settings-values";
 
 describe("settings values", () => {
@@ -186,6 +188,28 @@ describe("Shipherd 总控 daily patrol time (BTL-190 5)", () => {
     // 存坏了当作关，不猜一个时间。
     s.set("shipherdPatrolTime", "garbage");
     expect(shipherdPatrolTime(s)).toBeNull();
+  });
+});
+
+describe("flowDailyAsks (BTL-272)", () => {
+  it("reads the daily cap with a default of FLOW_DAILY_ASKS, and falls back on a broken value", () => {
+    const s = new SettingsRepo(memDb());
+    expect(flowDailyAsks(s)).toBe(FLOW_DAILY_ASKS);
+    s.set("flowDailyAsks", "50");
+    expect(flowDailyAsks(s)).toBe(50);
+    for (const bad of ["", "abc", "0", "-5", "1.5", "10001", "1e3"]) {
+      s.set("flowDailyAsks", bad);
+      expect(flowDailyAsks(s), bad).toBe(FLOW_DAILY_ASKS);
+    }
+  });
+
+  it("accepts 1–10000 and rejects anything else, in both languages", () => {
+    expect(normalizeSetting("flowDailyAsks", " 120 ")).toBe("120");
+    expect(normalizeSetting("flowDailyAsks", "1")).toBe("1");
+    expect(normalizeSetting("flowDailyAsks", "10000")).toBe("10000");
+    for (const bad of ["0", "10001", "-1", "abc", "", "2.5"]) expect(() => normalizeSetting("flowDailyAsks", bad), bad).toThrow(SettingError);
+    expect(MAIN_STRINGS.zh.flowDailyAsks).toContain("10000");
+    expect(MAIN_STRINGS.en.flowDailyAsks).toContain("10000");
   });
 });
 

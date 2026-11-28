@@ -11,6 +11,7 @@ import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
 import { availabilityActionArg, boolArg, addRepoArg, CLOSE_RETRY_MAX, closeRetryArg, closeTicketArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { flowActArg, flowIdArg, flowScopeArg } from "./validate";
 import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 describe("memory IPC arguments", () => {
@@ -597,5 +598,17 @@ describe("closeTicketArg (BTL-270)", () => {
     expect(() => closeRetryArg({ sessionIds: ["a b"] })).toThrow();
     expect(() => closeRetryArg({ prUrls: "x" })).toThrow();
     expect(() => closeRetryArg(null)).toThrow();
+  });
+});
+
+describe("info flow args (BTL-272)", () => {
+  it("accepts a scope, an id and one of the four acts, and nothing else", () => {
+    expect(flowScopeArg({ all: true })).toEqual({ all: true });
+    expect(flowScopeArg({ featureId: 3 })).toEqual({ featureId: 3 });
+    for (const bad of [null, {}, { all: "yes" }, { featureId: -1 }, "all"]) expect(() => flowScopeArg(bad)).toThrow();
+    expect(flowIdArg(7)).toBe(7);
+    for (const bad of [0, -2, 1.5, "7", null]) expect(() => flowIdArg(bad)).toThrow();
+    for (const ok of ["apply", "reject", "undo", "dismiss"]) expect(flowActArg(ok)).toBe(ok);
+    for (const bad of ["delete", "", 1, null]) expect(() => flowActArg(bad)).toThrow();
   });
 });
