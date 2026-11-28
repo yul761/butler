@@ -518,11 +518,24 @@ function interactive() {
   /** /fake-nostop always 之后：每一轮都丢 Stop（BTL-279 review：回复的那一轮也没有 Stop）。 */
   let stopLost = false;
   const NOSTOP_FOOTER = ["  model: opus · ctx 41%", "  branch: main · +3 −1", "  cost: $0.42 today", "  PR #12 · CI green", "  ⏵⏵ accept edits on", "  ? for shortcuts"];
+  /**
+   * 空输入框：两条线按终端的宽度画（和 Claude Code 一样）。写死 60 字时，CI 的小屏幕上终端只有四十几列，线折成两行，
+   * 认不出输入框，屏幕证据就校正不了。
+   */
+  const emptyBox = () => {
+    const rule = "\u2500".repeat(Math.max(20, process.stdout.columns || 80));
+    return `${rule}\n> \n${rule}\n${NOSTOP_FOOTER.join("\n")}\n`;
+  };
+  /** 上一次画的是丢了 Stop 的空输入框：终端改了尺寸就按新宽度重画（Claude Code 改尺寸时也整屏重画）。 */
+  let boxShown = false;
+  process.stdout.on("resize", () => {
+    if (boxShown) out(emptyBox());
+  });
   /** 写完这一轮的回复、画出空输入框（下面六行状态栏），不跑 Stop。transcript 里的回复也没有 stop_reason。 */
   const endWithoutStop = (text) => {
     append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: null, usage: usage(), content: [{ type: "text", text }] } });
-    const rule = "\u2500".repeat(60);
-    out(`${text}\n${rule}\n> \n${rule}\n${NOSTOP_FOOTER.join("\n")}\n`);
+    out(`${text}\n${emptyBox()}`);
+    boxShown = true;
   };
   if (mcp) {
     try {
@@ -615,6 +628,7 @@ function interactive() {
       out("> ");
       return;
     }
+    boxShown = false;
     // 每条收到的输入都记一笔（JSON 字符串）：e2e 按顺序核对 Shipherd 往终端里输入了什么，屏幕上的早已滚走。
     log(`prompt ${JSON.stringify(line)}`);
     const step = scripted.get(line);
