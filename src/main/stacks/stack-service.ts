@@ -348,7 +348,12 @@ export class StackService {
     if (i.stackId) {
       const s = this.d.repo.get(i.stackId);
       if (!s || s.removedAt) return { ok: false, message: t.notFound };
+      const before = this.d.repo.layers(s.id).map((l) => l.id);
       this.d.repo.replaceLayers(s.id, layers);
+      const kept = new Set(this.d.repo.layers(s.id).map((l) => l.id));
+      // 移出栈的层（行删掉了）：内存里它的「被谁拦住」记录、它拦着别的层的记录一起清（层 id 以后可能被新加的层复用，heldBy 也会认出来，
+      // 这里只是不留着没人管的残留）
+      this.forgetHeld(before.filter((id) => !kept.has(id)));
       for (const l of this.d.repo.layers(s.id)) {
         const nl = layers.find((x) => x.branch === l.branch);
         if (nl && l.tipSha === null) this.d.repo.updateLayer(l.id, { tipSha: nl.tipSha ?? null, baseSha: nl.baseSha ?? null });
@@ -561,8 +566,10 @@ export class StackService {
   remove(stackId: number): StackActionResult {
     const s = this.d.repo.get(stackId);
     if (!s || s.removedAt) return { ok: false, message: T().errors.notFound };
+    const ids = this.d.repo.layers(stackId).map((l) => l.id);
     this.d.repo.remove(stackId);
     this.behindCache.delete(stackId);
+    this.forgetHeld(ids);
     this.changed();
     return { ok: true };
   }
@@ -576,10 +583,11 @@ export class StackService {
     if (!s || s.removedAt) return { ok: false, message: T().errors.notFound };
     if (!this.policyOf(s).autoRebase) return { ok: false, message: T().errors.autoRebaseOff };
     if (this.running.has(stackId)) return { ok: false, message: T().errors.busy };
-    // 手动就是确认（BTL-278）：上一次等确认的是 autosquash，这次也 autosquash；跑完把等着的强推推出去
+    // 手动就是确认（BTL-278）：上一次等确认的是 autosquash（或者因为关 ticket 推迟的是 autosquash），这次也 autosquash；
+    // 跑完把等着的强推推出去
     const lr = this.d.repo.lastRun(stackId);
     const asked = lr?.outcome === "needs_confirm" ? lr : null;
-    let run = await this.run(s, "manual", { autosquash: asked?.detail.autosquash === true });
+    let run = await this.run(s, "manual", { autosquash: asked?.detail.autosquash === true || this.deferredAutosquash(stackId) });
     if (run?.trigger === "manual") {
       this.patchRun(run.id, { actor: by, ...(asked ? { confirms: asked.id } : {}) });
       run = this.d.repo.run(run.id);
@@ -651,7 +659,12 @@ export class StackService {
     // 有一层的 ticket 关掉或归档了（PR 刚读过：合并了的不算）：整个栈这次不改写任何分支（BTL-278 复核：关 ticket 承诺它的分支
     // 不改写、不推、不开 PR；只改别的层的话，上面的层就接不到它上面了）。「现在」页点名那一层，要人把它移出栈
     const dead = open.filter((l) => !this.live(repo, l)).map((l) => l.branch);
-    if (dead.length > 0) return this.defer(stack, trigger, `${NOT_LIVE} ${dead.join(", ")}`, "deferred", { inputs: await this.inputsOf(stack) });
+    if (dead.length > 0) {
+      // 推迟的是 autosquash（自动的，或者手动确认的那种）：记下来，重新打开以后照样 autosquash（BTL-278 复核 N2）。
+      // 之前已经因为关 ticket 推迟过一次 autosquash（这次是别的触发、或者关掉的层变了）也带着，不然重开后 fixup 就不折了
+      const squash = o.autosquash === true || this.deferredAutosquash(stack.id);
+      return this.defer(stack, trigger, `${NOT_LIVE} ${dead.join(", ")}`, "deferred", { inputs: await this.inputsOf(stack), ...(squash ? { autosquash: true } : {}) });
+    }
     const engineLayers: EngineLayer[] = [];
     for (const l of open) {
       const tip = await revParse(repo, `refs/heads/${l.branch}`);
@@ -1324,6 +1337,8 @@ export class StackService {
       if (l.state !== "draft" || !l.prNumber) continue;
       // 只改 Shipherd 自己开的 draft（BTL-278）：用户自己开的 draft PR 的标题、正文不动
       if (stack.source !== "detected" && l.mode !== "draft") continue;
+      // ticket 关掉、归档了（或者分支不归它了）：它的 PR 也不碰（BTL-278 复核：autoRebase 关着时栈底合并，onMerged 照样来这里）
+      if (!this.live(stack.repoPath, l)) continue;
       const parent = all[i - 1];
       if (!parent) continue;
       const pr = await gh.prView(stack.repoPath, stack.repoSlug, l.prNumber);
@@ -1432,17 +1447,20 @@ export class StackService {
       const checkouts = await worktreeBranches(repo);
       const layers: ApplyLayer[] = [];
       const rows = this.d.repo.layers(stackId);
-      // 那次 run 改写过、现在已经不在栈里的层：不恢复（栈服务不再管它），说一声跳过了哪些（BTL-278 复核 P2）
-      const gone: string[] = [];
+      // 恢复备份也是改写：和 runLocked 一样，栈里有一层（没合并的，不只是那次 run 改写过的）的 ticket 关掉、归档了，整个栈都不动
+      // （BTL-278 复核 N9：那次只改写了 d、之后 b 关了，原来照样改写、强推 d）
+      const dead = rows.filter((r) => r.state !== "merged" && !this.live(repo, r)).map((r) => r.branch);
+      if (dead.length > 0) return { ok: false, message: t.notLive(dead.join(", ")) };
+      // 那次 run 改写过、现在已经不在栈里（栈服务不再管它，BTL-278 复核 P2）或者已经合并了的层（复核 N1：改回备份它的本地就和
+      // 远端分叉了，又不会再推）：不恢复，说一声跳过了哪些
+      const skipped: string[] = [];
       for (const l of from.detail.layers ?? []) {
         if (!l.backupRef) continue;
         const row = rows.find((r) => r.branch === l.branch);
-        if (!row) {
-          gone.push(l.branch);
+        if (!row || row.state === "merged") {
+          skipped.push(l.branch);
           continue;
         }
-        // 关掉或归档的 ticket 的分支不改写（BTL-278 复核），恢复备份也是改写。只看还在栈里、没合并的层
-        if (row.state !== "merged" && !this.live(repo, row)) return { ok: false, message: t.notLive(l.branch) };
         const backup = await revParse(repo, l.backupRef);
         const cur = await revParse(repo, `refs/heads/${l.branch}`);
         if (!backup || cur !== l.newTip) return { ok: false, message: t.restoreMoved(l.branch) };
@@ -1452,12 +1470,12 @@ export class StackService {
           remoteTip: await this.layerRemoteTip(stack, l.branch), remoteOkSha: rows.find((r) => r.branch === l.branch)?.remoteOkSha ?? null,
         });
       }
-      // 改写过的层都不在栈里了：没有能恢复的
-      if (layers.length === 0 && gone.length > 0) return { ok: false, message: t.restoreSkipped(gone.join(", ")) };
+      // 改写过的层都合并了或者不在栈里了：没有能恢复的
+      if (layers.length === 0 && skipped.length > 0) return { ok: false, message: t.restoreSkipped(skipped.join(", ")) };
       const runId = this.d.repo.startRun(stackId, "restore", null);
       const res = await applyTips({
         repo, stackId, runId, layers, backup: false, sessionBusy: (p) => this.d.sessionBusy(p),
-        // layers 里只有还在栈里的层（上面跳过了别的），rows 里一定找得到
+        // layers 里只有还在栈里、没合并的层（上面跳过了别的），rows 里一定找得到
         push: this.pusher((l, done) => this.forcePush(stack, l, rows.find((r) => r.branch === l.branch)!, null, done)), log: (m) => this.d.log(m),
       });
       if (res.kind === "deferred") {
@@ -1475,7 +1493,7 @@ export class StackService {
         if (row?.ticketKey) this.d.withdraw?.(mailTo(stack, { ...row, ticketKey: row.ticketKey }), "verify");
       }
       this.d.repo.finishRun(runId, { outcome: "restored", detail: { layers: res.layers, pushed: res.pushed, unpushed: res.unpushed, restoredFrom: from.id } });
-      return gone.length > 0 ? { ok: true, message: t.restoreSkipped(gone.join(", ")) } : { ok: true };
+      return skipped.length > 0 ? { ok: true, message: t.restoreSkipped(skipped.join(", ")) } : { ok: true };
     } finally {
       this.release(stackId);
       this.changed();
@@ -1527,7 +1545,7 @@ export class StackService {
           const trigger = await this.dueTrigger(s, p, fetched, tipOf);
           if (trigger) {
             if (trigger === "daily") this.d.repo.updateStack(s.id, { lastDailyAt: now });
-            await this.run(s, trigger);
+            await this.run(s, trigger, this.rerunOpts(s, trigger));
           } else if (p.autosquash) {
             await this.maybeAutosquash(s);
           }
@@ -1561,8 +1579,19 @@ export class StackService {
         if (this.d.repo.run(lr.id)?.detail.delivered) this.patchRun(lr.id, { inputs: await this.inputsOf(s) });
         continue;
       }
-      if ((await this.dueTrigger(s, p, false)) === "layer_commits") await this.run(s, "layer_commits");
+      if ((await this.dueTrigger(s, p, false)) === "layer_commits") await this.run(s, "layer_commits", this.rerunOpts(s, "layer_commits"));
     }
+  }
+
+  /** 上一次 run 是因为 ticket 关掉推迟的 autosquash（自动的，或者手动确认的那种）。 */
+  private deferredAutosquash(stackId: number): boolean {
+    const lr = this.d.repo.lastRun(stackId);
+    return lr?.outcome === "deferred" && lr.reason?.startsWith(NOT_LIVE) === true && (lr.trigger === "autosquash" || lr.detail.autosquash === true);
+  }
+
+  /** dueTrigger 给出的触发怎么跑：重跑的是推迟了的 autosquash 时带上 autosquash（BTL-278 复核 N2：原来记一条 autosquash:noop，fixup 没折）。 */
+  private rerunOpts(s: StackRow, trigger: StackTrigger): RunOpts {
+    return trigger === "autosquash" || this.deferredAutosquash(s.id) ? { autosquash: true } : {};
   }
 
   /** 一个 ref 现在指向的提交。tick 里传一次读好的（tipsOf），别处默认现查。 */
@@ -1572,9 +1601,10 @@ export class StackService {
     const lr = this.d.repo.lastRun(s.id);
     // 因为 ticket 关掉推迟的：每层都又 live 了（ticket 重新打开、关掉的层移出了栈），马上按那次的触发重跑，不等退避，也不等新的触发
     // （BTL-278 复核 P7：daily、手动那次推迟以后没有别的触发，lr 一直停在 deferred，补推、提升都不做）。手动的那次按自动的重跑：
-    // 没人在点，要改写正在 review 的 PR 时照样先问
+    // 没人在点，要改写正在 review 的 PR 时照样先问。（恢复备份被拒时不记 run，不会走到这里。）推迟的是 autosquash 的话，
+    // 调用方按 rerunOpts 带上 autosquash
     if (lr?.outcome === "deferred" && lr.reason?.startsWith(NOT_LIVE) === true && open.every((l) => this.live(s.repoPath, l))) {
-      return lr.trigger === "manual" || lr.trigger === "restore" ? "layer_commits" : lr.trigger;
+      return lr.trigger === "manual" ? "layer_commits" : lr.trigger;
     }
     // 上次读不到 PR：退避着再读（同一条推迟会合并成一行，repeats 是连着读不到的次数）
     if (lr?.outcome === "deferred" && lr.reason?.startsWith(PRS_UNREADABLE)) {
@@ -1665,6 +1695,8 @@ export class StackService {
     const due: { l: LayerRow; local: string; remote: string | null }[] = [];
     for (const l of this.d.repo.layers(s.id)) {
       if (l.state === "merged" || l.remoteOkSha === null) continue;
+      // ticket 关掉、归档了（或者分支不归它了）：forcePush 反正不推，不用每轮查标记、读 PR（BTL-278 复核 N4）
+      if (!this.live(s.repoPath, l)) continue;
       if (!confirmed && (l.state === "ready" || l.conflictKey)) continue;
       if (!this.d.external.allowed("force_push", { repoSlug: s.repoSlug, ticketKey: l.ticketKey })) continue;
       const local = await revParse(s.repoPath, `refs/heads/${l.branch}`);
@@ -1748,8 +1780,14 @@ export class StackService {
    */
   private pushedOut(layerId: number): void {
     this.dropMarkers(layerId);
-    this.heldOf.delete(layerId);
-    for (const [k, h] of this.heldOf) if (h.byId === layerId) this.heldOf.delete(k);
+    this.forgetHeld([layerId]);
+  }
+
+  /** 这些层的「被谁拦住」记录，和它们拦着别的层的记录，都清掉（推上去了；或者层的行删掉了：移出栈、栈不再管，BTL-278 复核）。 */
+  private forgetHeld(ids: readonly number[]): void {
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    for (const [k, h] of this.heldOf) if (gone.has(k) || gone.has(h.byId)) this.heldOf.delete(k);
   }
 
   /**
