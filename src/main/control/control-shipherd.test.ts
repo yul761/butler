@@ -24,7 +24,7 @@ import type { TicketPr } from "../db/ticket-prs-repo";
 import { noPreReview, type PreReviewBadge, type PreReviewQueueItem, type PreReviewTicketStatus, type PreReviewView } from "../../shared/prereview";
 
 /** Shipherd 总控（BTL-190 第 5 点）：三个 feature（一个归档了）、四个 ticket（一个归档了）和各种 session。 */
-function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"]; assessment?: boolean; preReviewOps?: PreReviewOps } = {}) {
+function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admission"]; noMetrics?: boolean; stacks?: ControlHandlerDeps["stacks"]; assessment?: boolean; preReviewOps?: PreReviewOps; patrolling?: (id: string) => boolean } = {}) {
   const db = memDb();
   const tickets = new TicketsRepo(db);
   const sessions = new SessionsRepo(db);
@@ -136,6 +136,7 @@ function setup(o: { shipherdDeps?: boolean; admission?: ControlHandlerDeps["admi
         needsYou: (id) => needs.get(id) ?? null,
         inbox: { view: () => inboxView },
         shipherdSessions: () => ["bt"],
+        ...(o.patrolling && { patrolling: o.patrolling }),
         progress: (f) => (progressCalls.push(f), progressView),
         ...(!o.noMetrics && { metrics: (days: number | undefined) => (metricsCalls.push(days), { days: days ?? 30 } as never) }),
         ...(o.assessment && {
@@ -457,6 +458,39 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(submitted).toHaveLength(1);
     expect(submitted[0][1]).toContain("看一下");
     expect(repo.get(r.requestId)?.status).toBe("delivered");
+  });
+
+  it("a send in the patrol turn leaves a coordinator the user closed with × closed: queued for when the user opens it, marked as a patrol send (BTL-279 review)", async () => {
+    const asked: string[] = [];
+    const { call, opened, repo, sessions, submitted } = setup({ patrolling: (id) => (asked.push(id), id === "bt") });
+    sessions.setUserEnded("dc", 123);
+    const r = value<{ requestId: string; sessionId: string; opened?: string; wake?: string; note: string }>(await call({ op: "send_message", epic: "docs", text: "看一下" }));
+    expect(asked).toContain("bt");
+    expect(r).toMatchObject({ sessionId: "dc", wake: "ended_by_user" });
+    expect(r.opened).toBeUndefined();
+    expect(r.note).toContain("用户自己结束了这个 session");
+    expect(opened).toEqual([]);
+    await tick();
+    expect(submitted).toEqual([]);
+    expect(repo.get(r.requestId)).toMatchObject({ status: "queued", toSession: "dc", meta: { auto: "patrol" } });
+  });
+
+  it("a patrol-turn send still opens a coordinator that closed on its own (not by the user), and the send is still marked as a patrol send (BTL-279 review)", async () => {
+    const { call, opened, repo } = setup({ patrolling: (id) => id === "bt" });
+    const r = value<{ requestId: string; opened?: string }>(await call({ op: "send_message", epic: "docs", text: "看一下" }));
+    expect(r.opened).toBe("resumed");
+    expect(opened).toHaveLength(1);
+    expect(repo.get(r.requestId)?.meta).toEqual({ auto: "patrol" });
+  });
+
+  it("outside the patrol turn nothing is marked, and a running coordinator gets the patrol mark only while patrolling (BTL-279 review)", async () => {
+    let patrol = false;
+    const { call, repo } = setup({ patrolling: () => patrol });
+    const plain = value<{ requestId: string }>(await call({ op: "send_message", epic: "checkout", text: "a" }));
+    expect(repo.get(plain.requestId)?.meta ?? null).toBeNull();
+    patrol = true;
+    const marked = value<{ requestId: string }>(await call({ op: "send_message", epic: "checkout", text: "b" }));
+    expect(repo.get(marked.requestId)?.meta).toEqual({ auto: "patrol" });
   });
 
   it("says waiting_memory when memory is too short to reopen a coordinator (BTL-256)", async () => {

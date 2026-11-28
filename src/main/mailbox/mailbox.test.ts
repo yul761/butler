@@ -9,7 +9,7 @@ import { SessionMessagesRepo } from "../db/session-messages-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
-import { AGE_NOTE_MS, type AwaitingUser, JUDGING_HOLD_MS, UNSURE_DELIVER_MS, Mailbox, MESSAGE_KEEP_MS, PRUNE_EVERY_MS, REPLY_WAIT_MS, STUCK_RECEIPT_MS, STUCK_TURN_RECEIPT_MS, TAKEN_STALE_MS } from "./mailbox";
+import { AGE_NOTE_MS, type AwaitingUser, JUDGING_HOLD_MS, UNSURE_DELIVER_MS, Mailbox, MESSAGE_KEEP_MS, PROBE_DENSE_MS, PROBE_FIRST_GAP_MS, PROBE_MAX_GAP_MS, PRUNE_EVERY_MS, REPLY_WAIT_MS, STUCK_RECEIPT_MS, STUCK_TURN_RECEIPT_MS, TAKEN_STALE_MS } from "./mailbox";
 
 const flushPromises = () => new Promise((r) => setTimeout(r, 0));
 
@@ -48,6 +48,10 @@ function world() {
   const hibernated = new Set<string>();
   /** 这些 head 记录说在干活、屏幕证据说停了：guard 校正成在等，按停下处理（和 index.ts 的 healed 一样放到下一拍）。 */
   const healOnCheck = new Set<string>();
+  /** transcript 显示最近一轮已经结束的 head（turnClosed）。 */
+  const turnClosed = new Set<string>();
+  /** 读过谁的最后一条回复（lastReply）。 */
+  const replyReads: string[] = [];
   /** guard 被问过的 head（按顺序）。 */
   const checked: string[] = [];
   /** coordinatorAnswered 的调用：head 加上那几个 ask_user、答案、谁答的、那条消息排进来的时间。 */
@@ -104,7 +108,8 @@ function world() {
     canInterrupt: () => true,
     interrupt: (t) => interrupts.push(t),
     interruptRecheck: () => () => true,
-    lastReply: (id) => replies.get(head(id)?.id ?? id) ?? null,
+    lastReply: (id) => (replyReads.push(head(id)?.id ?? id), replies.get(head(id)?.id ?? id) ?? null),
+    turnClosed: (h) => turnClosed.has(h),
     nameOf: (id) => (id === null ? "Shipherd" : `S(${id})`),
     typing: (h, phase) => typed.push(`${h}:${phase}`),
     coordinatorAnswered: (h, o) => coordinatorAnswered.push({ head: h, ...o }),
@@ -127,7 +132,7 @@ function world() {
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
     root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, deliveredMsgs, held, add, dirFiles,
-    controllerOf, subordinates, busyReason, typing, lenientRechecks, successors, hibernated, healOnCheck, checked, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
+    controllerOf, subordinates, busyReason, typing, lenientRechecks, successors, hibernated, healOnCheck, turnClosed, replyReads, checked, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -426,6 +431,133 @@ describe("Mailbox", () => {
     expect(w.woken).not.toContain("t2");
   });
 
+  it("a reply still comes back when the answering turn lost both UserPromptSubmit and Stop: the record says waiting all along, the transcript says the turn ended (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    // UserPromptSubmit 丢了：记录一直是贴之前的「在等」。那一轮跑完了、写了回复，Stop 也丢了。
+    w.tick(60_000);
+    // 一轮还开着时的中间话不算回复。
+    w.replies.set("e", { id: "r1", text: "working on X", at: w.now() });
+    w.tick(10_000);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    w.replies.set("e", { id: "r2", text: "done X", at: w.now() });
+    w.turnClosed.add("e");
+    w.tick(10_000);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "replied", replyText: "done X" });
+    expect(w.repo.queued().filter((m) => m.kind === "reply")).toMatchObject([{ toSession: "boss", fromSession: "e" }]);
+  });
+
+  it("the reply to a delivered message still comes back while another message for that head stays held (third review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    // 之后它在问用户：Shipherd 别的消息被「需要你」挡着，一直排着。
+    w.needsYou.add("e");
+    const held = w.mb.send({ kind: "ci", from: null, to: "e", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(w.repo.get(held.id)?.status).toBe("queued");
+    // 那一轮的 UserPromptSubmit 和 Stop 都丢了，transcript 显示已经结束。
+    w.tick(30_000);
+    w.replies.set("e", { id: "r2", text: "done X", at: w.now() });
+    w.turnClosed.add("e");
+    w.tick(10_000);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.repo.get(held.id)?.status).toBe("queued");
+    expect(w.repo.get(id)).toMatchObject({ status: "replied", replyText: "done X" });
+  });
+
+  it("a waiting head whose transcript shows an ended turn but whose last reply predates the delivery is not answered by it (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    w.turnClosed.add("e");
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    for (let i = 0; i < 3; i++) {
+      w.tick(10_000);
+      await w.mb.tick();
+      await flushPromises();
+    }
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    expect(w.repo.queued()).toEqual([]);
+  });
+
+  it("a head that stopped after the delivery is not probed again: the Stop already checked for the reply (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    w.turnClosed.add("e");
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    w.tick(10_000);
+    await w.mb.stopped("e");
+    await flushPromises();
+    const reads = w.replyReads.filter((h) => h === "e").length;
+    expect(reads).toBeGreaterThan(0);
+    for (let i = 0; i < 3; i++) {
+      w.tick(10_000);
+      await w.mb.tick();
+      await flushPromises();
+    }
+    expect(w.replyReads.filter((h) => h === "e").length).toBe(reads);
+    expect(w.repo.get(id)?.status).toBe("delivered");
+  });
+
+  it("probes a head that owes a reply on every tick for ten minutes after the delivery, then backs off to at most every five minutes; a new delivery starts over (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("t1", true);
+    w.mb.send(msg("t1", "question"));
+    await flushPromises();
+    const deliveredAt = w.now();
+    // 它在干活，回复一直没来：每个 tick 记录说在干活，probe 过 guard（guard 挡住：busy）。
+    w.setWaiting("t1", false);
+    const probes: number[] = [];
+    const step = 5_000;
+    for (let t = step; t <= PROBE_DENSE_MS + 30 * 60_000; t += step) {
+      w.tick(step);
+      w.checked.length = 0;
+      await w.mb.tick();
+      if (w.checked.includes("t1")) probes.push(w.now() - deliveredAt);
+    }
+    const dense = probes.filter((x) => x < PROBE_DENSE_MS);
+    expect(dense).toHaveLength(PROBE_DENSE_MS / step - 1);
+    const gaps = probes.slice(dense.length).map((x, i) => x - probes[dense.length - 1 + i]);
+    // 间隔一次翻一倍（按 tick 取整），最长 5 分钟。
+    expect(gaps.slice(0, 5)).toEqual([PROBE_FIRST_GAP_MS, 2 * PROBE_FIRST_GAP_MS, 4 * PROBE_FIRST_GAP_MS, 8 * PROBE_FIRST_GAP_MS, PROBE_MAX_GAP_MS]);
+    expect(Math.max(...gaps)).toBe(PROBE_MAX_GAP_MS);
+    expect(gaps.slice(4).every((g) => g === PROBE_MAX_GAP_MS)).toBe(true);
+    // 又送到一条等回复的：从头每个 tick 看。
+    w.setWaiting("t1", true);
+    w.mb.send(msg("t1", "another question"));
+    await flushPromises();
+    w.setWaiting("t1", false);
+    let again = 0;
+    for (let i = 0; i < 3; i++) {
+      w.tick(step);
+      w.checked.length = 0;
+      await w.mb.tick();
+      if (w.checked.includes("t1")) again++;
+    }
+    expect(again).toBe(3);
+  });
+
   it("an old turn's reply written while deliver waited for the input box is the baseline, not the reply to this message (BTL-279 review)", async () => {
     const w = world();
     w.add("boss", false);
@@ -665,7 +797,48 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
     expect(w.delivered[0].text).not.toContain(M().mailboxNotAnAnswer);
     expect(w.delivered[0].text).not.toContain("替用户答");
+    // 越过了「还在判断」：和 flush 判断太久时一样，注明不是用户的回答（BTL-279 复核建议 5）。
+    expect(w.delivered[0].text).toContain(M().mailboxNotUserAnswer);
     expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("deliver now past needs_you marks Shipherd's own notice as not the user's answer; with nothing holding it, no note (BTL-279 review suggestion 5)", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 5, question: "which one?", at: w.now() - 1 }], text: null });
+    const held = w.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(w.repo.get(held.id)!.status).toBe("queued");
+    expect(await w.mb.deliverNow(held.id)).toEqual({ delivered: true, reason: null });
+    expect(w.delivered.at(-1)!.text).toContain(M().mailboxNotUserAnswer);
+    expect(w.delivered.at(-1)!.text).toContain("CI is red");
+
+    const v = world();
+    v.add("t1", true);
+    v.typing.add("t1");
+    const plain = v.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(v.repo.get(plain.id)!.status).toBe("queued");
+    expect(await v.mb.deliverNow(plain.id)).toEqual({ delivered: true, reason: null });
+    expect(v.delivered.at(-1)!.text).not.toContain(M().mailboxNotUserAnswer);
+  });
+
+  it("deliver now of the user's own ask_user answer held as unsure is not marked as not the user's answer, also with a notice queued behind it (third review)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 7, question: "which one?", at: w.now() - 1 }], text: null });
+    const { id } = w.mb.send({ ...msg("t1", "answer: B"), kind: "answer", ref: "answer:7" });
+    w.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(w.repo.get(id)!.status).toBe("queued");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
+    const typed = w.delivered.map((d) => d.text).join("\n");
+    expect(typed).toContain("answer: B");
+    // 和 flush 一样：排着 session 等的回答时不越过「需要你」，什么都不注明。
+    expect(typed).not.toContain(M().mailboxNotUserAnswer);
   });
 
   it("a coordinator waiting on the user still gets its sessions' reports and the replies to what it sent, each marked as not the user's answer (BTL-279)", async () => {
@@ -859,6 +1032,30 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     w.successors.set("old", "new");
     expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
     expect(w.repo.get(id)).toMatchObject({ status: "delivered", toSession: "new" });
+  });
+
+  it("Deliver now on a reply readdressed to a busy successor reports why the successor holds it, not that the old control is closed (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    // 接替的那个开着，但在干活（turn）。
+    w.add("new", false);
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    w.successors.set("old", "new");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: false, reason: "turn" });
+    expect(w.repo.get(id)).toMatchObject({ status: "queued", toSession: "new", blockedReason: "turn" });
+  });
+
+  it("a reply to a closed control is not readdressed to a successor that is closed too: it waits for its own and wakes it (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", false, false);
+    w.successors.set("old", "new");
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "queued", toSession: "old", blockedReason: "closed" });
+    expect(w.woken).toContain("old");
+    expect(w.woken).not.toContain("new");
   });
 
   it("a reply to a hibernated control stays its own even when another control of the epic is open: it is woken, not readdressed (BTL-279 review)", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Session } from "../../shared/types";
 import type { SessionMessage } from "../db/session-messages-repo";
-import { MAX_RESUME_ATTEMPTS, MEMORY_RETRY_MS, RESUME_RETRY_MS, Resumer, restartOrder, resumable, type ResumerDeps } from "./resumer";
+import { MAX_RESUME_ATTEMPTS, MEMORY_RETRY_MS, RESUME_RETRY_MS, Resumer, controllerMailSince, restartOrder, resumable, type ResumerDeps } from "./resumer";
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: "s1", ticketKey: "ABC-1", cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
@@ -18,6 +18,15 @@ describe("resumable", () => {
   it("takes an epic coordinator and a fix session", () => {
     expect(resumable(session({ ticketKey: null, featureId: 3, coordinator: true, spawnedBy: null }), ctx)).toBe(true);
     expect(resumable(session({ ticketKey: null, featureId: 3, fixesSession: "x", spawnedBy: null }), ctx)).toBe(true);
+  });
+  it("takes the Shipherd coordinator to be continued, but not older ones (BTL-279 review: a crashed global coordinator gets its reports)", () => {
+    const g = session({ id: "g2", ticketKey: null, shipherd: true, spawnedBy: null });
+    expect(resumable(g, { ...ctx, latestShipherd: () => "g2" })).toBe(true);
+    expect(resumable(g, { ...ctx, latestShipherd: () => "g1" })).toBe(false);
+    expect(resumable(g, { ...ctx, latestShipherd: () => null })).toBe(false);
+    expect(resumable(g, ctx)).toBe(false);
+    expect(resumable({ ...g, dismissed: true }, { ...ctx, latestShipherd: () => "g2" })).toBe(false);
+    expect(resumable({ ...g, ticketKey: "ABC-1" }, { ...ctx, latestShipherd: () => "g2" })).toBe(false);
   });
   it("leaves out sessions the user opened, the Shipherd coordinator, lesson sessions, hidden and outside ones", () => {
     expect(resumable(session({ spawnedBy: null }), ctx)).toBe(false);
@@ -128,6 +137,18 @@ describe("Resumer", () => {
     tick(MEMORY_RETRY_MS);
     await r.request("s1", "mail");
     expect(admit).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes the global coordinator that crashed or did not come back after a restart, but not one the user closed with × (BTL-279 review)", async () => {
+    const g = session({ id: "g", ticketKey: null, shipherd: true, spawnedBy: null });
+    const { r, d, heads } = setup({ resumable: (h, insisted) => resumable(h, { ...ctx, latestShipherd: () => "g" }, insisted) });
+    heads.set("g", g);
+    await expect(r.request("g", "mail")).resolves.toEqual({ state: "resuming" });
+    expect(d.open).toHaveBeenCalledTimes(1);
+    const closed = setup({ resumable: (h, insisted) => resumable(h, { ...ctx, latestShipherd: () => "g" }, insisted), controllerMailSince: () => 99 });
+    closed.heads.set("g", { ...g, userEndedAt: 5 });
+    await expect(closed.r.request("g", "mail")).resolves.toEqual({ state: "ended_by_user" });
+    expect(closed.d.admit).not.toHaveBeenCalled();
   });
 
   it("does not resume a session the user ended", async () => {
@@ -368,6 +389,38 @@ describe("Resumer", () => {
     const done = await r.resumeAll(heads);
     expect(done).toEqual({ resumed: ["a"], waitingMemory: ["b", "c"] });
     expect(admit).toHaveBeenCalledTimes(2);
+    expect(d.open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("controllerMailSince (BTL-279)", () => {
+  const m = (over: Partial<SessionMessage>) => msg({ kind: "shipherd", fromSession: "bt", toSession: "ec", queuedAt: 10, ...over });
+  const headOf = (id: string) => (id === "ec-old" ? "ec" : id);
+  const controls = (from: string | null, head: string) => from === "bt" && head === "ec";
+
+  it("takes the latest instruction from its own controller, following the chain to the head", () => {
+    expect(controllerMailSince([m({ queuedAt: 10 }), m({ toSession: "ec-old", queuedAt: 30 }), m({ kind: "instruction", queuedAt: 20 })], "ec", headOf, controls)).toBe(30);
+  });
+
+  it("ignores other kinds, other heads and senders that are not its controller", () => {
+    expect(controllerMailSince([m({ kind: "reply" as SessionMessage["kind"] }), m({ toSession: "other" }), m({ fromSession: "x" }), m({ fromSession: null })], "ec", headOf, controls)).toBeNull();
+  });
+
+  it("a send made in the patrol turn does not count, so it does not reopen what the user closed (review suggestion 3)", () => {
+    expect(controllerMailSince([m({ queuedAt: 50, meta: { auto: "patrol" } })], "ec", headOf, controls)).toBeNull();
+    expect(controllerMailSince([m({ queuedAt: 10 }), m({ queuedAt: 50, meta: { auto: "patrol", answers: 3 } })], "ec", headOf, controls)).toBe(10);
+    // 别的 meta 照常算。
+    expect(controllerMailSince([m({ queuedAt: 40, meta: { answers: 3 } })], "ec", headOf, controls)).toBe(40);
+  });
+
+  it("with the Resumer: a patrol send after the user closed the epic coordinator leaves it ended_by_user; an explicit send after that reopens it", async () => {
+    const queued = [m({ toSession: "s1", queuedAt: 1_000_100, meta: { auto: "patrol" } })];
+    const { r, d, heads } = setup({ controllerMailSince: (h) => controllerMailSince(queued, h, (id) => id, (from) => from === "bt") });
+    heads.set("s1", session({ ticketKey: null, coordinator: true, featureId: 7, spawnedBy: null, userEndedAt: 1_000_000 }));
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "ended_by_user" });
+    expect(d.admit).not.toHaveBeenCalled();
+    queued.push(m({ toSession: "s1", queuedAt: 1_000_200 }));
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "resuming" });
     expect(d.open).toHaveBeenCalledTimes(1);
   });
 });

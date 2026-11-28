@@ -216,6 +216,9 @@ const ZH = {
   notJsonObject: (file: string) => `${file} 不是合法的 JSON 对象，Shipherd 不会修改它`,
   newerDatabase: (found: number, known: number) => `这份数据是更新版本的 Shipherd 创建的（数据版本 ${found}，这个 Shipherd 只认识到 ${known}）。请安装最新版本的 Shipherd 再打开。`,
   newerDatabaseBackup: (path: string) => `升级前留了一份这个版本能打开的备份：${path}。退出 Shipherd 后把它改名成 app.db 就能用旧版本打开，但升级以后的改动会丢掉。`,
+  /** 迁移顺序和这份数据走过的不一样（4.3.0 复核）：装过测试版本。 */
+  migrationOrder: (found: number, n: number) => `这份数据被迁移顺序不同的测试版本 Shipherd 升级过（数据版本 ${found}，第 ${n} 步要加的列已经在了），接着升级会跳过一些步骤，所以没有升级。`,
+  migrationOrderBackup: (path: string) => `装测试版本之前可能留了一份备份：${path}。退出 Shipherd 后把它改名成 app.db 再打开，测试版本里的改动会丢掉。`,
   /** 迁移前的备份失败（BTL-262）：不迁移，先问用户。 */
   databaseBackupFailed: (path: string, reason: string, diskFull: boolean) =>
     `Shipherd 要升级数据，升级前没能备份到 ${path}（${diskFull ? "磁盘空间不足" : reason}）。为了不丢数据，这次没有升级。${diskFull ? "请腾出一些磁盘空间，" : "请检查数据目录能不能写，"}再打开 Shipherd。`,
@@ -997,6 +1000,8 @@ const EN: MainStrings = {
   notJsonObject: (file: string) => `${file} is not a valid JSON object; Shipherd won't change it`,
   newerDatabase: (found: number, known: number) => `This data was created by a newer Shipherd (data version ${found}; this Shipherd knows up to ${known}). Install the latest Shipherd to open it.`,
   newerDatabaseBackup: (path: string) => `A backup this version can open was kept before the upgrade: ${path}. Quit Shipherd and rename it to app.db to open it with this version; changes made since the upgrade will be lost.`,
+  migrationOrder: (found: number, n: number) => `This data was upgraded by a test build of Shipherd with a different upgrade order (data version ${found}; the columns step ${n} adds are already there). Upgrading on would skip some steps, so nothing was upgraded.`,
+  migrationOrderBackup: (path: string) => `A backup from before the test build may be here: ${path}. Quit Shipherd, rename it to app.db and open Shipherd again; changes made in the test build will be lost.`,
   databaseBackupFailed: (path: string, reason: string, diskFull: boolean) =>
     `Shipherd needs to upgrade its data but could not back it up to ${path} first (${diskFull ? "the disk is full" : reason}). To keep your data safe, nothing was upgraded. ${diskFull ? "Free up some disk space" : "Check that the data folder is writable"}, then open Shipherd again.`,
   databaseBackupAsk: {

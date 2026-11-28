@@ -35,6 +35,11 @@ export const STUCK_TURN_RECEIPT_MS = 10 * 60_000;
  * 不能一直压着，过了就送进去，注明不是用户的回答。
  */
 export const JUDGING_HOLD_MS = 90_000;
+/** 送到后这么久之内，每个 tick 都替等【回复】的 head 看一眼（probeAwaiting，BTL-279 复核）；之后按指数退避。 */
+export const PROBE_DENSE_MS = 10 * 60_000;
+/** 退避的第一个间隔，每看一次翻一倍，最长 PROBE_MAX_GAP_MS。 */
+export const PROBE_FIRST_GAP_MS = 20_000;
+export const PROBE_MAX_GAP_MS = 5 * 60_000;
 /** 跟着角色走、不跟着对话走的消息（BTL-279）：收件的总控关了、另一个接替了它，就改投给接替的那个。 */
 const FOLLOWS_ROLE = new Set<string>(["reply", "report"]);
 /**
@@ -147,6 +152,11 @@ export interface MailboxDeps {
   interruptRecheck(termId: string): () => boolean;
   /** 目标最后一条回复（ActivityMonitor.lastReplyOf）。 */
   lastReply(sessionId: string): { id: string; text: string; at: number | null } | null;
+  /**
+   * transcript 显示它最近一轮已经结束（ActivityMonitor.turnClosed）：最后一条回复是说完了的话，不是一轮中间的。
+   * 记录说在等输入、却从送到以后一直没停下过时（UserPromptSubmit 和 Stop 都丢了），凭它补查回复（BTL-279 复核）。没接时不补查。
+   */
+  turnClosed?(headId: string): boolean;
   /** 给人看的 session 名字（列表、回复的开头）："ABC-1"、"feature 登录改版的总控"、"Shipherd 总控"。null 是 Shipherd 自己。 */
   nameOf(sessionId: string | null): string;
   /**
@@ -238,6 +248,9 @@ export type TargetState = "busy" | "idle" | "closed";
 const iso = (t: number | null): string | null => (t === null ? null : new Date(t).toISOString());
 /** 正文的版本：按 ref 换了正文（回答改了、评论多了）就变。 */
 const revOf = (m: Pick<SessionMessage, "body">): string => createHash("sha1").update(m.body).digest("hex").slice(0, 16);
+/** 排着的里有 session 等的那种（ask_user 的回答、换新以后的「接着做」）：不看「需要你」，也不注明不是用户的回答。flush 和 deliverNow 共用。 */
+const answersWait = (queued: readonly SessionMessage[]): boolean => queued.some((m) => m.kind === "answer" || m.kind === "refresh");
+
 const EXPECTS_REPLY: ReadonlySet<MessageKind> = new Set(["instruction", "shipherd"]);
 
 export class Mailbox {
@@ -254,6 +267,8 @@ export class Mailbox {
   private readonly handlers = new Map<string, (m: SessionMessage) => void>();
   /** 每个 session（head）最后一次停下来的时间：送达记账晚于它停下来时补查回复。 */
   private readonly stoppedAt = new Map<string, number>();
+  /** probeAwaiting 的节奏，按 head：它最新一条等回复的消息什么时候送到的（since）、上一次看是什么时候、下一次隔多久。 */
+  private readonly probes = new Map<string, { since: number; at: number; gap: number }>();
   /** 排队时间严格递增：同一毫秒排的几条也按排的顺序送（磁盘上的文件名按它排序）。 */
   private lastQueuedAt = 0;
   /** send 之后马上那一次送的尝试，按消息 id：settle 等它（BTL-269）。 */
@@ -734,8 +749,7 @@ export class Mailbox {
       this.block(head, queued.filter((m) => !this.inFlight.has(m.id)), "auto_input");
       return;
     }
-    // ask_user 的回答、换新以后的「接着做」不看「需要你」：session 等的就是它们。
-    let answer = queued.some((m) => m.kind === "answer" || m.kind === "refresh");
+    let answer = answersWait(queued);
     const lenient = this.blockedFor(queued, "unsure") >= UNSURE_DELIVER_MS;
     let list = queued;
     let gate = this.d.check(head, { answer, lenient });
@@ -827,8 +841,15 @@ export class Mailbox {
     }
     this.d.log(`mailbox: ${head}: the user asked to deliver ${id} now`);
     const queued = this.queuedFor(head).filter((x) => !this.interrupting.has(x.id));
-    // 它在等用户回答时，总控的指示照样注明是不是在替用户回答（和 flush 一样）；只是还没判断完的不加注明。
-    await this.input(head, gate.termId, queued, this.d.recheckAfter(head, gate, o), id, undefined, this.awaiting(head));
+    // 它在等用户回答时，总控的指示照样注明是不是在替用户回答（和 flush 一样）。
+    // 不点「现在送进去」本来会被「需要你」挡住的（在等用户、或者还没判断完）：和 flush 越过它时一样，别的每一条注明不是用户的回答（BTL-279 复核建议 5）。
+    // 用 lenient 再看一次：只跳过 unsure，挡在「需要你」之前的别的检查和刚才 force 的那次一样，force 已经过了。
+    // answer 和 flush 用同一个判断（复核）：排着 ask_user 的回答时 flush 不看「需要你」、也不注明，这里也不能给用户自己的回答注明「不是用户的回答」。
+    const pastHold = (() => {
+      const plain = this.d.check(head, { answer: answersWait(queued), lenient: true });
+      return !plain.ok && plain.block === "needs_you";
+    })();
+    await this.input(head, gate.termId, queued, this.d.recheckAfter(head, gate, o), id, undefined, this.awaiting(head), pastHold);
     const after = this.d.repo.get(id);
     if (after && after.status !== "queued") return { delivered: true, reason: null };
     return { delivered: false, reason: after?.blockedReason ?? null };
@@ -1014,21 +1035,52 @@ export class Mailbox {
   }
 
   /**
-   * 在等【回复】、终端开着、记录还说在干活、又没有排队消息的 head（BTL-279 review）：也过一次 guard。
-   * 回复的那一轮丢了 Stop 时，只有 guard 会凭屏幕证据校正记录（校正按停下处理，停下时查回复）；
-   * 不看一眼的话，要等下一条消息排进来才校正，【回复】一直回不来。
-   * 只看开着的：guard 对关着的会去叫醒休眠的，不能为了查回复叫醒它。有排队消息的 flush 已经看过了。
+   * 在等【回复】、终端开着、又没有排队消息的 head（BTL-279 review）：看它这一轮是不是已经结束了、只是没有 Stop。
+   * - 记录还说在干活：过一次 guard。只有 guard 会凭屏幕证据校正记录（校正按停下处理，停下时查回复）；
+   *   不看一眼的话，要等下一条消息排进来才校正，【回复】一直回不来。
+   * - 记录说在等输入、可从送到以后一直没停下过（复核：那一轮的 UserPromptSubmit 和 Stop 都丢了，记录停在贴之前的「在等」，
+   *   guard 不会去校正它）：transcript 显示那一轮已经结束了，就直接查回复（checkReplies 只认送到以后的回复）。
+   * 只看开着的：guard 对关着的会去叫醒休眠的，不能为了查回复叫醒它。有排队消息的 flush 已经过过 guard，只跳过第一种。
+   * 节奏（复核建议 4）：送到后 PROBE_DENSE_MS 之内每个 tick 都看，之后间隔从 PROBE_FIRST_GAP_MS 起翻倍，最长 PROBE_MAX_GAP_MS。
    */
   private probeAwaiting(flushed: Set<string>): void {
-    const heads = new Set(this.d.repo.awaitingReply(this.d.now() - REPLY_WAIT_MS).map((m) => this.headOf(m.toSession)));
-    for (const h of heads) {
-      if (flushed.has(h) || this.d.termOf(h) === null || this.d.head(h)?.waitingForInput === true) continue;
+    const now = this.d.now();
+    const latest = new Map<string, number>();
+    for (const m of this.d.repo.awaitingReply(now - REPLY_WAIT_MS)) {
+      const h = this.headOf(m.toSession);
+      const at = m.deliveredAt ?? m.queuedAt;
+      if (at > (latest.get(h) ?? -Infinity)) latest.set(h, at);
+    }
+    for (const h of this.probes.keys()) if (!latest.has(h)) this.probes.delete(h);
+    for (const [h, since] of latest) {
+      if (this.d.termOf(h) === null || !this.probeDue(h, since, now)) continue;
       try {
-        this.d.check(h, { answer: false });
+        if (this.d.head(h)?.waitingForInput !== true) {
+          // 有排队消息的，flush 这一拍已经过过 guard 了。
+          if (!flushed.has(h)) this.d.check(h, { answer: false });
+          continue;
+        }
+        // 查回复不跳过有排队消息的（复核）：flush 不查回复，别的消息一直挡着（需要你、草稿、打字）时，这条的回复也得回来。
+        // 送到以后停下过的，停下时已经查过了。
+        if (since <= (this.stoppedAt.get(h) ?? -Infinity) || this.d.turnClosed?.(h) !== true) continue;
+        void this.checkReplies(h).catch((e: unknown) => this.d.log(`mailbox: reply check for ${h} (no Stop since the delivery) failed`, e));
       } catch (e) {
         this.d.log(`mailbox: checking ${h} for a reply that ended without Stop failed`, e);
       }
     }
+  }
+
+  /** 这一 tick 该不该替 h 看一眼（见 probeAwaiting 的节奏）。since 变了（又送到一条）从头算。 */
+  private probeDue(h: string, since: number, now: number): boolean {
+    const p = this.probes.get(h);
+    if (!p || p.since !== since || now - since < PROBE_DENSE_MS) {
+      this.probes.set(h, { since, at: now, gap: PROBE_FIRST_GAP_MS });
+      return true;
+    }
+    if (now - p.at < p.gap) return false;
+    p.at = now;
+    p.gap = Math.min(PROBE_MAX_GAP_MS, p.gap * 2);
+    return true;
   }
 
   /**

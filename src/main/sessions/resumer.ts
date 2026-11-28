@@ -1,6 +1,7 @@
 import type { Session } from "../../shared/types";
 import type { SessionMessage } from "../db/session-messages-repo";
 import { M } from "../strings";
+import { sentByPatrol } from "../schedule/patrol-turns";
 import type { TranscriptState } from "./discovery";
 
 /**
@@ -34,16 +35,20 @@ export type ResumeStart =
 export interface ResumableContext {
   ticketArchived(key: string): boolean;
   epicArchived(id: number): boolean;
+  /** 现在要接着用的那个全局总控（SessionService.latestShipherd 的 id）；没接时全局总控都不恢复。 */
+  latestShipherd?(): string | null;
 }
 
 /**
  * 能不能自动恢复：Shipherd 开的、属于一个 epic 或 ticket 的、总控管的 session。ticket 的 session 要是总控开的（用户自己点开的不算），
- * epic 级的（epic 总控、修复 session）都算。Shipherd 总控、复盘分析 session、隐藏了的、被替换的、ticket 或 epic 归档了的不算。
- * 用户点 × 结束的另外看（userEndedAt）。
+ * epic 级的（epic 总控、修复 session）都算。全局总控只算现在要接着用的那一个（latestShipherd，BTL-279 复核：崩了、重启后没起来的
+ * 要能收到汇报和回复；旧的那些不拉起来）。复盘分析 session、隐藏了的、被替换的、ticket 或 epic 归档了的不算。
+ * 用户点 × 结束的另外看（userEndedAt）：全局总控没有管它的总控，点 × 关掉的一直不自动开。
  * insisted（BTL-279「关了的就打开」）：它自己的总控发来的指示在等着，用户自己点开的 ticket session 也恢复；别的照样不算。
  */
 export function resumable(h: Session, ctx: ResumableContext, insisted = false): boolean {
-  if (h.origin !== "shipherd" || h.shipherd || h.lessonRunId !== null || h.dismissed || h.replacedBy !== null) return false;
+  if (h.origin !== "shipherd" || h.lessonRunId !== null || h.dismissed || h.replacedBy !== null) return false;
+  if (h.shipherd) return h.ticketKey === null && (ctx.latestShipherd?.() ?? null) === h.id;
   if (h.ticketKey !== null) return (h.spawnedBy !== null || insisted) && !ctx.ticketArchived(h.ticketKey);
   return h.featureId !== null && !ctx.epicArchived(h.featureId);
 }
@@ -52,6 +57,20 @@ export function resumable(h: Session, ctx: ResumableContext, insisted = false): 
 export function restartOrder(heads: Session[], hasMail: (headId: string) => boolean, prWaiting: (h: Session) => boolean): Session[] {
   const rank = (h: Session) => (hasMail(h.id) ? 0 : prWaiting(h) ? 1 : 2);
   return [...heads].sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
+}
+
+/**
+ * ResumerDeps.controllerMailSince 的算法（BTL-279）：排着等 headId 的指示（instruction、shipherd）里，它自己的总控（controls）发的最新一条的排队时间。
+ * 巡检那一轮发的（meta.auto = "patrol"，复核建议 3）不算：用户点 × 关掉的不因为它拉起来。
+ */
+export function controllerMailSince(queued: readonly SessionMessage[], headId: string, headOf: (id: string) => string, controls: (from: string | null, headId: string) => boolean): number | null {
+  let since: number | null = null;
+  for (const m of queued) {
+    if ((m.kind !== "instruction" && m.kind !== "shipherd") || headOf(m.toSession) !== headId) continue;
+    if (sentByPatrol(m.meta)) continue;
+    if (controls(m.fromSession, headId) && (since === null || m.queuedAt > since)) since = m.queuedAt;
+  }
+  return since;
 }
 
 export interface ResumerDeps {
@@ -234,6 +253,8 @@ export class Resumer {
    * 不然用户刚关掉，还排着的那条马上又把它拉起来；之后总控再发一条，才是总控要它。
    */
   private insisted(h: Session): boolean {
+    // 全局总控上面没有总控：点 × 关掉的谁发来的都不拉起来（BTL-279 复核）。
+    if (h.shipherd) return false;
     const since = this.d.controllerMailSince?.(h.id) ?? null;
     return since !== null && (h.userEndedAt == null || since > h.userEndedAt);
   }

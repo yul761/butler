@@ -1,3 +1,17 @@
+/** 迁移里写了这一行：只加列，migrate 先查 PRAGMA table_info 再逐列加（见 addColumns）。 */
+export const CHECKED_ADD_COLUMNS = "-- shipherd:checked-add-columns";
+
+/**
+ * 只加列的迁移（4.3.0 起这样写）。rebase 后迁移换了位置、用户装过把它排在前面的测试版本时，这几列在升到这一步之前就已经在了：
+ * 那个版本在这个位置跑的是这条，现在排在它前面的别的迁移这份数据没跑过。migrate 认到 CHECKED_ADD_COLUMNS 就逐列查，
+ * 有已经在的列就抛 MigrationOrderError（起不来、告诉用户换回备份），不悄悄跳过别的迁移，也不报看不懂的 duplicate column。
+ * 生成的仍是普通 SQL（测试里直接 db.exec 照样能跑）。cols 每一项是「列名 类型 约束」，和 ALTER TABLE … ADD COLUMN 后面写的一样。
+ */
+export function addColumns(table: string, cols: readonly string[]): string {
+  if (!/^\w+$/.test(table) || cols.length === 0 || cols.some((c) => !/^\w+\s+\S/.test(c) || c.includes(";") || c.includes("\n"))) throw new Error(`addColumns: bad ${table} ${cols.join(", ")}`);
+  return [CHECKED_ADD_COLUMNS, ...cols.map((c) => `ALTER TABLE ${table} ADD COLUMN ${c};`)].join("\n");
+}
+
 /**
  * 按顺序追加，永远不要修改已发布的条目。下标 i 对应 user_version i+1。
  * 产品改名（BTL-260）以前的条目里还是旧名字 butler（列名、表名、取值）：它们已经在用户的库上跑过，只能原样保留，
@@ -1716,9 +1730,11 @@ export const MIGRATIONS: string[] = [
   `,
   // BTL-279（4.3.0 里排在最后，rebase 时挪到数组末尾）：每条消息试着送了几次（attempts），最后一次的时间（last_attempt_at）和结果（last_attempt：
   // 挡住它的原因 MailboxBlockReason，或者直接输入的结果 recheck / exited）。只在排队时记，送到后留着：诊断导出和消息列表看得出卡在哪、试了多久。
-  `
-  ALTER TABLE session_messages ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
-  ALTER TABLE session_messages ADD COLUMN last_attempt_at INTEGER;
-  ALTER TABLE session_messages ADD COLUMN last_attempt TEXT;
-  `,
+  // 只加列，用 addColumns 写（4.3.0 复核）：分支版本把它排在第 63 个跑过的库，这几列已经在、BTL-270 却没跑过，起不来并说清楚原因。
+  addColumns("session_messages", [
+    "attempts INTEGER NOT NULL DEFAULT 0",
+    "last_attempt_at INTEGER",
+    "last_attempt TEXT",
+  ]),
 ];
+

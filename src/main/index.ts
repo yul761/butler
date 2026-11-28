@@ -50,7 +50,7 @@ import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
 import { MAILBOX_EVENT, mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
-import { DatabaseBackupError, NewerDatabaseError, openDatabase, withTransaction } from "./db/database";
+import { DatabaseBackupError, MigrationOrderError, NewerDatabaseError, openDatabase, withTransaction } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
 import { HandoffsRepo } from "./db/handoffs-repo";
 import { JobsRepo } from "./db/jobs-repo";
@@ -163,6 +163,7 @@ import { legacyButlerHolder, legacyUserDataDir } from "./migrate/legacy-user-dat
 import { envValue } from "../shared/legacy-env";
 import { isWorkingDay, localDate } from "./schedule/calendar";
 import { morningJob, nightlyJob, type DailyJobDeps } from "./schedule/daily-jobs";
+import { PatrolTurns } from "./schedule/patrol-turns";
 import { ShipherdPatrol } from "./schedule/shipherd-patrol";
 import { Scheduler, TICK_MS, type ScheduleTrigger } from "./schedule/scheduler";
 import { AdmissionPolicyService } from "./lessons/admission-policies";
@@ -186,7 +187,7 @@ import { transcriptCostBase } from "./fork/cost-base";
 import { autoRefreshNeedsYou, refreshKindOf, SessionRefresher, startRefresh } from "./sessions/session-refresher";
 import { SessionCleanup, working } from "./sessions/session-cleanup";
 import { Hibernator } from "./sessions/hibernator";
-import { Resumer, restartOrder, resumable } from "./sessions/resumer";
+import { Resumer, controllerMailSince, restartOrder, resumable } from "./sessions/resumer";
 import { childrenWorking } from "./sessions/managed-by";
 import { needsDiscovery, scanClaudeProjects, syncDiscovered, TranscriptLocator, UNCLAIMED_WINDOW_MS, type HeadCache } from "./sessions/discovery";
 import { fillBranchFromCwd, outsideSessionsOn } from "./sessions/outside-sessions";
@@ -2183,6 +2184,8 @@ async function bootstrap(): Promise<void> {
   /** 这个 head 有别的 session 发来、还排着的消息（约定广播不算）。 */
   const hasSessionMail = (headId: string): boolean =>
     messagesRepo.queued().some((m) => m.fromSession !== null && m.kind !== "convention" && (sessions.head(m.toSession)?.id ?? m.toSession) === headId);
+  /** 全局总控在做巡检那一轮（BTL-279 复核建议 3）：这一轮 send_message 发的不把用户点 × 关掉的 epic 总控拉起来。 */
+  const patrolTurns = new PatrolTurns(Date.now);
   const mailbox = new Mailbox({
     repo: messagesRepo,
     root: paths.mailbox,
@@ -2210,6 +2213,7 @@ async function bootstrap(): Promise<void> {
       return () => pty.isOpen(termId) && pty.lastUserInputAt(termId) <= at && !pty.screenNeedsUser(termId);
     },
     lastReply: (id) => activityMonitor.lastReplyOf(id),
+    turnClosed: (id) => activityMonitor.turnClosed(id),
     // 正在换新的不往 hook 投影（BTL-248）：/handoff 那一轮带进去的消息会被紧接着的 /clear 清掉。
     held: (id) => refresher.isRefreshing(id),
     featureOf: (id) => {
@@ -2239,7 +2243,10 @@ async function bootstrap(): Promise<void> {
       if (!h.coordinator || h.featureId === null) return null;
       return sessions.listFeatureCoordinators(h.featureId).find((x) => x.id !== h.id && x.coordinator && x.replacedBy === null && !x.dismissed && gateTerm(x.id) !== null)?.id ?? null;
     },
-    delivered: (m) => resumer?.delivered(m),
+    delivered: (m) => {
+      if (m.kind === "patrol") patrolTurns.delivered(sessions.head(m.toSession)?.id ?? m.toSession, m.deliveredAt ?? Date.now());
+      resumer?.delivered(m);
+    },
     notify,
     // 又试了一次（BTL-279）：只有消息列表跟着变。
     notifyMessages: () => notify("messages"),
@@ -3131,6 +3138,7 @@ async function bootstrap(): Promise<void> {
    */
   const sessionStopped = (stopped: string): void => {
     holdWatcher.sessionIdle(stopped);
+    patrolTurns.stopped(sessions.head(stopped)?.id ?? stopped);
     // 权限档案省掉了几次确认（ws-j）：只读 transcript 新增的部分。
     void profileHits.sessionStopped(stopped).catch((e: unknown) => logger("permission profile: counting hits failed", e));
     // 熔断压着的「接着做」（降档、提高上限以后）趁现在递（工作流 L）。
@@ -3411,20 +3419,14 @@ async function bootstrap(): Promise<void> {
       const f = features.get(id);
       return !f || f.archivedAt !== null;
     },
+    latestShipherd: () => sessionService.latestShipherd()?.id ?? null,
   };
   const theResumer = resumer = new Resumer({
     head: (id) => sessions.head(id),
     running: (id) => gateTerm(id) !== null,
     resumable: (h, insisted) => resumable(h, resumableCtx, insisted),
     // 「关了的就打开」（BTL-279）：它自己的总控（全局总控 → epic 总控，epic 总控 → 它的 ticket / 修复 session）发来的指示。
-    controllerMailSince: (headId) => {
-      let since: number | null = null;
-      for (const m of messagesRepo.queued()) {
-        if ((m.kind !== "instruction" && m.kind !== "shipherd") || (sessions.head(m.toSession)?.id ?? m.toSession) !== headId) continue;
-        if (mailboxControls(m.fromSession, headId) && (since === null || m.queuedAt > since)) since = m.queuedAt;
-      }
-      return since;
-    },
+    controllerMailSince: (headId) => controllerMailSince(messagesRepo.queued(), headId, (id) => sessions.head(id)?.id ?? id, mailboxControls),
     transcript: (id) => transcriptLocator.state(id),
     admit: (what) => admitOrRefuse(admission, what),
     open: openByKind,
@@ -4080,6 +4082,7 @@ async function bootstrap(): Promise<void> {
       // Shipherd 总控（BTL-190 第 5 点）的只读数据。
       shipherd: {
         shipherdSessions: () => sessions.listShipherd().map((x) => x.id),
+        patrolling: (id) => patrolTurns.active(id),
         featureRows: () => sessionService.featureRowsAll(),
         prs: () => tickets.list().flatMap((t) => prWatcher.statusOf(t.key)),
         prTurns: () => turnService.prTurns(),
@@ -4138,7 +4141,9 @@ async function bootstrap(): Promise<void> {
       resume: async (id) => (costBreaker?.sessionPaused(id) ? null : isHibernated(id) ? { state: "hibernated" } : (resumer?.request(id, "mail") ?? null)),
       // 答的是「调用的这个总控现在发一条会怎样」（BTL-279）：和送信时同一个判断（mailboxControls）。epic 下列出的别的协调者、
       // 调用方不是它的总控时照常算（用户点 × 关的就是 ended_by_user）（BTL-279 second review）。
-      wakeState: (id, caller) => (isHibernated(id) ? "hibernated" : (resumer?.status(id, { asController: mailboxControls(caller, id) }) ?? "not_managed")),
+      // 调用方在做巡检那一轮：它发的不拉起用户关掉的（BTL-279 复核建议 3），答「用户结束了」。
+      wakeState: (id, caller) => (isHibernated(id) ? "hibernated"
+        : (resumer?.status(id, { asController: mailboxControls(caller, id) && !(caller !== null && patrolTurns.active(sessions.head(caller)?.id ?? caller)) }) ?? "not_managed")),
       endHibernated: (id) => {
         const h = sessions.get(id);
         hibernator?.forget(id, "ended by end_session");
@@ -4444,8 +4449,8 @@ if (process.argv.includes("--smoke")) {
         app.exit(1);
         return;
       }
-      // 数据比程序新、备份失败：给一句能看懂的话，不贴调用栈。
-      const text = e instanceof NewerDatabaseError || e instanceof DatabaseBackupError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
+      // 数据比程序新、迁移顺序对不上、备份失败：给一句能看懂的话，不贴调用栈。
+      const text = e instanceof NewerDatabaseError || e instanceof DatabaseBackupError || e instanceof MigrationOrderError ? e.message : e instanceof Error ? (e.stack ?? e.message) : String(e);
       dialog.showErrorBox(M().startupFailed, text);
       app.exit(1);
     });

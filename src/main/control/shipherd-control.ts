@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { PATROL_AUTO } from "../schedule/patrol-turns";
 import { type ShipherdControlRequest, type ControlResult, type InboxControlOp, type SendAnswers, sanitizeTask, SUMMARY_LIMIT } from "../../shared/control";
 import type { ProgressFilter, ProgressView } from "../../shared/progress";
 import type { Turn } from "../../shared/turn";
@@ -47,6 +48,11 @@ export interface ShipherdControlDeps {
   };
   /** list_inbox 的 messages：Shipherd 总控发出、收到的信箱消息（BTL-245）。 */
   shipherdSessions?: () => string[];
+  /**
+   * 这个全局总控（head）在做巡检那一轮（PatrolTurns.active，BTL-279 复核）：这时 send_message 发的带上 meta.auto = "patrol"，
+   * 不把用户点 × 关掉的 epic 总控拉起来。
+   */
+  patrolling?: (headId: string) => boolean;
 }
 
 const iso = (t: number | null | undefined): string | null => (t ? new Date(t).toISOString() : null);
@@ -192,8 +198,11 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
     };
     const mailbox = d.mailbox;
     /** 排进目标的信箱（BTL-245）：在忙的下一次工具调用时读到，停着的直接输入；从不因为它在忙而拒绝。 */
-    const enqueue = (sessionId: string, text: string, featureId: number | null, interrupt: boolean, hold = false, meta: object | null = null) =>
-      mailbox!.send({ kind: "shipherd", from: self?.id ?? null, to: sessionId, featureId, body: text, interrupt, hold, ...(meta && { meta }) });
+    const enqueue = (sessionId: string, text: string, featureId: number | null, interrupt: boolean, hold = false, meta: object | null = null) => {
+      const patrol = self !== null && b.patrolling?.(self.id) === true;
+      const m = patrol ? { ...meta, auto: PATROL_AUTO } : meta;
+      return mailbox!.send({ kind: "shipherd", from: self?.id ?? null, to: sessionId, featureId, body: text, interrupt, hold, ...(m && { meta: m }) });
+    };
     /** 如实说这条现在怎么样了（BTL-269）：等这一次尝试（最多 15 秒），送到了还是排着、为什么排着。 */
     const queued = async (r: { id: string; state: "busy" | "idle" | "closed" }, sessionId: string, extra: { waitNote?: string; [k: string]: unknown } = {}): Promise<ControlResult> => {
       meta.release?.(); // 只剩等了，别的请求先走（BTL-269）。
@@ -216,6 +225,10 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       if (!svc.openFeature) return fail(M().ctlStartUnavailable);
       const given = target.session && target.session.coordinator && target.session.replacedBy === null ? target.session : undefined;
       const resume = given ?? d.sessions.listFeatureCoordinators(f.id).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
+      // 巡检那一轮发的（BTL-279 复核建议 3）：用户点 × 关掉的不拉起来。消息排着，用户打开它时送到（信箱去叫它时 Resumer 也不认这条）。
+      if (resume && resume.userEndedAt != null && self !== null && b.patrolling?.(self.id) === true) {
+        return queued(enqueue(resume.id, text, featureId, false, false, meta), resume.id, { wake: "ended_by_user", waitNote: M().mailboxWakeNote("ended_by_user") });
+      }
       // 用户点 × 结束的也接着打开（BTL-279「关了的就打开」）：这条是全局总控在这之后新发的，总控要它干活。
       // 打开时 opened 清掉 userEndedAt；用户之后再点 ×，还排着的不会再把它拉起来（Resumer.insisted 只认点 × 之后发的）。
       const openFeature = svc.openFeature.bind(svc);

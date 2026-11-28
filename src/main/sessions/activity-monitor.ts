@@ -247,6 +247,8 @@ interface Tracked {
   turnStartAt: number | null;
   /** 这次读到的、没有 Stop hook 的轮次结束的时间（现场写的）；没有为 null。 */
   hooklessEndAt: number | null;
+  /** transcript 里这一轮开着没有（最近一次读到的）；还没读过为 null。 */
+  turnOpen: boolean | null;
 }
 
 /** 这一次更新里最多读一次进程树：后台任务的检查和卡住采样共用。 */
@@ -401,6 +403,14 @@ export class ActivityMonitor {
     return t?.lastReply && t.lastReplyId ? { id: t.lastReplyId, text: t.lastReply, at: t.lastReplyAt } : null;
   }
 
+  /**
+   * transcript 显示它最近一轮已经结束（不看 hook，也不看后台任务）：最后一条回复是那一轮说完的话。还没读过、读到一轮还开着为 false。
+   * 信箱用它补查回复（BTL-279 复核：回答那一轮的 UserPromptSubmit 和 Stop 都丢了，记录一直说在等）。
+   */
+  turnClosed(sessionId: string): boolean {
+    return this.tracked.get(sessionId)?.turnOpen === false;
+  }
+
   /** 用户点了“没事，忽略”：这一次不再提醒，直到 session 恢复活动后再次卡住。 */
   dismiss(sessionId: string): void {
     const t = this.tracked.get(sessionId);
@@ -477,6 +487,7 @@ export class ActivityMonitor {
     t.lastReply = state.lastReply;
     t.lastReplyId = state.lastReplyId;
     t.lastReplyAt = state.lastReplyAt;
+    t.turnOpen = full.turnOpen;
     if (grew) t.lastOutputAt = now;
     await this.sample(t, grew, now, probe);
     const next: SessionActivity = { sessionId: t.id, ...derived, lastOutputAt: t.lastOutputAt, ...this.verdict(t), lastOutput: output.lines, limit: state.apiError ? state.apiLimit : null };
@@ -556,7 +567,7 @@ export class ActivityMonitor {
       id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null, turnSize: 0, turnOutputAt: null,
       eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null, lastReplyAt: null,
       shellKey: "", shellCommands: [], shellAlive: null, shellCheckedAt: Number.NEGATIVE_INFINITY,
-      watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, limitReportedAt: null, promptAt: null, promptSize: 0, turnStartAt: null, hooklessEndAt: null,
+      watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, limitReportedAt: null, promptAt: null, promptSize: 0, turnStartAt: null, hooklessEndAt: null, turnOpen: null,
     };
     this.tracked.set(id, t);
     return t;

@@ -225,6 +225,25 @@ describe("dialogOnScreen / permissionOnScreen", () => {
     }
     // 成套的编号选项（1. 下面有 2.）仍然不算输入框。
     expect(inputBoxEmpty(["⏺ done", RULE, "> quoted", RULE, " ❯ 1. Yes", "   2. No"])).toBeNull();
+    expect(inputBoxEmpty(["⏺ done", RULE, "> quoted", RULE, " 1) Yes", " 2) No"])).toBeNull();
+    // 「1.」「2.」后面紧跟着字、没有空格（倍速、版本号、路径）：是状态栏，不是选项。
+    for (const bar of [["  1.5x speed", "  2.0 MB/s"], ["1.Foo", "2.Bar"], ["  1)main", "  2)dev"]]) {
+      expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, ...bar])).toBe(true);
+    }
+  });
+
+  it("a footer with a dialog or permission wording but no numbered options is still not an input box (BTL-279 review)", () => {
+    // 引用块让倒数第二条线像输入框的上沿，下面画的是没有编号的确认框。
+    const trust = ["⏺ done", RULE, "> quoted", RULE, " Quick safety check: Is this a project you trust?", " ❯ Yes, I trust this folder", "   No, exit", " Enter to confirm · Esc to cancel"];
+    expect(inputBoxEmpty(trust)).toBeNull();
+    expect(dialogOnScreen(trust)).toBe(true);
+    for (const ask of [" Do you want to proceed?", " Would you like to proceed?", " Do you want to make this edit to a.ts?", " Do you want to create b.ts?"]) {
+      const lines = ["⏺ done", RULE, "> quoted", RULE, ask, " ❯ Yes", "   No"];
+      expect(inputBoxEmpty(lines)).toBeNull();
+    }
+    expect(inputBoxEmpty(["⏺ done", RULE, "> quoted", RULE, " Enter to confirm"])).toBeNull();
+    // 同样形状、状态栏里没有这些字样：是输入框。
+    expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, " ❯ Yes", "   No"])).toBe(true);
   });
 
   it("finds the 2.1.322 trust dialog and the older one, regardless of spacing", () => {
@@ -285,6 +304,10 @@ describe("workingOnScreen / inputBoxEmpty", () => {
     // 窄窗口里转圈那一行折行（BTL-279 review）：「esc to interrupt」落在下一行，或者被拆成两半，照样算在干活。
     expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens", " · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
     expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens · esc to", "interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    // 折成三行：转圈行下面两行连起来才有「esc to interrupt」。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k", " tokens · esc to", " interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    // 最多连两行：第四行才出现的不算。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s", " · ↑ 1.2k", " tokens · esc", " to interrupt)", RULE, "❯ ", RULE])).toBe(false);
     // 转圈的行已经结束（下面紧跟着线）：上面对话里另起一行引用的不算。
     expect(workingOnScreen(["✻ Worked for 3s", RULE, "esc to interrupt", RULE, "❯ ", RULE])).toBe(false);
     // 对话里 * 开头的列表项，下一行引用了这几个字：不是折行的转圈行，不算。

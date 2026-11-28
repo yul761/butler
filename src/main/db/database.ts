@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { backupBeforeMigrate, backupPath, type OnBackupFailed } from "./backup";
-import { MIGRATIONS } from "./migrations";
+import { CHECKED_ADD_COLUMNS, MIGRATIONS } from "./migrations";
 import { M } from "../strings";
 
 export type Db = DatabaseSync;
@@ -31,7 +31,15 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
     if (current > 0 && current < MIGRATIONS.length && file !== ":memory:") {
       backupBeforeMigrate(db, file, current, { log: o.log, onBackupFailed: o.onBackupFailed, failedMessage: (f) => M().databaseBackupFailed(f.backup, f.reason, f.diskFull) });
     }
-    migrate(db);
+    try {
+      migrate(db);
+    } catch (e) {
+      // 迁移顺序对不上：指给用户装测试版本之前的那份备份（比现在版本旧、最新的一份；刚才那份 pre-v<current> 就是这份数据本身）。
+      if (!(e instanceof MigrationOrderError) || file === ":memory:") throw e;
+      let backup: string | undefined;
+      for (let v = current - 1; v > 0 && backup === undefined; v--) if (existsSync(backupPath(file, v))) backup = backupPath(file, v);
+      throw new MigrationOrderError(e.found, e.index, backup);
+    }
     // WAL 下 NORMAL 是安全的（BTL-275）：断电最多丢最后几次提交，库不会坏；FULL 每次自动提交都在主线程 fsync 一次。
     // 迁移完才改：迁移和它前面的备份照旧在 FULL 下跑，备份自己还另外 fsync（backup.ts）。
     db.exec("PRAGMA synchronous = NORMAL;");
@@ -132,7 +140,8 @@ export function migrate(db: Db, target: number = MIGRATIONS.length): number {
       db.exec("BEGIN");
       try {
         const violations = fkOff ? fkViolations(db) : 0;
-        db.exec(MIGRATIONS[i]);
+        if (MIGRATIONS[i].startsWith(CHECKED_ADD_COLUMNS)) addMissingColumns(db, MIGRATIONS[i], i);
+        else db.exec(MIGRATIONS[i]);
         if (fkOff && fkViolations(db) > violations) throw new Error(`migration ${i + 1} broke foreign keys`);
         db.exec(`PRAGMA user_version = ${i + 1}`);
         db.exec("COMMIT");
@@ -145,6 +154,43 @@ export function migrate(db: Db, target: number = MIGRATIONS.length): number {
     }
   }
   return target;
+}
+
+/** addColumns 生成的那一行一条 ALTER TABLE … ADD COLUMN（名字只认 \\w）。 */
+const ADD_COLUMN = /^ALTER TABLE (\w+) ADD COLUMN (\w+)\s+[^;\n]+;$/;
+
+/**
+ * 迁移顺序和这份数据走过的不一样（4.3.0 复核）：数据版本 found 还没到第 index+1 条，它加的列却已经在了，说明装过把这条排在更前面的
+ * 测试版本。那个版本在这个位置跑的是这条，现在排在它前面的别的迁移这份数据就没跑过；接着升级会悄悄跳过它们，之后查询才出错。
+ * 宁可起不来：告诉用户换回装测试版本之前的备份。
+ */
+export class MigrationOrderError extends Error {
+  constructor(readonly found: number, readonly index: number, readonly backup?: string) {
+    super(M().migrationOrder(found, index + 1) + (backup ? ` ${M().migrationOrderBackup(backup)}` : ""));
+  }
+}
+
+/**
+ * addColumns 写的迁移：先逐列查 PRAGMA table_info，再加。不是 addColumns 的格式就报错，不能把认不出来的一行跳过。
+ * 照现在的顺序升上来的库，这几列不会已经在（同一列只有这一条加）；已经在了就是迁移顺序不同的版本动过这份数据：抛 MigrationOrderError，
+ * 不跳过、不报看不懂的 duplicate column。
+ */
+function addMissingColumns(db: Db, sql: string, index: number): void {
+  const have = new Map<string, Set<string>>();
+  const colsOf = (table: string): Set<string> => {
+    let c = have.get(table);
+    if (!c) have.set(table, (c = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((r) => r.name.toLowerCase()))));
+    return c;
+  };
+  for (const line of sql.split("\n").slice(1)) {
+    const m = ADD_COLUMN.exec(line);
+    if (!m) throw new Error(`not an addColumns migration line: ${line}`);
+    const cols = colsOf(m[1]);
+    if (cols.size === 0) throw new Error(`no table ${m[1]}`);
+    if (cols.has(m[2].toLowerCase())) throw new MigrationOrderError(userVersion(db), index);
+    db.exec(line);
+    cols.add(m[2].toLowerCase());
+  }
 }
 
 /** 迁移里写了这一行：migrate 在它的事务外关掉外键（见 BTL-270 重建 tickets 表）。 */
