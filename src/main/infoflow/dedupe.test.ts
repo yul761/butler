@@ -420,3 +420,18 @@ describe("review of fed50a04, coordinator decisions (dedupe)", () => {
     expect(findDuplicate("先合 #109，不过 CI 要先绿", ["先合 #109，CI 要先绿"])).not.toBeNull();
   });
 });
+
+describe("review of 9fe253ff (dedupe)", () => {
+  it.each([
+    ["Turn off notifications on Fridays", "Turn on notifications on Fridays"],
+    ["Use tabs for indentation", "Use spaces for indentation"],
+    ["测试环境开启缓存，生产环境开启缓存", "测试环境开启缓存，生产环境关闭缓存"],
+  ])("counts antonyms: %s vs %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(findDuplicate(b, [a])).toBeNull();
+  });
+
+  it("only compares the order when the counts are equal: one more of the same word is containment, not a clash", () => {
+    expect(findDuplicate("关闭旧缓存，开启新缓存", ["开启日志，关闭旧缓存，开启新缓存"])).toBe("开启日志，关闭旧缓存，开启新缓存");
+  });
+});

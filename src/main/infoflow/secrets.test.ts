@@ -1062,4 +1062,87 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
       expect(maskSecrets("​password=abc12345")).toBe(`password=${M}`);
     });
   });
+
+  describe("review of 9fe253ff (secrets)", () => {
+    const M = SECRET_MASK;
+
+    it("M1: htpasswd masks the last word before a redirect, skipping -C / -r values", () => {
+      expect(maskSecrets("htpasswd -bBC 10 f bob hunter2xyz")).toBe(`htpasswd -bBC 10 f bob ${M}`);
+      expect(maskSecrets("htpasswd -b -C 10 f bob hunter2xyz")).toBe(`htpasswd -b -C 10 f bob ${M}`);
+      expect(maskSecrets("htpasswd -b -r 5000 f bob hunter2xyz")).toBe(`htpasswd -b -r 5000 f bob ${M}`);
+      expect(maskSecrets("htpasswd -bn bob hunter2xyz > f")).toBe(`htpasswd -bn bob ${M} > f`);
+      expect(maskSecrets("htpasswd -bn bob hunter2xyz 2>/dev/null")).toBe(`htpasswd -bn bob ${M} 2>/dev/null`);
+      expect(maskSecrets("htpasswd -nb bob 'two words' >>f")).toBe(`htpasswd -nb bob ${M} >>f`);
+      expect(maskSecrets('htpasswd -b f bob "a b c')).toBe(`htpasswd -b f bob ${M}`);
+      expect(maskSecrets("htpasswd -b f bob hunter2xyz && echo ok")).toBe(`htpasswd -b f bob ${M} && echo ok`);
+      expect(maskSecrets("htpasswd -b -- f bob hunter2xyz")).toBe(`htpasswd -b -- f bob ${M}`);
+      // 多出来的参数也一起盖住（一个占位符）；有 -n 时口令是第二个位置参数。
+      expect(maskSecrets("htpasswd -b f bob hunter2xyz extra")).toBe(`htpasswd -b f bob ${M}`);
+      expect(maskSecrets("htpasswd -nb bob hunter2xyz extra")).toBe(`htpasswd -nb bob ${M}`);
+      // 不全是字母数字的 -x.C 不是选项（是文件名），后面的 bob 不当成 -C 的值。
+      expect(maskSecrets("htpasswd -b -x.C bob hunter2xyz")).toBe(`htpasswd -b -x.C bob ${M}`);
+      expect(maskSecrets("htpasswd -c f bob")).toBe("htpasswd -c f bob");
+      expect(maskSecrets("htpasswd -bc f")).toBe("htpasswd -bc f");
+      expect(maskSecrets("htpasswd -bC 10 f bob")).toBe(`htpasswd -bC 10 f ${M}`);
+    });
+
+    it("M2: enclosed numbers, ™, ℡ and ligatures are not mapped, so they don't glue onto the next word", () => {
+      expect(maskSecrets("步骤：①mysql -uroot -pHunter2xyz")).toBe(`步骤：①mysql -uroot -p${M}`);
+      expect(maskSecrets("⑴mysql -pHunter2xyz")).toBe(`⑴mysql -p${M}`);
+      expect(maskSecrets("⒈mysql -pHunter2xyz")).toBe(`⒈mysql -p${M}`);
+      expect(maskSecrets(`①${fake.ghp}`)).toBe(`①${M}`);
+      expect(maskSecrets(`①${fake.akia}`)).toBe(`①${M}`);
+      expect(maskSecrets(`①${fake.ant}`)).toBe(`①${M}`);
+      expect(maskSecrets(`℡${fake.ghp}`)).toBe(`℡${M}`);
+      expect(maskSecrets(`ﬁ${fake.ghp}`)).toBe(`ﬁ${M}`);
+      expect(maskSecrets("①key=abcdefgh12345678")).toBe(`①key=${M}`);
+      expect(maskSecrets("②docker login -p S3cretPw")).toBe(`②docker login -p ${M}`);
+      expect(maskSecrets("配置™Bearer abcd1234efgh5678")).toBe(`配置™${M}`);
+      // 连字不展开：ﬁ 原样留着。
+      expect(maskSecrets("ﬁle ﬂow")).toBe("ﬁle ﬂow");
+      // 带圈、方框的单个字母照样还原（🄿🄰🅂🅂🅆🄾🅁🄳）。
+      expect(maskSecrets("🄿🄰🅂🅂🅆🄾🅁🄳=hunter2xyz")).toBe(`PASSWORD=${M}`);
+    });
+
+    it("normalizes full-width text after an emoji or a lone high surrogate", () => {
+      expect(maskSecrets("😀ｐａｓｓｗｏｒｄ＝hunter2xyz")).toBe(`😀password=${M}`);
+      expect(maskSecrets("\ud83dｐａｓｓｗｏｒｄ＝hunter2xyz")).toBe(`\ud83dpassword=${M}`);
+    });
+
+    it("M3: masks every block scalar in a nested YAML map", () => {
+      expect(maskSecrets("stringData:\n  password: |\n    hunter2xyz\n  token: |\n    s3cr3tTok\n")).toBe(
+        `stringData:\n  password: |\n    ${M}\n  token: |\n    ${M}\n`,
+      );
+      expect(maskSecrets("password: |2\n  hunter2xyz")).toBe(`password: |2\n  ${M}`);
+      expect(maskSecrets("password: |\n  a1\n\n  b2\nnext: ok")).toBe(`password: |\n  ${M}\nnext: ok`);
+      expect(maskSecrets("password: |\r\n  a1  \r\n\r\nnext: ok")).toBe(`password: |\r\n  ${M}\r\n\r\nnext: ok`);
+    });
+
+    it("M4: Cookie / Set-Cookie with a full-width colon", () => {
+      expect(maskSecrets("Cookie：sid=abc123; x=y")).toBe(`Cookie：${M}`);
+      expect(maskSecrets("Set-Cookie：session=abcdef123; Path=/")).toBe(`Set-Cookie：${M}`);
+      expect(maskSecrets("Cookie： abc123secretvalue")).toBe(`Cookie： ${M}`);
+    });
+
+    it("b: a quoted --password-stdin here-string is masked up to the closing quote", () => {
+      expect(maskSecrets('docker login --password-stdin <<< "hunter 2"')).toBe(`docker login --password-stdin <<< "${M}"`);
+      expect(maskSecrets("docker login --password-stdin <<< 'hunter2'")).toBe(`docker login --password-stdin <<< '${M}'`);
+      expect(maskSecrets("docker login --password-stdin <<< 'hunter 2'")).toBe(`docker login --password-stdin <<< '${M}'`);
+      expect(maskSecrets('docker login --password-stdin <<< "unclosed val')).toBe(`docker login --password-stdin <<< "${M}`);
+    });
+
+    it("c: a --password= value after a line continuation", () => {
+      expect(maskSecrets("cli --password=\\\nab1")).toBe(`cli --password=\\\n${M}`);
+      expect(maskSecrets("some-cli --password=\\\n  S3cretPw")).toBe(`some-cli --password=\\\n  ${M}`);
+    });
+
+    it("d: boundaries the mutants slipped through", () => {
+      expect(maskSecrets("Authorization: abcdefgh")).toBe(`Authorization: ${M}`);
+      expect(maskSecrets("Authorization: abcdefg")).toBe("Authorization: abcdefg");
+      expect(maskSecrets('curl -u "admin：S3 cret" https://x')).toBe(`curl -u "admin：${M}" https://x`);
+      expect(maskSecrets("aws configure set some_api_key abc")).toBe(`aws configure set some_api_key ${M}`);
+      expect(maskSecrets("- name: SENTRY_DSN\n  value: https://abc@o1.ingest.sentry.io/1")).toBe(`- name: SENTRY_DSN\n  value: ${M}`);
+      expect(maskSecrets("- name: DB_PASSWORD\n  value: # set later")).toBe("- name: DB_PASSWORD\n  value: # set later");
+    });
+  });
 });

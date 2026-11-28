@@ -161,6 +161,26 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
     stdinSpaces: "--password-stdin" + " ".repeat(N) + "<<<",
     echoMany: "echo a ".repeat(N / 7),
     echoPipes: "echo a | ".repeat(N / 9),
+    // 复核 9fe253ff：htpasswd 以前是平方级（-b 后面很多个 -b、一个很长的选项词，200KB 要十几秒），YAML 嵌套块、全角冒号的 Cookie、
+    // here-string 的引号值、键名后面接 _ 的长串。
+    htpasswdDashB: "htpasswd -b" + " -b".repeat(N / 3),
+    htpasswdLongFlag: "htpasswd -" + "b".repeat(N),
+    htpasswdAb: "htpasswd -" + "ab".repeat(N / 2),
+    htpasswdAbWords: "htpasswd -b" + " ab".repeat(N / 3),
+    htpasswdCost: "htpasswd -b" + " -C 1".repeat(N / 5),
+    htpasswdMany: "htpasswd -b f u p ".repeat(N / 18),
+    htpasswdRedirect: "htpasswd -b f u p" + " >".repeat(N / 2),
+    yamlNested: "  password: |\n    a\n".repeat(N / 20),
+    yamlSpaces: "password: |\n" + " ".repeat(N),
+    yamlBlank: "password: |\n  a" + "\n".repeat(N),
+    cookieFullwidth: "Cookie：".repeat(N / 7),
+    cookieFullwidthDigits: "Cookie： a1".repeat(N / 10),
+    stdinDq: '--password-stdin <<< "'.repeat(N / 22),
+    stdinSq: "--password-stdin <<< '".repeat(N / 22),
+    tokensUnderscore: "tokens_".repeat(N / 7),
+    passwordUnderscore: "password_".repeat(N / 9),
+    tokenUnderscore: "token_".repeat(N / 6),
+    circledDigits: "①mysql -p".repeat(N / 9),
   };
   const time = (input: string): number => {
     maskSecrets(input);
@@ -211,7 +231,8 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
   it("one prefix followed by 200KB of one filler", () => {
     for (const head of ["password", "A_KEY_", "password: 'a'", "the password is \"\" ", "password: ''a", "mysql -p", "mysql ", "| DBPASSWORD |\n|-|\n", "ｐａｓｓｗｏｒｄ＝",
       "Authorization: ", "password: |\n", "- name: DB_PASSWORD\n  value: ", " -u \"a:", " --password \"", "pass: ", "htpasswd -b",
-      "aws configure set ", "echo ", "--password-stdin", "gh secret set x --body ", "password=\\\n"]) {
+      "aws configure set ", "echo ", "--password-stdin", "gh secret set x --body ", "password=\\\n",
+      "htpasswd -", "Cookie：", "--password-stdin <<< \"", "  token: |\n    a\n  password: |\n"]) {
       for (const fill of ["中", "1", "`", "“", "\\\n", "')", "A_", "\u200b", "│"]) {
         expect(time(head + fill.repeat(N / fill.length)), `${head} + ${JSON.stringify(fill)}`).toBeLessThan(LIMIT_MS);
       }

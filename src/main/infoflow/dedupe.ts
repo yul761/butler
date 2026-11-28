@@ -212,18 +212,28 @@ function unitsOf(s: string): Set<string> {
 const sameSet = (a: Set<string>, b: Set<string>): boolean => a.size === b.size && [...a].every((x) => b.has(x));
 
 /**
- * 一对反义词在两句里各占一边：一句只有 x、另一句只有 y。两句都两个都有时看先后（「先关闭旧的再开启新的」对「先开启旧的再关闭新的」）。
- * 一句两个都有、另一句只有一个（「默认开启」对「默认开启，允许用户关闭」）不算：这种交给包含和相似度。
- * at(side, w)：w 在那一句里第一次出现的位置，没有是 -1。
+ * 一对反义词按次数比：x 在一句里比另一句多、y 在这句里反而比另一句少，就是换了说法（「Turn off … on Fridays」对「Turn on … on Fridays」：
+ * off 多一个、on 少一个）。两边次数都一样、两个都有时看先后（「先关闭旧的再开启新的」对「先开启旧的再关闭新的」）。
+ * 只多了一个（「默认开启」对「默认开启，允许用户关闭」）不算：这种交给包含和相似度。
+ * count(side, w)：w 在那一句里出现几次；at(side, w)：第一次出现的位置，没有是 -1。
  */
-function antonymsClash(at: (side: 0 | 1, w: string) => number, pairs: readonly [string, string][]): boolean {
+function antonymsClash(
+  count: (side: 0 | 1, w: string) => number,
+  at: (side: 0 | 1, w: string) => number,
+  pairs: readonly [string, string][],
+): boolean {
   return pairs.some(([x, y]) => {
+    const dx = count(0, x) - count(1, x);
+    const dy = count(0, y) - count(1, y);
+    if ((dx > 0 && dy < 0) || (dx < 0 && dy > 0)) return true;
+    if (dx !== 0 || dy !== 0) return false;
     const [ax, ay, bx, by] = [at(0, x), at(0, y), at(1, x), at(1, y)];
-    if (ax >= 0 && ay < 0 && bx < 0 && by >= 0) return true;
-    if (ax < 0 && ay >= 0 && bx >= 0 && by < 0) return true;
     return ax >= 0 && ay >= 0 && bx >= 0 && by >= 0 && ax < ay !== bx < by;
   });
 }
+
+/** 子串 w 在 s 里出现几次（不重叠）。 */
+const occurrences = (s: string, w: string): number => s.split(w).length - 1;
 
 /** w 和 un+w、dis+w（allowed / disallowed、locked / unlocked）：从两句里出现的 un… / dis… 词生成反义词对。 */
 function prefixPairs(stems: readonly string[][]): [string, string][] {
@@ -252,12 +262,16 @@ export function polarityClash(a: string, b: string): boolean {
   const ub = unitsOf(b);
   if (ua.size > 0 && ub.size > 0 && !sameSet(ua, ub)) return true;
   const zh = [factKey(a), factKey(b)];
-  if (antonymsClash((side, w) => zh[side].indexOf(w), ZH_ANTONYMS)) return true;
+  if (antonymsClash((side, w) => occurrences(zh[side], w), (side, w) => zh[side].indexOf(w), ZH_ANTONYMS)) return true;
   const la = latin(a);
   const lb = latin(b);
   if (swapped(la, lb)) return true;
   const en = [la.map(stem), lb.map(stem)];
-  return antonymsClash((side, w) => en[side].indexOf(w), [...EN_ANTONYMS, ...prefixPairs(en)]);
+  return antonymsClash(
+    (side, w) => en[side].filter((x) => x === w).length,
+    (side, w) => en[side].indexOf(w),
+    [...EN_ANTONYMS, ...prefixPairs(en)],
+  );
 }
 
 /** text 和 existing 里的某一条是同一件事：返回那一条，否则 null。 */
