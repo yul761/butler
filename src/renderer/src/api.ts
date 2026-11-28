@@ -1,5 +1,6 @@
 import type { AutomationLevel, AutomationState } from "../../shared/automation";
 import type { TicketGlance } from "../../shared/ticket-glance";
+import type { CloseLeftoversResult, ClosePreview } from "./close-ticket-outcome";
 import { normTurnFilter, type TurnBoard, type TurnFilter, type TurnSendReason } from "../../shared/turn";
 import type { CheckDraftResult, CheckHitView, CheckScope, ChecksAction, ChecksActResult, ChecksView } from "../../shared/checks";
 import type { BacktestActResult, BacktestAction, BacktestView } from "../../shared/backtest";
@@ -103,6 +104,13 @@ export const api = {
   ticketGlance: (key: string) => call<TicketGlance>(IPC.ticketsGlance, key),
   createTicket: (input: CreateTicketInput) => call<Ticket>(IPC.ticketsCreate, input),
   setStatus: (key: string, status: TicketStatus | null) => call<void>(IPC.ticketsSetStatus, key, status),
+  /** 关闭框打开时：这个 ticket 开着的 PR 里能关的、关不了的和原因（BTL-270）。 */
+  closePreview: (key: string) => call<ClosePreview>(IPC.ticketsClosePreview, key),
+  closeTicket: (key: string, o: { reason: string; closePrs: boolean; endSessions: boolean; prUrls?: string[] }) =>
+    call<CloseLeftoversResult & { ignoredFollowups: number }>(IPC.ticketsClose, key, o),
+  /** 关闭以后重试上次没关成的 PR、没结束的 session（BTL-270）。 */
+  retryClose: (key: string, o: { prUrls: string[]; sessionIds: string[] }) => call<CloseLeftoversResult>(IPC.ticketsCloseRetry, key, o),
+  reopenTicket: (key: string) => call<{ restoredFollowups: number; status: TicketStatus }>(IPC.ticketsReopen, key),
   archive: (key: string) => call<void>(IPC.ticketsArchive, key),
   switchBranch: (repoId: number) => call<void>(IPC.ticketsSwitchBranch, repoId),
   addRepo: (input: AddRepoInput) => call<TicketRepo>(IPC.ticketsAddRepo, input),
@@ -170,7 +178,8 @@ export const api = {
   uninstallHooks: () => call<HealthReport>(IPC.healthUninstallHooks),
   pickDirectory: () => call<string | null>(IPC.dialogPickDir),
   mergeEvents: () => call<MergeEvent[]>(IPC.mergeEvents),
-  prWatchList: () => call<WatchedPr[]>(IPC.prWatchList),
+  /** 后台监视的 PR；给了 ticketKey 只取这一个 ticket 的（BTL-270 审查：ticket 页不全量扫）。 */
+  prWatchList: (ticketKey?: string) => call<WatchedPr[]>(IPC.prWatchList, ticketKey),
   prStages: (scope: PrStagesScope) => call<PrStagesTicket[]>(IPC.prStages, scope),
   prOpen: (url: string) => call<{ ok: true } | { ok: false; reason: "bad_url" }>(IPC.prOpen, url),
   /** 终端里点的链接（BTL-257）：主进程只放行 http / https，交给系统浏览器。 */

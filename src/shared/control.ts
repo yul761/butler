@@ -1,5 +1,6 @@
 import type { Lang } from "./i18n";
 import { isModelName, isTier } from "./model-routing";
+import { MANUAL_TICKET_STATUSES, type ManualTicketStatus } from "./types";
 
 /**
  * 总控 session 开子 session（设计文档 2026-10-23 第二步）：shipherd-sessions MCP server ↔ Shipherd 主进程，走文件。
@@ -100,6 +101,18 @@ export type PreReviewControlOp =
 export const isPreReviewOp = (op: unknown): op is PreReviewControlOp["op"] =>
   op === "pre_review_status" || op === "pre_review_run" || op === "pre_review_queue" || op === "pre_review_queue_act";
 
+/**
+ * ticket 的关闭和后续事项（BTL-270）：feature 总控和 Shipherd 总控都有。close_ticket 是不做了（和 done 做完了分开），
+ * 可以顺便关掉开着的 PR、结束 ticket 的 session；reopen_ticket 撤销关闭。set_ticket_status 设手动状态，auto 是清掉手动状态，
+ * closed 要给 reason（走 close_ticket）。list_followups 列没处理完的后续事项（all 连处理过的一起），resolve_followup 标成完成或忽略。
+ */
+export type TicketStatusControlOp =
+  | { op: "close_ticket"; ticket: string; reason: string; close_prs?: boolean; pr_urls?: string[]; end_sessions?: boolean }
+  | { op: "reopen_ticket"; ticket: string }
+  | { op: "set_ticket_status"; ticket: string; status: ManualTicketStatus | "auto"; reason?: string }
+  | { op: "list_followups"; ticket?: string; all?: boolean }
+  | { op: "resolve_followup"; followup: string; status: "done" | "ignored"; reason: string };
+
 /** ticket 的 session 的请求（ticket 总控 BTL-246 起没有了，只剩 ask_user、report 和下面两个）。 */
 export type TicketControlRequest =
   | ({ v: 1; ticketKey: string; from: string | null } & InboxControlOp)
@@ -112,6 +125,9 @@ export type TicketControlRequest =
 
 /** lessons 工具一次最多带几个路径、关键词多长。 */
 export const LESSONS_TOOL_MAX_PATHS = 50;
+/** close_ticket 的 pr_urls 最多几个、每个最长多少：超了直接拒绝，不截断（BTL-270 审查）。 */
+export const CLOSE_TICKET_MAX_PR_URLS = 50;
+export const CLOSE_TICKET_PR_URL_MAX = 2048;
 export const LESSONS_TOOL_MAX_QUERY = 200;
 
 /**
@@ -136,6 +152,7 @@ export type FeatureControlRequest =
   /** BTL-271：epic 总控也能看自己 epic 的 PR 和一个 PR 的评估（和 Shipherd 总控同一份，只是只列自己的）。 */
   | { v: 1; featureId: number; from: string | null; op: "list_prs" }
   | { v: 1; featureId: number; from: string | null; op: "pr_assessment"; pr: string }
+  | ({ v: 1; featureId: number; from: string | null } & TicketStatusControlOp)
   | { v: 1; featureId: number; from: string | null; op: "list_tickets" }
   | { v: 1; featureId: number; from: string | null; op: "list_repos" }
   | { v: 1; featureId: number; from: string | null; op: "create_ticket"; ticket: string; title?: string; repos?: string[]; branch?: string; stack_on?: string; feature?: string }
@@ -185,6 +202,7 @@ export type ShipherdControlRequest =
   | ({ v: 1; shipherd: true; from: string | null } & InboxControlOp)
   | ({ v: 1; shipherd: true; from: string | null } & StackControlOp)
   | ({ v: 1; shipherd: true; from: string | null } & PreReviewControlOp)
+  | ({ v: 1; shipherd: true; from: string | null } & TicketStatusControlOp)
   /** epic（内部是 features 表）和它们里面 feature 的进度（BTL-246）。 */
   | { v: 1; shipherd: true; from: string | null; op: "list_epics" }
   /** epic 里的 feature（内部是 block），可以只看一个 epic。 */
@@ -299,6 +317,46 @@ function stackOp<B extends object>(base: B, o: Record<string, unknown>): (B & St
   return null;
 }
 
+export const isTicketStatusOp = (op: unknown): op is TicketStatusControlOp["op"] =>
+  op === "close_ticket" || op === "reopen_ticket" || op === "set_ticket_status" || op === "list_followups" || op === "resolve_followup";
+
+const optBool = (x: unknown): boolean => x === undefined || typeof x === "boolean";
+
+/** 两种总控共用的 ticket 关闭和后续事项请求；不合规返回 null。 */
+function ticketStatusOp<B extends object>(base: B, o: Record<string, unknown>): (B & TicketStatusControlOp) | null {
+  if (o.op === "list_followups") {
+    if (o.ticket !== undefined && !okName(o.ticket, 200)) return null;
+    if (!optBool(o.all)) return null;
+    return { ...base, op: "list_followups", ...(o.ticket !== undefined && { ticket: o.ticket as string }), ...(o.all === true && { all: true }) };
+  }
+  if (o.op === "resolve_followup") {
+    if (!okName(o.followup, 200) || (o.status !== "done" && o.status !== "ignored") || !okReason(o.reason)) return null;
+    return { ...base, op: "resolve_followup", followup: o.followup, status: o.status, reason: o.reason };
+  }
+  if (!okName(o.ticket, 200)) return null;
+  if (o.op === "reopen_ticket") return { ...base, op: "reopen_ticket", ticket: o.ticket };
+  if (o.op === "close_ticket") {
+    if (!okReason(o.reason) || !optBool(o.close_prs) || !optBool(o.end_sessions)) return null;
+    const urls = o.pr_urls;
+    if (urls !== undefined && (!Array.isArray(urls) || urls.length > CLOSE_TICKET_MAX_PR_URLS || !urls.every((u) => okName(u, CLOSE_TICKET_PR_URL_MAX)))) return null;
+    // 点名了 PR 却说不关（close_prs: false）：自相矛盾，拒绝。
+    if (urls !== undefined && o.close_prs === false) return null;
+    return {
+      ...base, op: "close_ticket", ticket: o.ticket, reason: o.reason,
+      ...((o.close_prs === true || urls !== undefined) && { close_prs: true }), ...(urls !== undefined && { pr_urls: urls as string[] }),
+      ...(o.end_sessions === true && { end_sessions: true }),
+    };
+  }
+  if (o.op === "set_ticket_status") {
+    if (o.status !== "auto" && !MANUAL_TICKET_STATUSES.includes(o.status as ManualTicketStatus)) return null;
+    if (o.reason !== undefined && !okReason(o.reason)) return null;
+    // 关掉要说为什么（和 close_ticket 一样）。
+    if (o.status === "closed" && o.reason === undefined) return null;
+    return { ...base, op: "set_ticket_status", ticket: o.ticket, status: o.status as ManualTicketStatus | "auto", ...(o.reason !== undefined && { reason: o.reason as string }) };
+  }
+  return null;
+}
+
 const isSessionOp = (op: unknown) => op === "session_activity" || op === "end_session" || op === "refresh_session";
 
 /** 主进程按运行时类型检查请求（文件谁都能写）：不合规返回 null。ticketKey 和 featureId 必须正好有一个。 */
@@ -332,6 +390,7 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     }
     if (isSessionOp(o.op)) return sessionOp(base, o);
     if (isStackOp(o.op)) return stackOp(base, o);
+    if (isTicketStatusOp(o.op)) return ticketStatusOp(base, o);
     if (o.op === "create_ticket") {
       if (!okName(o.ticket, 200)) return null;
       if (o.title !== undefined && (typeof o.title !== "string" || o.title.length > 500)) return null;
@@ -405,6 +464,7 @@ function parseShipherdRequest(o: Record<string, unknown>, from: string | null): 
   if (isInboxOp(o.op)) return inboxOp(base, o);
   if (isStackOp(o.op)) return stackOp(base, o);
   if (isPreReviewOp(o.op)) return preReviewOp(base, o);
+  if (isTicketStatusOp(o.op)) return ticketStatusOp(base, o);
   if (o.op === "list_epics" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
     return { ...base, op: o.op };
   }

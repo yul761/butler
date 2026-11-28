@@ -16,8 +16,8 @@ import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable
 const noop = () => {};
 const ctx: NameCtx = { features: new Map(), tickets: new Map([["T-1", "one"]]) };
 const bar = { done: 9, agent: 2, you: 2, external: 1, idle: 1 };
-const total: ScopeTurnRow = { kind: "feature", id: 3, name: "F", total: 15, merged: 9, bar, youCount: 2, slowest: "收尾 R/X" };
-const tk: ScopeTurnRow = { kind: "ticket", id: "T-2", name: "工作流 J–N", total: 8, merged: 6, bar: { ...bar, done: 6 }, youCount: 0, slowest: null };
+const total: ScopeTurnRow = { kind: "feature", id: 3, name: "F", total: 15, merged: 9, closed: 0, bar, youCount: 2, slowest: "收尾 R/X" };
+const tk: ScopeTurnRow = { kind: "ticket", id: "T-2", name: "工作流 J–N", total: 8, merged: 6, closed: 0, bar: { ...bar, done: 6 }, youCount: 0, slowest: null };
 const youItem: TurnItem = { ticketKey: "T-1", pr: { repo: "r", number: 5, title: "t", url: "u" }, featureId: 3, turn: { owner: "you", kind: "merge", risk: null }, since: 0, others: 0 };
 const cards = { ctx, now: 1000, onFix: noop, onOpen: noop, onGo: noop, onChanged: noop };
 const overview = (o: Partial<Parameters<typeof ScopeOverview>[0]> = {}) => renderToStaticMarkup(createElement(ScopeOverview, { rows: [tk], total, youItems: [youItem], kind: "feature", emptyText: "EMPTY", cards, ...o }));
@@ -32,7 +32,7 @@ describe("ScopeOverview", () => {
     expect(html).toContain("turn-bar");
   });
   it("empty scope shows emptyText and create button, no NaN or bar", () => {
-    const html = overview({ rows: [], total: { ...total, total: 0, merged: 0, youCount: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, slowest: null }, youItems: [], onCreate: noop });
+    const html = overview({ rows: [], total: { ...total, total: 0, merged: 0, closed: 0, youCount: 0, bar: { done: 0, agent: 0, you: 0, external: 0, idle: 0 }, slowest: null }, youItems: [], onCreate: noop });
     expect(html).toContain("EMPTY");
     expect(html).toContain(`>${S.newTicket}</button>`);
     expect(html).not.toContain("NaN");
@@ -40,7 +40,7 @@ describe("ScopeOverview", () => {
   });
   it("empty scope still shows the cards that are your turn (a coordinator's question before any ticket)", () => {
     const zero = { done: 0, agent: 0, you: 0, external: 0, idle: 0 };
-    const html = overview({ rows: [], total: { ...total, total: 0, merged: 0, youCount: 0, bar: zero, slowest: null }, onCreate: noop });
+    const html = overview({ rows: [], total: { ...total, total: 0, merged: 0, closed: 0, youCount: 0, bar: zero, slowest: null }, onCreate: noop });
     expect(html).toContain("EMPTY");
     expect(html).toContain('class="scope-you"');
     expect(html).toContain('data-testid="turn-card"');
@@ -51,8 +51,8 @@ describe("ScopeOverview", () => {
   it("rows with nothing counted yet are still listed, with no headline count", () => {
     const zero = { done: 0, agent: 0, you: 0, external: 0, idle: 0 };
     const html = overview({
-      rows: [{ ...tk, name: "空 ticket", total: 0, merged: 0, bar: zero }],
-      total: { ...total, total: 0, merged: 0, youCount: 0, bar: zero, slowest: null }, youItems: [],
+      rows: [{ ...tk, name: "空 ticket", total: 0, merged: 0, closed: 0, bar: zero }],
+      total: { ...total, total: 0, merged: 0, closed: 0, youCount: 0, bar: zero, slowest: null }, youItems: [],
     });
     expect(html).toContain("空 ticket");
     expect(html).toContain("0/0 合了");
@@ -61,7 +61,7 @@ describe("ScopeOverview", () => {
     expect(html).not.toContain("turn-bar");
   });
   it("a feature's ticket rows: a ticket with no PR says so instead of 0/1 merged", () => {
-    const tRow = (id: string, merged: number): ScopeTurnRow => ({ kind: "ticket", id, name: id, total: 1, merged, bar: { ...bar, done: merged }, youCount: 0, slowest: null });
+    const tRow = (id: string, merged: number): ScopeTurnRow => ({ kind: "ticket", id, name: id, total: 1, merged, closed: 0, bar: { ...bar, done: merged }, youCount: 0, slowest: null });
     const html = overview({ rows: [tRow("K-1", 0), tRow("K-2", 0)], ticketsWithPr: new Set(["K-2"]) });
     const line = (key: string) => new RegExp(`title="${key}">${key}</button><span class="line muted">([^<]*)</span>`).exec(html)?.[1];
     expect(line("K-1")).toBe("还没开 PR");
@@ -91,9 +91,9 @@ describe("ScopeOverview with the epic's features (blocks, BTL-246)", () => {
     item: youItem, since: 0, prs: [], asks: [],
   });
   const blocks = [
-    { id: 1, name: "Payment", description: "cards and wallets", merged: 1, total: 1, rows: [row("A-1", true)] },
-    { id: 2, name: "Shipping", description: null, merged: 0, total: 2, rows: [row("A-2"), row("A-3")] },
-    { id: null, name: S.lay.notInAFeature, description: null, merged: 0, total: 1, rows: [row("A-4")] },
+    { id: 1, name: "Payment", description: "cards and wallets", merged: 1, closed: 0, total: 1, rows: [row("A-1", true)] },
+    { id: 2, name: "Shipping", description: null, merged: 0, closed: 0, total: 2, rows: [row("A-2"), row("A-3")] },
+    { id: null, name: S.lay.notInAFeature, description: null, merged: 0, closed: 0, total: 1, rows: [row("A-4")] },
   ];
   it("shows one collapsible row per feature in order with merged/total, its tickets in the ticket table, instead of the ticket rows", () => {
     const html = overview({ blocks, onOpenTicket: noop });
@@ -125,7 +125,7 @@ describe("ScopeTicketTable", () => {
   });
   const html = (groups: Parameters<typeof ScopeTicketTable>[0]["groups"], emptyText = "EMPTY") => renderToStaticMarkup(createElement(ScopeTicketTable, { groups, onOpenTicket: noop, emptyText }));
   it("groups, columns, PR cells", () => {
-    const h = html([{ name: "工作流 J–N", merged: 3, total: 5, rows: [mk("A-1", []), mk("A-2", [{ tag: "#52", number: 52, repo: "r" }, { tag: "#53", number: 53, repo: "r" }], 1)] }]);
+    const h = html([{ name: "工作流 J–N", merged: 3, closed: 0, total: 5, rows: [mk("A-1", []), mk("A-2", [{ tag: "#52", number: 52, repo: "r" }, { tag: "#53", number: 53, repo: "r" }], 1)] }]);
     expect(h).toContain("ticket-table");
     expect(h).toContain("工作流 J–N · 3/5 合了");
     for (const c of ["ticket", "谁该动", "现在怎么样", "PR"]) expect(h).toContain(`<th>${c}</th>`);
@@ -134,7 +134,7 @@ describe("ScopeTicketTable", () => {
     expect(h).toContain("另有 1 个 PR");
   });
   it("ticket key is a button so the row opens from the keyboard", () => {
-    const h = html([{ name: null, merged: 0, total: 1, rows: [mk("A-1", [])] }]);
+    const h = html([{ name: null, merged: 0, closed: 0, total: 1, rows: [mk("A-1", [])] }]);
     expect(h).toMatch(/<button type="button" class="key">A-1<\/button>/);
   });
   it("empty groups", () => {
@@ -143,7 +143,7 @@ describe("ScopeTicketTable", () => {
     expect(h).not.toContain("<table");
   });
   it("empty group shows one note", () => {
-    expect(html([{ name: "G", merged: 0, total: 0, rows: [] }])).toContain("这一组还没有 ticket。");
+    expect(html([{ name: "G", merged: 0, closed: 0, total: 0, rows: [] }])).toContain("这一组还没有 ticket。");
   });
 });
 

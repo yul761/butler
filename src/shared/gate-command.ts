@@ -92,6 +92,33 @@ function prUrlRepo(pr: string): string | null {
   return host === "github.com" ? m[2] : `${m[1]}/${m[2]}`;
 }
 
+/** gh pr 的这几个子命令会改 PR 的状态。 */
+const PR_STATE_ACTIONS = ["merge", "close", "reopen"] as const;
+export type PrStateAction = (typeof PR_STATE_ACTIONS)[number];
+/** 带值的选项（merge、close、reopen 的并集）：找 PR 参数时跳过它们的值。 */
+const GH_PR_VALUE_OPTS = ["-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo", "-c", "--comment"];
+
+/**
+ * tokens[i] 是 gh：`gh pr [选项] merge|close|reopen [PR] [选项]` 解析成子命令、PR（号、链接或分支；没写是当前分支，null）和仓库
+ * （-R / --repo、PR 链接里的、GH_REPO）。别的 gh 命令返回 null。
+ */
+function ghPrCommand(tokens: string[], i: number, ghRepoEnv: string | null): { action: PrStateAction; pr: string | null; repo: string | null } | null {
+  if (tokens[i] !== "gh" || tokens[i + 1] !== "pr") return null;
+  // `gh pr -R o/r merge 12`：-R 也可以写在 pr 和子命令之间。
+  let j = i + 2;
+  const before: string[] = [];
+  while (j < tokens.length && isOption(tokens[j])) {
+    before.push(tokens[j]);
+    if ((tokens[j] === "-R" || tokens[j] === "--repo") && j + 1 < tokens.length) before.push(tokens[++j]);
+    j++;
+  }
+  const action = PR_STATE_ACTIONS.find((a) => a === tokens[j]);
+  if (!action) return null;
+  const args = [...before, ...tokens.slice(j + 1)];
+  const pr = positionals(args, GH_PR_VALUE_OPTS)[0] ?? null;
+  return { action, pr, repo: prMergeRepo(args, pr, ghRepoEnv) };
+}
+
 function classifySegment(tokens: string[], dir: string | null): GateAction | null {
   let i = 0;
   let ghRepoEnv: string | null = null; // GH_REPO=o/r gh pr merge 12
@@ -101,19 +128,8 @@ function classifySegment(tokens: string[], dir: string | null): GateAction | nul
   }
   const cmd = tokens[i];
   if (cmd === "gh") {
-    if (tokens[i + 1] !== "pr") return null;
-    // `gh pr -R o/r merge 12`：-R 也可以写在 pr 和 merge 之间。
-    let j = i + 2;
-    const before: string[] = [];
-    while (j < tokens.length && tokens[j] !== "merge" && isOption(tokens[j])) {
-      before.push(tokens[j]);
-      if ((tokens[j] === "-R" || tokens[j] === "--repo") && j + 1 < tokens.length) before.push(tokens[++j]);
-      j++;
-    }
-    if (tokens[j] !== "merge") return null;
-    const args = [...before, ...tokens.slice(j + 1)];
-    const pr = positionals(args, ["-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email", "--match-head-commit", "-R", "--repo"])[0] ?? null;
-    return { kind: "pr_merge", dir, pr, repo: prMergeRepo(args, pr, ghRepoEnv) };
+    const c = ghPrCommand(tokens, i, ghRepoEnv);
+    return c && c.action === "merge" ? { kind: "pr_merge", dir, pr: c.pr, repo: c.repo } : null;
   }
   if (cmd !== "git") return null;
   i++;
@@ -276,6 +292,37 @@ export function classifyShip(command: string): ShipCommand[] {
       if (/^refs\/(?!heads\/)/.test(dst)) continue;
       out.push({ kind: "push", dir: segDir, branch: dst && dst !== "HEAD" ? dst : null });
     }
+  }
+  return out;
+}
+
+/** 一条改 PR 状态的命令（BTL-270：跑完马上重读这个 PR）。dir 是前面 `cd` 的目录；pr 没写是当前分支（null）。 */
+export interface PrStateCommand {
+  action: PrStateAction;
+  dir: string | null;
+  pr: string | null;
+  repo: string | null;
+}
+
+/** 命令里所有的 `gh pr merge|close|reopen`，按出现的顺序。认不准的不返回（最多是等下一轮轮询才看到）。 */
+export function classifyPrState(command: string): PrStateCommand[] {
+  if (!/\bgh\b/.test(command) || !/\b(?:merge|close|reopen)\b/.test(command)) return [];
+  const out: PrStateCommand[] = [];
+  let dir: string | null = null;
+  for (const raw of splitSegments(command)) {
+    const tokens = shipTokens(raw);
+    let i = 0;
+    let ghRepoEnv: string | null = null;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
+      if (tokens[i].startsWith("GH_REPO=") && tokens[i].length > 8) ghRepoEnv = tokens[i].slice(8);
+      i++;
+    }
+    if (tokens[i] === "cd") {
+      if (tokens[i + 1]) dir = joinDir(dir, tokens[i + 1]);
+      continue;
+    }
+    const c = ghPrCommand(tokens, i, ghRepoEnv);
+    if (c) out.push({ action: c.action, dir, pr: c.pr, repo: c.repo });
   }
   return out;
 }

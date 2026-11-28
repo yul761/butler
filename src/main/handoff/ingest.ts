@@ -21,6 +21,8 @@ export interface IngestDeps {
   linkedOpen?: (ticketKey: string) => boolean;
   /** 这个 ticket 链接的、Shipherd 放弃读了的 PR（prUrlKey 形式）。 */
   givenUpPrs?: (ticketKey: string) => ReadonlySet<string>;
+  /** Shipherd 自己关掉的 PR（prUrlKey 形式，栈退回普通分支时关掉的 draft）：不算「关了没合」（BTL-270）。 */
+  shipherdClosedPrs?: (ticketKey: string) => ReadonlySet<string>;
   /** 这个 PR 链接不在 ticket 的任何一个仓库里（Shipherd 不跟踪它，状态不看它）。 */
   foreignPr?: (ticketKey: string, url: string) => boolean;
 }
@@ -39,7 +41,7 @@ export type IngestResult =
   | { stored: true; handoffId: number; degraded: boolean; status: TicketStatus | null }
   | { stored: false; reason: "no_ticket" | "duplicate" | "no_block" };
 
-type StatusDeps = Pick<IngestDeps, "tickets" | "handoffs" | "followups" | "now" | "linkedOpen" | "givenUpPrs" | "foreignPr">;
+type StatusDeps = Pick<IngestDeps, "tickets" | "handoffs" | "followups" | "now" | "linkedOpen" | "givenUpPrs" | "shipherdClosedPrs" | "foreignPr">;
 
 const foreignOf = (d: StatusDeps, ticketKey: string): ((url: string) => boolean) | undefined =>
   d.foreignPr ? (url) => d.foreignPr?.(ticketKey, url) ?? false : undefined;
@@ -74,7 +76,7 @@ export function ingestHandoff(d: IngestDeps, input: IngestInput): IngestResult {
     // 状态按模型自己报的 PR 算；记着的和链接的只能让它保持 in_review。
     const { own, remembered } = splitOwnAndRemembered(reported, stored);
     const status = deriveStatus({ ...payload, prs: own }, openFollowups(d, input.ticketKey), {
-      remembered, linkedOpen: d.linkedOpen?.(input.ticketKey) ?? false, givenUp: d.givenUpPrs?.(input.ticketKey), foreign: foreignOf(d, input.ticketKey),
+      remembered, linkedOpen: d.linkedOpen?.(input.ticketKey) ?? false, givenUp: d.givenUpPrs?.(input.ticketKey), shipherdClosed: d.shipherdClosedPrs?.(input.ticketKey), foreign: foreignOf(d, input.ticketKey),
     });
     d.tickets.setStatus(input.ticketKey, status, now);
     return { stored: true, handoffId: id, degraded: false, status };
@@ -95,7 +97,7 @@ export function rederiveTicketStatus(d: StatusDeps, ticketKey: string): TicketSt
     current === "done" || current === "merged_pending_followup"
       ? open > 0 ? "merged_pending_followup" : "done"
       : deriveStatus({ ...latest.payload, prs: [] }, open, {
-          remembered: latest.payload.prs, linkedOpen: d.linkedOpen?.(ticketKey) ?? false, givenUp: d.givenUpPrs?.(ticketKey), foreign: foreignOf(d, ticketKey),
+          remembered: latest.payload.prs, linkedOpen: d.linkedOpen?.(ticketKey) ?? false, givenUp: d.givenUpPrs?.(ticketKey), shipherdClosed: d.shipherdClosedPrs?.(ticketKey), foreign: foreignOf(d, ticketKey),
         });
   d.tickets.setStatus(ticketKey, status, d.now());
   return status;

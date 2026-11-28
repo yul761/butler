@@ -1,4 +1,4 @@
-import type { Ticket, TicketRepo, TicketStatus, WorkMode } from "../../shared/types";
+import type { Ticket, TicketCloseSource, TicketClosure, TicketRepo, TicketStatus, WorkMode } from "../../shared/types";
 import { withTransaction, type Db } from "./database";
 
 /**
@@ -14,6 +14,9 @@ interface TicketRow {
   archived_at: number | null;
   feature_id: number | null;
   block_id: number | null;
+  closed_at?: number | null;
+  closed_reason?: string | null;
+  closed_source?: string | null;
 }
 
 interface RepoRow {
@@ -60,6 +63,8 @@ export class TicketsRepo {
       archivedAt: r.archived_at,
       featureId: r.feature_id === null ? null : Number(r.feature_id),
       blockId: r.block_id === null ? null : Number(r.block_id),
+      closure:
+        r.closed_at === null || r.closed_at === undefined ? null : { at: r.closed_at, reason: r.closed_reason ?? "", source: (r.closed_source ?? "user") as TicketCloseSource },
     };
   }
 
@@ -126,6 +131,12 @@ export class TicketsRepo {
     return row ? toRepo(row) : null;
   }
 
+  /** 用这个分支名的仓库行（任何 ticket，关了、归档了的也算）。按仓库比较由调用方做（repoPath）。 */
+  reposOnBranch(branch: string): TicketRepo[] {
+    const rows = this.db.prepare(`SELECT * FROM ticket_repos WHERE branch = ? ORDER BY id`).all(branch) as unknown as RepoRow[];
+    return rows.map(toRepo);
+  }
+
   listRepos(ticketKey: string): TicketRepo[] {
     const rows = this.db.prepare(`SELECT * FROM ticket_repos WHERE ticket_key = ? ORDER BY id`).all(ticketKey) as unknown as RepoRow[];
     return rows.map(toRepo);
@@ -168,8 +179,23 @@ export class TicketsRepo {
       .run(status, at, status, key);
   }
 
+  /** 手动状态。设成 closed 以外的（包括清掉）同时清掉关闭记录：关闭记录只跟着 closed。 */
   setStatusManual(key: string, status: TicketStatus | null, at: number | null = null): void {
-    this.db.prepare(`UPDATE tickets SET status_manual = ?, status_manual_at = ? WHERE key = ?`).run(status, status ? at : null, key);
+    this.db
+      .prepare(
+        `UPDATE tickets SET status_manual = ?, status_manual_at = ?,
+           closed_at = CASE WHEN ? = 'closed' THEN closed_at END, closed_reason = CASE WHEN ? = 'closed' THEN closed_reason END,
+           closed_source = CASE WHEN ? = 'closed' THEN closed_source END
+         WHERE key = ?`,
+      )
+      .run(status, status ? at : null, status, status, status, key);
+  }
+
+  /** 关掉（BTL-270 closeTicket）：手动状态设成 closed，记下谁、为什么关的。 */
+  close(key: string, c: TicketClosure): void {
+    this.db
+      .prepare(`UPDATE tickets SET status_manual = 'closed', status_manual_at = ?, closed_at = ?, closed_reason = ?, closed_source = ? WHERE key = ?`)
+      .run(c.at, c.at, c.reason, c.source, key);
   }
 
   statusTimes(key: string): { changedAt: number | null; manualAt: number | null } {

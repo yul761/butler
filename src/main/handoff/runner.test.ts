@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TicketPrsRepo } from "../db/ticket-prs-repo";
 import type { Handoff } from "../../shared/handoff";
 import { headlessArgs, READ_ONLY_TOOLS, runHeadless, unsafeCmdArg, type HeadlessOutcome, type HeadlessRequest, type HeadlessRun } from "../claude/headless";
 import { FollowupsRepo } from "../db/followups-repo";
@@ -43,8 +44,9 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cw
     });
   let fid = 0;
   const ingest = (input: IngestInput) => ingestHandoff({ db, tickets, handoffs, followups, now: () => NOW, newFollowupId: () => `f${++fid}` }, input);
+  const ticketPrs = new TicketPrsRepo(db);
   const runner = new HandoffRunner({
-    tickets, sessions, handoffs, followups, settings, ingest,
+    tickets, sessions, handoffs, followups, settings, ingest, ticketPrs,
     dirs: (t) => {
       const first = t.repos[0]?.worktreePath ?? t.repos[0]?.repoPath ?? "/ws";
       return { cwd: first, addDirs: opts.addDirs ?? [], repoDirs: [first, ...(opts.addDirs ?? [])] };
@@ -68,7 +70,7 @@ function setup(opts: { run?: HeadlessRun; signal?: AbortSignal; projectMcp?: (cw
   const setRespond = (fn: typeof respond) => {
     respond = fn;
   };
-  return { runner, tickets, sessions, handoffs, settings, calls, mtimes, addTicket, ingest, setRespond };
+  return { runner, tickets, ticketPrs, sessions, handoffs, settings, calls, mtimes, addTicket, ingest, setRespond };
 }
 
 describe("HandoffRunner", () => {
@@ -247,6 +249,26 @@ describe("HandoffRunner", () => {
     await runner.runNightly();
     expect(sessions.get("s-A-1")).toMatchObject({ dismissed: false, ticketKey: "A-1" });
     expect(sessions.listByTicket("A-1").find((s) => !s.dismissed)?.id).toBe("s-A-1");
+  });
+
+  it("the morning refresh also covers tickets in needs_decision with a PR on their main branch, not active or closed ones (BTL-270 review)", async () => {
+    const { runner, addTicket, tickets, ticketPrs, setRespond } = setup();
+    for (const k of ["A-1", "B-2", "C-3", "D-4", "E-5"]) addTicket(k);
+    const pr = (key: string, n: number, headBranch: string) =>
+      ticketPrs.link({ ticketKey: key, url: `https://github.com/o/r/pull/${n}`, slug: "o/r", repoId: tickets.listRepos(key)[0].id, number: n, headBranch, state: "closed", source: "branch", linkedAt: 1 });
+    pr("A-1", 1, "feature/A-1");
+    pr("C-3", 3, "feature/C-3");
+    // D-4 的 PR 不在主分支上（session 推过的别的分支）：PR 轮询半小时读一次，早间不再花一次模型调用；E-5 一个 PR 都没有。
+    pr("D-4", 4, "wt/child");
+    tickets.setStatus("A-1", "needs_decision", NOW);
+    tickets.setStatus("B-2", "active", NOW);
+    tickets.setStatus("C-3", "needs_decision", NOW);
+    tickets.setStatusManual("C-3", "closed", NOW);
+    tickets.setStatus("D-4", "needs_decision", NOW);
+    tickets.setStatus("E-5", "needs_decision", NOW);
+    setRespond(async () => ok({ status: "in_review", pr: { number: 9, url: "u", state: "open", review: "pending" }, jira: null }));
+    const batch = await runner.refreshForBrief();
+    expect(batch.outcomes.map((o) => o.ticketKey)).toEqual(["A-1"]);
   });
 
   it("refreshes in_review and merged tickets without resuming and keeps the rest of the last handoff", async () => {

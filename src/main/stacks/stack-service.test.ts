@@ -434,6 +434,31 @@ describe("StackService draft layers", () => {
     expect(w.repoT.layer(lc.id)).toMatchObject({ mode: "branch", state: "branch_only", prNumber: null });
   });
 
+  it("marks the draft it closed as closed by Shipherd, and only when it really closed it (BTL-270)", async () => {
+    const w = world();
+    const closed: string[] = [];
+    w.deps.closedByShipherd = (url) => closed.push(url);
+    const id = await defineAll(w);
+    const lc = w.repoT.layers(id)[2]!;
+    await w.svc.setLayerMode(lc.id, "draft");
+    const url = w.repoT.layer(lc.id)!.prUrl;
+    expect(url).toMatch(/\/pull\/100$/);
+    await w.svc.setLayerMode(lc.id, "branch");
+    expect(closed).toEqual([url]);
+
+    // 对外动作开关关着、没关成：不记。
+    let allowClose = true;
+    const w2 = world({ allow: (k) => k !== "pr_open" || allowClose });
+    const closed2: string[] = [];
+    w2.deps.closedByShipherd = (u) => closed2.push(u);
+    const id2 = await defineAll(w2);
+    const l2 = w2.repoT.layers(id2)[2]!;
+    await w2.svc.setLayerMode(l2.id, "draft");
+    allowClose = false;
+    expect((await w2.svc.setLayerMode(l2.id, "branch")).ok).toBe(false);
+    expect(closed2).toEqual([]);
+  });
+
   it("reminds about stale drafts", async () => {
     const w = world();
     const id = await defineAll(w);

@@ -10,7 +10,7 @@ import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
 import { commentActionArg, flakyActionArg, loopSetArg } from "./validate";
 import { batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, lessonTargetArg, policyScopeArg, policySetArg, starterTargetArg } from "./validate";
-import { availabilityActionArg, boolArg, addRepoArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
+import { availabilityActionArg, boolArg, addRepoArg, CLOSE_RETRY_MAX, closeRetryArg, closeTicketArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonQueueIdArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg, linkUrlArg, openShipherdArg, openFeatureArg, openFixArg, clipboardTextArg, factIdArg, repoIdArg, routingActionArg, sessionIdArg, switchModelArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, versionArg } from "./validate";
 import { EXTERNAL_LINK_MAX } from "../util/external-link";
 
 describe("memory IPC arguments", () => {
@@ -568,5 +568,34 @@ describe("fork and report args (UI redesign layer 5)", () => {
     expect(devMessageArg(" 先别合 \n等 CI ")).toBe(" 先别合 \n等 CI ");
     expect(devMessageArg("x".repeat(TASK_LIMIT))).toHaveLength(TASK_LIMIT);
     for (const bad of [" \n ", "", "x".repeat(TASK_LIMIT + 1), 1, null, undefined]) expect(() => devMessageArg(bad)).toThrow();
+  });
+});
+
+describe("closeTicketArg (BTL-270)", () => {
+  it("needs a reason and refuses one over the limit instead of cutting it", () => {
+    expect(closeTicketArg({ reason: "需求变了" })).toEqual({ reason: "需求变了", closePrs: false, endSessions: false });
+    expect(closeTicketArg({ reason: "x", closePrs: true, endSessions: true })).toEqual({ reason: "x", closePrs: true, endSessions: true });
+    expect(() => closeTicketArg({ reason: "  " })).toThrow();
+    expect(() => closeTicketArg({ reason: "x".repeat(501) })).toThrow();
+    expect(() => closeTicketArg({ reason: "x", closePrs: "yes" })).toThrow();
+    expect(() => closeTicketArg(null)).toThrow();
+  });
+
+  it("takes the PRs ticked in the dialog, refusing too many instead of cutting the list", () => {
+    const urls = Array.from({ length: CLOSE_RETRY_MAX }, (_, i) => `https://github.com/o/r/pull/${i + 1}`);
+    expect(closeTicketArg({ reason: "x", closePrs: true, prUrls: urls })).toEqual({ reason: "x", closePrs: true, endSessions: false, prUrls: urls });
+    expect(closeTicketArg({ reason: "x", closePrs: true, prUrls: [] })).toEqual({ reason: "x", closePrs: true, endSessions: false, prUrls: [] });
+    expect(() => closeTicketArg({ reason: "x", closePrs: true, prUrls: [...urls, "https://github.com/o/r/pull/999"] })).toThrow();
+    expect(() => closeTicketArg({ reason: "x", prUrls: "https://github.com/o/r/pull/1" })).toThrow();
+    expect(() => closeTicketArg({ reason: "x", prUrls: [42] })).toThrow();
+  });
+
+  it("takes the PR links and session ids to retry, refusing too many instead of dropping the rest", () => {
+    expect(closeRetryArg({ prUrls: ["https://github.com/o/r/pull/1"], sessionIds: ["s-1"] })).toEqual({ prUrls: ["https://github.com/o/r/pull/1"], sessionIds: ["s-1"] });
+    expect(closeRetryArg({})).toEqual({ prUrls: [], sessionIds: [] });
+    expect(() => closeRetryArg({ prUrls: Array.from({ length: CLOSE_RETRY_MAX + 1 }, (_, i) => `u${i}`) })).toThrow();
+    expect(() => closeRetryArg({ sessionIds: ["a b"] })).toThrow();
+    expect(() => closeRetryArg({ prUrls: "x" })).toThrow();
+    expect(() => closeRetryArg(null)).toThrow();
   });
 });

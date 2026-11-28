@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Turn } from "../../../shared/turn";
-import { TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
+import { MANUAL_TICKET_STATUSES, type Feature, type OpenSessionRequest, type TicketStatus, type TicketView } from "../../../shared/types";
 import { api } from "../api";
+import { restPreviews } from "../close-ticket-outcome";
 import { reportError } from "../errors";
 import { repoWhere } from "../repos";
 import { ticketRows } from "../scope-view";
@@ -17,6 +18,8 @@ import { TicketPrTab } from "./TicketPrTab";
 import { TerminalPane } from "./TerminalPane";
 import { TicketTerminalTab, useTicketTerminals, type TicketTerminals } from "./TicketTerminalTab";
 import { TitleDialog } from "./TitleDialog";
+import { CloseRestButton } from "./CloseRestButton";
+import { CloseTicketDialog } from "./CloseTicketDialog";
 import { useStateRefetch } from "./useStateRefetch";
 import { useTurnBoard } from "./useTurnBoard";
 import { GLANCE_SCOPES } from "../state-bus";
@@ -42,6 +45,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   // 终端状态留在页面里：切到别的页签再回来，终端从快照重建，不丢。
   const term = useTicketTerminals(ticket);
   const [editingTitle, setEditingTitle] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   /** 页签落点：n 递增，同一个页签也能再落一次。 */
   const [force, setForce] = useState<{ tab: TicketTab; n: number } | null>(() => (initialOpen ? { tab: "terminal", n: 0 } : null));
   const goTab = (tab: TicketTab) => setForce((f) => ({ tab, n: (f?.n ?? 0) + 1 }));
@@ -79,6 +84,23 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   }, [landing]);
 
   const statusValue = ticket.statusManual ?? "auto";
+  const closed = ticket.statusManual === "closed";
+  // 关着的 ticket 还有开着的、能关的（或核对失败、可以再试的）自己的 PR：给一个「关掉剩下的 PR」入口（BTL-270 审查），打开同一个勾选框（CloseRestButton）。
+  // 对话框提交过、关上以后丢掉记下的数重新看（restSeq）；关掉了 PR 的等监视记录跟上再看（restPreviews.settle）。
+  // 什么都没提交就取消（onClose 给 null）：不丢记下的数，也不重新看（afterClose）。
+  const [restSeq, setRestSeq] = useState(0);
+  const [closingRest, setClosingRest] = useState(false);
+  // 重新打开了：记下的数作废（再关上时 PR 可能已经不一样了），路上的预览回来也不写。
+  useEffect(() => {
+    if (!closed) restPreviews.drop(ticket.key);
+  }, [ticket.key, closed]);
+  // 关闭框关上了：提交过才 settle 并重新看；什么都没提交就取消（null）的，记下的数照用。
+  const afterClose = (closedPrs: string[] | null) => {
+    if (closedPrs === null) return;
+    restPreviews.settle(ticket.key, closedPrs);
+    setRestSeq((n) => n + 1);
+  };
+  const reopen = () => api.reopenTicket(ticket.key).then((r) => setNotice(S.tc.reopened(r.restoredFollowups)), reportError);
 
   return (
     <div className="ticket-page">
@@ -91,8 +113,13 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           onChange={(e) => api.setStatus(ticket.key, e.target.value === "auto" ? null : (e.target.value as TicketStatus)).catch(reportError)}
         >
           <option value="auto">{S.statusAuto(STATUS_LABEL[ticket.status])}</option>
-          {TICKET_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+          {/* 「已关闭」要原因，走旁边的按钮；关着时这一项只用来显示。「待决定」只能自动得出。 */}
+          {MANUAL_TICKET_STATUSES.map((s) => <option key={s} value={s} disabled={s === "closed"}>{STATUS_LABEL[s]}</option>)}
         </select>
+        {closed
+          ? <button className="ticket-reopen" onClick={() => void reopen()}>{S.tc.reopen}</button>
+          : <button className="ticket-close" onClick={() => { setNotice(null); setClosing(true); }}>{S.tc.close}</button>}
+        {closed && <CloseRestButton key={ticket.key} ticketKey={ticket.key} seq={restSeq} onOpen={() => { setNotice(null); setClosingRest(true); }} />}
         <button onClick={() => setEditingTitle(true)}>{S.editTitle}</button>
         <button onClick={() => api.archive(ticket.key).then(onArchived, reportError)}>{S.archive}</button>
       </header>
@@ -101,7 +128,15 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
           {S.inFeature} <button className="link" onClick={() => onOpenFeature?.(feature.id)}>{feature.name}</button>
         </div>
       )}
+      {closed && ticket.closure && (
+        <div className="ticket-closed-banner muted" data-closed-source={ticket.closure.source}>
+          {S.tc.banner(ticket.closure.reason)} · {S.tc.by[ticket.closure.source]}
+        </div>
+      )}
+      {notice && <div className="muted ticket-notice">{notice}</div>}
       {editingTitle && <TitleDialog ticket={ticket} onClose={() => setEditingTitle(false)} />}
+      {closing && <CloseTicketDialog ticket={ticket} onClose={(closedPrs) => { setClosing(false); afterClose(closedPrs); }} onNotice={setNotice} />}
+      {closingRest && <CloseTicketDialog ticket={ticket} rest onClose={(closedPrs) => { setClosingRest(false); afterClose(closedPrs); }} onNotice={setNotice} />}
 
       <PageTabs
         page={`ticket:${ticket.key}`}

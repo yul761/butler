@@ -21,13 +21,14 @@ export type Turn =
   | { owner: "you"; kind: "merge"; risk: "low" | "medium" | "high" | null }
   | { owner: "you"; kind: "review"; author: string; title: string; url: string }
   // action：卡住裁判建议你怎么做（只有 silent 有，卡片上原因下面一行）；没有为 null 或不写。
-  | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked"; detail: string | null; action?: string | null; sessionId: string | null }
+  | { owner: "you"; kind: "stuck"; source: "needs_you" | "blocked_report" | "silent" | "ticket_blocked" | "ticket_needs_decision"; detail: string | null; action?: string | null; sessionId: string | null }
   | { owner: "you"; kind: "unattended"; why: UnattendedWhy; canSend: boolean; sessionId: string | null }
   | { owner: "you"; kind: "shipherd"; notice: NowNotice }
   | { owner: "agent"; kind: "fixing_ci" | "addressing_review" | "rebasing" | "working"; sessionId: string }
   // stack_below：Shipherd 管的栈里、下面一层还没合的 draft（names 是下面那层的分支），等它合了 Shipherd 自己 rebase 并改成 ready。
   | { owner: "external"; kind: "ci_running" | "awaiting_review" | "merge_queue" | "stack_below"; names: string[] }
-  | { owner: "done"; kind: "merged" }
+  // closed：ticket 关了、不做了（BTL-270），和合了一样算结束。
+  | { owner: "done"; kind: "merged" | "closed" }
   | { owner: "idle"; kind: "not_started" };
 
 /** 急的顺序：同一个 ticket 有几个 PR 时，取最急的那个（spec §5.1）。 */
@@ -57,7 +58,10 @@ export interface ScopeTurnRow {
   id: number | string;
   name: string;
   total: number;
+  /** 合了的（不含关掉的）。 */
   merged: number;
+  /** 关掉不做的 ticket（BTL-270）；算在 bar.done 里，和 merged 一起算结束。 */
+  closed: number;
   /** 进度条的四段，按 owner 计数。 */
   bar: Record<"done" | "agent" | "you" | "external" | "idle", number>;
   youCount: number;

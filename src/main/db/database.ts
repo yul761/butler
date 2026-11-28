@@ -120,18 +120,32 @@ export function migrate(db: Db): number {
   const current = userVersion(db);
   if (current > MIGRATIONS.length) throw new NewerDatabaseError(current, MIGRATIONS.length);
   for (let i = current; i < MIGRATIONS.length; i++) {
-    db.exec("BEGIN");
+    // 重建表（改 CHECK）的迁移要 DROP 别的表外键指着的表：外键只能在事务外关，提交前查一遍有没有这条迁移新造成的违规。
+    const fkOff = MIGRATIONS[i].includes(FOREIGN_KEYS_OFF) && fkOn(db);
+    if (fkOff) db.exec("PRAGMA foreign_keys = OFF");
     try {
-      db.exec(MIGRATIONS[i]);
-      db.exec(`PRAGMA user_version = ${i + 1}`);
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
+      db.exec("BEGIN");
+      try {
+        const violations = fkOff ? fkViolations(db) : 0;
+        db.exec(MIGRATIONS[i]);
+        if (fkOff && fkViolations(db) > violations) throw new Error(`migration ${i + 1} broke foreign keys`);
+        db.exec(`PRAGMA user_version = ${i + 1}`);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+    } finally {
+      if (fkOff) db.exec("PRAGMA foreign_keys = ON");
     }
   }
   return MIGRATIONS.length;
 }
+
+/** 迁移里写了这一行：migrate 在它的事务外关掉外键（见 BTL-270 重建 tickets 表）。 */
+const FOREIGN_KEYS_OFF = "-- shipherd:foreign-keys-off";
+const fkOn = (db: Db): boolean => (db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number } | undefined)?.foreign_keys === 1;
+const fkViolations = (db: Db): number => db.prepare("PRAGMA foreign_key_check").all().length;
 
 let savepointSeq = 0;
 

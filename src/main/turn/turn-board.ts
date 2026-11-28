@@ -46,6 +46,9 @@ const emptyBar = (): Bar => ({ done: 0, agent: 0, you: 0, external: 0, idle: 0 }
 const live = (o: TurnOwner) => o === "you" || o === "agent" || o === "external";
 const prRef = (p: { repo: string; number: number; title: string; url: string }) => ({ repo: p.repo, number: p.number, title: p.title, url: p.url });
 
+/** ticket 关了、不做了（BTL-270）。 */
+const isClosed = (t: Turn) => t.owner === "done" && t.kind === "closed";
+
 const isAsk = (o: TimedTurn) => o.turn.owner === "you" && o.turn.kind === "answer";
 
 function calcTicket(t: BoardTicket): TicketCalc {
@@ -133,12 +136,12 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
   const looseYou = (pred: (l: LooseItem) => boolean) => input.loose.filter((l) => l.turn.owner === "you" && pred(l)).length;
   const ticketRow = (c: TicketCalc): ScopeTurnRow => {
     const members = c.t.prs.length > 0
-      ? c.t.prs.map((p) => ({ name: `${p.repo}#${p.number}`, owner: p.turn.owner, progressAt: p.since }))
-      : [{ name: c.t.name, owner: c.turn.owner, progressAt: c.since }];
+      ? c.t.prs.map((p) => ({ name: `${p.repo}#${p.number}`, owner: p.turn.owner, progressAt: p.since, closed: false }))
+      : [{ name: c.t.name, owner: c.turn.owner, progressAt: c.since, closed: isClosed(c.turn) }];
     return row("ticket", c.t.key, c.t.name, members, c.youCount);
   };
   const ticketsOfFeature = (id: number) => calcs.filter((c) => c.t.featureId === id);
-  const ticketMembers = (cs: TicketCalc[]) => cs.map((c) => ({ name: c.t.name, owner: c.turn.owner, progressAt: c.since }));
+  const ticketMembers = (cs: TicketCalc[]) => cs.map((c) => ({ name: c.t.name, owner: c.turn.owner, progressAt: c.since, closed: isClosed(c.turn) }));
   const featureRow = (f: { id: number; name: string }): ScopeTurnRow => {
     const cs = ticketsOfFeature(f.id);
     const you = cs.reduce((n, c) => n + c.youCount, 0) + looseYou((l) => l.featureId === f.id);
@@ -161,8 +164,9 @@ export function buildTurnBoard(input: BoardInput, rawFilter: TurnFilter | null):
   return { items: shown, counts, scopes, generatedAt: input.now };
 }
 
-function row(kind: ScopeTurnRow["kind"], id: number | string, name: string, members: { name: string; owner: TurnOwner; progressAt: number }[], youCount: number): ScopeTurnRow {
+function row(kind: ScopeTurnRow["kind"], id: number | string, name: string, members: { name: string; owner: TurnOwner; progressAt: number; closed: boolean }[], youCount: number): ScopeTurnRow {
   const bar = emptyBar();
   for (const m of members) bar[m.owner]++;
-  return { kind, id, name, total: members.length, merged: bar.done, bar, youCount, slowest: slowestOf(members) };
+  const closed = members.filter((m) => m.closed).length;
+  return { kind, id, name, total: members.length, merged: bar.done - closed, closed, bar, youCount, slowest: slowestOf(members) };
 }

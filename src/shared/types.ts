@@ -10,8 +10,62 @@ import type { AvailabilityHit, LimitHit } from "./availability";
 import type { ReportKind } from "./control";
 import type { FeatureHandoff, Handoff, Pr } from "./handoff";
 import type { PrMergeable, PrMergeState, PrReviewer, PrReviewRequest } from "./progress";
-export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done"] as const;
+/**
+ * done 是做完了；closed 是不做了（需求变了、PR 关掉了，只能手动设，见 closeTicket）；
+ * needs_decision 是自动的：PR 全都关了没合、也没有开着的，等人决定重开、另开还是关掉（BTL-270）。
+ */
+export const TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done", "needs_decision", "closed"] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
+/** 手动能设的状态：needs_decision 只由 PR 推出来，手动设没有意义。 */
+export const MANUAL_TICKET_STATUSES = ["active", "in_review", "blocked", "merged_pending_followup", "done", "closed"] as const satisfies readonly TicketStatus[];
+export type ManualTicketStatus = (typeof MANUAL_TICKET_STATUSES)[number];
+/** 谁关的 ticket：用户在界面上、总控（close_ticket）、还是信息路由（BTL-272）。 */
+export const TICKET_CLOSE_SOURCES = ["user", "coordinator", "routing"] as const;
+export type TicketCloseSource = (typeof TICKET_CLOSE_SOURCES)[number];
+export interface TicketClosure {
+  at: number;
+  reason: string;
+  source: TicketCloseSource;
+}
+/**
+ * 关 ticket 时关不了的 PR 为什么关不了（BTL-270）：never_read 还没读过；given_up 放弃读了（一直读不到、或认定不存在）；
+ * foreign 不在 ticket 的仓库里；not_own_branch head 分支不是这个 ticket 自己的分支；shared 也挂在别的 ticket 上（关了的也算）；
+ * shared_branch 同一个仓库里别的 ticket 也用过这个分支名（不知道 PR 是谁的）。
+ */
+export const UNCLOSABLE_PR_KINDS = ["never_read", "given_up", "foreign", "not_own_branch", "shared", "shared_branch"] as const;
+export type UnclosablePrKind = (typeof UNCLOSABLE_PR_KINDS)[number];
+/**
+ * 关 ticket 时没关掉的 PR：failed 是 gh 关失败，skipped 是对外动作开关关着，unverified 是关之前用 gh 实时核对 head 失败了
+ * （gh 出错、超时；没核对过不关，BTL-270 审查），其余是关不了。
+ */
+export type ClosePrErrorKind = "failed" | "skipped" | "unverified" | UnclosablePrKind;
+/** 重试有意义的：gh 失败、开关关着、核对失败。关不了的那几类再试也一样。 */
+export const RETRYABLE_CLOSE_PR_ERRORS: readonly ClosePrErrorKind[] = ["failed", "skipped", "unverified"];
+/** needsDecision 看的事实。status 是 PR 之前的状态（模型报的、或者存着的）；模型报的 closed 由调用方先当成 needs_decision。 */
+export interface DecisionFacts {
+  status: TicketStatus;
+  /** 状态是 blocked 而且列了 blockers：卡住优先，不算等决定。别的状态带的 blockers 是对着关掉的 PR 说的，不算。 */
+  blockedWithReasons: boolean;
+  /** 开着的 PR 数（存的状态还没跟上时也按 PR 算）。 */
+  openPrs: number;
+  /** 算数的 PR（去掉放弃读的、Shipherd 自己关的、别处的）至少一个，而且全都关了没合。 */
+  allClosed: boolean;
+}
+
+/**
+ * 「要你决定还做不做」的唯一判断（BTL-270 审查）：deriveStatus 的第 5 条、prHandoff 的待决定 / 重开、看板和进度页的 awaitsDecision 都用它。
+ * 有开着的 PR 不算（GitHub 上重开了、另开了一个，下一轮读才改）；blocked 列了原因的不算；已经是 needs_decision 的接着算；
+ * in_review、没列原因的 blocked，PR 全都关了没合时算。active（又开始干了）、合并过了的、closed（手动关了）都不算。
+ */
+export function needsDecision(f: DecisionFacts): boolean {
+  if (f.openPrs > 0) return false;
+  if (f.status === "blocked" && f.blockedWithReasons) return false;
+  if (f.status === "needs_decision") return true;
+  return f.allClosed && (f.status === "in_review" || f.status === "blocked");
+}
+
+/** 这时候是不是真的在等人决定：存着的状态加上开着的 PR 数，按 needsDecision 判断。看板和进度页共用。 */
+export const awaitsDecision = (status: TicketStatus, openPrs: number): boolean => needsDecision({ status, blockedWithReasons: false, openPrs, allClosed: false });
 export type WorkMode = "worktree" | "branch";
 
 /** ticket 涉及的一个仓库：各自的工作方式和分支（设计文档 2026-10-23 多仓库 ticket）。 */
@@ -86,6 +140,8 @@ export interface Ticket {
   featureId: number | null;
   /** 在 epic 里属于哪个 feature（内部叫 block，见 BTL-246；null 或省略：不属于任何 feature）。 */
   blockId?: number | null;
+  /** 关掉时记的原因和来源（BTL-270）；没关过、或者重新打开了是 null / 省略。 */
+  closure?: TicketClosure | null;
 }
 
 /**
@@ -346,6 +402,11 @@ export interface Followup {
   source: FollowupSource;
   createdAt: number;
   doneAt: number | null;
+  /** 总控或用户处理（完成、忽略）时写的原因（BTL-270 resolve_followup / close_ticket）。 */
+  resolvedReason?: string | null;
+  resolvedSource?: TicketCloseSource | null;
+  /** 关 ticket 时顺手忽略的：重新打开时还原成忽略前的状态。 */
+  ignoredByClose?: boolean;
 }
 
 export type HandoffTrigger = "nightly" | "manual" | "command" | "refresh";

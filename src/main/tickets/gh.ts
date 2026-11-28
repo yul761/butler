@@ -455,6 +455,57 @@ export async function prRead(cwd: string, ref: string, timeoutMs: number): Promi
   return parsePr(r.stdout);
 }
 
+/** 关 PR 之前核对的：head 在不在 fork 上（isCrossRepository）、head 分支、还开着没有（BTL-270 审查）。 */
+export interface PrHead {
+  crossRepo: boolean;
+  /** head 所在仓库的 owner（headRepositoryOwner.login）；head 仓库删了时是 null。 */
+  headOwner: string | null;
+  /** head 所在仓库的名字（headRepository.name）；读不到（仓库删了）是 null。fork 上的 head 要和 origin 的 owner、名字都对上才算本 ticket 的。 */
+  headRepo: string | null;
+  headBranch: string;
+  /** PR 现在的目标分支（baseRefName）。 */
+  baseBranch: string;
+  open: boolean;
+}
+
+const PR_HEAD_FIELDS = "isCrossRepository,headRepositoryOwner,headRepository,headRefName,baseRefName,state";
+
+/** 核对 head 失败：error 是给人看的原因；ghTooOld 是 gh 太老、不认识要读的字段（headRepositoryOwner、headRepository、baseRefName），要升级 gh。 */
+export interface PrHeadError {
+  error: string;
+  ghTooOld?: true;
+}
+
+/** gh 不认识 --json 的某个字段（版本太老）时的报错。 */
+const UNKNOWN_JSON_FIELD = /unknown json field/i;
+
+/** gh pr view <ref> --json PR_HEAD_FIELDS 的输出 → PrHead；输出里缺老版 gh 不给的字段是 "too_old"；别的不对是 null。 */
+export function parsePrHead(text: string | null): PrHead | "too_old" | null {
+  const j = obj(parseJson(text));
+  if (j && (!("headRepositoryOwner" in j) || !("headRepository" in j) || !("baseRefName" in j))) return "too_old";
+  if (!j || typeof j.isCrossRepository !== "boolean" || typeof j.headRefName !== "string" || typeof j.baseRefName !== "string" || typeof j.state !== "string") return null;
+  const owner = obj(j.headRepositoryOwner)?.login;
+  const name = obj(j.headRepository)?.name;
+  return {
+    crossRepo: j.isCrossRepository, headOwner: typeof owner === "string" && owner ? owner : null, headRepo: typeof name === "string" && name ? name : null, headBranch: j.headRefName, baseBranch: j.baseRefName, open: j.state === "OPEN",
+  };
+}
+
+/**
+ * 关 ticket 时实时核对一个 PR 的 head（BTL-270 审查）：head 在哪个 owner 下、分支名、目标分支、还开不开着。
+ * gh 失败、超时、输出不对时是 { error }（给人看的原因），调用方当作「核对失败、可以重试」；gh 太老、不认识要读的字段时带 ghTooOld。
+ */
+export async function prHead(cwd: string, ref: string, timeoutMs: number): Promise<PrHead | PrHeadError> {
+  const r = await runGhDetail(cwd, ["pr", "view", ref, "--json", PR_HEAD_FIELDS], timeoutMs, 1024 * 1024);
+  if (r.stdout === null) {
+    const error = ghErrorSummary(r, timeoutMs);
+    return UNKNOWN_JSON_FIELD.test(r.stderr) ? { error, ghTooOld: true } : { error };
+  }
+  const h = parsePrHead(r.stdout);
+  if (h === "too_old") return { error: "gh pr view did not return headRepositoryOwner / headRepository / baseRefName", ghTooOld: true };
+  return h ?? { error: "gh pr view returned unexpected output" };
+}
+
 /**
  * gh repo view <slug>：GitHub 上这个仓库现在的 slug（小写；github.com 以外的主机带主机名，和 parseRemoteSlug 一样）。
  * 改过名、转过 owner 的，GitHub 跳转到新名字，返回的就和传进来的不一样。GH_NOT_FOUND：仓库不在了或看不到；null：gh 失败。

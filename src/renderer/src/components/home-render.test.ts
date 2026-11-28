@@ -124,7 +124,7 @@ describe("HomeMore (the old Now page's run-status blocks)", () => {
 
 describe("AllWorkBody", () => {
   const scope = (kind: ScopeTurnRow["kind"], id: number | string, o: Partial<ScopeTurnRow> = {}): ScopeTurnRow => ({
-    kind, id, name: String(id), total: 4, merged: 1, bar: { done: 1, agent: 1, you: 2, external: 0, idle: 0 }, youCount: 0, slowest: null, ...o,
+    kind, id, name: String(id), total: 4, merged: 1, closed: 0, bar: { done: 1, agent: 1, you: 2, external: 0, idle: 0 }, youCount: 0, slowest: null, ...o,
   });
   const board = (scopes: ScopeTurnRow[]): TurnBoard => ({ items: [], counts: { you: 0, agent: 0, external: 0, mergedToday: 0 }, scopes, generatedAt: 1 });
   const base = {
@@ -134,7 +134,7 @@ describe("AllWorkBody", () => {
   const render = (o: Partial<AllWorkBodyProps> = {}) => renderToStaticMarkup(createElement(AllWorkBody, { board: null, ...base, ...o }));
 
   it("has the create buttons, the two entries and the four columns", () => {
-    const html = render({ board: board([scope("feature", 1, { youCount: 2 }), scope("feature", 2), scope("ticket", "BTL-9", { total: 1, merged: 0 })]) });
+    const html = render({ board: board([scope("feature", 1, { youCount: 2 }), scope("feature", 2), scope("ticket", "BTL-9", { total: 1, merged: 0, closed: 0 })]) });
     for (const t of [`+ ${S.newTicket}`, `+ ${S.newFeature}`, S.archived]) expect(html).toContain(t);
     // 「显示 Shipherd 之外开的 session」默认关：没有未认领入口（BTL-244）。
     expect(html).not.toContain(S.hm.all.unclaimedBtn(0));
@@ -152,7 +152,7 @@ describe("AllWorkBody", () => {
   });
 
   it("a ticket row keeps its key whole and says the ticket's own state, not a scope count", () => {
-    const merged = scope("ticket", "BTL-9", { total: 1, merged: 1, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } });
+    const merged = scope("ticket", "BTL-9", { total: 1, merged: 1, closed: 0, bar: { done: 1, agent: 0, you: 0, external: 0, idle: 0 } });
     const html = render({ board: board([merged]) });
     expect(html).toContain('<span class="key">BTL-9</span><span class="title">BTL-9 title</span>');
     expect(html).toContain('title="BTL-9 BTL-9 title"');
@@ -177,7 +177,7 @@ describe("AllWorkBody", () => {
   it("a single ticket's row says where the ticket's own item stands", () => {
     const turn: Turn = { owner: "external", kind: "ci_running", names: [] };
     const it9: TurnItem = { ticketKey: "BTL-9", pr: null, featureId: null, turn, since: 1, others: 0, ticketLevel: true };
-    const html = render({ board: { ...board([scope("ticket", "BTL-9", { total: 1, merged: 0 })]), items: [it9] } });
+    const html = render({ board: { ...board([scope("ticket", "BTL-9", { total: 1, merged: 0, closed: 0 })]), items: [it9] } });
     const row = /<tr[^>]*all-work-row-ticket-BTL-9(?:(?!<\/tr>).)*<\/tr>/.exec(html)![0];
     expect(row).toContain(turnSentence(turn, it9, S));
     expect(row).not.toContain(S.hm.scopeLine(1, 0, null));
@@ -305,7 +305,7 @@ describe("HomeBody", () => {
   const you = (n: number): TurnItem => ({ ticketKey: `BTL-${n}`, pr: null, featureId: null, turn: { owner: "you", kind: "merge", risk: null }, since: 1, others: 0 });
   const busy = (n: number): TurnItem => ({ ticketKey: `RUN-${n}`, pr: null, featureId: null, turn: { owner: "agent", kind: "working", sessionId: "s" }, since: 1, others: 0 });
   const scope = (id: number, o: Partial<ScopeTurnRow> = {}): ScopeTurnRow => ({
-    kind: "feature", id, name: `Feature ${id}`, total: 4, merged: 1, bar: { done: 1, agent: 1, you: 2, external: 0, idle: 0 }, youCount: 0, slowest: null, ...o,
+    kind: "feature", id, name: `Feature ${id}`, total: 4, merged: 1, closed: 0, bar: { done: 1, agent: 1, you: 2, external: 0, idle: 0 }, youCount: 0, slowest: null, ...o,
   });
   const counts = { you: 0, agent: 2, external: 1, mergedToday: 3 };
   const board = (items: TurnItem[], scopes: ScopeTurnRow[] = [scope(1, { youCount: 2 })]): TurnBoard => ({ items, counts, scopes, generatedAt: 1 });

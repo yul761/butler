@@ -51,7 +51,7 @@ export function turnSentence(turn: Turn, _item: TurnItem, s: UiStrings): string 
       if (turn.kind === "stack_below") return t.external.stackBelow(turn.names);
       return t.external[turn.kind];
     case "done":
-      return t.done;
+      return turn.kind === "closed" ? t.closed : t.done;
     case "idle":
       return t.idle;
   }

@@ -228,6 +228,9 @@ button.link { border: none; background: transparent; padding: 0; color: inherit;
 .row input { flex: 1; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: flex; align-items: center; justify-content: center; z-index: 10; }
 .modal { width: 460px; display: flex; flex-direction: column; gap: 10px; padding: 20px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+.close-leftovers { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+.close-leftovers code { word-break: break-all; }
+.close-ticket-leftovers h3 { margin: 4px 0 0; font-size: 13px; }
 .modal label { display: flex; flex-direction: column; gap: 4px; }
 .modal label.inline { flex-direction: row; align-items: center; gap: 6px; }
 .modal fieldset { border: 1px solid var(--border); border-radius: 6px; display: flex; gap: 16px; }

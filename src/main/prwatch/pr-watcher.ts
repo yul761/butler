@@ -4,11 +4,11 @@ import type { PrStageRepo } from "../db/pr-stage-repo";
 import { PR_GONE_RETRY_MS, prGivenUp, type TicketPr, type TicketPrsRepo } from "../db/ticket-prs-repo";
 import {
   GH_NOT_FOUND, latestReviewers, prBatchable, reviewerKind, type CiCheck, type PrComment, type PrStatus, type branchRuns, type failedLogDetail, type prBatch, type prRead, type prsForBranch, type reviewAuthors,
-  type ReviewAuthors, type reviewComments,
+  type ReviewAuthors, type reviewComments, type BranchPr,
 } from "../tickets/gh";
-import { prUrlParts } from "../../shared/pr-url";
+import { prUrlKey, prUrlParts } from "../../shared/pr-url";
 import type { firstCommitAt } from "../tickets/git";
-import type { Ticket, TicketRepo, WatchedPr } from "../../shared/types";
+import { effectiveStatus, type Ticket, type TicketRepo, type WatchedPr } from "../../shared/types";
 import type { CiItem } from "./ci-delivery";
 import { PR_STATES, type PrLinker } from "./pr-links";
 import { firstCommitObservation, prObservations, scopeOf, stageKey, type ObsScope, type PrSnapshot } from "./pr-observe";
@@ -55,12 +55,22 @@ export const OWNED_LIST_MS = 5 * 60_000;
 export const OWNED_FRESH_MS = 14 * 24 * 60 * 60_000;
 /** 有归属的分支上已经合并 / 关闭的 PR：最近一次推送前这么久以内开的才算这次的（推送和开 PR 之间隔不了多久）。 */
 export const OWNED_PR_SLACK_MS = 24 * 60 * 60_000;
+/**
+ * 分支列表里开着、行里记的是关掉的（GitHub 网页上重开了）：同一行最多这么久要求重读一次（BTL-270 审查）。
+ * 列表和 gh pr view 说法不一样（GitHub 那边还没同步）、或者重读失败时，不至于每一轮都重新列分支、再要求一次。
+ */
+export const REOPEN_PROBE_MS = 5 * 60_000;
+/** 等决定（needs_decision）的 ticket：关掉的 PR 行这么久重读一次，有归属的分支这么久列一次（在 GitHub 网页上重开、另开的才看得到）。 */
+export const DECIDING_REREAD_MS = 30 * 60_000;
+
+/** PrWatcher 看的 ticket：状态给了的话，等决定（needs_decision）的会低频重读关掉的 PR（BTL-270 审查）。 */
+export type WatchedTicket = Pick<Ticket, "key" | "repos"> & Partial<Pick<Ticket, "status" | "statusManual">>;
 
 export interface PrWatcherDeps {
   prs: TicketPrsRepo;
   branches: BranchWatchRepo;
   /** 未归档的 ticket 和它们的仓库。 */
-  tickets(): Pick<Ticket, "key" | "repos">[];
+  tickets(): WatchedTicket[];
   repoOf(repoId: number): TicketRepo | null;
   /** 在哪个目录跑 gh（worktree 或仓库本身）。 */
   ghWorkDir(r: TicketRepo): string;
@@ -125,6 +135,15 @@ type Prefetched = { got: PrStatus | typeof GH_NOT_FOUND; same: boolean } | { vie
 const sameChecks = (a: CiCheck[], b: CiCheck[]) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
+ * 这一行现在会不会被读：放弃了的（read_retry_at 还没到）和认定不存在的（read_gone_at，一周内）不会，除非强制重试放弃了的。
+ * 关掉的行重读（includeSettled、等决定的低频重读）和「列表说重开了」的触发都按它判断（BTL-261、BTL-270 审查）。
+ */
+export const readableNow = (r: Pick<TicketPr, "readRetryAt" | "readGoneAt">, now: number): boolean =>
+  (r.readRetryAt === null || r.readRetryAt <= now) && (r.readGoneAt === null || r.readGoneAt <= now - PR_GONE_RETRY_MS);
+
+const deciding = (t: WatchedTicket): boolean => t.status !== undefined && effectiveStatus({ status: t.status, statusManual: t.statusManual ?? null }) === "needs_decision";
+
+/**
  * 按 PR 查（全部是代码，不调模型）。ticket_prs 每个 (ticket, PR) 一行，PR 按 URL 读一次、写进所有链接它的 ticket；
  * 每个 ticket 仓库的分支用 gh pr list 找 PR（同一个分支上先后的几个 PR 都链接上），没有开着的 PR 时看分支的 workflow run（branch_watch）。
  * PR 状态或 review 变了告诉 onPrChanged，CI 有了新结论告诉 onCiSettled，合并了告诉 onMerged（成功为止）。
@@ -137,6 +156,8 @@ export class PrWatcher {
   /** soon() / soonTicket() 要求马上查的仓库和 ticket；ticket 的值：放弃了的 PR 要不要也读。 */
   private dueRepos = new Set<number>();
   private dueTickets = new Map<string, boolean>();
+  /** soonTicket 的 includeSettled：这些 ticket 已经合并、关掉的 PR 也重读一次（gh pr reopen 之后，BTL-270）。 */
+  private settledTickets = new Set<string>();
   private ghActive = 0;
   private readonly ghWaiting: (() => void)[] = [];
   /** Copilot review 的行内评论拉失败的次数，键 `${url}:${reviewId}`；拉到了就删掉。只在内存里。 */
@@ -157,6 +178,10 @@ export class PrWatcher {
   private readonly prCache = new Map<string, { sig: string; pr: PrStatus; fullAt: number; failed: CiCheck[] | null; wide: boolean }>();
   /** 上次记「GraphQL 点数不多了」日志时的重置时间：同一个窗口只记一次。 */
   private rateLoggedFor: number | null = null;
+  /** 列表说重开了、要求过重读的行（键行 id）：这个时间之前不再要求（REOPEN_PROBE_MS）。只在内存里。 */
+  private readonly reopenProbeAt = new Map<number, number>();
+  /** 等决定的 ticket 关掉的行（键行 id）：这个时间之前不再低频重读（DECIDING_REREAD_MS）。只在内存里，重启后第一轮读一次。 */
+  private readonly decidingReadAt = new Map<number, number>();
 
   constructor(private readonly d: PrWatcherDeps) {}
 
@@ -185,8 +210,10 @@ export class PrWatcher {
    * 立刻查这个 ticket 所有仓库的分支和它所有的 PR。retryGivenUp（默认 true）：放弃读了的 PR 也读一次（用户点了刷新、ticket 的 session 停下来）。
    * 总控停下来时把 epic 里每个 ticket 都查一遍，那时传 false：不然放弃了的 PR 总控每停一次就读一次，放弃等于没放弃。
    */
-  soonTicket(ticketKey: string, o: { retryGivenUp?: boolean } = {}): void {
+  soonTicket(ticketKey: string, o: { retryGivenUp?: boolean; includeSettled?: boolean } = {}): void {
     this.dueTickets.set(ticketKey, (this.dueTickets.get(ticketKey) ?? false) || (o.retryGivenUp ?? true));
+    // 平时读过的合并 / 关掉的 PR 不再读；session 或总控刚跑了 gh pr reopen 之类的，要把它们也读一次才看得到。
+    if (o.includeSettled) this.settledTickets.add(ticketKey);
     this.schedule();
   }
 
@@ -266,17 +293,21 @@ export class PrWatcher {
   private async round(): Promise<void> {
     const repos = this.dueRepos;
     const keys = this.dueTickets;
+    const settled = this.settledTickets;
     this.dueRepos = new Set();
     this.dueTickets = new Map();
+    this.settledTickets = new Set();
     const forced: Forced = (key, repoId) => keys.has(key) || (repoId !== null && repos.has(repoId));
     const retryGivenUp: Forced = (key, repoId) => keys.get(key) === true || (repoId !== null && repos.has(repoId));
     const marks: Marks = { prChanged: new Set(), changed: false };
-    let tickets: Pick<Ticket, "key" | "repos">[] = [];
+    let tickets: WatchedTicket[] = [];
     await this.part("listing tickets", () => {
       tickets = this.d.tickets();
     });
     await this.part("pruning old branches", () => this.prune(tickets, marks));
-    await this.part("reading PRs", () => this.pollPrs(tickets, forced, retryGivenUp, marks));
+    const now = this.d.now();
+    for (const [id, at] of this.reopenProbeAt) if (at <= now) this.reopenProbeAt.delete(id);
+    await this.part("reading PRs", () => this.pollPrs(tickets, forced, retryGivenUp, marks, settled));
     await this.part("checking branches", () => this.checkBranches(tickets, forced, marks));
     await this.part("checking owned branches", () => this.checkOwnedBranches(tickets, forced, marks));
     await this.part("handling merged PRs", () => this.handleMerged());
@@ -287,7 +318,7 @@ export class PrWatcher {
   }
 
   /** ticket 换了分支（C-S3）：删掉旧分支找到的、还开着的 PR 行；分支行换成新分支的、没查过的。 */
-  private prune(tickets: Pick<Ticket, "key" | "repos">[], marks: Marks): void {
+  private prune(tickets: WatchedTicket[], marks: Marks): void {
     for (const t of tickets) {
       for (const r of t.repos) {
         if (this.d.prs.pruneStale(r.id, r.branch) > 0) marks.changed = true;
@@ -300,19 +331,44 @@ export class PrWatcher {
     }
   }
 
-  private async pollPrs(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, retryGivenUp: Forced, marks: Marks): Promise<void> {
+  private async pollPrs(tickets: WatchedTicket[], forced: Forced, retryGivenUp: Forced, marks: Marks, settled: ReadonlySet<string> = new Set()): Promise<void> {
     const live = new Set(tickets.map((t) => t.key));
     const now = this.d.now();
     // 归档 ticket 里没读过的行（补链接来的）也读一次；读过以后 needingRead 不再给它。
     // 放弃了的（read_retry_at 还没到）和认定不存在的（read_gone_at，一周内）不读，除非这一轮强制、而且要重试放弃了的
     // （用户点了刷新、session 刚 push 或停下；总控停下的那种不算）：认定错了（比如换了账号、补了权限）用户刷新一下就能读回来。
-    const goneUntil = now - PR_GONE_RETRY_MS;
-    const rows = this.d.prs
-      .needingRead(now, { includeGone: true })
+    const needed = this.d.prs.needingRead(now, { includeGone: true });
+    const ids = new Set(needed.map((r) => r.id));
+    // gh pr reopen 之类以后（includeSettled）：合并 / 关掉的行也读一次。这些行不跟着强制重试放弃了的：认定不存在的照样一周一次（BTL-261）。
+    const settledIds = new Set<number>();
+    for (const key of settled) {
+      for (const r of this.d.prs.byTicket(key)) {
+        if (ids.has(r.id) || r.state === "open") continue;
+        needed.push(r);
+        settledIds.add(r.id);
+      }
+    }
+    // 等决定（needs_decision）的 ticket：关掉的行每 DECIDING_REREAD_MS 读一次，不管在哪个分支上（有归属的分支、handoff 里写的），
+    // 在 GitHub 网页上重开了才看得到（BTL-270 审查）。同样守着放弃读、认定不存在（readableNow）。
+    const decidingIds = new Set<number>();
+    const decidingSeen = new Set<number>();
+    for (const t of tickets) {
+      if (!deciding(t)) continue;
+      for (const r of this.d.prs.byTicket(t.key)) {
+        if (ids.has(r.id) || settledIds.has(r.id) || r.state !== "closed" || r.checkedAt === 0) continue;
+        decidingSeen.add(r.id);
+        if (now < (this.decidingReadAt.get(r.id) ?? 0)) continue;
+        needed.push(r);
+        settledIds.add(r.id);
+        decidingIds.add(r.id);
+      }
+    }
+    for (const id of this.decidingReadAt.keys()) if (!decidingSeen.has(id)) this.decidingReadAt.delete(id);
+    const rows = needed
       .filter(
         (r) =>
           (live.has(r.ticketKey) || r.checkedAt === 0) &&
-          (retryGivenUp(r.ticketKey, r.repoId) || ((r.readRetryAt === null || r.readRetryAt <= now) && (r.readGoneAt === null || r.readGoneAt <= goneUntil))),
+          (settledIds.has(r.id) ? readableNow(r, now) : retryGivenUp(r.ticketKey, r.repoId) || readableNow(r, now)),
       );
     const urls = new Set(rows.map((r) => r.url));
     for (const u of this.unreadBackoff.keys()) if (!urls.has(u)) this.unreadBackoff.delete(u);
@@ -324,9 +380,13 @@ export class PrWatcher {
     const due = capRound(
       polls.filter((p) => {
         const backedOff = now < (this.unreadBackoff.get(p.url)?.at ?? 0);
-        return p.rows.some((r) => retryGivenUp(r.ticketKey, r.repoId) || (!backedOff && (forced(r.ticketKey, r.repoId) || now >= nextPrCheckAt(r, p.sessionOpen))));
+        return p.rows.some(
+          (r) => decidingIds.has(r.id) || retryGivenUp(r.ticketKey, r.repoId) || (!backedOff && (forced(r.ticketKey, r.repoId) || now >= nextPrCheckAt(r, p.sessionOpen))),
+        );
       }),
     );
+    // 这一轮真要读的才记下时间：被 capRound 挤掉的下一轮再来。
+    for (const p of due) for (const r of p.rows) if (decidingIds.has(r.id)) this.decidingReadAt.set(r.id, now + DECIDING_REREAD_MS);
     const unread: Unread[] = [];
     // 每个仓库批量读完就开始读它的 PR，不等别的仓库。
     const groups = this.d.gh.prBatch ? batchGroups(due) : { bySlug: new Map<string, BatchGroup>(), rest: due };
@@ -608,7 +668,7 @@ export class PrWatcher {
     return bots;
   }
 
-  private async checkBranches(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
+  private async checkBranches(tickets: WatchedTicket[], forced: Forced, marks: Marks): Promise<void> {
     const targets = branchTargets(tickets, { ghWorkDir: (r) => this.d.ghWorkDir(r), sessionOpen: (k, id) => this.d.sessionOpen(k, id) });
     const now = this.d.now();
     // 放弃读了的开着的 PR 也算：PR 还在，只是读不到，分支检查照样停着（不然它每轮都去列这个分支）。
@@ -628,9 +688,10 @@ export class PrWatcher {
    * 已经链接上的 PR 还开着、或者在最近一次推送之后才合并 / 关闭的：这次推送的 PR 已经有了，不再列（再推一次又会列）。
    * 列出来的只链接开着的、和最近一次推送前一天以后开的：重名的老分支（`fix/ci`）上早就合并的 PR 不链接进来。
    */
-  private async checkOwnedBranches(tickets: Pick<Ticket, "key" | "repos">[], forced: Forced, marks: Marks): Promise<void> {
+  private async checkOwnedBranches(tickets: WatchedTicket[], forced: Forced, marks: Marks): Promise<void> {
     if (!this.d.owners) return;
     const now = this.d.now();
+    const waiting = new Set(tickets.filter(deciding).map((t) => t.key));
     const due: { ticketKey: string; repo: TicketRepo; branch: string; id: string; at: number }[] = [];
     const seen = new Set<string>();
     const linked = new Map<string, TicketPr[]>();
@@ -640,9 +701,11 @@ export class PrWatcher {
       const id = `${o.ticketKey}:${o.repoId}:${o.branch}`;
       seen.add(id);
       if (!linked.has(o.ticketKey)) linked.set(o.ticketKey, this.d.prs.byTicket(o.ticketKey));
-      const done = (r: TicketPr): boolean => r.state === "open" || (r.mergedAt ?? r.closedAt ?? r.linkedAt) >= o.at;
+      // 等决定的 ticket（BTL-270 审查）：推送后关掉的 PR 不算「这次推送的 PR 已经有了」，接着低频列，网页上重开、另开的才看得到。
+      const decidingNow = waiting.has(o.ticketKey);
+      const done = (r: TicketPr): boolean => r.state === "open" || (!(decidingNow && r.state === "closed") && (r.mergedAt ?? r.closedAt ?? r.linkedAt) >= o.at);
       if (linked.get(o.ticketKey)!.some((r) => r.repoId === o.repoId && r.headBranch === o.branch && done(r))) continue;
-      if (!forced(o.ticketKey, o.repoId) && now < (this.ownedListedAt.get(id) ?? 0) + OWNED_LIST_MS) continue;
+      if (!forced(o.ticketKey, o.repoId) && now < (this.ownedListedAt.get(id) ?? 0) + (decidingNow ? DECIDING_REREAD_MS : OWNED_LIST_MS)) continue;
       due.push({ ticketKey: o.ticketKey, repo, branch: o.branch, id, at: o.at });
     }
     for (const id of this.ownedListedAt.keys()) if (!seen.has(id)) this.ownedListedAt.delete(id);
@@ -654,9 +717,28 @@ export class PrWatcher {
           if (list === null) return this.d.log(`pr watch: listing the PRs of ${t.branch} in ${t.repo.repoPath} failed`);
           const fresh = list.filter((p) => p.state === "OPEN" || (p.createdAt !== null && p.createdAt >= t.at - OWNED_PR_SLACK_MS));
           if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repo.id, repoPath: t.repo.repoPath, branch: t.branch }, fresh, "branch") > 0) marks.changed = true;
+          this.probeReopened(t.ticketKey, list);
         }),
       ),
     );
+  }
+
+  /**
+   * 列出来开着、行里记的却是关掉的（在 GitHub 网页上重开了）：链接不改读过的行，平时也不读关掉的行，
+   * 下一轮把这个 ticket 关掉的行也读一次，不然 ticket 一直停在「待决定」（BTL-270 审查）。不强制重试放弃了的（BTL-261）。
+   * 只在那一行真会被重读时（readableNow，和 pollPrs 同一个判断）才要求，同一行 REOPEN_PROBE_MS 最多一次：
+   * 不然放弃读了的行每一轮都要求、每一轮都读不了，分支就被一秒一次地列下去。
+   */
+  private probeReopened(ticketKey: string, list: readonly BranchPr[]): void {
+    const openUrls = new Set(list.filter((b) => b.state === "OPEN").map((b) => prUrlKey(b.url)));
+    if (openUrls.size === 0) return;
+    const now = this.d.now();
+    const hits = this.d.prs
+      .byTicket(ticketKey)
+      .filter((r) => r.state === "closed" && r.checkedAt > 0 && openUrls.has(prUrlKey(r.url)) && readableNow(r, now) && now >= (this.reopenProbeAt.get(r.id) ?? 0));
+    if (hits.length === 0) return;
+    for (const r of hits) this.reopenProbeAt.set(r.id, now + REOPEN_PROBE_MS);
+    this.soonTicket(ticketKey, { retryGivenUp: false, includeSettled: true });
   }
 
   /** 这个仓库的分支行；分支改过时行还是旧分支的，当作没有。 */
@@ -680,6 +762,7 @@ export class PrWatcher {
     }
     // 新链接的行 checked_at 为 0，下一轮的 PR 读取马上读它（R12）。
     if (this.d.linker.linkBranchPrs(t.ticketKey, { id: t.repoId, repoPath: t.repoPath, branch: t.branch }, list, "branch") > 0) marks.changed = true;
+    this.probeReopened(t.ticketKey, list);
     if (list.some((b) => b.state === "OPEN")) {
       // CI 由 PR 的读取接手。读失败的标记清掉了、或者第一次有这一行：界面上的「读不到」要跟着消失（BTL-275：栈 tick 不再每分钟兜底刷新）。
       this.d.branches.upsert({ ...base, ...kept, readError: false, checkedAt: now });

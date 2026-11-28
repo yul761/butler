@@ -61,6 +61,11 @@ describe("shipherd-hook", () => {
     expect(wanted(pr)).toBe(true);
     expect((pr.payload as { pr_urls: string[] }).pr_urls).toEqual(["https://github.com/o/r/pull/34"]);
     expect(JSON.stringify(pr.payload)).not.toContain("secret");
+    // gh pr close / merge / reopen（BTL-270）：也写，带上解析出来的 PR，主进程马上重读。
+    const closed = bash("gh pr close 12 -c 'not needed'", "✓ Closed pull request o/r#12");
+    expect(wanted(closed)).toBe(true);
+    expect(closed.payload).toMatchObject({ ship: [], pr_state: [{ action: "close", dir: null, pr: "12", repo: null }] });
+    expect(wanted(bash("gh pr view 12"))).toBe(false);
     // 别的事件照旧都写。
     expect(wanted(buildEnvelope('{"hook_event_name":"Stop","session_id":"s1"}', {}, 1))).toBe(true);
   });

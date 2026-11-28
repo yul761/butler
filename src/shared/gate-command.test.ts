@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyBypass, classifyGateCommand, classifyPush, classifyShip } from "./gate-command";
+import { classifyBypass, classifyGateCommand, classifyPush, classifyShip, classifyPrState } from "./gate-command";
 
 describe("classifyGateCommand", () => {
   it("recognises gh pr merge", () => {
@@ -126,6 +126,21 @@ describe("classifyPush", () => {
   });
   it("finds the push in a later segment", () => {
     expect(classifyPush("git add -A && git commit -m 'push it' && git push")).toEqual({ dir: null });
+  });
+});
+
+describe("classifyPrState (BTL-270)", () => {
+  it("finds gh pr merge, close and reopen with the PR, the repo and the directory", () => {
+    expect(classifyPrState("gh pr close 12 --comment 'not needed'")).toEqual([{ action: "close", dir: null, pr: "12", repo: null }]);
+    expect(classifyPrState("gh pr -R o/r reopen 12")).toEqual([{ action: "reopen", dir: null, pr: "12", repo: "o/r" }]);
+    expect(classifyPrState("cd /wt/a && gh pr merge --squash -d")).toEqual([{ action: "merge", dir: "/wt/a", pr: null, repo: null }]);
+    expect(classifyPrState("gh pr close https://github.com/o/r/pull/3 -c bye && GH_REPO=o/s gh pr reopen 4")).toEqual([
+      { action: "close", dir: null, pr: "https://github.com/o/r/pull/3", repo: "o/r" },
+      { action: "reopen", dir: null, pr: "4", repo: "o/s" },
+    ]);
+  });
+  it("ignores other gh and git commands", () => {
+    for (const c of ["gh pr view 12", "gh pr create --fill", "git merge main", "gh issue close 3", "echo gh pr close 1"]) expect(classifyPrState(c), c).toEqual([]);
   });
 });
 

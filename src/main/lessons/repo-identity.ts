@@ -143,4 +143,14 @@ export class RepoIdentity {
     if (slug) return { slug };
     return { reason: this.exists(join(path, ".git")) ? "no_remote" : "not_git" };
   }
+
+  /**
+   * slugOf，但不在主线程上同步跑 git（BTL-270 审查，关 ticket 时比较仓库用）：先 warm（异步 git），再只看缓存；
+   * git 失败、没缓存上的就是 null（不像 slugOf 那样同步重试）。
+   */
+  async slugOfWarm(path: string): Promise<string | null> {
+    await this.warm([path]);
+    const s = this.cache.get(path);
+    return s === undefined || s === null ? null : this.canonical(s);
+  }
 }

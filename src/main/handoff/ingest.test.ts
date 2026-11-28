@@ -152,6 +152,23 @@ describe("ingestHandoff", () => {
     expect(linked).toMatchObject({ status: "in_review" });
   });
 
+  it("rederive keeps needs_decision when the handoff's own PRs are all closed; blocked with listed blockers stays blocked (BTL-270)", () => {
+    const { deps, tickets } = setup();
+    const closedPr = { number: 7, url: "https://github.com/o/app/pull/7", state: "closed" as const, review: null };
+    for (const [status, blockers] of [["in_review", ["reviewer 关了"]], ["blocked", []]] as const) {
+      ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ status, prs: [closedPr], blockers: [...blockers] }) });
+      expect(tickets.get("PROJ-1")?.status).toBe("needs_decision");
+      expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("needs_decision");
+    }
+    // BTL-270 审查：模型说 blocked 还列了卡在哪，以 blocked 为准。
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ status: "blocked", prs: [closedPr], blockers: ["等后端接口"] }) });
+    expect(tickets.get("PROJ-1")?.status).toBe("blocked");
+    expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("blocked");
+    // 模型明确说又开始干了：不用决定。
+    ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: "s1", trigger: "command", rawText: null, payload: payload({ status: "active", prs: [closedPr] }) });
+    expect(rederiveTicketStatus(deps, "PROJ-1")).toBe("active");
+  });
+
   it("rederive keeps done/mpf in sync with followups and leaves active alone", () => {
     const { deps, tickets, followups, tick } = setup();
     ingestHandoff(deps, { ticketKey: "PROJ-1", sessionId: null, trigger: "nightly", rawText: null, payload: payload({ status: "done", followups: [fu()] }) });

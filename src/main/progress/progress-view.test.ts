@@ -53,6 +53,18 @@ describe("bucketOf", () => {
     expect(bucketOf(t, [], true)).toBe("in_progress");
     expect(bucketOf(t, [], false)).toBe("not_started");
   });
+
+  it("a closed ticket is its own finished bucket even with a failing open PR; needs_decision is blocked and listed as stuck (BTL-270)", () => {
+    const t = ticket("A");
+    expect(bucketOf({ ...t, status: "blocked", statusManual: "closed" }, [p({ ci: "failing" })!], true)).toBe("closed");
+    expect(bucketOf({ ...t, status: "needs_decision" }, [], true)).toBe("blocked");
+    // 存的状态还没跟上、PR 已经在 GitHub 上重开了：按 PR 算，和 Now 页一致（awaitsDecision）。
+    expect(bucketOf({ ...t, status: "needs_decision" }, [p()!], true)).toBe("in_review");
+    expect(bucketOf({ ...t, status: "needs_decision" }, [{ ...p()!, state: "closed" as const }], true)).toBe("blocked");
+    const v = buildProgress(input({ tickets: [{ ...ticket("A"), statusManual: "closed" }, { ...ticket("B"), status: "needs_decision" }], prs: [] }));
+    expect(v.counts).toMatchObject({ closed: 1, blocked: 1, merged: 0, total: 2 });
+    expect(v.stuck.map((x) => [x.ticketKey, x.turn.kind === "stuck" && x.turn.source])).toEqual([["B", "ticket_needs_decision"]]);
+  });
 });
 
 describe("buildProgress", () => {
@@ -79,7 +91,7 @@ describe("buildProgress", () => {
 
   it("counts every ticket in exactly one bucket", () => {
     const v = buildProgress(base);
-    expect(v.counts).toEqual({ merged: 0, blocked: 2, in_review: 2, in_progress: 1, not_started: 0, total: 5 });
+    expect(v.counts).toEqual({ merged: 0, closed: 0, blocked: 2, in_review: 2, in_progress: 1, not_started: 0, total: 5 });
   });
 
   it("lists whose turn each open PR is (the board's turn), longest-stuck first, plus blocked tickets with no open PR", () => {

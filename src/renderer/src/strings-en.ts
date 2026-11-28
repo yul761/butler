@@ -18,7 +18,7 @@ import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
 import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
-import type { FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
+import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
@@ -33,6 +33,8 @@ export const EN_STATUS: Record<TicketStatus, string> = {
   blocked: "Blocked",
   in_review: "In review",
   done: "Done",
+  needs_decision: "Needs a decision",
+  closed: "Closed",
 };
 
 export const EN: UiStrings = {
@@ -394,7 +396,8 @@ export const EN: UiStrings = {
     reviewAgo: (d: string) => `asked ${d} ago`,
     reviewNow: "asked just now",
     scopesHeading: "Epics",
-    scopeLine: (total: number, merged: number, slowest: string | null) => `${merged} of ${total} merged${slowest === null ? "" : ` · slowest: "${slowest}"`}`,
+    scopeLine: (total: number, merged: number, slowest: string | null, closed = 0) =>
+      `${merged} of ${total} merged${closed > 0 ? `, ${closed} closed` : ""}${slowest === null ? "" : ` · slowest: "${slowest}"`}`,
     scopeEmpty: "No tickets yet",
     scopeMore: (n: number) => `See all ${n} in All work`,
     whoYou: (n: number) => `You ${n}`,
@@ -403,6 +406,7 @@ export const EN: UiStrings = {
     whoExternal: "Others",
     whoStackBelow: "Layer below",
     whoDone: "Merged",
+    whoClosed: "Closed",
     whoIdle: "Not started",
     running: (n: number) => `In progress ${n}`,
     moreHeading: "How it is running",
@@ -521,6 +525,7 @@ export const EN: UiStrings = {
       blocked_report: (d: string | null) => (d === null ? "Reported it's blocked" : `Reported it's blocked: ${d}`),
       silent: (d: string | null) => (d === null ? "Running but silent for a long time" : `Running but silent for a long time: ${d}`),
       ticket_blocked: () => "The ticket is marked blocked",
+      ticket_needs_decision: () => "Its PRs were all closed; decide whether to keep going",
     },
     unattended: {
       ci_failing: "CI failed and nobody is fixing it",
@@ -540,6 +545,7 @@ export const EN: UiStrings = {
       stackBelow: (names: string[]) => `Waiting for the layer below (${names.join(", ")}) to merge`,
     },
     done: "Merged",
+    closed: "Closed, not doing it",
     idle: "Not started",
     shipherd: {
       approval: "Waiting for you to confirm a permission prompt",
@@ -705,6 +711,52 @@ export const EN: UiStrings = {
   colArchivedAt: "Archived",
   restoreArchived: (key: string) => `Restore ${key}`,
   statusAuto: (current: string) => `Automatic (now: ${current})`,
+  tc: {
+    close: "Close ticket",
+    title: (key: string) => `Close ${key}`,
+    lede: "Close it when you're not doing it (the need changed, or you went another way). It's counted apart from Done, and you can reopen it later.",
+    reason: "Reason",
+    reasonHint: "For example: the need changed, we're not doing this",
+    reasonCount: (n: number, max: number) => `${n}/${max}`,
+    reasonTooLong: (max: number) => `Keep the reason under ${max} characters`,
+    closePrs: "Close the ticked PRs too",
+    prsLoading: "Looking for this ticket's open PRs…",
+    prsNone: "No open PRs",
+    prsFailed: (error: string) => `Couldn't list the open PRs: ${error}`,
+    unclosableTitle: (n: number) => (n === 1 ? "1 open PR won't be closed" : `${n} open PRs won't be closed`),
+    publicComment: "When a PR is closed, the reason above is posted on GitHub as a comment that anyone who can see the PR can read.",
+    endSessions: "Also end its sessions",
+    confirm: "Close",
+    banner: (reason: string) => `Closed: ${reason}`,
+    by: { user: "closed by you", coordinator: "closed by a coordinator", routing: "closed by routing" } as Record<"user" | "coordinator" | "routing", string>,
+    reopen: "Reopen",
+    closeRest: "Close remaining PRs",
+    restTitle: (key: string) => `Close the remaining PRs of ${key}`,
+    restLede: "The ticket is closed, but these PRs are still open. Only the ticked ones are closed, with the close reason as the comment.",
+    restNone: "No PRs left that can be closed",
+    restConfirm: "Close ticked PRs",
+    reopened: (n: number) => (n > 0 ? `Reopened; ${n} follow-ups are back` : "Reopened"),
+    leftTitle: (key: string) => `${key} is closed, but some things are left`,
+    leftLede: "The ticket is closed. These were not closed or ended; the reason is under each one. You can retry them, or leave it.",
+    leftPrs: (n: number) => (n === 1 ? "1 PR was not closed" : `${n} PRs were not closed`),
+    leftSessions: (n: number) => (n === 1 ? "1 session was not ended" : `${n} sessions were not ended`),
+    prKind: {
+      failed: "gh failed", skipped: "external actions are off", unverified: "not checked", never_read: "not read yet", given_up: "can't be read",
+      foreign: "not in a repo of this ticket", not_own_branch: "not this ticket's branch", shared: "another ticket uses it too",
+      shared_branch: "another ticket used this branch name too",
+    } as Record<ClosePrErrorKind, string>,
+    nothingToRetry: "Retrying won't change the rest (gh didn't fail on them); handle them yourself.",
+    retry: "Retry the rest",
+    leaveIt: "Leave it",
+    reopenedMeanwhile: "It was reopened while closing, so the remaining PRs stay open and no sessions were ended",
+    closedMeanwhile: {
+      prs: "This ticket had just been closed (its close reason stays the first one), so only the PRs you ticked were closed",
+      sessions: "This ticket had just been closed (its close reason stays the first one), so only its sessions were ended",
+      both: "This ticket had just been closed (its close reason stays the first one), so only the PRs you ticked were closed and its sessions ended",
+      nothing: "This ticket had just been closed (its close reason stays the first one); nothing more for you to do",
+      failed: "This ticket had just been closed (its close reason stays the first one); the items below weren't done",
+    },
+  },
   noSessions: "No sessions yet. Click “New session” to start.",
   resume: "Resume",
   exited: (code: number) => `claude exited (exit code ${code})`,
@@ -2284,8 +2336,8 @@ export const EN: UiStrings = {
     effOverrideSub: (items: number, size: number, risk: number, clarify: number) => `${items} tickets · size ${size} · risk ${risk} · info ${clarify}`,
   },
   lay: {
-    progressLine: (merged: number, total: number, you: number) =>
-      total === 0 ? "No tickets yet" : `${merged} of ${total} merged · ${you === 0 ? "nothing waiting on you" : `${you} waiting on you`}`,
+    progressLine: (merged: number, total: number, you: number, closed = 0) =>
+      total === 0 ? "No tickets yet" : `${merged} of ${total} merged${closed > 0 ? `, ${closed} closed` : ""} · ${you === 0 ? "nothing waiting on you" : `${you} waiting on you`}`,
     slowest: (name: string) => `Slowest: "${name}".`,
     noSlowest: "Nothing is clearly behind.",
     whoYou: "You",
@@ -2331,13 +2383,13 @@ export const EN: UiStrings = {
     convNoSession: "This ticket has no session yet.",
     youHere: "Waiting on you here",
     noYouHere: "Nothing here is waiting on you.",
-    featureCard: (merged: number, total: number) => `${merged}/${total} merged`,
+    featureCard: (merged: number, total: number, closed = 0) => `${merged}/${total} merged${closed > 0 ? ` · ${closed} closed` : ""}`,
     runningEmpty: "Nothing is being worked on by an agent, CI or anyone else right now.",
     colTicket: "Ticket",
     colWho: "Who's up",
     colNow: "Status",
     colPr: "PR",
-    groupHeader: (name: string, merged: number, total: number) => `${name} · ${merged}/${total} merged`,
+    groupHeader: (name: string, merged: number, total: number, closed = 0) => `${name} · ${merged}/${total} merged${closed > 0 ? ` · ${closed} closed` : ""}`,
     noTicketsInGroup: "No tickets in this group yet.",
     notInAFeature: "Not in a feature",
     featuresHeading: "Features",

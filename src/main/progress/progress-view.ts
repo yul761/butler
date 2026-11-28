@@ -5,7 +5,7 @@ import {
   type ProgressStackNode, type ProgressStackRepo, type ProgressStuck, type ProgressTicket, type ProgressView,
 } from "../../shared/progress";
 import { prChangesRequested, type Turn } from "../../shared/turn";
-import { effectiveStatus, type Ticket, type WatchedPr } from "../../shared/types";
+import { awaitsDecision, effectiveStatus, type Ticket, type WatchedPr } from "../../shared/types";
 
 /** 一个 feature 最新的汇总（featureRowsAll 加上 ws-b 的新鲜度）。 */
 export interface ProgressSummary {
@@ -66,9 +66,11 @@ const blocking = (p: ProgressPr): boolean => p.ci === "failing" || prChangesRequ
 /** 汇总条的格子：按顺序判断（定义见设计文档第 4 节）。prs 是这个 ticket 读到过的 PR。 */
 export function bucketOf(t: Pick<Ticket, "status" | "statusManual">, prs: ProgressPr[], started: boolean): ProgressBucket {
   const status = effectiveStatus(t);
+  if (status === "closed") return "closed";
   const open = prs.filter((p) => p.state === "open");
   if (status === "done" || status === "merged_pending_followup" || (open.length === 0 && prs.some((p) => p.state === "merged"))) return "merged";
-  if (status === "blocked" || open.some(blocking)) return "blocked";
+  // needs_decision（PR 都关了没合，BTL-270）也要你动手，放进阻塞这一格；又有开着的 PR 时按 PR 算，和 Now 页一致（awaitsDecision）。
+  if (status === "blocked" || awaitsDecision(status, open.length) || open.some(blocking)) return "blocked";
   if (open.some((p) => !p.isDraft)) return "in_review";
   if (open.length > 0 || started) return "in_progress";
   return "not_started";
@@ -170,8 +172,10 @@ export function buildProgress(input: ProgressInput, filter: ProgressFilter = {})
     stuck.push({ ticketKey: p.ticketKey, ticketTitle: t?.title ?? null, featureId: t?.featureId ?? null, pr: p, turn: p.turn, since: p.statusChangedAt });
   }
   for (const t of tickets) {
-    if (effectiveStatus(t) !== "blocked" || (ticketRows.get(t.key)?.openPrs ?? 0) > 0) continue;
-    const turn: Turn = { owner: "you", kind: "stuck", source: "ticket_blocked", detail: null, sessionId: null };
+    const status = effectiveStatus(t);
+    const source = status === "blocked" ? "ticket_blocked" : status === "needs_decision" ? "ticket_needs_decision" : null;
+    if (source === null || (ticketRows.get(t.key)?.openPrs ?? 0) > 0) continue;
+    const turn: Turn = { owner: "you", kind: "stuck", source, detail: null, sessionId: null };
     stuck.push({ ticketKey: t.key, ticketTitle: t.title, featureId: t.featureId, pr: null, turn, since: null });
   }
   // 卡得最久的在最上面；不知道从什么时候起的放最后。

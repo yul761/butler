@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { classifyShip } from "../src/shared/gate-command";
+import { classifyPrState, classifyShip } from "../src/shared/gate-command";
 import type { HookEnvelope } from "../src/shared/hook-envelope";
 import { homeFromEnv } from "../src/main/paths";
 import { envValue } from "../src/shared/legacy-env";
@@ -71,6 +71,8 @@ function trimBashPayload(payload: unknown): unknown {
   const p = payload;
   const command = bashCommand(p) ?? "";
   const ship = classifyShip(command);
+  // gh pr merge / close / reopen（BTL-270）：主进程马上重读这个 PR，界面不等下一轮轮询。
+  const prState = classifyPrState(command);
   const response = p.tool_response && typeof p.tool_response === "object" ? (p.tool_response as Record<string, unknown>) : {};
   // 失败的没有 tool_response，输出在 error 里。
   const out = [response.stdout, response.stderr, p.error].filter((v): v is string => typeof v === "string").join("\n");
@@ -84,14 +86,15 @@ function trimBashPayload(payload: unknown): unknown {
     tool_input: { command: command.slice(0, COMMAND_LIMIT) },
     ship,
     pr_urls: urls,
+    ...(prState.length > 0 && { pr_state: prState }),
   };
 }
 
-/** 要不要写进收件箱：Bash 跑完的只有推送分支、开 PR 的才写（别的 Bash 调用每次都来，主进程用不上）。在 trimBashPayload 之后调用。 */
+/** 要不要写进收件箱：Bash 跑完的只有推送分支、开 PR、改 PR 状态的才写（别的 Bash 调用每次都来，主进程用不上）。在 trimBashPayload 之后调用。 */
 export function wanted(envelope: HookEnvelope): boolean {
   if (!isBashPost(envelope.payload)) return true;
-  const ship = envelope.payload.ship;
-  return Array.isArray(ship) && ship.length > 0;
+  const { ship, pr_state } = envelope.payload;
+  return (Array.isArray(ship) && ship.length > 0) || (Array.isArray(pr_state) && pr_state.length > 0);
 }
 
 export function buildEnvelope(raw: string, env: NodeJS.ProcessEnv, now: number): HookEnvelope {

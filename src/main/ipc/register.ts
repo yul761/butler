@@ -38,7 +38,7 @@ import type { StackActionResult, StackLayerMode, StackPolicyLayer, StackPolicySe
 import { clipboard, dialog, ipcMain, type BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc";
 import {
-  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type DeliverNowResult, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type WatchedPr, type TicketView, type FeatureView,
+  FOLLOWUP_STATUSES, type AutostartState, type CiItemRef, type FollowupStatus, type InboxView, type JobStateView, type McpProbe, type MergeEvent, type DeliverNowResult, type MessageScope, type MessageView, type NowView, type OpenSessionRequest, type RefreshSessionResult, type TicketStatus, type ManualTicketStatus, type WatchedPr, type TicketView, type FeatureView,
 } from "../../shared/types";
 import type { ExternalActionEntry } from "../../shared/external";
 import type { ExternalAuditRepo } from "../db/external-audit-repo";
@@ -52,6 +52,7 @@ import type { SessionsRepo } from "../db/sessions-repo";
 import type { UsageRepo } from "../db/usage-repo";
 import { summarizeUsage, USAGE_WINDOW_MS } from "../usage/usage-summary";
 import type { TicketsRepo } from "../db/tickets-repo";
+import type { CloseOptions, CloseResult, ClosePreview, ReopenResult, RetryCloseOptions, RetryCloseResult, SetStatusResult } from "../tickets/ticket-close";
 import type { HandoffRunner } from "../handoff/runner";
 import type { FeatureSummaryRunner } from "../handoff/feature-runner";
 import type { HealthService } from "../hooks/health";
@@ -87,7 +88,7 @@ import type { FeaturePolicyState } from "../../shared/feature-rows";
 import { interruptsActionArg, type InterruptsFacade } from "../interrupts/facade";
 import type { InterruptsActResult, InterruptsState, ProfileScan } from "../../shared/interrupts";
 import {
-  addRepoArg, automationLevelArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
+  addRepoArg, automationLevelArg, closeRetryArg, closeTicketArg, backgroundActionArg, costSetArg, costSubjectArg, commentActionArg, flakyActionArg, loopSetArg, routingActionArg, switchModelArg, availabilityActionArg, boolArg, ciItemArg, turnFilterArg, turnSendArg, clipboardTextArg, createFeatureArg, createTicketArg, dirArg, featureIdArg, featureNameArg, inboxAnswerArg, inboxBehalfArg, inboxIdArg, inboxScopeArg, messageScopeArg, lessonActionArg, lessonRunIdArg, lessonSlugArg, prStagesScopeArg, prUrlArg,
   openShipherdArg, openFeatureArg, openFixArg, repoIdArg, sessionIdArg, sessionIdsArg, ticketKeyArg, updateRepoArg, updateTicketArg, batchIdArg, batchListArg, exportRequestArg, importApplyArg, importRetargetArg, policyScopeArg, policySetArg, checkScopeArg, checkKeyArg, checksActionArg, checkLessonIdArg, admissionScopeArg, wizardActionArg, calibrationSinceArg, calibrationActionArg, baselinesActionArg, legacyActionArg, legacyViolationsArg, checkExportActionArg,
   versionArg, stacksFilterArg, stackIdArg, stackLayerModeArg, stackPolicySetArg, backtestActionArg, prIdArg, prPolicySetArg, intakeActionArg, intakeClassifyArg, intakePolicySetArg, reportsPageArg, feedbackOpenArg, linkUrlArg, preReviewStatusArg, preReviewQueueActionArg, messageIdArg } from "./validate";
 import type { BaselineSummary, BaselinesAction, BaselinesActResult, BaselinesView, CheckExportAction, CheckExportResult, CheckExportView, LegacyScanView, LegacyViolation, RuleRowView } from "../../shared/baselines";
@@ -119,8 +120,8 @@ export interface IpcDeps {
   handoffs: HandoffsRepo;
   settings: SettingsRepo;
   gateRepo: Pick<MergeGateRepo, "recentEvents">;
-  /** PrWatcher 跟着的 PR 和 CI。 */
-  prWatchList: () => WatchedPr[];
+  /** PrWatcher 跟着的 PR 和 CI：不带参数是全部，带了 ticketKey 只取这一个 ticket 的（prWatchListHandler，参数在里面校验）。 */
+  prWatchList: (raw: unknown) => WatchedPr[];
   /** PR 进度。 */
   prStages: Pick<PrStagesService, "view">;
   /** 在系统浏览器里打开 PR 链接：只开 ticket 链接过、主机允许的（openKnownPr）。 */
@@ -278,6 +279,15 @@ export interface IpcDeps {
   update: { view(): UpdateView; checkNow(): Promise<UpdateCheckResult>; skip(version: string): void; dismiss(version: string): void; openRelease(): void };
   /** followup 状态变化后重新推导 ticket 状态。 */
   rederive: (ticketKey: string) => void;
+  /** 关掉 / 重新打开 ticket（tickets/ticket-close.ts，BTL-270）。来源记成 user。 */
+  ticketClose?: {
+    close(key: string, o: CloseOptions): Promise<CloseResult>;
+    reopen(key: string, source: "user"): ReopenResult;
+    retry(key: string, o: RetryCloseOptions): Promise<RetryCloseResult>;
+    setStatus(key: string, status: Exclude<ManualTicketStatus, "closed"> | null, source: "user"): SetStatusResult;
+    /** 关闭框里列的开着的 PR：能关的、关不了的和原因。 */
+    preview(key: string): Promise<ClosePreview | null>;
+  };
   detectTrackerTools: () => Promise<McpProbe>;
   /** 设置 › 功能：三张策略表各读一次（UI 重做第 6 层）。 */
   featurePolicy: () => FeaturePolicyState;
@@ -347,8 +357,48 @@ export function registerIpc(d: IpcDeps): void {
     return t;
   });
   handle(IPC.ticketsSetStatus, (key: string, status: TicketStatus | null) => {
+    // closed 要原因、要忽略后续事项，走 ticketsClose；needs_decision 只能自动得出。
+    if (status === "closed" || status === "needs_decision") throw new TicketError("invalid_status", M().ticketStatusNotManual);
+    // 和总控的 set_ticket_status 同一个函数：从「已关闭」换成别的，先撤销关闭（关闭时忽略的后续事项还原）。
+    if (d.ticketClose) {
+      if (!d.ticketClose.setStatus(key, status, "user").ok) throw new TicketError("not_found", M().ctlNoTicket(key));
+      return;
+    }
     d.tickets.setStatusManual(key, status, d.now());
     d.notify();
+  });
+  handle(IPC.ticketsClose, async (rawKey: unknown, raw: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const o = closeTicketArg(raw);
+    const r = await d.ticketClose.close(key, { ...o, source: "user" });
+    if (!r.ok) {
+      if (r.error === "no_ticket") throw new TicketError("not_found", M().ctlNoTicket(key));
+      if (r.error === "already_closed") throw new TicketError("invalid_status", M().ticketAlreadyClosed(key));
+      throw new TicketError("invalid_reason", M().ticketCloseNeedsReason);
+    }
+    return r;
+  });
+  handle(IPC.ticketsClosePreview, async (rawKey: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const r = await d.ticketClose.preview(key);
+    if (!r) throw new TicketError("not_found", M().ctlNoTicket(key));
+    return r;
+  });
+  handle(IPC.ticketsCloseRetry, async (rawKey: unknown, raw: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const r = await d.ticketClose.retry(key, { ...closeRetryArg(raw), source: "user" });
+    if (!r.ok) throw new TicketError("not_found", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ctlTicketNotClosed(key));
+    return r;
+  });
+  handle(IPC.ticketsReopen, (rawKey: unknown) => {
+    const key = ticketKeyArg(rawKey);
+    if (!d.ticketClose) throw new TicketError("not_found", M().ticketCloseUnavailable);
+    const r = d.ticketClose.reopen(key, "user");
+    if (!r.ok) throw new TicketError("not_found", r.error === "no_ticket" ? M().ctlNoTicket(key) : M().ctlTicketNotClosed(key));
+    return r;
   });
   handle(IPC.ticketsArchive, (key: string) => {
     d.tickets.archive(key, d.now());
@@ -563,7 +613,7 @@ export function registerIpc(d: IpcDeps): void {
   // 「现在」页的“最近合并”：最近 7 天、最多 20 条。
   const recentMerges = (): MergeEvent[] => d.gateRepo.recentEvents(d.now() - 7 * 24 * 3600 * 1000, 20);
   handle(IPC.mergeEvents, recentMerges);
-  handle(IPC.prWatchList, (): WatchedPr[] => d.prWatchList());
+  handle(IPC.prWatchList, (raw: unknown): WatchedPr[] => d.prWatchList(raw));
   handle(IPC.prStages, (raw: unknown): PrStagesTicket[] => d.prStages.view(prStagesScopeArg(raw)));
   handle(IPC.prOpen, (raw: unknown): PrOpenResult => d.prOpen(prUrlArg(raw)));
   handle(IPC.linkOpen, (raw: unknown): LinkOpenResult => d.linkOpen(linkUrlArg(raw)));

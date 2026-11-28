@@ -81,6 +81,8 @@ export interface StackServiceDeps {
   record?(kind: string, data: Record<string, string | number | boolean | null>, dedupeKey?: string): void;
   /** 栈或提醒变了（推给界面）。 */
   onChange?(): void;
+  /** Shipherd 自己关掉了一个 draft（退回普通分支）：记下来，ticket 不因为它变成「待决定」（BTL-270）。 */
+  closedByShipherd?(prUrl: string): void;
   /** 每日任务的记录（jobs 表）。 */
   jobs?: Pick<JobsRepo, "get" | "record">;
   /** 自动检测栈的仓库（Shipherd 管的仓库）。 */
@@ -703,6 +705,7 @@ export class StackService {
           const n = layer.prNumber;
           const r = await this.d.external.attempt("pr_open", { scope, target: layer.prUrl, summary: `close draft #${n} (back to a plain branch)` }, () => gh.prClose(repo, slug, n, T().demoteComment));
           if (!r.ran) return { ok: false, message: t.switchOff("pr_open") };
+          if (layer.prUrl) this.d.closedByShipherd?.(layer.prUrl);
         }
         this.d.repo.updateLayer(layer.id, { mode: "branch", state: "branch_only", prNumber: null, prUrl: null, draftSince: null });
         this.changed();

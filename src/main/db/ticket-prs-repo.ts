@@ -66,6 +66,11 @@ export interface TicketPr {
   readNotFoundSince: number | null;
   /** 认定 PR 不存在的时间（PR_NOT_FOUND_GIVE_UP）：不再读；null = 没有。 */
   readGoneAt: number | null;
+  /**
+   * Shipherd 自己关掉这个 PR 的时间（栈的一层退回普通分支时关掉的 draft，BTL-270）：不是有人放弃了这个 PR，
+   * ticket 状态不看它（不会因为它变成「待决定」）。没有为 null；旧的测试数据可以不给。
+   */
+  shipherdClosedAt?: number | null;
   /** 以下是 ws-b 加的（叠放树、轮到谁）；没读过时是空值。 */
   baseBranch: string | null;
   isDraft: boolean;
@@ -140,6 +145,7 @@ interface Row {
   read_not_found: number;
   read_not_found_since: number | null;
   read_gone_at: number | null;
+  shipherd_closed_at?: number | null;
   base_branch: string | null;
   is_draft: number;
   title: string | null;
@@ -172,6 +178,7 @@ const toPr = (r: Row): TicketPr => ({
   source: r.source, linkedAt: Number(r.linked_at), checkedAt: Number(r.checked_at), deliveredKey: r.delivered_key, deliveredAt: num(r.delivered_at), deliveredTo: r.delivered_to ?? null,
   mergedHandledAt: num(r.merged_handled_at), readFailures: Number(r.read_failures), readFailingSince: num(r.read_failing_since), readRetryAt: num(r.read_retry_at),
   readNotFound: Number(r.read_not_found ?? 0), readNotFoundSince: num(r.read_not_found_since ?? null), readGoneAt: num(r.read_gone_at ?? null),
+  shipherdClosedAt: num(r.shipherd_closed_at ?? null),
   baseBranch: r.base_branch, isDraft: Number(r.is_draft) !== 0, title: r.title, author: r.author, labels: jsonList<string>(r.labels),
   reviewRequests: jsonList<PrReviewRequest>(r.review_requests), reviewers: jsonList<PrReviewer>(r.reviewers),
   mergeable: r.mergeable, mergeState: r.merge_state, statusChangedAt: num(r.status_changed_at),
@@ -208,6 +215,11 @@ export class TicketPrsRepo {
     return { pr: toPr(row), created: !existed };
   }
 
+  /** Shipherd 自己关掉了这个 PR（栈退回普通分支）：所有 ticket 里链接它的行都记上（BTL-270）。 */
+  markShipherdClosed(url: string, at: number): void {
+    this.db.prepare(`UPDATE ticket_prs SET shipherd_closed_at = ? WHERE url = ?`).run(at, prUrlKey(url));
+  }
+
   get(id: number): TicketPr | null {
     const r = this.db.prepare(`SELECT * FROM ticket_prs WHERE id = ?`).get(id) as unknown as Row | undefined;
     return r ? toPr(r) : null;
@@ -236,6 +248,11 @@ export class TicketPrsRepo {
         .prepare(`SELECT * FROM ticket_prs WHERE ticket_key = ? ORDER BY COALESCE(opened_at, linked_at) DESC, id DESC`)
         .all(ticketKey) as unknown as Row[]
     ).map(toPr);
+  }
+
+  /** 号码是 n 的 PR 行（各个仓库的都有）：调用方再按仓库、ticket 筛。 */
+  byNumber(n: number): TicketPr[] {
+    return (this.db.prepare(`SELECT * FROM ticket_prs WHERE number = ? ORDER BY id`).all(n) as unknown as Row[]).map(toPr);
   }
 
   byUrl(url: string): TicketPr[] {
@@ -269,6 +286,9 @@ export class TicketPrsRepo {
       vals.push(v);
     };
     if (p.state !== undefined) set("state", p.state);
+    // 记着关了、又读到开着（有人在 GitHub 上重开了 Shipherd 关掉的 draft）：以后再被关就是有人关的，算「关了没合」（BTL-270）。
+    // 只在原来是 closed 时清（SET 里的 state 是改之前的值）：关之前就发出去的读取晚到、报的还是 open，不能把刚记下的清掉。
+    if (p.state === "open") sets.push("shipherd_closed_at = CASE WHEN state = 'closed' THEN NULL ELSE shipherd_closed_at END");
     if (p.review !== undefined) set("review", p.review);
     if (p.ci !== undefined) set("ci", p.ci);
     if (p.readError !== undefined) set("read_error", p.readError ? 1 : 0);

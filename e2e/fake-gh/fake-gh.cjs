@@ -23,7 +23,7 @@
 //     run rerun <id> --failed：成功；
 //   栈（工作流 K）：
 //     pr list --state open …（不带 --head，自动检测栈）：fixture 的 open（pr view 字段的数组），没有就是 []；
-//     pr edit <号> --base/--title/--body-file/--add-label/--remove-label …、pr ready <号>、pr close <号> …、issue edit <号> …：成功
+//     pr edit <号> --base/--title/--body-file/--add-label/--remove-label …、pr ready <号>、pr close <号> …、issue edit <号> …：成功（pr close 的号在 closeFails 里时退出 1）
 //       （假 gh 不改 fixture，测试据 FAKE_GH_LOG 断言；要后续读到新状态就自己 setGh）；
 //     label create <名字> …：成功；issue create …：打印 fixture 的 issueCreated（没有就是 …/issues/900）；
 //   更新提示（BTL-253）：
@@ -57,7 +57,7 @@ const flag = (name) => {
 };
 const fixture = () => {
   const f = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, "utf8"));
-  return { loggedOut: f.loggedOut === true, branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], release: f.release ?? null, renames: f.renames ?? {}, reviewRequested: f.reviewRequested ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
+  return { loggedOut: f.loggedOut === true, branches: f.branches ?? {}, prs: f.prs ?? {}, created: f.created ?? null, threads: f.threads ?? {}, runs: f.runs ?? {}, logs: f.logs ?? {}, compare: f.compare ?? [], files: f.files ?? {}, open: f.open ?? [], release: f.release ?? null, renames: f.renames ?? {}, reviewRequested: f.reviewRequested ?? [], closeFails: f.closeFails ?? [], issueCreated: f.issueCreated ?? "https://github.com/acme/app/issues/900" };
 };
 const out = (v) => process.stdout.write(`${JSON.stringify(v)}\n`);
 /** fixture 里没有：和真 gh 一样退出 1，是正常结果，不记 unsupported。 */
@@ -168,6 +168,10 @@ if (cmd === "--version") {
   out(fixture().open);
 } else if (cmd === "pr" && sub === "edit" && /^\d+$/.test(ref ?? "") && ["--base", "--title", "--body-file", "--add-label", "--remove-label"].some((f) => args.includes(f))) {
   process.stdout.write(`https://github.com/acme/app/pull/${ref}\n`);
+} else if (cmd === "pr" && sub === "close" && fixture().closeFails.includes(ref ?? "")) {
+  // fixture 的 closeFails：这个 PR 关不掉，像真 gh 那样打一行错误、退出 1。
+  process.stderr.write(`GraphQL: could not close pull request #${ref}\n`);
+  process.exit(1);
 } else if (cmd === "pr" && (sub === "ready" || sub === "close") && /^\d+$/.test(ref ?? "")) {
   // 成功：真 gh 打一行提示，Shipherd 不读。
 } else if (cmd === "label" && sub === "create" && ref !== undefined && !ref.startsWith("-")) {
