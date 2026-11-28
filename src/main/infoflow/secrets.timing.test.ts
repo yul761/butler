@@ -236,6 +236,10 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
         // 复核 cf12cf39 必修 1、2：表格里 ENV 式的键；留着没换的数字按换了的读法再认一遍（GLUED_RULES 跑一遍，每处替换都要记下来挪位置）。
         "| MY_KEY²_X | v |\n", "| db_pass₁_x |", "TOKEN₁2ghp_abcdefghijklmnopqrstuvwxyz0123456789 ", "credential²_AKIAABCDEFGHIJKLMNOP ",
         "GITHUB_TOKEN²xdeadbeefcafe12345678 ", "x₁2aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW password=Hunter2xyz ", "Bearer x₁a", "token x₁a ",
+        // 复核 7c2e090a 必修 A：键后面紧跟换过的数字再接字母数字 _（两种读法都跑 GLUED_RULES）。
+        "AKIAABCDEFGHIJKLMNOP₁_KEY | x ", "ghp_abcdefghijklmnopqrstuvwxyz0123456789₂x ",
+        // 复核 7c2e090a 必修 B：JWT 那条以前是平方级（\beyJ 前面的 [A-Za-z0-9_-]*? 每个位置都往后试），纯 ASCII 的也是。
+        "₁sk-eyJ", "x₁aa-eyJ", "²sk-eyJ", "²Hunter2xyzeyJxoxb-eyJ", "₁MY_KEY-eyJHunter2xyz", "1sk-eyJ", "-eyJ",
       ].map((p) => [`compatShortPeriod ${JSON.stringify(p)}`, p.repeat(Math.floor(N / p.length))]),
     ),
   };
@@ -298,12 +302,12 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
 
   it("scans the whole text for KEY candidates once per call, whatever the rules rewrite (moveStarts never gives up)", () => {
     // 计时拦不住每条 KEY 规则都整篇重扫（复核 c067e822 变异 E8：本地 30ms 上下，CI 才过 50ms），这里数整篇扫描的次数：
-    // keyStarts 每扫一次，KEY_AT（gi，源码以键名的先行断言开头）都从 lastIndex 0 开始 exec 一次。
+    // keyStarts 每扫一次，KEY_NAME_AT（gi，源码是键名的分支）都从 lastIndex 0 开始 exec 一次（两种候选一起找，只扫一遍）。
     // 手动换 exec 只数次数（spyOn 会把每次调用的参数都存下来）；输入用 2KB 的，次数和长度无关。
     const exec = RegExp.prototype.exec;
     let scans = 0;
     RegExp.prototype.exec = function (this: RegExp, str: string) {
-      if (this.lastIndex === 0 && this.flags === "gi" && this.source.startsWith("(?=(?:password|passwd|")) scans++;
+      if (this.lastIndex === 0 && this.flags === "gi" && this.source.startsWith("(?:password|passwd|")) scans++;
       return exec.call(this, str);
     };
     try {

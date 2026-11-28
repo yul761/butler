@@ -1525,3 +1525,70 @@ describe("review of cf12cf39 (secrets)", () => {
     expect(maskSecrets("token₁apikey』= Hunter2xyz")).toBe(`token1apikey』= ${M}`);
   });
 });
+
+describe("review of 7c2e090a (secrets)", () => {
+  const M = SECRET_MASK;
+  /** 64 位以内的长串：大小写字母和数字都有（b64 规则）。 */
+  const long = "AbCdEfGh1234567890AbCdEfGh12345678";
+
+  it("must-fix A: a key followed by a mapped compat digit and then a word character is also read unmapped", () => {
+    // AFTER_CELL 把键后面的数字换掉以后，密钥和后面的 _KEY 粘成一个词（\b 断了）：没换的读法也跑一遍，两边打掉的取并集。
+    expect(maskSecrets(`${fake.akia}₁_KEY | x`)).toBe(`${M}1_KEY | x`);
+    expect(maskSecrets(`${fake.akia}₁_KEY|`)).toBe(`${M}1_KEY|`);
+    expect(maskSecrets(`| ${fake.akia}₁_KEY | x |`)).toBe(`| ${M}1_KEY | x |`);
+    expect(maskSecrets("deadbeefcafe1234²_secret | x")).toBe(`${M}2_secret | x`);
+    expect(maskSecrets("deadbeefcafe1234²_token|")).toBe(`${M}2_token|`);
+    expect(maskSecrets("id deadbeefcafe1234¹_pass | grep x")).toBe(`id ${M}1_pass | grep x`);
+    expect(maskSecrets("echo deadbeefcafe12345678¹_KEY | base64")).toBe(`echo ${M}1_KEY | base64`);
+    expect(maskSecrets(`${fake.akia}₁_KEY=x`)).toBe(`${M}1_KEY=x`);
+    expect(maskSecrets(`${fake.akia}₁MY_TOKEN=x`)).toBe(`${M}1MY_TOKEN=x`);
+    // 换了的读法本来就认得出的照旧。
+    expect(maskSecrets(`${long}²_KEY | x`)).toBe(`${M} | x`);
+    expect(maskSecrets(`${fake.ghp}²_token | x`)).toBe(`${M}_token | x`);
+    // 键后面换了的数字本身打在前面那段里：数字后面紧跟的值打掉，数字前面的键留着。
+    expect(maskSecrets("TOKEN¹deadbeefcafe1234 | x")).toBe(`TOKEN1${M} | x`);
+    expect(maskSecrets(`TOKEN¹deadbeefcafe1234 | x ${fake.ghp}₁x`)).toBe(`TOKEN1${M} | x ${M}`);
+    // 前面的命令改过文本（位置挪了）。
+    expect(maskSecrets(`mysql -p"abc | x y z" KEEP TOKEN¹deadbeefcafe1234 | x`)).toBe(`mysql -p${M} KEEP TOKEN1${M} | x`);
+  });
+
+  it("must-fix A: a glued reading that starts right at a compat digit masks the digit too", () => {
+    expect(maskSecrets("¹deadbeefcafe1234 ")).toBe(`${M} `);
+    expect(maskSecrets(`mysql -p"abc|def"ghi KEEP ¹deadbeefcafe1234 tail`)).toBe(`mysql -p${M} KEEP ${M} tail`);
+  });
+
+  it("must-fix C: a command with several masked values records one edit per value, so the text between them survives", () => {
+    expect(maskSecrets(`sshpass -p x²${long} ssh deploy@host Authorization: Bearer abcdefgh12345678 done`)).toBe(
+      `sshpass -p ${M} ssh deploy@host Authorization: ${M} done`,
+    );
+    expect(maskSecrets(`mysql -px²${long} -uroot mydb -pHunter2xyz keep`)).toBe(`mysql ${M} -uroot mydb -p${M} keep`);
+    expect(maskSecrets(`gh secret set X --body x²${long} --repo me/r -b Hunter2xyz tail`)).toBe(
+      `gh secret set X --body ${M} --repo me/r -b ${M} tail`,
+    );
+    // 值的引号没闭合时往后吃到行尾，吃掉的那段算进最后一个值：下一行的位置照样挪得对。
+    expect(maskSecrets(`mysql x"y -pabc"def | tail\nTOKEN¹deadbeefcafe1234 | x`)).toBe(`mysql x"y -p${M}\nTOKEN1${M} | x`);
+    expect(maskSecrets(`mysql x"y -pabc"def | tail\n¹deadbeefcafe1234 tail`)).toBe(`mysql x"y -p${M}\n${M} tail`);
+  });
+
+  it("must-fix D: glued rules (Bearer, JWT, ghp_) and the snapping of glued spans", () => {
+    expect(maskSecrets("Bearer ₁abcdefgh")).toBe(M);
+    expect(maskSecrets(`${fake.jwt}²x`)).toBe(M);
+    expect(maskSecrets(`①${fake.ghp}₁x`)).toBe(`①${M}`);
+    // 纯小写的 ghp_…（b64 规则要大小写都有，认不出）：只有 ghp_ 这条按整个词认。
+    expect(maskSecrets(`①ghp_${"abcdefghijklmnopqrstuvw"}₁x`)).toBe(`①${M}`);
+    // 一个胶水段的两头挪到同一处替换的两头（不是反过来，挪反了会多出一个占位符）。
+    expect(maskSecrets(`Basic ₁=𝟏${fake.glpat}\n`)).toBe(`${M}\n`);
+    // 路径里没打的尾巴（/x.js）不算进打掉的那段。
+    expect(maskSecrets("https://u:p@h/²aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW/x.js")).toBe(`https://u:${M}@h/${M}/x.js`);
+  });
+
+  it("must-fix E: glued rules run one after another on what the previous ones left, not over masked tokens", () => {
+    // npm_… 后面紧连着换掉的数字：b64 规则不会连着前面的 token 和 _X 一起打。
+    expect(maskSecrets(` ${fake.npm}₁_X\n`)).toBe(` ${M}_X\n`);
+    // 前一条打掉的 sk_live_… 不和后面的 npm_… 并成一串。
+    expect(maskSecrets(`${fake.skLive}${fake.npm}²x | y`)).toBe(`${M}${M} | y`);
+    expect(maskSecrets(`secret: ${fake.skLive}\u200b${fake.npm}²x | y`)).toBe(`secret: ${M}${M} | y`);
+    // 私钥块先盖上：-----BEGIN 的 - 不会把前面的长串和块连成一段。
+    expect(maskSecrets(`x₁${long}-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----`)).toBe(`${M}${M}`);
+  });
+});

@@ -95,8 +95,8 @@ interface Hit {
   rest: string;
 }
 
-/** 命令参数类规则的函数形式：seg 是整条命令，要打的值交给 mask，返回替换后的命令。 */
-type CommandArgs = (seg: string, mask: (value: string) => string) => string;
+/** 命令参数类规则的函数形式：seg 是整条命令，要打的值和它在 seg 里的位置交给 mask（从左往右、不重叠），返回替换后的命令。 */
+type CommandArgs = (seg: string, mask: (value: string, at: number) => string) => string;
 
 interface Rule {
   re: RegExp;
@@ -110,11 +110,31 @@ interface Rule {
   arg?: RegExp | CommandArgs;
   /** 看了前后文再决定换成什么（返回整个匹配的替换结果）。在 URL 路径里只打像 token 的那几段。 */
   mask?: (hit: Hit) => string;
-  /** 匹配从 KEY 开头（「键 = 值」「键 is 值」、YAML 块标量）：只在 KEY_AT 扫出来的候选起点上试，见 maskRules。 */
-  keyed?: true;
+  /**
+   * 匹配从 KEY 开头：只在 KEY_AT 扫出来的候选起点上试，见 maskRules。"sep" 是键后面跟分隔符的（「键 = 值」、YAML 块标量），
+   * "is" 是键后面跟「 is」的（「键 is 值」）：两种各扫一份候选起点，每条规则只在自己那一种上试。
+   */
+  keyed?: KeyKind;
+  /**
+   * KEY 规则的粗筛（见 aheadOf）：从起点往后，stop 里的字出现之前一定有一个 need 里的字，不然这条规则在这个起点上匹配不了，
+   * 不用试（pwds_pwd=, 连着重复的 200KB 有 4 万个起点，块标量、引号这几条每条都试一遍约 1.7ms，慢的 runner 上翻三四倍）。
+   * need、stop 都是 g 的单字符类。
+   */
+  ahead?: { need: RegExp; stop: RegExp };
   /** 按字母数字认整个词（长串、带前缀的 token、Bearer 后面的值）：没换的兼容数字两边按换了的读法再认一遍，见 maskGlued。 */
   glued?: true;
+  /**
+   * 打掉的部分一定在一段这类字符（cls）连着至少 runMin 个的串里（没有字面前缀的长串规则：16 进制、base64）。
+   * cls 是 ASCII 字符码的查表（charClass）。gluedSpans 在换了的读法上，换掉的数字都不在这么长的串里时整条跳过：差出来的匹配要盖住换掉的数字，不可能有
+   * （₁a₁a… 连着 200KB，每个 ₁ 都留着：换了的读法是一整篇，这两条要整篇再扫一遍，7c2e090a 的 macOS CI 上 52ms）。
+   */
+  run?: { cls: Uint8Array; runMin: number };
+  /** 匹配里一定有的一段字面量：文本里没有就整条跳过（includes 比规则在每个起点上试快得多）。 */
+  need?: string;
 }
+
+/** KEY 规则的两种开头（见 Rule.keyed、KEY_AT）。 */
+type KeyKind = "sep" | "is";
 
 /** 一处替换：旧文本里从 at 起的 len 个字换成了 to（maskRules 拿它把 KEY 规则的候选起点挪到新文本上）。 */
 interface Edit {
@@ -167,6 +187,11 @@ const VAL_ANY = String.raw`(?:(?<!(?:^|[^"'\`“”‘’「」『』])["'\`“�
  * 「X is Y」的键名前面：不能紧挨着字母数字（不用 \b：The DB_PASSWORD is … 里 _ 和 P 之间没有 \b，环境变量式的键名也要认）。
  */
 const NOT_AFTER_ALNUM = String.raw`(?<![A-Za-z0-9])`;
+/**
+ * 「KEY SEP EMPTY_Q 开引号」的粗筛（Rule.ahead）：KEY、SEP（含 KQ、EMPH_END、续行）、EMPTY_Q 里都没有 , ;，开引号一定在它们前面
+ * （KQ 里的引号排在前面也只是多试一次）。
+ */
+const OPEN_AHEAD = { need: /["'`“‘「『]/g, stop: /[,;]/g };
 /** 开引号（规则里是第 2 个捕获组）：" ' ` 和全角的 “ ‘ 「 『。 */
 const OPEN = String.raw`(["'\`“‘「『])`;
 /**
@@ -194,7 +219,10 @@ const EMPTY_Q = String.raw`(?:(?:""|''|\`\`|“”|‘’|「」|『』)\s*)*`;
 const EMPH_END = String.raw`(?:(?:\*\*?|__?)(?=\s))?`;
 /** 分隔符后面用 \ 续行的（password=\⏎S3cretPw、PGPASSWORD=\⏎…）：跳过续行，值在下一行。只认一次，和前后的空白不重叠，线性。 */
 const CONT = String.raw`(?:\\\r?\n\s*)?`;
-/** 键和值之间：冒号、等号、「是」「为」；冒号后面可以跟着粗体的收尾、\ 续行。 */
+/**
+ * 键和值之间：冒号、等号、「是」「为」；冒号后面可以跟着粗体的收尾、\ 续行。
+ * 改这里的分隔符或 KQ 的引号时，keyStarts 的预筛选（NOT_BEFORE_SEP、SEP_START）要一起改：不在那里的分隔符，候选起点会被筛掉。
+ */
 const SEP = String.raw`${KQ}\s*(?:[:=：]|是|为)${EMPH_END}\s*${CONT}`;
 /** 环境变量式的键、单独的 key 后面：只认冒号、等号（不认「是」「为」）。 */
 const ENV_SEP = String.raw`${KQ}\s*[:=：]${EMPH_END}\s*${CONT}`;
@@ -204,6 +232,13 @@ const ENV_SEP = String.raw`${KQ}\s*[:=：]${EMPH_END}\s*${CONT}`;
  */
 const ENV_TAIL = String.raw`_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|AUTH|DSN)S?(?:_?\d+)?(?:_[A-Z0-9]{1,16})?`;
 const ENV_KEY = String.raw`\b[A-Z][A-Z0-9_]*${ENV_TAIL}`;
+/**
+ * 正则开头的「(」加上 ENV_KEY，前面多一个先行断言：这一整串大写字母、数字、_ 后面（隔着可选的引号、*）就是 \s* 和分隔符。
+ * 和 ENV_KEY${ENV_SEP} 认的一样：ENV_KEY 和 KQ 里的 _ 都在这一串里，后面接的 KQ（引号、*）、空白、分隔符都不是，所以 ENV_SEP 之前的部分
+ * 一定正好是整串（加上可选的引号、*）。整串用 (?=(…))\2 一口吃下（不回退）：200KB 的 PWDS_ 连着重复时，不用从尾巴一个字一个字
+ * 往回找 _KEY 这种后缀（三条 ENV 规则各约 1.7ms → 0.4ms）。里面多了第 2 个捕获组，所以只能放在正则最开头（第 1 组是这里开的「(」）。
+ */
+const ENV_KEY_OPEN = String.raw`(\b(?=[A-Z](?=([A-Z0-9_]*))\2${KQ}\s*[:=：])${ENV_KEY}`;
 /**
  * Markdown 表格里的「| 键 | 值」：键名两边都要有 |，所以 echo $token | grep 不算；但不管是不是第一列，
  * 任何 | 键 | 单元格后面的值都打（a | token | grep foo 里的 grep 会被打掉，误打可以接受）。
@@ -327,21 +362,34 @@ const maskCommands = (s: string, cmd: RegExp, arg: RegExp | CommandArgs, edits?:
       continue;
     }
     const end = m.index + m[0].length;
+    const at0 = m.index;
     let open: string | null = null;
+    // 每个打掉的值记一处替换（cf12cf39..7c2e090a 复核 C：整条命令记成一处的话，maskGlued 挪位置时一个占位符会把值之间
+    // 没打的原文也盖住）。
+    const first = edits ? edits.length : 0;
     // 值的引号没闭合时，P_VALUE 一直吃到段尾（引号里什么都吃，段里又没有换行），所以没闭合的值总在段尾，不用另外核对位置。
-    const mask = (v: string): string => {
+    const mask = (v: string, at: number): string => {
       open = openQuoteAtEnd(v);
+      edits?.push({ at: at0 + at, len: v.length, to: SECRET_MASK });
       return SECRET_MASK;
     };
     let seg: string;
     if (typeof arg === "function") seg = arg(m[0], mask);
     else {
       arg.lastIndex = 0;
-      seg = m[0].replace(arg, (v: string, keep: string) => `${keep}${mask(v.slice(keep.length))}`);
+      seg = m[0].replace(arg, (...a: unknown[]) => {
+        const v = a[0] as string;
+        const keep = a[1] as string;
+        return `${keep}${mask(v.slice(keep.length), (a[a.length - 2] as number) + keep.length)}`;
+      });
     }
     // 往后走到这个词的末尾（闭引号和紧连着的字）；走过的都吃掉，下一条命令从那里接着找，总共是线性的。
     const next = open === null ? end : wordEnd(s, end, open);
-    if (edits && (next !== end || seg !== m[0])) edits.push({ at: m.index, len: next - m.index, to: seg });
+    // 往后吃掉的那段算进最后一个值（没闭合的值在段尾）。
+    if (edits && next !== end && edits.length > first) {
+      const e = edits[edits.length - 1];
+      e.len = next - e.at;
+    }
     out += s.slice(last, m.index) + seg;
     last = next;
     cmd.lastIndex = next;
@@ -403,6 +451,8 @@ const headerCols = (line: string): number[] => {
     const t = c.trim();
     // 空格子直接跳过（很多个 | 的行每格都跑两三条正则，200KB 约 30ms）。
     if (t.length === 0 || t.length > 128) return;
+    // 不含 HEADER_HINT 的格子哪条都认不出（同上），只测这一条（很宽的表头里大部分格子是这样，每格省掉三四条正则，200KB 约 2ms）。
+    if (!HEADER_HINT.test(t)) return;
     // 拆开前后都试：拆开会把 PassWord、PassPhrase、PASSWord 这种整词切断（Pass Word），原样的也要认。
     // 连写的（DBPASSWORD、userpwd、Authtoken、Dbpassword）不论大小写都按 HEADER_RUN 认（Tokenizer、Secretary 会被误打）。
     if (HEADER_KEY.test(t) || HEADER_RUN.test(t)) out.push(k);
@@ -614,8 +664,20 @@ const htpasswdArgs: CommandArgs = (seg, mask) => {
   // 从口令那个位置参数一直到重定向前的最后一个词，整段打成一个占位符：多出来的参数也盖住，又不会每个词一个占位符把输出撑长。
   const from = starts[noFile ? 1 : Math.min(2, starts.length - 1)];
   const to = ends[ends.length - 1];
-  return seg.slice(0, from) + mask(seg.slice(from, to)) + seg.slice(to);
+  return seg.slice(0, from) + mask(seg.slice(from, to), from) + seg.slice(to);
 };
+
+/** ASCII 字符码的查表：spec 里的字（a-z 这样的写法是一段），见 Rule.run。 */
+function charClass(spec: string): Uint8Array {
+  const t = new Uint8Array(128);
+  for (let i = 0; i < spec.length; i++) {
+    if (spec[i + 1] === "-" && i + 2 < spec.length) {
+      for (let c = spec.charCodeAt(i); c <= spec.charCodeAt(i + 2); c++) t[c] = 1;
+      i += 2;
+    } else t[spec.charCodeAt(i)] = 1;
+  }
+  return t;
+}
 
 const RULES: Rule[] = [
   // 私钥 / 证书块：BEGIN 到 END 整段（没有 END 就到结尾）。
@@ -626,25 +688,34 @@ const RULES: Rule[] = [
   // 不会回溯），第一个非空行的缩进记下来（第 2 个捕获组），
   // 后面的行要以同样的缩进开头（不比第一行浅），中间的空行算进块里；缩进一变浅，块就到头了，匹配停在那里，下一次从那一行
   // 接着找（嵌套 mapping 里挨着的第二个块 token: | 照样认）。每个匹配只吃掉它自己的块，线性。
-  { keyed: true, re: new RegExp(String.raw`(${KEY}${KQ}[ \t]*:[ \t]*[|>][-+1-9]{0,2}[ \t]*\r?\n)(?!\s*\[REDACTED\])(?:[ \t]*\r?\n)*([ \t]+)[^ \t\r\n][^\r\n]*(?:\r?\n(?:\2[^\r\n]*|[ \t]*(?=\r?\n|$)))*`, "gi"), mask: maskBlockScalar },
+  // 粗筛：KEY、KQ、[ \t]、: 里都没有 = , ; 和换行，[|>] 一定在它们前面。
+  // \2 前面的 (?=[ \t]) 不改变匹配（\2 是缩进，只有空格、tab）：带 i 的反向引用每次都按大小写折叠去比，空行上也要比一次，
+  // 先看一个字就不用比（password: | 后面跟 20 万个空行，整条约 7ms → 0.6ms）。
+  {
+    keyed: "sep",
+    re: new RegExp(String.raw`(${KEY}${KQ}[ \t]*:[ \t]*[|>][-+1-9]{0,2}[ \t]*\r?\n)(?!\s*\[REDACTED\])(?:[ \t]*\r?\n)*([ \t]+)[^ \t\r\n][^\r\n]*(?:\r?\n(?:(?=[ \t])\2[^\r\n]*|[ \t]*(?=\r?\n|$)))*`, "gi"),
+    mask: maskBlockScalar,
+    ahead: { need: /[|>]/g, stop: /[=,;\r\n]/g },
+  },
   // Kubernetes 的 env：- name: DB_PASSWORD 下一行 value: hunter2xyz。name 里含键名的（PASSWORD、TOKEN、SECRET、KEY、DSN…），value 后面整行打掉。
   {
     re: /(\bname[ \t]*:[ \t]*["']?[A-Za-z0-9_.-]{1,128}["']?[ \t]*\r?\n[ \t]*value[ \t]*:[ \t]*)(?!\[REDACTED\])[^\s#][^\r\n]*/g,
     skip: (h) => !K8S_SECRET_NAME.test(h.match.slice(0, h.match.length - h.value.length)),
   },
   // 键后面的值在引号里（"、'、`）：到同一个闭引号整段打掉（"my secret phrase"、'ab'）。要在别的规则之前：不然值里先被换进占位符，剩下的字就漏了。
-  { keyed: true, re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
-  { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "g") },
+  { keyed: "sep", re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi"), ahead: OPEN_AHEAD },
+  // ENV 式的键里一定有 _（ENV_TAIL）：没有 _ 的文本不跑（很多短串时，[A-Z][A-Z0-9_]* 在每个大写的词上都要回退着找 _）。
+  { re: new RegExp(`${ENV_KEY_OPEN}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "g"), need: "_" },
   { re: new RegExp(`(\\bkey${DIGITS}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi"), skip: (h) => plainKeyValue(h.value) },
-  { keyed: true, re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
+  { keyed: "is", re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${TABLE_KEY}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${PASS_KEY}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   // 引号没闭合、值里有空格（password: "two words、password = 'hunter 2）：照 mysql 的做法打到行尾。闭合了的上面已经打过，
   // 占位符跳过。同一种引号之间不会重叠着扫，总共是线性的。
-  { keyed: true, re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
-  { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "g") },
+  { keyed: "sep", re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi"), ahead: OPEN_AHEAD },
+  { re: new RegExp(`${ENV_KEY_OPEN}${ENV_SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "g"), need: "_" },
   // 「X is '…」引号没闭合：和 key: '… 一样打到行尾（以前只打第一个词，没冒号的连第一个词都不打）。
-  { keyed: true, re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
+  { keyed: "is", re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
   // 闭引号后面紧跟着字（password: 'abc'def123、TOKEN='abc'"def"：shell 里是同一个词）：接着打到这个词结束，闭引号留着。
   // 只接在上面打过码的引号值后面；后面又是一段引号的整段算进去（没闭合的到行尾）。每个字只有一种走法，线性。
   { re: /(\[REDACTED\]["'`”’」』])(?:[^\s，。；,;、)\]}>|"'`“”‘’「」『』]|"[^"\r\n]*"?|'[^'\r\n]*'?|`[^`\r\n]*`?|“[^”\r\n]*”?|‘[^’\r\n]*’?|「[^」\r\n]*」?|『[^』\r\n]*』?)+/g },
@@ -702,8 +773,16 @@ const RULES: Rule[] = [
   { re: new RegExp(String.raw`(--password-stdin\b[^\n|;&]{0,128}?<<<[ \t]*)${P_VALUE}`, "g") },
   // 值用「先行断言 + 反向引用」一次取到整个词、不回溯（不然很长的词后面没有 | 时，每个字都要回退着再试一遍）。
   { re: /(\becho[ \t]+["']?)(?!\[REDACTED\])(?!\$)(?=([^\s"'|]+))\2(?=["']?[ \t]*\|[^\n|]{0,128}--password-stdin)/g },
-  // JWT
-  { re: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, glued: true },
+  // JWT：eyJ…{5,}.…{5,}.…{5,}，eyJ 前面是词边界（一串 [A-Za-z0-9_-] 的开头，或者串里的 - 后面）。
+  // 每一段都吃到这串 [A-Za-z0-9_-] 的末尾（类里没有 .），所以同一串里从哪个 eyJ 起跑，后两段成不成都一样。只在一串的开头起跑：
+  // 先行断言核对一次后两段，再懒惰地往后找第一个 eyJ（前面那段是第 1 个捕获组，留着）。以前写成 \beyJ…，每个 -eyJ 都扫到串尾
+  // 再回退，sk-eyJ 重复 200KB 要 5 秒多（r12 复核必修 B）。一串只扫常数遍，线性；匹配到的和原来一样。
+  {
+    re: /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5})((?:[A-Za-z0-9_-]*?-)??)eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g,
+    glued: true,
+    // 在每串的开头都要试：没有 eyJ 的文本（绝大多数）不跑（不然很多短串的表格 200KB 约 1.8ms）。
+    need: "eyJ",
+  },
   // GitHub
   { re: /\bgithub_pat_[A-Za-z0-9_]{20,}/g, glued: true },
   { re: /\bgh[pousr]_[A-Za-z0-9]{20,}/g, glued: true },
@@ -721,9 +800,9 @@ const RULES: Rule[] = [
   { re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, glued: true },
   // 「密码是 xxx」「token=xxx」「SECRET_KEY=xxx」「_auth=xxx」：只换值。
   // 引号没闭合（被截断的 "hunter2xyz）也照打：前缀后面可以跟一个引号。
-  { keyed: true, re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${VQ})${VAL}`, "gi") },
+  { keyed: "sep", re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${VQ})${VAL}`, "gi") },
   // 环境变量式的键（区分大小写，免得 primary_key: id 被当成密钥）。
-  { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${VQ})${VAL}`, "g") },
+  { re: new RegExp(`${ENV_KEY_OPEN}${ENV_SEP}${EMPTY_Q}${VQ})${VAL}`, "g"), need: "_" },
   // 单独的 key（key=…、"key": …、表格里的 | key | …）：前面不能连着字母、数字、_（primary_key、monkey 不算）。
   { re: new RegExp(`(\\bkey${DIGITS}${ENV_SEP}${EMPTY_Q}${VQ})${VAL}`, "gi"), skip: (h) => plainKeyValue(h.value) },
   // 单独的 pass、pin（nodemailer 的 { user, pass }、{"pin": "4821"}、smtp 配置）：前面不能连着字母数字（bypass、spin 不算）。
@@ -736,23 +815,33 @@ const RULES: Rule[] = [
     glued: true,
   },
   // 「the password is: x」：带冒号的照打。
-  { keyed: true, re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*[:：]\\s*${EMPTY_Q}${VQ})${VAL_ANY}`, "gi") },
+  { keyed: "is", re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*[:：]\\s*${EMPTY_Q}${VQ})${VAL_ANY}`, "gi") },
   // 「the password is hunter2xyz」「token is "abc123def」（引号没闭合）：值里要有数字或符号，免得「the token is expired」
   // 「… is expired.」「the token is user's」这种话被打码（句末的 . 不算；! ? 算，宁可误打）。
   {
-    keyed: true,
+    keyed: "is",
     re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s+${EMPTY_Q}${VQ})${VAL}`, "gi"),
     // 只有字母（可以带一个撇号：don't、user’s）再加句号的是普通的话。
     skip: (h) => /^[A-Za-z]+(?:['’][A-Za-z]+)*\.*$/.test(h.value),
   },
   // 16 进制串（至少有一个字母、一个数字）：13–39 位、41 位以上都打（32 位的 Datadog / Twilio key、SHA-256）；7–12 位和 40 位的当成 commit SHA 放过。
   // 紧跟在 * 后面的 40 位是 mysql_native_password 的哈希（mysql.user 的 authentication_string），照打。
-  { re: /\b(?=[0-9a-fA-F]*[a-fA-F])(?=[0-9a-fA-F]*\d)(?:(?<=\*)|(?![0-9a-fA-F]{40}\b))[0-9a-fA-F]{13,}\b/g, glued: true },
+  {
+    // 先看够不够 13 位（短的词一次就排除，不用两个先行各扫一遍）。
+    re: /\b(?=[0-9a-fA-F]{13})(?=[0-9a-fA-F]*[a-fA-F])(?=[0-9a-fA-F]*\d)(?:(?<=\*)|(?![0-9a-fA-F]{40}\b))[0-9a-fA-F]{13,}\b/g,
+    glued: true,
+    run: { cls: charClass("0-9A-Fa-f"), runMin: 13 },
+  },
   // 长的 base64 / base64url 串：32 位以上、大小写字母和数字都有（单词不会这样）。含 / 而且后面紧跟扩展名（文件路径，
   // 每段都不像 token）、或者在 URL 的路径部分里（github.com/o/Repo/commit/<sha>，每段都不像 URL token）的，放过。
   {
-    re: /(?<![A-Za-z0-9+/_-])(?=[A-Za-z0-9+/_-]*[a-z])(?=[A-Za-z0-9+/_-]*[A-Z])(?=[A-Za-z0-9+/_-]*\d)[A-Za-z0-9+/_-]{32,}={0,2}/g,
+    // 就是 (?<![A-Za-z0-9+/_-])(?=…[a-z])(?=…[A-Z])(?=…\d)[A-Za-z0-9+/_-]{32,}={0,2}，换了写法：先吃一个这类字符（开头是字符类，
+    // V8 能跳着找起点；开头是往回看的断言时每个位置都要起跑）、再往回看它前面不是这类字符，先看够不够 32 位（短的词一次就排除），
+    // 再在第一个字的位置看三种字都有（往回看的断言里套先行断言）。打表头表格以后的 500KB 上约 1.6ms → 1.1ms，匹配一样（随机差分 0 diff）。
+    re: /[A-Za-z0-9+/_-](?<![A-Za-z0-9+/_-]{2})(?=[A-Za-z0-9+/_-]{31})(?<=(?=[A-Za-z0-9+/_-]*[a-z])(?=[A-Za-z0-9+/_-]*[A-Z])(?=[A-Za-z0-9+/_-]*\d).)[A-Za-z0-9+/_-]{31,}={0,2}/g,
     glued: true,
+    // 打掉的部分在 [A-Za-z0-9+/_-]{32,} 里（末尾的 = 不是数字，换掉的数字不会在那里）。
+    run: { cls: charClass("A-Za-z0-9+/_-"), runMin: 32 },
     mask: (h) => {
       if (!h.match.includes("/")) return SECRET_MASK;
       const segs = h.match.split("/");
@@ -857,7 +946,7 @@ const codePointAt = (s: string, i: number): number => {
 function compatDigitWidth(s: string, i: number): number {
   const c = s.charCodeAt(i);
   const kind = KIND[c];
-  if (kind === TO) return isDigit(BMP_TO.get(c)) ? 1 : 0;
+  if (kind === TO) return TO_CODE[c] >= 48 && TO_CODE[c] <= 57 ? 1 : 0;
   if (kind !== HIGH) return 0;
   const cp = codePointAt(s, i);
   return cp >= 0 && isCompatAstral(cp) && isDigit(astralTo(cp)) ? 2 : 0;
@@ -1296,6 +1385,11 @@ function nextIsWord(s: string, j: number): boolean {
 
 /** 上一次 normalize 有没有留着没换的兼容数字（后面紧跟字母数字、换完又不是键的一部分）：有的话 maskSecrets 再跑 maskGlued。 */
 let heldDigits = false;
+/**
+ * 上一次 normalize 换掉的、后面紧跟字母数字的兼容数字（换完是键的一部分）在规范化文本里的位置，按顺序：换完和后面的词粘在一起，
+ * 前面按整个词认的密钥就断不开了（AKIA…₁_KEY），maskSecrets 在这些位置换回去再认一遍（keptSpans）。
+ */
+let keptDigits: number[] = [];
 
 /**
  * 规范化：全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂、＠）换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），
@@ -1311,6 +1405,8 @@ function normalize(s: string): string {
   // 已经看过的一串兼容数字到 digitsEnd 为止；digitsMap：这一串换不换（后面不紧跟字母数字，或者换完是 KEY 的一部分）。
   let digitsEnd = 0;
   let digitsMap = true;
+  // 这一串后面紧跟字母数字（换了的话记进 keptDigits）。
+  let digitsGlued = false;
   // keyDigits 判过的那一整串数字到 keyEnd 为止、判出来是什么：同一串里后面的兼容数字直接用，不再往回、往前看。
   // 只是省掉重复调用（cf12cf39 复核建议 5：每个数字都重判，结果一样，差分 0 diff）：keyDigits 判的是整串，从串里哪个数字起判都一样。
   let keyEnd = 0;
@@ -1318,6 +1414,7 @@ function normalize(s: string): string {
   envRunEnd = 0;
   sufRunEnd = 0;
   heldDigits = false;
+  keptDigits = [];
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     // 要换的字都在 U+00AD 以后：ASCII 和常见的拉丁字母直接跳过。
@@ -1329,7 +1426,8 @@ function normalize(s: string): string {
         const end = compatDigitsEnd(s, i);
         if (end > i) {
           digitsEnd = end;
-          if (!nextIsWord(s, end)) digitsMap = true;
+          digitsGlued = nextIsWord(s, end);
+          if (!digitsGlued) digitsMap = true;
           else {
             if (i >= keyEnd) {
               keyMap = keyDigits(s, i);
@@ -1341,7 +1439,10 @@ function normalize(s: string): string {
         }
       }
       // 这一串里的数字不换（夹在中间的不可见字照常去掉；BMP 以外的数字只跳过前半，后半在 KIND 里是 KEEP）。
-      if (i < digitsEnd && !digitsMap && compatDigitWidth(s, i) > 0) continue;
+      if (i < digitsEnd && digitsGlued && compatDigitWidth(s, i) > 0) {
+        if (!digitsMap) continue;
+        keptDigits.push(out.length + i - last);
+      }
     }
     let to: string;
     let width = 1;
@@ -1374,25 +1475,94 @@ function normalize(s: string): string {
 }
 
 /**
- * KEY 规则（keyed）能起跑的位置：后面是键名、可选的引号，再跟分隔符（: = ： 是 为）或「 is」。每条 KEY 规则的开头都是这一段
- * （YAML 块标量的「键:」、SEP、「键 is」），所以它们的匹配只会从这些位置开始。
- * 先用这一条零宽先行扫一遍，记下候选起点，8 条 KEY 规则只在这些起点上用 sticky 副本去试：不然每条规则都要在每个位置把 KEY 试一遍
+ * KEY 规则（keyed）能起跑的位置：后面是键名、可选的引号，再跟分隔符（: = ： 是 为，"sep"）或「 is」（"is"）。每条 KEY 规则的开头
+ * 都是其中一种（YAML 块标量的「键:」和 SEP 是 "sep"，「键 is」是 "is"），所以它们的匹配只会从这些位置开始。
+ * 先找出候选起点，KEY 规则只在这些起点上用 sticky 的 KEY_AT 去试：不然每条规则都要在每个位置把 KEY 试一遍
  * （tokens_、pwds_、credentials_ 连着重复的 200KB，8 条加起来约 20ms，CI 上翻两三倍）。没有候选就整条跳过。
+ * 找候选是整篇扫一遍键名（KEY_NAME_AT：字面量的分支，没有键名的整篇不到 0.1ms；零宽先行要在每个位置起跑，200KB 约 0.5ms 一遍），
+ * 再在每个键名上用两种 KEY_AT 各试一次，两种各记一份：只跟分隔符的起点（pwds_pwd=, 连着重复）上 4 条 is 规则都不用试，
+ * 只跟 is 的起点上 4 条 sep 规则也不用（7c2e090a 的 macOS CI：共用一份时这类输入本地约 17ms，慢的 runner 上 60–66ms）。
+ * is 不带规则里的 NOT_AFTER_ALNUM：往前看的断言会让 moveStarts 里「b 往后起跑的不变」不成立；多出来的起点只是白试一次。
  * 只扫一次：后面哪条规则改了文本，就按它记下的每一处替换把候选起点挪过去（moveStarts），不整篇重扫
  * （复核 f780e9ef：每改一次就重扫的话，前面一小段让每条 KEY 规则都改一次，就是整篇扫 7–8 遍，CI 上 60–70ms；
  * 文本变了就退回整篇 replace 的话，同样的前缀接 PWDS_ 重复 200KB 是 8 条整篇 replace，CI 上约 55ms）。
  */
-const KEY_AT = new RegExp(String.raw`(?=${KEY}${KQ}(?:\s*(?:[:=：]|是|为)|\s+is))`, "gi");
-const keyStarts = (s: string): number[] => {
-  const out: number[] = [];
-  KEY_AT.lastIndex = 0;
-  for (let m = KEY_AT.exec(s); m; m = KEY_AT.exec(s)) {
-    out.push(m.index);
-    KEY_AT.lastIndex = m.index + 1;
+const KEY_AT: Record<KeyKind, RegExp> = {
+  sep: new RegExp(String.raw`(?=${KEY}${KQ}\s*(?:[:=：]|是|为))`, "iy"),
+  is: new RegExp(String.raw`(?=${KEY}${KQ}\s+is)`, "iy"),
+};
+/** 键名（KEY 的开头）：KEY_AT 的匹配都从一个键名开始。 */
+const KEY_NAME_AT = new RegExp(`(?:${KEY_NAMES})`, "gi");
+/**
+ * 键名的头一个字（ASCII 的大小写都算：不带 u 的 i 只把 ASCII 字母互认）。moveStarts 在占位符里逐个位置试时先查它：
+ * [REDACTED] 十个字里只有三个是，不用每个位置都跑一次正则（pwd: 'a'" 连着重复的 200KB 每处都换进一个占位符）。
+ */
+const KEY_INITIAL = new Set(
+  KEY_NAMES.split("|").flatMap((name) => [name[0].toLowerCase(), name[0].toUpperCase()].map((c) => c.charCodeAt(0))),
+);
+/** s 在 i 上是不是 kind 这种的候选起点。 */
+const keyAt = (s: string, i: number, kind: KeyKind): boolean => {
+  if (!KEY_INITIAL.has(s.charCodeAt(i))) return false;
+  const at = KEY_AT[kind];
+  at.lastIndex = i;
+  return at.test(s);
+};
+/** 「键 is」里 is 前面紧挨着的空白。 */
+const SPACE_IS = /\sis/gi;
+/** KEY、KQ、空白里都不会有的字。 */
+const NOT_IN_KEY = /[=,;:]/g;
+/**
+ * KEY、KQ、空白里会有的字以外的字（KEY 里是 ASCII 字母数字、_ -、空格和键名里的汉字，KQ 是引号、*、_）：sep 的 KEY_AT 从键名到
+ * 分隔符（: = ： 是 为）之间只有这些字，所以从键名往后碰到的第一个别的字一定就是分隔符，不是的话不用试。
+ */
+const NOT_BEFORE_SEP = new RegExp(
+  `[^A-Za-z0-9_\\-*"'\`“”‘’「」『』\\s${[...new Set(KEY_NAMES)].filter((c) => c.charCodeAt(0) > 0x7f).join("")}]`,
+  "g",
+);
+const SEP_START = new Set([..."=:：是为"].map((c) => c.charCodeAt(0)));
+/**
+ * s 里 kinds 这几种的候选起点，各一份（按顺序）。键名互相重叠的（passwords 里的 password、pwd）都要试：
+ * 每找到一个从下一个位置接着找。
+ * "is" 这种先粗筛：键名到「 is」之间只能是 KEY、KQ 和空白，不会有 = , ; :。从键名往后，下一个「 is」前面先碰到这几个字
+ * （或者后面没有「 is」）的不用试（pwds_pwd=, 连着重复时每个键名都要试一次，200KB 约 2ms）。键名按顺序来，
+ * 下一个「 is」、下一个这种字都只往后找，总共是线性的。
+ * "sep" 这种也先粗筛（NOT_BEFORE_SEP）：从键名往后第一个 KEY、KQ、空白里不会有的字不是分隔符的不用试（PWDS_ 连着重复的 200KB，
+ * 四万个键名每个都要试一次，约 3ms）。粗筛只扔掉一定不成立的起点，两种候选都和逐个试的结果一样。
+ */
+const keyStarts = (s: string, kinds: readonly KeyKind[]): Partial<Record<KeyKind, number[]>> => {
+  const out: Partial<Record<KeyKind, number[]>> = {};
+  for (const kind of kinds) out[kind] = [];
+  let isAt = -1;
+  let notKey = -1;
+  let sepAt = -1;
+  const re = KEY_NAME_AT;
+  re.lastIndex = 0;
+  for (let m = re.exec(s); m; m = re.exec(s)) {
+    const p = m.index;
+    for (const kind of kinds) {
+      if (kind === "is") {
+        isAt = nextAt(SPACE_IS, s, p, isAt);
+        if (isAt === s.length) continue;
+        notKey = nextAt(NOT_IN_KEY, s, p, notKey);
+        if (notKey < isAt) continue;
+      } else {
+        sepAt = nextAt(NOT_BEFORE_SEP, s, p, sepAt);
+        if (!SEP_START.has(s.charCodeAt(sepAt))) continue;
+      }
+      if (keyAt(s, p, kind)) out[kind]!.push(p);
+    }
+    re.lastIndex = p + 1;
   }
   return out;
 };
-const KEY_AT_Y = new RegExp(KEY_AT.source, "iy");
+/**
+ * 占位符里面（[ 后面的每个位置）起跑不了 KEY_AT：KEY_AT 从键名起跑，占位符的后缀（REDACTED]、EDACTED]…）都不以键名开头
+ * （不看大小写）。加载时核对一遍，不成立（改了键名或占位符）就不跳。moveStarts 跳过这些位置：tailMany 这种每个键都换进一个
+ * 占位符的，A、C、T 上两种 KEY_AT 各试一次，200KB 约 3ms。
+ */
+const MASK_INSIDE_NO_KEY = Array.from({ length: SECRET_MASK.length - 1 }, (_, k) => SECRET_MASK.slice(k + 1)).every(
+  (rest) => !new RegExp(`^(?:${KEY_NAMES})`, "i").test(rest),
+);
 /** KEY_AT 匹配到的那一段（键名、引号、空白、分隔符、is）里不会有的字：占位符 [REDACTED] 的头尾。 */
 const isBreak = (c: number): boolean => c === 0x5b || c === 0x5d;
 /**
@@ -1413,11 +1583,12 @@ function spacesToBreak(out: string, from: number, b: number): boolean {
  * - 从 a 前面起跑、又碰到 [a, b) 的，那一段要同时含 out[a-1] 和 out[a]（纯删除时是接缝两边的字）。这两个字有一个是 [ 或 ]
  *   就不可能；out[a-1] 是空白、从它往后的空白在 [a, b) 里接上 [ 的也不可能（spacesToBreak：块标量开头的空行和值一起换掉时）。裁头碰到替换文本里的 [ 就停，所以替换进去的是占位符时 out[a] 就是它的 [（原文的值也以 [R 开头时同样停在 [ 上，
  *   不会裁进占位符里面）；
- * - 起点落在 [a, b) 里的，逐个位置用 KEY_AT 试一遍（这段通常就是一个占位符，加起来不超过替换进去的字数）。
+ * - 起点落在 [a, b) 里的，逐个位置用 KEY_AT 试一遍（这段通常就是一个占位符，加起来不超过替换进去的字数）；占位符里面的跳过
+ *   （MASK_INSIDE_NO_KEY）。
  * 多出来的旧起点留着没关系（KEY 规则在那里试不出来）。两头都不是 [ ] 的说不清，返回 null，调用方整篇重扫：只是防御，
  * 每处替换都换进一个占位符，碰不到（secrets.timing.test.ts 数着整篇扫描的次数守着）。
  */
-function moveStarts(s: string, out: string, starts: readonly number[], edits: readonly Edit[]): number[] | null {
+function moveStarts(s: string, out: string, starts: readonly number[], edits: readonly Edit[], kind: KeyKind): number[] | null {
   const res: number[] = [];
   let i = 0;
   // 前面处理过的替换让后面的位置挪了多少。
@@ -1437,14 +1608,40 @@ function moveStarts(s: string, out: string, starts: readonly number[], edits: re
     while (i < starts.length && starts[i] < oldA) res.push(starts[i++] + shift);
     while (i < starts.length && starts[i] < oldB) i++;
     for (let q = a; q < b; q++) {
-      KEY_AT_Y.lastIndex = q;
-      if (KEY_AT_Y.test(out)) res.push(q);
+      if (MASK_INSIDE_NO_KEY && out.charCodeAt(q) === 0x5b && out.startsWith(SECRET_MASK, q)) q += SECRET_MASK.length - 1;
+      else if (keyAt(out, q, kind)) res.push(q);
     }
     shift += e.to.length - e.len;
   }
   while (i < starts.length) res.push(starts[i++] + shift);
   return res;
 }
+
+const KEY_KINDS: readonly KeyKind[] = ["sep", "is"];
+
+/** s 里不小于 p 的第一个 re（g）匹配的位置，没有是 s.length。prev 是上一次的结果：p 不比上一次小，还没越过它就不用再找。 */
+const nextAt = (re: RegExp, s: string, p: number, prev: number): number => {
+  if (prev >= p) return prev;
+  re.lastIndex = p;
+  const m = re.exec(s);
+  return m ? m.index : s.length;
+};
+/**
+ * starts 里按 ahead 粗筛还可能匹配的起点（Rule.ahead）。起点按顺序，下一个 need、下一个 stop 都只往后找，
+ * 每次找的那一段互不重叠，总共是线性的。
+ */
+const aheadOf = (s: string, starts: readonly number[], { need, stop }: { need: RegExp; stop: RegExp }): number[] => {
+  const out: number[] = [];
+  let n = -1;
+  let t = -1;
+  for (const p of starts) {
+    n = nextAt(need, s, p, n);
+    if (n === s.length) break;
+    t = nextAt(stop, s, p, t);
+    if (n < t) out.push(p);
+  }
+  return out;
+};
 
 /** 每条 KEY 规则的 sticky 副本（只在给定的位置试）。 */
 const STICKY = new Map<RegExp, RegExp>();
@@ -1535,20 +1732,27 @@ const maskRules = (s: string, log?: Edit[][]): string => {
   const tableEdits: Edit[] = [];
   let out = maskTables(s, log && tableEdits);
   if (log && tableEdits.length > 0) log.push(trimEdits(s, tableEdits));
-  // KEY 规则的候选起点（对当前的 out）：第一条 KEY 规则前扫一次，之后哪条规则改了文本就按它的替换挪过去（见 KEY_AT）；
-  // 挪不了的是 null，下一条 KEY 规则前重扫。第一次扫之前不用记替换。
-  let starts: number[] | null = null;
+  // KEY 规则的候选起点（对当前的 out），两种各一份：第一条 KEY 规则前一起找一次，之后哪条规则改了文本就按它的替换挪过去
+  // （见 KEY_AT）；挪不了的是 null，这种的下一条 KEY 规则前重找。第一次找之前不用记替换。
+  const starts: Record<KeyKind, number[] | null> = { sep: null, is: null };
   let tracking = false;
   for (const rule of RULES) {
     const before = out;
     const edits: Edit[] = [];
     if (rule.arg) out = maskCommands(out, rule.re, rule.arg, tracking || log ? edits : undefined);
     else if (rule.keyed) {
-      starts ??= keyStarts(out);
+      // 第一次用到时两种一起找（只扫一遍键名）；哪种挪不了（null）就只重找那一种。
+      if (starts[rule.keyed] === null) Object.assign(starts, keyStarts(out, KEY_KINDS.filter((kind) => starts[kind] === null)));
+      const at = rule.ahead ? aheadOf(out, starts[rule.keyed]!, rule.ahead) : starts[rule.keyed]!;
       tracking = true;
-      if (starts.length > 0) out = replaceAt(out, rule.re, starts, recording(replacer(rule), edits));
-    } else out = out.replace(rule.re, tracking || log ? recording(replacer(rule), edits) : replacer(rule));
-    if (tracking && starts !== null && out !== before) starts = moveStarts(before, out, starts, edits);
+      if (at.length > 0) out = replaceAt(out, rule.re, at, recording(replacer(rule), edits));
+    } else if (!rule.need || out.includes(rule.need)) out = out.replace(rule.re, tracking || log ? recording(replacer(rule), edits) : replacer(rule));
+    if (tracking && out !== before) {
+      for (const kind of KEY_KINDS) {
+        const at = starts[kind];
+        if (at !== null) starts[kind] = moveStarts(before, out, at, edits, kind);
+      }
+    }
     if (log && edits.length > 0) log.push(trimEdits(before, edits));
   }
   return out;
@@ -1556,6 +1760,8 @@ const maskRules = (s: string, log?: Edit[][]): string => {
 
 /** 只按整个词认的规则（见 Rule.glued）。 */
 const GLUED_RULES = RULES.filter((r) => r.glued);
+/** 私钥 / 证书块（RULES 的第一条）：readingSpans 先盖上它，GLUED_RULES 之前 maskRules 已经打掉了这块。 */
+const PEM_RULE = RULES[0];
 
 /**
  * 留着没换的兼容数字（normalize 的例外：后面紧跟字母数字、换完又不是键的一部分，token²ghp_…）按换了的读法再认一遍
@@ -1569,51 +1775,124 @@ const GLUED_RULES = RULES.filter((r) => r.glued);
  */
 function gluedSpans(n: string): [number, number][] {
   // 换掉的每个数字在 a 里的位置；它和它前面的数字一共比 n 短了几个 UTF-16 单元（BMP 以外的 𝟏 占两个，换完一个）。
-  const at: number[] = [];
-  const shift: number[] = [];
+  // 都按 TypedArray 存、只往前写（₁a₁a… 一篇有 10 万个数字，每个数字拼一次串、push 两个数组的话约 2ms）。
+  const atBuf = new Int32Array(n.length);
+  const shift = new Int32Array(n.length);
+  let count = 0;
   let short = 0;
-  let a = "";
-  let last = 0;
+  // 换了的读法按字符码写进缓冲区，最后一次建成串。
+  const buf = new Uint16Array(n.length);
+  let len = 0;
   for (let i = 0; i < n.length; i++) {
+    const c = n.charCodeAt(i);
     // 先按 KIND 筛：绝大多数字不是兼容数字，不进 compatDigitWidth。
-    const kind = KIND[n.charCodeAt(i)];
-    if (kind !== TO && kind !== HIGH) continue;
-    const w = compatDigitWidth(n, i);
-    if (w === 0) continue;
-    a += n.slice(last, i) + (w === 2 ? astralTo(codePointAt(n, i)) : BMP_TO.get(n.charCodeAt(i)));
-    at.push(a.length - 1);
-    short += w - 1;
-    shift.push(short);
-    last = i + w;
-    i = last - 1;
-  }
-  a += n.slice(last);
-  if (at.length === 0) return [];
-  /** a 里第一个不小于 x 的数字是第几个。 */
-  const firstFrom = (x: number): number => {
-    let lo = 0;
-    let hi = at.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (at[mid] < x) lo = mid + 1;
-      else hi = mid;
+    const kind = KIND[c];
+    const w = kind === TO ? (TO_CODE[c] >= 48 && TO_CODE[c] <= 57 ? 1 : 0) : kind === HIGH ? compatDigitWidth(n, i) : 0;
+    if (w === 0) {
+      buf[len++] = c;
+      continue;
     }
-    return lo;
+    // compatDigitWidth 不是 0 的，换完是一个 ASCII 数字。
+    atBuf[count] = len;
+    buf[len++] = w === 2 ? astralTo(codePointAt(n, i))!.charCodeAt(0) : TO_CODE[c];
+    short += w - 1;
+    shift[count++] = short;
+    i += w - 1;
+  }
+  if (count === 0) return [];
+  return readingSpans(buf, len, atBuf.subarray(0, count), shift, false);
+}
+
+/**
+ * keptSpans 在换回去的位置上放的字、readingSpans 把打掉的部分盖上的字：和兼容数字一样不是字母数字、空白、标点，
+ * GLUED_RULES 的字符类、\b 都把它当成断开（和占位符 [REDACTED] 两头的 [ ] 一样）。
+ */
+const NOT_WORD = 0x2081;
+
+/**
+ * gluedSpans 反过来的那一半（r12 复核必修 A）：normalize 换掉的、后面紧跟字母数字的兼容数字（换完是键的一部分，见 keyDigits：
+ * AKIA…₁_KEY | x 的 ₁_KEY 是表格里 ENV 式的键），换完把前后的词粘在一起，\b 断了，AKIA…、deadbeef… 这种按整个词认的就认不出了。
+ * 在这些位置（kept，规范化文本里的，按顺序）放回一个不是字母数字的字，在这个读法上跑一遍 GLUED_RULES，留下打掉的部分碰到
+ * （盖住或紧挨着）这些位置的那几处：别的匹配两种读法都一样，maskRules 已经打了。长度不变，位置不用换算。
+ */
+function keptSpans(n: string, kept: readonly number[]): [number, number][] {
+  if (kept.length === 0) return [];
+  const buf = new Uint16Array(n.length);
+  for (let i = 0; i < n.length; i++) buf[i] = n.charCodeAt(i);
+  const at = Int32Array.from(kept);
+  for (const x of kept) buf[x] = NOT_WORD;
+  return readingSpans(buf, n.length, at, null, true);
+}
+
+/**
+ * 在另一种读法（buf 的前 len 个字，at 是和规范化文本不一样的那些位置，按顺序）上跑 GLUED_RULES，返回打掉的部分碰到这些位置的
+ * 那几处（换回规范化文本里的位置，按顺序、互不重叠）。shift[k] 是 at 里第 k 个位置和它前面的一共比规范化文本短了几个
+ * UTF-16 单元（null 是一样长）。touch：紧挨着也算（\b 两边），不然要盖住。
+ */
+function readingSpans(buf: Uint16Array, len: number, at: Int32Array, shift: Int32Array | null, touch: boolean): [number, number][] {
+  const count = at.length;
+  // 按 UTF-16 原样建串：Buffer 的 utf16le 不动落单的代理项（TextDecoder 会换成 U+FFFD），比 fromCharCode 分段拼快几倍。
+  // 只在 main 进程里跑；Uint16Array 按本机字节序存，支持的平台（x64、arm64）都是小端。
+  const text = (): string => Buffer.from(buf.buffer, buf.byteOffset, len * 2).toString("utf16le");
+  let a = text();
+  // 一条规则的匹配从左往右、不重叠，问的位置单调不减：「第一个不小于 x 的位置是第几个」用一个只往前走的下标 k 答，不用二分
+  // （₁a₁a… 换完每 17 个字一处 16 进制串，每处问三次）。
+  let k = 0;
+  /** at 里第一个不小于 x 的是第几个（x 不比上一次问的小）。 */
+  const firstFrom = (x: number): number => {
+    while (k < count && at[k] < x) k++;
+    return k;
   };
-  /** a 里的位置换成 n 里的。 */
+  /** a 里的位置换成规范化文本里的（x 不比上一次问的小）。 */
   const toN = (x: number): number => {
-    const k = firstFrom(x);
-    return x + (k > 0 ? shift[k - 1] : 0);
+    if (shift === null) return x;
+    const j = firstFrom(x);
+    return x + (j > 0 ? shift[j - 1] : 0);
+  };
+  /** 有没有 at 里的位置落在一段至少 min 个 cls 字符连着的串里（按顺序，每段串只往两头走一遍；at 上的字本身也算进去）。 */
+  const inLongRun = (cls: Uint8Array, min: number): boolean => {
+    let runEnd = 0;
+    for (let q = 0; q < count; q++) {
+      const x = at[q];
+      if (x < runEnd) continue;
+      let lo = x;
+      while (lo > runEnd && cls[buf[lo - 1]] === 1) lo--;
+      let hi = x + 1;
+      while (hi < len && cls[buf[hi]] === 1) hi++;
+      if (hi - lo >= min) return true;
+      runEnd = hi;
+    }
+    return false;
   };
   const spans: [number, number][] = [];
+  // 这条规则打掉的部分（a 里的位置，碰没碰到 at 都算）：跑完盖上 NOT_WORD 再跑下一条，和 maskRules 里一条接一条打一样
+  // （cf12cf39..7c2e090a 复核 E：各条规则各自在没打过的读法上跑，npm_…、ghp_… 后面紧连着换掉的数字时，b64 规则会连着
+  // 前面的 token 整个打掉，两种读法都不会这样打）。
+  const hit: number[] = [];
+  // 先盖上私钥块：-----BEGIN 的 - 在 b64 规则的字符类里，块前面紧连的字会被连着打掉（同上，复核 E）。只盖不记。
+  // 别的排在 GLUED_RULES 前面的规则（KEY 规则、命令参数）不在这里重跑（整篇多跑一遍 maskRules 太慢）：它们先打掉一段、
+  // 后面的长串就不够长的，这里还会连着打（多打，不漏）。
+  if (a.includes("-----BEGIN")) {
+    PEM_RULE.re.lastIndex = 0;
+    for (let m = PEM_RULE.re.exec(a); m !== null; m = PEM_RULE.re.exec(a)) hit.push(m.index, m.index + m[0].length);
+  }
   for (const rule of GLUED_RULES) {
+    if (hit.length > 0) {
+      for (let q = 0; q < hit.length; q += 2) buf.fill(NOT_WORD, hit[q], hit[q + 1]);
+      hit.length = 0;
+      a = text();
+    }
+    if (rule.run && !inLongRun(rule.run.cls, rule.run.runMin)) continue;
+    if (rule.need && !a.includes(rule.need)) continue;
     const re = rule.re;
-    const fn = replacer(rule);
+    // 没有 skip、mask 的，换上去的就是「前缀 + 占位符」（和 replacer 一样），不用每处展开参数调一遍。
+    const fn = rule.skip || rule.mask ? replacer(rule) : null;
     re.lastIndex = 0;
+    k = 0;
     for (let m = re.exec(a); m !== null; m = re.exec(a)) {
       const p = m.index;
       const whole = m[0];
-      const to = fn(...m, p, a);
+      const to = fn ? fn(...m, p, a) : `${typeof m[1] === "string" ? m[1] : ""}${SECRET_MASK}`;
       if (to === whole) continue;
       // 真正打掉的那一段：去掉替换前后相同的头尾（保留的前缀、路径里没打的段）。
       let pre = 0;
@@ -1622,12 +1901,20 @@ function gluedSpans(n: string): [number, number][] {
       while (suf < whole.length - pre && suf < to.length - pre && whole[whole.length - 1 - suf] === to[to.length - 1 - suf]) suf++;
       const from = p + pre;
       const end = p + whole.length - suf;
-      const k = firstFrom(from);
-      if (k < at.length && at[k] < end) spans.push([toN(from), toN(end)]);
+      hit.push(from, end);
+      const j = firstFrom(touch ? from - 1 : from);
+      if (j < count && (touch ? at[j] <= end : at[j] < end)) spans.push([toN(from), toN(end)]);
     }
   }
-  spans.sort((x, y) => x[0] - y[0]);
-  // 挨着、重叠的并起来（挪位置要按顺序、互不重叠）。
+  return mergeSpans(spans);
+}
+
+/** 按起点排好、挨着和重叠的并起来（挪位置要按顺序、互不重叠）。 */
+function mergeSpans(spans: [number, number][]): [number, number][] {
+  // 一条规则的各处本来就按顺序；只有一条规则有的（最常见）不用排。
+  let sorted = true;
+  for (let q = 1; q < spans.length && sorted; q++) sorted = spans[q - 1][0] <= spans[q][0];
+  if (!sorted) spans.sort((x, y) => x[0] - y[0]);
   const merged: [number, number][] = [];
   for (const [from, end] of spans) {
     const top = merged[merged.length - 1];
@@ -1697,7 +1984,10 @@ function maskGlued(out: string, spans: readonly [number, number][], log: readonl
 export function maskSecrets(s: string): string {
   const normalized = normalize(s);
   // 留着没换的兼容数字按换了的读法再认一遍（gluedSpans、maskGlued）。
-  const spans = heldDigits ? gluedSpans(normalized) : [];
+  // 换了的、后面紧跟字母数字的，按没换的读法再认一遍（keptSpans），两边打掉的取并集。
+  const glued = heldDigits ? gluedSpans(normalized) : [];
+  const kept = keptSpans(normalized, keptDigits);
+  const spans = kept.length === 0 ? glued : glued.length === 0 ? kept : mergeSpans([...glued, ...kept]);
   let masked: string;
   if (spans.length === 0) masked = maskRules(normalized);
   else {
