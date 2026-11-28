@@ -2,10 +2,12 @@
 // 谁发给谁、种类、状态（已排队 / 已送达 / 已回复）、怎么送到的、正文和回复。新的在前。
 // 还在排队的写出挡住它的原因（BTL-269），并给一个「现在送进去」按钮。
 import { useState } from "react";
-import type { DeliverNowResult, MessageView, MessageScope } from "../../../shared/types";
+import { PATROL_ETA_REASONS, type DeliverNowResult, type MessageView, type MessageScope } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
+
+const MESSAGE_SCOPES = ["data", "messages"] as const;
 
 const shortTime = (iso: string) => new Date(iso).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -27,6 +29,7 @@ export function MessageListItems({ messages }: { messages: MessageView[] }) {
             </span>
           </div>
           {m.status === "queued" && <QueuedLine m={m} />}
+          {m.attempts > 0 && <p className="muted message-attempts" data-testid="message-attempts">{attemptsText(m)}</p>}
           <p className="message-text">{m.text}</p>
           {m.reply !== null && (
             <div className="message-reply">
@@ -51,12 +54,20 @@ function QueuedLine({ m }: { m: MessageView }) {
   return (
     <div className="message-blocked" data-testid="message-blocked">
       {m.blocked && <span className="muted">{L.line(L.reason[m.blocked.reason], m.blocked.since ? shortTime(m.blocked.since) : null)}</span>}
+      {m.kind === "patrol" && m.blocked && PATROL_ETA_REASONS.has(m.blocked.reason) && <span className="muted" data-testid="message-patrol-eta">{L.patrolEta}</span>}
       <button type="button" className="link" title={L.title} disabled={state === "sending"} onClick={deliver} data-testid="message-deliver-now">
         {state === "sending" ? L.sending : L.button}
       </button>
       {state !== "idle" && state !== "sending" && <span className="muted" role="status">{state}</span>}
     </div>
   );
+}
+
+/** 没送进去的尝试（BTL-279）：几次、最后一次的时间和结果。送到了也留着：看得出试了多久才进去。 */
+function attemptsText(m: MessageView): string {
+  const L = S.mailboxBlocked;
+  const what = m.lastAttempt === null ? null : m.lastAttempt === "recheck" || m.lastAttempt === "exited" ? L.attempt[m.lastAttempt] : L.reason[m.lastAttempt];
+  return L.attempts(m.attempts, m.lastAttemptAt ? shortTime(m.lastAttemptAt) : null, what);
 }
 
 function resultText(r: DeliverNowResult): string {
@@ -80,6 +91,7 @@ export function MessageListSummary({ messages }: { messages: MessageView[] | nul
 
 export function Messages({ scope }: { scope: MessageScope }) {
   const key = "shipherd" in scope ? "messages:shipherd" : `messages:feature:${scope.featureId}`;
-  const messages = useStateRefetch(key, () => api.messages(scope));
+  // 重试次数、最后一次尝试只通知 messages（BTL-279）：别的变化照常走 data。
+  const messages = useStateRefetch(key, () => api.messages(scope), { scopes: MESSAGE_SCOPES });
   return <MessageListSummary messages={messages} />;
 }

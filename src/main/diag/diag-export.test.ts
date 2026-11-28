@@ -44,7 +44,17 @@ describe("buildDiagnostics", () => {
     expect(d.logTail).toHaveLength(1000);
     expect(d.logTail[999]).toBe("l1499");
     expect(d.perf.history[0].sends["state:changed"].n).toBe(1);
-    expect(Object.keys(d).sort()).toEqual(["app", "generatedAt", "kind", "logTail", "mainMemory", "perf", "processes", "renderer", "schema", "system"]);
+    expect(Object.keys(d).sort()).toEqual(["app", "generatedAt", "kind", "logTail", "mailbox", "mainMemory", "perf", "processes", "renderer", "schema", "system"]);
     expect(d.renderer).toEqual({ events: [] });
+    expect(d.mailbox).toBeNull();
+  });
+  it("carries the mailbox's state as given (BTL-279: why each message is stuck, how often it was tried)", () => {
+    const mailbox = { queued: [{ id: "m1", kind: "shipherd", blockedReason: "unsure", attempts: 4 }], recent: [], inputting: [] };
+    const d = buildDiagnostics({
+      now: 0, version: "4.3.0", versions: {}, platform: "darwin", arch: "arm64", osRelease: "1", cpus: { model: "cpu", count: 8 },
+      memory: { totalMb: 1, freeMb: 1 }, appMetrics: [], mainMemory: {}, mode: "off", current: new PerfStats({ now: () => 0, log: () => undefined, mode: "off" }).current(),
+      history: [], logTail: [], mailbox,
+    });
+    expect(d.mailbox).toEqual(mailbox);
   });
 });

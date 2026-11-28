@@ -1,4 +1,4 @@
-import type { MailboxBlockReason, MessageKind, MessageStatus } from "../../shared/types";
+import type { MailboxAttempt, MailboxBlockReason, MessageKind, MessageStatus } from "../../shared/types";
 import type { Db } from "./database";
 
 /** 信箱里的一条消息（BTL-245）。时间都是毫秒。 */
@@ -28,6 +28,12 @@ export interface SessionMessage {
   blockedSince: number | null;
   /** 给发件的总控发「还没送到」回执的时间；没发过为 null。 */
   stuckReceiptAt: number | null;
+  /** 试着送了几次（BTL-279）：每次 flush 看过它、直接输入过它都算一次。送到后留着。 */
+  attempts: number;
+  /** 最后一次尝试的时间；没试过为 null。 */
+  lastAttemptAt: number | null;
+  /** 最后一次尝试的结果：挡住它的原因，或者直接输入的结果（recheck：粘贴前复查没过；exited：终端退出了）。 */
+  lastAttempt: MailboxAttempt | null;
 }
 
 export type NewSessionMessage = Pick<SessionMessage, "id" | "kind" | "fromSession" | "toSession" | "featureId" | "body" | "queuedAt"> &
@@ -54,6 +60,9 @@ interface Row {
   blocked_reason: MailboxBlockReason | null;
   blocked_since: number | bigint | null;
   stuck_receipt_at: number | bigint | null;
+  attempts: number | bigint;
+  last_attempt_at: number | bigint | null;
+  last_attempt: MailboxAttempt | null;
 }
 
 const num = (v: number | bigint | null): number | null => (v === null ? null : Number(v));
@@ -72,6 +81,7 @@ const toMessage = (r: Row): SessionMessage => ({
   interrupt: Number(r.interrupt) === 1, ref: r.ref, meta: parseMeta(r.meta), status: r.status, via: r.via, expectsReply: Number(r.expects_reply) === 1,
   baseReplyId: r.base_reply_id, replyText: r.reply_text, queuedAt: Number(r.queued_at), deliveredAt: num(r.delivered_at), repliedAt: num(r.replied_at),
   blockedReason: r.blocked_reason, blockedSince: num(r.blocked_since), stuckReceiptAt: num(r.stuck_receipt_at),
+  attempts: Number(r.attempts), lastAttemptAt: num(r.last_attempt_at), lastAttempt: r.last_attempt,
 });
 
 /** 界面上的范围：Shipherd 总控发出或收到的（给它的 session id 们），或者一个 feature 的。 */
@@ -151,6 +161,18 @@ export class SessionMessagesRepo {
     return changed;
   }
 
+  /** 这几条（还在排队的）试过一次送（BTL-279）：次数加一，记下时间和结果。已经送到的不动。 */
+  attempted(ids: string[], at: number, result: MailboxAttempt): void {
+    const stmt = this.db.prepare(`UPDATE session_messages SET attempts = attempts + 1, last_attempt_at = ?, last_attempt = ? WHERE id = ? AND status = 'queued'`);
+    for (const id of ids) stmt.run(at, result, id);
+  }
+
+  /** 这几条（还排着的）改投给 to（BTL-279：收件的总控关了、另一个接替了它）：挡住的原因清掉，按新收件人重新判断。 */
+  readdress(ids: string[], to: string): void {
+    const stmt = this.db.prepare(`UPDATE session_messages SET to_session = ?, blocked_reason = NULL, blocked_since = NULL WHERE id = ? AND status = 'queued'`);
+    for (const id of ids) stmt.run(to, id);
+  }
+
   /** 这几条（还排着的）的「还没送到」回执撤回了：清掉记号，按现在的原因重发。 */
   clearStuckReceipt(ids: string[]): void {
     const stmt = this.db.prepare(`UPDATE session_messages SET stuck_receipt_at = NULL WHERE id = ? AND status = 'queued'`);
@@ -181,6 +203,11 @@ export class SessionMessagesRepo {
   /** 排队早于 before 的都删掉（还在排队的也删：目标一个月都没再打开）。返回删了几行。 */
   prune(before: number): number {
     return Number(this.db.prepare(`DELETE FROM session_messages WHERE queued_at < ?`).run(before).changes);
+  }
+
+  /** 不分范围的最近几条，新的在前（诊断导出，BTL-279）。 */
+  recentAll(limit: number): SessionMessage[] {
+    return (this.db.prepare(`SELECT * FROM session_messages ORDER BY queued_at DESC, id DESC LIMIT ?`).all(limit) as unknown as Row[]).map(toMessage);
   }
 
   /** 最近的几条，新的在前。 */

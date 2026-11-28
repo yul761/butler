@@ -763,7 +763,14 @@ export interface MessageView {
   repliedAt: string | null;
   /** 还在排队时，上一次试着送被什么挡住、从什么时候开始（BTL-269）；没挡过、送到了为 null。 */
   blocked: { reason: MailboxBlockReason; since: string | null } | null;
+  /** 没送进去的尝试有几次、最后一次的时间和结果（BTL-279）：送到后留着，看得出试了多久。 */
+  attempts: number;
+  lastAttemptAt: string | null;
+  lastAttempt: MailboxAttempt | null;
 }
+
+/** 一次没送进去的尝试的结果（BTL-279）：挡住它的原因，或者 recheck（粘贴前复查没过）、exited（终端退出了）。 */
+export type MailboxAttempt = MailboxBlockReason | "recheck" | "exited";
 
 /** messages:list 的范围：Shipherd 总控的，或者一个 feature 的。 */
 export type MessageScope = { shipherd: true } | { featureId: number };
@@ -779,6 +786,12 @@ export type MailboxBlockReason =
   | "judging"
   /** guard 放行了，往里贴的时候没成（等输入框超时）。 */
   | "deliver_failed";
+
+/**
+ * 别的消息在这几个原因下会在下一次调用工具时（hook）读到；巡检不走 hook（BTL-279 第五轮），要等这一轮结束、停下来再直接输入，
+ * 主进程给 send_message、list_sessions 的那句话和消息列表都换成巡检自己的一句（第六轮复核）。
+ */
+export const PATROL_ETA_REASONS: ReadonlySet<MailboxBlockReason> = new Set<MailboxBlockReason>(["turn", "auto_input", "deliver_failed"]);
 
 /** messages:deliverNow 的结果（BTL-269）：送进去了；没送进去时的原因（delivering 正在送、gone 消息已经不在排队了）。 */
 export interface DeliverNowResult {

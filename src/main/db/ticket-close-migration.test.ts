@@ -86,7 +86,8 @@ describe("ticket close migration (BTL-270)", () => {
     const prsBefore = info("ticket_prs");
     const was = { snap: snapshot(), master: master() };
 
-    migrate(db);
+    // 只升到这一条：后面的迁移（BTL-279 给 session_messages 加列）改别的表是它们自己的事。
+    expect(migrate(db, C + 1)).toBe(C + 1);
 
     const after = info("tickets");
     expect(after.slice(0, 14)).toEqual(oldInfo);

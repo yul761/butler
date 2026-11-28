@@ -2583,6 +2583,7 @@ export const EN: UiStrings = {
       cost_paused: "the cost breaker paused it",
       deliver_failed: "Shipherd tried to type it in but its input box never became ready",
     } as Record<MailboxBlockReason, string>,
+    patrolEta: "A patrol never goes in mid-turn: it is typed in once this turn ends and the session stops",
     line: (why: string, since: string | null) => `Queued: ${why}${since ? ` (since ${since})` : ""}`,
     button: "Deliver now",
     title: "Type it in now, even if it is waiting for your answer or you just typed. It still waits if the screen shows it working, the input box has unsent text, or a prompt is on screen.",
@@ -2592,5 +2593,7 @@ export const EN: UiStrings = {
     delivering: "Shipherd is typing it in; give it a few seconds",
     gone: "This message is no longer queued",
     failed: "Not delivered; Shipherd tries again every 10 seconds",
+    attempts: (n: number, at: string | null, what: string | null) => `Tried ${n} time${n === 1 ? "" : "s"}${at ? `, last at ${at}` : ""}${what ? ` (${what})` : ""}`,
+    attempt: { recheck: "the last check before pasting failed", exited: "the terminal exited" } as Record<"recheck" | "exited", string>,
   },
 };

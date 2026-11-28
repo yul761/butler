@@ -16,6 +16,10 @@ describe("SCOPE_INVALIDATES", () => {
     expect(SCOPE_INVALIDATES.output).toEqual([VIEW_KEYS.now]);
   });
 
+  it("a mailbox attempt count change keeps every view but the Now page: the mailbox ticks every 10 s and no cached view reads it (BTL-279 second review)", () => {
+    expect(SCOPE_INVALIDATES.messages).toEqual([VIEW_KEYS.now]);
+  });
+
   it("every scope drops the Now page, so a refetch after any state:changed builds it afresh (BTL-275)", () => {
     for (const s of STATE_SCOPES) {
       const keys = SCOPE_INVALIDATES[s];

@@ -34,7 +34,8 @@ const CLOCK_SKEW_MS = 86_400_000;
  * （启动、唤醒、解锁、每分钟的 tick）、jobs 表和日历工具。
  *
  * 到期：今天的巡检时刻已过，而 jobs 里记的上次巡检早于这个时刻（从没跑过也算）。睡过了的话醒来以后当天补，过了零点就不补昨天的。
- * 排进全局总控的信箱就算当天跑过（BTL-248）：开着的在忙时下一次调用工具读到，停着的直接输入。
+ * 排进全局总控的信箱就算当天跑过（BTL-248）：只直接输入，自成一轮巡检。开着的在忙时等它停下来再输入，不经 hook 带进别人那一轮
+ * （BTL-279 第五轮：那一轮不算巡检，用户关掉的 epic 总控会被拉起来）。停着的直接输入。
  * 没开：先排进要接着用的那个 session 的信箱（hold），再恢复它（没有就新开），排着的当第一条消息交过去；开不了当天记失败，排着的撤回。
  */
 export class ShipherdPatrol {
@@ -84,7 +85,7 @@ export class ShipherdPatrol {
       return this.record("failed", r.reason);
     }
     const head = this.d.headOf(r.termId);
-    // 刚好别处（例如用户点开）先开了它：照常排队（不 hold），在忙走 hook、停着直接输入。
+    // 刚好别处（例如用户点开）先开了它：照常排队（不 hold）。巡检不走 hook：停着就直接输入，在忙就等它这一轮结束。
     if (r.alreadyOpen) {
       this.send(slot, head);
       return this.record("ok", null);
@@ -92,7 +93,7 @@ export class ShipherdPatrol {
     this.d.onChange?.();
     if (!latest) this.send(slot, head, true);
     this.record("ok", null);
-    // 没交进去也还排着：在忙的 hook 送，停下来时信箱再送。
+    // 没交进去也还排着：巡检不走 hook，等它停下来时信箱再直接输入。
     if (!(await this.d.opened(head, r.termId))) this.d.log?.("shipherd patrol: first message not typed in yet; it stays queued");
   }
 

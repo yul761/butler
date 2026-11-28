@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Session } from "../../shared/types";
 import type { SessionMessage } from "../db/session-messages-repo";
-import { MAX_RESUME_ATTEMPTS, MEMORY_RETRY_MS, RESUME_RETRY_MS, Resumer, restartOrder, resumable, type ResumerDeps } from "./resumer";
+import { MAX_RESUME_ATTEMPTS, MEMORY_RETRY_MS, RESUME_RETRY_MS, Resumer, controllerMailSince, restartOrder, resumable, wakeStateFor, type ResumerDeps, type WakeState } from "./resumer";
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: "s1", ticketKey: "ABC-1", cwd: "/w", origin: "shipherd", gitBranch: null, firstPrompt: null, lastActivityAt: null, waitingForInput: false,
@@ -19,6 +19,15 @@ describe("resumable", () => {
     expect(resumable(session({ ticketKey: null, featureId: 3, coordinator: true, spawnedBy: null }), ctx)).toBe(true);
     expect(resumable(session({ ticketKey: null, featureId: 3, fixesSession: "x", spawnedBy: null }), ctx)).toBe(true);
   });
+  it("takes the Shipherd coordinator to be continued, but not older ones (BTL-279 review: a crashed global coordinator gets its reports)", () => {
+    const g = session({ id: "g2", ticketKey: null, shipherd: true, spawnedBy: null });
+    expect(resumable(g, { ...ctx, latestShipherd: () => "g2" })).toBe(true);
+    expect(resumable(g, { ...ctx, latestShipherd: () => "g1" })).toBe(false);
+    expect(resumable(g, { ...ctx, latestShipherd: () => null })).toBe(false);
+    expect(resumable(g, ctx)).toBe(false);
+    expect(resumable({ ...g, dismissed: true }, { ...ctx, latestShipherd: () => "g2" })).toBe(false);
+    expect(resumable({ ...g, ticketKey: "ABC-1" }, { ...ctx, latestShipherd: () => "g2" })).toBe(false);
+  });
   it("leaves out sessions the user opened, the Shipherd coordinator, lesson sessions, hidden and outside ones", () => {
     expect(resumable(session({ spawnedBy: null }), ctx)).toBe(false);
     expect(resumable(session({ ticketKey: null, shipherd: true, spawnedBy: null }), ctx)).toBe(false);
@@ -26,6 +35,13 @@ describe("resumable", () => {
     expect(resumable(session({ dismissed: true }), ctx)).toBe(false);
     expect(resumable(session({ origin: "discovered" as Session["origin"] }), ctx)).toBe(false);
     expect(resumable(session({ replacedBy: "s2" }), ctx)).toBe(false);
+  });
+  it("takes a ticket session the user opened when its coordinator insists, but still not hidden, archived or outside ones (BTL-279)", () => {
+    expect(resumable(session({ spawnedBy: null }), ctx, true)).toBe(true);
+    expect(resumable(session({ spawnedBy: null, dismissed: true }), ctx, true)).toBe(false);
+    expect(resumable(session({ spawnedBy: null }), { ...ctx, ticketArchived: () => true }, true)).toBe(false);
+    expect(resumable(session({ ticketKey: null, shipherd: true, spawnedBy: null }), ctx, true)).toBe(false);
+    expect(resumable(session({ origin: "discovered" as Session["origin"] }), ctx, true)).toBe(false);
   });
   it("leaves out archived tickets and epics", () => {
     expect(resumable(session(), { ...ctx, ticketArchived: () => true })).toBe(false);
@@ -56,7 +72,7 @@ function setup(over: Partial<ResumerDeps> = {}) {
   const d: ResumerDeps = {
     head: (id) => heads.get(id) ?? null,
     running: (id) => running.has(id),
-    resumable: (h) => resumable(h, ctx),
+    resumable: (h, insisted) => resumable(h, ctx, insisted),
     transcript: () => "present",
     admit: vi.fn(async () => ({ ok: true as const, release })),
     open: vi.fn(async (h: Session): Promise<Opened> => {
@@ -123,12 +139,79 @@ describe("Resumer", () => {
     expect(admit).toHaveBeenCalledTimes(2);
   });
 
+  it("resumes the global coordinator that crashed or did not come back after a restart, but not one the user closed with × (BTL-279 review)", async () => {
+    const g = session({ id: "g", ticketKey: null, shipherd: true, spawnedBy: null });
+    const { r, d, heads } = setup({ resumable: (h, insisted) => resumable(h, { ...ctx, latestShipherd: () => "g" }, insisted) });
+    heads.set("g", g);
+    await expect(r.request("g", "mail")).resolves.toEqual({ state: "resuming" });
+    expect(d.open).toHaveBeenCalledTimes(1);
+    const closed = setup({ resumable: (h, insisted) => resumable(h, { ...ctx, latestShipherd: () => "g" }, insisted), controllerMailSince: () => 99 });
+    closed.heads.set("g", { ...g, userEndedAt: 5 });
+    await expect(closed.r.request("g", "mail")).resolves.toEqual({ state: "ended_by_user" });
+    expect(closed.d.admit).not.toHaveBeenCalled();
+  });
+
   it("does not resume a session the user ended", async () => {
     const { r, d, heads } = setup();
     heads.set("s1", session({ userEndedAt: 5 }));
     await expect(r.request("s1", "mail")).resolves.toEqual({ state: "ended_by_user" });
     expect(r.status("s1")).toBe("ended_by_user");
     expect(d.admit).not.toHaveBeenCalled();
+  });
+
+  it("resumes a session the user ended when its coordinator sends an instruction after that, not for one queued before (BTL-279)", async () => {
+    let since: number | null = 3;
+    const { r, d, heads } = setup({ controllerMailSince: () => since });
+    heads.set("s1", session({ userEndedAt: 5 }));
+    // 用户点 × 之前就排着的：不因为它又拉起来。
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "ended_by_user" });
+    expect(d.admit).not.toHaveBeenCalled();
+    // 总控在那之后又发了一条：打开。
+    since = 7;
+    expect(r.status("s1")).toBe("resumes");
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "resuming" });
+    expect(d.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("list_sessions (asked by the coordinator) says a session the user ended or opened resumes when it sends (BTL-279)", () => {
+    const { r, heads } = setup();
+    heads.set("s1", session({ userEndedAt: 5 }));
+    expect(r.status("s1")).toBe("ended_by_user");
+    expect(r.status("s1", { asController: true })).toBe("resumes");
+    heads.set("s1", session({ spawnedBy: null }));
+    expect(r.status("s1")).toBe("not_managed");
+    expect(r.status("s1", { asController: true })).toBe("resumes");
+    // 隐藏了的、归档的照样不恢复。
+    heads.set("s1", session({ dismissed: true }));
+    expect(r.status("s1", { asController: true })).toBe("not_managed");
+  });
+
+  it("resumes a ticket session the user opened when its coordinator's instruction waits; Shipherd's own notices do not (BTL-279)", async () => {
+    let since: number | null = null;
+    const { r, d, heads } = setup({ controllerMailSince: () => since, resumable: (h, insisted) => resumable(h, ctx, insisted) });
+    heads.set("s1", session({ spawnedBy: null }));
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "not_managed" });
+    since = 10;
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "resuming" });
+    expect(d.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ended session resumed for its coordinator that exits before starting counts as a failure, unless the user ends it again (BTL-279)", async () => {
+    const a = setup({ controllerMailSince: () => 10, started: () => false, isOpen: () => false, running: () => false });
+    a.heads.set("s1", session({ userEndedAt: 5 }));
+    await a.r.request("s1", "mail");
+    await a.r.idle();
+    expect(a.r.status("s1")).toBe("resume_failed");
+    const b = setup({ controllerMailSince: () => 10, started: () => false, isOpen: () => false, running: () => false });
+    b.heads.set("s1", session({ userEndedAt: 5 }));
+    b.d.open = vi.fn(async (h: Session): Promise<Opened> => {
+      b.heads.set(h.id, session({ userEndedAt: 20 }));
+      return { ok: true, termId: h.id, alreadyOpen: false };
+    });
+    await b.r.request("s1", "mail");
+    await b.r.idle();
+    expect(b.receipts).toEqual([]);
+    expect(b.r.status("s1")).toBe("ended_by_user");
   });
 
   it("does not resume sessions it does not manage", async () => {
@@ -307,5 +390,86 @@ describe("Resumer", () => {
     expect(done).toEqual({ resumed: ["a"], waitingMemory: ["b", "c"] });
     expect(admit).toHaveBeenCalledTimes(2);
     expect(d.open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("controllerMailSince (BTL-279)", () => {
+  const m = (over: Partial<SessionMessage>) => msg({ kind: "shipherd", fromSession: "bt", toSession: "ec", queuedAt: 10, ...over });
+  const headOf = (id: string) => (id === "ec-old" ? "ec" : id);
+  const controls = (from: string | null, head: string) => from === "bt" && head === "ec";
+
+  it("takes the latest instruction from its own controller, following the chain to the head", () => {
+    expect(controllerMailSince([m({ queuedAt: 10 }), m({ toSession: "ec-old", queuedAt: 30 }), m({ kind: "instruction", queuedAt: 20 })], "ec", headOf, controls)).toBe(30);
+  });
+
+  it("ignores other kinds, other heads and senders that are not its controller", () => {
+    expect(controllerMailSince([m({ kind: "reply" as SessionMessage["kind"] }), m({ toSession: "other" }), m({ fromSession: "x" }), m({ fromSession: null })], "ec", headOf, controls)).toBeNull();
+  });
+
+  it("a send made in the patrol turn does not count, so it does not reopen what the user closed (review suggestion 3)", () => {
+    expect(controllerMailSince([m({ queuedAt: 50, meta: { auto: "patrol" } })], "ec", headOf, controls)).toBeNull();
+    expect(controllerMailSince([m({ queuedAt: 10 }), m({ queuedAt: 50, meta: { auto: "patrol", answers: 3 } })], "ec", headOf, controls)).toBe(10);
+    // 别的 meta 照常算。
+    expect(controllerMailSince([m({ queuedAt: 40, meta: { answers: 3 } })], "ec", headOf, controls)).toBe(40);
+  });
+
+  it("with the Resumer: a patrol send after the user closed the epic coordinator leaves it ended_by_user; an explicit send after that reopens it", async () => {
+    const queued = [m({ toSession: "s1", queuedAt: 1_000_100, meta: { auto: "patrol" } })];
+    const { r, d, heads } = setup({ controllerMailSince: (h) => controllerMailSince(queued, h, (id) => id, (from) => from === "bt") });
+    heads.set("s1", session({ ticketKey: null, coordinator: true, featureId: 7, spawnedBy: null, userEndedAt: 1_000_000 }));
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "ended_by_user" });
+    expect(d.admit).not.toHaveBeenCalled();
+    queued.push(m({ toSession: "s1", queuedAt: 1_000_200 }));
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "resuming" });
+    expect(d.open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("wakeStateFor (list_sessions wake, BTL-279 fourth review)", () => {
+  /** 记下 status 被问时 asController 是什么；用户点 × 关掉的：总控发的会打开，别的不打开。 */
+  const deps = (o: { hibernated?: boolean; controls?: boolean; patrolling?: string[]; resumer?: boolean } = {}) => {
+    const asked: { id: string; asController: boolean }[] = [];
+    const patrolled: string[] = [];
+    return {
+      asked, patrolled,
+      d: {
+        hibernated: () => o.hibernated ?? false,
+        controls: (caller: string | null) => (o.controls ?? true) && caller !== null,
+        patrolling: (c: string) => (patrolled.push(c), (o.patrolling ?? []).includes(c)),
+        status: o.resumer === false ? null : (id: string, x: { asController: boolean }): WakeState => (asked.push({ id, ...x }), x.asController ? "resumes" : "ended_by_user"),
+      },
+    };
+  };
+
+  it("asks as the controller when the caller controls it and is not on its patrol turn", () => {
+    const x = deps();
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("resumes");
+    expect(x.asked).toEqual([{ id: "epic", asController: true }]);
+    expect(x.patrolled).toEqual(["bt"]);
+  });
+
+  it("a caller on its patrol turn is not asked as the controller: the epic coordinator the user closed stays closed", () => {
+    const x = deps({ patrolling: ["bt"] });
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("ended_by_user");
+    expect(x.asked).toEqual([{ id: "epic", asController: false }]);
+    // 别的调用方在巡检不影响这一个。
+    expect(wakeStateFor("epic", "other", deps({ patrolling: ["bt"] }).d)).toBe("resumes");
+  });
+
+  it("a caller that does not control it, or no caller, is not asked as the controller", () => {
+    const x = deps({ controls: false });
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("ended_by_user");
+    const y = deps();
+    expect(wakeStateFor("epic", null, y.d)).toBe("ended_by_user");
+    expect(y.asked).toEqual([{ id: "epic", asController: false }]);
+    expect(y.patrolled).toEqual([]);
+  });
+
+  it("hibernated wins over everything; no resumer means not_managed", () => {
+    const x = deps({ hibernated: true });
+    expect(wakeStateFor("epic", "bt", x.d)).toBe("hibernated");
+    expect(x.asked).toEqual([]);
+    expect(wakeStateFor("epic", "bt", deps({ resumer: false }).d)).toBe("not_managed");
+    expect(wakeStateFor("epic", "bt", deps({ resumer: false, hibernated: true }).d)).toBe("hibernated");
   });
 });

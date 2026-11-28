@@ -9,7 +9,7 @@ import { SessionMessagesRepo } from "../db/session-messages-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
-import { AGE_NOTE_MS, type AwaitingUser, Mailbox, MESSAGE_KEEP_MS, PRUNE_EVERY_MS, REPLY_WAIT_MS, STUCK_RECEIPT_MS, STUCK_TURN_RECEIPT_MS, TAKEN_STALE_MS } from "./mailbox";
+import { AGE_NOTE_MS, type AwaitingUser, JUDGING_HOLD_MS, UNSURE_DELIVER_MS, Mailbox, MESSAGE_KEEP_MS, PROBE_DENSE_MS, PROBE_FIRST_GAP_MS, PROBE_MAX_GAP_MS, PRUNE_EVERY_MS, REPLY_WAIT_MS, STUCK_RECEIPT_MS, STUCK_TURN_RECEIPT_MS, TAKEN_STALE_MS } from "./mailbox";
 
 const flushPromises = () => new Promise((r) => setTimeout(r, 0));
 
@@ -32,11 +32,28 @@ function world() {
   const held = new Set<string>();
   /** head -> 它的总控（fromController 认的发件人）。 */
   const controllerOf = new Map<string, string>();
+  /** head -> 它管的 session（fromSubordinate 认的发件人，BTL-279）。 */
+  const subordinates = new Map<string, Set<string>>();
   /** head -> 挡住它的 busy 细分（不在里面的按 turn）。 */
   const busyReason = new Map<string, "turn" | "unsure">();
   const typing = new Set<string>();
   const drafts = new Set<string>();
   const logs: string[] = [];
+  let messageNotices = 0;
+  /** recheckAfter 收到的 lenient（BTL-279：粘贴前复查也要按同样宽松的标准，不然复查一定不过）。 */
+  const lenientRechecks: boolean[] = [];
+  /** head -> 接替它的、开着的那个（新开的全局总控、同一个 epic 新开的总控；BTL-279）。 */
+  const successors = new Map<string, string>();
+  /** 休眠着的 head（BTL-279 review：不改投，叫醒它）。 */
+  const hibernated = new Set<string>();
+  /** 这些 head 记录说在干活、屏幕证据说停了：guard 校正成在等，按停下处理（和 index.ts 的 healed 一样放到下一拍）。 */
+  const healOnCheck = new Set<string>();
+  /** transcript 显示最近一轮已经结束的 head（turnClosed）。 */
+  const turnClosed = new Set<string>();
+  /** 读过谁的最后一条回复（lastReply）。 */
+  const replyReads: string[] = [];
+  /** guard 被问过的 head（按顺序）。 */
+  const checked: string[] = [];
   /** coordinatorAnswered 的调用：head 加上那几个 ask_user、答案、谁答的、那条消息排进来的时间。 */
   const coordinatorAnswered: ({ head: string } & { asks: number[]; answer: string; by: string; queuedAt: number })[] = [];
   /**
@@ -67,33 +84,44 @@ function world() {
   const mb = new Mailbox({
     repo, root, head, termOf, openTerms: () => [...terms.keys()],
     check: (id, o): DeliveryCheck => {
+      checked.push(head(id)?.id ?? id);
       const t = termOf(id);
       if (t === null) return { ok: false, block: "closed" };
       const h = head(id)!;
+      if (healOnCheck.has(h.id) && !h.waitingForInput) {
+        h.waitingForInput = true;
+        setTimeout(() => void mb.stopped(h.id), 0);
+        return { ok: false, block: "busy", busy: "unsure" };
+      }
       // 和真的 guard 一样：force 只跳过「看着停了、还没安静够久」（unsure），屏幕上看得出在干活（turn）照样挡。
       const busy = busyReason.get(h.id) ?? "turn";
-      if ((!h.waitingForInput || blocked.has(h.id)) && !(o.force && busy === "unsure")) return { ok: false, block: "busy", busy };
+      if ((!h.waitingForInput || blocked.has(h.id)) && !((o.force || o.lenient) && busy === "unsure")) return { ok: false, block: "busy", busy };
       if (!o.force && !o.answer && needsYou.has(h.id)) return { ok: false, block: "needs_you" };
       if (!o.force && typing.has(h.id)) return { ok: false, block: "typing" };
       if (drafts.has(h.id)) return { ok: false, block: "draft" };
       return { ok: true, termId: t, headId: h.id };
     },
     fromController: (m, h) => controllerOf.get(h) === m.fromSession,
-    recheckAfter: () => () => true,
+    fromSubordinate: (m, h) => m.fromSession !== null && (subordinates.get(h)?.has(m.fromSession) ?? false),
+    recheckAfter: (_id, _p, o) => (lenientRechecks.push(o.lenient === true), () => true),
     deliver,
     canInterrupt: () => true,
     interrupt: (t) => interrupts.push(t),
     interruptRecheck: () => () => true,
-    lastReply: (id) => replies.get(head(id)?.id ?? id) ?? null,
+    lastReply: (id) => (replyReads.push(head(id)?.id ?? id), replies.get(head(id)?.id ?? id) ?? null),
+    turnClosed: (h) => turnClosed.has(h),
     nameOf: (id) => (id === null ? "Shipherd" : `S(${id})`),
     typing: (h, phase) => typed.push(`${h}:${phase}`),
     coordinatorAnswered: (h, o) => coordinatorAnswered.push({ head: h, ...o }),
     awaitingUser: (h) => (!needsYou.has(h) ? null : awaiting.has(h) ? awaiting.get(h)! : { asks: [], text: { reason: "asked in text", at: 0 } }),
     wake: (h) => woken.push(h),
+    successor: (h) => successors.get(h) ?? null,
+    hibernated: (h) => hibernated.has(h),
     delivered: (m) => deliveredMsgs.push({ id: m.id, via: m.via }),
     held: (h) => held.has(h),
     featureOf: (h) => (h === "t9" ? 9 : null),
     notify: () => {},
+    notifyMessages: () => messageNotices++,
     now: () => now,
     log: (m) => logs.push(m),
   });
@@ -104,11 +132,12 @@ function world() {
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
     root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, deliveredMsgs, held, add, dirFiles,
-    controllerOf, busyReason, typing, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
+    controllerOf, subordinates, busyReason, typing, lenientRechecks, successors, hibernated, healOnCheck, turnClosed, replyReads, checked, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
     failDeliver: (r: DeliverResult) => (deliverResult = r),
+    messageNotices: () => messageNotices,
     hook: (term: string, tool = "Read") => runMailbox(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: tool }), { SHIPHERD_SESSION: term }, root),
   };
 }
@@ -126,6 +155,81 @@ describe("Mailbox", () => {
     w.held.delete("t1");
     w.mb.syncTerm("t1");
     expect(w.dirFiles("t1")).toHaveLength(1);
+  });
+
+  it("a patrol never goes through the hook, even after a sweep or a rebuild: it waits for the stop and is typed in; other kinds still go through the hook (BTL-279 fifth review)", async () => {
+    const w = world();
+    w.add("bt", false);
+    const patrol = w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+    await flushPromises();
+    expect(w.dirFiles("bt")).toBeNull();
+    w.mb.sweep("bt");
+    w.mb.rebuild();
+    expect(w.dirFiles("bt")).toBeNull();
+    expect(w.hook("bt").out).toBe("");
+    w.mb.send(msg("bt", "CI failed"));
+    await flushPromises();
+    const ctx = JSON.parse(w.hook("bt").out).hookSpecificOutput.additionalContext as string;
+    expect(ctx).toContain("CI failed");
+    expect(ctx).not.toContain("daily patrol");
+    expect(w.repo.get(patrol.id)?.status).toBe("queued");
+    w.setWaiting("bt", true);
+    await w.mb.stopped("bt");
+    expect(w.delivered.map((d) => d.text).join("\n")).toContain("daily patrol");
+    expect(w.deliveredMsgs).toContainEqual({ id: patrol.id, via: "input" });
+  });
+
+  for (const blocker of ["needs_you", "draft"] as const) {
+    it(`a patrol held back by ${blocker} while the control is stopped is still never written to disk, before or after it gets busy (BTL-279 sixth review, surviving mutant #4)`, async () => {
+      const w = world();
+      w.add("bt", true);
+      (blocker === "needs_you" ? w.needsYou : w.drafts).add("bt");
+      const patrol = w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+      await flushPromises();
+      expect(w.repo.get(patrol.id)).toMatchObject({ status: "queued", blockedReason: blocker });
+      w.mb.syncTerm("bt");
+      expect(w.dirFiles("bt")).toBeNull();
+      // 总控变忙了（用户自己开了一轮）：巡检也不能这时候写出去、被 hook 带进这一轮。
+      w.setWaiting("bt", false);
+      w.mb.syncTerm("bt");
+      await w.mb.flush("bt");
+      expect(w.dirFiles("bt")).toBeNull();
+      expect(w.hook("bt").out).toBe("");
+      expect(w.repo.get(patrol.id)?.status).toBe("queued");
+    });
+  }
+
+  it("a patrol's ETA says it waits for the turn to end, not for a tool call; other kinds keep theirs (BTL-279 sixth review)", () => {
+    for (const reason of ["turn", "auto_input", "deliver_failed"] as const) {
+      const patrol = Mailbox.note({ delivery: "queued", reason, since: 0, kind: "patrol" }, 0);
+      expect(patrol).toContain(M().mailboxEtaPatrol);
+      expect(patrol).not.toContain("调用工具");
+      expect(Mailbox.note({ delivery: "queued", reason, since: 0, kind: "shipherd" }, 0)).toContain(M().mailboxEta[reason]);
+    }
+    expect(Mailbox.note({ delivery: "queued", reason: "closed", since: 0, kind: "patrol" }, 0)).toContain(M().mailboxEta.closed);
+  });
+
+  it("pendingFor takes the kind of the message that is blocked, not of the oldest one (BTL-279 seventh review, surviving mutant M21)", async () => {
+    const w = world();
+    w.add("bt", false);
+    w.mb.send({ kind: "shipherd", from: null, to: "bt", featureId: null, body: "older", ref: "s:1" });
+    w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+    await flushPromises();
+    const [older] = w.repo.queued().filter((m) => m.kind === "shipherd");
+    // 最早那条这会儿没有挡住的原因（刚排进来、还没 tick 到），挡住的是巡检那条。
+    w.repo.setBlocked([older.id], null, w.now());
+    expect(w.mb.pendingFor("bt")).toMatchObject({ queued: 2, oldestQueuedAt: older.queuedAt, reason: "turn", kind: "patrol" });
+    expect(w.mb.pendingView("bt")?.note).toContain(M().mailboxEtaPatrol);
+  });
+
+  it("list_sessions' pending note for a busy Shipherd control with a patrol queued uses the patrol ETA (BTL-279 sixth review)", async () => {
+    const w = world();
+    w.add("bt", false);
+    w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+    await flushPromises();
+    expect(w.mb.pendingView("bt")?.note).toContain(M().mailboxEtaPatrol);
+    const r = await w.mb.settle(w.repo.queued()[0].id, 0);
+    expect(Mailbox.note(r, w.now())).toContain(M().mailboxEtaPatrol);
   });
 
   it("types the user's own words in as they are, never batched with Shipherd's messages; through the hook they carry a note", async () => {
@@ -370,6 +474,185 @@ describe("Mailbox", () => {
     expect(w.delivered).toHaveLength(1);
   });
 
+  it("a reply whose turn ended without Stop still comes back: the tick checks open heads that owe a reply, so the screen evidence heals them (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("t1", true);
+    w.add("t2", true);
+    w.replies.set("t1", { id: "r0", text: "old", at: w.now() - 10 });
+    const { id } = w.mb.send(msg("t1", "question"));
+    const other = w.mb.send(msg("t2", "question for one that gets closed"));
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    expect(w.repo.get(other.id)?.status).toBe("delivered");
+    // 它因为这条开始干活，写完回复，但 Stop 没来：记录一直说在干活，也没有别的消息排给它。
+    w.setWaiting("t1", false);
+    // t2 也在等回复，但终端关了（休眠）。
+    w.setWaiting("t2", false);
+    w.terms.delete("t2");
+    w.hibernated.add("t2");
+    w.tick(5000);
+    w.replies.set("t1", { id: "r1", text: "answer", at: w.now() });
+    w.healOnCheck.add("t1");
+    w.checked.length = 0;
+    w.tick(10_000);
+    await w.mb.tick();
+    await new Promise((r) => setTimeout(r, 0));
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "replied", replyText: "answer" });
+    expect(w.repo.queued().filter((m) => m.kind === "reply")).toMatchObject([{ toSession: "boss", fromSession: "t1" }]);
+    // 关着的不为查回复去看：guard 会去叫醒休眠的。
+    expect(w.checked).not.toContain("t2");
+    expect(w.woken).not.toContain("t2");
+  });
+
+  it("a reply still comes back when the answering turn lost both UserPromptSubmit and Stop: the record says waiting all along, the transcript says the turn ended (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    // UserPromptSubmit 丢了：记录一直是贴之前的「在等」。那一轮跑完了、写了回复，Stop 也丢了。
+    w.tick(60_000);
+    // 一轮还开着时的中间话不算回复。
+    w.replies.set("e", { id: "r1", text: "working on X", at: w.now() });
+    w.tick(10_000);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    w.replies.set("e", { id: "r2", text: "done X", at: w.now() });
+    w.turnClosed.add("e");
+    w.tick(10_000);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "replied", replyText: "done X" });
+    expect(w.repo.queued().filter((m) => m.kind === "reply")).toMatchObject([{ toSession: "boss", fromSession: "e" }]);
+  });
+
+  it("the reply to a delivered message still comes back while another message for that head stays held (third review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    // 之后它在问用户：Shipherd 别的消息被「需要你」挡着，一直排着。
+    w.needsYou.add("e");
+    const held = w.mb.send({ kind: "ci", from: null, to: "e", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(w.repo.get(held.id)?.status).toBe("queued");
+    // 那一轮的 UserPromptSubmit 和 Stop 都丢了，transcript 显示已经结束。
+    w.tick(30_000);
+    w.replies.set("e", { id: "r2", text: "done X", at: w.now() });
+    w.turnClosed.add("e");
+    w.tick(10_000);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.repo.get(held.id)?.status).toBe("queued");
+    expect(w.repo.get(id)).toMatchObject({ status: "replied", replyText: "done X" });
+  });
+
+  it("a waiting head whose transcript shows an ended turn but whose last reply predates the delivery is not answered by it (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    w.turnClosed.add("e");
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    for (let i = 0; i < 3; i++) {
+      w.tick(10_000);
+      await w.mb.tick();
+      await flushPromises();
+    }
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    expect(w.repo.queued()).toEqual([]);
+  });
+
+  it("a head that stopped after the delivery is not probed again: the Stop already checked for the reply (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("e", true);
+    w.replies.set("e", { id: "r0", text: "old", at: w.now() - 10 });
+    w.turnClosed.add("e");
+    const { id } = w.mb.send(msg("e", "please do X"));
+    await flushPromises();
+    w.tick(10_000);
+    await w.mb.stopped("e");
+    await flushPromises();
+    const reads = w.replyReads.filter((h) => h === "e").length;
+    expect(reads).toBeGreaterThan(0);
+    for (let i = 0; i < 3; i++) {
+      w.tick(10_000);
+      await w.mb.tick();
+      await flushPromises();
+    }
+    expect(w.replyReads.filter((h) => h === "e").length).toBe(reads);
+    expect(w.repo.get(id)?.status).toBe("delivered");
+  });
+
+  it("probes a head that owes a reply on every tick for ten minutes after the delivery, then backs off to at most every five minutes; a new delivery starts over (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("t1", true);
+    w.mb.send(msg("t1", "question"));
+    await flushPromises();
+    const deliveredAt = w.now();
+    // 它在干活，回复一直没来：每个 tick 记录说在干活，probe 过 guard（guard 挡住：busy）。
+    w.setWaiting("t1", false);
+    const probes: number[] = [];
+    const step = 5_000;
+    for (let t = step; t <= PROBE_DENSE_MS + 30 * 60_000; t += step) {
+      w.tick(step);
+      w.checked.length = 0;
+      await w.mb.tick();
+      if (w.checked.includes("t1")) probes.push(w.now() - deliveredAt);
+    }
+    const dense = probes.filter((x) => x < PROBE_DENSE_MS);
+    expect(dense).toHaveLength(PROBE_DENSE_MS / step - 1);
+    const gaps = probes.slice(dense.length).map((x, i) => x - probes[dense.length - 1 + i]);
+    // 间隔一次翻一倍（按 tick 取整），最长 5 分钟。
+    expect(gaps.slice(0, 5)).toEqual([PROBE_FIRST_GAP_MS, 2 * PROBE_FIRST_GAP_MS, 4 * PROBE_FIRST_GAP_MS, 8 * PROBE_FIRST_GAP_MS, PROBE_MAX_GAP_MS]);
+    expect(Math.max(...gaps)).toBe(PROBE_MAX_GAP_MS);
+    expect(gaps.slice(4).every((g) => g === PROBE_MAX_GAP_MS)).toBe(true);
+    // 又送到一条等回复的：从头每个 tick 看。
+    w.setWaiting("t1", true);
+    w.mb.send(msg("t1", "another question"));
+    await flushPromises();
+    w.setWaiting("t1", false);
+    let again = 0;
+    for (let i = 0; i < 3; i++) {
+      w.tick(step);
+      w.checked.length = 0;
+      await w.mb.tick();
+      if (w.checked.includes("t1")) again++;
+    }
+    expect(again).toBe(3);
+  });
+
+  it("an old turn's reply written while deliver waited for the input box is the baseline, not the reply to this message (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("t1", true);
+    w.replies.set("t1", { id: "r0", text: "old", at: w.now() - 10 });
+    // 等输入框的时候（最多一分钟），旧的那一轮写完了它的最后一段话，然后才贴进去。
+    w.whileWaiting.run = () => {
+      w.tick(30_000);
+      w.replies.set("t1", { id: "r1", text: "the old turn's last words", at: w.now() });
+      w.tick(1);
+    };
+    const { id } = w.mb.send(msg("t1", "question"));
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "delivered", baseReplyId: "r1", deliveredAt: w.now() });
+    // 对方因为这条停下来，最后一条回复还是旧的 r1：不算回复。
+    await w.mb.stopped("t1");
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    expect(w.repo.queued()).toEqual([]);
+  });
+
   it("interrupt presses Esc on a busy target and types the message in, keeping it off the hook's path", async () => {
     const w = world();
     w.add("t1", false);
@@ -589,7 +872,331 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
     expect(w.delivered[0].text).not.toContain(M().mailboxNotAnAnswer);
     expect(w.delivered[0].text).not.toContain("替用户答");
+    // 越过了「还在判断」：和 flush 判断太久时一样，注明不是用户的回答（BTL-279 复核建议 5）。
+    expect(w.delivered[0].text).toContain(M().mailboxNotUserAnswer);
     expect(w.coordinatorAnswered).toEqual([]);
+  });
+
+  it("deliver now past needs_you marks Shipherd's own notice as not the user's answer; with nothing holding it, no note (BTL-279 review suggestion 5)", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 5, question: "which one?", at: w.now() - 1 }], text: null });
+    const held = w.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(w.repo.get(held.id)!.status).toBe("queued");
+    expect(await w.mb.deliverNow(held.id)).toEqual({ delivered: true, reason: null });
+    expect(w.delivered.at(-1)!.text).toContain(M().mailboxNotUserAnswer);
+    expect(w.delivered.at(-1)!.text).toContain("CI is red");
+
+    const v = world();
+    v.add("t1", true);
+    v.typing.add("t1");
+    const plain = v.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(v.repo.get(plain.id)!.status).toBe("queued");
+    expect(await v.mb.deliverNow(plain.id)).toEqual({ delivered: true, reason: null });
+    expect(v.delivered.at(-1)!.text).not.toContain(M().mailboxNotUserAnswer);
+  });
+
+  it("deliver now of the user's own ask_user answer held as unsure is not marked as not the user's answer, also with a notice queued behind it (third review)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", { asks: [{ id: 7, question: "which one?", at: w.now() - 1 }], text: null });
+    const { id } = w.mb.send({ ...msg("t1", "answer: B"), kind: "answer", ref: "answer:7" });
+    w.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI is red" });
+    await flushPromises();
+    expect(w.repo.get(id)!.status).toBe("queued");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
+    const typed = w.delivered.map((d) => d.text).join("\n");
+    expect(typed).toContain("answer: B");
+    // 和 flush 一样：排着 session 等的回答时不越过「需要你」，什么都不注明。
+    expect(typed).not.toContain(M().mailboxNotUserAnswer);
+  });
+
+  it("a coordinator waiting on the user still gets its sessions' reports and the replies to what it sent, each marked as not the user's answer (BTL-279)", async () => {
+    const w = world();
+    w.add("coord", true);
+    w.needsYou.add("coord");
+    w.subordinates.set("coord", new Set(["t1"]));
+    const report = w.mb.send({ kind: "report", from: "t1", to: "coord", featureId: 1, body: "PR #12 is open" });
+    const reply = w.mb.send({ kind: "reply", from: "t2", to: "coord", featureId: 1, body: "【回复】done" });
+    // 不是它管的 session 的汇报、Shipherd 自己的 CI 通知照样等用户回答完（计划 14）。
+    const stranger = w.mb.send({ kind: "report", from: "x9", to: "coord", featureId: 1, body: "not mine" });
+    const ci = w.mb.send({ kind: "ci", from: null, to: "coord", featureId: 1, body: "CI failed" });
+    await flushPromises();
+    await w.mb.flush("coord");
+    const typedIn = w.delivered.map((d) => d.text).join("\n");
+    expect(typedIn).toContain("PR #12 is open");
+    expect(typedIn).toContain("【回复】done");
+    expect(typedIn.split(M().mailboxNotUserAnswer)).toHaveLength(3);
+    expect(typedIn).not.toContain("not mine");
+    expect(typedIn).not.toContain("CI failed");
+    expect(w.repo.get(report.id)!.status).toBe("delivered");
+    expect(w.repo.get(reply.id)!.status).toBe("delivered");
+    expect(w.repo.get(stranger.id)!.blockedReason).toBe("needs_you");
+    expect(w.repo.get(ci.id)!.blockedReason).toBe("needs_you");
+  });
+
+  it("not waiting on the user: reports go in without the note (BTL-279)", async () => {
+    const w = world();
+    w.add("coord", true);
+    w.subordinates.set("coord", new Set(["t1"]));
+    w.mb.send({ kind: "report", from: "t1", to: "coord", featureId: 1, body: "PR #12 is open" });
+    await flushPromises();
+    await w.mb.flush("coord");
+    expect(w.delivered[0].text).not.toContain(M().mailboxNotUserAnswer);
+  });
+
+  it("judging that never settles holds the coordinator's message only so long; then it goes in marked as not the user's answer (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.needsYou.add("t1");
+    w.awaiting.set("t1", null);
+    w.controllerOf.set("t1", "coord");
+    const { id } = w.mb.send({ kind: "shipherd", from: "coord", to: "t1", featureId: 1, body: "status?" });
+    const ci = w.mb.send({ kind: "ci", from: null, to: "t1", featureId: 1, body: "CI failed" });
+    await flushPromises();
+    w.tick(JUDGING_HOLD_MS - 1000);
+    await w.mb.tick();
+    expect(w.delivered).toEqual([]);
+    expect(w.repo.get(id)!.blockedReason).toBe("judging");
+    w.tick(1000);
+    await w.mb.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain("status?");
+    expect(w.delivered[0].text).toContain(M().mailboxNotUserAnswer);
+    expect(w.delivered[0].text).not.toContain(M().mailboxNotAnAnswer);
+    expect(w.coordinatorAnswered).toEqual([]);
+    expect(w.repo.get(ci.id)!.status).toBe("queued");
+  });
+
+  it("one session slow to take its input does not hold up the others in the same tick, and the next tick does not type into it twice (BTL-279)", async () => {
+    const w = world();
+    w.add("slow", false);
+    w.add("fast", false);
+    w.mb.send(msg("slow", "for slow"));
+    w.mb.send(msg("fast", "for fast"));
+    await flushPromises();
+    let release: (r: DeliverResult) => void = () => {};
+    w.deliver.mockImplementationOnce(async (term, text) => {
+      w.delivered.push({ term, text });
+      return new Promise<DeliverResult>((r) => (release = r));
+    });
+    w.setWaiting("slow", true);
+    w.setWaiting("fast", true);
+    const first = w.mb.tick();
+    await flushPromises();
+    // slow 的输入框一直没就绪（deliver 最多等 1 分钟）：fast 不用等它。
+    expect(w.delivered.map((d) => d.term).sort()).toEqual(["fast", "slow"]);
+    const second = w.mb.tick();
+    await flushPromises();
+    expect(w.delivered.filter((d) => d.term === "slow")).toHaveLength(1);
+    release("sent");
+    await first;
+    await second;
+    expect(w.repo.queued()).toEqual([]);
+  });
+
+  it("one head's flush throwing does not cost the others their delivery or the tick its reply check; the failure is logged per head (BTL-279 second review)", async () => {
+    const w = world();
+    w.add("bad", false);
+    w.add("good", false);
+    w.add("owes", true);
+    w.mb.send(msg("bad", "for bad"));
+    w.mb.send(msg("good", "for good"));
+    const asked = w.mb.send(msg("owes", "question"));
+    await flushPromises();
+    expect(w.repo.get(asked.id)?.status).toBe("delivered");
+    w.setWaiting("owes", false);
+    w.checked.length = 0;
+    const real = w.mb.flush.bind(w.mb);
+    vi.spyOn(w.mb, "flush").mockImplementation((h) => (h === "bad" ? Promise.reject(new Error("boom")) : real(h)));
+    w.setWaiting("good", true);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.delivered.some((d) => d.term === "good" && d.text.includes("for good"))).toBe(true);
+    expect(w.checked).toContain("owes");
+    expect(w.logs.some((l) => l.includes("flushing bad failed"))).toBe(true);
+    expect(w.logs.some((l) => l.includes("tick failed"))).toBe(false);
+  });
+
+  it("a reply to a global control that was closed for a newer one goes to the one now open; the requestId stays (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("old", true);
+    const { id } = w.mb.send({ kind: "shipherd", from: "old", to: "t1", featureId: 1, body: "look at the mailbox" });
+    w.setWaiting("t1", true);
+    await w.mb.flush("t1");
+    expect(w.repo.get(id)!.status).toBe("delivered");
+    // 用户关掉了旧的全局总控、开了一个新的（不是换新，没有 replacedBy）。
+    w.terms.delete("old");
+    w.add("new", true);
+    w.successors.set("old", "new");
+    w.replies.set("t1", { id: "r1", text: "done, PR #5", at: w.now() + 10 });
+    w.tick(20);
+    await w.mb.stopped("t1");
+    await flushPromises();
+    const got = w.delivered.filter((d) => d.term === "new").map((d) => d.text).join("\n");
+    expect(got).toContain("done, PR #5");
+    expect(got).toContain(id);
+    expect(w.repo.get(id)!.status).toBe("replied");
+    expect(w.repo.queued()).toEqual([]);
+    // 只搬回复和汇报：发给旧总控的别的消息（CI 之类）留在它自己的信箱。
+    const ci = w.mb.send({ kind: "ci", from: null, to: "old", featureId: 1, body: "CI red" });
+    await flushPromises();
+    expect(w.repo.get(ci.id)!.toSession).toBe("old");
+    expect(w.repo.get(ci.id)!.status).toBe("queued");
+  });
+
+  it("the reply keeps its requestId when the recipient was replaced (refresh, resume under a new id) and the sender too (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", true);
+    w.add("coord", true);
+    const { id } = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "do it" });
+    await flushPromises();
+    expect(w.repo.get(id)!.status).toBe("delivered");
+    // 收件人换新了（/handoff + /clear，或者 --resume 换了 id）：新 head 是 t2。
+    w.terms.delete("t1");
+    w.sessions.get("t1")!.replacedBy = "t2";
+    w.sessions.set("t2", { id: "t2", waitingForInput: true });
+    w.terms.set("t2", "t2");
+    // 发件的总控也换新了：coord → coord2。
+    w.terms.delete("coord");
+    w.sessions.get("coord")!.replacedBy = "coord2";
+    w.sessions.set("coord2", { id: "coord2", waitingForInput: true });
+    w.terms.set("coord2", "coord2");
+    w.replies.set("t2", { id: "r9", text: "finished it", at: w.now() + 5 });
+    w.tick(10);
+    await w.mb.stopped("t2");
+    await flushPromises();
+    expect(w.repo.get(id)!.status).toBe("replied");
+    const got = w.delivered.filter((d) => d.term === "coord2").map((d) => d.text).join("\n");
+    expect(got).toContain("finished it");
+    expect(got).toContain(id);
+  });
+
+  it("readdressing to the successor does not hold up the closed control's own mail: it is blocked and woken before the paste into the successor (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", true);
+    const reply = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    const inst = w.mb.send(msg("old", "an instruction for the old control"));
+    await flushPromises();
+    // 用户这时另开了一个接替它的。
+    w.successors.set("old", "new");
+    w.woken.length = 0;
+    w.repo.setBlocked([inst.id], null, w.now());
+    // 往接替的那个里贴要等（最多一分钟）：这期间旧的那个的指示已经记成 closed、叫醒了。
+    const seen: { blocked: string | null; woken: boolean }[] = [];
+    w.whileWaiting.run = () => seen.push({ blocked: w.repo.get(inst.id)!.blockedReason, woken: w.woken.includes("old") });
+    await w.mb.flush("old");
+    expect(seen).toEqual([{ blocked: "closed", woken: true }]);
+    expect(w.repo.get(reply.id)).toMatchObject({ status: "delivered", toSession: "new" });
+    expect(w.repo.get(inst.id)).toMatchObject({ status: "queued", toSession: "old" });
+  });
+
+  it("Deliver now on a reply to a closed control says it went in when it was readdressed to the successor and delivered (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", true);
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    w.successors.set("old", "new");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
+    expect(w.repo.get(id)).toMatchObject({ status: "delivered", toSession: "new" });
+  });
+
+  it("Deliver now on a reply readdressed to a busy successor reports why the successor holds it, not that the old control is closed (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    // 接替的那个开着，但在干活（turn）。
+    w.add("new", false);
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    w.successors.set("old", "new");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: false, reason: "turn" });
+    expect(w.repo.get(id)).toMatchObject({ status: "queued", toSession: "new", blockedReason: "turn" });
+  });
+
+  it("a reply to a closed control is not readdressed to a successor that is closed too: it waits for its own and wakes it (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", false, false);
+    w.successors.set("old", "new");
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "queued", toSession: "old", blockedReason: "closed" });
+    expect(w.woken).toContain("old");
+    expect(w.woken).not.toContain("new");
+  });
+
+  it("a reply to a hibernated control stays its own even when another control of the epic is open: it is woken, not readdressed (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", true);
+    w.hibernated.add("old");
+    w.successors.set("old", "new");
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "queued", toSession: "old", blockedReason: "hibernated" });
+    expect(w.woken).toContain("old");
+    expect(w.delivered).toEqual([]);
+  });
+
+  it("a reply to a closed control with no one taking over waits for it and asks to wake it (BTL-279)", async () => {
+    const w = world();
+    w.add("coord", false, false);
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "coord", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "queued", toSession: "coord", blockedReason: "closed" });
+    expect(w.woken).toContain("coord");
+  });
+
+  it("unsure for UNSURE_DELIVER_MS: it goes in anyway (the screen shows an empty box, nothing running); turn never does (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    const { id } = w.mb.send(msg("t1", "from the global control"));
+    await flushPromises();
+    w.tick(UNSURE_DELIVER_MS - 1000);
+    await w.mb.tick();
+    expect(w.delivered).toEqual([]);
+    expect(w.repo.get(id)!.blockedReason).toBe("unsure");
+    w.tick(1000);
+    await w.mb.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.repo.get(id)!.status).toBe("delivered");
+    expect(w.lenientRechecks.at(-1)).toBe(true);
+    // 屏幕上看得出在跑（turn）：多久都不硬送，hook 在下一次工具调用时带进去。
+    const v = world();
+    v.add("t2", false);
+    const b = v.mb.send(msg("t2", "x"));
+    await flushPromises();
+    v.tick(60 * 60_000);
+    await v.mb.tick();
+    expect(v.delivered).toEqual([]);
+    expect(v.repo.get(b.id)!.blockedReason).toBe("turn");
+  });
+
+  it("unsure: a newer message queued behind an old one does not restart the clock; the oldest wait counts (BTL-279 second review)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    w.mb.send(msg("t1", "old"));
+    await flushPromises();
+    w.tick(UNSURE_DELIVER_MS - 1000);
+    await w.mb.tick();
+    w.mb.send(msg("t1", "new"));
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    w.tick(1000);
+    await w.mb.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain("old");
+    expect(w.delivered[0].text).toContain("new");
   });
 
   it("A1: right after a stop, before the verdict, the coordinator's message waits as 'judging' and is not taken as an answer; once judged it goes in", async () => {
@@ -796,6 +1403,70 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(w.repo.get(id)!.blockedReason).toBe("closed");
   });
 
+  it("counts every real attempt that did not get a message in (a new reason, or a paste that did not go in), with its time and result; the message list and pendingView show them (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", false);
+    const { id } = w.mb.send(msg("t1", "hello"));
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 1, lastAttemptAt: w.now(), lastAttempt: "turn" });
+    const firstNotices = w.messageNotices();
+    w.tick(10_000);
+    await w.mb.tick();
+    w.tick(10_000);
+    await w.mb.tick();
+    // 原因没变、也没去贴的 tick 不算（BTL-279 review）：不写库、不通知，排一夜也不会涨到几千次。
+    expect(w.repo.get(id)).toMatchObject({ attempts: 1, lastAttemptAt: w.now() - 20_000, lastAttempt: "turn", blockedSince: w.now() - 20_000 });
+    expect(w.messageNotices()).toBe(firstNotices);
+    // 等输入框超时、粘贴前复查没过、终端退出：真的去贴了，每次都算，原因相同也算。
+    w.setWaiting("t1", true);
+    w.failDeliver("timeout");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 2, lastAttempt: "deliver_failed" });
+    expect(w.messageNotices()).toBe(firstNotices + 1);
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 3, lastAttemptAt: w.now(), lastAttempt: "deliver_failed" });
+    w.failDeliver("blocked");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 4, lastAttempt: "recheck" });
+    w.failDeliver("exited");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 5, lastAttemptAt: w.now(), lastAttempt: "exited" });
+    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ attempts: 5, lastAttemptAt: new Date(w.now()).toISOString(), lastAttempt: "exited" });
+    expect(w.mb.pendingView("t1")).toMatchObject({ attempts: 5, lastAttemptAt: new Date(w.now()).toISOString() });
+    // 送到了：次数留着。
+    w.failDeliver("sent");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ status: "delivered", attempts: 5 });
+    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ status: "delivered", attempts: 5, blocked: null });
+  });
+
+  it("diagnostics lists every queued message with why it waits and how often it was tried, and recent ones with how they went in; never the text (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("t2", true);
+    const a = w.mb.send(msg("t1", "secret plan A"));
+    const b = w.mb.send(msg("t2", "secret plan B"));
+    await flushPromises();
+    w.tick(10_000);
+    await w.mb.tick();
+    const d = w.mb.diagnostics();
+    expect(d.queued).toEqual([
+      expect.objectContaining({
+        id: a.id, kind: "instruction", from: "boss", to: "t1", head: "t1", term: "t1", queuedAt: new Date(w.now() - 10_000).toISOString(),
+        blockedReason: "turn", blockedSince: new Date(w.now() - 10_000).toISOString(), attempts: 1, lastAttemptAt: new Date(w.now() - 10_000).toISOString(), lastAttempt: "turn",
+        stuckReceiptAt: null, inFlight: false,
+      }),
+    ]);
+    expect(d.recent).toEqual(expect.arrayContaining([expect.objectContaining({ id: b.id, status: "delivered", via: "input", attempts: 0 })]));
+    expect(d.inputting).toEqual([]);
+    expect(JSON.stringify(d)).not.toContain("secret plan");
+  });
+
   it("settle says delivered when it went in, and queued with the reason when it did not", async () => {
     const w = world();
     w.add("t1", true);
@@ -804,7 +1475,7 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(await w.mb.settle(a.id, 1000)).toMatchObject({ delivery: "delivered" });
     const b = w.mb.send(msg("t2", "wait"));
     const r = await w.mb.settle(b.id, 1000);
-    expect(r).toEqual({ delivery: "queued", reason: "turn", since: w.now() });
+    expect(r).toEqual({ delivery: "queued", reason: "turn", since: w.now(), kind: "instruction" });
     expect(Mailbox.note(r, w.now())).not.toContain("下一次调用工具时就会读到");
     expect(Mailbox.note(r, w.now())).toContain("它这一轮还在干活");
     expect(Mailbox.note({ delivery: "queued", reason: "unsure", since: w.now() - 3 * 60_000 }, w.now())).toContain("3 分钟");
@@ -893,9 +1564,10 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
 
   it("a later stuck message from the same sender is merged into the receipt still queued, not swapped for it (review suggestion 2)", async () => {
     const w = world();
-    w.add("t1", false);
+    // 一直挡着的原因（「在确认」挡久了会硬送，BTL-279）：等用户回答，发件的不是它的总控。
+    w.add("t1", true);
+    w.needsYou.add("t1");
     w.add("coord", false);
-    w.busyReason.set("t1", "unsure");
     const a = w.mb.send({ kind: "instruction", from: "coord", to: "t1", featureId: 1, body: "first" });
     await flushPromises();
     w.tick(STUCK_RECEIPT_MS + 1000);

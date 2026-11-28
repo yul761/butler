@@ -42,8 +42,12 @@ export interface DeliveryGuardDeps {
    * 当它停着放行，并调 healed 校正记录（BTL-269 B：Stop hook 没来、transcript 没写结束，就会一直卡着）。没接时只看记录。
    */
   idle?: (headId: string, termId: string) => { idle: boolean; working: boolean; looksIdle: boolean };
-  /** 凭证据放行了一个记录说在跑的 session：把它记成在等输入（index.ts 里是 onTurnEndedWithoutStop）。 */
-  healed?: (headId: string) => void;
+  /**
+   * 凭证据放行了一个记录说在跑的 session：把它记成在等输入（index.ts 里是 onTurnEndedWithoutStop）。
+   * 返回 false 表示记录没动：这一次直接放行，不然每次都校正、每次都 unsure，永远送不进去（BTL-279）。
+   * 只有记录不是「在等」时才校正，所以实际只在 head 对不上、或 lastActivityAt 比现在还晚（时钟回拨）时返回 false：是兜底，不是常见路径。
+   */
+  healed?: (headId: string) => boolean | void;
   /** 打过字之后多久之内不自动输入，默认 USER_TYPING_QUIET_MS（e2e 用环境变量调短）。 */
   typingQuietMs?: number;
   now(): number;
@@ -69,7 +73,11 @@ export class DeliveryGuard {
    * 用户在打字、有草稿、屏幕有确认框时不校正（那时是用户在用它，记录怎么写都不该由我们改）。
    * 重复调用没副作用：markTurnEndedWithoutStop 对已经在等、head 换了、之后有过输入的都不动；停下的后续放到下一拍，不在 guard 里重入。
    */
-  check(sessionId: string, o: { force?: boolean } = {}): DeliveryCheck {
+  /**
+   * lenient（BTL-279）：信箱里的消息已经「在确认」（unsure）挡了很久：屏幕画着空输入框、没有转圈和确认框，只是输出一直没安静够久，
+   * 判断不准时倾向送达（消息里写着是谁发的）。只跳过 unsure，别的和平常一样挡。
+   */
+  check(sessionId: string, o: { force?: boolean; lenient?: boolean } = {}): DeliveryCheck {
     // 先看熔断：暂停着的不往里递，也不为了递东西叫醒它。
     if (this.d.costPaused?.(sessionId)) return { ok: false, block: "cost_paused" };
     const termId = this.d.termOf(sessionId);
@@ -77,7 +85,7 @@ export class DeliveryGuard {
     const head = this.d.head(termId);
     if (!head) return { ok: false, block: "busy", busy: "turn" };
     const turn = this.turn(head, termId);
-    if (turn.busy && !(o.force && turn.busy === "unsure")) return { ok: false, block: "busy", busy: turn.busy };
+    if (turn.busy && !((o.force || o.lenient) && turn.busy === "unsure")) return { ok: false, block: "busy", busy: turn.busy };
     if (this.d.refreshing?.(head.id)) return { ok: false, block: "busy", busy: "refreshing" };
     // 别的自动输入正在往这个终端里递（I2）：等它递完，两段不能贴在同一个输入框里，也不能贴在它那一轮的回复中间。
     if (this.d.pty.autoInputInFlight(termId)) return { ok: false, block: "busy", busy: "auto_input" };
@@ -87,10 +95,7 @@ export class DeliveryGuard {
     if (!o.force && typed > 0 && this.d.now() - typed < (this.d.typingQuietMs ?? USER_TYPING_QUIET_MS)) return { ok: false, block: "typing" };
     // 草稿不看时间：用户打了一半去干别的，过多久回车都会把通知和草稿一起提交。
     if (this.d.pty.hasDraft(termId)) return { ok: false, block: "draft" };
-    if (turn.heal) {
-      this.d.healed?.(head.id);
-      return { ok: false, block: "busy", busy: "unsure" };
-    }
+    if (turn.heal && this.d.healed?.(head.id) !== false) return { ok: false, block: "busy", busy: "unsure" };
     return { ok: true, termId, headId: head.id };
   }
 
@@ -98,7 +103,7 @@ export class DeliveryGuard {
    * 给 deliver 的 recheck（I2）：check 通过、马上调 deliver 时取。粘贴前 guard 还通过、还是同一个终端、
    * check 之后用户没往这个终端里输入过（哪怕已经过了打字的安静期），才贴。
    */
-  recheckAfter(sessionId: string, passed: { termId: string }, o: { force?: boolean } = {}): () => boolean {
+  recheckAfter(sessionId: string, passed: { termId: string }, o: { force?: boolean; lenient?: boolean } = {}): () => boolean {
     const checkedAt = this.d.now();
     return () => {
       const g = this.check(sessionId, o);

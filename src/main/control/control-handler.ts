@@ -70,7 +70,8 @@ export interface ControlHandlerDeps {
    */
   resume?: (sessionId: string) => Promise<ResumeStart | null>;
   /** list_sessions 每行的 wake：关着的收到消息时会怎样。 */
-  wakeState?: (sessionId: string) => WakeState;
+  /** caller：问的是谁（list_sessions 的调用方）；只有它真是这个 session 的总控时，才按「总控发一条会重开」回答。 */
+  wakeState?: (sessionId: string, caller: string | null) => WakeState;
   /** ask_user、report（BTL-190 第 2+3 点）；不给就拒绝。 */
   inbox?: Pick<InboxService, "ask" | "report">;
   /** Shipherd 总控的请求（BTL-190 第 5 点）；不给就拒绝。 */
@@ -207,7 +208,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
   /** list_sessions：带上现在还能再开几个（工作流 W）。 */
   const listed = async (rows: unknown[]): Promise<ControlResult> => okCap(rows, d.admission ? await d.admission.capacity() : undefined);
 
-  const sessionRow = (t: Ticket | null, s: { id: string; coordinator: boolean; repoId: number | null; firstPrompt: string | null; waitingForInput: boolean; lastActivityAt: number | null; spawnedBy: string | null; hibernatedAt?: number | null }) => {
+  const sessionRow = (t: Ticket | null, s: { id: string; coordinator: boolean; repoId: number | null; firstPrompt: string | null; waitingForInput: boolean; lastActivityAt: number | null; spawnedBy: string | null; hibernatedAt?: number | null }, caller: string | null) => {
     const running = d.sessionService.isRunning(s.id);
     return {
     id: s.id,
@@ -220,7 +221,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
     lastActivityAt: s.lastActivityAt ? new Date(s.lastActivityAt).toISOString() : null,
     startedByCoordinator: s.spawnedBy !== null,
     // BTL-256：关着的收到消息时会怎样（running、resumes、ended_by_user……）。
-    ...(d.wakeState && { wake: d.wakeState(s.id) }),
+    ...(d.wakeState && { wake: d.wakeState(s.id, caller) }),
     activity: listedActivity(s.id),
     // BTL-269：信箱里排着、还没送到的消息，挡住的原因和开始时间。
     mailbox: pendingMail(s.id),
@@ -299,11 +300,11 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
   const visible = <T extends { replacedBy: string | null; dismissed: boolean }>(rows: T[]) => rows.filter((s) => !s.replacedBy && !s.dismissed);
 
   /** 一个 feature 的 session：feature 级的（总控、修复）和它每个 ticket 的。修复 session 的 fixes 沿链走到现在的 id，和列表里的 id 对得上。 */
-  const featureSessionRows = (f: Feature, own: Ticket[]) => {
+  const featureSessionRows = (f: Feature, own: Ticket[], caller: string | null) => {
     const fixes = (s: Session) => (s.fixesSession ? (d.sessions.head(s.fixesSession)?.id ?? s.fixesSession) : null);
     const rows = [
-      ...visible(d.sessions.listByFeature(f.id)).map((s) => ({ ...sessionRow(null, s), ticket: null, fixes: fixes(s) })),
-      ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s), ticket: t.key, fixes: null }))),
+      ...visible(d.sessions.listByFeature(f.id)).map((s) => ({ ...sessionRow(null, s, caller), ticket: null, fixes: fixes(s) })),
+      ...own.flatMap((t) => visible(d.sessions.listByTicket(t.key)).map((s) => ({ ...sessionRow(t, s, caller), ticket: t.key, fixes: null }))),
     ];
     // BTL-271：「等 CI」和「预审中」分开：每个 session 最近一次预审。
     const pre = d.preReviewOps?.status.forSessions(rows.map((r) => r.id)) ?? null;
@@ -535,7 +536,7 @@ export function controlHandler(d: ControlHandlerDeps): (req: ControlRequest, met
       return sessionActivity(req.session, (s) => (s.ticketKey !== null ? keys.has(s.ticketKey) : s.featureId === f.id));
     }
 
-    if (req.op === "list_sessions") return listed(featureSessionRows(f, own));
+    if (req.op === "list_sessions") return listed(featureSessionRows(f, own, req.from ?? null));
 
     if (req.op === "send_message") return featureSend(f, own, req, meta);
 

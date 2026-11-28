@@ -260,8 +260,11 @@ function isRule(line: string): boolean {
   return n >= t.length * 0.9;
 }
 
-/** 输入框下面最多几行非空的提示（模式、快捷键、状态栏）。 */
-const MAX_FOOTER_LINES = 4;
+/**
+ * 输入框下面最多几行非空的提示（模式、快捷键、状态栏）。多行的自定义状态栏加上模式、后台任务、更新提示能有六七行（BTL-279：
+ * 原来是 4，超了就认不出输入框，空闲证据、草稿校正、deliver 的「屏幕稳定」一起失灵，消息一直送不进去）。
+ */
+const MAX_FOOTER_LINES = 10;
 
 /**
  * claude 的输入框：屏幕下方两条「────」线，中间第一行以「❯」开头，下面只剩几行提示。返回两条线的行号；没画输入框返回 null。
@@ -275,8 +278,21 @@ function inputBox(lines: string[]): { top: number; bottom: number } | null {
   if (rules.length < 2) return null;
   const [top, bottom] = rules.slice(-2);
   if (!/^[❯>]/.test(lines[top + 1]?.trim() ?? "")) return null;
-  if (lines.slice(bottom + 1).filter((l) => l.trim() !== "").length > MAX_FOOTER_LINES) return null;
+  const footer = lines.slice(bottom + 1).filter((l) => l.trim() !== "");
+  if (footer.length > MAX_FOOTER_LINES) return null;
+  // 「状态栏」里有编号选项或对话框的字样：那是顶替输入框画的确认框（BTL-279 review）。对话里早先有一条线、下一行又以 > 开头
+  // （引用块）时，倒数第二条线会被当成输入框的上沿；状态栏放宽到十行以后，七八行的确认框也塞得下，认错了就会往确认框里贴。
+  // 编号选项要成套：「1. 」后面带空格，下面还有一行「2. 」。状态栏常以「1.2k tokens」「1) feature/x」开头，单看「1.」会把真输入框认丢。
+  if (footerOptions(footer) || footer.some((l) => [...DIALOG_MARKERS, ...PERMISSION_MARKERS].some((m) => squash(l).includes(m)))) return null;
   return { top, bottom };
+}
+
+const FOOTER_OPTION = (n: number): RegExp => new RegExp(`^(?:[❯>]\\s*)?${n}[.)]\\s+\\S`);
+
+/** footer 里有一套编号选项：某行是「1. xxx」，它下面还有一行「2. xxx」。 */
+function footerOptions(footer: string[]): boolean {
+  const first = footer.findIndex((l) => FOOTER_OPTION(1).test(l.trim()));
+  return first >= 0 && footer.slice(first + 1).some((l) => FOOTER_OPTION(2).test(l.trim()));
 }
 
 /**
@@ -320,9 +336,32 @@ export function permissionOnScreen(lines: string[]): boolean {
   return ask >= 0 && area.slice(ask + 1).some((l) => FIRST_OPTION.test(l.trim()));
 }
 
-/** 这一轮还在跑：claude 在转圈的那一行写着「esc to interrupt」。 */
+/** 转圈那一行开头的字（claude 轮着画这几个）。 */
+const SPINNER = /^[✻✶✳✢·✽✺✹✸✷*∗]/;
+
+/**
+ * 这一轮还在跑：claude 在转圈的那一行（或者新版画在输入框下面的提示）写着「esc to interrupt」。
+ * 只看转圈的那一行和最后一条线下面（BTL-279）：对话内容里引用了这几个字（贴的日志、在改 Shipherd 自己）不算，
+ * 不然一直当它在干活，消息永远送不进去。一条线都没有（启动中、整屏重画）照旧看整屏。
+ */
 export function workingOnScreen(lines: string[]): boolean {
-  return lines.some((l) => squash(l).includes("esctointerrupt"));
+  let last = -1;
+  lines.forEach((l, i) => {
+    if (isRule(l)) last = i;
+  });
+  const phrase = (l: string): boolean => squash(l).includes("esctointerrupt");
+  if (last < 0) return lines.some(phrase);
+  if (lines.slice(last + 1).some(phrase)) return true;
+  // 转圈那一行在窄窗口里会折行（BTL-279 review）：「esc to interrupt」落在下面一两行，甚至被拆开。
+  // 括号没闭合（「(3s · ↑ 1.2k tokens」）才是折了行：连着往下最多两行一起看，碰到线就停。对话里 * · 开头的列表项不连。
+  return lines.slice(0, last).some((l, i) => {
+    if (!SPINNER.test(l.trim())) return false;
+    if (phrase(l)) return true;
+    if (!l.includes("(") || l.lastIndexOf(")") > l.lastIndexOf("(")) return false;
+    let joined = l;
+    for (let j = i + 1; j < Math.min(i + 3, last) && !isRule(lines[j]); j++) joined += lines[j];
+    return phrase(joined);
+  });
 }
 
 /**
@@ -333,6 +372,21 @@ export function inputBoxEmpty(lines: string[]): boolean | null {
   const text = inputBoxText(lines);
   if (text === null) return null;
   return text === "";
+}
+
+/**
+ * deliver 看「屏幕稳定」用的那一块：输入框以上（aboveInputBox）。输入框没认出来（BTL-279：底部提示太多、样式变了）就看到最后一条线为止，
+ * 下面会刷新的状态栏不算；屏幕上看得出在跑（转圈）、一条线都没有时返回 null（只能等输出停下）。
+ */
+export function stableArea(lines: string[]): string[] | null {
+  const above = aboveInputBox(lines);
+  if (above !== null) return above;
+  if (workingOnScreen(lines)) return null;
+  let last = -1;
+  lines.forEach((l, i) => {
+    if (isRule(l)) last = i;
+  });
+  return last < 0 ? null : lines.slice(0, last + 1);
 }
 
 /** 输入框上面的那部分屏幕（对话的内容），不含输入框和下面会刷新的状态栏；没画输入框返回 null。 */

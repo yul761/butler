@@ -276,6 +276,36 @@ describe("DeliveryGuard: the record says working, the screen says stopped (BTL-2
     expect(guard.check("s-old", { force: true })).toMatchObject({ ok: true });
   });
 
+  it("a heal that changes nothing (the record would not move) does not hold it as unsure forever: it goes in (BTL-279)", () => {
+    const t = setup();
+    t.state.head = session({ waitingForInput: false });
+    t.state.activity = activity("thinking");
+    const calls: string[] = [];
+    const g = new DeliveryGuard({ ...t.deps(), idle: () => ({ idle: true, working: false, looksIdle: true }), healed: (h) => (calls.push(h), false) });
+    expect(g.check("s-old")).toEqual({ ok: true, termId: "t-1", headId: "s-head" });
+    expect(calls).toEqual(["s-head"]);
+  });
+
+  it("lenient (unsure for long, BTL-279) lets an empty quiet-looking screen in, but nothing else that force skips", () => {
+    const t = setup();
+    t.state.head = session({ waitingForInput: false });
+    t.state.activity = activity("thinking");
+    let e = { idle: false, working: false, looksIdle: true };
+    const g = () => new DeliveryGuard({ ...t.deps(), idle: () => e });
+    expect(g().check("s-old")).toMatchObject({ ok: false, busy: "unsure" });
+    expect(g().check("s-old", { lenient: true })).toMatchObject({ ok: true });
+    // 屏幕上看得出在跑：照样挡。
+    e = { idle: false, working: true, looksIdle: false };
+    expect(g().check("s-old", { lenient: true })).toMatchObject({ ok: false, busy: "turn" });
+    e = { idle: false, working: false, looksIdle: true };
+    // 等用户回答、刚打过字：lenient 不跳过（只有用户点「现在送进去」才跳过）。
+    t.state.needsYou = () => true;
+    expect(g().check("s-old", { lenient: true })).toEqual({ ok: false, block: "needs_you" });
+    t.state.needsYou = () => false;
+    t.state.typedAt = t.state.now - 1000;
+    expect(g().check("s-old", { lenient: true })).toEqual({ ok: false, block: "typing" });
+  });
+
   it("force (the Deliver now button) skips unsure, needs-you and typing, but not a draft, a prompt on screen or a refresh", () => {
     const t = setup();
     t.state.head = session({ waitingForInput: false });

@@ -14,6 +14,20 @@ describe("SessionMessagesRepo", () => {
     expect(repo.get("m1")).toMatchObject({ status: "delivered", blockedReason: null, blockedSince: null });
   });
 
+  it("counts every attempt with its time and result, only while queued; the count stays after delivery (BTL-279)", () => {
+    const repo = new SessionMessagesRepo(memDb());
+    repo.enqueue({ ...base, id: "m1", kind: "instruction", expectsReply: true, interrupt: false, meta: null });
+    repo.enqueue({ ...base, id: "m2", kind: "instruction", expectsReply: true, interrupt: false, meta: null, queuedAt: base.queuedAt + 1 });
+    expect(repo.get("m1")).toMatchObject({ attempts: 0, lastAttemptAt: null, lastAttempt: null });
+    repo.attempted(["m1", "m2"], 15, "turn");
+    repo.attempted(["m1"], 25, "deliver_failed");
+    expect(repo.get("m1")).toMatchObject({ attempts: 2, lastAttemptAt: 25, lastAttempt: "deliver_failed" });
+    expect(repo.get("m2")).toMatchObject({ attempts: 1, lastAttemptAt: 15, lastAttempt: "turn" });
+    repo.delivered("m1", { at: 30, via: "input", toSession: "c", baseReplyId: null });
+    repo.attempted(["m1"], 35, "turn");
+    expect(repo.get("m1")).toMatchObject({ status: "delivered", attempts: 2, lastAttemptAt: 25 });
+  });
+
   it("queues, delivers and records a reply; each step only moves forward", () => {
     const repo = new SessionMessagesRepo(memDb());
     repo.enqueue({ ...base, id: "m1", kind: "instruction", expectsReply: true, interrupt: true, meta: { items: [1, 2] } });

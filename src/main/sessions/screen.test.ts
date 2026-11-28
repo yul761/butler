@@ -207,6 +207,45 @@ describe("TermScreen lazy parsing (BTL-277)", () => {
 });
 
 describe("dialogOnScreen / permissionOnScreen", () => {
+  it("a permission prompt under one rule is not taken for an input box with a tall footer, even when an earlier rule is followed by a quote (BTL-279 review)", () => {
+    const lines = [
+      "⏺ Notes:", RULE, "> quoted from the spec", "⏺ Running the migration", RULE,
+      " Bash command", "   pnpm db:migrate", " Do you want to proceed?", " ❯ 1. Yes", "   2. Yes, and don't ask again", "   3. No, and tell Claude what to do differently (esc)",
+    ];
+    expect(permissionOnScreen(lines)).toBe(true);
+    expect(inputBoxEmpty(lines)).toBeNull();
+    // 真的输入框下面六行状态栏照样认得出。
+    const box = ["⏺ done", RULE, "> ", RULE, "  model: opus · ctx 41%", "  branch: main · +3 −1", "  cost: $0.42 today", "  PR #12 · CI green", "  ⏵⏵ accept edits on", "  ? for shortcuts"];
+    expect(inputBoxEmpty(box)).toBe(true);
+    expect(permissionOnScreen(box)).toBe(false);
+    // 状态栏以「1.2k」「1)」开头（像编号、其实不是选项），真输入框照样认得出（BTL-279 second review）。
+    for (const bar of ["  1.2k tokens · $0.03 · ctx 41%", "  1) feature/BTL-279 ↑2", "1. main · clean"]) {
+      expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, bar])).toBe(true);
+      expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, bar, "  ⏵⏵ accept edits on"])).toBe(true);
+    }
+    // 成套的编号选项（1. 下面有 2.）仍然不算输入框。
+    expect(inputBoxEmpty(["⏺ done", RULE, "> quoted", RULE, " ❯ 1. Yes", "   2. No"])).toBeNull();
+    expect(inputBoxEmpty(["⏺ done", RULE, "> quoted", RULE, " 1) Yes", " 2) No"])).toBeNull();
+    // 「1.」「2.」后面紧跟着字、没有空格（倍速、版本号、路径）：是状态栏，不是选项。
+    for (const bar of [["  1.5x speed", "  2.0 MB/s"], ["1.Foo", "2.Bar"], ["  1)main", "  2)dev"]]) {
+      expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, ...bar])).toBe(true);
+    }
+  });
+
+  it("a footer with a dialog or permission wording but no numbered options is still not an input box (BTL-279 review)", () => {
+    // 引用块让倒数第二条线像输入框的上沿，下面画的是没有编号的确认框。
+    const trust = ["⏺ done", RULE, "> quoted", RULE, " Quick safety check: Is this a project you trust?", " ❯ Yes, I trust this folder", "   No, exit", " Enter to confirm · Esc to cancel"];
+    expect(inputBoxEmpty(trust)).toBeNull();
+    expect(dialogOnScreen(trust)).toBe(true);
+    for (const ask of [" Do you want to proceed?", " Would you like to proceed?", " Do you want to make this edit to a.ts?", " Do you want to create b.ts?"]) {
+      const lines = ["⏺ done", RULE, "> quoted", RULE, ask, " ❯ Yes", "   No"];
+      expect(inputBoxEmpty(lines)).toBeNull();
+    }
+    expect(inputBoxEmpty(["⏺ done", RULE, "> quoted", RULE, " Enter to confirm"])).toBeNull();
+    // 同样形状、状态栏里没有这些字样：是输入框。
+    expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, " ❯ Yes", "   No"])).toBe(true);
+  });
+
   it("finds the 2.1.322 trust dialog and the older one, regardless of spacing", () => {
     expect(dialogOnScreen([" Quick safety check: Is this a project you created or one you trust?", " ❯ No, exit", "   Yes, I trust this folder", " Enter to confirm · Esc to cancel"])).toBe(true);
     expect(dialogOnScreen(["Quicksafetycheck:", "❯no,exit"])).toBe(true);
@@ -237,7 +276,7 @@ describe("dialogOnScreen / permissionOnScreen", () => {
 describe("permissionOnScreen (BTL-269 D: a quoted question is not a prompt)", () => {
   it("needs a numbered first option after the question", () => {
     // 回复里引用了这句话、输入框没认出来（底部提示多了一行）：没有选项，不算确认框。
-    const reply = ["⏺ 计划写好了。Would you like to proceed? 你看一下再说。", "", RULE, "❯ ", RULE, "  ⏵⏵ auto mode on", "  ctx 40%", "  model opus", "  branch x", "  extra"];
+    const reply = ["⏺ 计划写好了。Would you like to proceed? 你看一下再说。", "", RULE, "❯ ", RULE, "  ⏵⏵ auto mode on", ...Array.from({ length: 10 }, (_, i) => `  status ${i}`)];
     expect(inputBoxText(reply)).toBeNull();
     expect(permissionOnScreen(reply)).toBe(false);
     expect(permissionOnScreen(["Would you like to proceed?"])).toBe(false);
@@ -251,6 +290,36 @@ describe("workingOnScreen / inputBoxEmpty", () => {
   it("sees the spinner line of a running turn", () => {
     expect(workingOnScreen(["✻ Thinking… (12s · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
     expect(workingOnScreen(["⏺ done", RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(false);
+  });
+
+  it("only the spinner line or the footer counts, not 'esc to interrupt' quoted in the conversation above (BTL-279)", () => {
+    // 对话里贴过日志、在改 Shipherd 自己的代码：上面的内容里有这几个字不算在跑。
+    const quoted = ["⏺ The guard checks for `esc to interrupt` on screen:", "  return lines.some((l) => squash(l).includes(\"esctointerrupt\"));", "⏺ done"];
+    expect(workingOnScreen([...quoted, RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(false);
+    // 转圈那一行（✻ ✶ ✳ ✢ · 开头）和新版画在输入框下面的提示照样算。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    expect(workingOnScreen([...quoted, RULE, "❯ ", RULE, "  · esc to interrupt · ← for agents"])).toBe(true);
+    // 没有输入框线（启动中、整屏重画）：照旧看整屏。
+    expect(workingOnScreen(["Working on it (esc to interrupt)"])).toBe(true);
+    // 窄窗口里转圈那一行折行（BTL-279 review）：「esc to interrupt」落在下一行，或者被拆成两半，照样算在干活。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens", " · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens · esc to", "interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    // 折成三行：转圈行下面两行连起来才有「esc to interrupt」。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k", " tokens · esc to", " interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    // 最多连两行：第四行才出现的不算。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s", " · ↑ 1.2k", " tokens · esc", " to interrupt)", RULE, "❯ ", RULE])).toBe(false);
+    // 转圈的行已经结束（下面紧跟着线）：上面对话里另起一行引用的不算。
+    expect(workingOnScreen(["✻ Worked for 3s", RULE, "esc to interrupt", RULE, "❯ ", RULE])).toBe(false);
+    // 对话里 * 开头的列表项，下一行引用了这几个字：不是折行的转圈行，不算。
+    expect(workingOnScreen(["* The guard looks for", "  `esc to interrupt` on screen", RULE, "❯ ", RULE])).toBe(false);
+  });
+
+  it("finds the box under a tall footer: a multi-line statusline plus mode and notices (BTL-279)", () => {
+    const footer = ["  ~/code/app  main*  ctx 41%", "  Opus 5.5 · $1.23 today", "  ⏵⏵ accept edits on (shift+tab to cycle)", "  1 background task", "  ✓ Update installed · Restart to apply", "  ? for shortcuts"];
+    expect(inputBoxEmpty(["⏺ done", RULE, "❯ ", RULE, ...footer])).toBe(true);
+    expect(aboveInputBox(["⏺ done", RULE, "❯ ", RULE, ...footer])).toEqual(["⏺ done"]);
+    // 太高的就不当作输入框（对话框下面的长列表）。
+    expect(inputBoxEmpty(["⏺ done", RULE, "❯ ", RULE, ...Array.from({ length: 20 }, (_, i) => `  line ${i}`)])).toBeNull();
   });
 
   it("an empty box is empty; text is not, even text that reads like the placeholder; no box is null", () => {
@@ -295,7 +364,7 @@ describe("inputBoxText / pasteInInputBox", () => {
     expect(inputBoxText([RULE, " ❯ No, exit"])).toBeNull();
     // 两条线之间不是「❯」开头、或者第二条线下面还有一大段：不是输入框。
     expect(inputBoxText([RULE, "| a | b |", RULE])).toBeNull();
-    expect(inputBoxText([RULE, "❯ x", RULE, "1", "2", "3", "4", "5"])).toBeNull();
+    expect(inputBoxText([RULE, "❯ x", RULE, ...Array.from({ length: 11 }, (_, i) => `${i}`)])).toBeNull();
   });
 
   it("tells whether this paste is still sitting in the box", () => {

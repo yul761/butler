@@ -8,7 +8,8 @@ import { S } from "../src/renderer/src/strings";
 import { completeWizard, expect, makeGitRepo, newButton, openSettingsTab, openTab, openTicketTab, terminalText, test, type Sandbox } from "./fixtures";
 
 /**
- * BTL-256：总控给关着的 session 发消息时，Shipherd 在后台接着原来的对话恢复它再送；内存不够时排着；用户点 × 结束的不恢复；
+ * BTL-256：总控给关着的 session 发消息时，Shipherd 在后台接着原来的对话恢复它再送；内存不够时排着；
+ * 用户点 × 结束的，总控在那之后发来消息也恢复（BTL-279「关了的就打开」）；
  * 打开「重启后自动恢复」时，Shipherd 重启后把上次开着终端的、总控管的 session 恢复回来。
  */
 
@@ -148,7 +149,7 @@ test("a coordinator's message resumes a closed session in the background once, a
   }
 });
 
-test("a session the user ended with × is not resumed by a coordinator's message", async ({ makeSandbox, launch }) => {
+test("a session the user ended with × is resumed in the background when its coordinator sends to it afterwards (BTL-279, was BTL-256)", async ({ makeSandbox, launch }) => {
   test.setTimeout(180_000);
   const s = makeSandbox();
   s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000" };
@@ -163,12 +164,12 @@ test("a session the user ended with × is not resumed by a coordinator's message
     await end.click();
     await end.click();
     await expect(end).toHaveCount(0);
-    await expect.poll(() => wakeOf(boss, child)).toBe("ended_by_user");
+    // 总控看到的是「发一条会怎样」：会恢复。
+    await expect.poll(() => wakeOf(boss, child)).toBe("resumes");
     const sent = json<{ state: string; wake: string; note: string }>(await boss.call("send_message", { session: child, text: "接着做" }));
-    expect(sent).toMatchObject({ state: "closed", wake: "ended_by_user" });
-    await page.waitForTimeout(2000);
-    expect(resumes(s, child)).toBe(0);
-    expect((messagesIn(s, worktree)[child] ?? []).join("\n")).not.toContain("接着做");
+    expect(sent).toMatchObject({ state: "closed", wake: "resuming" });
+    await expect.poll(() => (messagesIn(s, worktree)[child] ?? []).join("\n"), { timeout: 60_000 }).toContain("接着做");
+    expect(resumes(s, child)).toBe(1);
   } finally {
     boss.close();
   }

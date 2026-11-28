@@ -216,6 +216,12 @@ const ZH = {
   notJsonObject: (file: string) => `${file} 不是合法的 JSON 对象，Shipherd 不会修改它`,
   newerDatabase: (found: number, known: number) => `这份数据是更新版本的 Shipherd 创建的（数据版本 ${found}，这个 Shipherd 只认识到 ${known}）。请安装最新版本的 Shipherd 再打开。`,
   newerDatabaseBackup: (path: string) => `升级前留了一份这个版本能打开的备份：${path}。退出 Shipherd 后把它改名成 app.db 就能用旧版本打开，但升级以后的改动会丢掉。`,
+  /** 迁移顺序和这份数据走过的不一样（4.3.0 复核）：装过测试版本。 */
+  migrationOrder: (found: number, n: number, what: "column" | "table" | "index") =>
+    `这份数据被迁移顺序不同的测试版本 Shipherd 升级过（数据版本 ${found}，第 ${n} 步要${what === "table" ? "建的表" : what === "index" ? "建的索引" : "加的列"}已经在了），接着升级会跳过一些步骤，所以没有接着升级。`,
+  migrationOrderBackup: (path: string) => `装测试版本之前可能留了一份备份：${path}。退出 Shipherd 后把它改名成 app.db 再打开，测试版本里的改动会丢掉。`,
+  migrationOrderNoBackup: (dir: string, copy: string | null, partial: boolean) =>
+    `没找到装测试版本之前的备份。数据目录在 ${dir}${!copy ? "" : partial ? `，里面的 ${copy} 是这次升级前的数据，换回去只是撤掉这次升了一半的几步，测试版本动过的地方还在` : `，里面的 ${copy} 只是现在这份数据的副本，换回去也一样`}。可以装回那个测试版本接着用；或者退出 Shipherd，把你自己留的备份改名成 app.db 放进这个目录再打开。`,
   /** 迁移前的备份失败（BTL-262）：不迁移，先问用户。 */
   databaseBackupFailed: (path: string, reason: string, diskFull: boolean) =>
     `Shipherd 要升级数据，升级前没能备份到 ${path}（${diskFull ? "磁盘空间不足" : reason}）。为了不丢数据，这次没有升级。${diskFull ? "请腾出一些磁盘空间，" : "请检查数据目录能不能写，"}再打开 Shipherd。`,
@@ -391,7 +397,7 @@ const ZH = {
             ? `Shipherd 之前没能恢复它（${error ?? ""}），暂时不再自动试。消息排着，用户打开它时会送到。`
             : wake === "hibernated"
               ? "它在休眠，Shipherd 正在叫醒它，醒来就送。"
-              : "它不是总控开的 session，Shipherd 不自动恢复它。消息排着，下次打开时送到。",
+              : "它已经隐藏或归档了，或者不是 Shipherd 管的 session，Shipherd 不自动恢复它。消息排着，下次打开时送到。",
   resumeReceiptDelivered: (name: string, ids: string[]) => `【回执】${name} 的终端原来关着，Shipherd 已在后台恢复它（接着原来的对话），你的消息 ${ids.join("、")} 已经送到。它的回复会以【回复】另外送来。`,
   resumeReceiptFailed: (name: string, ids: string[], why: string, retry: boolean) =>
     `【回执】Shipherd 没能在后台恢复 ${name}：${why}。你的消息 ${ids.join("、")} 还排在它的信箱里，用户打开它时会送到。${retry ? "过 10 分钟 Shipherd 会再试一次。" : "Shipherd 不再自动试；要它接着做，用 ask_user 告诉用户。"}`,
@@ -772,6 +778,7 @@ const ZH = {
   // BTL-269：信箱里的消息为什么还没送到、什么时候能送到。
   mailboxAnswersQuestion: (question: string) => `（你在等用户回答『${question}』。下面这条是你的总控替用户答的，当作那个问题的回答。用户要是另有想法，会再告诉你。）`,
   mailboxNotAnAnswer: "（你在等用户回答问题。下面这条是你的总控发来的，但不是对那个提问的回答，问题还在等用户。）",
+  mailboxNotUserAnswer: "（下面这条不是用户的回答。你要是在等用户回答问题，问题还在等用户。）",
   inboxCorrection: (question: string, coordinator: string, answer: string) =>
     `【用户更正】你问的『${question}』，之前总控替用户答的是：${coordinator}\n用户自己的回答：${answer}\n以用户的回答为准。`,
   mailboxBlocked: {
@@ -804,6 +811,8 @@ const ZH = {
     cost_paused: "用户在界面上点「继续」以后送到",
     deliver_failed: "Shipherd 每 10 秒会再试，它下一次调用工具时也会读到",
   } as Record<MailboxBlockReason, string>,
+  /** 巡检的 ETA（BTL-279 第六轮）：巡检不走 hook，在忙时不会在下一次调用工具时读到。 */
+  mailboxEtaPatrol: "巡检不在一轮中间送：等它这一轮结束、停下来以后直接输入进去，自成一轮",
   mailboxDelivered: "消息已经送进去了。",
   mailboxDelivering: "Shipherd 正在把消息输入进去（在等它的输入框就绪），一般几秒钟。",
   mailboxQueuedUnknown: "消息排进了它的信箱，还没送到。Shipherd 每 10 秒会再试。",
@@ -996,6 +1005,11 @@ const EN: MainStrings = {
   notJsonObject: (file: string) => `${file} is not a valid JSON object; Shipherd won't change it`,
   newerDatabase: (found: number, known: number) => `This data was created by a newer Shipherd (data version ${found}; this Shipherd knows up to ${known}). Install the latest Shipherd to open it.`,
   newerDatabaseBackup: (path: string) => `A backup this version can open was kept before the upgrade: ${path}. Quit Shipherd and rename it to app.db to open it with this version; changes made since the upgrade will be lost.`,
+  migrationOrder: (found: number, n: number, what: "column" | "table" | "index") =>
+    `This data was upgraded by a test build of Shipherd with a different upgrade order (data version ${found}; the ${what === "table" ? "tables" : what === "index" ? "indexes" : "columns"} step ${n} ${what === "column" ? "adds" : "creates"} are already there). Upgrading on would skip some steps, so Shipherd did not upgrade any further.`,
+  migrationOrderBackup: (path: string) => `A backup from before the test build may be here: ${path}. Quit Shipherd, rename it to app.db and open Shipherd again; changes made in the test build will be lost.`,
+  migrationOrderNoBackup: (dir: string, copy: string | null, partial: boolean) =>
+    `No backup from before the test build was found. The data folder is ${dir}${!copy ? "" : partial ? `; ${copy} in it is the data from before this upgrade, so switching to it only undoes the steps this upgrade got through, and the test build's changes stay` : `; ${copy} in it is only a copy of the current data, so switching to it changes nothing`}. You can go back to that test build, or quit Shipherd, put a backup of your own into that folder as app.db and open Shipherd again.`,
   databaseBackupFailed: (path: string, reason: string, diskFull: boolean) =>
     `Shipherd needs to upgrade its data but could not back it up to ${path} first (${diskFull ? "the disk is full" : reason}). To keep your data safe, nothing was upgraded. ${diskFull ? "Free up some disk space" : "Check that the data folder is writable"}, then open Shipherd again.`,
   databaseBackupAsk: {
@@ -1146,7 +1160,7 @@ const EN: MainStrings = {
             ? `Shipherd could not resume it earlier (${error ?? ""}) and is not retrying for now. The message stays queued and is delivered when the user opens it.`
             : wake === "hibernated"
               ? "It is hibernating; Shipherd is waking it and delivers the message when it is up."
-              : "It is not a session a coordinator started, so Shipherd does not resume it on its own. The message stays queued and is delivered the next time it opens.",
+              : "It is hidden or archived, or not a session Shipherd manages, so Shipherd does not resume it on its own. The message stays queued and is delivered the next time it opens.",
   resumeReceiptDelivered: (name: string, ids: string[]) => `[Receipt] ${name}'s terminal was closed. Shipherd resumed it in the background (continuing its conversation) and delivered your message ${ids.join(", ")}. Its reply comes separately as [Reply].`,
   resumeReceiptFailed: (name: string, ids: string[], why: string, retry: boolean) =>
     `[Receipt] Shipherd could not resume ${name} in the background: ${why}. Your message ${ids.join(", ")} is still queued in its mailbox and is delivered when the user opens it. ${retry ? "Shipherd tries once more in 10 minutes." : "Shipherd will not retry on its own; if it should continue, tell the user with ask_user."}`,
@@ -1515,6 +1529,7 @@ const EN: MainStrings = {
   // BTL-269: why a queued message has not gone in yet, and when it will.
   mailboxAnswersQuestion: (question: string) => `(You are waiting for the user to answer "${question}". The next message is your coordinator answering for the user; take it as the answer. If the user thinks otherwise they will tell you.)`,
   mailboxNotAnAnswer: "(You are waiting for the user to answer a question. The next message is from your coordinator, but it is not an answer to that question; the question is still waiting for the user.)",
+  mailboxNotUserAnswer: "(The next message is not the user's answer. If you are waiting for the user to answer a question, it is still waiting for the user.)",
   inboxCorrection: (question: string, coordinator: string, answer: string) =>
     `[User correction] You asked "${question}". Your coordinator answered for the user: ${coordinator}\nThe user's own answer: ${answer}\nGo with the user's answer.`,
   mailboxBlocked: {
@@ -1547,6 +1562,7 @@ const EN: MainStrings = {
     cost_paused: "It goes in once the user clicks Continue",
     deliver_failed: "Shipherd retries every 10 seconds; it also reads it at its next tool call",
   } as Record<MailboxBlockReason, string>,
+  mailboxEtaPatrol: "A patrol never goes in mid-turn: it is typed in once this turn ends and the session stops, as a turn of its own",
   mailboxDelivered: "The message has gone in.",
   mailboxDelivering: "Shipherd is typing the message in (waiting for its input box), usually a few seconds.",
   mailboxQueuedUnknown: "The message is in its mailbox and has not gone in yet. Shipherd retries every 10 seconds.",
