@@ -1328,3 +1328,114 @@ describe("review of c067e822 (secrets)", () => {
     expect(maskSecrets('password: "[Rxx" pwd=Hunter2xyz')).toBe(`password: "${M}" pwd=${M}`);
   });
 });
+
+describe("review of adf2412e (secrets)", () => {
+  const M = SECRET_MASK;
+
+  it("must-fix B: after a key name, compat digits glued to another secret pattern stay as they are (the pattern still starts a word)", () => {
+    expect(maskSecrets(`token²${fake.ghp}`)).toBe(`token²${M}`);
+    expect(maskSecrets("password¹mysql -pHunter2xyz")).toBe(`password¹mysql -p${M}`);
+    expect(maskSecrets(`token₁${fake.akia}`)).toBe(`token₁${M}`);
+    expect(maskSecrets(`secret²${fake.sk}`)).toBe(`secret²${M}`);
+    expect(maskSecrets(`password²${fake.slack}`)).toBe(`password²${M}`);
+    expect(maskSecrets(`pwd²${fake.npm}`)).toBe(`pwd²${M}`);
+    expect(maskSecrets(`passwords¹${fake.ghp}`)).toBe(`passwords¹${M}`);
+    expect(maskSecrets(`the token²${fake.ghp} leaked`)).toBe(`the token²${M} leaked`);
+  });
+
+  /**
+   * 没有要打码的就原样返回，看不出数字换没换：反例后面都接一个要打码的 token=…，换了的话整行会是换过的那一份。
+   * 这些例子里兼容数字后面都紧跟字母、数字或 _（只有这种才要判换完是不是键；后面是 =、-、空白的照换）。
+   */
+  const T = " token=Hunter2xyz";
+  const kept = (s: string): void => expect(maskSecrets(s + T), s).toBe(`${s} token=${M}`);
+
+  it("must-fix B: both readings are masked: mapping the digits gives a key, and the key's value is masked", () => {
+    // 数字前面隔着很长一串编号（以前往回只看 40 个字，整个漏掉）。
+    expect(maskSecrets(`token_${"1234567890".repeat(4)}₁_prod=Hunter2xyz`)).toBe(`token_${"1234567890".repeat(4)}1_prod=${M}`);
+    expect(maskSecrets(`token${"1".repeat(70)}x₁y= Hunter2xyz`)).toBe(`token${"1".repeat(70)}x1y= ${M}`);
+    // 键名中间夹一大片零宽字符（去掉的字不算往回看的步数）。
+    const zw = "​".repeat(70);
+    expect(maskSecrets(`tok${zw}en₁_prod= Hunter2xyz`)).toBe(`token1_prod= ${M}`);
+    expect(maskSecrets(`key${zw}₁_= Hunter2xyz`)).toBe(`key1_= ${M}`);
+    expect(maskSecrets(`k${zw}ey₁_= Hunter2xyz`)).toBe(`key1_= ${M}`);
+    // 长键名（往回看得够远：S2）、键名带编号再跟兼容数字（S17）。
+    expect(maskSecrets("private_key₁_prod=Hunter2xyz")).toBe(`private_key1_prod=${M}`);
+    expect(maskSecrets("authentication_string²_x=Hunter2xyz")).toBe(`authentication_string2_x=${M}`);
+    expect(maskSecrets("MY_API_KEY_2²_X=Hunter2xyz")).toBe(`MY_API_KEY_22_X=${M}`);
+    // 编号前面的 _ 或 -、名字和编号之间的 _（token_12_₁x）、编号后面直接是 - 开头的后缀。
+    expect(maskSecrets("token_²_prod=Hunter2xyz")).toBe(`token_2_prod=${M}`);
+    expect(maskSecrets("token_12_₁x= Hunter2xyz")).toBe(`token_12_1x= ${M}`);
+    expect(maskSecrets("token12-a₁b= Hunter2xyz")).toBe(`token12-a1b= ${M}`);
+    expect(maskSecrets("token12-₁b= Hunter2xyz")).toBe(`token12-1b= ${M}`);
+    // 后缀后面的 KQ：_ _、**、引号。
+    expect(maskSecrets("token₁__: Hunter2xyz")).toBe(`token1__: ${M}`);
+    expect(maskSecrets("token₁_prod**: Hunter2xyz")).toBe(`token1_prod**: ${M}`);
+    expect(maskSecrets('pwd₁_X"= Hunter2xyz')).toBe(`pwd1_X"= ${M}`);
+    // 「 is」、是、为、全角冒号。
+    expect(maskSecrets("token₁_prod is Hunter2xyz")).toBe(`token1_prod is ${M}`);
+    expect(maskSecrets("pwd₁_X 是 Hunter2xyz")).toBe(`pwd1_X 是 ${M}`);
+    expect(maskSecrets("pwd₁_X为Hunter2xyz")).toBe(`pwd1_X为${M}`);
+    expect(maskSecrets("pwd₁_prod： Hunter2xyz")).toBe(`pwd1_prod： ${M}`);
+    // 键和分隔符之间的空白多长都行（和 KEY 里的 \s* 一样）。
+    const gap = " ".repeat(100);
+    expect(maskSecrets(`token₁_prod${gap}= Hunter2xyz`)).toBe(`token1_prod${gap}= ${M}`);
+    expect(maskSecrets(`token₁_${gap}= Hunter2xyz`)).toBe(`token1_${gap}= ${M}`);
+    expect(maskSecrets(`key₁_${gap}= Hunter2xyz`)).toBe(`key1_${gap}= ${M}`);
+    expect(maskSecrets(`tokenmonkey₁x${gap}= Hunter2xyz`)).toBe(`tokenmonkey1x${gap}= ${M}`);
+  });
+
+  it("must-fix B: compat digits inside a key's word suffix map too (the suffix may contain digits)", () => {
+    expect(maskSecrets("tokenmonkey₁x=Hunter2xyz")).toBe(`tokenmonkey1x=${M}`);
+    expect(maskSecrets("tokens₁ᵃ=Hunter2xyz")).toBe(`tokens1a=${M}`);
+    expect(maskSecrets("token2x₁y=Hunter2xyz")).toBe(`token2x1y=${M}`);
+    expect(maskSecrets("token12_₁x=Hunter2xyz")).toBe(`token12_1x=${M}`);
+    // 后缀最多 16 个字母数字（编号后面的、字母开头的、后缀里夹着数字的）：16 个的换、17 个的不换（换了也不是键）。
+    expect(maskSecrets("token₁_abcdefghijklmnop= Hunter2xyz")).toBe(`token1_abcdefghijklmnop= ${M}`);
+    expect(maskSecrets("secret₁abcdefghijklmnop: Hunter2xyz")).toBe(`secret1abcdefghijklmnop: ${M}`);
+    expect(maskSecrets("token_abcdefghijklmn₁o=Hunter2xyz")).toBe(`token_abcdefghijklmn1o=${M}`);
+    expect(maskSecrets("tokenabcdefghijklmn₁o=Hunter2xyz")).toBe(`tokenabcdefghijklmn1o=${M}`);
+    kept("token₁_abcdefghijklmnopq= Hunter2xyz");
+    kept("token₁abcdefghijklmnopq= Hunter2xyz");
+    kept("token_abcdefghijklmno₁p= Hunter2xyz");
+    kept("tokenabcdefghijklmno₁p= Hunter2xyz");
+    // tokens 再加一个 s 起头的 17 个字：后缀只能从第二个 s 起，太长。
+    kept("tokenss²abcdefghijklmno ： Hunter2xyz");
+  });
+
+  it("must-fix B: compat digits in a bare key, an ENV-style key, or a table key cell", () => {
+    expect(maskSecrets("key₁_=Hunter2xyz")).toBe(`key1_=${M}`);
+    expect(maskSecrets("the KEY_₁_:Hunter2xyz")).toBe(`the KEY_1_:${M}`);
+    // 单独的 key 前面不能连着字母、数字、_；后面直接是分隔符（不能再跟后缀）。
+    kept("monkey₁_= Hunter2xyz");
+    kept("My_key₁_ = Hunter2xyz");
+    kept("KEY²x“\t: Hunter2xyz");
+    // ENV 式：数字在前缀里、在后缀里；整段要从词头起、全是大写，后面只能是冒号、等号。
+    expect(maskSecrets("MY₁_TOKEN=Hunter2xyz")).toBe(`MY1_TOKEN=${M}`);
+    expect(maskSecrets("ＭＹ₁_ＴＯＫＥＮ＝Hunter2xyz")).toBe(`MY1_TOKEN=${M}`);
+    expect(maskSecrets("MY_TOKEN_X₁Y=Hunter2xyz")).toBe(`MY_TOKEN_X1Y=${M}`);
+    expect(maskSecrets("A_KEY₁_X=Hunter2xyz")).toBe(`A_KEY1_X=${M}`);
+    kept("a_KEY₁_X=Hunter2xyz");
+    kept("_KEY₁_X=Hunter2xyz");
+    kept("MY_KEY₁_' 是 Hunter2xyz");
+    // 表格：| 键 | 值 |（键和 | 之间只能是空格、制表符）。
+    expect(maskSecrets("| token₁_prod | Hunter2xyz |")).toBe(`| token1_prod | ${M} |`);
+    kept("secret-₁x　| Hunter2xyz");
+  });
+
+  it("suggestion S10: an astral ignorable inside a run of compat digits before a token does not join them to it", () => {
+    expect(maskSecrets(`x₁\u{E0001}₂${fake.ghp}`)).toBe(`x₁₂${M}`);
+  });
+
+  it("must-fix B: what follows a key name but is not a separator keeps the digits as they are", () => {
+    kept("token₁_-: Hunter2xyz");
+    kept("token₁_x-: Hunter2xyz");
+    kept('pwd₁_x""=Hunter2xyz');
+    kept("token₁_x it Hunter2xyz");
+    kept("secret²x__is  Hunter2xyz");
+    kept("pwd₁y_Z_ 为 Hunter2xyz");
+    // 键名后面多了一个 _ 或 -（token_-a…）、两个 _（pwd_-x…）：不是「键名 [_-]? 编号」。
+    kept("token_-a₁b= Hunter2xyz");
+    kept("pwd_-x₁y= Hunter2xyz");
+  });
+});

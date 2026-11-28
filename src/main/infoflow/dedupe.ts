@@ -255,8 +255,11 @@ function swapped(a: readonly string[], b: readonly string[]): boolean {
   return sa.every((w, i) => w === sb[i]);
 }
 
-/** 分句：逗号、顿号、分号、句号、问号叹号、换行隔开的（c067e822 复核必修 3：「测试环境关闭缓存、生产环境开启缓存」要切开）。 */
-const CLAUSE = /[，,、;；。！？!?\n]+/;
+/**
+ * 分句：逗号、顿号、分号、句号、问号叹号、换行隔开的（c067e822 复核必修 3：「测试环境关闭缓存、生产环境开启缓存」要切开），
+ * 英文句号后面跟空白或者在句末的也算（adf2412e 复核必修 C：「turn on cache in prod. turn off cache in test」；v1.2、3.14 不切）。
+ */
+const CLAUSE = /(?:[，,、;；。！？!?\n]|\.(?=\s|$))+/;
 /** 一个分句按一对反义词切开以后：一段段的字，和反义词所在的位置（0 / 1：是这一对的哪一头）。 */
 type Piece = string | 0 | 1;
 
@@ -284,16 +287,16 @@ function zhPieces(words: readonly string[], x: string, y: string): Piece[] {
  * 一个分句里每个对象配的是哪一头，交给 add（对象是这一段的字连起来，不带空格）。
  * 只出现一头的（可以出现几次）：整个分句去掉反义词就是对象。两头都有的（「测试环境 cache off 生产环境 cache on」）按反义词的位置切：
  * 以反义词结尾的分句是「X 关闭」的语序，对象是它前面那一段；以反义词开头的是「关闭 X」，对象是它后面那一段；两头都不是的两种都生成
- * （同一个对象在一句里配了两头的，调用方当成说不清、不比）。
+ * （同一个对象在一句里配了两头的，调用方当成说不清、不比）。返回这个分句是不是两头都有。
  */
-function clauseObjects(pieces: readonly Piece[], add: (obj: string, side: 0 | 1) => void): void {
+function clauseObjects(pieces: readonly Piece[], add: (obj: string, side: 0 | 1) => void): boolean {
   const at = pieces.flatMap((t, i) => (typeof t === "number" ? [i] : []));
-  if (at.length === 0) return;
+  if (at.length === 0) return false;
   const text = (from: number, to: number): string => pieces.slice(from, to).filter((t) => typeof t === "string").join("");
   const first = pieces[at[0]] as 0 | 1;
   if (at.every((i) => pieces[i] === first)) {
     add(text(0, pieces.length), first);
-    return;
+    return false;
   }
   const startsWith = at[0] === 0;
   const endsWith = at[at.length - 1] === pieces.length - 1;
@@ -302,16 +305,24 @@ function clauseObjects(pieces: readonly Piece[], add: (obj: string, side: 0 | 1)
     if (endsWith || !startsWith) add(text(k === 0 ? 0 : at[k - 1] + 1, p), side);
     if (startsWith || !endsWith) add(text(p + 1, k + 1 < at.length ? at[k + 1] : pieces.length), side);
   });
+  return true;
 }
 
 /** 说不清的对象：同一句里配了两头。 */
 const BOTH = 2;
 
+/** clausePolarity 的结果：每个对象配的是哪一头；有没有一个分句里一对反义词两头都有。 */
+interface Polarity {
+  objects: Map<string, 0 | 1 | typeof BOTH>;
+  mixed: boolean;
+}
+
 /**
  * 每个分句里的对象配上是一对反义词的哪一头（见 clauseObjects）。key 是「第几对|对象」，值是 0 / 1，同一句里两头都配过的是 BOTH。
  */
-function clausePolarity(s: string): Map<string, 0 | 1 | typeof BOTH> {
+function clausePolarity(s: string): Polarity {
   const out = new Map<string, 0 | 1 | typeof BOTH>();
+  let mixed = false;
   const add = (key: string, side: 0 | 1): void => {
     const was = out.get(key);
     out.set(key, was === undefined || was === side ? side : BOTH);
@@ -319,19 +330,21 @@ function clausePolarity(s: string): Map<string, 0 | 1 | typeof BOTH> {
   for (const clause of plain(s).split(CLAUSE)) {
     const words = clause.match(/[a-z0-9]+|\p{Script=Han}+/gu) ?? [];
     ZH_ANTONYMS.forEach(([x, y], k) => {
-      clauseObjects(zhPieces(words, x, y), (obj, side) => {
+      const both = clauseObjects(zhPieces(words, x, y), (obj, side) => {
         if (obj !== "") add(`z${k}|${obj}`, side);
       });
+      mixed ||= both;
     });
     const stems = words.map((w) => (/^[a-z0-9]+$/.test(w) ? stem(w) : w));
     EN_ANTONYMS.forEach(([x, y], k) => {
       const pieces = words.map((w, i): Piece => (stems[i] === x ? 0 : stems[i] === y ? 1 : w));
-      clauseObjects(pieces, (obj, side) => {
+      const both = clauseObjects(pieces, (obj, side) => {
         if (obj !== "") add(`e${k}|${obj}`, side);
       });
+      mixed ||= both;
     });
   }
-  return out;
+  return { objects: out, mixed };
 }
 
 /**
@@ -339,11 +352,10 @@ function clausePolarity(s: string): Map<string, 0 | 1 | typeof BOTH> {
  * 「测试环境 cache」一边 off、一边 on）。两句的反义词次数、先后可以都对得上，换的是对象（f780e9ef 复核 MF3），按分句比才看得出来。
  * 对象按字面比：英文里换了语序的（In prod turn off caching / Turn off caching in prod）认不出来（BTL-280）。
  */
-function clausesClash(a: string, b: string): boolean {
-  const pa = clausePolarity(a);
-  if (pa.size === 0) return false;
-  for (const [key, side] of clausePolarity(b)) {
-    const other = pa.get(key);
+function clausesClash(pa: Polarity, pb: Polarity): boolean {
+  if (pa.objects.size === 0) return false;
+  for (const [key, side] of pb.objects) {
+    const other = pa.objects.get(key);
     if (side !== BOTH && other !== undefined && other !== BOTH && other !== side) return true;
   }
   return false;
@@ -357,9 +369,15 @@ export function polarityClash(a: string, b: string): boolean {
   const ua = unitsOf(a);
   const ub = unitsOf(b);
   if (ua.size > 0 && ub.size > 0 && !sameSet(ua, ub)) return true;
-  if (clausesClash(a, b)) return true;
+  const pa = clausePolarity(a);
+  const pb = clausePolarity(b);
+  if (clausesClash(pa, pb)) return true;
   const zh = [factKey(a), factKey(b)];
   const zhContained = zh[0].includes(zh[1]) || zh[1].includes(zh[0]);
+  // 一个分句里一对反义词两头都有（「测试环境关闭缓存生产环境开启缓存」「turn off x and turn on y」）：对象是哪一段说不准，
+  // 按分句比不出来（没有标点隔开，对象切错了就对不上），只要两句不是一字不差、也不是一句整个在另一句里，就当成换了说法
+  // （adf2412e 复核必修 C：宁可多存一条，也不吞掉改主意）。
+  if (!zhContained && (pa.mixed || pb.mixed)) return true;
   if (antonymsClash((side, w) => occurrences(zh[side], w), (side, w) => zh[side].indexOf(w), ZH_ANTONYMS, zhContained)) return true;
   const la = latin(a);
   const lb = latin(b);

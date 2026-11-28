@@ -785,8 +785,9 @@ const isIgnorableAstral = (cp: number): boolean => (cp >= 0x1bca0 && cp <= 0x1bc
  * 上下标数字要换：键名后面的编号（token₁=、password²=）换成 token1、password2 才认得出。但一串兼容数字后面紧跟字母、数字、_
  * （按换完以后算，去掉的不可见字跳过）时不换（20531347 复核 MF2）：「注¹mysql -pX」「x²ghp_…」「₂token is X」换成 1mysql、2ghp_
  * 就和后面的词粘在一起，\b 认不出词头，整条漏打；不换的话 ¹ 不是 \w，后面的词照常认得出。
- * 例外是前面紧挨着键名（KEY_NAMES 可带 s 和编号，或者 ENV 式的 …_KEY、…_TOKEN）：token₁_prod=、PASSWORD²_DB=、password²abc= 照换，
- * 换完才是键名加编号加后缀（c067e822 复核必修 2）。一串数字中间夹的零宽字符、软连字符不打断这一串（token₁、零宽空格、₂= 是 token12=）。
+ * 例外是换完以后正好是一个键的一部分（keyDigits：KEY 的编号或者单词后缀里的数字、单独的 key 的编号、ENV 式的键，后面还接着分隔符）：
+ * token₁_prod=、PASSWORD²_DB=、password²abc=、MY₁_TOKEN= 照换，换完才是键名加编号加后缀（c067e822 复核必修 2）；前面是键名、后面却不是键的
+ * （token²ghp_…、password¹mysql -p…）不换（adf2412e 复核必修 B）。只看这一串前后几十个字，每一串只判一次（必修 A：线性）。一串数字中间夹的零宽字符、软连字符不打断这一串（token₁、零宽空格、₂= 是 token12=）。
  * 带圈、带框的（U+2460–24FF、U+1F100–1F1FF）只换字母：① ⑴ ⒈ 🄁 → 1 会和后面的词粘在一起，\b 认不出词头
  * （「步骤：①mysql -pX」「①ghp_…」）。换成几个字或符号的（™ → TM、℡ → TEL、ﬁ → fi、℃ → °C）也不动（「配置™Bearer …」）；
  * 键名里本来就没有连字。模块加载时按块算一遍（约一千五百个字）。
@@ -809,11 +810,14 @@ const TO = 3;
 const HIGH = 4;
 const KIND = new Uint8Array(0x10000);
 const BMP_TO = new Map<number, string>();
+/** BMP_TO 的同一份，按字符码存（都是一个 ASCII 字）：keyDigits 往回、往前看时不建字符串。 */
+const TO_CODE = new Uint16Array(0x10000);
 for (let c = 0xff01; c <= 0xff5e; c++) if (!KEPT_FULLWIDTH.includes(String.fromCharCode(c))) KIND[c] = SHIFT;
 for (const [lo, hi] of IGNORABLE_BMP) for (let c = lo; c <= hi; c++) KIND[c] = DROP;
 for (let c = 0x2500; c <= 0x257f; c++) {
   KIND[c] = TO;
   BMP_TO.set(c, BOX_V.includes(c) ? "|" : BOX_H.includes(c) ? "-" : "+");
+  TO_CODE[c] = BMP_TO.get(c)!.charCodeAt(0);
 }
 for (const [lo, hi] of COMPAT_BLOCKS) {
   for (let c = lo; c <= hi; c++) {
@@ -821,6 +825,7 @@ for (const [lo, hi] of COMPAT_BLOCKS) {
     if (to !== null) {
       KIND[c] = TO;
       BMP_TO.set(c, to);
+      TO_CODE[c] = to.charCodeAt(0);
     }
   }
 }
@@ -873,40 +878,376 @@ function compatDigitsEnd(s: string, i: number): number {
     j += d;
   }
 }
-/** 一个字换完以后是什么（不换的原样，去掉的是 ""）；只给 keyBefore 往回看用。 */
-function mappedChar(c: number, cp: number): string {
-  if (cp >= 0x10000) return isIgnorableAstral(cp) ? "" : isCompatAstral(cp) ? (astralTo(cp) ?? String.fromCodePoint(cp)) : String.fromCodePoint(cp);
-  const kind = c < 0xad ? KEEP : KIND[c];
-  if (kind === SHIFT) return String.fromCharCode(c - 0xfee0);
-  if (kind === DROP) return "";
-  if (kind === TO) return BMP_TO.get(c) ?? "";
-  return String.fromCharCode(c);
-}
-/** 键名（可带 s 和编号）、ENV 式的键（大写，区分大小写）结尾。 */
-const KEY_END = new RegExp(String.raw`(?:${KEY_NAMES})s?(?:[_-]?\d+)?$`, "i");
-const ENV_END = /[A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|AUTH|DSN)S?(?:_?\d+)?$/;
-/** 往回最多看几个字（换完以后）：最长的键名 authentication_string 加 s 和编号，ENV 式的键看末尾这一段就够。 */
-const KEY_LOOKBACK = 40;
-/** s 里 i 前面的字换完以后是不是以键名结尾（往回看 KEY_LOOKBACK 个字，不拼整段前文：那样每次都要把前面整个拼平）。 */
-function keyBefore(s: string, i: number): boolean {
-  const parts: string[] = [];
-  let n = 0;
-  for (let k = i - 1; k >= 0 && n < KEY_LOOKBACK; k--) {
-    const c = s.charCodeAt(k);
-    let cp = c;
-    if (c >= 0xdc00 && c <= 0xdfff && k > 0) {
-      const h = s.charCodeAt(k - 1);
-      if (h >= 0xd800 && h <= 0xdbff) {
-        cp = (h - 0xd800) * 0x400 + (c - 0xdc00) + 0x10000;
-        k--;
-      }
-    }
-    const t = mappedChar(c, cp);
-    parts.push(t);
-    n += t.length;
+/** mappedCode 的两种特殊结果：这个字去掉了；BMP 以外不换的字（不会是键名、分隔符的一部分）。 */
+const GONE = -1;
+const OTHER = 0x10000;
+/** 一个字换完以后的字符码（不换的原样）；只给 keyDigits 往回、往前看用，不建字符串。 */
+function mappedCode(c: number, cp: number): number {
+  if (cp >= 0x10000) {
+    if (isIgnorableAstral(cp)) return GONE;
+    const t = isCompatAstral(cp) ? astralTo(cp) : null;
+    return t === null ? OTHER : t.charCodeAt(0);
   }
-  const tail = parts.reverse().join("");
-  return KEY_END.test(tail) || ENV_END.test(tail);
+  if (c < 0xad) return c;
+  const kind = KIND[c];
+  if (kind === SHIFT) return c - 0xfee0;
+  if (kind === DROP) return GONE;
+  if (kind === TO) return TO_CODE[c];
+  return c;
+}
+/** prevMapped / nextMapped 读完的那个字的开头 / 结尾（省得每次返回一对值）。 */
+let readAt = 0;
+/** s 里 k 前面那个字（代理对算一个）换完以后的字符码；readAt 设成它的开头。 */
+function prevMapped(s: string, k: number): number {
+  const c = s.charCodeAt(k - 1);
+  if (c >= 0xdc00 && c <= 0xdfff && k >= 2) {
+    const h = s.charCodeAt(k - 2);
+    if (h >= 0xd800 && h <= 0xdbff) {
+      readAt = k - 2;
+      return mappedCode(h, (h - 0xd800) * 0x400 + (c - 0xdc00) + 0x10000);
+    }
+  }
+  readAt = k - 1;
+  return mappedCode(c, c);
+}
+/** s 里从 j 起的那个字换完以后的字符码；readAt 设成它的结尾。 */
+function nextMapped(s: string, j: number): number {
+  const c = s.charCodeAt(j);
+  if (c >= 0xd800 && c <= 0xdbff) {
+    const d = s.charCodeAt(j + 1);
+    if (d >= 0xdc00 && d <= 0xdfff) {
+      readAt = j + 2;
+      return mappedCode(c, (c - 0xd800) * 0x400 + (d - 0xdc00) + 0x10000);
+    }
+  }
+  readAt = j + 1;
+  return mappedCode(c, c);
+}
+/** 换完以后是数字、或者去掉了（零宽字符夹在数字中间不打断这一串）。 */
+const digitOrGone = (t: number): boolean => t === GONE || (t >= 48 && t <= 57);
+
+/** 倒着存的字典树：从键名的最后一个字往前走。键是字的 UTF-16 码（ASCII 字母转小写）。 */
+interface Trie {
+  next: Map<number, Trie>;
+  end: boolean;
+}
+function trieOf(words: Iterable<string>): Trie {
+  const root: Trie = { next: new Map(), end: false };
+  for (const w of words) {
+    let n = root;
+    for (let i = 0; i < w.length; i++) {
+      const c = w.charCodeAt(i);
+      let m = n.next.get(c);
+      if (!m) {
+        m = { next: new Map(), end: false };
+        n.next.set(c, m);
+      }
+      n = m;
+    }
+    n.end = true;
+  }
+  return root;
+}
+/** 把 KEY_NAMES 的一个分支展开成全部字面写法（里面只有 [_ -]? 和 [_ ] 这种字符组）；剩下别的正则写法就报错，别悄悄漏掉。 */
+function spellings(p: string): string[] {
+  const m = /\[([^\]]+)\](\?)?/.exec(p);
+  if (!m) {
+    if (/[\\()[\]?*+.{}^$|]/.test(p)) throw new Error(`KEY_NAMES 里有展不开的写法：${p}`);
+    return [p];
+  }
+  const opts = [...m[1], ...(m[2] ? [""] : [])];
+  return opts.flatMap((o) => spellings(p.slice(0, m.index) + o + p.slice(m.index + m[0].length)));
+}
+const reversed = (w: string): string => [...w].reverse().join("");
+/** 键名（可以是复数）倒着读：数字串前面直接是它，或者后缀开头前面没有编号时用。 */
+const KEY_NAME_BEFORE = trieOf(KEY_NAMES.split("|").flatMap(spellings).flatMap((name) => ["", "s"].map((pl) => pl + reversed(name))));
+/** 键名、可选的 s、可选的 _ 或 -（DIGITS 的 [_-]）倒着读：编号前面用（和 KEY 里 `(?:${KEY_NAMES})s?(?:[_-]?\d+)?` 的前半段一样）。 */
+const KEY_BEFORE_DIGITS = trieOf(
+  KEY_NAMES.split("|").flatMap(spellings).flatMap((name) => ["", "_", "-"].flatMap((sep) => ["", "s"].map((pl) => sep + pl + reversed(name)))),
+);
+/**
+ * s 里 p 前面（换完以后、ASCII 字母不分大小写）倒着走 trie，走到一个词尾就算。不设往回看的上限：去掉的字（键名中间夹的零宽字符）
+ * 不算一步，别的字一对不上就停，所以最多走一个键名那么多个字；一大片零宽字符只有紧挨着它后面的这几个起点会走过（复核 adf2412e 必修 A、B）。
+ */
+function trieBefore(s: string, p: number, root: Trie): boolean {
+  let n = root;
+  let k = p;
+  while (k > 0) {
+    let c = prevMapped(s, k);
+    k = readAt;
+    if (c === GONE) continue;
+    if (c >= 65 && c <= 90) c += 32;
+    const m = n.next.get(c);
+    if (!m) return false;
+    n = m;
+    if (n.end) return true;
+  }
+  return false;
+}
+/** s 里正好在 p 结束的是不是「键名 s? 编号?」（KEY 里后缀前面的那一段）。 */
+function keyBefore(s: string, p: number): boolean {
+  let k = p;
+  let digits = false;
+  // 编号多长都行（和 \d+ 一样）：调用方每一段字母数字只问一遍，问的几个位置前面的数字互不重叠，合起来还是线性的。
+  while (k > 0) {
+    const c = prevMapped(s, k);
+    if (c !== GONE && !(c >= 48 && c <= 57)) break;
+    if (c !== GONE) digits = true;
+    k = readAt;
+  }
+  return trieBefore(s, k, digits ? KEY_BEFORE_DIGITS : KEY_NAME_BEFORE);
+}
+/** 单独的 key 后面的编号（`\bkey${DIGITS}`）：数字串前面是 key、key_ 或 key-，key 前面不连着字母、数字、_。 */
+function plainKeyBefore(s: string, p: number): boolean {
+  let k = p;
+  let want = 0;
+  const word = [121, 101, 107]; // y e k
+  while (k > 0) {
+    let c = prevMapped(s, k);
+    k = readAt;
+    if (c === GONE) continue;
+    if (c >= 65 && c <= 90) c += 32;
+    if (want === 0 && (c === 95 || c === 45)) {
+      want = -1;
+      continue;
+    }
+    if (want < 0) want = 0;
+    if (c !== word[want]) return false;
+    if (++want === 3) break;
+  }
+  if (want !== 3) return false;
+  while (k > 0) {
+    const c = prevMapped(s, k);
+    k = readAt;
+    if (c === GONE) continue;
+    return !(isAlnumCode(c) || c === 95);
+  }
+  return true;
+}
+const isAlnumCode = (c: number): boolean => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+/** JS 正则 \s 认的空白。 */
+const isSpaceCode = (c: number): boolean =>
+  c === 32 || (c >= 9 && c <= 13) || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a) || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff;
+/** KQ 里的引号（* 和 _ 另判：可以连着两个）。 */
+const QUOTE_CODES = new Set([..."\"'`“”‘’「」『』"].map((c) => c.charCodeAt(0)));
+/** 后缀最多 1 个 _ 或 - 加 16 个字母数字。 */
+const SUFFIX_MAX = 16;
+/** 从 j 起跳过去掉的字，下一个字换完以后的字符码（到头了是 OTHER）；readAt 设成它的结尾。 */
+function peekMapped(s: string, j: number): number {
+  while (j < s.length) {
+    const c = nextMapped(s, j);
+    if (c !== GONE) return c;
+    j = readAt;
+  }
+  readAt = j;
+  return OTHER;
+}
+/** afterKey 认哪一种：KEY 的编号后面（还可以先跟一个单词后缀）、KEY 的后缀后面、ENV 式的键后面。 */
+const AFTER_DIGITS = 0;
+const AFTER_SUFFIX = 1;
+const AFTER_ENV = 2;
+/**
+ * s 里 q 起（换完以后）是不是键后面该接的东西，按字符码一个个认，不建字符串、不跑正则：
+ * - AFTER_SUFFIX：KQ（一个引号、* 或 **、_ 或 __，可选），再是 \s* 加 : = ： 是 为、\s+ 加 is、或者 [ \t]* 加 |
+ *   （KEY_AT 的 `${KQ}(?:\s*(?:[:=：]|是|为)|\s+is)` 和 TABLE_KEY 的 `${KQ}[ \t]*\|`）；
+ * - AFTER_DIGITS：前面还可以先有一个 KEY_SUFFIX（_ 或 - 加 1 到 16 个字母数字，或者字母开头的 1 到 16 个字母数字，到字母数字的尽头）；
+ * - AFTER_ENV：KQ，再是 \s* 加 : = ：（ENV_SEP 的前半段）。
+ * KQ 和后缀都只有一种读法：_ 后面紧跟字母数字的只能是后缀（当 KQ 的话后面就得是空白或分隔符），所以不用回溯。
+ */
+function afterKey(s: string, q: number, kind: number): boolean {
+  let c = peekMapped(s, q);
+  let j = readAt;
+  if (kind === AFTER_DIGITS && (c === 95 || c === 45 || (c >= 65 && c <= 90) || (c >= 97 && c <= 122))) {
+    let d = c;
+    let k = j;
+    if (c === 95 || c === 45) {
+      d = peekMapped(s, k);
+      k = readAt;
+    }
+    if (isAlnumCode(d)) {
+      let run = 0;
+      while (isAlnumCode(d)) {
+        if (++run > SUFFIX_MAX) return false;
+        d = peekMapped(s, k);
+        k = readAt;
+      }
+      c = d;
+      j = k;
+    } else if (c !== 95) return false;
+  }
+  // KQ
+  if (QUOTE_CODES.has(c)) {
+    c = peekMapped(s, j);
+    j = readAt;
+  } else if (c === 42 || c === 95) {
+    const first = c;
+    c = peekMapped(s, j);
+    j = readAt;
+    if (c === first) {
+      c = peekMapped(s, j);
+      j = readAt;
+    }
+  }
+  let spaces = 0;
+  let tabs = true;
+  // 空白不设上限（和 \s* 一样）：每串数字后面的这段空白只有它自己会走（下一串数字在这段空白后面），合起来还是线性的。
+  while (isSpaceCode(c)) {
+    spaces++;
+    if (c !== 32 && c !== 9) tabs = false;
+    c = peekMapped(s, j);
+    j = readAt;
+  }
+  if (c === 58 || c === 61 || c === 0xff1a) return true;
+  if (kind === AFTER_ENV) return false;
+  if (c === 0x662f || c === 0x4e3a) return true;
+  if (c === 124) return tabs;
+  return spaces > 0 && (c | 32) === 105 && (peekMapped(s, j) | 32) === 115;
+}
+/**
+ * sufRun 看过的那一段字母数字：到 sufRunEnd 为止、后面接不接得上键后面该接的（afterKey 的 AFTER_SUFFIX）、离结尾 16 个字母数字以内是从哪里起（sufRunFrom）、
+ * 最靠前的一个能当 KEY 后缀开头的位置（sufRunKey，没有就是 Infinity；用到才算，还没算是 NaN）；normalize 每次开头清掉。
+ */
+let sufRunEnd = 0;
+let sufRunOk = false;
+let sufRunFrom = 0;
+let sufRunKey = NaN;
+/**
+ * 数字串从 start 起在 KEY 的单词后缀里（tokenmonkey₁x=、tokens₁ᵃ=、token2x₁=、token12_₁x=）：这一段字母数字后面接着分隔符（AFTER_SUFFIX），
+ * 后缀从这一段里一个字母起（字母开头的那种）、或者从这一段的开头起（_ - 开头的那种），到这一段结尾不超过 16 个字母数字，
+ * 开头前面正好是「键名 s? 编号?」。sufRun 一段只走一遍（结尾、后面接不接得上、离结尾 16 个字的位置、最靠前的后缀开头都记下来，
+ * 同一段里的数字串直接用），每个开头 keyBefore 也只看几十个字，所以 ₁a₁a… 这种也是线性的。
+ */
+function sufRun(s: string, start: number, end: number): void {
+  if (start >= sufRunEnd) {
+    let b = end;
+    while (b < s.length) {
+      const c = nextMapped(s, b);
+      if (c !== GONE && !isAlnumCode(c)) break;
+      b = readAt;
+    }
+    sufRunEnd = b;
+    sufRunOk = afterKey(s, b, AFTER_SUFFIX);
+    if (sufRunOk) {
+      let k = b;
+      let n = 0;
+      while (k > 0) {
+        const c = prevMapped(s, k);
+        if (c !== GONE && (n === SUFFIX_MAX || !isAlnumCode(c))) break;
+        if (c !== GONE) n++;
+        k = readAt;
+      }
+      sufRunFrom = k;
+    }
+    sufRunKey = NaN;
+  }
+}
+/** [from, b) 里最靠前的一个后缀开头：from 是这一段的开头、前面是 _ 或 -；或者一个字母。开头前面都要正好是「键名 s? 编号?」。 */
+function suffixStart(s: string, from: number, b: number): number {
+  let q = from;
+  while (q > 0) {
+    const c = prevMapped(s, q);
+    if (c !== GONE) {
+      if ((c === 95 || c === 45) && keyBefore(s, readAt)) return from;
+      break;
+    }
+    q = readAt;
+  }
+  for (let j = from; j < b; ) {
+    const c = nextMapped(s, j);
+    const next = readAt;
+    if (c >= 65 && keyBefore(s, j)) return j;
+    j = next;
+  }
+  return Infinity;
+}
+function inKeySuffix(s: string, start: number): boolean {
+  if (!sufRunOk) return false;
+  if (Number.isNaN(sufRunKey)) sufRunKey = suffixStart(s, sufRunFrom, sufRunEnd);
+  return sufRunKey <= start;
+}
+/** ENV 式的键：整段（换完以后）对上 \b[A-Z][A-Z0-9_]*ENV_TAIL，后面可以多一两个 _（KQ 的 __?）。 */
+const ENV_WHOLE = new RegExp(String.raw`^[A-Z][A-Z0-9_]*${ENV_TAIL}_{0,2}$`);
+const isWordCode = (c: number): boolean => isAlnumCode(c) || c === 95;
+/** envRun 判过的那一段到 envRunEnd 为止、判出来是什么（同一段里的数字串直接用）；normalize 每次开头清掉。 */
+let envRunEnd = 0;
+let envRunOk = false;
+/**
+ * 数字串 [start, end) 所在的这一段字母数字 _（换完以后；ENV_KEY 前面有 \b，键里只有大写字母、数字、_，所以 ENV 式的键正好是一整段，
+ * 最多去掉结尾一两个 _）是不是 ENV 式的键，后面接着冒号、等号：MY_SECRET²_X=、GITHUB_TOKEN₁_CI=、MY_API_KEY_2²_X=、MY₁_TOKEN=。
+ * 每一段只走一遍、只判一次（这一段里后面的数字串直接用 envRunOk），所以 A₁A₁A₁… 这种也是线性的。
+ */
+function envRun(s: string, start: number, end: number): boolean {
+  if (start < envRunEnd) return envRunOk;
+  let a = start;
+  while (a > 0) {
+    const c = prevMapped(s, a);
+    if (c !== GONE && !isWordCode(c)) break;
+    a = readAt;
+  }
+  let b = end;
+  let upper = true;
+  while (b < s.length) {
+    const c = nextMapped(s, b);
+    if (c !== GONE && !isWordCode(c)) break;
+    if (c >= 97) upper = false;
+    b = readAt;
+  }
+  envRunEnd = b;
+  envRunOk = false;
+  if (!upper || !afterKey(s, b, AFTER_ENV)) return false;
+  for (let k = a; k < start; ) {
+    const c = nextMapped(s, k);
+    k = readAt;
+    if (c >= 97) return false;
+  }
+  let w = "";
+  for (let k = a; k < b; ) {
+    const c = nextMapped(s, k);
+    k = readAt;
+    if (c !== GONE) w += String.fromCharCode(c);
+  }
+  envRunOk = ENV_WHOLE.test(w);
+  return envRunOk;
+}
+/**
+ * 编号 [.., end) 后面是不是 KEY 剩下的部分（afterKey 的 AFTER_DIGITS）。后面紧跟字母的，只能是字母开头的后缀、一直到这一段字母数字的结尾：
+ * 直接用 sufRun 记下的（不用每串都往后走 17 个字）。
+ */
+function keyAfterDigits(s: string, end: number): boolean {
+  let j = end;
+  while (j < s.length) {
+    const c = nextMapped(s, j);
+    if (c === GONE) {
+      j = readAt;
+      continue;
+    }
+    if (isAlnumCode(c)) return sufRunOk && end >= sufRunFrom;
+    break;
+  }
+  return afterKey(s, end, AFTER_DIGITS);
+}
+/** keyDigits 判的那一整串数字的结尾。 */
+let keyDigitsEnd = 0;
+/**
+ * 从 i 起的兼容数字所在的这一整串数字（ASCII 数字、全角数字、兼容数字连着，中间可以夹去掉的字）到 [start, end)，
+ * 换成数字以后有没有一个键盖住它（复核 adf2412e 必修 B：只有这样才换；前面是键名、后面却不是键的 token²ghp_…、password¹mysql -p…
+ * 不换，¹ 不是 \w，后面的词照常认得出）：
+ * - 是 KEY 的编号：前面是「键名 s? [_-]?」，后面是 KEY 剩下的部分（token₁_prod=、PASSWORD²_DB=、token₁2=）；
+ * - 是单独的 key 的编号（key₁=、KEY_₁_:）；
+ * - 在 KEY 的单词后缀里（inKeySuffix）；
+ * - 在 ENV 式的键里（envRun）。
+ * 都只看这一串前后几十个字以内、每一串只判一次（复核 adf2412e 必修 A：线性）。这一串的结尾放在 keyDigitsEnd。
+ */
+function keyDigits(s: string, i: number): boolean {
+  let start = i;
+  while (start > 0 && digitOrGone(prevMapped(s, start))) start = readAt;
+  let end = i;
+  while (end < s.length && digitOrGone(nextMapped(s, end))) end = readAt;
+  keyDigitsEnd = end;
+  sufRun(s, start, end);
+  if (trieBefore(s, start, KEY_BEFORE_DIGITS) && keyAfterDigits(s, end)) return true;
+  if (plainKeyBefore(s, start) && afterKey(s, end, AFTER_SUFFIX)) return true;
+  return inKeySuffix(s, start) || envRun(s, start, end);
 }
 /** 从 j 起、跳过会被去掉的字以后，下一个字换完以后是不是字母、数字或 _。 */
 function nextIsWord(s: string, j: number): boolean {
@@ -943,9 +1284,14 @@ function nextIsWord(s: string, j: number): boolean {
 function normalize(s: string): string {
   let out = "";
   let last = 0;
-  // 已经看过的一串兼容数字到 digitsEnd 为止；digitsMap：这一串换不换（后面不紧跟字母数字，或者前面是键名）。
+  // 已经看过的一串兼容数字到 digitsEnd 为止；digitsMap：这一串换不换（后面不紧跟字母数字，或者换完是 KEY 的一部分）。
   let digitsEnd = 0;
   let digitsMap = true;
+  // keyDigits 判过的那一整串数字到 keyEnd 为止、判出来是什么：同一串里后面的兼容数字直接用，不再往回、往前看。
+  let keyEnd = 0;
+  let keyMap = false;
+  envRunEnd = 0;
+  sufRunEnd = 0;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     // 要换的字都在 U+00AD 以后：ASCII 和常见的拉丁字母直接跳过。
@@ -957,7 +1303,14 @@ function normalize(s: string): string {
         const end = compatDigitsEnd(s, i);
         if (end > i) {
           digitsEnd = end;
-          digitsMap = !nextIsWord(s, end) || keyBefore(s, i);
+          if (!nextIsWord(s, end)) digitsMap = true;
+          else {
+            if (i >= keyEnd) {
+              keyMap = keyDigits(s, i);
+              keyEnd = keyDigitsEnd;
+            }
+            digitsMap = keyMap;
+          }
         }
       }
       // 这一串里的数字不换（夹在中间的不可见字照常去掉；BMP 以外的数字只跳过前半，后半在 KIND 里是 KEEP）。
@@ -1015,13 +1368,23 @@ const keyStarts = (s: string): number[] => {
 const KEY_AT_Y = new RegExp(KEY_AT.source, "iy");
 /** KEY_AT 匹配到的那一段（键名、引号、空白、分隔符、is）里不会有的字：占位符 [REDACTED] 的头尾。 */
 const isBreak = (c: number): boolean => c === 0x5b || c === 0x5d;
+/**
+ * out[from] 是空白，从它往后一直是空白、在 b 之前碰到 [ 或 ]：含 out[from] 的 KEY_AT 匹配只能是在「\s* 分隔符」「\s+is」的空白里，
+ * 空白后面是 [ ] 就接不上，所以不可能（块标量开头有空行时，「|\n\n  abc」换成「|\n  [REDACTED]」，差异从 \n 和空格之间开始）。
+ */
+function spacesToBreak(out: string, from: number, b: number): boolean {
+  if (!isSpaceCode(out.charCodeAt(from))) return false;
+  let q = from + 1;
+  while (q < b && isSpaceCode(out.charCodeAt(q))) q++;
+  return q < b && isBreak(out.charCodeAt(q));
+}
 
 /**
  * 文本 s 按 edits（按位置排好、不重叠）换成了 out，把 s 上的候选起点 starts 挪到 out 上。新的候选起点只可能和每处替换真正改了的
  * 那一段 [a, b)（去掉和原文相同的头尾）沾边：
  * - 从 b 往后起跑的，往后看到的字和原来一样：原来是候选的还是（挪个位置），原来不是的还不是；
  * - 从 a 前面起跑、又碰到 [a, b) 的，那一段要同时含 out[a-1] 和 out[a]（纯删除时是接缝两边的字）。这两个字有一个是 [ 或 ]
- *   就不可能。裁头碰到替换文本里的 [ 就停，所以替换进去的是占位符时 out[a] 就是它的 [（原文的值也以 [R 开头时同样停在 [ 上，
+ *   就不可能；out[a-1] 是空白、从它往后的空白在 [a, b) 里接上 [ 的也不可能（spacesToBreak：块标量开头的空行和值一起换掉时）。裁头碰到替换文本里的 [ 就停，所以替换进去的是占位符时 out[a] 就是它的 [（原文的值也以 [R 开头时同样停在 [ 上，
  *   不会裁进占位符里面）；
  * - 起点落在 [a, b) 里的，逐个位置用 KEY_AT 试一遍（这段通常就是一个占位符，加起来不超过替换进去的字数）。
  * 多出来的旧起点留着没关系（KEY 规则在那里试不出来）。两头都不是 [ ] 的说不清，返回 null，调用方整篇重扫：只是防御，
@@ -1043,7 +1406,7 @@ function moveStarts(s: string, out: string, starts: readonly number[], edits: re
     const oldB = e.at + e.len - tail;
     const a = oldA + shift;
     const b = e.at + shift + e.to.length - tail;
-    if (a > 0 && !isBreak(out.charCodeAt(a - 1)) && !isBreak(out.charCodeAt(a))) return null;
+    if (a > 0 && !isBreak(out.charCodeAt(a - 1)) && !isBreak(out.charCodeAt(a)) && !spacesToBreak(out, a - 1, b)) return null;
     while (i < starts.length && starts[i] < oldA) res.push(starts[i++] + shift);
     while (i < starts.length && starts[i] < oldB) i++;
     for (let q = a; q < b; q++) {

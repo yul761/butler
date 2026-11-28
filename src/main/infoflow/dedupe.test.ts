@@ -529,7 +529,8 @@ describe("review of c067e822 (dedupe)", () => {
     // 两头都不是反义词的分句两种语序都生成；同一句里说不清的对象不比。
     expect(polarityClash("turn off x and turn on y", "turn on x and turn off y")).toBe(true);
     expect(polarityClash("turn off x and turn on y", "turn off x and turn on y, turn on z")).toBe(false);
-    expect(polarityClash("turn off x and turn on y", "turn off x, turn on y")).toBe(false);
+    // 复核 adf2412e 必修 C：一个分句里两头都有、两句又不是一字不差也不是包含的，当成换了说法（宁可多存一条）。
+    expect(polarityClash("turn off x and turn on y", "turn off x, turn on y")).toBe(true);
   });
 
   it("a clause ending with an antonym reads 「X 关闭」: each object is the piece before its antonym, from the previous one", () => {
@@ -555,5 +556,59 @@ describe("review of c067e822 (dedupe)", () => {
     const b = "关闭测试环境缓存，开启生产环境缓存";
     expect(polarityClash(a, b)).toBe(false);
     expect(polarityClash(b, a)).toBe(false);
+  });
+});
+
+describe("review of adf2412e (dedupe)", () => {
+  // 必修 C：一个分句里一对反义词两头都有（没有标点隔开），对象切不准；两句不是一字不差、也不是包含的，就当成换了说法。
+  const changedMind: [string, string][] = [
+    ["测试环境关闭缓存生产环境开启缓存", "生产环境关闭缓存测试环境开启缓存日志开启"],
+    ["测试环境关闭缓存 生产环境开启缓存", "生产环境关闭缓存 测试环境开启缓存 日志开启"],
+    ["测试环境关闭缓存生产环境开启缓存", "生产环境关闭缓存，测试环境开启缓存，日志开启"],
+    ["预发环境启用限流，生产环境禁用限流", "生产环境启用限流预发环境禁用限流"],
+    ["启用本地缓存、禁用生产环境缓存", "启用生产环境缓存禁用本地缓存监控启用"],
+    ["turn on cache in prod. turn off cache in test", "turn on cache in test; turn off cache in prod; metrics on"],
+    ["turn off ratelimit in local; turn on ratelimit in prod", "turn off ratelimit in prod and turn on ratelimit in local"],
+    ["turn off cache x and turn on cache y", "turn off cache y and turn on cache x and turn on z"],
+  ];
+
+  it.each(changedMind)("must-fix C: %s → %s is a change of mind, in both directions", (a, b) => {
+    expect(findDuplicate(b, [a])).toBeNull();
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(polarityClash(a, b)).toBe(true);
+    expect(polarityClash(b, a)).toBe(true);
+  });
+
+  it("must-fix C: a clause with both halves is still a duplicate of itself, of the same words with other punctuation, and of a sentence containing it", () => {
+    const a = "测试环境关闭缓存生产环境开启缓存";
+    expect(findDuplicate(a, [a])).toBe(a);
+    expect(findDuplicate("测试环境关闭缓存，生产环境开启缓存", [a])).toBe(a);
+    expect(findDuplicate(a, ["测试环境关闭缓存 生产环境开启缓存"])).toBe("测试环境关闭缓存 生产环境开启缓存");
+    // 一句整个在另一句里：新的是旧的加了一段（不吞，交给包含规则），旧的是新的多说一段（吞）。
+    expect(polarityClash(a, a + "，日志开启")).toBe(false);
+    expect(polarityClash("turn off x and turn on y", "turn off x and turn on y, turn on z")).toBe(false);
+    expect(findDuplicate("turn off cache in test and turn on cache in prod", ["turn off cache in test and turn on cache in prod"])).not.toBeNull();
+  });
+
+  it("must-fix C: an English full stop followed by a space or at the end splits clauses; one inside a word or number does not", () => {
+    // 句号切开以后两句的对象一一对上（cache in prod 一边 on、一边 off）。
+    expect(polarityClash("turn on cache in prod. turn off cache in test.", "turn off cache in prod. turn on cache in test.")).toBe(true);
+    // v1.2、3.14 里的点不切：单一极性的同一句，只是写法不同。
+    expect(polarityClash("turn on cache v1.2 in prod", "turn on cache v1.2 in prod.")).toBe(false);
+    // 句号切开以后每个分句只有一头：换了个词的同一件事照样算重复（不切的话整句两头都有，就当成换了说法）。
+    expect(findDuplicate("turn on caching in prod. turn off logs in test", ["turn on cache in prod. turn off logs in test"])).not.toBeNull();
+    expect(findDuplicate("turn on cache in prod. turn off logs in test", ["turn on caching in prod. turn off logs in test"])).not.toBeNull();
+    // v1.2 的点不切：这一句还是两头都有，换了个词也不算重复。
+    expect(findDuplicate("turn on caching v1.2 and turn off logs", ["turn on cache v1.2 and turn off logs"])).toBeNull();
+    expect(findDuplicate("turn on cache v1.2 and turn off logs", ["turn on caching v1.2 and turn off logs"])).toBeNull();
+  });
+
+  it("suggestion D4: a clause with an antonym in the middle on both sides keeps both readings, so the same words with other punctuation stay duplicates", () => {
+    // 「限流开启生产环境关闭限流」：只留后一种读法的话「限流」配了关闭，和前一句的「限流开启」对不上，就会误判成换了说法。
+    const a = "缓存关闭、限流开启，生产环境关闭限流";
+    const b = "缓存关闭、限流开启生产环境关闭限流";
+    expect(findDuplicate(b, [a])).toBe(a);
+    expect(findDuplicate(a, [b])).toBe(b);
+    expect(polarityClash(a, b)).toBe(false);
   });
 });

@@ -214,8 +214,23 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
     bracketsThenPwdsPwd: REWRITE_BRACKET_VALUES + "pwds_pwd=,".repeat(N / 10),
     // MF2：兼容数字一串一串的（每串都往后看一眼是不是紧跟字母数字）。
     compatDigitRuns: "x²mysql ₁₂ ".repeat(N / 11),
-    // 复核 c067e822 必修 2：每串兼容数字后面都紧跟字母，都要往回看前面是不是键名（最多 40 个字）。
+    // 复核 c067e822 必修 2：每串兼容数字后面都紧跟字母，都要往回看前面是不是键名。
     compatDigitsAfterWords: "authentication_stringsx₁\u200b₂y ".repeat(N / 30),
+    // 复核 adf2412e 必修 A：周期很短的兼容数字（每两三个字就一串，每串都要判换完是不是键；以前往回看 40 个字加正则，CI 上 60–370ms）。
+    ...Object.fromEntries(
+      [
+        "A₁", "Ａ₁", "₁a", "₁ａ", "a₁", "₁_", "_₁", "x²y ", "₁a=", "ｐ₁",
+        // 前面是键名的（字典树走到词尾、还要看后面）、后面是分隔符的（真的换、真的打码）。
+        "pwd₁a", "token₁a", "A_KEY₁x", "ｐｗｄ₁ａ", "pwd₁a     ", "pwd₁a=", "ｔｏｋｅｎ₁ａ＝",
+        // 后缀里的数字、ENV 式整段的键。
+        "tokenmonkey₁x=", "token" + "₁a".repeat(8) + "=", "₁a".repeat(8) + "=", "MY₁_TOKEN=", "key₁=",
+        // 键后面的空白不设上限：每串后面一段长空白、一段零宽字符。
+        "pwd₁_" + " ".repeat(40), "token₁_" + "\u200b".repeat(40) + " ",
+        // 往回看也不设上限：键名中间夹一大片零宽字符、很长的编号、后缀前面一长串字母。
+        "tok" + "\u200b".repeat(40) + "en₁a", "k" + "\u200b".repeat(30) + "e" + "\u200b".repeat(30) + "y₁_",
+        "token" + "1".repeat(60) + "x₁", "1".repeat(60) + "a₁b", "a".repeat(15) + "₁",
+      ].map((p) => [`compatShortPeriod ${JSON.stringify(p)}`, p.repeat(Math.floor(N / p.length))]),
+    ),
   };
   const time = (input: string): number => {
     maskSecrets(input);
@@ -285,7 +300,9 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
       return exec.call(this, str);
     };
     try {
-      for (const head of ["", REWRITE_EACH_KEY_RULE, REWRITE_BRACKET_VALUES, "mysql -pAbc token=Hunter2xyz -pDef\n", "mysql -p[Rabc TOKEN=[Rx -p[Rd\n"]) {
+      // 复核 adf2412e：块标量的 | 或 > 后面先跟空行，开头的空行和值一起换掉，差异从空白开始（以前整篇扫 2 次）。
+      const blank = ["password: |\n\n  abc\n", "password: |\n \n  abc\n", "token: >\r\n\r\n  abc\r\n", "password: |\n\n\n  [Rabc\n"];
+      for (const head of ["", REWRITE_EACH_KEY_RULE, REWRITE_BRACKET_VALUES, "mysql -pAbc token=Hunter2xyz -pDef\n", "mysql -p[Rabc TOKEN=[Rx -p[Rd\n", ...blank, blank.join("") + REWRITE_EACH_KEY_RULE]) {
         for (const fill of ["pwds_1", "tokens_1", "PWDS_", "pwds_pwd=,", "tokens_tokens_=,", "密码是，", "password=[Rx ", "token: |\n  [Rv\n"]) {
           for (const input of [head + fill.repeat(2000 / fill.length), zw(head + fill.repeat(2000 / fill.length))]) {
             scans = 0;
