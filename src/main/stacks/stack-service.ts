@@ -132,6 +132,8 @@ const FAILED_RETRY_MS = 60 * 60_000;
 const FAILED_RETRY_MAX_MS = 24 * 3600_000;
 /** 读不到开着的 PR（gh 没登录、网络断了）推迟的：等 5 分钟再读，每次翻倍，最多一小时（BTL-278：原来每个 tick 都起一次 gh）。 */
 const PRS_UNREADABLE = "can't read the open PRs";
+/** 栈里有层的 ticket 关掉或归档了（BTL-278 复核）：整个栈不改写，推迟的原因以它开头（后面是那几层）。 */
+const NOT_LIVE = "ticket closed or archived:";
 const PRS_RETRY_MS = 5 * 60_000;
 const PRS_RETRY_MAX_MS = 60 * 60_000;
 /** pushTarget 的结果留多久（同一轮里的几次 git 调用合成一次）。 */
@@ -292,8 +294,8 @@ export class StackService {
    * 只在内存里：重启后第一次推重查一次，查的过程没有别的副作用。每层只留最新的一条（local、remote：查的是哪两个顶端，「现在」页按 local 认）。
    */
   private readonly markersOf = new Map<string, { layerId: number; local: string; remote: string | null; files: string[] | null; at: number; n: number }>();
-  /** 被下面带标记的层拦住、这次没推的层（「现在」页点名拦它的那一层，BTL-278）：层 → 拦它的分支、它当时要推的顶端。 */
-  private readonly heldOf = new Map<number, { by: string; byId: number; tip: string }>();
+  /** 被下面带标记的层拦住、这次没推的层（「现在」页点名拦它的那一层，BTL-278）：层 → 拦它的层（id）、它当时要推的顶端。 */
+  private readonly heldOf = new Map<number, { byId: number; tip: string }>();
   /** pushTarget 的结果（这一轮里）。 */
   private readonly pushTargetMemo = new Map<string, { at: number; p: Promise<PushTarget> }>();
   /** 要开 PR 的新栈底认不出该推到哪个 remote（「现在」页提醒，BTL-278）：栈 → 那一层。 */
@@ -589,6 +591,7 @@ export class StackService {
     if (run?.outcome === "deferred" && run.reason?.startsWith(`${PUSH_REMOTE_AMBIGUOUS} `)) {
       return { ok: false, message: T().errors.pushRemoteAmbiguous(run.reason.slice(PUSH_REMOTE_AMBIGUOUS.length + 1).split(" ")[0]!) };
     }
+    if (run?.outcome === "deferred" && run.reason?.startsWith(`${NOT_LIVE} `)) return { ok: false, message: T().errors.notLive(run.reason.slice(NOT_LIVE.length + 1)) };
     return { ok: true, message: run ? this.runSummary(run) : undefined };
   }
 
@@ -645,6 +648,10 @@ export class StackService {
       this.d.repo.updateStack(stack.id, { trunkSha });
       return null;
     }
+    // 有一层的 ticket 关掉或归档了（PR 刚读过：合并了的不算）：整个栈这次不改写任何分支（BTL-278 复核：关 ticket 承诺它的分支
+    // 不改写、不推、不开 PR；只改别的层的话，上面的层就接不到它上面了）。「现在」页点名那一层，要人把它移出栈
+    const dead = open.filter((l) => !this.d.owned(repo, l.branch)).map((l) => l.branch);
+    if (dead.length > 0) return this.defer(stack, trigger, `${NOT_LIVE} ${dead.join(", ")}`, "deferred", { inputs: await this.inputsOf(stack) });
     const engineLayers: EngineLayer[] = [];
     for (const l of open) {
       const tip = await revParse(repo, `refs/heads/${l.branch}`);
@@ -1362,6 +1369,8 @@ export class StackService {
       if (firstOpen?.id === layer.id) return { ok: false, message: t.isBottom };
       if (layer.prNumber) return { ok: true };
       const parent = all[idx - 1]!;
+      // 这一层或者要先推的父层的 ticket 关掉或归档了：不推、不开（BTL-278 复核）。父层不会是合并了的：那样这一层就是栈底，上面已经返回了
+      for (const b of [parent, layer]) if (!this.d.owned(repo, b.branch)) return { ok: false, message: t.notLive(b.branch) };
       // 远端还没有的父层和这一层先推上去。第一次推也是把内容交出去（BTL-278）：推之前和别的推送一样查冲突标记，
       // 下面有带标记、没推出去的层也不推（叠在它上面，推上去远端就带着那些标记），推的是查过的那个提交
       for (const b of [parent, layer]) {
@@ -1421,6 +1430,8 @@ export class StackService {
       const rows = this.d.repo.layers(stackId);
       for (const l of from.detail.layers ?? []) {
         if (!l.backupRef) continue;
+        // 关掉或归档的 ticket 的分支不改写（BTL-278 复核），恢复备份也是改写
+        if (!this.d.owned(repo, l.branch)) return { ok: false, message: t.notLive(l.branch) };
         const backup = await revParse(repo, l.backupRef);
         const cur = await revParse(repo, `refs/heads/${l.branch}`);
         if (!backup || cur !== l.newTip) return { ok: false, message: t.restoreMoved(l.branch) };
@@ -1495,6 +1506,9 @@ export class StackService {
           // 各层和 trunk 的顶端一次读（BTL-275），updateBehind、dueTrigger 共用；它们之间不动 ref。
           const tipOf = await this.tipsOf(s).catch((e) => (this.d.log(`stacks: tips for stack ${s.id}`, e), undefined));
           await this.updateBehind(s, tipOf).catch((e) => this.d.log(`stacks: behind for stack ${s.id}`, e));
+          // 「现在」页的标记、被拦提醒：session 自己推上去了就撤（只碰提醒）。每个栈都看：autoRebase 关着、上一次没落定的栈
+          // 不会走补推，原来提醒就一直挂着（BTL-278 复核）。正在跑的栈跳过：它推完自己会改
+          if (!this.running.has(s.id)) await this.releasePushed(s).catch((e) => this.d.log(`stacks: releasing notices for stack ${s.id}`, e));
           if (!p.autoRebase) continue;
           const trigger = await this.dueTrigger(s, p, fetched, tipOf);
           if (trigger) {
@@ -1553,7 +1567,9 @@ export class StackService {
       // 失败（git 超时、worktree 建不起来）不一定是定论：过一阵再试
       || (lr?.outcome === "failed" && this.d.now() - (lr.finishedAt ?? lr.startedAt) >= this.failedRetryMs(s.id, lr))
       // 认不出推到哪个 remote 的推迟（记了输入的那种）：等人改配置，过一阵再看（同样连着推迟，间隔翻倍）
-      || (lr?.outcome === "deferred" && this.d.now() - (lr.finishedAt ?? lr.startedAt) >= Math.min(FAILED_RETRY_MAX_MS, FAILED_RETRY_MS * 2 ** Math.max(0, (lr.detail.repeats ?? 1) - 1)));
+      || (lr?.outcome === "deferred" && this.d.now() - (lr.finishedAt ?? lr.startedAt) >= Math.min(FAILED_RETRY_MAX_MS, FAILED_RETRY_MS * 2 ** Math.max(0, (lr.detail.repeats ?? 1) - 1)))
+      // 因为 ticket 关掉推迟的：ticket 又打开了，马上重跑（不等退避）
+      || (lr?.outcome === "deferred" && lr.reason?.startsWith(NOT_LIVE) === true && open.every((l) => this.d.owned(s.repoPath, l.branch)));
     if (lr && !stale && !isSettledOutcome(lr.outcome) && lr.detail.inputs !== undefined && lr.detail.inputs === (await this.inputsOf(s, tipOf))) return null;
     // 冲突在 session 手里的层和它上面的层：session 自己动分支不算「有新提交」
     const held = await this.handedOff(s, open, tipOf);
@@ -1628,7 +1644,6 @@ export class StackService {
    * （confirmed = 用户刚确认过）。
    */
   private async pushPending(s: StackRow, confirmed = false): Promise<void> {
-    await this.releasePushed(s);
     const due: { l: LayerRow; local: string; remote: string | null }[] = [];
     for (const l of this.d.repo.layers(s.id)) {
       if (l.state === "merged" || l.remoteOkSha === null) continue;
@@ -1637,7 +1652,7 @@ export class StackService {
       const local = await revParse(s.repoPath, `refs/heads/${l.branch}`);
       const remote = await this.layerRemoteTip(s, l.branch);
       if (remote === local) {
-        // 提醒（它自己被拦、它拦着别的层）上面 releasePushed 已经撤了
+        // 提醒（它自己被拦、它拦着别的层）由 tick 里的 releasePushed 撤
         this.d.repo.updateLayer(l.id, { remoteOkSha: null });
         continue;
       }
@@ -1704,7 +1719,7 @@ export class StackService {
   private async heldBelowNoted(stack: StackRow, row: LayerRow, tip: string, pushedNow?: ReadonlySet<string>): Promise<LayerRow | null> {
     const below = await this.heldBelow(stack, row, tip, pushedNow);
     // 不拦了就清掉（推没推成都清：推失败不是被下面那层拦的）。这一层推上去以后不另外清，靠这里
-    if (below) this.heldOf.set(row.id, { by: below.branch, byId: below.id, tip });
+    if (below) this.heldOf.set(row.id, { byId: below.id, tip });
     else this.heldOf.delete(row.id);
     return below;
   }
@@ -1725,10 +1740,11 @@ export class StackService {
    * 关着、它自己又没有 remoteOkSha 时，没有别的路径会再看它。只看有提醒的层（一次 git 读全部 ref），没有就不起 git。
    */
   private async releasePushed(s: StackRow): Promise<void> {
+    const layers = this.d.repo.layers(s.id);
     const ids = new Set<number>();
     for (const m of this.markersOf.values()) if (m.files === null || m.files.length > 0) ids.add(m.layerId);
     for (const [id, h] of this.heldOf) ids.add(id).add(h.byId);
-    const ls = this.d.repo.layers(s.id).filter((l) => l.state !== "merged" && ids.has(l.id));
+    const ls = layers.filter((l) => l.state !== "merged" && ids.has(l.id));
     if (ls.length === 0) return;
     const remotes = new Map<string, string | null>();
     for (const l of ls) remotes.set(l.branch, await this.pushRemote(s, l.branch));
@@ -1736,8 +1752,24 @@ export class StackService {
     for (const l of ls) {
       const local = tips.get(`refs/heads/${l.branch}`) ?? null;
       const rm = remotes.get(l.branch);
-      if (local && rm && tips.get(`refs/remotes/${rm}/${l.branch}`) === local) this.pushedOut(l.id);
+      if (!local || !rm || tips.get(`refs/remotes/${rm}/${l.branch}`) !== local) continue;
+      // 推上去的正是查出带标记的那个提交：标记跟着到了远端，记一笔（提醒照样撤：远端现在就是这样，再拦也拦不回来）
+      const m = [...this.markersOf.values()].find((x) => x.layerId === l.id && x.local === local && x.files !== null && x.files.length > 0);
+      if (m) this.d.log(`stacks: ${l.branch} was pushed at ${sha7(local)} with the conflict markers Shipherd found in ${m.files!.join(", ")}`);
+      this.pushedOut(l.id);
     }
+  }
+
+  /**
+   * 这一层记着的「被谁拦住」还作数的话，拦它的那层（BTL-278 复核）：同一个栈里、没合并、在它下面，而且这一层还停在当时要推的顶端。
+   * 层移出栈、重排以后，旧的记录不作数（不然「现在」页一直点名一个已经不在栈里的层）。不作数的记录不另外删：
+   * 「现在」页和别处都经过这里认，留着不影响什么，这一层再被查到时 heldBelowNoted 会换掉或清掉它。
+   */
+  private heldBy(layers: LayerRow[], l: LayerRow): LayerRow | null {
+    const h = this.heldOf.get(l.id);
+    if (!h || h.tip !== l.tipSha) return null;
+    const by = layers.find((x) => x.id === h.byId);
+    return by && by.state !== "merged" && by.position < l.position ? by : null;
   }
 
   private dropMarkers(layerId: number): void {
@@ -2145,7 +2177,9 @@ export class StackService {
       if (lr && (lr.outcome === "deferred" || lr.outcome === "failed" || lr.outcome === "rolled_back") && now - lr.startedAt >= STUCK_AFTER_MS) {
         // 读不到 PR（GitHub Enterprise 之类 gh 没登录的主机）：说清楚为什么、怎么办（BTL-278）
         const prs = lr.outcome === "deferred" && lr.reason?.startsWith(PRS_UNREADABLE) ? /^can't read the open PRs on (\S+);/.exec(lr.reason) : null;
-        if (lr.outcome === "deferred" && lr.reason?.startsWith(PRS_UNREADABLE)) {
+        if (lr.outcome === "deferred" && lr.reason?.startsWith(NOT_LIVE)) {
+          // 下面 ticket_closed 那条说了
+        } else if (lr.outcome === "deferred" && lr.reason?.startsWith(PRS_UNREADABLE)) {
           out.push({ reason: "prs_unreadable", stackId: s.id, stackName: s.name, branch: open[0]!.branch, host: prs?.[1] ?? null, ticketKey: open[0]!.ticketKey });
         } else {
           out.push({ reason: "stuck", stackId: s.id, stackName: s.name, branch: open[0]!.branch, detail: lr.reason, ticketKey: open[0]!.ticketKey });
@@ -2162,12 +2196,17 @@ export class StackService {
       // 被下面带标记的层拦住、没推的层：点名拦它的那层（那层自己有一条 markers 提醒）。同一层拦住的几层并成一条
       const held = new Map<string, LayerRow[]>();
       for (const l of open) {
-        const h = this.heldOf.get(l.id);
-        if (!h || h.tip !== l.tipSha) continue;
-        held.set(h.by, [...(held.get(h.by) ?? []), l]);
+        const by = this.heldBy(layers, l);
+        if (by) held.set(by.branch, [...(held.get(by.branch) ?? []), l]);
       }
       for (const [by, ls] of held) {
         out.push({ reason: "held_below", stackId: s.id, stackName: s.name, branch: ls[0]!.branch, branches: ls.map((l) => l.branch), by, ticketKey: ls[0]!.ticketKey, prNumber: ls[0]!.prNumber });
+      }
+      // 有层的 ticket 关掉或归档了：栈服务不再改写、推这个栈，也不给这一层开 PR，要人把它移出栈（BTL-278 复核）。
+      // 按现在的 ticket 状态算（不靠 run 记录）：ticket 重新打开、层移出栈，提醒就没了
+      const dead = open.filter((l) => !this.d.owned(s.repoPath, l.branch));
+      if (dead.length > 0) {
+        out.push({ reason: "ticket_closed", stackId: s.id, stackName: s.name, branch: dead[0]!.branch, branches: dead.map((l) => l.branch), ticketKey: dead[0]!.ticketKey, prNumber: dead[0]!.prNumber });
       }
       // 新栈底认不出推到哪个 remote：不推、不开 PR，要人指定（BTL-278）
       const np = this.noPushRemote.get(s.id);

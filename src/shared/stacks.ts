@@ -279,7 +279,8 @@ export interface StacksView {
 /** prs_unreadable：读不到 PR 推迟了一天以上；markers：要推的顶端有冲突标记（或者查不了），没推。 */
 /** held_below：叠在一层带标记、没推出去的层上面，这次也没推（by 是拦住它的那层）。 */
 /** no_push_remote：要开 PR 的新栈底认不出该推到哪个 remote，没推、没开 PR。 */
-export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten" | "prs_unreadable" | "markers" | "held_below" | "no_push_remote";
+/** ticket_closed：栈里这几层（branches）的 ticket 关掉或归档了，整个栈不改写、不推，那几层也不开 PR，要人移出栈。 */
+export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten" | "prs_unreadable" | "markers" | "held_below" | "no_push_remote" | "ticket_closed";
 
 /**
  * markers 提醒里是哪种层（BTL-278）：new_bottom = 从没推过的新栈底（也没开 PR）；new_layer = 从没推过的中间层；

@@ -64,6 +64,8 @@ describe("noticeNeedsYou", () => {
     // 冲突标记没推出去、认不出推到哪个 remote：都要你动手；被下面那层拦住的只是跟着那条（BTL-278）
     expect(noticeNeedsYou(stack("markers"))).toBe(true);
     expect(noticeNeedsYou(stack("no_push_remote"))).toBe(true);
+    // 有层的 ticket 关掉了：整个栈停着，要你把它移出栈（BTL-278 复核）
+    expect(noticeNeedsYou(stack("ticket_closed"))).toBe(true);
     expect(noticeNeedsYou(stack("held_below"))).toBe(false);
     const intake = (state: string) => ({ kind: "intake", item: { state } }) as unknown as NowNotice;
     expect(noticeNeedsYou(intake("needs_decision"))).toBe(true);

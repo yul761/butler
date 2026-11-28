@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { repoLockKey, repoLocks } from "../tickets/repo-lock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalActionKind } from "../../shared/external";
@@ -3366,5 +3366,252 @@ describe("StackService checks every push for conflict markers (BTL-278, seventh 
       if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
       else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
     }
+  });
+  describe("review of a69fa1d7", () => {
+    it("a closed ticket's layer stops the whole stack: nothing is rewritten, pushed or opened as a draft, and the notice names it", async () => {
+      const w = world({ policy: { dailyRebase: false } });
+      const id = await defineAll(w);
+      const owned = w.deps.owned;
+      let closed = true;
+      w.deps.owned = (r, b) => (closed && b === "c" ? null : owned(r, b));
+      const before = w.tips(BRANCHES);
+      const remoteBefore = w.remoteTips(BRANCHES);
+      w.pushMain("x.txt", "x\n");
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.tips(BRANCHES)).toEqual(before);
+      expect(w.remoteTips(BRANCHES)).toEqual(remoteBefore);
+      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: "ticket closed or archived: c" });
+      expect(w.svc.notices().filter((n) => n.reason === "ticket_closed")).toEqual([expect.objectContaining({ stackId: id, branch: "c", branches: ["c"], ticketKey: "C" })]);
+      // 不会过一天变成一条「卡住了」：ticket_closed 那条已经说了
+      w.advance(25 * 3600_000);
+      await w.svc.tick();
+      expect(w.svc.notices().filter((n) => n.reason === "stuck")).toEqual([]);
+      expect(w.tips(BRANCHES)).toEqual(before);
+      // 「马上 rebase」也不改写，说清楚为什么
+      const now = await w.svc.rebaseNow(id);
+      expect(now.ok).toBe(false);
+      expect(now.message).toContain("c");
+      expect(w.tips(BRANCHES)).toEqual(before);
+      // 开 draft：这一层关掉的、要先推的父层关掉的，都不推、不开
+      unpushBCD(w);
+      const [, , lc, ld] = w.repoT.layers(id);
+      for (const l of [lc!, ld!]) {
+        const r = await w.svc.setLayerMode(l.id, "draft");
+        expect(r).toMatchObject({ ok: false });
+        expect(r.message).toContain("c ");
+      }
+      expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+      expect(w.external.filter((e) => e.kind === "branch_push")).toEqual([]);
+      expect(onRemote(w, "c") || onRemote(w, "d")).toBe(false);
+      // ticket 又打开了：下一轮就 rebase，提醒也没了
+      closed = false;
+      for (const b of ["b", "c", "d"]) g(w.repo, "push", "-q", "origin", b);
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+      expect(w.svc.notices().filter((n) => n.reason === "ticket_closed")).toEqual([]);
+    });
+
+    it("restoring the backups doesn't rewrite a closed ticket's branch", async () => {
+      const w = world({ policy: { dailyRebase: false } });
+      const id = await defineAll(w);
+      w.pushMain("m.txt", "m\n");
+      await w.svc.tick();
+      const after = w.tips(BRANCHES);
+      const owned = w.deps.owned;
+      w.deps.owned = (r, b) => (b === "c" ? null : owned(r, b));
+      const r = await w.svc.restore(id);
+      expect(r).toMatchObject({ ok: false });
+      expect(r.message).toContain("c ");
+      expect(w.tips(BRANCHES)).toEqual(after);
+    });
+
+    it("a closed ticket's layer becoming the bottom isn't opened as a PR", async () => {
+      const w = world({ policy: { dailyRebase: false } });
+      await defineAll(w);
+      const owned = w.deps.owned;
+      w.deps.owned = (r, b) => (b === "b" ? null : owned(r, b));
+      const head = w.mergeOnHub("a", "squash");
+      await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+      expect(w.svc.notices().filter((n) => n.reason === "ticket_closed")).toEqual([expect.objectContaining({ branch: "b" })]);
+    });
+
+    it("a merged layer whose ticket is closed doesn't hold the stack up", async () => {
+      const w = world({ policy: { dailyRebase: false } });
+      const id = await defineAll(w);
+      const head = w.mergeOnHub("a", "squash");
+      await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+      const owned = w.deps.owned;
+      w.deps.owned = (r, b) => (b === "a" ? null : owned(r, b));
+      w.pushMain("x.txt", "x\n");
+      w.advance(10 * 60_000);
+      await w.svc.tick();
+      // 跑到了引擎（新栈底 b 已经开成 ready PR，所以等确认），没因为 a 推迟
+      expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "needs_confirm" });
+      expect(w.svc.notices().filter((n) => n.reason === "ticket_closed")).toEqual([]);
+    });
+
+    it("held-back notice goes once Shipherd itself pushes the holding layer after its check passes, force_push off above", async () => {
+      let cOff = false;
+      const w = world({ policy: { dailyRebase: false }, allow: (k, scope) => !(k === "force_push" && cOff && (scope?.ticketKey === "C" || scope?.ticketKey === "D")) });
+      await defineAll(w);
+      const svc = w.svc as unknown as Spy;
+      const real = svc.markersVsRemote.bind(w.svc);
+      let broken = true;
+      vi.spyOn(svc, "markersVsRemote").mockImplementation(async (s, l, ...rest) => (broken && l.branch === "b" ? null : real(s, l, ...rest)));
+      w.pushMain("x.txt", "x\n");
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.svc.notices().find((n) => n.reason === "held_below")).toMatchObject({ branches: ["c", "d"], by: "b" });
+      const before = w.remoteTip("b");
+      cOff = true;
+      broken = false;
+      w.advance(60 * 60_000);
+      await w.svc.tick();
+      expect(w.remoteTip("b")).not.toBe(before);
+      expect(w.remoteTip("b")).toBe(w.tip("b"));
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.svc.notices().filter((n) => n.reason === "held_below")).toEqual([]);
+    });
+
+    /** b 带着标记没推，c、d 因此被拦（「c、d 被 b 拦」），之后 c、d 的 force_push 关掉（不会再替它们查谁拦着）。 */
+    async function heldByB(w: World): Promise<number> {
+      const id = await defineAll(w);
+      amendB(w);
+      for (let i = 0; i < 3; i++) {
+        w.advance(5 * 60_000);
+        await w.svc.tick();
+      }
+      expect(w.svc.notices().find((n) => n.reason === "held_below")).toMatchObject({ branches: ["c", "d"], by: "b" });
+      return id;
+    }
+    const offAbove = () => {
+      const st = { cOff: false };
+      return { st, allow: (k: ExternalActionKind, scope?: ExternalDetail["scope"]) => !(k === "force_push" && st.cOff && (scope?.ticketKey === "C" || scope?.ticketKey === "D")) };
+    };
+
+    it("removing the holding layer from the stack doesn't leave a held-back notice naming it", async () => {
+      const { st, allow } = offAbove();
+      const w = world({ policy: { dailyRebase: false }, allow });
+      const id = await heldByB(w);
+      st.cOff = true;
+      expect((await w.svc.define({ repoPath: w.repo, branches: ["a", "c", "d"], source: "mcp", stackId: id })).ok).toBe(true);
+      for (let i = 0; i < 2; i++) {
+        w.advance(5 * 60_000);
+        await w.svc.tick();
+      }
+      expect(w.svc.notices().filter((n) => n.reason === "held_below")).toEqual([]);
+    });
+
+    it("a merged holding layer doesn't hold anything", async () => {
+      const w = world({ policy: { dailyRebase: false } });
+      const id = await heldByB(w);
+      w.repoT.updateLayer(w.repoT.layers(id)[1]!.id, { state: "merged" });
+      expect(w.svc.notices().filter((n) => n.reason === "held_below")).toEqual([]);
+    });
+
+    it("a tick doesn't touch the notices of a stack that's running; it does once the run is done", async () => {
+      const { st, allow } = offAbove();
+      const w = world({ policy: { dailyRebase: false }, allow });
+      const id = await heldByB(w);
+      st.cOff = true;
+      g(w.repo, "push", "-q", "-f", "origin", "b");
+      // 手动 rebase 停在 fetch 上（栈在跑）的时候来一个 tick
+      const svc = w.svc as unknown as { fetch: (r: string, remote: string, force: boolean) => Promise<boolean> };
+      const real = svc.fetch.bind(w.svc);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let blocked = false;
+      vi.spyOn(svc, "fetch").mockImplementation(async (r, remote, force) => {
+        if (force && !blocked) {
+          blocked = true;
+          await gate;
+        }
+        return real(r, remote, force);
+      });
+      const manual = w.svc.rebaseNow(id);
+      await vi.waitFor(() => expect(blocked).toBe(true));
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.svc.notices().filter((n) => n.reason === "held_below")).not.toEqual([]);
+      release();
+      await manual;
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.svc.notices().filter((n) => n.reason === "held_below" || n.reason === "markers")).toEqual([]);
+    });
+
+    it("after a reorder only the layers still above the holding layer are listed as held", async () => {
+      const { st, allow } = offAbove();
+      const w = world({ policy: { dailyRebase: false }, allow });
+      const id = await heldByB(w);
+      st.cOff = true;
+      expect((await w.svc.define({ repoPath: w.repo, branches: ["a", "c", "b", "d"], source: "mcp", stackId: id })).ok).toBe(true);
+      expect(w.svc.notices().filter((n) => n.reason === "held_below")).toEqual([expect.objectContaining({ branches: ["d"], by: "b" })]);
+    });
+
+    it("a layer with the same branch name in another repo's stack being pushed doesn't release this stack's held layers", async () => {
+      const { st, allow } = offAbove();
+      const w = world({ policy: { dailyRebase: false }, allow });
+      await heldByB(w);
+      // 另一个仓库里同样 a ← b ← c ← d 的栈：它的 b 也带着标记，然后它的 session 把 b 推了上去
+      const other = gitWorld(BRANCHES);
+      expect((await w.svc.define({ repoPath: other.repo, branches: BRANCHES, source: "mcp" })).ok).toBe(true);
+      g(other.repo, "checkout", "-q", "b");
+      writeFileSync(join(other.repo, "b.txt"), MARK);
+      g(other.repo, "commit", "-q", "-a", "--amend", "--no-edit");
+      g(other.repo, "checkout", "-q", "main");
+      for (let i = 0; i < 2; i++) {
+        w.advance(5 * 60_000);
+        await w.svc.tick();
+      }
+      const otherId = w.repoT.list().find((s) => s.repoPath !== resolve(w.repo))!.id;
+      expect(w.svc.notices().filter((n) => n.reason === "markers" && n.stackId === otherId)).not.toEqual([]);
+      st.cOff = true;
+      g(other.repo, "push", "-q", "-f", "origin", "b");
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.svc.notices().filter((n) => n.reason === "markers" && n.stackId === otherId)).toEqual([]);
+      expect(w.svc.notices().filter((n) => n.reason === "held_below" && n.stackId !== otherId)).toEqual([expect.objectContaining({ branches: ["c", "d"], by: "b" })]);
+    });
+
+    it("with autoRebase off, a markers notice from opening a draft goes once the session pushes the layer itself", async () => {
+      const w = world({ autoRebase: false });
+      const id = await defineAll(w);
+      unpushBCD(w);
+      amendB(w);
+      const lb = w.repoT.layers(id)[1]!;
+      w.repoT.updateLayer(lb.id, { tipSha: w.tip("b") });
+      expect((await w.svc.setLayerMode(lb.id, "draft")).ok).toBe(false);
+      expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "markers", branch: "b" }));
+      g(w.repo, "push", "-q", "origin", "b");
+      w.advance(5 * 60_000);
+      await w.svc.tick();
+      expect(w.svc.notices().filter((n) => n.reason === "markers")).toEqual([]);
+    });
+
+    it("logs when the layer was pushed with the very markers Shipherd found, not when the session fixed them first", async () => {
+      for (const fixFirst of [false, true]) {
+        const { st, allow } = offAbove();
+        const w = world({ policy: { dailyRebase: false }, allow });
+        await heldByB(w);
+        const logs: string[] = [];
+        w.deps.log = (m) => void logs.push(m);
+        st.cOff = true;
+        if (fixFirst) fixB(w);
+        g(w.repo, "push", "-q", "-f", "origin", "b");
+        w.advance(60_000);
+        await w.svc.tick();
+        expect(w.svc.notices().filter((n) => n.reason === "markers" || n.reason === "held_below")).toEqual([]);
+        const hit = logs.filter((m) => m.includes("with the conflict markers Shipherd found"));
+        expect(hit, `fixFirst ${fixFirst}`).toEqual(fixFirst ? [] : [expect.stringContaining("b was pushed at")]);
+        if (!fixFirst) expect(hit[0]).toContain("b.txt");
+      }
+    });
   });
 });

@@ -562,6 +562,7 @@ export const EN: UiStrings = {
       stackConfirm: "A stack rebase needs your OK",
       stackMarkers: "A stack layer has conflict markers and wasn't pushed",
       stackNoPushRemote: "Shipherd can't tell where to push a new stack bottom",
+      stackTicketClosed: "A stack layer's ticket is closed, so the stack isn't rebased",
       intake: "Auto-intake needs your decision",
       other: "Shipherd needs a click",
     },
@@ -1998,6 +1999,8 @@ export const EN: UiStrings = {
         `${branches} in stack "${stack}" ${branches.includes(",") ? "were" : "was"} rewritten but not pushed yet: ${by} below has conflict markers that aren't pushed, and pushing on top of it would put them on the remote. Shipherd holds the push until ${by} is clean (see its notice), then pushes next round on its own.`,
       no_push_remote: (stack: string, branch: string) =>
         `${branch}, the new bottom of stack "${stack}", hasn't been pushed yet, and Shipherd can't tell which remote it goes to (this repository has several), so it didn't push it or open its PR. Say which with git config branch.${branch}.pushRemote <remote> in a terminal, and the next round opens it.`,
+      ticket_closed: (stack: string, branches: string) =>
+        `The ticket for ${branches} in stack "${stack}" is closed or archived. Shipherd doesn't rewrite or push its branch any more, or open a PR for it, so the whole stack is on hold and isn't rebased. Take it out of the stack (or reopen the ticket), and the next round carries on.`,
       confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
         why === "remote_ahead"
           ? `Stack "${stack}": ${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer)` +

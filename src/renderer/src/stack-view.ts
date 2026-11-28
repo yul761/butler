@@ -18,6 +18,7 @@ export function stackNoticeText(n: StackNoticeInfo, S: UiStrings): string {
     case "markers": return t.markers(n.stackName, n.branch, (n.files ?? []).join(", "), n.where ?? "rewritten");
     case "held_below": return t.held_below(n.stackName, (n.branches ?? [n.branch]).join(", "), n.by ?? "—");
     case "no_push_remote": return t.no_push_remote(n.stackName, n.branch);
+    case "ticket_closed": return t.ticket_closed(n.stackName, (n.branches ?? [n.branch]).join(", "));
     case "confirm":
       return t.confirm(n.stackName, (n.branches ?? [n.branch]).join(", "), n.detail === "handoff" || n.detail === "remote_ahead" ? n.detail : "ready_pr", n.push ?? true, n.toSession ?? true);
     case "rewritten": {
