@@ -85,6 +85,8 @@ describe("index.ts mail-wakes-a-session wiring (BTL-272 rebase review suggestion
 
   it("index.ts makes no wake decision of its own from a message's kind", () => {
     expect(indexSource).not.toMatch(/wakesTarget/);
-    expect(indexSource).not.toMatch(/m\.kind !== "convention"/);
+    // 引号、等号、空格怎么写都算（复核 c067e822 建议 4：只认 m.kind !== "convention" 的话，换成单引号就绕过了）。
+    expect(indexSource).not.toMatch(/kind\s*[!=]==?\s*["'`]convention["'`]/);
+    expect(indexSource).not.toMatch(/["'`]convention["'`]\s*[!=]==?\s*\w*\.?kind/);
   });
 });

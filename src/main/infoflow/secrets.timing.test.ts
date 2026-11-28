@@ -9,6 +9,12 @@ import { maskSecrets } from "./secrets";
 /** 让每条 KEY 规则（YAML 以外）都改一次文本的前缀（复核 f780e9ef 的复现）。 */
 const REWRITE_EACH_KEY_RULE =
   "password: \"a b\" token is \"a b\" password: \"abc def\ntoken is 'abc def\npassword=Hunter2xyz token is: x token is Hunter2xyz\n";
+/**
+ * 同一类前缀，值都以 [R 开头（复核 c067e822 的复现）：裁掉替换前后相同的头时以前会裁进占位符里，候选起点挪不过去，
+ * 每条 KEY 规则都整篇重扫（CI 约 75–80ms）。
+ */
+const REWRITE_BRACKET_VALUES =
+  "password: |\n  [Rabc\nname: DB_PASSWORD\nvalue: [Rx\npassword: \"[Ra b\" token is \"[Ra b\" password: \"[Rabc def\ntoken is '[Rabc def\npassword=[RHunter2xyz token is: [Rx token is [RHunter2xyz\n";
 
 describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under 50ms)", () => {
   const LIMIT_MS = 50;
@@ -201,8 +207,15 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
     // 同一个前缀接大写的 PWDS_（ENV_KEY 从一个词头扫到底再一路退回来，CI 约 55ms）。
     rewritesThenEnvPwds: REWRITE_EACH_KEY_RULE + "PWDS_".repeat(N / 5),
     envPwds: "PWDS_".repeat(N / 5),
+    // 复核 c067e822：值以 [R 开头的前缀。
+    bracketsThenPwds1: REWRITE_BRACKET_VALUES + "pwds_1".repeat(N / 6),
+    bracketsThenTokens1: REWRITE_BRACKET_VALUES + "tokens_1".repeat(N / 8),
+    bracketsThenEnvPwds: REWRITE_BRACKET_VALUES + "PWDS_".repeat(N / 5),
+    bracketsThenPwdsPwd: REWRITE_BRACKET_VALUES + "pwds_pwd=,".repeat(N / 10),
     // MF2：兼容数字一串一串的（每串都往后看一眼是不是紧跟字母数字）。
     compatDigitRuns: "x²mysql ₁₂ ".repeat(N / 11),
+    // 复核 c067e822 必修 2：每串兼容数字后面都紧跟字母，都要往回看前面是不是键名（最多 40 个字）。
+    compatDigitsAfterWords: "authentication_stringsx₁\u200b₂y ".repeat(N / 30),
   };
   const time = (input: string): number => {
     maskSecrets(input);
@@ -258,6 +271,31 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
       for (const fill of ["中", "1", "`", "“", "\\\n", "')", "A_", "\u200b", "│"]) {
         expect(time(head + fill.repeat(N / fill.length)), `${head} + ${JSON.stringify(fill)}`).toBeLessThan(LIMIT_MS);
       }
+    }
+  });
+
+  it("scans the whole text for KEY candidates once per call, whatever the rules rewrite (moveStarts never gives up)", () => {
+    // 计时拦不住每条 KEY 规则都整篇重扫（复核 c067e822 变异 E8：本地 30ms 上下，CI 才过 50ms），这里数整篇扫描的次数：
+    // keyStarts 每扫一次，KEY_AT（gi，源码以键名的先行断言开头）都从 lastIndex 0 开始 exec 一次。
+    // 手动换 exec 只数次数（spyOn 会把每次调用的参数都存下来）；输入用 2KB 的，次数和长度无关。
+    const exec = RegExp.prototype.exec;
+    let scans = 0;
+    RegExp.prototype.exec = function (this: RegExp, str: string) {
+      if (this.lastIndex === 0 && this.flags === "gi" && this.source.startsWith("(?=(?:password|passwd|")) scans++;
+      return exec.call(this, str);
+    };
+    try {
+      for (const head of ["", REWRITE_EACH_KEY_RULE, REWRITE_BRACKET_VALUES, "mysql -pAbc token=Hunter2xyz -pDef\n", "mysql -p[Rabc TOKEN=[Rx -p[Rd\n"]) {
+        for (const fill of ["pwds_1", "tokens_1", "PWDS_", "pwds_pwd=,", "tokens_tokens_=,", "密码是，", "password=[Rx ", "token: |\n  [Rv\n"]) {
+          for (const input of [head + fill.repeat(2000 / fill.length), zw(head + fill.repeat(2000 / fill.length))]) {
+            scans = 0;
+            maskSecrets(input);
+            expect(scans, JSON.stringify(input.slice(0, 60))).toBe(1);
+          }
+        }
+      }
+    } finally {
+      RegExp.prototype.exec = exec;
     }
   });
 

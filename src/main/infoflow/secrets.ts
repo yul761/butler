@@ -785,6 +785,8 @@ const isIgnorableAstral = (cp: number): boolean => (cp >= 0x1bca0 && cp <= 0x1bc
  * 上下标数字要换：键名后面的编号（token₁=、password²=）换成 token1、password2 才认得出。但一串兼容数字后面紧跟字母、数字、_
  * （按换完以后算，去掉的不可见字跳过）时不换（20531347 复核 MF2）：「注¹mysql -pX」「x²ghp_…」「₂token is X」换成 1mysql、2ghp_
  * 就和后面的词粘在一起，\b 认不出词头，整条漏打；不换的话 ¹ 不是 \w，后面的词照常认得出。
+ * 例外是前面紧挨着键名（KEY_NAMES 可带 s 和编号，或者 ENV 式的 …_KEY、…_TOKEN）：token₁_prod=、PASSWORD²_DB=、password²abc= 照换，
+ * 换完才是键名加编号加后缀（c067e822 复核必修 2）。一串数字中间夹的零宽字符、软连字符不打断这一串（token₁、零宽空格、₂= 是 token12=）。
  * 带圈、带框的（U+2460–24FF、U+1F100–1F1FF）只换字母：① ⑴ ⒈ 🄁 → 1 会和后面的词粘在一起，\b 认不出词头
  * （「步骤：①mysql -pX」「①ghp_…」）。换成几个字或符号的（™ → TM、℡ → TEL、ﬁ → fi、℃ → °C）也不动（「配置™Bearer …」）；
  * 键名里本来就没有连字。模块加载时按块算一遍（约一千五百个字）。
@@ -848,6 +850,64 @@ function compatDigitWidth(s: string, i: number): number {
   const cp = codePointAt(s, i);
   return cp >= 0 && isCompatAstral(cp) && isDigit(astralTo(cp)) ? 2 : 0;
 }
+/** s[j] 是会被去掉的不可见字（零宽字符、软连字符、BMP 以外的可忽略字）：返回它占几个 UTF-16 单元，不是返回 0。 */
+function droppedWidth(s: string, j: number): number {
+  const kind = KIND[s.charCodeAt(j)];
+  if (kind === DROP) return 1;
+  if (kind !== HIGH) return 0;
+  const cp = codePointAt(s, j);
+  return cp >= 0 && isIgnorableAstral(cp) ? 2 : 0;
+}
+/** 从 i 起一串兼容数字（中间可以夹会被去掉的字）到哪里为止（最后一个数字后面）；i 上不是兼容数字就是 i。 */
+function compatDigitsEnd(s: string, i: number): number {
+  let end = i;
+  for (let j = i; ; ) {
+    const w = compatDigitWidth(s, j);
+    if (w > 0) {
+      j += w;
+      end = j;
+      continue;
+    }
+    const d = end > i ? droppedWidth(s, j) : 0;
+    if (d === 0) return end;
+    j += d;
+  }
+}
+/** 一个字换完以后是什么（不换的原样，去掉的是 ""）；只给 keyBefore 往回看用。 */
+function mappedChar(c: number, cp: number): string {
+  if (cp >= 0x10000) return isIgnorableAstral(cp) ? "" : isCompatAstral(cp) ? (astralTo(cp) ?? String.fromCodePoint(cp)) : String.fromCodePoint(cp);
+  const kind = c < 0xad ? KEEP : KIND[c];
+  if (kind === SHIFT) return String.fromCharCode(c - 0xfee0);
+  if (kind === DROP) return "";
+  if (kind === TO) return BMP_TO.get(c) ?? "";
+  return String.fromCharCode(c);
+}
+/** 键名（可带 s 和编号）、ENV 式的键（大写，区分大小写）结尾。 */
+const KEY_END = new RegExp(String.raw`(?:${KEY_NAMES})s?(?:[_-]?\d+)?$`, "i");
+const ENV_END = /[A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|AUTH|DSN)S?(?:_?\d+)?$/;
+/** 往回最多看几个字（换完以后）：最长的键名 authentication_string 加 s 和编号，ENV 式的键看末尾这一段就够。 */
+const KEY_LOOKBACK = 40;
+/** s 里 i 前面的字换完以后是不是以键名结尾（往回看 KEY_LOOKBACK 个字，不拼整段前文：那样每次都要把前面整个拼平）。 */
+function keyBefore(s: string, i: number): boolean {
+  const parts: string[] = [];
+  let n = 0;
+  for (let k = i - 1; k >= 0 && n < KEY_LOOKBACK; k--) {
+    const c = s.charCodeAt(k);
+    let cp = c;
+    if (c >= 0xdc00 && c <= 0xdfff && k > 0) {
+      const h = s.charCodeAt(k - 1);
+      if (h >= 0xd800 && h <= 0xdbff) {
+        cp = (h - 0xd800) * 0x400 + (c - 0xdc00) + 0x10000;
+        k--;
+      }
+    }
+    const t = mappedChar(c, cp);
+    parts.push(t);
+    n += t.length;
+  }
+  const tail = parts.reverse().join("");
+  return KEY_END.test(tail) || ENV_END.test(tail);
+}
 /** 从 j 起、跳过会被去掉的字以后，下一个字换完以后是不是字母、数字或 _。 */
 function nextIsWord(s: string, j: number): boolean {
   while (j < s.length) {
@@ -883,25 +943,25 @@ function nextIsWord(s: string, j: number): boolean {
 function normalize(s: string): string {
   let out = "";
   let last = 0;
-  // 已经看过的一串兼容数字到这里为止，可以换（后面不紧跟字母数字）。
-  let digitsOk = 0;
+  // 已经看过的一串兼容数字到 digitsEnd 为止；digitsMap：这一串换不换（后面不紧跟字母数字，或者前面是键名）。
+  let digitsEnd = 0;
+  let digitsMap = true;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     // 要换的字都在 U+00AD 以后：ASCII 和常见的拉丁字母直接跳过。
     if (c < 0xad) continue;
     const kind = KIND[c];
     if (kind === KEEP) continue;
-    if (i >= digitsOk && (kind === TO || kind === HIGH)) {
-      let j = i;
-      for (let w = compatDigitWidth(s, j); w > 0; w = compatDigitWidth(s, j)) j += w;
-      if (j > i) {
-        if (nextIsWord(s, j)) {
-          // 这一串都不换，跳到它后面。
-          i = j - 1;
-          continue;
+    if (kind === TO || kind === HIGH) {
+      if (i >= digitsEnd) {
+        const end = compatDigitsEnd(s, i);
+        if (end > i) {
+          digitsEnd = end;
+          digitsMap = !nextIsWord(s, end) || keyBefore(s, i);
         }
-        digitsOk = j;
       }
+      // 这一串里的数字不换（夹在中间的不可见字照常去掉；BMP 以外的数字只跳过前半，后半在 KIND 里是 KEEP）。
+      if (i < digitsEnd && !digitsMap && compatDigitWidth(s, i) > 0) continue;
     }
     let to: string;
     let width = 1;
@@ -961,9 +1021,11 @@ const isBreak = (c: number): boolean => c === 0x5b || c === 0x5d;
  * 那一段 [a, b)（去掉和原文相同的头尾）沾边：
  * - 从 b 往后起跑的，往后看到的字和原来一样：原来是候选的还是（挪个位置），原来不是的还不是；
  * - 从 a 前面起跑、又碰到 [a, b) 的，那一段要同时含 out[a-1] 和 out[a]（纯删除时是接缝两边的字）。这两个字有一个是 [ 或 ]
- *   就不可能（替换进去的是占位符，头一个字就是 [；原文本来就以 [ 开头的，a 往后挪一位，out[a-1] 是 [）；
+ *   就不可能。裁头碰到替换文本里的 [ 就停，所以替换进去的是占位符时 out[a] 就是它的 [（原文的值也以 [R 开头时同样停在 [ 上，
+ *   不会裁进占位符里面）；
  * - 起点落在 [a, b) 里的，逐个位置用 KEY_AT 试一遍（这段通常就是一个占位符，加起来不超过替换进去的字数）。
- * 多出来的旧起点留着没关系（KEY 规则在那里试不出来）。两头都不是 [ ] 的说不清，返回 null，调用方整篇重扫。
+ * 多出来的旧起点留着没关系（KEY 规则在那里试不出来）。两头都不是 [ ] 的说不清，返回 null，调用方整篇重扫：只是防御，
+ * 每处替换都换进一个占位符，碰不到（secrets.timing.test.ts 数着整篇扫描的次数守着）。
  */
 function moveStarts(s: string, out: string, starts: readonly number[], edits: readonly Edit[]): number[] | null {
   const res: number[] = [];
@@ -973,7 +1035,8 @@ function moveStarts(s: string, out: string, starts: readonly number[], edits: re
   for (const e of edits) {
     const max = Math.min(e.len, e.to.length);
     let head = 0;
-    while (head < max && s.charCodeAt(e.at + head) === e.to.charCodeAt(head)) head++;
+    // 碰到替换文本里的 [ 就停：值本来以 [R 开头（password=[Rabc）时，不能把头裁进占位符里面（c067e822 复核必修 1）。
+    while (head < max && e.to.charCodeAt(head) !== 0x5b && s.charCodeAt(e.at + head) === e.to.charCodeAt(head)) head++;
     let tail = 0;
     while (tail < max - head && s.charCodeAt(e.at + e.len - 1 - tail) === e.to.charCodeAt(e.to.length - 1 - tail)) tail++;
     const oldA = e.at + head;

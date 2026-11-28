@@ -1254,3 +1254,77 @@ describe("review of f780e9ef (secrets)", () => {
     );
   });
 });
+
+describe("review of c067e822 (secrets)", () => {
+  const M = SECRET_MASK;
+
+  it("must-fix 2: a key name, then compat digits, then a suffix is still a key (the digits map after a key name)", () => {
+    expect(maskSecrets("token₁_prod=Hunter2xyz")).toBe(`token1_prod=${M}`);
+    expect(maskSecrets("PASSWORD²_DB=Hunter2xyz")).toBe(`PASSWORD2_DB=${M}`);
+    expect(maskSecrets("api_key²_live=Hunter2xyz")).toBe(`api_key2_live=${M}`);
+    expect(maskSecrets("password²abc=Hunter2xyz")).toBe(`password2abc=${M}`);
+    expect(maskSecrets("token₁s=Hunter2xyz")).toBe(`token1s=${M}`);
+    expect(maskSecrets("token₁2=Hunter2xyz")).toBe(`token12=${M}`);
+    expect(maskSecrets("token₁ᵃ=Hunter2xyz")).toBe(`token1a=${M}`);
+    expect(maskSecrets("𝐭𝐨𝐤𝐞𝐧𝟏𝐱=Hunter2xyz")).toBe(`token1x=${M}`);
+    expect(maskSecrets("𝐭𝐨𝐤𝐞𝐧𝟏_𝐩𝐫𝐨𝐝=Hunter2xyz")).toBe(`token1_prod=${M}`);
+    // 键名带编号以后再跟兼容数字；复数的键名。
+    expect(maskSecrets("token_1²_prod=Hunter2xyz")).toBe(`token_12_prod=${M}`);
+    expect(maskSecrets("tokens₁_prod=Hunter2xyz")).toBe(`tokens1_prod=${M}`);
+    // 往回看的键名按换完以后算：全角的、中间夹零宽字符的。
+    expect(maskSecrets("ｔｏｋｅｎ₁_prod=Hunter2xyz")).toBe(`token1_prod=${M}`);
+    expect(maskSecrets("tok\u200ben₁_prod=Hunter2xyz")).toBe(`token1_prod=${M}`);
+  });
+
+  it("must-fix 2: an ENV-style key (…_SECRET, …_TOKEN, …_KEY), then compat digits, then a suffix", () => {
+    expect(maskSecrets("MY_SECRET²_X=Hunter2xyz")).toBe(`MY_SECRET2_X=${M}`);
+    expect(maskSecrets("GITHUB_TOKEN₁_CI=Hunter2xyz")).toBe(`GITHUB_TOKEN1_CI=${M}`);
+    expect(maskSecrets("STRIPE_KEY²_LIVE=Hunter2xyz")).toBe(`STRIPE_KEY2_LIVE=${M}`);
+    // ENV 式只认大写：小写的 primary_key 不在键名里，数字不换，后面的 ghp_ 照常认得出。
+    expect(maskSecrets("primary_key²ghp_abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`primary_key²${M}`);
+  });
+
+  it("must-fix 2: zero-width characters and soft hyphens inside a run of compat digits do not split it", () => {
+    expect(maskSecrets("token₁\u200b₂=Hunter2xyz")).toBe(`token12=${M}`);
+    expect(maskSecrets("password²\u200b³: Hunter2xyz")).toBe(`password23: ${M}`);
+    expect(maskSecrets("𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝𝟏\u200b𝟐=Hunter2xyz")).toBe(`password12=${M}`);
+    expect(maskSecrets("token₁\u00ad₂=Hunter2xyz")).toBe(`token12=${M}`);
+    expect(maskSecrets("token₁\u{E0001}₂=Hunter2xyz")).toBe(`token12=${M}`);
+    // 一整串（不是只到零宽字符为止）后面不紧跟字母数字，就整串都换：ghp_ 后面接着的 12 还是这个令牌的一部分。
+    expect(maskSecrets("ghp_abcdefghijklmnopqrstuvwxyz0123456789₁\u200b₂ ok")).toBe(`${M} ok`);
+    expect(maskSecrets("ghp_abcdefghijklmnopqrstuvwxyz0123456789₁\u{E0001}₂ ok")).toBe(`${M} ok`);
+    // 不是键名的前面：整串都不换，夹在中间的不可见字照常去掉。
+    expect(maskSecrets("x₁\u200b₂ghp_abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`x₁₂${M}`);
+  });
+
+  it("must-fix 2: digits glued to a word after something that is not a key name still stay as they are", () => {
+    expect(maskSecrets("x²ghp_abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`x²${M}`);
+    expect(maskSecrets("注¹mysql -pHunter2xyz")).toBe(`注¹mysql -p${M}`);
+    // 键名只是前文的一部分时（monkey 里的 key 不在键名里；passwordless 后面不是键名结尾）也不换。
+    expect(maskSecrets("passwordless²ghp_abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`passwordless²${M}`);
+  });
+
+  it("suggestion 2: what follows the digits is judged after mapping, skipping ignorable astral characters (N3, N5, N6, N7)", () => {
+    // N3：全角的字母。
+    expect(maskSecrets("x²ｇｈｐ_abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`x²${M}`);
+    expect(maskSecrets("注¹ｍｙｓｑｌ -pHunter2xyz")).toBe(`注¹mysql -p${M}`);
+    // N5：后面紧跟的是 _。
+    expect(maskSecrets("x²_token is Hunter2xyz")).toBe(`x²_token is ${M}`);
+    // N6：带圈字母换成字母，也算紧跟字母。
+    expect(maskSecrets("注¹ⓜysql -pHunter2xyz")).toBe(`注¹mysql -p${M}`);
+    // N7：中间隔一个 BMP 以外的可忽略字（U+E0001）。
+    expect(maskSecrets("注¹\u{E0001}mysql -pHunter2xyz")).toBe(`注¹mysql -p${M}`);
+    expect(maskSecrets("x²\u{E0001}ghp_abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`x²${M}`);
+  });
+
+  it("suggestion 1 (E9): an upper-case key between two masks of one command is masked (the rescan ignores case)", () => {
+    expect(maskSecrets("mysql -pAbc TOKEN=Hunter2xyz -pDef")).toBe(`mysql -p${M} TOKEN=${M} -p${M}`);
+    expect(maskSecrets("mysql -pAbc Password=Hunter2xyz -pDef")).toBe(`mysql -p${M} Password=${M} -p${M}`);
+  });
+
+  it("must-fix 1: values starting with [R, before and after other keys, give the same result as running each rule on its own", () => {
+    expect(maskSecrets("password=[Rabc123 token=Hunter2xyz")).toBe(`password=${M} token=${M}`);
+    expect(maskSecrets("mysql -p[Rxyz ok token=Hunter2xyz -p[Rq")).toBe(`mysql -p${M} ok token=${M} -p${M}`);
+    expect(maskSecrets('password: "[Rxx" pwd=Hunter2xyz')).toBe(`password: "${M}" pwd=${M}`);
+  });
+});

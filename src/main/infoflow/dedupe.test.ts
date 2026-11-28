@@ -502,3 +502,58 @@ describe("review of f780e9ef (dedupe)", () => {
     expect(polarityClash("turn off x and turn on y", "turn off x and turn on y, turn on z")).toBe(false);
   });
 });
+
+describe("review of c067e822 (dedupe)", () => {
+  // 必修 3：同一类改主意，换个分隔符（顿号、没有标点、分号）写。
+  const pairs: [string, string][] = [
+    ["测试环境关闭缓存、生产环境开启缓存", "生产环境关闭缓存、测试环境开启缓存、日志开启"],
+    ["测试环境 cache off 生产环境 cache on", "生产环境 cache off，测试环境 cache on，日志 on"],
+    ["测试环境 cache off；生产环境 cache on", "生产环境 cache off 测试环境 cache on 日志 on"],
+  ];
+  it.each(pairs)("%s / %s are not duplicates, either way round", (a, b) => {
+    expect(polarityClash(a, b)).toBe(true);
+    expect(polarityClash(b, a)).toBe(true);
+    expect(findDuplicate(b, [a])).toBeNull();
+    expect(findDuplicate(a, [b])).toBeNull();
+  });
+
+  it("the same facts written with other separators are still duplicates (no clash)", () => {
+    expect(polarityClash("测试环境 cache off 生产环境 cache on", "测试环境 cache off，生产环境 cache on")).toBe(false);
+    expect(polarityClash("测试环境关闭缓存、生产环境开启缓存", "测试环境关闭缓存，生产环境开启缓存")).toBe(false);
+    expect(findDuplicate("测试环境 cache off；生产环境 cache on", ["测试环境 cache off 生产环境 cache on"])).toBe("测试环境 cache off 生产环境 cache on");
+  });
+
+  it("both halves in one clause (suggestion 5, D2): split at the antonyms, either word order", () => {
+    // 「关闭 X」的语序：反义词在前，对象是它后面那一段。
+    expect(polarityClash("关闭测试环境缓存 开启生产环境缓存", "关闭生产环境缓存，开启测试环境缓存")).toBe(true);
+    // 两头都不是反义词的分句两种语序都生成；同一句里说不清的对象不比。
+    expect(polarityClash("turn off x and turn on y", "turn on x and turn off y")).toBe(true);
+    expect(polarityClash("turn off x and turn on y", "turn off x and turn on y, turn on z")).toBe(false);
+    expect(polarityClash("turn off x and turn on y", "turn off x, turn on y")).toBe(false);
+  });
+
+  it("a clause ending with an antonym reads 「X 关闭」: each object is the piece before its antonym, from the previous one", () => {
+    // 只有生产环境从 on 改成了 off（次数、先后都对不上号，只能按分句看出来）。
+    const a = "测试环境 cache off 生产环境 cache on";
+    const b = "测试环境 cache off，生产环境 cache off，日志 on";
+    expect(polarityClash(a, b)).toBe(true);
+    expect(polarityClash(b, a)).toBe(true);
+  });
+
+  it("a clause starting with an antonym reads 「关闭 X」: each object is the piece after its antonym, up to the next one", () => {
+    // 只有测试环境从关闭改成了开启。
+    const a = "关闭测试环境缓存 开启生产环境缓存";
+    const b = "关闭日志，开启测试环境缓存，开启生产环境缓存";
+    expect(polarityClash(a, b)).toBe(true);
+    expect(polarityClash(b, a)).toBe(true);
+  });
+
+  it("an object that one sentence gives both halves (read both ways) is not compared, either way round", () => {
+    // 「请关闭测试环境缓存开启生产环境缓存吧」头尾都不是反义词，两种语序都读：「测试环境缓存」既是关闭后面那段、也是开启前面那段，
+    // 说不清，不拿来比；另一句说的是同一件事，不能因为后写进去的那一头（开启）判成改主意。
+    const a = "请关闭测试环境缓存开启生产环境缓存吧";
+    const b = "关闭测试环境缓存，开启生产环境缓存";
+    expect(polarityClash(a, b)).toBe(false);
+    expect(polarityClash(b, a)).toBe(false);
+  });
+});

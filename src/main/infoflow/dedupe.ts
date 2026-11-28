@@ -255,32 +255,80 @@ function swapped(a: readonly string[], b: readonly string[]): boolean {
   return sa.every((w, i) => w === sb[i]);
 }
 
-/** 分句：逗号、分号、句号、问号叹号、换行隔开的（顿号不切：「A、B 开启」是一个分句）。 */
-const CLAUSE = /[，,;；。！？!?\n]+/;
+/** 分句：逗号、顿号、分号、句号、问号叹号、换行隔开的（c067e822 复核必修 3：「测试环境关闭缓存、生产环境开启缓存」要切开）。 */
+const CLAUSE = /[，,、;；。！？!?\n]+/;
+/** 一个分句按一对反义词切开以后：一段段的字，和反义词所在的位置（0 / 1：是这一对的哪一头）。 */
+type Piece = string | 0 | 1;
+
+/** 中文的反义词在词（汉字串、拉丁词）里面找：「测试环境关闭缓存」切成「测试环境」、关闭、「缓存」。 */
+function zhPieces(words: readonly string[], x: string, y: string): Piece[] {
+  const out: Piece[] = [];
+  for (const w of words) {
+    let i = 0;
+    for (;;) {
+      const px = w.indexOf(x, i);
+      const py = w.indexOf(y, i);
+      const p = px < 0 ? py : py < 0 ? px : Math.min(px, py);
+      if (p < 0) break;
+      const side = p === px ? 0 : 1;
+      if (p > i) out.push(w.slice(i, p));
+      out.push(side);
+      i = p + (side === 0 ? x : y).length;
+    }
+    if (i < w.length) out.push(w.slice(i));
+  }
+  return out;
+}
+
 /**
- * 每个分句里只出现一对反义词中一头的：对象（分句的词去掉这个反义词，按原来的顺序）配上是哪一头。
- * key 是「第几对|对象」，值是 0 / 1（哪一头）。分句里两头都有的不算（「turn off x and turn on y」说不清哪个对象配哪头）。
+ * 一个分句里每个对象配的是哪一头，交给 add（对象是这一段的字连起来，不带空格）。
+ * 只出现一头的（可以出现几次）：整个分句去掉反义词就是对象。两头都有的（「测试环境 cache off 生产环境 cache on」）按反义词的位置切：
+ * 以反义词结尾的分句是「X 关闭」的语序，对象是它前面那一段；以反义词开头的是「关闭 X」，对象是它后面那一段；两头都不是的两种都生成
+ * （同一个对象在一句里配了两头的，调用方当成说不清、不比）。
  */
-function clausePolarity(s: string): Map<string, 0 | 1> {
-  const out = new Map<string, 0 | 1>();
+function clauseObjects(pieces: readonly Piece[], add: (obj: string, side: 0 | 1) => void): void {
+  const at = pieces.flatMap((t, i) => (typeof t === "number" ? [i] : []));
+  if (at.length === 0) return;
+  const text = (from: number, to: number): string => pieces.slice(from, to).filter((t) => typeof t === "string").join("");
+  const first = pieces[at[0]] as 0 | 1;
+  if (at.every((i) => pieces[i] === first)) {
+    add(text(0, pieces.length), first);
+    return;
+  }
+  const startsWith = at[0] === 0;
+  const endsWith = at[at.length - 1] === pieces.length - 1;
+  at.forEach((p, k) => {
+    const side = pieces[p] as 0 | 1;
+    if (endsWith || !startsWith) add(text(k === 0 ? 0 : at[k - 1] + 1, p), side);
+    if (startsWith || !endsWith) add(text(p + 1, k + 1 < at.length ? at[k + 1] : pieces.length), side);
+  });
+}
+
+/** 说不清的对象：同一句里配了两头。 */
+const BOTH = 2;
+
+/**
+ * 每个分句里的对象配上是一对反义词的哪一头（见 clauseObjects）。key 是「第几对|对象」，值是 0 / 1，同一句里两头都配过的是 BOTH。
+ */
+function clausePolarity(s: string): Map<string, 0 | 1 | typeof BOTH> {
+  const out = new Map<string, 0 | 1 | typeof BOTH>();
+  const add = (key: string, side: 0 | 1): void => {
+    const was = out.get(key);
+    out.set(key, was === undefined || was === side ? side : BOTH);
+  };
   for (const clause of plain(s).split(CLAUSE)) {
     const words = clause.match(/[a-z0-9]+|\p{Script=Han}+/gu) ?? [];
     ZH_ANTONYMS.forEach(([x, y], k) => {
-      const hasX = words.some((w) => w.includes(x));
-      const hasY = words.some((w) => w.includes(y));
-      if (hasX === hasY) return;
-      const side = hasX ? x : y;
-      const obj = words.map((w) => w.split(side).join("")).filter((w) => w !== "").join(" ");
-      if (obj !== "") out.set(`z${k}|${obj}`, hasX ? 0 : 1);
+      clauseObjects(zhPieces(words, x, y), (obj, side) => {
+        if (obj !== "") add(`z${k}|${obj}`, side);
+      });
     });
     const stems = words.map((w) => (/^[a-z0-9]+$/.test(w) ? stem(w) : w));
     EN_ANTONYMS.forEach(([x, y], k) => {
-      const hasX = stems.includes(x);
-      const hasY = stems.includes(y);
-      if (hasX === hasY) return;
-      const side = hasX ? x : y;
-      const obj = words.filter((_, i) => stems[i] !== side).join(" ");
-      if (obj !== "") out.set(`e${k}|${obj}`, hasX ? 0 : 1);
+      const pieces = words.map((w, i): Piece => (stems[i] === x ? 0 : stems[i] === y ? 1 : w));
+      clauseObjects(pieces, (obj, side) => {
+        if (obj !== "") add(`e${k}|${obj}`, side);
+      });
     });
   }
   return out;
@@ -296,7 +344,7 @@ function clausesClash(a: string, b: string): boolean {
   if (pa.size === 0) return false;
   for (const [key, side] of clausePolarity(b)) {
     const other = pa.get(key);
-    if (other !== undefined && other !== side) return true;
+    if (side !== BOTH && other !== undefined && other !== BOTH && other !== side) return true;
   }
   return false;
 }
