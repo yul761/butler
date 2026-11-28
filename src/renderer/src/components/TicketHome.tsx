@@ -1,5 +1,6 @@
 // ticket 页的「概况」页签（UI 重做第 3 层，spec §5.3）：一句状态、主按钮、agent 最后说的那句话、「状态」（最新一份 handoff，BTL-244）、一小块基本信息。
 // TicketHome 只吃数据；TicketHomeTab 是取数薄壳。
+import { TicketWorkflow } from "./WorkflowParts";
 import { useState, type ReactNode } from "react";
 import type { PrStagesTicket } from "../../../shared/pr-stages";
 import type { TicketGlance } from "../../../shared/ticket-glance";
@@ -220,6 +221,7 @@ export function TicketHomeTab({ ticket, onGoTab, onFix, answered, onAnswered, bu
   return (
     <>
     {addingRepo && <RepoDialog ticketKey={key} hasSessions={false} onClose={() => setAddingRepo(false)} />}
+    <TicketWorkflow ticketKey={key} />
     <TicketHome
       ticket={ticket} row={row} glance={glance} stages={stages} canFix={canFix} notice={notice} answered={answered} busy={busy} onGoTab={onGoTab}
       onStartSession={onStartSession} onAddRepo={() => setAddingRepo(true)}

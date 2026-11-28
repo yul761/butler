@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ScopeTurnRow, Turn, TurnBoard, TurnItem } from "../../shared/turn";
+import type { NowNotice } from "../../shared/types";
 import { STRINGS } from "./strings";
 import {
   firstRunProps,
   homeOpenedSignal,
   ticketNowText,
-  HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, prUrl,
+  HOME_CARD_CAP, YOU_KIND_ORDER, barSegments, capCards, cardActions, cardKey, homeLede, homeTitle, isNoWork, locationOf, lookTarget, noticeKey, prUrl,
   runningRows, scopeLine, scopeRoute, scopeWho, ticketItem, turnTone, visibleScopes, youCards, type NameCtx,
 } from "./home-view";
 import { formatDuration } from "./components/TicketActivity";
@@ -336,5 +337,23 @@ describe("firstRunProps (home with no work at all)", () => {
     expect(d.onGo).not.toHaveBeenCalled();
     p.onOpenSettings();
     expect(d.onGo).toHaveBeenCalledWith({ page: "settings", section: "features" });
+  });
+});
+
+describe("noticeKey (BTL-269 behalf answers, BTL-272 info flow)", () => {
+  it("tells apart two behalf answers and two info flow notices of each kind", () => {
+    const target = { page: "ticket", key: "BTL-1", sessionId: null } as const;
+    const behalf = (askId: number): NowNotice => ({ kind: "behalf_answered", askId, question: "q", answer: "a", by: "epic 总控", at: 1, target, title: null });
+    expect(noticeKey(behalf(1))).toBe("behalf_answered:1");
+    expect(noticeKey(behalf(1))).not.toBe(noticeKey(behalf(2)));
+    const leftovers = { prErrors: [], sessionErrors: [] };
+    const flows = (actionId: number): NowNotice[] => [
+      { kind: "flow_proposal", actionId, label: "l", source: "s", text: "t", at: 1 },
+      { kind: "flow_synced", actionId, label: "l", source: "s", at: 1 },
+      { kind: "flow_partial", actionId, label: "l", source: "s", leftovers, at: 1 },
+    ];
+    const keys = [...flows(1), ...flows(2)].map(noticeKey);
+    expect(new Set(keys).size).toBe(6);
+    expect(keys).toContain("flow_partial:2");
   });
 });

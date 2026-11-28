@@ -68,3 +68,25 @@ describe("index.ts mailbox and patrol wiring (BTL-279 fourth review)", () => {
     expect(indexSource.match(/startupErrorText\(/g)).toHaveLength(1);
   });
 });
+
+describe("index.ts mail-wakes-a-session wiring (BTL-272 rebase review suggestion 1)", () => {
+  it("the background restore asks wake.ts's hasSessionMail with the queued messages and the head mapping", () => {
+    expect(indexSource).toContain('import { hasSessionMail as sessionMailWakes, headsWithWakingMail } from "./mailbox/wake";');
+    expect(indexSource).toContain("  const headOf = (id: string): string => sessions.head(id)?.id ?? id;\n");
+    expect(indexSource).toContain("  const hasSessionMail = (headId: string): boolean => sessionMailWakes(messagesRepo.queued(), headOf, headId);\n");
+    expect(indexSource).toMatch(/resumer && hasSessionMail\(id\)\) void resumer\.request\(id, "mail"\)/);
+  });
+
+  it("the restart order puts first the heads from wake.ts's headsWithWakingMail", () => {
+    const restart = block('if (settings.get("autoResumeAfterRestart") === "1"', "\n  }\n");
+    expect(restart).toContain("const mail = headsWithWakingMail(messagesRepo.queued(), (id) => sessions.head(id)?.id ?? id);");
+    expect(restart).toContain("restartOrder(heads, (id) => mail.has(id),");
+  });
+
+  it("index.ts makes no wake decision of its own from a message's kind", () => {
+    expect(indexSource).not.toMatch(/wakesTarget/);
+    // 引号、等号、空格怎么写都算（复核 c067e822 建议 4：只认 m.kind !== "convention" 的话，换成单引号就绕过了）。
+    expect(indexSource).not.toMatch(/kind\s*[!=]==?\s*["'`]convention["'`]/);
+    expect(indexSource).not.toMatch(/["'`]convention["'`]\s*[!=]==?\s*\w*\.?kind/);
+  });
+});

@@ -9,8 +9,10 @@ import { S } from "../strings";
 import { conversationSessions, defaultConvRoot } from "../ticket-view";
 import { ControlConversation } from "./ControlConversation";
 import { Messages } from "./MessageList";
+import { InfoFlowPanel } from "./InfoFlow";
 import { FeatureSummaryTab, type SummaryRunMessage } from "./FeatureSummaryTab";
 import { EpicLevel } from "./EpicLevel";
+import { FeatureWorkflow } from "./WorkflowParts";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";
 import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
@@ -105,6 +107,7 @@ export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSessi
       </WorkspaceHeader>
       {/* 页面的错误（改名、归档、打开 session）放在页签外面：停在哪个页签都看得到。 */}
       {error && <p className="error">{error}</p>}
+      <FeatureWorkflow featureId={feature.id} />
 
       <PageTabs
         page={`feature:${feature.id}`}
@@ -177,6 +180,8 @@ export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSessi
             label: <>{S.lay.tabSummary}{blockers > 0 && <span className="blocker">{S.featureBlockedCount(blockers)}</span>}</>,
             content: <FeatureSummaryTab feature={feature} onOpenTicket={onOpenTicket} onRun={runSummary} />,
           },
+          // 信息流转（BTL-272）：这个 epic 的对话里抽出来的要点、发给了谁、同步了什么。
+          { id: "infoflow", label: S.infoflow.tab, content: <InfoFlowPanel scope={{ featureId: feature.id }} /> },
         ]}
       />
       {newTicket && (

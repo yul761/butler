@@ -26,7 +26,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
+import { buildNotices, ciNotices, collectNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
 import { readBgSettings } from "./background/bg-settings";
@@ -94,6 +94,7 @@ import { SessionMessagesRepo, type SessionMessage } from "./db/session-messages-
 import { Mailbox, MAILBOX_BODY_LIMIT, type AwaitingUser } from "./mailbox/mailbox";
 import { broadcastConvention } from "./mailbox/broadcast";
 import { sessionName } from "./mailbox/names";
+import { hasSessionMail as sessionMailWakes, headsWithWakingMail } from "./mailbox/wake";
 import { ExternalAuditRepo } from "./db/external-audit-repo";
 import { ExternalActions } from "./external/actions";
 import { buildProgress } from "./progress/progress-view";
@@ -177,6 +178,10 @@ import { writeRefreshTail } from "./sessions/refresh-tail";
 import { ConvRepo } from "./db/conv-repo";
 import { ConvIngester } from "./conversation/conv-ingester";
 import { judgeConvQa } from "./conversation/conv-qa";
+import { InfoflowRepo } from "./db/infoflow-repo";
+import { extractTurn } from "./infoflow/extract";
+import { InfoflowService } from "./infoflow/infoflow-service";
+import { infoflowLookups, infoflowTicketActions } from "./infoflow/wiring";
 import { ConversationStore, RECENT_QA_CHARS, withRecentQa } from "./conversation/conversation-store";
 import { ForkDiscussionsRepo } from "./db/fork-discussions-repo";
 import { DevSender } from "./fork/dev-send";
@@ -209,7 +214,7 @@ import { ReviewRequestsRepo } from "./db/review-requests-repo";
 import { REVIEW_AWAY_IDLE_SECONDS, ReviewRequestPoller, bindFocusCatchUp } from "./prwatch/review-requests";
 import {
   baselinesConfig, checksConfig, configBackupIntervalDays, configBackupKeep, configExportReminderDays, hibernateEndWatchersOn, hibernateMinutes, hibernateOn, idleCloseMinutes, sharedMcpOn, auditRetentionDays, memoryOn,
-  memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
+  flowDailyAsks, memoryPressureFreePercent, memoryPressureOn, refreshThreshold, scheduleConfig, sessionAdmission, SettingError, trackerTools,
 } from "./settings/settings-values";
 import { evidenceGuideLines, type GuideRepo } from "./prereview/guide-lines";
 import { PreReviewService } from "./prereview/service";
@@ -269,7 +274,7 @@ import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
 import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
-import { StackService, type OwnedBranch } from "./stacks/stack-service";
+import { StackService, stackMailRepoIdOf, stackMailRef, stackTicketLive, type OwnedBranch, type StackMailTo } from "./stacks/stack-service";
 import { StackControl } from "./control/stack-control";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
@@ -283,7 +288,7 @@ import { CiTriageRepo } from "./db/ci-triage-repo";
 import { CommentItemsRepo } from "./db/comment-items-repo";
 import { commentOnPr, replyToReviewComment, rerunFailed, resolveReviewThread, reviewThreads, runInfo } from "./tickets/gh-loop";
 import type { CiItem } from "./prwatch/ci-delivery";
-import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prHead, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, prBatch, reviewAuthors, reviewComments, issueEvents, searchMergedPrs } from "./tickets/gh";
+import { applyGhResolution, branchRuns, ghAuthState, createPr, ghAvailable, probeGh, compareFiles, editPrBody, failedLog, failedLogDetail, mergedPrs, prBody, REVIEW_SEARCH_TIMEOUT_MS, reviewRequestedPrs, prFileNames, prHead, prInfo, prLessonDataDetail, prsForBranch, prRead, prStatus, repoCurrentSlug, prBatch, reviewAuthors, reviewComments, issueEvents, searchMergedPrs, runGhDetail } from "./tickets/gh";
 import { RepoRenamesRepo } from "./db/repo-renames-repo";
 import { RENAME_RETRY_MS, RepoRenames } from "./tickets/repo-renames";
 import { LessonsRepo } from "./db/lessons-repo";
@@ -335,6 +340,12 @@ import { RoutingService } from "./routing/routing-service";
 import { SessionModelSwitcher } from "./routing/session-switch";
 import { routingSettings } from "./routing/routing-settings";
 import type { DiscoveryView, Tier } from "../shared/model-routing";
+import { WorkflowRepo } from "./db/workflow-repo";
+import { requestBotReview, requestBotReviewGuarded, reviewCommentCount } from "./workflow/bot-review";
+import { loopWithWorkflow, preReviewWithWorkflow } from "./workflow/overrides";
+import { workflowControl } from "./workflow/workflow-control";
+import { workflowHandlers } from "./workflow/workflow-ipc";
+import { WorkflowService } from "./workflow/workflow-service";
 
 /** session 只是又有了输出时，最多隔这么久告诉界面一次（ticket 速览的上下文、最后一句）。 */
 const OUTPUT_NOTIFY_MS = 5000;
@@ -1191,7 +1202,17 @@ async function bootstrap(): Promise<void> {
   // 上次跑到一半退出的导出：建了的 worktree 和分支收回去。
   void checkExporter.recover().catch((e) => logger("check export: recovering interrupted exports failed", e));
   /** 预审（工作流 G）开着吗；给了 ticket 时它所在的 epic 自己选的档位优先（BTL-247）。 */
-  const preReviewActive = (ticketKey?: string | null): boolean => automation.preReview(ticketKey, settings.get("preReviewEnabled") === "1");
+  // 工作流程（BTL-273）在后面才建好：预审开关、评论闭环的策略在这之前就要定义，用到时才读它。
+  const workflowHooks: { service: WorkflowService | null } = { service: null };
+  /** 预审的结果这类不知道是哪个 ticket 的变化：隔 2 秒把有流程的 ticket 都过一遍（只读库）。 */
+  const workflowSweep = throttle(() => {
+    if (workflowHooks.service?.anyWorkflow()) void workflowHooks.service.evaluateAll();
+  }, 2000);
+  /** 这个 ticket 生效的流程；没有、读坏了都是 null（按原来的开关）。 */
+  const workflowOf = (ticketKey?: string | null) => workflowHooks.service?.workflowFor(ticketKey) ?? null;
+  /** 有流程时流程说了算（流程里有 pre_review 才跑）；没有时按 epic 的档位和设置。 */
+  const preReviewActive = (ticketKey?: string | null): boolean =>
+    preReviewWithWorkflow(workflowOf(ticketKey), automation.preReview(ticketKey, settings.get("preReviewEnabled") === "1"));
   /** 「完成前交证据」那一段的仓库：worktree 目录名和档案（导入的、没扫过的没有档案）。 */
   const guideRepos = (repoPaths: string[]): GuideRepo[] =>
     repoPaths.map((root) => {
@@ -1595,6 +1616,8 @@ async function bootstrap(): Promise<void> {
           ...(kind === "ticket" ? watcherGuideLines(currentLang(), repoPaths) : []),
           ...(kind === "ticket" && preReview ? evidenceGuideLines(currentLang(), guideRepos(repoPaths)) : []),
           ...interruptGuideLines(currentLang(), kind, { choiceRule: settings.get("interruptChoiceRule") === "1", selfServe: settings.get("interruptSelfServe") === "1" }),
+          // 工作流程（BTL-273）：这个 ticket 的步骤和现在走到哪一步。
+          ...(kind === "ticket" && ticketKey ? (workflowHooks.service?.guideLines(ticketKey) ?? []) : []),
         ],
         profile: kind === "ticket" ? sessionProfile(repoPaths, lessons.length > 0 || (plan?.rest.length ?? 0) > 0) : "",
       });
@@ -1612,6 +1635,8 @@ async function bootstrap(): Promise<void> {
       const h = sessions.head(termId);
       if (h?.userEndedAt != null) sessions.setUserEnded(h.id, null);
       resumer?.opened(termId);
+      // 工作流程（BTL-273）：之前没有 session 收提醒的，现在有了。
+      if (h?.ticketKey && workflowHooks.service?.anyWorkflow()) void workflowHooks.service.evaluate(h.ticketKey);
     },
     hidden: (id) => {
       hibernator?.forget(id);
@@ -2188,8 +2213,8 @@ async function bootstrap(): Promise<void> {
   /** 这条消息是收件人自己的总控发的（BTL-269 A：「需要你」时也送进去）。 */
   const mailboxFromController = (m: SessionMessage, headId: string): boolean => mailboxControls(m.fromSession, headId);
   /** 这个 head 有别的 session 发来、还排着的消息（约定广播不算）。 */
-  const hasSessionMail = (headId: string): boolean =>
-    messagesRepo.queued().some((m) => m.fromSession !== null && m.kind !== "convention" && (sessions.head(m.toSession)?.id ?? m.toSession) === headId);
+  const headOf = (id: string): string => sessions.head(id)?.id ?? id;
+  const hasSessionMail = (headId: string): boolean => sessionMailWakes(messagesRepo.queued(), headOf, headId);
   /** 全局总控在做巡检那一轮（BTL-279 复核建议 3）：这一轮 send_message 发的不把用户点 × 关掉的 epic 总控拉起来。 */
   const patrolTurns = new PatrolTurns(Date.now);
   const mailbox = new Mailbox({
@@ -2260,6 +2285,46 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   mailboxDiagnostics = () => mailbox.diagnostics();
+  // 信息流转（BTL-272）：每轮说完抽要点，写进最小一级记忆，发给该知道的 session，对话里说的状态变化同步进 Shipherd。
+  // 关 ticket 用 BTL-270 的 closeTicket（来源记 routing），重新打开用 reopenTicket；ticketClose 在后面定义，执行时才用到。
+  const flowLookups = infoflowLookups({
+    tickets, features, blocks, sessions,
+    live: (id) => pty.isOpen(id) || isHibernated(id),
+    closed: (t) => effectiveStatus(t) === "closed",
+  });
+  const infoflow = new InfoflowService({
+    repo: new InfoflowRepo(db),
+    conv: convRepo,
+    head: (id) => sessions.head(id),
+    enabled: () => settings.get("flowExtract") !== "0",
+    autoApply: () => settings.get("flowAutoApply") !== "0",
+    dailyAsks: () => flowDailyAsks(settings),
+    nameOf: mailboxName,
+    ...flowLookups,
+    extract: (ctx, turn, o) => extractTurn({ ...judgeDeps, timeoutMs: 90_000 }, ctx, turn, o),
+    cwdOf: (s) => (existsSync(s.cwd) ? s.cwd : paths.home),
+    paused: (id) => costBreaker?.sessionPaused(id) ?? false,
+    remember: (scope, text, findDup) => memory.rememberUnlessDup(scope, text, findDup),
+    forget: (scope, match) => memory.forgetText(scope, match),
+    // epic 不从来源带（null）：信箱按收件人算，发到别的 epic 的消息归在收件人那边。
+    send: (m) => mailbox.send({ kind: "fact", from: m.from, to: m.to, featureId: null, body: m.body, ref: m.ref, meta: m.meta }),
+    withdraw: (ref) => mailbox.withdraw(ref),
+    act: infoflowTicketActions({
+      tickets, blocks, notify,
+      closer: {
+        close: (key, reason, closePrs, prUrls) => ticketClose.close(key, { reason, source: "routing", closePrs, ...(prUrls && { prUrls }), endSessions: false }),
+        preview: async (key) => ticketClose.preview(key),
+        retry: (key, o) => ticketClose.retry(key, o),
+        reopen: async (key) => ticketClose.reopen(key, "routing"),
+      },
+    }),
+    strings: () => M().infoflow,
+    notify,
+    now: Date.now,
+    log: logger,
+    // 只给 e2e 用：不想等 20 秒的安静期、30 秒一遍。
+    settleMs: Number(process.env.SHIPHERD_FLOW_SETTLE_MS) || undefined,
+  });
   const inboxRepo = new InboxRepo(db);
   const inboxService: InboxService = new InboxService({
     repo: inboxRepo,
@@ -2534,7 +2599,7 @@ async function bootstrap(): Promise<void> {
   // 评论闭环和 CI 分类（工作流 I）：三层策略（契约 4.2），模型经路由（comment_classify / ci_classify），对外动作过 4.8 的开关。
   const loopPolicies = new LoopPolicies({ db, products: { productsOf: (slug) => lessonsRepo.productsOf(slug), product: (id) => lessonsRepo.product(id) }, now: Date.now });
   /** 仓库的三层策略；给了 ticket 且它所在 epic 自己选了自动化档位时，受管的键按那一档（BTL-247）。 */
-  const loopPolicyFor = (slug: string | null, ticketKey?: string | null) => automation.loop(loopPolicies.forSlug(slug), ticketKey);
+  const loopPolicyFor = (slug: string | null, ticketKey?: string | null) => loopWithWorkflow(workflowOf(ticketKey), automation.loop(loopPolicies.forSlug(slug), ticketKey));
   const ciTriageRepo = new CiTriageRepo(db);
   const commentItems = new CommentItemsRepo(db);
   const loopStats = new LoopStats({ comments: commentItems, triage: ciTriageRepo });
@@ -2622,8 +2687,8 @@ async function bootstrap(): Promise<void> {
       ticketKey: r.ticketKey, ticketRepoId: r.id, ticketTitle: tickets.get(r.ticketKey)?.title ?? null,
       worktree: r.workMode === "worktree" && r.worktreePath && r.worktreeRemovedAt === null && existsSync(r.worktreePath) ? r.worktreePath : null,
     });
-    // 只认没归档的 ticket；分支名被重复用过时取最新的那个
-    const live = (r: TicketRepo): boolean => { const t = tickets.get(r.ticketKey); return t !== null && t.archivedAt === null; };
+    // 只认没归档、没关掉的 ticket；分支名被重复用过时取最新的那个
+    const live = (r: TicketRepo): boolean => stackTicketLive(tickets.get(r.ticketKey));
     const direct = tickets.reposByBranch(branch).filter((r) => samePath(r.repoPath, repoPath) && live(r)).at(-1);
     if (direct) return own(direct);
     for (const o of branchOwners.byBranch(branch)) {
@@ -2632,21 +2697,26 @@ async function bootstrap(): Promise<void> {
     }
     return null;
   };
+  const stackMailRepoId = (to: StackMailTo): number | null => stackMailRepoIdOf(to, tickets.listRepos(to.ticketKey), samePath);
   const stackService = new StackService({
     repo: new StacksRepo(db, Date.now),
     policy: stackPolicy,
     // 自动化档位（BTL-247）：栈里各层 ticket 所在 epic 自己选的档位盖在三层策略上；「半自动」epic 的仓库也做栈检测。
     overlay: (base, keys) => automation.stack(base, keys),
     autoRebaseRepos: () => [
-      ...new Set(tickets.list().filter((t) => t.archivedAt === null && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
+      ...new Set(tickets.list().filter((t) => stackTicketLive(t) && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
     ],
     external: externalActions,
+    // 工作流程（BTL-273）：自动开栈底的 PR 不经过 hook，照样用 hook 的判断（工作流程服务在下面才建好）。
+    workflowGate: async (i) => workflowHooks.service?.prOpenMode(i) ?? { mode: "open" },
     workRoot: join(paths.home, "stack-work"),
     execPath: process.execPath,
     now: Date.now,
     log: logger,
     owned: stackOwned,
-    slugOf: async (path) => repoIdentity.slugOf(path),
+    slugOf: (path) => repoIdentity.slugOfAsync(path),
+    // fork 工作流：层的 PR 开在 upstream 上（BTL-278）；异步、有缓存，不每轮同步起 git
+    remoteSlugs: (path) => repoIdentity.remoteSlugsOfAsync(path),
     // 开着终端、在这个目录里、正在干活的 session（同一个 head 只看一次）。
     sessionBusy: (path) => pty.openIds().some((t) => {
       const h = sessions.head(t);
@@ -2656,13 +2726,18 @@ async function bootstrap(): Promise<void> {
     trunkBusy: (repoPath, trunk, ignore) => gateRepo.activeHolds().some((h) => samePath(h.repoPath, repoPath) && h.target === trunk && !ignore.includes(h.branch)),
     awaitingCheck: (url): boolean => ticketPrs.byUrl(url).some((r): boolean => commentLoop.awaitingCheck(r.id)),
     // 和 CI、评论同一个收件人；排进它的信箱（BTL-248），同一层新的冲突换掉还没送的旧的。认不出收件人时返回 false。
-    deliver: async (to, text) => {
-      const repoId = to.ticketRepoId ?? tickets.listRepos(to.ticketKey).find((r) => r.branch === to.branch)?.id ?? null;
+    // ref 带上 ticket 的仓库（BTL-278）：同一个 ticket 跨仓库、分支同名时，一边的新信不能换掉、撤掉另一边的
+    deliver: async (to, text, topic) => {
+      const repoId = stackMailRepoId(to);
       if (repoId === null) return false;
       const rcpt = loopRecipient(to.ticketKey, repoId, to.branch);
       if (!rcpt.ok) return false;
-      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: `stack:${to.ticketKey}:${to.branch}` });
+      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: stackMailRef(to, repoId, topic) });
       return true;
+    },
+    withdraw: (to, topic) => {
+      const repoId = stackMailRepoId(to);
+      if (repoId !== null) mailbox.withdraw(stackMailRef(to, repoId, topic));
     },
     record: recordEvent,
     onChange: () => notify(),
@@ -2750,7 +2825,10 @@ async function bootstrap(): Promise<void> {
     policy: prPolicyFor,
     mailbox,
     lang: () => currentLang(),
-    changed: () => notify(),
+    changed: () => {
+      notify();
+      workflowSweep();
+    },
     now: Date.now,
     log: logger,
   });
@@ -2859,6 +2937,77 @@ async function bootstrap(): Promise<void> {
   const reassessAll = (): void => void assessment.assessAll(openPrIds()).catch((e: unknown) => logger("assess: reassessing open PRs failed", e));
   prPolicies.onChange(reassessAll);
   afterConfigApplied = reassessAll;
+  // 工作流程（BTL-273）：分层的步骤、每一步的进度、提醒下一步、请 bot review、开 PR 和合并的顺序。
+  const workflowRepo = new WorkflowRepo(db);
+  const workflow = new WorkflowService({
+    repo: workflowRepo,
+    tickets,
+    featureName: (id) => features.get(id)?.name ?? null,
+    productsOf: (slug) => lessonsRepo.productsOf(slug),
+    productName: (id) => lessonsRepo.product(id)?.name ?? null,
+    slugOf: (path) => repoIdentity.slugOf(path),
+    prs: ticketPrs,
+    stages: prStages,
+    preReviews: preReviewRepo,
+    headSha: async (dir, branch) => {
+      try {
+        return (await git.git(dir, ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`])).trim() || null;
+      } catch {
+        return null;
+      }
+    },
+    level: (key) => automation.levelForTicket(key),
+    mailbox: { send: (x) => mailbox.send({ ...x, body: sanitizeTask(x.body) }), withdraw: (ref) => mailbox.withdraw(ref) },
+    // 和 CI 结论、评论同一个收件人判断（分支的主人、ticket 分支上的 session、休眠的）：ticket 的每个仓库依次看。
+    recipient: (key) => {
+      for (const r of tickets.get(key)?.repos ?? []) {
+        if (!r.branch) continue;
+        const to = loopRecipient(key, r.id, r.branch);
+        if (to.ok) return to.sessionId;
+      }
+      return null;
+    },
+    coordinator: (featureId) => {
+      for (const x of sessions.listFeatureCoordinators(featureId)) {
+        const h = sessions.head(x.id);
+        if (h && !h.dismissed) return h.id;
+      }
+      return null;
+    },
+    session: (id) => sessions.head(id),
+    // 经对外动作开关（pr_review_request）和审计：关着不调 gh，交给 session 自己请。
+    requestBotReview: (pr, cwd, bot) => {
+      const { slug, number } = pr;
+      if (slug === null || number === null) return Promise.resolve({ ok: false as const, error: "the PR has no repository or number yet" });
+      const target = { cwd, slug, number, bot };
+      return requestBotReviewGuarded(externalActions, { ...target, ticketKey: pr.ticketKey, url: pr.url }, () =>
+        requestBotReview((dir, args) => runGhDetail(dir, args, 30_000, 1024 * 1024), target),
+      );
+    },
+    reviewCommentCount: (pr, cwd, ids) =>
+      pr.slug === null || pr.number === null
+        ? Promise.resolve(null)
+        : reviewCommentCount((dir, args) => runGhDetail(dir, args, 30_000, 1024 * 1024), { cwd, slug: pr.slug, number: pr.number }, ids),
+    ghCwd: (pr) => (pr.repoId === null ? null : prGhDir(pr)),
+    now: Date.now,
+    log: logger,
+    onChange: () => notify(),
+  });
+  workflowHooks.service = workflow;
+  workflow.recoverInterrupted();
+  // 启动时把有流程的进行中 ticket 过一遍：上次关着时 PR、CI 变了的补上进度；提醒按库里记的那条，不重复送。
+  void workflow.evaluateAll();
+  /** PR 读到了、预审出结果了、合并了：有流程的 ticket 重新判断一次（只读库；串行，提醒按库里记的那条去重）。 */
+  const workflowSoon = (key: string | null | undefined): void => {
+    if (key && workflow.anyWorkflow()) void workflow.evaluate(key);
+  };
+  const workflowCtl = workflowControl({
+    service: workflow,
+    products: () => lessonsRepo.products().map((p) => ({ id: p.id, name: p.name })),
+    features,
+    tickets,
+    sessions,
+  });
   const prWatcher = new PrWatcher({
     prs: ticketPrs,
     branches: branchWatch,
@@ -2880,6 +3029,7 @@ async function bootstrap(): Promise<void> {
       lessonRunner.merged({ repoPath, slug: pr.slug }, pr.number);
       if (repoPath) void stackService.onMerged({ url: pr.url, number: pr.number, headSha: pr.headSha, headBranch: pr.headBranch }, repoPath).catch((e: unknown) => logger(`stacks: after ${pr.url} merged failed`, e));
       void reviewCollector.collect(pr.id).catch((e: unknown) => logger("review effect: collecting failed", e));
+      workflowSoon(pr.ticketKey);
     },
     // PR 的状态或 review 变了：在最新的 handoff 上换掉 prs，存成一条 refresh。ticket 状态、PR 标签、合并后清理 worktree 都照旧走 ingest。
     onPrChanged: (key) => {
@@ -2909,6 +3059,7 @@ async function bootstrap(): Promise<void> {
         }
       }
       void assessment.observe(rows, pr).catch((e: unknown) => logger("assess: observing a PR failed", e));
+      for (const key of new Set(rows.map((r) => r.ticketKey))) workflowSoon(key);
       return commentLoop.observe(rows, pr, where);
     },
     onHumanComment: (ticketKey, prNumber, count) => {
@@ -2930,6 +3081,8 @@ async function bootstrap(): Promise<void> {
   };
   const mergeGate = new MergeGate({
     tickets, repo: gateRepo, git, prInfo, whoOf,
+    // 工作流程（BTL-273）：开 PR 前的步骤、谁能合、合并前的步骤。
+    workflow,
     repoOfSlug: (slug, cwdRepo) => {
       const remotesOf = (p: string) => {
         const origin = [repoIdentity.slugOf(p), repoIdentity.rawSlugOf(p)].filter((x): x is string => x !== null);
@@ -3460,7 +3613,7 @@ async function bootstrap(): Promise<void> {
         seen.add(h.id);
         return !h.hibernatedAt && h.userEndedAt == null && resumable(h, resumableCtx) ? [h] : [];
       });
-      const mail = new Set(messagesRepo.queued().flatMap((m) => (m.kind === "convention" ? [] : [sessions.head(m.toSession)?.id ?? m.toSession])));
+      const mail = headsWithWakingMail(messagesRepo.queued(), (id) => sessions.head(id)?.id ?? id);
       const order = restartOrder(heads, (id) => mail.has(id), (h) => h.ticketKey !== null && prWatcher.statusOf(h.ticketKey).some((p) => p.state === "open" || p.state === null));
       logger(`resume after restart: ${order.length} of ${openAtLastQuit.length} session(s) open at the last quit`);
       const r = await theResumer.resumeAll(order);
@@ -3503,21 +3656,23 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /** 「现在」页和「谁该动」看板共用的一份 Shipherd 提醒。 */
-  const currentNotices = (): NowNotice[] => [
-    ...buildNotices({
-      availability: availability.view(),
-      recentRuns: lessonRuns.recentFinished(20),
-      routing: routing.attention(),
-      sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
-    }),
-    ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
-    ...costNotices(costBreaker?.views() ?? [], costTargetOf),
-    ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
-    ...stackNotices(stackService.notices()),
-    ...backtest.notices(),
-    ...intakeNotices(intake.notices()),
-    ...inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
-  ];
+  const currentNotices = (): NowNotice[] =>
+    collectNotices({
+      built: buildNotices({
+        availability: availability.view(),
+        recentRuns: lessonRuns.recentFinished(20),
+        routing: routing.attention(),
+        sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
+      }),
+      ci: ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
+      cost: costNotices(costBreaker?.views() ?? [], costTargetOf),
+      comments: commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
+      stack: stackNotices(stackService.notices()),
+      backtest: backtest.notices(),
+      intake: intakeNotices(intake.notices()),
+      behalf: inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
+      infoflow: infoflow.notices(),
+    });
   // 请你 review 的 PR（UI 重做第 1 层，计划 R9）：gh search 的结果整体替换进 review_requests。
   const reviewRequests = new ReviewRequestsRepo(db);
   let unbindReviewFocus: (() => void) | null = null;
@@ -3623,6 +3778,13 @@ async function bootstrap(): Promise<void> {
     if (key.startsWith("intake")) intakePollSoon();
     // 打开「显示 Shipherd 之外开的 session」：马上扫一次，不等 5 分钟的定时（BTL-244）。
     if (key === "showOutsideSessions") void runDiscovery();
+    // 关掉「自动抽要点」：马上跑一遍，把还在排队的要点撤回（BTL-272）。
+    if (key === "flowExtract") infoflow.poke();
+    // 改了每天的上限：马上跑一遍（调高了就接着问），「现在」页马上刷新（还在上限时，次数、上限、什么时候接着也跟着变）。
+    if (key === "flowDailyAsks") {
+      infoflow.poke();
+      notify();
+    }
   };
   automationHooks.settingChanged = onSettingChanged;
   // 三族策略的读写入口：设置 › 自动化的开关、套用档位预设、register 的 loop / stacks / intake 用同一份。
@@ -3631,7 +3793,8 @@ async function bootstrap(): Promise<void> {
     policySet: (scope: LoopScope, overrides: LoopPolicyOverrides) => loopPolicies.setLayer(scope, overrides),
   };
   const stackPolicyIo = {
-    policyView: (scope: PolicyScope) => stackPolicy.view(scope),
+    // BTL-278：被 epic 档位盖过的栈在设置页说出来
+    policyView: (scope: PolicyScope) => ({ ...stackPolicy.view(scope), epic: stackService.epicNote(scope) }),
     policySet: (scope: PolicyScope, overrides: Record<string, unknown>): StackPolicySetResult => {
       try {
         stackPolicy.setLayer(scope, overrides);
@@ -3702,7 +3865,7 @@ async function bootstrap(): Promise<void> {
     transaction: (fn) => withTransaction(db, fn),
     // 哪些开着的 PR 能关、怎么关、怎么结束 session：tickets/ticket-close-wiring.ts（单独测）。
     ...closeWiring({
-      tickets, ticketPrs, branchOwners, ghDir: prGhDir, slugOf: (path) => repoIdentity.slugOfWarm(path), defaultBranch: (repo) => git.defaultBranch(repo), prHead, prClose, external: externalActions,
+      tickets, ticketPrs, branchOwners, ghDir: prGhDir, slugOf: (path) => repoIdentity.slugOfAsync(path), defaultBranch: (repo) => git.defaultBranch(repo), prHead, prClose, external: externalActions,
       sessions: {
         activityKind: (id) => activityMonitor.get(id)?.kind ?? null,
         waitingForInput: (id) => sessions.get(id)?.waitingForInput ?? false,
@@ -3747,6 +3910,7 @@ async function bootstrap(): Promise<void> {
     diag: diag ?? undefined,
     ticketClose,
     feedback,
+    infoflow,
     userEnded: (termId) => {
       const h = sessions.head(termId);
       if (h) sessions.setUserEnded(h.id, Date.now());
@@ -4008,6 +4172,12 @@ async function bootstrap(): Promise<void> {
     },
     detectTrackerTools,
     featurePolicy: () => readFeaturePolicy(db, (id) => lessonsRepo.product(id)?.name ?? null),
+    workflow: workflowHandlers({
+      service: workflow,
+      products: () => lessonsRepo.products().map((p) => ({ id: p.id, name: p.name })),
+      features, tickets,
+      slugOf: (path) => repoIdentity.slugOf(path),
+    }),
     automation: {
       state: () => automation.state(),
       apply: (level) => automation.apply(level),
@@ -4113,6 +4283,7 @@ async function bootstrap(): Promise<void> {
           },
         },
       },
+      workflow: workflowCtl,
       preReview: {
         submit: (id, raw) => preReview.submitEvidence(id, raw),
         latest: (id) => preReview.latestForSession(id),
@@ -4228,6 +4399,7 @@ async function bootstrap(): Promise<void> {
     .catch((e: unknown) => logger("lessons: starting the runner failed", e));
   activityMonitor.start();
   convIngester.start();
+  infoflow.start(Number(process.env.SHIPHERD_FLOW_TICK_MS) || undefined);
   procServices.start();
   usageScanner.start(usageScanMs(process.env));
   bgScheduler.start();
@@ -4375,6 +4547,7 @@ async function bootstrap(): Promise<void> {
     if (hookDiscoveryTimer) clearTimeout(hookDiscoveryTimer);
     activityMonitor.stop();
     convIngester.stop();
+    infoflow.stop();
     void procServices.stop();
     usageScanner.stop();
     if (costCheckTimer) clearTimeout(costCheckTimer);

@@ -6,7 +6,7 @@ import type { StackActionResult, StackPolicyOverrides, StackView, StacksFilter }
 import { api } from "../api";
 import { reportError } from "../errors";
 import { policyScopeFromKey, policyScopeKey } from "../policy-view";
-import { isBottom, lastRunLines, layerActions, stackInputValue, stackKeyKind, stackOverridesFromDraft, stackShown, type StackDraft } from "../stack-view";
+import { isBottom, lastRunLines, layerActions, stackAutoRebaseNote, stackEpicLines, stackInputValue, stackKeyKind, stackOverridesFromDraft, stackShown, type StackDraft } from "../stack-view";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
@@ -44,13 +44,14 @@ function StackCard({ stack: s, onOpenTicket }: { stack: StackView; onOpenTicket:
   const now = Date.now();
   // 从上往下画：栈顶在上，栈底在下，和 git log 一样。
   const layers = [...s.layers].reverse();
+  const note = stackAutoRebaseNote(s, S);
   return (
     <div className="stack-card" data-testid={`stack-${s.id}`}>
       <div className="stack-head">
         <strong>{s.name}</strong>
         <span className="muted"> {S.sk.repoTrunk(s.repoSlug ?? s.repoPath, s.trunk)} · {S.sk.source[s.source]}</span>
       </div>
-      {!s.autoRebase && <p className="muted" data-testid={`stack-${s.id}-off`}>{S.sk.autoRebaseOff}</p>}
+      {note && <p className="muted" data-testid={`stack-${s.id}-${s.autoRebase ? "on" : "off"}`}>{note}</p>}
       <ol className="stack-layers" reversed>
         {layers.map((l) => (
           <li key={l.id} className={`stack-layer state-${l.state}`} data-testid={`stack-layer-${l.branch}`}>
@@ -184,6 +185,7 @@ function StackPolicyEditor() {
               })}
             </tbody>
           </table>
+          {stackEpicLines(current.epic, S).map((line, i) => <p key={i} className="muted" data-testid="stack-policy-epic">{line}</p>)}
           <div className="actions">
             <button className="primary" data-testid="stack-save" disabled={busy} onClick={save}>{S.lp.save}</button>
             <button data-testid="stack-discard" disabled={busy || Object.keys(draft).length === 0} onClick={() => setDraft({})}>{S.lp.discard}</button>

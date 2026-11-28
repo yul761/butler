@@ -105,6 +105,10 @@ export interface PrSnapshot {
   head: string;
   headSha: string | null;
   labels: string[];
+  /** 从 fork 开过来的（head 同名也不是这个仓库的分支）。 */
+  crossRepo?: boolean;
+  /** head 分支所在的仓库（owner/name，小写）；gh 没给时 null。fork 工作流里按它认是不是栈的 remote 上的分支（BTL-278）。 */
+  headRepo?: string | null;
 }
 
 function snapshot(v: unknown): PrSnapshot | null {
@@ -117,10 +121,17 @@ function snapshot(v: unknown): PrSnapshot | null {
     number: r.number, url: r.url, state, isDraft: r.isDraft === true, title: typeof r.title === "string" ? r.title : "",
     body: typeof r.body === "string" ? r.body : "", base: typeof r.baseRefName === "string" ? r.baseRefName : "",
     head: typeof r.headRefName === "string" ? r.headRefName : "", headSha: typeof r.headRefOid === "string" ? r.headRefOid : null, labels,
+    crossRepo: r.isCrossRepository === true, headRepo: headRepoOf(r),
   };
 }
 
-const FIELDS = "number,url,state,isDraft,title,body,baseRefName,headRefName,headRefOid,labels";
+function headRepoOf(r: Record<string, unknown>): string | null {
+  const owner = (r.headRepositoryOwner as { login?: unknown } | null | undefined)?.login;
+  const name = (r.headRepository as { name?: unknown } | null | undefined)?.name;
+  return typeof owner === "string" && typeof name === "string" && owner && name ? `${owner}/${name}`.toLowerCase() : null;
+}
+
+const FIELDS = "number,url,state,isDraft,title,body,baseRefName,headRefName,headRefOid,labels,isCrossRepository,headRepository,headRepositoryOwner";
 
 export async function prView(cwd: string, slug: string | null, n: number): Promise<PrSnapshot | null> {
   try {
@@ -130,14 +141,32 @@ export async function prView(cwd: string, slug: string | null, n: number): Promi
   }
 }
 
+/** openPrs 一次最多读这么多条；读满了说明可能还有，要按分支再查（BTL-278）。 */
+export const OPEN_PR_LIMIT = 200;
+
 /** 仓库里开着的 PR（自动检测栈用）。失败返回 null。 */
 export async function openPrs(cwd: string, slug: string | null): Promise<PrSnapshot[] | null> {
   try {
-    const j = JSON.parse(await gh(cwd, slug, ["pr", "list", "--state", "open", "--limit", "200", "--json", FIELDS])) as unknown;
+    const j = JSON.parse(await gh(cwd, slug, ["pr", "list", "--state", "open", "--limit", String(OPEN_PR_LIMIT), "--json", FIELDS])) as unknown;
     return Array.isArray(j) ? j.map(snapshot).filter((x): x is PrSnapshot => x !== null) : null;
   } catch {
     return null;
   }
+}
+
+/** 这几个分支上开着的 PR（openPrs 读满一页时逐个查）。有一个查不到就返回 null。 */
+export async function openPrsForHeads(cwd: string, slug: string | null, heads: string[]): Promise<PrSnapshot[] | null> {
+  const out: PrSnapshot[] = [];
+  for (const head of heads) {
+    try {
+      const j = JSON.parse(await gh(cwd, slug, ["pr", "list", "--state", "open", "--head", head, "--json", FIELDS])) as unknown;
+      if (!Array.isArray(j)) return null;
+      out.push(...j.map(snapshot).filter((x): x is PrSnapshot => x !== null));
+    } catch {
+      return null;
+    }
+  }
+  return out;
 }
 
 export async function issueCreate(cwd: string, slug: string | null, title: string, body: string): Promise<{ number: number; url: string }> {

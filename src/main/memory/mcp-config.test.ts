@@ -147,9 +147,10 @@ describe("sessions tools allowed without a prompt (BTL-190 2+3)", () => {
       "mcp__shipherd-sessions__reorder_features", "mcp__shipherd-sessions__set_ticket_feature",
       "mcp__shipherd-sessions__submit_evidence", "mcp__shipherd-sessions__pre_review_result", "mcp__shipherd-sessions__pr_assessment", "mcp__shipherd-sessions__lessons",
       "mcp__shipherd-sessions__pre_review_status", "mcp__shipherd-sessions__pre_review_queue",
+      "mcp__shipherd-sessions__workflow_step_done", "mcp__shipherd-sessions__get_workflow", "mcp__shipherd-sessions__list_workflow_presets",
     ]);
     // 会动别的终端或建东西的不在里面。
-    for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_epic_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode", "pre_review_run", "pre_review_queue_act"]) {
+    for (const t of ["start_session", "end_session", "send_message", "refresh_session", "refresh_epic_summary", "create_ticket", "create_feature", "start_feature", "stack_define", "stack_rebase", "stack_layer_mode", "pre_review_run", "pre_review_queue_act", "set_workflow"]) {
       expect(SESSIONS_AUTO_ALLOW).not.toContain(`mcp__shipherd-sessions__${t}`);
     }
   });

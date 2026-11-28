@@ -11,7 +11,7 @@ export const STACK_OVERVIEWS = ["off", "issue"] as const;
 export type StackOverview = (typeof STACK_OVERVIEWS)[number];
 
 export interface StackPolicy {
-  /** 允许 Shipherd 改这个仓库里栈的本地分支（rebase、autosquash、开 rerere）。总开关，默认关。 */
+  /** 允许 Shipherd 改这个仓库里栈的本地分支（rebase、autosquash）。总开关，默认关。 */
   autoRebase: boolean;
   /** 栈底合并后怎么接：auto 按合并事件检测。 */
   mergeMethod: StackMergeMethod;
@@ -152,6 +152,8 @@ export interface StackPolicyKeyView {
 export interface StackPolicyView {
   scope: PolicyScope;
   keys: StackPolicyKeyView[];
+  /** 这个范围里 autoRebase 被 epic 档位盖过的栈（BTL-278；index.ts 从栈服务补上）。 */
+  epic?: StackEpicNote;
 }
 
 export interface StackPolicyLayer {
@@ -174,7 +176,24 @@ export const STACK_TRIGGERS = ["main_updated", "bottom_merged", "layer_commits",
 export type StackTrigger = (typeof STACK_TRIGGERS)[number];
 
 export type StackRunMode = "update_refs" | "per_layer";
-export type StackRunOutcome = "rebased" | "noop" | "conflict" | "deferred" | "failed" | "rolled_back" | "restored";
+/** needs_confirm（BTL-278）：自动跑出来要改写正在 review 的 PR、或者交给 session 的冲突层，什么都没落地，等人点「马上 rebase」。 */
+export type StackRunOutcome = "rebased" | "noop" | "conflict" | "deferred" | "failed" | "rolled_back" | "restored" | "needs_confirm";
+
+/**
+ * 为什么要人确认：ready_pr = 要改写开着、可以 review 的 PR；handoff = 要改写冲突已经交给 session 的层（或它上面的层）；
+ * remote_ahead = 冲突的那一层远端有本地没有的提交（比如 reviewer 推的），交出去的强推会冲掉它们（BTL-278）。
+ */
+export type StackConfirmWhy = "ready_pr" | "handoff" | "remote_ahead";
+
+/** 交给 session 的冲突里，强推命令锁哪个 remote 的哪个 sha（BTL-278）。remote 为 null = 认不出推到哪里。 */
+export interface ConflictLease { remote: string | null; sha: string | null; ahead: boolean }
+
+/** 谁点的「马上 rebase」（BTL-278）：user = 界面上；coordinator = epic 总控调 stack_rebase；shipherd = Shipherd 总控调的。 */
+export type StackActor = "user" | "coordinator" | "shipherd";
+
+export function isSettledOutcome(o: StackRunOutcome): boolean {
+  return o === "rebased" || o === "noop" || o === "restored";
+}
 
 export interface StackRunView {
   id: number;
@@ -188,6 +207,9 @@ export interface StackRunView {
   conflict: { branch: string; files: string[] } | null;
   /** 推送：开关关着没推的分支。 */
   unpushed: string[];
+  /** needs_confirm：为什么、哪几层。 */
+  /** push：确认以后会不会强推；toSession：冲突会不会交给 session（remote_ahead 的文案用）。 */
+  confirm: { why: StackConfirmWhy; branches: string[]; push?: boolean; toSession?: boolean } | null;
   startedAt: number;
   finishedAt: number | null;
 }
@@ -222,11 +244,24 @@ export interface StackView {
   mergeMethod: "squash" | "merge" | null;
   /** 生效的策略里最常看的几个。 */
   autoRebase: boolean;
+  /**
+   * autoRebase 是谁定的（BTL-278）：policy = 三层策略；epic = 层所在的 epic 选了档位（半自动打开、手动关掉）；
+   * explicit_off = epic 是半自动，但仓库或产品层明确关了，按关。
+   */
+  autoRebaseBy: StackAutoRebaseBy;
   overviewUrl: string | null;
   layers: StackLayerView[];
   lastRun: StackRunView | null;
   /** 最近一次留了备份的 run（「从备份恢复」用）。 */
   restorable: StackRunView | null;
+}
+
+export type StackAutoRebaseBy = "policy" | "epic" | "explicit_off";
+
+/** 设置页：这个范围里 autoRebase 被 epic 档位打开的栈，和 epic 想开、被明确关掉的栈（名字）。 */
+export interface StackEpicNote {
+  on: string[];
+  ignored: string[];
 }
 
 export interface StacksFilter {
@@ -240,7 +275,18 @@ export interface StacksView {
 }
 
 /** 栈的提醒（「现在」页）。 */
-export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck";
+/** rewritten：最近一次自动 rebase 改写了这几层、它们还停在 Shipherd 写的顶端（没人编译过，BTL-278）。 */
+/** prs_unreadable：读不到 PR 推迟了一天以上；markers：要推的顶端有冲突标记（或者查不了），没推。 */
+/** held_below：叠在一层带标记、没推出去的层上面，这次也没推（by 是拦住它的那层）。 */
+/** no_push_remote：要开 PR 的新栈底认不出该推到哪个 remote，没推、没开 PR。 */
+/** ticket_closed：栈里这几层（branches）的 ticket 关掉或归档了，整个栈不改写、不推，那几层也不开 PR，要人移出栈。 */
+export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten" | "prs_unreadable" | "markers" | "held_below" | "no_push_remote" | "ticket_closed";
+
+/**
+ * markers 提醒里是哪种层（BTL-278）：new_bottom = 从没推过的新栈底（也没开 PR）；new_layer = 从没推过的中间层；
+ * rewritten = Shipherd 改写过、没推出去；local = 本地有远端没有的提交（session 自己提交的），叠在上面的层推不出去。
+ */
+export type StackMarkersWhere = "new_bottom" | "new_layer" | "rewritten" | "local";
 
 export interface StackNoticeInfo {
   reason: StackNoticeReason;
@@ -249,8 +295,22 @@ export interface StackNoticeInfo {
   branch: string;
   /** 这一层的 ticket（提醒上「打开 ticket」用）。 */
   ticketKey?: string | null;
-  /** conflict：冲突文件；stuck：最近的原因。 */
+  /** conflict、markers：冲突（标记）文件，markers 的空表示查不了；stuck：最近的原因；confirm：ready_pr、handoff 或 remote_ahead。 */
   files?: string[];
+  /** markers：是哪种层（决定提醒怎么说）。 */
+  where?: StackMarkersWhere;
+  /** held_below：拦住这几层（branches）的那一层。 */
+  by?: string;
+  /** prs_unreadable：remote 的主机（认不出就是 null，当 github.com）。 */
+  host?: string | null;
+  /** confirm：等确认的几层；rewritten：刚被自动改写的几层；held_below：被拦住的几层。 */
+  branches?: string[];
+  /** rewritten：其中真的请了 session 核对的几层。 */
+  asked?: string[];
+  /** confirm：确认以后会不会强推。 */
+  push?: boolean;
+  /** confirm：冲突会不会交给 session。 */
+  toSession?: boolean;
   detail?: string | null;
   /** draft_stale：已经多少天；behind：落后多少天。 */
   days?: number;

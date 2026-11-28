@@ -345,7 +345,7 @@ export class TurnService {
       if (!noticeNeedsYou(n) || n.kind === "session_limited") continue;
       if (n.kind === "comments_waiting" && closedKeys.has(n.waiting.ticketKey)) continue;
       if (n.kind === "ci_undelivered" && closedKeys.has(n.ci.ticketKey)) continue;
-      const since = n.kind === "ci_undelivered" ? n.ci.since : n.kind === "comments_waiting" ? n.waiting.since : now;
+      const since = n.kind === "ci_undelivered" ? n.ci.since : n.kind === "comments_waiting" ? n.waiting.since : n.kind === "flow_proposal" ? n.at : now;
       const tt: TimedTurn = { turn: { owner: "you", kind: "shipherd", notice: n }, since };
       const target = "target" in n ? n.target : null;
       const key = n.kind === "ci_undelivered" ? n.ci.ticketKey

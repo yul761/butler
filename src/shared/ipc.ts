@@ -272,6 +272,15 @@ export const IPC = {
   appMenu: "app:menu",
   /** 信箱（BTL-269）：用户在消息列表里点「现在送进去」：参数是消息 id，返回 DeliverNowResult。 */
   messagesDeliverNow: "messages:deliverNow",
+  /** 信息流转（BTL-272）：抽出来的要点、原话、对同步的状态变化照做 / 不用 / 撤销 / 知道了。 */
+  infoflowList: "infoflow:list",
+  infoflowTurn: "infoflow:turn",
+  infoflowAct: "infoflow:act",
+  // 工作流程（BTL-273）：设置页的分层（读、改一层），ticket 首页和 epic 页的流程条（读）。
+  workflowState: "workflow:state",
+  workflowSet: "workflow:set",
+  workflowTicket: "workflow:ticket",
+  workflowFeature: "workflow:feature",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -304,6 +313,8 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.diagSnapshot, IPC.diagExport,
   IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,
   IPC.messagesDeliverNow,
+  IPC.infoflowList, IPC.infoflowTurn, IPC.infoflowAct,
+  IPC.workflowState, IPC.workflowSet, IPC.workflowTicket, IPC.workflowFeature,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];

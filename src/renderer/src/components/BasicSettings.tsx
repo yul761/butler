@@ -79,6 +79,30 @@ export function BasicSettings({ report, onHealth, onRerunWizard }: { report: Hea
         <input type="checkbox" checked={current.memoryEnabled !== "0"} onChange={(e) => void save("memoryEnabled", e.target.checked ? "1" : "0")} />
         {S.memoryEnabled}
       </label>
+      <label className="inline">
+        <input type="checkbox" data-testid="setting-flowExtract" checked={current.flowExtract !== "0"} onChange={(e) => void save("flowExtract", e.target.checked ? "1" : "0")} />
+        {S.infoflow.extract}
+      </label>
+      <p className="muted">{S.infoflow.extractHelp}</p>
+      <label className="inline">
+        <input
+          type="checkbox"
+          data-testid="setting-flowAutoApply"
+          disabled={current.flowExtract === "0"}
+          checked={current.flowAutoApply !== "0"}
+          onChange={(e) => void save("flowAutoApply", e.target.checked ? "1" : "0")}
+        />
+        {S.infoflow.autoApply}
+      </label>
+      <p className="muted">{S.infoflow.autoApplyHelp}</p>
+      <div className="field">
+        {S.infoflow.dailyAsks}
+        <input className="mono" type="number" min={1} max={10000} step={1} data-testid="setting-flowDailyAsks" disabled={current.flowExtract === "0"} {...textBlur("flowDailyAsks")} />
+        <p className="muted">{S.infoflow.dailyAsksHelp}</p>
+        <div className="actions">
+          <button onClick={() => void reset("flowDailyAsks")}>{S.resetDefault}</button>
+        </div>
+      </div>
       <dl className="kv">
         <dt>{S.memoryDataDir}</dt>
         <dd>{m.dataDir}</dd>

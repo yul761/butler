@@ -99,12 +99,14 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
           ? "几个 ticket 前后依赖（后一个要在前一个的改动上做）时用栈：create_ticket 带 stack_on 把新 ticket 接在上一个之上，或者用 stack_define 把已有的分支定成栈。"
           : "几个 Shipherd 分支前后依赖时可以用 stack_define 把它们定成栈（从下到上）。") +
           "只有栈底的 PR 给人 review；栈底合并或 trunk 更新后 Shipherd 会整栈 rebase、把下一层开成 PR，冲突交给那一层的 session，不用手动 rebase 上面的层。" +
-          "list_stacks 看状态，stack_rebase 马上 rebase 一次，上面某层要跑 CI 时用 stack_layer_mode 开成 draft。"
+          "list_stacks 看状态，stack_rebase 马上 rebase 一次，上面某层要跑 CI 时用 stack_layer_mode 开成 draft。" +
+          "栈在 needs_confirm（等确认）时调 stack_rebase 就是替用户确认改写、强推正在 review 的 PR：除非用户事先说过可以，先用 ask_user 问。Shipherd 只做 git rebase，不编译、不跑测试；改写后它会请各层的 session 核对。"
         : (kind === "coordinator"
           ? "When tickets depend on each other (one builds on another's changes), use a stack: create_ticket with stack_on puts the new ticket on top of the previous one, or stack_define turns existing branches into a stack. "
           : "When Shipherd branches depend on each other you can turn them into a stack with stack_define (bottom to top). ") +
           "Only the bottom PR is for human review; when the bottom merges or trunk moves, Shipherd rebases the whole stack, opens the next layer as a PR, and hands conflicts to that layer's session, so nobody rebases the layers above by hand. " +
-          "Use list_stacks for the state, stack_rebase to rebase once now, and stack_layer_mode to open a layer above as a draft when it needs CI.",
+          "Use list_stacks for the state, stack_rebase to rebase once now, and stack_layer_mode to open a layer above as a draft when it needs CI. " +
+          "When a stack is needs_confirm (waiting for an OK), calling stack_rebase confirms rewriting and force-pushing PRs under review on the user's behalf: unless the user said beforehand that it's fine, ask them with ask_user first. Shipherd only runs git rebase; it doesn't build or run tests, and after a rewrite it asks each layer's session to check.",
   // PR 进度：自我 review 的结果用 report 写进时间线（只给 ticket session 和修复 session）。
   (lang, kind) =>
     kind !== "ticket"
@@ -128,6 +130,19 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
           "用户问预审了没有、结果怎样，用 pre_review_status（ticket 或 pr）；要重新预审用 pre_review_run；预审排着不动时用 pre_review_queue 看谁在跑、谁在排、为什么停着；要取消或提前一次，用 pre_review_queue_act（会作废已经花了额度的预审，要用户确认）。"
         : "Pre-review state is in preReview on list_tickets, list_sessions and list_prs (queued, paused or running means it is waiting on pre-review, not on CI). " +
           "When the user asks whether something was pre-reviewed or how it went, use pre_review_status (ticket or pr); to pre-review again, use pre_review_run; when pre-reviews are not moving, pre_review_queue shows what is running, what is queued and why it is stopped; to cancel one or move it forward, use pre_review_queue_act (it throws away a pre-review that already spent quota, so the user confirms it).",
+  // 工作流程（BTL-273）：两级总控能看、能设。epic 总控只能改自己的 epic 和它的 ticket。
+  (lang, kind) =>
+    kind !== "coordinator" && kind !== "shipherd"
+      ? null
+      : lang === "zh"
+        ? "用户想定 ticket 的做法（写完直接合、要不要预审、要不要 Copilot review、谁来合并）时，用 get_workflow 看现在的流程，list_workflow_presets 看能用的步骤和预设，set_workflow 设好。" +
+          "流程按 全局 → 产品/仓库 → epic → ticket 一层层覆盖；Shipherd 会按流程提醒 session 下一步，开 PR、合并的顺序不对会被拦住。" +
+          "流程里没有合并这一步时，由用户自己合，你也别合。" +
+          (kind === "coordinator" ? "你只能改这个 epic 和它的 ticket；全局、产品、仓库那几层要在 Shipherd 总控里改。" : "")
+        : "When the user wants to decide how tickets get done (merge right after writing, whether to pre-review, whether Copilot reviews, who merges), check the current one with get_workflow, see the steps and presets with list_workflow_presets, and set it with set_workflow. " +
+          "Workflows layer global → product/repo → epic → ticket, each overriding the one before; Shipherd nudges sessions to the next step and stops a PR or merge that comes out of order. " +
+          "When a workflow has no merge step, the user merges; don't merge it yourself." +
+          (kind === "coordinator" ? " You can change only this epic and its tickets; the global, product and repo layers are changed from the Shipherd coordinator." : ""),
 ];
 
 export interface GuideOptions {

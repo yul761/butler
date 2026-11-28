@@ -5,6 +5,7 @@ import { isModelName, isTaskId, isTier, POLICIES, type LimitPolicy, type LimitRu
 import { CONTEXT_LIMIT, REASON_LIMIT, TASK_LIMIT } from "../../shared/control";
 import { CONV_LIST_MAX, CONV_QUERY_MAX, type ConvListOpts } from "../../shared/conversation";
 import { normTurnFilter, type TurnFilter } from "../../shared/turn";
+import type { FlowScope } from "../../shared/infoflow";
 import type {
   AddRepoInput, CiItemRef, CreateFeatureInput, CreateTicketInput, InboxScope, MessageScope, OpenShipherdSessionRequest, OpenFeatureSessionRequest, OpenFixSessionRequest, UpdateRepoInput, UpdateTicketInput, WorkMode,
 } from "../../shared/types";
@@ -1086,4 +1087,25 @@ export function preReviewQueueActionArg(v: unknown): PreReviewQueueAction {
 export function messageIdArg(v: unknown): string {
   if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,100}$/.test(v)) throw new Error("invalid message id");
   return v;
+}
+
+/** 信息流转（BTL-272）的列表范围：全部，或者一个 epic 的。 */
+export function flowScopeArg(v: unknown): FlowScope {
+  const o = v as Record<string, unknown> | null;
+  if (!o || typeof o !== "object") throw new Error("invalid flow scope");
+  if (o.all === true) return { all: true };
+  if (o.featureId !== undefined) return { featureId: featureIdArg(o.featureId) };
+  throw new Error("invalid flow scope");
+}
+
+/** 信息流转里一条（要点、轮、同步动作）的 id。 */
+export function flowIdArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1) throw new Error("invalid flow id");
+  return v;
+}
+
+export const FLOW_ACTS = ["apply", "reject", "undo", "dismiss", "retry", "accept"] as const;
+export function flowActArg(v: unknown): (typeof FLOW_ACTS)[number] {
+  if (typeof v !== "string" || !(FLOW_ACTS as readonly string[]).includes(v)) throw new Error("invalid flow act");
+  return v as (typeof FLOW_ACTS)[number];
 }

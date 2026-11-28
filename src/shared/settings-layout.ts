@@ -5,7 +5,7 @@
 import type { EditableSettingKey } from "./settings";
 
 /** about：版本和检查更新（BTL-253），BTL-254 的发送反馈也在这里。没有设置项放在那。 */
-export const SETTINGS_TABS = ["basic", "features", "advanced", "health", "about"] as const;
+export const SETTINGS_TABS = ["basic", "features", "workflow", "advanced", "health", "about"] as const;
 export type SettingsTabId = (typeof SETTINGS_TABS)[number];
 
 export const ADVANCED_GROUPS = [
@@ -50,6 +50,9 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   showOutsideSessions: basic,
   updateCheckEnabled: basic,
   autoResumeAfterRestart: basic,
+  flowExtract: basic,
+  flowAutoApply: basic,
+  flowDailyAsks: basic,
   // 自动化（tab id 仍是 features）：全局档位
   automationLevel: { tab: "features" },
   // 高级 › 定时与 handoff
@@ -138,6 +141,7 @@ export const SETTING_PLACEMENT: Record<EditableSettingKey, Placement> = {
   externalPrBriefPost: adv("external"),
   externalIntakeTrackerComment: adv("external"),
   externalIntakeTrackerStatus: adv("external"),
+  externalPrReviewRequest: adv("external"),
   // 「复盘与规矩」页自己的区块
   checksEnabled: elsewhere,
   checksEditTimeoutSec: elsewhere,

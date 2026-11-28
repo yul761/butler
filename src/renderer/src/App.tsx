@@ -257,7 +257,7 @@ export function App() {
             {route.page === "effect" && <EffectPage />}
             {route.page === "unclaimed" && <LiveUnclaimedPage />}
             {route.page === "archived" && <ArchivedPage onRestored={showRestored} onFeatureRestored={goFeature} />}
-            {route.page === "settings" && <SettingsPage section={route.section} nonce={route.nonce} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} />}
+            {route.page === "settings" && <SettingsPage section={route.section} nonce={route.nonce} onRerunWizard={() => dispatchOnboarding({ type: "rerun" })} onOpenShipherd={(id) => setRoute({ page: "shipherd", focusSession: id })} />}
             {route.page === "audit" && <AuditPage />}
             {route.page === "prereview" && <PreReviewQueuePage onOpenTicket={(key) => openTicket(key)} onOpenSettings={() => go({ page: "settings", section: "review", nonce: Date.now() })} />}
             {route.page === "lessons" && <LessonsPage tab={route.tab} onOpenSession={(id) => setRoute({ page: "shipherd", focusSession: id })} />}

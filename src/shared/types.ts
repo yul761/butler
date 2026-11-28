@@ -1,3 +1,4 @@
+import type { FlowLeftovers } from "./infoflow";
 import type { AutomationLevel } from "./automation";
 import type { IntakeNoticeInfo, IntakeRecentEntry } from "./intake";
 import type { CostBreakerView } from "./cost";
@@ -379,6 +380,17 @@ export function effectiveStatus(t: Pick<Ticket, "status" | "statusManual">): Tic
   return t.statusManual ?? t.status;
 }
 
+/**
+ * [contract:ticket-finished] 算「已完成」的状态：不会再往下走的 ticket（工作流程不再提醒、不再判断）。
+ * needs_decision 不在里面（还等用户拿主意）。closed（BTL-270，不做了）在里面：和栈的 stackTicketLive 对齐，
+ * 关掉、归档的 ticket 两边都算不在用了（done 只在这里算完成，栈那边合并后的层还要收尾）。
+ */
+export const FINISHED_STATUSES: readonly TicketStatus[] = ["done", "closed"];
+
+/** ticket 已经完成：归档了，或者实际状态（手动改的优先）在 FINISHED_STATUSES 里。 */
+export const ticketFinished = (t: Pick<Ticket, "status" | "statusManual" | "archivedAt">): boolean =>
+  t.archivedAt !== null || FINISHED_STATUSES.includes(effectiveStatus(t));
+
 export const FOLLOWUP_KINDS = ["config", "flag", "deploy", "doc", "other"] as const;
 export type FollowupKind = (typeof FOLLOWUP_KINDS)[number];
 export const FOLLOWUP_TRIGGERS = ["after_merge", "after_deploy", "on_date", "none"] as const;
@@ -711,7 +723,15 @@ export type NowNotice =
    * 总控替你回答了一个 ask_user（BTL-269 A2）：问题、总控写的答案、是谁答的。可以改答案（当作更正送进那个 session）、打开、知道了。
    * 每个提问一条，点了知道了或者改过就不再出现。
    */
-  | { kind: "behalf_answered"; askId: number; question: string; answer: string; by: string; at: number; target: NowTarget; title: string | null };
+  | { kind: "behalf_answered"; askId: number; question: string; answer: string; by: string; at: number; target: NowTarget; title: string | null }
+  /** 信息流转（BTL-272）：对话里说的状态变化等你确认（照做、不用）。 */
+  | { kind: "flow_proposal"; actionId: number; label: string; source: string; text: string; at: number }
+  /** 信息流转：ticket 关了，但有 PR 没关上（session 没结束）：不算完成，逐条列出原因，重试、就这样或者撤销。 */
+  | { kind: "flow_partial"; actionId: number; label: string; source: string; leftovers: FlowLeftovers; at: number }
+  /** 信息流转：替你同步了对话里说的状态变化，可以撤销。 */
+  | { kind: "flow_synced"; actionId: number; label: string; source: string; at: number }
+  /** 信息流转：最近 24 小时问模型的次数到了上限，先停着；resumesAt 是能接着问的时间（第 used-cap+1 早的那次满 24 小时），dropped 是最近 24 小时等上限等到老化、丢掉的轮数。 */
+  | { kind: "flow_capped"; used: number; cap: number; resumesAt: number | null; dropped: number };
 
 export interface NowView {
   /** 页面顶上的提醒，即使没有什么需要你也显示。 */
@@ -736,10 +756,10 @@ export interface NowView {
 /** 信箱（BTL-245）：消息的种类。 */
 /**
  * ci：CI 结论；merge：合并占位放开了；stack：栈 rebase 冲突；patrol：每日巡检；cost：花费上限后的「接着做」；
- * refresh：换新后的「接着做」；user：用户在对话 tab 里发给开发 session 的话、分叉的结论（BTL-248）。
+ * refresh：换新后的「接着做」；user：用户在对话 tab 里发给开发 session 的话、分叉的结论（BTL-248）；fact：从对话里抽出来、别处要知道的要点（BTL-272）。
  */
 export type MessageKind = "instruction" | "report" | "answer" | "shipherd" | "reply" | "review" | "comments" | "convention"
-  | "ci" | "merge" | "stack" | "patrol" | "cost" | "refresh" | "user";
+  | "ci" | "merge" | "stack" | "patrol" | "cost" | "refresh" | "user" | "fact";
 /** 信箱消息的状态：已排队、已送达、已回复。 */
 export type MessageStatus = "queued" | "delivered" | "replied";
 

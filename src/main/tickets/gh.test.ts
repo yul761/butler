@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { tempDir } from "../test-utils";
-import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, ghApiGet, prBatch, prBatchable, PR_BATCH_CHUNK, prBatchQuery, prBatchResult, GH_NOT_FOUND, parsePrHead, prHead } from "./gh";
+import { applyGhResolution, ghAuthState, ghAvailable, probeGh, branchRuns, checksOf, ciOf, failedLog, failedLogDetail, ghBinary, ghErrorSummary, ghLogGone, compareFiles, mergedPrs, prInfo, reviewRequestedPrs, prLessonData, prLessonDataDetail, prRead, prStatus, prsForBranch, ghNotFound, ghPrNotFound, repoCurrentSlug, latestReviewers, reviewAuthors, reviewComments, reviewerKind, resetGhBinary, setGhBinary, resetGhEtags, ghApiGet, prBatch, prBatchable, PR_BATCH_CHUNK, prBatchQuery, prBatchResult, GH_NOT_FOUND, parsePrHead, prHead, aiReviewerOf } from "./gh";
 
 const savedPath = process.env.PATH;
 afterEach(() => {
@@ -850,5 +850,16 @@ describe.skipIf(process.platform === "win32")("prHead", () => {
     const ok = fakeGh(`echo "$@" > "$(dirname "$0")/args.txt"\necho '{"isCrossRepository":true,"headRepositoryOwner":{"login":"me"},"headRepository":{"name":"app"},"headRefName":"t-1","baseRefName":"main","state":"OPEN"}'`);
     expect(await prHead(ok, "1", 5000)).toEqual({ crossRepo: true, headOwner: "me", headRepo: "app", headBranch: "t-1", baseBranch: "main", open: true });
     expect(readFileSync(join(ok, "args.txt"), "utf8").trim()).toBe("pr view 1 --json isCrossRepository,headRepositoryOwner,headRepository,headRefName,baseRefName,state");
+  });
+});
+
+describe("aiReviewerOf (BTL-273)", () => {
+  it("tells Codex from Copilot among the logins reviewerKind calls copilot, and nothing else", () => {
+    expect(aiReviewerOf("chatgpt-codex-connector")).toBe("codex");
+    expect(aiReviewerOf("chatgpt-codex-connector[bot]")).toBe("codex");
+    expect(aiReviewerOf("copilot-pull-request-reviewer")).toBe("copilot");
+    expect(aiReviewerOf("Copilot")).toBe("copilot");
+    expect(aiReviewerOf("dependabot[bot]")).toBeNull();
+    expect(aiReviewerOf("alice")).toBeNull();
   });
 });

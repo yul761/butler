@@ -59,11 +59,22 @@ describe("noticeNeedsYou", () => {
     const stack = (reason: string) => ({ kind: "stack", stack: { reason }, target: null }) as unknown as NowNotice;
     expect(noticeNeedsYou(stack("conflict"))).toBe(true);
     expect(noticeNeedsYou(stack("behind"))).toBe(false);
+    // BTL-278：自动 rebase 要改写正在 review 的 PR，等你点「马上 rebase」
+    expect(noticeNeedsYou(stack("confirm"))).toBe(true);
+    // 冲突标记没推出去、认不出推到哪个 remote：都要你动手；被下面那层拦住的只是跟着那条（BTL-278）
+    expect(noticeNeedsYou(stack("markers"))).toBe(true);
+    expect(noticeNeedsYou(stack("no_push_remote"))).toBe(true);
+    // 有层的 ticket 关掉了：整个栈停着，要你把它移出栈（BTL-278 复核）
+    expect(noticeNeedsYou(stack("ticket_closed"))).toBe(true);
+    expect(noticeNeedsYou(stack("held_below"))).toBe(false);
     const intake = (state: string) => ({ kind: "intake", item: { state } }) as unknown as NowNotice;
     expect(noticeNeedsYou(intake("needs_decision"))).toBe(true);
     expect(noticeNeedsYou(intake("queued"))).toBe(false);
     // 总控已代答（BTL-269 A2）：只是告诉你一声，可以改，但不算等你。
     expect(noticeNeedsYou({ kind: "behalf_answered", askId: 1, question: "q", answer: "a", by: "c", at: 0, target: { page: "shipherd", sessionId: null }, title: null })).toBe(false);
+    // 信息流转（BTL-272）：等确认的要你动手；已替你同步的只是提示。
+    expect(noticeNeedsYou({ kind: "flow_proposal", actionId: 1, label: "x", source: "s", text: "t", at: 1 })).toBe(true);
+    expect(noticeNeedsYou({ kind: "flow_synced", actionId: 1, label: "x", source: "s", at: 1 })).toBe(false);
   });
 });
 

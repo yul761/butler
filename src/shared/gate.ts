@@ -1,4 +1,4 @@
-import type { GateAction } from "./gate-command";
+import type { GateAction, PrCreateAction } from "./gate-command";
 
 /**
  * 合并总控的闸门（设计文档 2026-11-04）：PreToolUse hook ↔ Shipherd 主进程，走文件。
@@ -12,9 +12,10 @@ export const GATE_WAIT_MS = 5000;
 /** 请求里任何字符串的长度上限。 */
 const STRING_LIMIT = 4096;
 
+/** prCreate：action 不是开 PR、但同一条命令里还有 `gh pr create` 时带上它，闸门先审开 PR（BTL-273；旧 hook 没有这个字段）。 */
 export type GateRequest =
-  | { v: 1; phase: "pre"; action: GateAction; cwd: string; session: string | null; ticket: string | null }
-  | { v: 1; phase: "post"; action: GateAction; cwd: string; session: string | null; ticket: string | null };
+  | { v: 1; phase: "pre"; action: GateAction; prCreate?: PrCreateAction; cwd: string; session: string | null; ticket: string | null }
+  | { v: 1; phase: "post"; action: GateAction; prCreate?: PrCreateAction; cwd: string; session: string | null; ticket: string | null };
 
 export type GateResult = { v: 1; decision: "allow" } | { v: 1; decision: "deny"; reason: string };
 
@@ -42,6 +43,9 @@ function parseAction(raw: unknown): GateAction | null {
       return a.source === undefined ? { kind: "push", dir, target: a.target } : { kind: "push", dir, target: a.target, source: a.source };
     case "switch":
       return okStr(a.branch) && typeof a.create === "boolean" ? { kind: "switch", dir, branch: a.branch, create: a.create } : null;
+    case "pr_create":
+      if (!okNullable(a.head) || typeof a.draft !== "boolean" || !okNullable(a.repo)) return null;
+      return { kind: "pr_create", dir, head: a.head, draft: a.draft, repo: a.repo };
     default:
       return null;
   }
@@ -56,5 +60,11 @@ export function parseGateRequest(raw: unknown): GateRequest | null {
   if (!okNullable(o.session) || !okNullable(o.ticket)) return null;
   const action = parseAction(o.action);
   if (!action) return null;
-  return { v: 1, phase: o.phase, action, cwd: o.cwd, session: o.session, ticket: o.ticket };
+  let prCreate: PrCreateAction | undefined;
+  if (o.prCreate !== undefined) {
+    const p = parseAction(o.prCreate);
+    if (!p || p.kind !== "pr_create") return null;
+    prCreate = p;
+  }
+  return { v: 1, phase: o.phase, action, ...(prCreate && { prCreate }), cwd: o.cwd, session: o.session, ticket: o.ticket };
 }

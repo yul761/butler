@@ -49,6 +49,9 @@ export class RepoIdentity {
   private readonly git: (path: string) => string | null;
   private readonly asyncGit: (path: string) => Promise<string | null>;
   private readonly upstreamGit: (path: string) => string | null;
+  private readonly upstreamAsyncGit: (path: string) => Promise<string | null>;
+  /** 正在查的（异步版）：同一个路径同时只起一个 git。 */
+  private readonly inflight = new Map<string, Promise<string | null>>();
   private readonly exists: (p: string) => boolean;
   private readonly cache = new Map<string, string | null>();
   private readonly upstreamCache = new Map<string, string | null>();
@@ -59,6 +62,7 @@ export class RepoIdentity {
       git?: (path: string) => string | null;
       asyncGit?: (path: string) => Promise<string | null>;
       upstreamGit?: (path: string) => string | null;
+      upstreamAsyncGit?: (path: string) => Promise<string | null>;
       exists?: (p: string) => boolean;
       canonical?: (slug: string) => string;
     } = {},
@@ -67,6 +71,7 @@ export class RepoIdentity {
     this.git = d.git ?? defaultGit;
     this.asyncGit = d.asyncGit ?? defaultGitAsync;
     this.upstreamGit = d.upstreamGit ?? ((p) => defaultGit(p, execFileSync, "upstream"));
+    this.upstreamAsyncGit = d.upstreamAsyncGit ?? ((p) => defaultGitAsync(p, "upstream"));
     this.exists = d.exists ?? existsSync;
   }
 
@@ -91,6 +96,44 @@ export class RepoIdentity {
     const up = this.remoteSlug(path, this.upstreamCache, this.upstreamGit);
     for (const s of [this.slugOf(path), up === null ? null : this.canonical(up)]) if (s && !out.includes(s)) out.push(s);
     return out;
+  }
+
+  /** slugOf 的异步版（BTL-278）：栈服务每轮都要、关 ticket 比较仓库也用，从不在主线程同步跑 git（Windows 上一次 git 要几十毫秒）。缓存和同步版共用；git 失败是 null 且不缓存，下次重读。 */
+  async slugOfAsync(path: string): Promise<string | null> {
+    const s = await this.remoteSlugAsync(path, this.cache, this.asyncGit, "origin");
+    return s === null ? null : this.canonical(s);
+  }
+
+  /** remoteSlugsOf 的异步版（BTL-278），缓存和同步版共用。 */
+  async remoteSlugsOfAsync(path: string): Promise<string[]> {
+    const [origin, up] = await Promise.all([this.slugOfAsync(path), this.remoteSlugAsync(path, this.upstreamCache, this.upstreamAsyncGit, "upstream")]);
+    const out: string[] = [];
+    for (const s of [origin, up === null ? null : this.canonical(up)]) if (s && !out.includes(s)) out.push(s);
+    return out;
+  }
+
+  private async remoteSlugAsync(path: string, cache: Map<string, string | null>, git: (path: string) => Promise<string | null>, which: string): Promise<string | null> {
+    if (cache.has(path)) return cache.get(path) ?? null;
+    if (!this.exists(path)) return null;
+    if (!this.exists(join(path, ".git"))) {
+      cache.set(path, null);
+      return null;
+    }
+    const key = `${which}\0${path}`;
+    let p = this.inflight.get(key);
+    if (!p) {
+      p = git(path)
+        .then((url) => {
+          const slug = url ? parseRemoteSlug(url) : null;
+          // 等 git 的时候同步版先记下了的，不覆盖
+          if (!cache.has(path)) cache.set(path, slug);
+          return cache.get(path) ?? null;
+        })
+        .catch(() => null) // 超时或出错：不缓存，下次再查
+        .finally(() => this.inflight.delete(key));
+      this.inflight.set(key, p);
+    }
+    return p;
   }
 
   private remoteSlug(path: string, cache: Map<string, string | null>, git: (path: string) => string | null): string | null {
@@ -142,15 +185,5 @@ export class RepoIdentity {
     const slug = this.slugOf(path);
     if (slug) return { slug };
     return { reason: this.exists(join(path, ".git")) ? "no_remote" : "not_git" };
-  }
-
-  /**
-   * slugOf，但不在主线程上同步跑 git（BTL-270 审查，关 ticket 时比较仓库用）：先 warm（异步 git），再只看缓存；
-   * git 失败、没缓存上的就是 null（不像 slugOf 那样同步重试）。
-   */
-  async slugOfWarm(path: string): Promise<string | null> {
-    await this.warm([path]);
-    const s = this.cache.get(path);
-    return s === undefined || s === null ? null : this.canonical(s);
   }
 }

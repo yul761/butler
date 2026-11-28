@@ -38,6 +38,12 @@ describe("session guide", () => {
     }
   });
 
+  it("tells both coordinators that stack_rebase on needs_confirm confirms the rewrite: ask the user first (BTL-278)", () => {
+    for (const lang of ["zh", "en"] as const) {
+      for (const kind of ["coordinator", "shipherd"] as const) expect(sessionGuide(lang, kind)).toMatch(/needs_confirm[^。.]*ask_user|needs_confirm[\s\S]{0,120}ask_user/);
+    }
+  });
+
   it("只有 ticket session 被告知自我 review 之后用 report 说明结果（PR 进度时间线）", () => {
     expect(sessionGuide("zh", "ticket")).toContain("自我 review");
     expect(sessionGuide("zh", "ticket")).toContain("进度时间线");
@@ -265,5 +271,15 @@ describe("session guide: the lessons index (BTL-274)", () => {
     writeFileSync(f, "x");
     utimesSync(f, 1, 1);
     expect(pruneSessionGuides(dir, Date.now())).toBe(1);
+  });
+});
+
+describe("workflow tools in the coordinator guide (BTL-273)", () => {
+  it("tells both coordinators about the workflow tools, not ticket sessions", () => {
+    expect(sessionGuide("zh", "coordinator")).toContain("set_workflow");
+    expect(sessionGuide("en", "coordinator")).toContain("set_workflow");
+    expect(sessionGuide("zh", "shipherd")).toContain("set_workflow");
+    expect(sessionGuide("en", "shipherd")).toContain("list_workflow_presets");
+    for (const lang of ["zh", "en"] as const) for (const kind of ["ticket", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("set_workflow");
   });
 });

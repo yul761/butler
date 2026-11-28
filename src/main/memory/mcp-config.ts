@@ -22,7 +22,8 @@ export const SESSIONS_SERVER = "shipherd-sessions";
  * - ask_user 和 report（BTL-190 第 2+3 点）只是把问题、汇报交给 Shipherd，第一次用就弹权限确认的话 session 会卡在那里等人；
  * - 只读的查询工具（BTL-190 第 5 点，Shipherd 总控巡检时一路调用；同名的工具在总控里也只是读）。
  * - epic 里 feature 的整理（BTL-246）：排顺序、把 ticket 放进 feature，只改 Shipherd 里的分组，随时能改回来；从 Jira 导入一批 ticket 后要一个个归，每次都确认太烦。
- * 会动别的终端、建东西或花额度的（start_session、end_session、send_message、refresh_session、refresh_epic_summary、create_*、stack_define、stack_rebase、stack_layer_mode）照样要确认。
+ * 会动别的终端、建东西或花额度的（start_session、end_session、send_message、refresh_session、refresh_epic_summary、create_*、stack_define、stack_rebase、stack_layer_mode）
+ * 和改工作流程的 set_workflow 照样要确认。
  */
 export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "ask_user", "report",
@@ -34,6 +35,8 @@ export const SESSIONS_AUTO_ALLOW: readonly string[] = [
   "lessons",
   // BTL-271：看一个 ticket / PR 的预审、看预审队列（只读）。取消、插队（pre_review_queue_act）会作废花了钱的预审，要确认。
   "pre_review_status", "pre_review_queue",
+  // 工作流程（BTL-273）：session 标自己做完一步、总控看流程和预设，都只动 Shipherd 里的记录。改流程的 set_workflow 照样要确认。
+  "workflow_step_done", "get_workflow", "list_workflow_presets",
 ].map((tool) => `mcp__${SESSIONS_SERVER}__${tool}`);
 
 /** 怎么启动打包好的 StateCore MCP：command 是 Shipherd 自己的 Electron（process.execPath），script 是 bundle。 */

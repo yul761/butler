@@ -3,7 +3,7 @@
 const READ_LAST = new Set([
   "list", "view", "get", "status", "state", "summary", "snapshot", "since", "history", "limits", "hits", "rules", "search", "batches", "runs",
   "pending", "stats", "archived", "glance", "unclaimed", "unclaimedCount", "messages", "breakers", "violations", "queue", "events", "language", "why", "board",
-  "assessment", "reports",
+  "assessment", "reports", "turn",
 ]);
 
 export function isReadChannel(channel: string): boolean {

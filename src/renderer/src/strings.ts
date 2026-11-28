@@ -15,6 +15,7 @@ import type { ExportContent, FileScope, PreviewStatus, SectionApplyCounts } from
 import type { LessonOrigin, LessonStatus, LessonQueueRowStatus, LessonRunReason, LessonRunStatus } from "../../shared/lessons";
 import type { PrStageId, PrTimelineKind } from "../../shared/pr-stages";
 import type { Lang } from "../../shared/i18n";
+import type { MergeBy, WorkflowPresetId, WorkflowScopeKind, WorkflowStepId } from "../../shared/workflow";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
 import type { FeatureId } from "../../shared/feature-rows";
 import type { CheckAbsenceReason, CheckMode, CheckOutcome, CheckSeverity, CheckStage, CheckType, CheckVerdict, ChecksBulkOp } from "../../shared/checks";
@@ -25,7 +26,7 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
-import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
+import type { StackLayerState, StackMarkersWhere, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
@@ -54,7 +55,7 @@ const ZH = {
   },
   /** 设置页（UI 重做第 6 层）：四个 tab、高级里的分组、健康检查。 */
   set: {
-    tabs: { basic: "基本", features: "自动化", advanced: "高级", health: "健康检查", about: "关于" } as Record<SettingsTabId, string>,
+    tabs: { basic: "基本", features: "自动化", workflow: "工作流程", advanced: "高级", health: "健康检查", about: "关于" } as Record<SettingsTabId, string>,
     groups: {
       schedule: "定时与状态",
       sessions: "Session 与内存",
@@ -570,6 +571,10 @@ const ZH = {
       commentsUndelivered: (n: number) => `有 ${n} 条评论没送到 session`,
       stackConflict: "栈里有冲突没交给 session",
       stackStuck: "栈的 rebase 卡住了",
+      stackConfirm: "栈的 rebase 等你确认",
+      stackMarkers: "栈里有一层带着冲突标记，没推出去",
+      stackNoPushRemote: "新栈底不知道该推到哪个 remote",
+      stackTicketClosed: "栈里有一层的 ticket 关掉了（或分支不归它了），栈停着没 rebase",
       intake: "自动接活拿不准，等你决定",
       other: "Shipherd 要你点一下",
     },
@@ -1931,7 +1936,7 @@ const ZH = {
   messagesNone: "还没有消息。",
   messageStatus: { queued: "已排队", delivered: "已送达", replied: "已回复" } as Record<MessageStatus, string>,
   messageKind: {
-    instruction: "指令", report: "汇报", answer: "回答", shipherd: "全局总控", reply: "回复", review: "预审结果", comments: "评论", convention: "约定", ci: "CI 结果", merge: "合并通知", stack: "栈冲突", patrol: "每日巡检", cost: "花费", refresh: "换新", user: "你发的",
+    instruction: "指令", report: "汇报", answer: "回答", shipherd: "全局总控", reply: "回复", review: "预审结果", comments: "评论", convention: "约定", ci: "CI 结果", merge: "合并通知", stack: "栈冲突", patrol: "每日巡检", cost: "花费", refresh: "换新", user: "你发的", fact: "信息",
   } as Record<MessageKind, string>,
   messageVia: { hook: "工具调用间隙送到", input: "直接输入" } as Record<"hook" | "input", string>,
   messageInterrupt: "叫停",
@@ -1952,13 +1957,31 @@ const ZH = {
     noUpdateRefs: "这台电脑的 git 不支持 --update-refs（要 2.38 以上），Shipherd 会一层一层 rebase，慢一些。",
     repoTrunk: (repo: string, trunk: string) => `${repo} · trunk ${trunk}`,
     autoRebaseOff: "这个仓库没开「允许 Shipherd 自动 rebase 栈」：Shipherd 只看，不改分支。",
+    autoRebaseEpicOn: "自动 rebase：因为 epic 是半自动，已开着。",
+    autoRebaseEpicOff: "自动 rebase：因为 epic 是手动，已关着。Shipherd 只看，不改分支。",
+    autoRebaseExplicitOff: "epic 是半自动，但这个仓库明确关了自动 rebase，按关。Shipherd 只看，不改分支。",
+    epicOn: (names: string) => `因为 epic 是半自动，这些栈的自动 rebase 已开着：${names}`,
+    epicIgnored: (names: string) => `这些栈的 epic 是半自动，但这里明确关了自动 rebase，按关：${names}`,
+    confirmLine: (why: "ready_pr" | "handoff" | "remote_ahead", branches: string, push = true, toSession = true) => {
+      if (why === "remote_ahead") {
+        const then = toSession ? "会把冲突交给 session 解" : "会把冲突留给你解（「冲突交给 session」关着）";
+        const noPush = push ? "不给推送命令" : "「强推」开关关着，Shipherd 不推，也不给推送命令";
+        return `${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）。Shipherd 没把冲突交出去；点「马上 rebase」${then}，${noPush}，远端的提交怎么合进来由你决定。`;
+      }
+      const how = push
+        ? "Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。"
+        : "Shipherd 只在本地做 git rebase（「强推」开关关着，不推），不编译、不跑测试，改写后会请各层的 session 核对。";
+      return why === "ready_pr"
+        ? `${branches} 有在 review 的 PR，Shipherd 没改写。要改写就点「马上 rebase」：${how}`
+        : `${branches} 现在归 session 管（最下面那层的冲突还没解完），Shipherd 没动。要改写就点「马上 rebase」：${how}`;
+    },
     source: { mcp: "总控定的", ticket: "stack_on 建的", detected: "自动识别" } as Record<StackSource, string>,
     state: { branch_only: "分支", draft: "draft PR", ready: "PR", merged: "已合并" } as Record<StackLayerState, string>,
     bottom: "栈底",
     behind: (n: number) => `落后 trunk ${n} 个提交`,
     unpushed: "改写过，还没推",
     lastRun: (outcome: string, trigger: string, when: string) => `最近一次：${outcome}（${trigger}，${when}）`,
-    outcome: { rebased: "rebase 好了", noop: "不用 rebase", conflict: "有冲突", deferred: "推迟了", failed: "失败了", rolled_back: "已回滚", restored: "已从备份恢复" } as Record<StackRunOutcome, string>,
+    outcome: { rebased: "rebase 好了", noop: "不用 rebase", conflict: "有冲突", deferred: "推迟了", failed: "失败了", rolled_back: "已回滚", restored: "已从备份恢复", needs_confirm: "等你确认" } as Record<StackRunOutcome, string>,
     trigger: { main_updated: "trunk 更新", bottom_merged: "栈底合并", layer_commits: "某层有新提交", daily: "每日", manual: "手动", autosquash: "autosquash", restore: "恢复" } as Record<StackTrigger, string>,
     conflict: (branch: string, files: string) => `冲突在 ${branch}：${files}`,
     unpushedList: (branches: string) => `「推送分支」开关关着，没推：${branches}`,
@@ -1975,6 +1998,43 @@ const ZH = {
       draft_stale: (stack: string, branch: string, days: number) => `栈「${stack}」的 ${branch} 当 draft 已经 ${days} 天了，不用跑 CI 的话可以降回分支`,
       behind: (stack: string, commits: number, days: number) => `栈「${stack}」的栈底落后 trunk ${commits} 个提交（最早的是 ${days} 天前的）`,
       stuck: (stack: string, detail: string) => `栈「${stack}」的 rebase 卡住了：${detail}`,
+      prs_unreadable: (stack: string, host: string | null) =>
+        host && host !== "github.com"
+          ? `栈「${stack}」一天多没自动 rebase 了：Shipherd 读不到 ${host} 上的 PR，没法确认哪些层在 review，就一直推迟。是 GitHub Enterprise 就在终端跑 gh auth login --hostname ${host}，登录后下一轮会自己接着跑；不是 GitHub 的仓库，栈只能手动 rebase（点「马上 rebase」）。`
+          : `栈「${stack}」一天多没自动 rebase 了：读不到开着的 PR，Shipherd 没法确认哪些层在 review，就一直推迟。多半是 gh 没登录：在终端跑 gh auth login，登录后下一轮会自己接着跑。`,
+      markers: (stack: string, branch: string, files: string, where: StackMarkersWhere = "rewritten") => {
+        const what = { new_bottom: "还没推过", new_layer: "还没推过", rewritten: "改写过、还没推出去", local: "本地有还没推的提交" }[where];
+        if (!files) return `栈「${stack}」的 ${branch} ${what}，可是查不了里面有没有冲突标记，Shipherd 先不推，过一会儿再查。一直这样就看一下 Shipherd 的日志。`;
+        switch (where) {
+          case "new_bottom":
+            return `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它，也不给它开 PR：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`;
+          case "new_layer":
+            return `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它、不给它开 draft，叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，上面的层下一轮补推；要开 draft 就再点一次。`;
+          case "local":
+            return `栈「${stack}」的 ${branch} 本地有还没推的提交，${files} 里有冲突标记（<<<<<<<），远端那份没有。叠在它上面的层推上去就带着这些标记，Shipherd 先不推它们：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就补推上面的层。`;
+          default:
+            return `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<），远端那份没有。Shipherd 不推它（重新 rebase 也会带着这些标记），叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`;
+        }
+      },
+      held_below: (stack: string, branches: string, by: string) =>
+        `栈「${stack}」的 ${branches} 改写过、还没推出去：它们叠在 ${by} 上，${by} 带着冲突标记、还没推，推上去远端就带着那些标记。Shipherd 先不推，等 ${by} 的标记去掉（看 ${by} 那条提醒），下一轮自己补推。`,
+      no_push_remote: (stack: string, branch: string) =>
+        `栈「${stack}」的新栈底 ${branch} 还没推过，Shipherd 认不出该推到哪个 remote（这个仓库有好几个 remote），就没推、也没开 PR。在终端跑 git config branch.${branch}.pushRemote <remote> 指定，下一轮就接着开。`,
+      ticket_closed: (stack: string, branches: string) =>
+        `栈「${stack}」的 ${branches} 所在的 ticket 已经关掉或归档了，或者这个分支已经不属于它。Shipherd 不再改写、推送它，也不给它开 PR，所以整个栈先停着不 rebase。让那个 ticket 的 session 或总控用 stack_define 把它移出栈，或者在栈区块点「不再管这个栈」，或者重新打开 ticket，下一轮就接着来。`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
+        why === "remote_ahead"
+          ? `栈「${stack}」的 ${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）` +
+            (push && toSession ? "，照常交给 session 强推会冲掉它们" : "") +
+            `。Shipherd 没动；点「马上 rebase」会把冲突${toSession ? "交给 session" : "留给你"}，` +
+            (push ? "但不给推送命令。" : "「强推」开关关着，不推，也不给推送命令。")
+          : why === "ready_pr"
+          ? `栈「${stack}」要 rebase，可是 ${branches} 有在 review 的 PR。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`
+          : `栈「${stack}」要 rebase，可是 ${branches} 现在归 session 管：最下面那层的冲突交给它了，还没解完。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`,
+      rewritten: (stack: string, branches: string, asked: string, rest: string) =>
+        `栈「${stack}」的 ${branches} 刚被 Shipherd 自动 rebase 过：只是 git 合了过去，没编译、没跑测试。` +
+        (asked ? `已经请 ${asked} 的 session 核对。` : "") +
+        (rest ? `${rest} 没有 session 收到核对请求，要自己编译、跑测试。` : ""),
     },
     noticeOpen: "看栈",
     settingsIntro: "栈式 PR 的策略，分三层：全局 → 产品 → 仓库，下层覆盖上层。「允许 Shipherd 自动 rebase 栈」默认关，开了 Shipherd 才会改这个仓库里栈的本地分支；推送、开 PR、贴总览 issue 另外受下面的对外动作开关控制，也都默认关。",
@@ -2233,6 +2293,7 @@ const ZH = {
     pr_brief_post: { label: "贴 review 简报", hint: "预审完成后把 review 简报写进 PR 描述（整块替换 Shipherd 的简报块）" },
     intake_tracker_comment: { label: "自动接活：到 tracker 提问", hint: "ticket 缺信息时，开个小 session 或交给总控在 ticket 上留评论问" },
     intake_tracker_status: { label: "自动接活：改 ticket 状态", hint: "自动开工时让 session 先把 ticket 改成进行中" },
+    pr_review_request: { label: "请 bot review", hint: "工作流程走到 bot review 时，由 Shipherd 请 Copilot review 或在 PR 上评论 @codex review；关着时提醒 session 自己请" },
   } as Record<ExternalActionKind, { label: string; hint: string }>,
   externalAuditHeading: "对外动作",
   externalAuditNone: "还没有对外动作的记录。",
@@ -2625,6 +2686,128 @@ const ZH = {
     /** 没送进去的尝试（BTL-279）：次数、最后一次的时间和结果。 */
     attempts: (n: number, at: string | null, what: string | null) => `试过 ${n} 次${at ? `，最后一次 ${at}` : ""}${what ? `（${what}）` : ""}`,
     attempt: { recheck: "粘贴前复查没过", exited: "终端退出了" } as Record<"recheck" | "exited", string>,
+  },
+  /** 信息流转（BTL-272）。 */
+  infoflow: {
+    extract: "自动整理对话里的要点",
+    extractHelp: "每个 session 每说完一轮，Shipherd 用便宜的模型挑出决定、约定、限制和状态变化，记进对应的记忆，再发给需要知道的 session。太短的、没有决定的轮不会去问模型。",
+    autoApply: "对话里说的状态变化直接同步",
+    dailyAsks: "每天最多问模型几次",
+    dailyAsksHelp: "抽要点每轮要问一次模型。最近 24 小时问到这个数就先停，「现在」页上会说什么时候接着。默认 300。",
+    autoApplyHelp: "你在对话里明确说了、能撤销的（关掉 ticket、ticket 换 feature、哪个 feature 先做），直接同步，然后在「轮到你」里告诉你，可以撤销。要关 PR 的一律先问你。关掉这项就全都等你确认。",
+    tab: "信息流转",
+    title: "信息流转",
+    help: "从对话里抽出来的要点：记进了哪里、发给了谁、送到没有、同步了什么状态。",
+    empty: "还没有抽出要点。每轮对话结束后会出现在这里。",
+    from: (who: string) => `来自 ${who}`,
+    speaker: { user: "你说的", agent: "agent 说的" } as Record<string, string>,
+    kinds: { decision: "决定", convention: "约定", constraint: "限制", state_change: "状态变化", fyi: "知会" } as Record<string, string>,
+    importance: { high: "重要", normal: "一般", low: "不急" } as Record<string, string>,
+    memory: {
+      written: (scope: string) => `记进了 ${scope}`,
+      dup: "记忆里已经有了，没再发",
+      full: "记忆满了，没写进去",
+      failed: "没写进记忆",
+      skipped: "只知会，不进记忆",
+      disabled: "记忆关着",
+      pending: "还在记",
+      held: "等你确认，确认了再记、再发",
+      dropped: "没用上，不记也不发",
+      retracted: "撤销了，记忆里也删了",
+    },
+    sentTo: "发给",
+    notSent: "没有要发的人",
+    delivery: { queued: "排队中", delivered: "已送到", replied: "已回复", gone: "已清理" } as Record<string, string>,
+    action: {
+      pending: "等你确认",
+      applied: "已同步",
+      already: "本来就是这样，没动",
+      rejected: "你没同意",
+      undone: "已撤销",
+      failed: (e: string) => `没做成：${e}`,
+      stale: "情况变了，作废了",
+      partial: (left: string) => `关了，但还有没处理完的：${left}`,
+      /** 本来就是这样、但有一句说明（关的时候别人先关了：这次实际做了什么）。 */
+      alreadyNote: (note: string) => `本来就是这样：${note}`,
+      partialClosedMeanwhile: (left: string) => `别人先关了这个 ticket，这些没处理成：${left}`,
+    },
+    showOriginal: "看原话",
+    hideOriginal: "收起原话",
+    loading: "读取中…",
+    noOriginal: "原话已经不在了",
+    roles: { user: "你", assistant: "agent" } as Record<string, string>,
+    apply: "照做",
+    reject: "不用",
+    undo: "撤销",
+    dismiss: "知道了",
+    synced: (label: string) => `已替你同步：${label}`,
+    capped: (used: number, cap: number, at: string | null, dropped: number) =>
+      `抽要点最近 24 小时已经问了模型 ${used} 次（上限 ${cap}），先停着${at ? `，${at} 以后接着` : ""}。这期间说的话不会自动同步${dropped > 0 ? `，已经有 ${dropped} 轮等太久、不再处理了` : ""}。`,
+    partial: (label: string, left: string) => `「${label}」只做了一半：ticket 关了，这些没处理完：${left}。重试剩下的，还是就这样？`,
+    /** 关的时候别人先关了 ticket，勾了的有没处理成的（BTL-270 的 closedMeanwhile 是 failed）：写明原因，不给撤销。 */
+    partialClosedMeanwhile: (label: string, left: string) => `「${label}」：别人先关了这个 ticket，这些没处理成：${left}。重试剩下的，还是就这样？`,
+    leftPr: (url: string, kind: string, error: string) => `${url}（${kind}：${error}）`,
+    leftSession: (id: string, error: string) => `session ${id}（${error}）`,
+    retry: "重试剩下的",
+    accept: "就这样",
+    proposal: (who: string, label: string) => `${who} 里说要「${label}」，照做吗？`,
+    actFailed: "没做成：情况可能已经变了，去信息流转里看看。",
+    summary: (n: number) => `信息流转（${n}）`,
+    listSep: "、",
+    deliveryItem: (to: string, status: string) => `${to}（${status}）`,
+    withAuto: (state: string) => `${state}（自动）`,
+  },
+  /** 工作流程（BTL-273）：设置页的分层编辑、ticket 首页和 epic 页的流程条。 */
+  workflow: {
+    intro: "给 ticket 定一套做法。每做完一步，Shipherd 会提醒 session 下一步；开 PR、合并的顺序不对会被拦住。下面的层覆盖上面的层，都没设就照原来的方式做。",
+    askClaude: "用 Claude 设置",
+    askClaudeHint: "打开 Shipherd 总控，用一句话说你想怎么做，它会帮你设好",
+    prefill: "帮我设一下 ticket 的工作流程：",
+    none: "还没设任何一层，ticket 照原来的方式做。",
+    scope: { global: "全局", product: "产品", repo: "仓库", feature: "epic", ticket: "ticket" } as Record<WorkflowScopeKind, string>,
+    scopeLabel: (kind: string, label: string) => (label ? `${kind} · ${label}` : kind),
+    add: "加一层",
+    edit: "改",
+    clear: "清掉",
+    save: "保存",
+    cancel: "取消",
+    pickTarget: "选一个",
+    noTargets: "没有可选的",
+    startFrom: "从预设开始：",
+    preset: { fast: "快速：写完开 PR，CI 过了就合", strict: "严格：自审、预审、Copilot review、改完再合" } as Record<WorkflowPresetId, string>,
+    presetName: { fast: "快速", strict: "严格" } as Record<WorkflowPresetId, string>,
+    custom: "自定义",
+    steps: {
+      implement: "写代码", self_review: "自我 review", pre_review: "预审", open_pr: "开 PR", ci_green: "CI 通过",
+      bot_review: "bot review", address_comments: "处理意见", re_review: "再请 review", human_review: "人工 review", merge: "合并",
+    } as Record<WorkflowStepId, string>,
+    addStep: "加一步：",
+    up: "上移",
+    down: "下移",
+    remove: "去掉",
+    draft: "先开 draft",
+    bot: "请谁",
+    rounds: "最多几轮",
+    mergeBy: { coordinator: "总控合", user: "我自己合" } as Record<MergeBy, string>,
+    note: "这一步的要求（可不填）",
+    notes: "整体说明（可不填）",
+    noMerge: "流程里没有「合并」这一步：session 都不能合，要你自己合。",
+    count: (n: number, max: number) => `${n} / ${max} 字`,
+    tooLong: (n: number, max: number) => `${n} / ${max} 字：太长了，存不了。流程会原样发给每个 session，请删短一点。`,
+    saved: "存好了。",
+    unchanged: "和原来一样，没改。",
+    strip: "工作流程",
+    from: (where: string) => `按${where}`,
+    current: "现在：",
+    allDone: "都做完了",
+    loopOn: "这个流程打开了评论闭环：PR 上的 review 评论会转给 session。回不回 GitHub，还看你「对外动作 › 回复 review 评论」的开关。",
+    doneAt: (when: string) => `${when} 做完`,
+    rounds_: (n: number) => `已请 ${n} 轮`,
+    epicOwn: "这个 epic 的流程",
+    epicInherit: "这个 epic 没单独设流程，按上层的。",
+    epicTickets: "各 ticket 走到哪",
+    progress: (done: number, total: number) => `${done}/${total}`,
+    setHere: "去设置",
   },
 };
 

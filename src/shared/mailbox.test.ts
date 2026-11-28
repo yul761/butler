@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { mailboxHookCommand, messageFileName, messageIdOf } from "./mailbox";
+import { mailboxHookCommand, messageFileName, messageIdOf, wakesTarget } from "./mailbox";
 
 describe("mailbox names", () => {
   it("file names sort by time and give back the id whatever the suffix", () => {
@@ -39,5 +39,15 @@ describe("mailboxHookCommand", () => {
     mkdirSync(join(root, "mb", "t1"), { recursive: true });
     expect(run("t1")).toBe(`ran mailbox ${join(root, "mb")}\n`);
     expect(run("t2")).toBe("");
+  });
+});
+
+describe("wakesTarget (BTL-272)", () => {
+  it("wakes for messages, not for conventions, and for facts only when marked", () => {
+    expect(wakesTarget({ kind: "instruction" })).toBe(true);
+    expect(wakesTarget({ kind: "convention" })).toBe(false);
+    expect(wakesTarget({ kind: "fact", meta: null })).toBe(false);
+    expect(wakesTarget({ kind: "fact", meta: { wake: false } })).toBe(false);
+    expect(wakesTarget({ kind: "fact", meta: { wake: true } })).toBe(true);
   });
 });

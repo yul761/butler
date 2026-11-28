@@ -65,3 +65,25 @@ export function stackNotices(list: StackNoticeInfo[]): NowNotice[] {
 export function intakeNotices(list: IntakeNoticeInfo[]): NowNotice[] {
   return list.map((item) => ({ kind: "intake" as const, item }));
 }
+
+/**
+ * 「现在」页和「谁该动」看板共用的那一份 Shipherd 提醒：每个来源一项、都是必填的（index.ts 里漏接一个来源是类型错误），
+ * 按这个顺序排。
+ */
+export interface NoticeSources {
+  built: NowNotice[];
+  ci: NowNotice[];
+  cost: NowNotice[];
+  comments: NowNotice[];
+  stack: NowNotice[];
+  backtest: NowNotice[];
+  intake: NowNotice[];
+  /** 总控替你答了的（BTL-269 A2）。 */
+  behalf: NowNotice[];
+  /** 信息流转（BTL-272）：要你点头的、已同步的、没处理完的、到了每天上限的。 */
+  infoflow: NowNotice[];
+}
+const NOTICE_ORDER: readonly (keyof NoticeSources)[] = ["built", "ci", "cost", "comments", "stack", "backtest", "intake", "behalf", "infoflow"];
+export function collectNotices(s: NoticeSources): NowNotice[] {
+  return NOTICE_ORDER.flatMap((k) => s[k]);
+}

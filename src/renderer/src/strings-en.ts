@@ -17,10 +17,11 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
-import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
+import type { StackLayerState, StackMarkersWhere, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
+import type { MergeBy, WorkflowPresetId, WorkflowScopeKind, WorkflowStepId } from "../../shared/workflow";
 import type { FeatureId } from "../../shared/feature-rows";
 
 /** "1 ticket", "2 tickets". */
@@ -50,7 +51,7 @@ export const EN: UiStrings = {
     openFeatureSettings: "To let it do more, choose Semi-automatic in Settings › Automation, or turn features on one by one under Advanced there",
   },
   set: {
-    tabs: { basic: "Basics", features: "Automation", advanced: "Advanced", health: "Health check", about: "About" } as Record<SettingsTabId, string>,
+    tabs: { basic: "Basics", features: "Automation", workflow: "Workflow", advanced: "Advanced", health: "Health check", about: "About" } as Record<SettingsTabId, string>,
     groups: {
       schedule: "Schedule & status",
       sessions: "Sessions & memory",
@@ -559,6 +560,10 @@ export const EN: UiStrings = {
       commentsUndelivered: (n: number) => `${n} comments not delivered`,
       stackConflict: "A stack conflict wasn't handed to a session",
       stackStuck: "The stack rebase is stuck",
+      stackConfirm: "A stack rebase needs your OK",
+      stackMarkers: "A stack layer has conflict markers and wasn't pushed",
+      stackNoPushRemote: "Shipherd can't tell where to push a new stack bottom",
+      stackTicketClosed: "A stack layer's ticket is closed (or the branch isn't its any more), so the stack isn't rebased",
       intake: "Auto-intake needs your decision",
       other: "Shipherd needs a click",
     },
@@ -1914,7 +1919,7 @@ export const EN: UiStrings = {
   messagesNone: "No messages yet.",
   messageStatus: { queued: "Queued", delivered: "Delivered", replied: "Replied" } as Record<MessageStatus, string>,
   messageKind: {
-    instruction: "Instruction", report: "Report", answer: "Answer", shipherd: "Global control", reply: "Reply", review: "Pre-review", comments: "Comments", convention: "Convention", ci: "CI result", merge: "Merge notice", stack: "Stack conflict", patrol: "Daily patrol", cost: "Spend cap", refresh: "Refresh", user: "From you",
+    instruction: "Instruction", report: "Report", answer: "Answer", shipherd: "Global control", reply: "Reply", review: "Pre-review", comments: "Comments", convention: "Convention", ci: "CI result", merge: "Merge notice", stack: "Stack conflict", patrol: "Daily patrol", cost: "Spend cap", refresh: "Refresh", user: "From you", fact: "Info",
   } as Record<MessageKind, string>,
   messageVia: { hook: "between tool calls", input: "typed in" } as Record<"hook" | "input", string>,
   messageInterrupt: "Interrupt",
@@ -1932,13 +1937,31 @@ export const EN: UiStrings = {
     noUpdateRefs: "This computer's git has no --update-refs (it needs 2.38 or later), so Shipherd rebases one layer at a time, which is slower.",
     repoTrunk: (repo: string, trunk: string) => `${repo} · trunk ${trunk}`,
     autoRebaseOff: "\"Let Shipherd rebase stacks\" is off for this repo: Shipherd only watches and does not change the branches.",
+    autoRebaseEpicOn: "Auto rebase: on, because the epic is semi-automatic.",
+    autoRebaseEpicOff: "Auto rebase: off, because the epic is manual. Shipherd only watches and does not change the branches.",
+    autoRebaseExplicitOff: "The epic is semi-automatic, but this repo turned auto rebase off. It stays off. Shipherd only watches and does not change the branches.",
+    epicOn: (names: string) => `Auto rebase is on for these stacks because their epic is semi-automatic: ${names}`,
+    epicIgnored: (names: string) => `These stacks' epic is semi-automatic, but auto rebase is turned off here, so it stays off: ${names}`,
+    confirmLine: (why, branches, push = true, toSession = true) => {
+      if (why === "remote_ahead") {
+        const then = toSession ? "hands the conflict to the session" : "leaves the conflict to you (Hand conflicts to the session is off)";
+        const noPush = push ? "without a push command" : "and nothing is pushed: the Force push switch is off, so Shipherd doesn't push or give a push command";
+        return `${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer). Shipherd didn't hand the conflict over; "Rebase now" ${then} ${noPush}, and you decide how to bring those commits in.`;
+      }
+      const how = push
+        ? "Shipherd only runs git rebase and force-pushes. It doesn't build or run tests; afterwards it asks each layer's session to check."
+        : "Shipherd only runs git rebase locally (the Force push switch is off, so nothing is pushed). It doesn't build or run tests; afterwards it asks each layer's session to check.";
+      return why === "ready_pr"
+        ? `${branches} has a PR under review, so Shipherd didn't rewrite it. Click "Rebase now" to rewrite it: ${how}`
+        : `${branches} belong to a session for now (the conflict on the lowest one isn't solved yet), so Shipherd left them alone. Click "Rebase now" to rewrite them: ${how}`;
+    },
     source: { mcp: "set by a coordinator", ticket: "made with stack_on", detected: "detected" } as Record<StackSource, string>,
     state: { branch_only: "branch", draft: "draft PR", ready: "PR", merged: "merged" } as Record<StackLayerState, string>,
     bottom: "bottom",
     behind: (count: number) => `${n(count, "commit")} behind trunk`,
     unpushed: "rewritten, not pushed yet",
     lastRun: (outcome: string, trigger: string, when: string) => `Latest: ${outcome} (${trigger}, ${when})`,
-    outcome: { rebased: "rebased", noop: "nothing to rebase", conflict: "conflict", deferred: "deferred", failed: "failed", rolled_back: "rolled back", restored: "restored from backup" } as Record<StackRunOutcome, string>,
+    outcome: { rebased: "rebased", noop: "nothing to rebase", conflict: "conflict", deferred: "deferred", failed: "failed", rolled_back: "rolled back", restored: "restored from backup", needs_confirm: "waiting for your OK" } as Record<StackRunOutcome, string>,
     trigger: { main_updated: "trunk moved", bottom_merged: "bottom merged", layer_commits: "new commits on a layer", daily: "daily", manual: "manual", autosquash: "autosquash", restore: "restore" } as Record<StackTrigger, string>,
     conflict: (branch: string, files: string) => `Conflict on ${branch}: ${files}`,
     unpushedList: (branches: string) => `"Push branches" is off, not pushed: ${branches}`,
@@ -1955,6 +1978,43 @@ export const EN: UiStrings = {
       draft_stale: (stack: string, branch: string, days: number) => `${branch} in stack "${stack}" has been a draft for ${n(days, "day")}; turn it back into a branch if it no longer needs CI`,
       behind: (stack: string, commits: number, days: number) => `The bottom of stack "${stack}" is ${n(commits, "commit")} behind trunk (the oldest from ${n(days, "day")} ago)`,
       stuck: (stack: string, detail: string) => `Rebasing stack "${stack}" is stuck: ${detail}`,
+      prs_unreadable: (stack: string, host: string | null) =>
+        host && host !== "github.com"
+          ? `Stack "${stack}" hasn't been rebased automatically for over a day: Shipherd can't read the PRs on ${host}, so it can't tell which layers are in review and keeps putting it off. If it's GitHub Enterprise, run gh auth login --hostname ${host} in a terminal and the next round picks it up; if it isn't a GitHub repository, the stack can only be rebased by hand ("Rebase now").`
+          : `Stack "${stack}" hasn't been rebased automatically for over a day: Shipherd can't read the open PRs, so it can't tell which layers are in review and keeps putting it off. Most likely gh isn't signed in: run gh auth login in a terminal, and the next round picks it up.`,
+      markers: (stack: string, branch: string, files: string, where: StackMarkersWhere = "rewritten") => {
+        const what = { new_bottom: "hasn't been pushed yet", new_layer: "hasn't been pushed yet", rewritten: "was rewritten but not pushed yet", local: "has local commits that aren't pushed" }[where];
+        if (!files) return `${branch} in stack "${stack}" ${what}, and Shipherd couldn't check it for conflict markers, so it holds the push and checks again in a while. If this keeps up, look at Shipherd's log.`;
+        switch (where) {
+          case "new_bottom":
+            return `${branch} in stack "${stack}" hasn't been pushed yet, and ${files} has conflict markers (<<<<<<<). Shipherd won't push it or open its PR: have this layer's session remove them and commit; Shipherd checks again next round and pushes once it's clean.`;
+          case "new_layer":
+            return `${branch} in stack "${stack}" hasn't been pushed yet, and ${files} has conflict markers (<<<<<<<). Shipherd won't push it or open its draft, nor push the layers above it for now: have this layer's session remove them and commit; the layers above get pushed next round, and to open the draft, click again.`;
+          case "local":
+            return `${branch} in stack "${stack}" has local commits that aren't pushed, and ${files} has conflict markers (<<<<<<<) the remote copy doesn't. The layers above it would carry those markers, so Shipherd holds their push: have this layer's session remove them and commit; Shipherd checks again next round and then pushes the layers above.`;
+          default:
+            return `${branch} in stack "${stack}" was rewritten but not pushed yet, and ${files} has conflict markers (<<<<<<<) the remote copy doesn't. Shipherd won't push it (rebasing again keeps the markers), nor the layers above it for now: have this layer's session remove them and commit; Shipherd checks again next round and pushes once it's clean.`;
+        }
+      },
+      held_below: (stack: string, branches: string, by: string) =>
+        `${branches} in stack "${stack}" ${branches.includes(",") ? "were" : "was"} rewritten but not pushed yet: ${by} below has conflict markers that aren't pushed, and pushing on top of it would put them on the remote. Shipherd holds the push until ${by} is clean (see its notice), then pushes next round on its own.`,
+      no_push_remote: (stack: string, branch: string) =>
+        `${branch}, the new bottom of stack "${stack}", hasn't been pushed yet, and Shipherd can't tell which remote it goes to (this repository has several), so it didn't push it or open its PR. Say which with git config branch.${branch}.pushRemote <remote> in a terminal, and the next round opens it.`,
+      ticket_closed: (stack: string, branches: string) =>
+        `The ticket for ${branches} in stack "${stack}" is closed or archived, or the branch isn't its any more. Shipherd doesn't rewrite or push it any more, or open a PR for it, so the whole stack is on hold and isn't rebased. Have that ticket's session or coordinator take it out of the stack with stack_define, click "Stop managing this stack" in the stack section, or reopen the ticket, and the next round carries on.`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
+        why === "remote_ahead"
+          ? `Stack "${stack}": ${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer)` +
+            (push && toSession ? "; the usual force push from the session would drop them" : "") +
+            `. Shipherd left it alone; "Rebase now" ${toSession ? "hands the conflict to the session" : "leaves the conflict to you"}` +
+            (push ? " without a push command." : ", and nothing is pushed: the Force push switch is off, so there's no push command either.")
+          : why === "ready_pr"
+          ? `Stack "${stack}" needs a rebase, but ${branches} has a PR under review. Shipherd left it alone. Click "Rebase now" if it's OK to rewrite (Shipherd doesn't build or run tests).`
+          : `Stack "${stack}" needs a rebase, but ${branches} belong to a session for now: it still has the conflict on the lowest one. Shipherd left them alone. Click "Rebase now" if it's OK to rewrite (Shipherd doesn't build or run tests).`,
+      rewritten: (stack: string, branches: string, asked: string, rest: string) =>
+        `Shipherd just rebased ${branches} in stack "${stack}" on its own: git only carried the commits over; nothing was built or tested.` +
+        (asked ? ` The session of ${asked} was asked to check.` : "") +
+        (rest ? ` No session got a request to check ${rest}: build and test it yourself.` : ""),
     },
     noticeOpen: "View stacks",
     settingsIntro: "Policy for stacked PRs, in three layers: global → product → repo, each overriding the one above. \"Let Shipherd rebase stacks\" is off by default; only with it on does Shipherd change the local branches of stacks in that repo. Pushing, opening PRs and posting the overview issue also need the outward-action switches below, all off by default.",
@@ -2213,6 +2273,7 @@ export const EN: UiStrings = {
     pr_brief_post: { label: "Post review briefs", hint: "Writes the review brief into the PR description after a pre-review, replacing Shipherd's brief block" },
     intake_tracker_comment: { label: "Intake: ask on the tracker", hint: "When a ticket is missing information, a small session or the coordinator comments on it with questions" },
     intake_tracker_status: { label: "Intake: change ticket status", hint: "When intake starts a ticket, the session first moves it to In Progress" },
+    pr_review_request: { label: "Ask a bot to review", hint: "When a workflow reaches bot review, Shipherd asks Copilot to review or comments @codex review on the PR; when off, the session is reminded to ask itself" },
   } as Record<ExternalActionKind, { label: string; hint: string }>,
   externalAuditHeading: "Outward actions",
   externalAuditNone: "No outward actions recorded yet.",
@@ -2595,5 +2656,123 @@ export const EN: UiStrings = {
     failed: "Not delivered; Shipherd tries again every 10 seconds",
     attempts: (n: number, at: string | null, what: string | null) => `Tried ${n} time${n === 1 ? "" : "s"}${at ? `, last at ${at}` : ""}${what ? ` (${what})` : ""}`,
     attempt: { recheck: "the last check before pasting failed", exited: "the terminal exited" } as Record<"recheck" | "exited", string>,
+  },
+  infoflow: {
+    extract: "Pick out key points from conversations",
+    extractHelp: "After each round in any session, Shipherd uses a cheap model to pick out decisions, conventions, constraints and state changes, saves them to the right memory, and sends them to the sessions that need to know. Short rounds and rounds with no decisions don't go to the model.",
+    autoApply: "Sync state changes said in conversation",
+    dailyAsks: "Model asks per day, at most",
+    dailyAsksHelp: "Info flow asks the model once per round. Once it has asked this many times in the last 24 hours it pauses, and the Now page says when it goes on. Default 300.",
+    autoApplyHelp: "Changes you clearly said and that can be undone (close a ticket, move a ticket to another feature, do a feature first) are synced right away, and Your turn tells you so you can undo. Closing a PR always asks you first. Turn this off to confirm everything.",
+    tab: "Info flow",
+    title: "Info flow",
+    help: "Key points picked out of conversations: where they were saved, who got them, whether they arrived, and what state was synced.",
+    empty: "No key points yet. They show up here after each round of conversation.",
+    from: (who: string) => `From ${who}`,
+    speaker: { user: "You said", agent: "Agent said" } as Record<string, string>,
+    kinds: { decision: "Decision", convention: "Convention", constraint: "Constraint", state_change: "State change", fyi: "FYI" } as Record<string, string>,
+    importance: { high: "Important", normal: "Normal", low: "Low" } as Record<string, string>,
+    memory: {
+      written: (scope: string) => `Saved to ${scope}`,
+      dup: "Already in memory, not sent again",
+      full: "Memory is full, not saved",
+      failed: "Not saved to memory",
+      skipped: "FYI only, not saved",
+      disabled: "Memory is off",
+      pending: "Still saving",
+      held: "Waiting for you; saved and sent once you confirm",
+      dropped: "Not used, so not saved or sent",
+      retracted: "Undone, and removed from memory",
+    },
+    sentTo: "Sent to",
+    notSent: "Nobody to send to",
+    delivery: { queued: "Queued", delivered: "Delivered", replied: "Replied", gone: "Cleared" } as Record<string, string>,
+    action: {
+      pending: "Waiting for you",
+      applied: "Synced",
+      already: "Already like that, nothing changed",
+      rejected: "You said no",
+      undone: "Undone",
+      failed: (e: string) => `Didn't work: ${e}`,
+      stale: "Things changed, dropped",
+      partial: (left: string) => `Closed, but not everything was done: ${left}`,
+      alreadyNote: (note: string) => `Already like that: ${note}`,
+      partialClosedMeanwhile: (left: string) => `Someone else closed this ticket first, and these didn't go through: ${left}`,
+    },
+    showOriginal: "Show original",
+    hideOriginal: "Hide original",
+    loading: "Loading...",
+    noOriginal: "The original is gone",
+    roles: { user: "You", assistant: "Agent" } as Record<string, string>,
+    apply: "Do it",
+    reject: "No",
+    undo: "Undo",
+    dismiss: "Got it",
+    synced: (label: string) => `Synced for you: ${label}`,
+    capped: (used: number, cap: number, at: string | null, dropped: number) =>
+      `Info flow asked the model ${used} times in the last 24 hours (limit ${cap}) and is paused${at ? ` until ${at}` : ""}. What's said meanwhile won't be synced automatically${dropped > 0 ? `; ${dropped} ${dropped === 1 ? "round waited too long and was" : "rounds waited too long and were"} dropped` : ""}.`,
+    partial: (label: string, left: string) => `"${label}" is only half done: the ticket is closed, but these weren't: ${left}. Retry them, or leave it?`,
+    partialClosedMeanwhile: (label: string, left: string) => `"${label}": someone else closed this ticket first, and these didn't go through: ${left}. Retry them, or leave it?`,
+    leftPr: (url: string, kind: string, error: string) => `${url} (${kind}: ${error})`,
+    leftSession: (id: string, error: string) => `session ${id} (${error})`,
+    retry: "Retry the rest",
+    accept: "Leave it",
+    proposal: (who: string, label: string) => `In ${who}: "${label}". Do it?`,
+    actFailed: "Didn't work. Things may have changed; check Info flow.",
+    summary: (n: number) => `Info flow (${n})`,
+    listSep: ", ",
+    deliveryItem: (to: string, status: string) => `${to} (${status})`,
+    withAuto: (state: string) => `${state} (auto)`,
+  },
+  workflow: {
+    intro: "Set how tickets get done. As each step finishes, Shipherd tells the session what's next, and stops a PR or merge that comes out of order. Lower layers override higher ones; with none set, tickets work as before.",
+    askClaude: "Set it up with Claude",
+    askClaudeHint: "Opens the Shipherd coordinator: say in a sentence how you want to work and it sets it up",
+    prefill: "Help me set up the ticket workflow: ",
+    none: "No layer is set yet, so tickets work as before.",
+    scope: { global: "Global", product: "Product", repo: "Repo", feature: "Epic", ticket: "Ticket" } as Record<WorkflowScopeKind, string>,
+    scopeLabel: (kind: string, label: string) => (label ? `${kind} · ${label}` : kind),
+    add: "Add a layer",
+    edit: "Edit",
+    clear: "Clear",
+    save: "Save",
+    cancel: "Cancel",
+    pickTarget: "Pick one",
+    noTargets: "Nothing to pick",
+    startFrom: "Start from a preset:",
+    preset: { fast: "Fast: write it, open a PR, merge once CI passes", strict: "Strict: self-review, pre-review, Copilot review, fix, then merge" } as Record<WorkflowPresetId, string>,
+    presetName: { fast: "Fast", strict: "Strict" } as Record<WorkflowPresetId, string>,
+    custom: "Custom",
+    steps: {
+      implement: "Write the code", self_review: "Self-review", pre_review: "Pre-review", open_pr: "Open the PR", ci_green: "CI passes",
+      bot_review: "Bot review", address_comments: "Address comments", re_review: "Review again", human_review: "Human review", merge: "Merge",
+    } as Record<WorkflowStepId, string>,
+    addStep: "Add a step:",
+    up: "Move up",
+    down: "Move down",
+    remove: "Remove",
+    draft: "Open as draft",
+    bot: "Reviewer",
+    rounds: "Max rounds",
+    mergeBy: { coordinator: "Coordinator merges", user: "I merge" } as Record<MergeBy, string>,
+    note: "What this step needs (optional)",
+    notes: "Notes for the whole workflow (optional)",
+    noMerge: "There's no Merge step, so no session may merge; you merge it yourself.",
+    count: (n: number, max: number) => `${n} / ${max} characters`,
+    tooLong: (n: number, max: number) => `${n} / ${max} characters: too long to save. The workflow is sent to every session as is, so please shorten it.`,
+    saved: "Saved.",
+    unchanged: "Same as before, nothing changed.",
+    strip: "Workflow",
+    from: (where: string) => `From ${where}`,
+    current: "Now: ",
+    allDone: "All done",
+    loopOn: "This workflow turns the comment loop on: review comments on the PR go to the session. Whether replies go to GitHub still follows your External actions › Reply to review comments switch.",
+    doneAt: (when: string) => `done ${when}`,
+    rounds_: (n: number) => `${n} round${n === 1 ? "" : "s"} asked`,
+    epicOwn: "This epic's workflow",
+    epicInherit: "This epic has no workflow of its own; it follows the layer above.",
+    epicTickets: "Where each ticket is",
+    progress: (done: number, total: number) => `${done}/${total}`,
+    setHere: "Settings",
   },
 };

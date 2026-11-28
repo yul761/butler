@@ -31,15 +31,40 @@ describe("RepoIdentity", () => {
     expect(nullCalls).toBe(1);
   });
 
-  it("slugOfWarm reads the origin with the async git only, never the sync one; a failure is null and not cached (BTL-270 review)", async () => {
+  it("slugOfAsync reads the origin with the async git only, never the sync one; a failure is null and not cached (BTL-270 review)", async () => {
     const sync = vi.fn(() => "git@github.com:acme/web.git");
     let fail = true;
     const id = new RepoIdentity({ git: sync, asyncGit: async () => { if (fail) throw new Error("timeout"); return "git@github.com:Acme/Web.git"; }, exists: () => true, canonical: (s) => `c:${s}` });
-    expect(await id.slugOfWarm("/a")).toBeNull();
+    expect(await id.slugOfAsync("/a")).toBeNull();
     fail = false;
-    expect(await id.slugOfWarm("/a")).toBe("c:acme/web");
-    expect(await id.slugOfWarm("/a")).toBe("c:acme/web");
+    expect(await id.slugOfAsync("/a")).toBe("c:acme/web");
+    expect(await id.slugOfAsync("/a")).toBe("c:acme/web");
     expect(sync).not.toHaveBeenCalled();
+  });
+
+  it("slugOfAsync: a missing path is not cached; a non-repo is cached as null; neither runs git", async () => {
+    const slash = (p: string) => p.replace(/\\/g, "/");
+    let mounted = false;
+    let plainHasGit = false;
+    const asyncGit = vi.fn(async () => "git@github.com:acme/web.git");
+    const id = new RepoIdentity({
+      git: () => {
+        throw new Error("sync git must not run");
+      },
+      asyncGit,
+      exists: (p) => {
+        const s = slash(p);
+        return s.startsWith("/plain") ? (s.endsWith("/.git") ? plainHasGit : true) : mounted;
+      },
+    });
+    expect(await id.slugOfAsync("/mnt/x")).toBeNull();
+    expect(await id.slugOfAsync("/plain")).toBeNull();
+    expect(asyncGit).not.toHaveBeenCalled();
+    mounted = true;
+    plainHasGit = true;
+    expect(await id.slugOfAsync("/mnt/x")).toBe("acme/web");
+    expect(await id.slugOfAsync("/plain")).toBeNull();
+    expect(asyncGit).toHaveBeenCalledTimes(1);
   });
 
   it("remoteSlugsOf gives origin and upstream, deduplicated, each cached on its own (fork workflow, BTL-261)", () => {
@@ -53,6 +78,37 @@ describe("RepoIdentity", () => {
     expect(same.remoteSlugsOf("/a")).toEqual(["acme/web"]);
     const noUpstream = new RepoIdentity({ git: () => "https://github.com/acme/web", upstreamGit: () => null, exists: () => true });
     expect(noUpstream.remoteSlugsOf("/a")).toEqual(["acme/web"]);
+  });
+
+  it("has async slugOf / remoteSlugsOf that share the cache, run one git per path at a time, and don't cache a failure (BTL-278)", async () => {
+    let origin = 0;
+    let up = 0;
+    let fail = true;
+    const id = new RepoIdentity({
+      git: () => {
+        throw new Error("sync git must not run");
+      },
+      upstreamGit: () => {
+        throw new Error("sync git must not run");
+      },
+      asyncGit: async () => (origin++, "git@github.com:me/web.git"),
+      upstreamAsyncGit: async () => {
+        up++;
+        if (fail) throw new Error("timeout");
+        return "https://github.com/acme/web.git";
+      },
+      exists: () => true,
+    });
+    expect(await id.remoteSlugsOfAsync("/a")).toEqual(["me/web"]);
+    fail = false;
+    const [x, y] = await Promise.all([id.remoteSlugsOfAsync("/a"), id.remoteSlugsOfAsync("/a")]);
+    expect(x).toEqual(["me/web", "acme/web"]);
+    expect(y).toEqual(x);
+    expect(await id.remoteSlugsOfAsync("/a")).toEqual(["me/web", "acme/web"]);
+    expect([origin, up]).toEqual([1, 2]);
+    // 同步版读的是同一份缓存
+    expect(id.remoteSlugsOf("/a")).toEqual(["me/web", "acme/web"]);
+    expect(await id.slugOfAsync("/a")).toBe("me/web");
   });
 
   it("gives the renamed name once the rename service is attached; rawSlugOf keeps what the remote says (BTL-261)", () => {

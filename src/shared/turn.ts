@@ -150,8 +150,13 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "comments_waiting":
       return true;
     case "cost": return n.breaker.state === "paused";
-    case "stack": return n.stack.reason === "conflict" || n.stack.reason === "stuck";
+    // no_push_remote：要你配 branch.<b>.pushRemote（BTL-278）。held_below 不算：拦它的那层自己有一条 markers
+    // ticket_closed：要你把关掉的 ticket 的层移出栈（不然整个栈一直不 rebase）
+    case "stack": return ["conflict", "stuck", "confirm", "prs_unreadable", "markers", "no_push_remote", "ticket_closed"].includes(n.stack.reason);
     case "intake": return INTAKE_DECISION_STATES.includes(n.item.state);
+    case "flow_proposal":
+    case "flow_partial":
+      return true;
     case "lessons_paused":
     case "lessons_failing":
     case "shared_mcp_failed":
@@ -159,6 +164,8 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "check_promoted":
     case "check_demoted":
     case "behalf_answered": // 总控已经替你答了（BTL-269 A2）：给你看一眼、可以改，不是非你不可。
+    case "flow_synced":
+    case "flow_capped":
       return false;
   }
 }

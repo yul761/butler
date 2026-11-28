@@ -396,6 +396,15 @@ function headless() {
       answer();
       return;
     }
+    // 信息流转的抽要点（conv_relay，BTL-272）：items 的每一项有 quote。默认一条都不抽；FAKE_CLAUDE_FLOW_FILE 指向的文件存在时原样回它（每次重读）。
+    const flowItem = props.items && props.items.items && props.items.items.properties;
+    if (flowItem && flowItem.quote) {
+      const file = process.env.FAKE_CLAUDE_FLOW_FILE;
+      const out = file && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { items: [] };
+      log(`infoflow extract ${out.items.length}`);
+      reply("flow", out);
+      return;
+    }
     if (props.items && !props.summary) {
       const ids = [...input.matchAll(/^### id=(\d+) /gm)].map((m) => Number(m[1]));
       log(`evidence verify ${ids.length}`);

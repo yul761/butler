@@ -130,6 +130,8 @@ export const SETTING_DEFAULTS = {
   /** 工作流 N：自动接活缺信息时到 tracker 上提问；开工时把 ticket 改成进行中。 */
   externalIntakeTrackerComment: "0",
   externalIntakeTrackerStatus: "0",
+  /** BTL-273：工作流程里 Shipherd 替 session 请 Copilot / Codex review。关着时提醒 session 自己请。 */
+  externalPrReviewRequest: "0",
   /** 工作流 G：开发 session 交证据、提 PR 前后台预审（复跑、对照规矩、核对证据），结果送回 session：1 开 0 关。 */
   preReviewEnabled: "0",
   /** BTL-271：预审同时最多跑几个（1–8）。不同 worktree 的可以同时跑，同一个 worktree 的一个接一个。新装 2；升级上来的迁移 60 写成 1（以前一次一个）。 */
@@ -208,6 +210,12 @@ export const SETTING_DEFAULTS = {
   updateSkippedVersion: "",
   /** BTL-256：重启后自动恢复之前在工作的 session（总控管的）。默认关。 */
   autoResumeAfterRestart: "0",
+  /** BTL-272：每轮对话结束后抽要点、写记忆、发给要知道的 session。默认开（用户要求；只写记忆和信箱，不对外）。 */
+  flowExtract: "1",
+  /** BTL-272：对话里用户明确说的、能撤销的状态变化（关 ticket、换 feature、先做哪个）直接同步。默认开；关掉就一律等你确认。 */
+  flowAutoApply: "1",
+  /** BTL-272：抽要点最近 24 小时最多问模型几次（和 shared/infoflow 的 FLOW_DAILY_ASKS 一样）。 */
+  flowDailyAsks: "300",
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFAULTS;
