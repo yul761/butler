@@ -255,6 +255,52 @@ function swapped(a: readonly string[], b: readonly string[]): boolean {
   return sa.every((w, i) => w === sb[i]);
 }
 
+/** 分句：逗号、分号、句号、问号叹号、换行隔开的（顿号不切：「A、B 开启」是一个分句）。 */
+const CLAUSE = /[，,;；。！？!?\n]+/;
+/**
+ * 每个分句里只出现一对反义词中一头的：对象（分句的词去掉这个反义词，按原来的顺序）配上是哪一头。
+ * key 是「第几对|对象」，值是 0 / 1（哪一头）。分句里两头都有的不算（「turn off x and turn on y」说不清哪个对象配哪头）。
+ */
+function clausePolarity(s: string): Map<string, 0 | 1> {
+  const out = new Map<string, 0 | 1>();
+  for (const clause of plain(s).split(CLAUSE)) {
+    const words = clause.match(/[a-z0-9]+|\p{Script=Han}+/gu) ?? [];
+    ZH_ANTONYMS.forEach(([x, y], k) => {
+      const hasX = words.some((w) => w.includes(x));
+      const hasY = words.some((w) => w.includes(y));
+      if (hasX === hasY) return;
+      const side = hasX ? x : y;
+      const obj = words.map((w) => w.split(side).join("")).filter((w) => w !== "").join(" ");
+      if (obj !== "") out.set(`z${k}|${obj}`, hasX ? 0 : 1);
+    });
+    const stems = words.map((w) => (/^[a-z0-9]+$/.test(w) ? stem(w) : w));
+    EN_ANTONYMS.forEach(([x, y], k) => {
+      const hasX = stems.includes(x);
+      const hasY = stems.includes(y);
+      if (hasX === hasY) return;
+      const side = hasX ? x : y;
+      const obj = words.filter((_, i) => stems[i] !== side).join(" ");
+      if (obj !== "") out.set(`e${k}|${obj}`, hasX ? 0 : 1);
+    });
+  }
+  return out;
+}
+
+/**
+ * 同一个对象在两句里配的是一对反义词的两头（「测试环境 cache off，生产环境 cache on」对「生产环境 cache off，测试环境 cache on，日志 on」：
+ * 「测试环境 cache」一边 off、一边 on）。两句的反义词次数、先后可以都对得上，换的是对象（f780e9ef 复核 MF3），按分句比才看得出来。
+ * 对象按字面比：英文里换了语序的（In prod turn off caching / Turn off caching in prod）认不出来（BTL-280）。
+ */
+function clausesClash(a: string, b: string): boolean {
+  const pa = clausePolarity(a);
+  if (pa.size === 0) return false;
+  for (const [key, side] of clausePolarity(b)) {
+    const other = pa.get(key);
+    if (other !== undefined && other !== side) return true;
+  }
+  return false;
+}
+
 /** a 和 b 说的是相反的事、或者不是同一件事（见上面的几种）：再像也不算重复。 */
 export function polarityClash(a: string, b: string): boolean {
   if (!sameSet(negations(a), negations(b))) return true;
@@ -263,13 +309,15 @@ export function polarityClash(a: string, b: string): boolean {
   const ua = unitsOf(a);
   const ub = unitsOf(b);
   if (ua.size > 0 && ub.size > 0 && !sameSet(ua, ub)) return true;
+  if (clausesClash(a, b)) return true;
   const zh = [factKey(a), factKey(b)];
   const zhContained = zh[0].includes(zh[1]) || zh[1].includes(zh[0]);
   if (antonymsClash((side, w) => occurrences(zh[side], w), (side, w) => zh[side].indexOf(w), ZH_ANTONYMS, zhContained)) return true;
   const la = latin(a);
   const lb = latin(b);
   if (swapped(la, lb)) return true;
-  // 按整词包含：前后补空格，on 不算 only 的一部分。
+  // 按整词包含：前后补空格，on 不算 only 的一部分。只拿拉丁词比会把汉字全丢掉（「测试环境 cache off，生产环境 cache on」的拉丁词
+  // 是「生产环境 cache off，测试环境 cache on，日志 on」的前一段），所以整句（factKey）也要在字面上包含（20531347 复核 MF3）。
   const ja = ` ${la.join(" ")} `;
   const jb = ` ${lb.join(" ")} `;
   const en = [la.map(stem), lb.map(stem)];
@@ -277,7 +325,7 @@ export function polarityClash(a: string, b: string): boolean {
     (side, w) => en[side].filter((x) => x === w).length,
     (side, w) => en[side].indexOf(w),
     [...EN_ANTONYMS, ...prefixPairs(en)],
-    ja.includes(jb) || jb.includes(ja),
+    zhContained && (ja.includes(jb) || jb.includes(ja)),
   );
 }
 

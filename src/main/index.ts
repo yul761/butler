@@ -48,7 +48,7 @@ import { APP_ID, shouldSetAppId } from "./app-id";
 import { runHeadless } from "./claude/headless";
 import { probeMcpTools } from "./claude/mcp-probe";
 import { projectMcpApprovalSettings, projectMcpConfigs } from "./claude/project-mcp";
-import { MAILBOX_EVENT, mailboxHookCommand, wakesTarget } from "../shared/mailbox";
+import { MAILBOX_EVENT, mailboxHookCommand } from "../shared/mailbox";
 import { headlessEnv } from "./claude/spawn";
 import { DatabaseBackupError, openDatabase, startupErrorText, withTransaction } from "./db/database";
 import { FollowupsRepo } from "./db/followups-repo";
@@ -94,6 +94,7 @@ import { SessionMessagesRepo, type SessionMessage } from "./db/session-messages-
 import { Mailbox, MAILBOX_BODY_LIMIT, type AwaitingUser } from "./mailbox/mailbox";
 import { broadcastConvention } from "./mailbox/broadcast";
 import { sessionName } from "./mailbox/names";
+import { hasSessionMail as sessionMailWakes, headsWithWakingMail } from "./mailbox/wake";
 import { ExternalAuditRepo } from "./db/external-audit-repo";
 import { ExternalActions } from "./external/actions";
 import { buildProgress } from "./progress/progress-view";
@@ -2192,8 +2193,8 @@ async function bootstrap(): Promise<void> {
   /** 这条消息是收件人自己的总控发的（BTL-269 A：「需要你」时也送进去）。 */
   const mailboxFromController = (m: SessionMessage, headId: string): boolean => mailboxControls(m.fromSession, headId);
   /** 这个 head 有别的 session 发来、还排着的消息（约定广播不算）。 */
-  const hasSessionMail = (headId: string): boolean =>
-    messagesRepo.queued().some((m) => m.fromSession !== null && wakesTarget(m) && (sessions.head(m.toSession)?.id ?? m.toSession) === headId);
+  const headOf = (id: string): string => sessions.head(id)?.id ?? id;
+  const hasSessionMail = (headId: string): boolean => sessionMailWakes(messagesRepo.queued(), headOf, headId);
   /** 全局总控在做巡检那一轮（BTL-279 复核建议 3）：这一轮 send_message 发的不把用户点 × 关掉的 epic 总控拉起来。 */
   const patrolTurns = new PatrolTurns(Date.now);
   const mailbox = new Mailbox({
@@ -3504,7 +3505,7 @@ async function bootstrap(): Promise<void> {
         seen.add(h.id);
         return !h.hibernatedAt && h.userEndedAt == null && resumable(h, resumableCtx) ? [h] : [];
       });
-      const mail = new Set(messagesRepo.queued().flatMap((m) => (wakesTarget(m) ? [sessions.head(m.toSession)?.id ?? m.toSession] : [])));
+      const mail = headsWithWakingMail(messagesRepo.queued(), (id) => sessions.head(id)?.id ?? id);
       const order = restartOrder(heads, (id) => mail.has(id), (h) => h.ticketKey !== null && prWatcher.statusOf(h.ticketKey).some((p) => p.state === "open" || p.state === null));
       logger(`resume after restart: ${order.length} of ${openAtLastQuit.length} session(s) open at the last quit`);
       const r = await theResumer.resumeAll(order);

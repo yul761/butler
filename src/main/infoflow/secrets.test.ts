@@ -1203,3 +1203,54 @@ describe("review of 20531347 (secrets)", () => {
     expect(maskSecrets("docker login --password-stdin <<<hunter2")).toBe(`docker login --password-stdin <<<${M}`);
   });
 });
+
+describe("review of f780e9ef (secrets)", () => {
+  const M = SECRET_MASK;
+
+  it("MF2: a run of compat digits glued to the next word stays as it is, so the word is still recognized", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+    expect(maskSecrets("注¹mysql -pHunter2xyz")).toBe(`注¹mysql -p${M}`);
+    expect(maskSecrets("x²ghp_abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`x²${M}`);
+    expect(maskSecrets("𝟏AKIAABCDEFGHIJKLMNOP")).toBe(`𝟏${M}`);
+    expect(maskSecrets("₂sk-abcdefghijklmnopqrstuvwxyz0123456789")).toBe(`₂${M}`);
+    expect(maskSecrets("₂token is Hunter2xyz")).toBe(`₂token is ${M}`);
+    expect(maskSecrets("²password is hunter2xyz")).toBe(`²password is ${M}`);
+    expect(maskSecrets("注¹sshpass -p Hunter2xyz ssh h")).toBe(`注¹sshpass -p ${M} ssh h`);
+    expect(maskSecrets("注¹xoxb-1234567890-abcdefghij")).toBe(`注¹${M}`);
+    // JWT 整个打掉，不是只打签名。
+    expect(maskSecrets(`x²${jwt}`)).toBe(`x²${M}`);
+    // 一串兼容数字（₁₂）、中间隔着会被去掉的零宽字符，也按后面紧跟的字算。
+    expect(maskSecrets("₁₂mysql -pHunter2xyz")).toBe(`₁₂mysql -p${M}`);
+    expect(maskSecrets("₁​password is Hunter2x1")).toBe(`₁password is ${M}`);
+    // 后面紧跟的是会换成字母的兼容字符（𝐩）也算紧跟字母。
+    expect(maskSecrets("²𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝 is Hunter2xyz")).toBe(`²password is ${M}`);
+  });
+
+  it("MF2: key names with a compat-digit number are still recognized", () => {
+    expect(maskSecrets("token₁=Hunter2xyzAbc")).toBe(`token1=${M}`);
+    expect(maskSecrets("password²: Hunter2xyz")).toBe(`password2: ${M}`);
+    expect(maskSecrets("𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝𝟏=Hunter2xyz")).toBe(`password1=${M}`);
+    expect(maskSecrets("token₁₂=Hunter2xyz")).toBe(`token12=${M}`);
+    expect(maskSecrets("E=mc² ok")).toBe("E=mc² ok");
+  });
+
+  it("a key=value between two masks of one command is still masked by a later KEY rule (the shared scan rescans what a rule changed)", () => {
+    expect(maskSecrets("mysql -pAbc token=Hunter2xyz -pDef")).toBe(`mysql -p${M} token=${M} -p${M}`);
+    expect(maskSecrets("mysql -pAbc password=Hunter2xyz -pDef ok")).toBe(`mysql -p${M} password=${M} -p${M} ok`);
+    expect(maskSecrets("sshpass -p Abc token=Hunter2xyz -p Def")).toBe(`sshpass -p ${M} token=${M} -p ${M}`);
+  });
+
+  it("a key and its separator on different lines (suggestion 1, mutation M19)", () => {
+    expect(maskSecrets("password\n= Hunter2xyz")).toBe(`password\n= ${M}`);
+    expect(maskSecrets("密码\n是 abc12345")).toBe(`密码\n是 ${M}`);
+    expect(maskSecrets("token\n  : Hunter2xyz")).toBe(`token\n  : ${M}`);
+    expect(maskSecrets("password\r\n= Hunter2xyz")).toBe(`password\r\n= ${M}`);
+  });
+
+  it("text that every KEY rule rewrites, then more keys: the result is the same as running each rule on its own", () => {
+    const head = `password: "a b" token is "a b" password: "abc def\ntoken is 'abc def\npassword=Hunter2xyz token is: x token is Hunter2xyz\n`;
+    expect(maskSecrets(head + "pwd=Hunter2xyz, PWDS_TOKEN=Abc12345")).toBe(
+      `password: "${M}" token is "${M}" password: "${M}\ntoken is '${M}\npassword=${M} token is: ${M} token is ${M}\npwd=${M}, PWDS_TOKEN=${M}`,
+    );
+  });
+});

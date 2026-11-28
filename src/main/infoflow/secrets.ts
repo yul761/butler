@@ -114,6 +114,13 @@ interface Rule {
   keyed?: true;
 }
 
+/** 一处替换：旧文本里从 at 起的 len 个字换成了 to（maskRules 拿它把 KEY 规则的候选起点挪到新文本上）。 */
+interface Edit {
+  at: number;
+  len: number;
+  to: string;
+}
+
 /** 当成文件路径的扩展名：匹配到的长串含 /，后面紧跟这些扩展名之一（前面可以有 .test 之类的段）。 */
 const PATH_EXT = /^(?:\.[\w-]+)*?\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|lock|txt|log|html?|css|scss|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|sh|sql|db|png|jpe?g|svg|gif|webp|pdf|zip|gz)\b/i;
 
@@ -308,7 +315,7 @@ const wordEnd = (s: string, from: number, open: string): number => {
  * 有个 mysql's），往后一直打到同一种闭引号和紧连着的字、或行尾，从那里接着找下一条命令（往后打过的那段里出现的命令名
  * 不再当成新命令）。一遍扫过去，线性。
  */
-const maskCommands = (s: string, cmd: RegExp, arg: RegExp | CommandArgs): string => {
+const maskCommands = (s: string, cmd: RegExp, arg: RegExp | CommandArgs, edits?: Edit[]): string => {
   let out = "";
   let last = 0;
   cmd.lastIndex = 0;
@@ -332,6 +339,7 @@ const maskCommands = (s: string, cmd: RegExp, arg: RegExp | CommandArgs): string
     }
     // 往后走到这个词的末尾（闭引号和紧连着的字）；走过的都吃掉，下一条命令从那里接着找，总共是线性的。
     const next = open === null ? end : wordEnd(s, end, open);
+    if (edits && (next !== end || seg !== m[0])) edits.push({ at: m.index, len: next - m.index, to: seg });
     out += s.slice(last, m.index) + seg;
     last = next;
     cmd.lastIndex = next;
@@ -774,7 +782,9 @@ const IGNORABLE_BMP: [number, number][] = [
 const isIgnorableAstral = (cp: number): boolean => (cp >= 0x1bca0 && cp <= 0x1bca3) || (cp >= 0x1d173 && cp <= 0x1d17a) || (cp >= 0xe0000 && cp <= 0xe0fff);
 /**
  * NFKC 换成单个 ASCII 字母或数字的兼容字符：上下标（ᵖ ⁿ ₐ ¹ ₂）、字母式符号（ℙ ℎ）、数字形式（ⅰ）、带圈字母（ⓟ）。
- * 上下标数字要换：键名后面的编号（token₁=、password²=）换成 token1、password2 才认得出。
+ * 上下标数字要换：键名后面的编号（token₁=、password²=）换成 token1、password2 才认得出。但一串兼容数字后面紧跟字母、数字、_
+ * （按换完以后算，去掉的不可见字跳过）时不换（20531347 复核 MF2）：「注¹mysql -pX」「x²ghp_…」「₂token is X」换成 1mysql、2ghp_
+ * 就和后面的词粘在一起，\b 认不出词头，整条漏打；不换的话 ¹ 不是 \w，后面的词照常认得出。
  * 带圈、带框的（U+2460–24FF、U+1F100–1F1FF）只换字母：① ⑴ ⒈ 🄁 → 1 会和后面的词粘在一起，\b 认不出词头
  * （「步骤：①mysql -pX」「①ghp_…」）。换成几个字或符号的（™ → TM、℡ → TEL、ﬁ → fi、℃ → °C）也不动（「配置™Bearer …」）；
  * 键名里本来就没有连字。模块加载时按块算一遍（约一千五百个字）。
@@ -814,23 +824,85 @@ for (const [lo, hi] of COMPAT_BLOCKS) {
 }
 for (let c = 0xd800; c <= 0xdbff; c++) KIND[c] = HIGH;
 const ASTRAL_TO = new Map<number, string | null>();
+const astralTo = (cp: number): string | null => {
+  let t = ASTRAL_TO.get(cp);
+  if (t === undefined) {
+    t = asciiCompat(cp);
+    ASTRAL_TO.set(cp, t);
+  }
+  return t;
+};
+const isDigit = (t: string | null | undefined): boolean => t !== null && t !== undefined && t.length === 1 && t >= "0" && t <= "9";
+const isWordChar = (t: string | null | undefined): boolean => t !== null && t !== undefined && t.length === 1 && /[A-Za-z0-9_]/.test(t);
+const codePointAt = (s: string, i: number): number => {
+  const c = s.charCodeAt(i);
+  const d = s.charCodeAt(i + 1);
+  return d >= 0xdc00 && d <= 0xdfff ? (c - 0xd800) * 0x400 + (d - 0xdc00) + 0x10000 : -1;
+};
+/** s[i] 是换成数字的兼容字符（₁ ² 𝟏）：返回它占几个 UTF-16 单元，不是返回 0。全角数字（１）不算，照常换。 */
+function compatDigitWidth(s: string, i: number): number {
+  const c = s.charCodeAt(i);
+  const kind = KIND[c];
+  if (kind === TO) return isDigit(BMP_TO.get(c)) ? 1 : 0;
+  if (kind !== HIGH) return 0;
+  const cp = codePointAt(s, i);
+  return cp >= 0 && isCompatAstral(cp) && isDigit(astralTo(cp)) ? 2 : 0;
+}
+/** 从 j 起、跳过会被去掉的字以后，下一个字换完以后是不是字母、数字或 _。 */
+function nextIsWord(s: string, j: number): boolean {
+  while (j < s.length) {
+    const c = s.charCodeAt(j);
+    if (c < 0xad) return isWordChar(s[j]);
+    const kind = KIND[c];
+    if (kind === KEEP) return false;
+    if (kind === SHIFT) return isWordChar(String.fromCharCode(c - 0xfee0));
+    if (kind === TO) return isWordChar(BMP_TO.get(c));
+    if (kind === DROP) {
+      j++;
+      continue;
+    }
+    const cp = codePointAt(s, j);
+    if (cp < 0) return false;
+    if (isIgnorableAstral(cp)) {
+      j += 2;
+      continue;
+    }
+    return isCompatAstral(cp) && isWordChar(astralTo(cp));
+  }
+  return false;
+}
 
 /**
  * 规范化：全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂、＠）换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），
  * 去掉 Default_Ignorable 的字（零宽字符、软连字符、U+2063…），框线字符（U+2500–257F，psql 的 │ ─ ┼）换成 | - +，
- * NFKC 换得成单个 ASCII 字母或数字的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝、ⓟ、₁、𝟏）换成那个字。每个字换成一个 ASCII 字、或去掉，别的字不动。
+ * NFKC 换得成单个 ASCII 字母或数字的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝、ⓟ、₁、𝟏）换成那个字（一串兼容数字后面紧跟字母数字的不换，见 COMPAT_BLOCKS）。
+ * 每个字换成一个 ASCII 字、或去掉，别的字不动。
  * 一个字一个字查表扫一遍，不用正则回调：每行一次回调的写法在三万多行的短表格上要 7ms（CI 上过了 50ms），这样约 1ms。
  * 一个要换的字都没有就返回原来那个串（调用方用 === 判断）。
  */
 function normalize(s: string): string {
   let out = "";
   let last = 0;
+  // 已经看过的一串兼容数字到这里为止，可以换（后面不紧跟字母数字）。
+  let digitsOk = 0;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     // 要换的字都在 U+00AD 以后：ASCII 和常见的拉丁字母直接跳过。
     if (c < 0xad) continue;
     const kind = KIND[c];
     if (kind === KEEP) continue;
+    if (i >= digitsOk && (kind === TO || kind === HIGH)) {
+      let j = i;
+      for (let w = compatDigitWidth(s, j); w > 0; w = compatDigitWidth(s, j)) j += w;
+      if (j > i) {
+        if (nextIsWord(s, j)) {
+          // 这一串都不换，跳到它后面。
+          i = j - 1;
+          continue;
+        }
+        digitsOk = j;
+      }
+    }
     let to: string;
     let width = 1;
     if (kind === SHIFT) to = String.fromCharCode(c - 0xfee0);
@@ -842,11 +914,7 @@ function normalize(s: string): string {
       const cp = (c - 0xd800) * 0x400 + (d - 0xdc00) + 0x10000;
       if (isIgnorableAstral(cp)) to = "";
       else if (isCompatAstral(cp)) {
-        let t = ASTRAL_TO.get(cp);
-        if (t === undefined) {
-          t = asciiCompat(cp);
-          ASTRAL_TO.set(cp, t);
-        }
+        const t = astralTo(cp);
         if (t === null) {
           i++;
           continue;
@@ -870,6 +938,9 @@ function normalize(s: string): string {
  * （YAML 块标量的「键:」、SEP、「键 is」），所以它们的匹配只会从这些位置开始。
  * 先用这一条零宽先行扫一遍，记下候选起点，8 条 KEY 规则只在这些起点上用 sticky 副本去试：不然每条规则都要在每个位置把 KEY 试一遍
  * （tokens_、pwds_、credentials_ 连着重复的 200KB，8 条加起来约 20ms，CI 上翻两三倍）。没有候选就整条跳过。
+ * 只扫一次：后面哪条规则改了文本，就按它记下的每一处替换把候选起点挪过去（moveStarts），不整篇重扫
+ * （复核 f780e9ef：每改一次就重扫的话，前面一小段让每条 KEY 规则都改一次，就是整篇扫 7–8 遍，CI 上 60–70ms；
+ * 文本变了就退回整篇 replace 的话，同样的前缀接 PWDS_ 重复 200KB 是 8 条整篇 replace，CI 上约 55ms）。
  */
 const KEY_AT = new RegExp(String.raw`(?=${KEY}${KQ}(?:\s*(?:[:=：]|是|为)|\s+is))`, "gi");
 const keyStarts = (s: string): number[] => {
@@ -881,6 +952,47 @@ const keyStarts = (s: string): number[] => {
   }
   return out;
 };
+const KEY_AT_Y = new RegExp(KEY_AT.source, "iy");
+/** KEY_AT 匹配到的那一段（键名、引号、空白、分隔符、is）里不会有的字：占位符 [REDACTED] 的头尾。 */
+const isBreak = (c: number): boolean => c === 0x5b || c === 0x5d;
+
+/**
+ * 文本 s 按 edits（按位置排好、不重叠）换成了 out，把 s 上的候选起点 starts 挪到 out 上。新的候选起点只可能和每处替换真正改了的
+ * 那一段 [a, b)（去掉和原文相同的头尾）沾边：
+ * - 从 b 往后起跑的，往后看到的字和原来一样：原来是候选的还是（挪个位置），原来不是的还不是；
+ * - 从 a 前面起跑、又碰到 [a, b) 的，那一段要同时含 out[a-1] 和 out[a]（纯删除时是接缝两边的字）。这两个字有一个是 [ 或 ]
+ *   就不可能（替换进去的是占位符，头一个字就是 [；原文本来就以 [ 开头的，a 往后挪一位，out[a-1] 是 [）；
+ * - 起点落在 [a, b) 里的，逐个位置用 KEY_AT 试一遍（这段通常就是一个占位符，加起来不超过替换进去的字数）。
+ * 多出来的旧起点留着没关系（KEY 规则在那里试不出来）。两头都不是 [ ] 的说不清，返回 null，调用方整篇重扫。
+ */
+function moveStarts(s: string, out: string, starts: readonly number[], edits: readonly Edit[]): number[] | null {
+  const res: number[] = [];
+  let i = 0;
+  // 前面处理过的替换让后面的位置挪了多少。
+  let shift = 0;
+  for (const e of edits) {
+    const max = Math.min(e.len, e.to.length);
+    let head = 0;
+    while (head < max && s.charCodeAt(e.at + head) === e.to.charCodeAt(head)) head++;
+    let tail = 0;
+    while (tail < max - head && s.charCodeAt(e.at + e.len - 1 - tail) === e.to.charCodeAt(e.to.length - 1 - tail)) tail++;
+    const oldA = e.at + head;
+    const oldB = e.at + e.len - tail;
+    const a = oldA + shift;
+    const b = e.at + shift + e.to.length - tail;
+    if (a > 0 && !isBreak(out.charCodeAt(a - 1)) && !isBreak(out.charCodeAt(a))) return null;
+    while (i < starts.length && starts[i] < oldA) res.push(starts[i++] + shift);
+    while (i < starts.length && starts[i] < oldB) i++;
+    for (let q = a; q < b; q++) {
+      KEY_AT_Y.lastIndex = q;
+      if (KEY_AT_Y.test(out)) res.push(q);
+    }
+    shift += e.to.length - e.len;
+  }
+  while (i < starts.length) res.push(starts[i++] + shift);
+  return res;
+}
+
 /** 每条 KEY 规则的 sticky 副本（只在给定的位置试）。 */
 const STICKY = new Map<RegExp, RegExp>();
 const stickyOf = (re: RegExp): RegExp => {
@@ -932,27 +1044,34 @@ function replaceAt(s: string, re: RegExp, starts: readonly number[], fn: (...arg
   return changed ? out + s.slice(last) : s;
 }
 
+/** 包一层替换回调，把每处真正改了的替换记进 edits（回调的倒数第二个参数是位置：规则里都没有命名捕获组）。 */
+const recording =
+  (fn: (...args: unknown[]) => string, edits: Edit[]) =>
+  (...args: unknown[]): string => {
+    const to = fn(...args);
+    const m = args[0] as string;
+    if (to !== m) edits.push({ at: args[args.length - 2] as number, len: m.length, to });
+    return to;
+  };
+
 /** 按顺序跑表头表格和每条规则。 */
 const maskRules = (s: string): string => {
   // 表头表格整格打码：排在前面，整格先换成一个占位符，后面的规则不会把格子拆开。
   let out = maskTables(s);
-  // KEY 规则的候选起点，和算它时的文本：文本被哪条规则改过就重扫。
-  let starts: number[] = [];
-  let startsOf: string | null = null;
+  // KEY 规则的候选起点（对当前的 out）：第一条 KEY 规则前扫一次，之后哪条规则改了文本就按它的替换挪过去（见 KEY_AT）；
+  // 挪不了的是 null，下一条 KEY 规则前重扫。第一次扫之前不用记替换。
+  let starts: number[] | null = null;
+  let tracking = false;
   for (const rule of RULES) {
-    if (rule.arg) {
-      out = maskCommands(out, rule.re, rule.arg);
-      continue;
-    }
-    if (rule.keyed) {
-      if (startsOf !== out) {
-        starts = keyStarts(out);
-        startsOf = out;
-      }
-      if (starts.length > 0) out = replaceAt(out, rule.re, starts, replacer(rule));
-      continue;
-    }
-    out = out.replace(rule.re, replacer(rule));
+    const before = out;
+    const edits: Edit[] = [];
+    if (rule.arg) out = maskCommands(out, rule.re, rule.arg, tracking ? edits : undefined);
+    else if (rule.keyed) {
+      starts ??= keyStarts(out);
+      tracking = true;
+      if (starts.length > 0) out = replaceAt(out, rule.re, starts, recording(replacer(rule), edits));
+    } else out = out.replace(rule.re, tracking ? recording(replacer(rule), edits) : replacer(rule));
+    if (tracking && starts !== null && out !== before) starts = moveStarts(before, out, starts, edits);
   }
   return out;
 };

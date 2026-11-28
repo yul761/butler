@@ -18,8 +18,12 @@ function before(): DatabaseSync {
 
 type Col = { name: string; type: string; notnull: number };
 const cols = (db: DatabaseSync, t: string) => db.prepare(`PRAGMA table_info(${t})`).all() as unknown as Col[];
+/** 表上的索引：名字和建索引的整句 SQL（UNIQUE、WHERE 条件、列都在里面；rebase 段复核建议 3：只比名字看不出丢了 UNIQUE）。 */
 const indexes = (db: DatabaseSync, t: string) =>
-  (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name NOT LIKE 'sqlite_%' ORDER BY name`).all(t) as { name: string }[]).map((r) => r.name);
+  (db.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name NOT LIKE 'sqlite_%' ORDER BY name`).all(t) as {
+    name: string;
+    sql: string | null;
+  }[]).map((r) => [r.name, r.sql]);
 
 describe("info flow migration (BTL-272)", () => {
   it("is in the list and adds the fact kind", () => {
@@ -111,7 +115,8 @@ describe("info flow migration (BTL-272)", () => {
     for (const c of beforeCols) expect(afterNames).toContain(c.name);
     const after = db.prepare(`SELECT * FROM session_messages WHERE id = 'm1'`).get() as Record<string, unknown>;
     for (const c of beforeCols) expect([c.name, after[c.name]]).toEqual([c.name, row[c.name]]);
-    for (const name of beforeIdx) expect(indexes(db, "session_messages")).toContain(name);
+    expect(beforeIdx.map(([name]) => name)).toEqual(["session_messages_queued_at", "session_messages_queued_ref", "session_messages_status"]);
+    expect(indexes(db, "session_messages")).toEqual(beforeIdx);
     db.exec(`INSERT INTO session_messages (id, kind, from_session, to_session, body, queued_at) VALUES ('m2', 'fact', 'a', 'b', 'x', 2)`);
   });
 });

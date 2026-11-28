@@ -466,3 +466,39 @@ describe("review of 20531347 (dedupe)", () => {
     );
   });
 });
+
+describe("review of f780e9ef (dedupe)", () => {
+  // MF3：中英混排的句子，英文那一路的「包含」只看拉丁词会把汉字丢掉；整句也要在字面上包含。
+  const pairs: [string, string][] = [
+    ["测试环境 cache off，生产环境 cache on", "生产环境 cache off，测试环境 cache on，日志 on"],
+    ["测试环境把 cache 设成 off，生产环境把 cache 设成 on", "生产环境把 cache 设成 off，测试环境把 cache 设成 on，日志也 on"],
+    ["在 staging 里 disable cache，在 prod 里 enable cache", "在 prod 里 disable cache，在 staging 里 enable cache，enable logs"],
+  ];
+  it.each(pairs)("%s / %s are not duplicates, either way round", (a, b) => {
+    expect(findDuplicate(b, [a])).toBeNull();
+    expect(findDuplicate(a, [b])).toBeNull();
+  });
+
+  it("a mixed sentence literally inside the other is still a duplicate", () => {
+    const longer = "日志 on，测试环境 cache off，生产环境 cache on";
+    expect(findDuplicate("测试环境 cache off，生产环境 cache on", [longer])).toBe(longer);
+    // 同一个对象在两句里配的是同一头：不算改主意。
+    expect(polarityClash("测试环境 cache off，生产环境 cache on", longer)).toBe(false);
+  });
+
+  it("English words contained but the Chinese is not: the antonyms' order still counts (MF3, without the clause check)", () => {
+    // 拉丁词「cache off cache on」整个在「cache on cache off cache on」里，汉字却对不上；按分句看没有同一个对象换了头，靠先后才拦得住。
+    expect(polarityClash("测试环境 cache off，生产环境 cache on", "预发环境 cache on，测试环境 cache off，正式环境 cache on")).toBe(true);
+    const a = "staging 环境 cache off，prod 环境 cache on";
+    const b = "dev 环境 cache on，staging 环境 cache off，prod 机器 cache on";
+    expect(similarity(a, b)).toBeGreaterThanOrEqual(DUP_SIMILARITY);
+    expect(polarityClash(a, b)).toBe(true);
+    expect(findDuplicate(b, [a])).toBeNull();
+  });
+
+  it("the same object with the other half of an antonym pair, clause by clause, is a change of mind", () => {
+    expect(polarityClash("测试环境开启缓存，生产环境关闭缓存", "生产环境开启缓存，测试环境关闭缓存，开启日志")).toBe(true);
+    // 一个分句里两头都有的不算（说不清哪个对象配哪头）。
+    expect(polarityClash("turn off x and turn on y", "turn off x and turn on y, turn on z")).toBe(false);
+  });
+});

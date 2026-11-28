@@ -6,6 +6,10 @@ import { maskSecrets } from "./secrets";
  * 单独一个 project（timing）：排在别的测试全跑完以后、只用一个 worker，不和并行的测试抢 CPU（vitest 5 没有 describe.sequential，
  * 同一个文件里的用例本来就是一个接一个跑的；抖动来自别的文件的 worker）。
  */
+/** 让每条 KEY 规则（YAML 以外）都改一次文本的前缀（复核 f780e9ef 的复现）。 */
+const REWRITE_EACH_KEY_RULE =
+  "password: \"a b\" token is \"a b\" password: \"abc def\ntoken is 'abc def\npassword=Hunter2xyz token is: x token is Hunter2xyz\n";
+
 describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under 50ms)", () => {
   const LIMIT_MS = 50;
   const N = 200_000;
@@ -189,6 +193,16 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
     yamlBlankLeadMany: "password: |\n\n".repeat(N / 13),
     stdinDollar: "--password-stdin <<< $'".repeat(N / 23),
     circledDigits: "①mysql -p".repeat(N / 9),
+    // 复核 f780e9ef：前面一小段让每条 KEY 规则都改一次文本，共用扫描以前每次都整篇重扫（CI 约 60–70ms）；后面接各种键名连写。
+    rewritesThenPwds1: REWRITE_EACH_KEY_RULE + "pwds_1".repeat(N / 6),
+    rewritesThenPwdsPwd: REWRITE_EACH_KEY_RULE + "pwds_pwd=,".repeat(N / 10),
+    rewritesThenTokens: REWRITE_EACH_KEY_RULE + "tokens_tokens_=,".repeat(N / 16),
+    rewritesThenZh: REWRITE_EACH_KEY_RULE + "密码是，".repeat(N / 4),
+    // 同一个前缀接大写的 PWDS_（ENV_KEY 从一个词头扫到底再一路退回来，CI 约 55ms）。
+    rewritesThenEnvPwds: REWRITE_EACH_KEY_RULE + "PWDS_".repeat(N / 5),
+    envPwds: "PWDS_".repeat(N / 5),
+    // MF2：兼容数字一串一串的（每串都往后看一眼是不是紧跟字母数字）。
+    compatDigitRuns: "x²mysql ₁₂ ".repeat(N / 11),
   };
   const time = (input: string): number => {
     maskSecrets(input);
