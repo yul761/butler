@@ -21,7 +21,7 @@ export function CloseRestButton({ ticketKey, seq, onOpen }: { ticketKey: string;
     if (stamp === undefined) return;
     const wait = restPreviews.waiting(ticketKey, stamp);
     if (wait > 0) {
-      // 等着的时候不显示旧数：刚关掉的 PR 还算在里面。
+      // 等完了到重新预览回来之前也不显示旧数。
       setLeft(0);
       const t = setTimeout(() => setTick((n) => n + 1), wait);
       return () => clearTimeout(t);
@@ -46,5 +46,7 @@ export function CloseRestButton({ ticketKey, seq, onOpen }: { ticketKey: string;
       live = false;
     };
   }, [ticketKey, seq, stamp, tick]);
-  return left > 0 ? <button className="ticket-close-rest" onClick={onOpen}>{S.tc.closeRest}</button> : null;
+  // 等监视记录跟上的时候不显示旧数（刚关掉的 PR 还算在里面）：渲染时就判断，settle 后的第一次渲染就藏起来，不闪一帧。
+  const waiting = stamp !== undefined && restPreviews.pending(ticketKey, stamp) > 0;
+  return left > 0 && !waiting ? <button className="ticket-close-rest" onClick={onOpen}>{S.tc.closeRest}</button> : null;
 }

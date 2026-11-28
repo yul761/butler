@@ -86,7 +86,8 @@ export function TicketPage({ ticket, onArchived, initialOpen = null, onInitialOp
   const statusValue = ticket.statusManual ?? "auto";
   const closed = ticket.statusManual === "closed";
   // 关着的 ticket 还有开着的、能关的（或核对失败、可以再试的）自己的 PR：给一个「关掉剩下的 PR」入口（BTL-270 审查），打开同一个勾选框（CloseRestButton）。
-  // 对话框关上以后丢掉记下的数重新看（restSeq）；关掉了 PR 的等监视记录跟上再看（restPreviews.settle）。
+  // 对话框提交过、关上以后丢掉记下的数重新看（restSeq）；关掉了 PR 的等监视记录跟上再看（restPreviews.settle）。
+  // 什么都没提交就取消（onClose 给 null）：不丢记下的数，也不重新看（afterClose）。
   const [restSeq, setRestSeq] = useState(0);
   const [closingRest, setClosingRest] = useState(false);
   // 重新打开了：记下的数作废（再关上时 PR 可能已经不一样了），路上的预览回来也不写。

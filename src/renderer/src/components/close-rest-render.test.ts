@@ -43,6 +43,7 @@ const { createRoot } = await import("react-dom/client");
 const { TicketPage } = await import("./TicketPage");
 const { restPreviews, REST_SETTLE_MS } = await import("../close-ticket-outcome");
 const { STATE_DEBOUNCE_MS } = await import("./useStateRefetch");
+const { S } = await import("../strings");
 
 let n = 0;
 const watch = (ticketKey: string, url: string, state: WatchedPr["state"] = "open") => ({ ticketKey, url, state }) as unknown as WatchedPr;
@@ -155,6 +156,25 @@ describe("TicketPage's close-the-rest button and its preview cache (BTL-270 revi
     expect(button()).not.toBeNull();
   });
 
+  it("the very first render after a close that is still waiting already hides the button (no one-frame flash)", async () => {
+    await mount(true);
+    await answer(2);
+    await act(async () => button()!.click());
+    // 数 settle 之后按钮被渲染了几次：读一次文案就是渲染了一次按钮。
+    const tc = S.tc as unknown as Record<string, unknown>;
+    const text = tc.closeRest;
+    let rendered = 0;
+    Object.defineProperty(tc, "closeRest", { configurable: true, enumerable: true, get: () => (rendered++, text) });
+    try {
+      await act(async () => h.dialogs.at(-1)!.onClose(["u1"]));
+      await settle();
+      expect(rendered).toBe(0);
+      expect(button()).toBeNull();
+    } finally {
+      Object.defineProperty(tc, "closeRest", { configurable: true, enumerable: true, writable: true, value: text });
+    }
+  });
+
   it("cancelling the dialog without submitting keeps the count: no new preview, the button stays", async () => {
     await mount(true);
     await answer(2);
@@ -202,6 +222,8 @@ describe("TicketPage's close-the-rest button and its preview cache (BTL-270 revi
       expect(h.previews).toHaveLength(0);
       await adv(1);
       expect(h.previews).toHaveLength(1);
+      // 等完了、新的预览还没回来：还是不显示旧数。
+      expect(button()).toBeNull();
       await answerFake(1);
       expect(button()).not.toBeNull();
       await adv(REST_SETTLE_MS * 3);

@@ -177,6 +177,21 @@ describe("the closed ticket page's remaining-PR count and the closed-meanwhile n
     expect(closedMeanwhile({ ...r, prErrors: [prError], alreadyClosed: true, reopenedMeanwhile: true }, false)).toBeNull();
   });
 
+  it("pending() reports the same wait as waiting() but never forgets it (render-time check)", () => {
+    let t = 0;
+    const c = restPreviewCache(() => t);
+    c.settle("T-1", ["u1"]);
+    expect(c.pending("T-1", "u1")).toBe(REST_SETTLE_MS);
+    expect(c.pending("T-1", "u2")).toBe(0);
+    expect(c.pending("T-1", null)).toBe(0);
+    // pending 返回 0 不忘掉：之后 u1 还开着照样在等。
+    expect(c.pending("T-1", "u1")).toBe(REST_SETTLE_MS);
+    t = 1_000;
+    expect(c.waiting("T-1", "u1")).toBe(REST_SETTLE_MS - 1_000);
+    expect(c.waiting("T-1", "u2")).toBe(0);
+    expect(c.pending("T-1", "u1")).toBe(0);
+  });
+
   it("two settles in a row wait for both closes' PRs, until the later deadline (BTL-270 review)", () => {
     let t = 0;
     const c = restPreviewCache(() => t);

@@ -82,6 +82,13 @@ export function restPreviewCache(now: () => number = () => Date.now()) {
   const seen = new Map<string, { at: number; n: number; stamp: string }>();
   const gens = new Map<string, number>();
   const settling = new Map<string, { urls: string[]; until: number }>();
+  const pendingFor = (key: string, stamp: string | null): number => {
+    const w = settling.get(key);
+    if (!w) return 0;
+    const left = w.until - now();
+    const open = stamp === null ? [] : stamp.split("\n");
+    return left > 0 && w.urls.some((u) => open.includes(u)) ? left : 0;
+  };
   const drop = (key: string): void => {
     seen.delete(key);
     gens.set(key, (gens.get(key) ?? 0) + 1);
@@ -127,13 +134,13 @@ export function restPreviewCache(now: () => number = () => Date.now()) {
      * stamp 是 null（监视记录读不到）不等。
      */
     waiting(key: string, stamp: string | null): number {
-      const w = settling.get(key);
-      if (!w) return 0;
-      const left = w.until - now();
-      const open = stamp === null ? [] : stamp.split("\n");
-      if (left > 0 && w.urls.some((u) => open.includes(u))) return left;
-      settling.delete(key);
-      return 0;
+      const left = pendingFor(key, stamp);
+      if (left === 0) settling.delete(key);
+      return left;
+    },
+    /** 和 waiting() 一样算还要等多久，但不忘掉这次等待：渲染时用（按钮等着的时候就藏起来，不等到 effect 里才藏，免得闪一帧）。 */
+    pending(key: string, stamp: string | null): number {
+      return pendingFor(key, stamp);
     },
   };
 }
