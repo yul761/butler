@@ -11,6 +11,7 @@ import { StacksRepo } from "../db/stacks-repo";
 import type { ExternalDetail } from "../external/actions";
 import { copyRepo, makeRepo, memDb, setOriginUrl, tempDir } from "../test-utils";
 import type { CreatePr, PrSnapshot } from "./gh-stack";
+import { T } from "./pr-text";
 import { StackPolicyService } from "./stack-policy";
 import { reasonKey, remoteKind, stackMailRef, stackMailRepoIdOf, StackService, type StackServiceDeps } from "./stack-service";
 
@@ -1323,18 +1324,45 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     }
   });
 
-  it("in a fork workflow pushes the layers to the fork they live on, never creates them on upstream; defers when it can't tell (BTL-278)", async () => {
+  /** fork 工作流：upstream 只有 main，层都在 origin（自己的 fork）上，栈跟着 upstream 的 main。 */
+  async function forkWorld() {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
-    // upstream：只有 main；层都在 origin（自己的 fork）上。栈跟着 upstream 的 main
     const up = join(tempDir(), "up.git");
     g(tempDir(), "clone", "-q", "--bare", w.remote, up);
     for (const b of BRANCHES) g(up, "branch", "-D", b);
     g(w.repo, "remote", "add", "upstream", up);
     g(w.repo, "fetch", "-q", "upstream");
     w.repoT.updateStack(id, { remote: "upstream" });
-    w.pushMain("x.txt", "x\n");
-    g(w.remote, "push", "-q", up, "main");
+    const trunk = (file: string) => {
+      w.pushMain(file, `${file}\n`);
+      g(w.remote, "push", "-q", up, "main");
+    };
+    return { w, id, up, trunk };
+  }
+
+  /** fork 工作流里 c 只在第三个 remote（other）上：origin、upstream 都没有。 */
+  function cOnlyOnOther(w: World): string {
+    g(w.remote, "branch", "-D", "c");
+    g(w.repo, "update-ref", "-d", "refs/remotes/origin/c");
+    const other = join(tempDir(), "other.git");
+    g(tempDir(), "init", "-q", "--bare", other);
+    g(w.repo, "remote", "add", "other", other);
+    g(w.repo, "push", "-q", "other", "c");
+    g(w.repo, "fetch", "-q", "other");
+    return other;
+  }
+
+  function countStarts(w: World): { n: number } {
+    const c = { n: 0 };
+    const start = w.repoT.startRun.bind(w.repoT);
+    w.repoT.startRun = ((...a: Parameters<typeof start>) => (c.n++, start(...a))) as typeof start;
+    return c;
+  }
+
+  it("in a fork workflow pushes the layers to the fork they live on, never creates them on upstream; a never-pushed layer doesn't hold up the stack (BTL-278)", async () => {
+    const { w, id, up, trunk } = await forkWorld();
+    trunk("x.txt");
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
     expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
@@ -1342,46 +1370,95 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     // c 在哪个 remote 上都还没有（从没推过）：照样改写、推别的层，c 不推，哪儿都不新建（不因为它把整个栈一直推迟）
     g(w.remote, "branch", "-D", "c");
     g(w.repo, "update-ref", "-d", "refs/remotes/origin/c");
-    let starts = 0;
-    const start = w.repoT.startRun.bind(w.repoT);
-    w.repoT.startRun = ((...a: Parameters<typeof start>) => (starts++, start(...a))) as typeof start;
-    w.pushMain("y.txt", "y\n");
-    g(w.remote, "push", "-q", up, "main");
+    const starts = countStarts(w);
+    trunk("y.txt");
     for (let i = 0; i < 6; i++) {
       w.advance(5 * 60_000);
       await w.svc.tick();
     }
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
-    expect(starts).toBe(1);
+    expect(starts.n).toBe(1);
     expect(w.remoteTips(["a", "b", "d"])).toEqual(w.tips(["a", "b", "d"]));
     expect(g(w.remote, "for-each-ref", "refs/heads/c")).toBe("");
     expect(g(up, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe("refs/heads/main");
-    // c 只在第三个 remote 上（origin、upstream 都没有）：认不出推到哪里，自动跑推迟；同一个 trunk 不反复跑
-    const other = join(tempDir(), "other.git");
-    g(tempDir(), "init", "-q", "--bare", other);
-    g(w.repo, "remote", "add", "other", other);
-    g(w.repo, "push", "-q", "other", "c");
-    g(w.repo, "fetch", "-q", "other");
-    w.pushMain("z.txt", "z\n");
-    g(w.remote, "push", "-q", up, "main");
-    starts = 0;
+  });
+
+  it("in a fork workflow defers an automatic run when a layer is only on a third remote, once per trunk (BTL-278)", async () => {
+    const { w, id, trunk } = await forkWorld();
+    cOnlyOnOther(w);
+    const starts = countStarts(w);
     const local = w.tips(BRANCHES);
+    trunk("z.txt");
     for (let i = 0; i < 6; i++) {
       w.advance(5 * 60_000);
       await w.svc.tick();
     }
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringContaining("can't tell which remote c is pushed to") });
     expect(w.repoT.lastRun(id)!.reason).toContain("git config branch.c.pushRemote <remote>");
-    expect(starts).toBe(1);
+    expect(starts.n).toBe(1);
     expect(w.tips(BRANCHES)).toEqual(local);
+    // 手动 rebase 也推迟（改写了也推不出去）：不算成功，给本地化的提示
+    expect(await w.svc.rebaseNow(id)).toEqual({ ok: false, message: T("zh").errors.pushRemoteAmbiguous("c") });
+    expect(w.tips(BRANCHES)).toEqual(local);
+  });
+
+  it("in a fork workflow picks a deferred run up again once the push remote is configured (BTL-278)", async () => {
+    const { w, id, up, trunk } = await forkWorld();
+    const other = cOnlyOnOther(w);
+    trunk("z.txt");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred" });
     // 用户说了推到哪里（branch.c.pushRemote）：一小时后重试时接着跑，c 推到 other 上
     g(w.repo, "config", "branch.c.pushRemote", "other");
-    w.advance(60 * 60_000);
+    w.advance(30 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred" });
+    w.advance(30 * 60_000);
     await w.svc.tick();
     expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
     expect(g(other, "rev-parse", "c")).toBe(w.tip("c"));
     expect(g(w.remote, "for-each-ref", "refs/heads/c")).toBe("");
     expect(g(up, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe("refs/heads/main");
+  });
+
+  it("defers when the remote branch.<b>.pushRemote names doesn't have the layer but another remote does; a new trunk is tried once, and fixing the config takes effect at once (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    // c 在 origin 上，配置却说推到 fork（fork 上没有 c）：认不出该推哪个
+    const fork = join(tempDir(), "fork.git");
+    g(tempDir(), "init", "-q", "--bare", fork);
+    g(w.repo, "remote", "add", "fork", fork);
+    g(w.repo, "config", "branch.c.pushRemote", "fork");
+    const remote = w.remoteTips(BRANCHES);
+    const local = w.tips(BRANCHES);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", reason: expect.stringContaining("can't tell which remote c is pushed to") });
+    expect(w.tips(BRANCHES)).toEqual(local);
+    expect(w.remoteTips(BRANCHES)).toEqual(remote);
+    expect(g(fork, "for-each-ref")).toBe("");
+    // trunk 又动了：按新的输入跑一次，还是推迟，并记下新的输入，之后同一个 trunk 不再每轮重跑
+    let starts = 0;
+    const start = w.repoT.startRun.bind(w.repoT);
+    w.repoT.startRun = ((...a: Parameters<typeof start>) => (starts++, start(...a))) as typeof start;
+    w.pushMain("y.txt", "y\n");
+    for (let i = 0; i < 6; i++) {
+      w.advance(5 * 60_000);
+      await w.svc.tick();
+    }
+    expect(starts).toBe(1);
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "deferred", detail: { repeats: 2 } });
+    // 刚推迟过（这一轮已经认过推到哪里），用户马上改好配置、点「马上 rebase」：按新配置认，c 推到 origin
+    w.pushMain("z.txt", "z\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(starts).toBe(2);
+    g(w.repo, "config", "branch.c.pushRemote", "origin");
+    await w.svc.rebaseNow(id);
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "manual", outcome: "rebased" });
+    expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
+    expect(g(fork, "for-each-ref")).toBe("");
   });
 
   it("in a reverse fork (origin is the main repository, the layer lives on a fork remote) never creates the layer on origin (BTL-278)", async () => {
@@ -1905,6 +1982,52 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     }
   });
 
+  it("cleans a repository whose stacks were all deleted after the upgrade and never came back (BTL-278)", async () => {
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const globalFile = join(tempDir(), "gitconfig");
+    writeFileSync(globalFile, "");
+    process.env.GIT_CONFIG_GLOBAL = globalFile;
+    try {
+      const w = world({ policy: { dailyRebase: false } });
+      const old = await defineAll(w);
+      g(w.repo, "config", "--local", "rerere.enabled", "true");
+      // 升级时栈还在（算候选），还没跑过一轮就删了，之后这个仓库再没有栈
+      w.svc = upgraded(w);
+      w.repoT.remove(old);
+      expect(w.repoT.list()).toEqual([]);
+      await w.svc.tick();
+      expect(() => g(w.repo, "config", "--local", "--get", "rerere.enabled")).toThrow();
+      expect(JSON.parse(readFileSync(join(w.deps.workRoot, "rerere-cleaned.json"), "utf8"))).toEqual({ candidates: [w.repo], done: [w.repo] });
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+    }
+  });
+
+  it("keeps the rerere candidates in memory when the record can't be written, instead of recomputing them from later stacks (BTL-278)", async () => {
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const globalFile = join(tempDir(), "gitconfig");
+    writeFileSync(globalFile, "");
+    process.env.GIT_CONFIG_GLOBAL = globalFile;
+    try {
+      const w = world({ policy: { dailyRebase: false } });
+      // 升级时没有栈：没有候选。记录读不了也写不进去（那个路径是个目录）
+      rmSync(join(w.deps.workRoot, "rerere-cleaned.json"), { force: true });
+      mkdirSync(join(w.deps.workRoot, "rerere-cleaned.json"), { recursive: true });
+      const svc = new StackService(w.deps);
+      w.svc = svc;
+      // 之后建的栈、用户自己开的 rerere：不能因为重读不到记录就把它当成旧版留下的
+      await defineAll(w);
+      g(w.repo, "config", "--local", "rerere.enabled", "true");
+      w.pushMain("x.txt", "x\n");
+      await svc.tick();
+      expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe("true");
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+    }
+  });
+
   it("leaves the rerere a user turned on in a repository that got its first stack after the upgrade (BTL-278)", async () => {
     const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
     const globalFile = join(tempDir(), "gitconfig");
@@ -2134,7 +2257,9 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "rebased" });
     expect(w.remoteTip("b")).toBe(held);
     expect(g(w.remote, "show", "b:b.txt")).not.toContain("<<<<<<<");
-    expect(w.remoteTips(["a", "c", "d"])).toEqual(w.tips(["a", "c", "d"]));
+    // 它下面的 a 照推；叠在它上面的 c、d 先不推（不然 c、d 会把 b 的标记带上远端）
+    expect(w.remoteTip("a")).toBe(w.tip("a"));
+    for (const b of ["c", "d"]) expect(w.remoteTip(b)).not.toBe(w.tip(b));
     expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "markers", branch: "b", files: ["b.txt"] }));
     // b 的 session 收到的核对请求说的是推之前查出了问题，不是「强推开关关着」
     const vb = w.verify.find((v) => v.ticketKey === "B")!.text;
@@ -2171,6 +2296,168 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     expect(w.svc.notices().filter((n) => n.reason === "markers")).toEqual([]);
   });
 
+  it("doesn't force-push the layers above a layer held back for conflict markers; pushes them all once it's fixed (BTL-278)", async () => {
+    let on = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" || on });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    // b 改写过、没推出去，又被改成带冲突标记的样子；force_push 打开以后 b 被拦下
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), "<<<<<<< ours\nb\n=======\nmain's b\n>>>>>>> theirs\n");
+    g(w.repo, "commit", "-q", "-a", "--amend", "--no-edit");
+    g(w.repo, "checkout", "-q", "main");
+    const lb = w.repoT.layers(id)[1]!;
+    w.repoT.updateLayer(lb.id, { tipSha: w.tip("b") });
+    on = true;
+    w.advance(60_000);
+    await w.svc.tick();
+    const held = w.remoteTips(BRANCHES);
+    // trunk 又动了：这一轮改写了 c、d（它们叠在带标记的 b 上），b 不推，c、d 也不推
+    w.pushMain("y.txt", "y\n");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ outcome: "rebased" });
+    expect(w.remoteTip("b")).toBe(held[1]);
+    expect(w.remoteTips(["c", "d"])).toEqual(held.slice(2));
+    expect(w.remoteTip("c")).not.toBe(w.tip("c"));
+    for (const b of ["b", "c", "d"]) expect(g(w.remote, "show", `${b}:b.txt`)).not.toContain("<<<<<<<");
+    // 也不在补推里推上去，补推也不为它们去读 PR（每分钟一次 gh）
+    const readPrs = vi.spyOn(w.svc as unknown as { readPrs: (...a: unknown[]) => Promise<boolean> }, "readPrs");
+    for (let i = 0; i < 3; i++) {
+      w.advance(60_000);
+      await w.svc.tick();
+    }
+    expect(w.remoteTips(["c", "d"])).toEqual(held.slice(2));
+    expect(readPrs).not.toHaveBeenCalled();
+    readPrs.mockRestore();
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "markers", branch: "b", files: ["b.txt"] }));
+    // session 去掉标记、提交：b、c、d 都推上去
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), "b fixed\n");
+    g(w.repo, "commit", "-q", "-a", "-m", "fix markers");
+    g(w.repo, "checkout", "-q", "main");
+    for (let i = 0; i < 3; i++) {
+      w.advance(60_000);
+      await w.svc.tick();
+    }
+    expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
+    for (const b of ["b", "c", "d"]) expect(g(w.remote, "show", `${b}:b.txt`)).not.toContain("<<<<<<<");
+    expect(w.svc.notices().filter((n) => n.reason === "markers")).toEqual([]);
+  });
+
+  it("doesn't push a never-pushed new bottom that carries conflict markers, nor open its PR; does both once it's fixed (BTL-278)", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    for (const b of ["b", "c", "d"]) {
+      g(w.remote, "branch", "-D", b);
+      g(w.repo, "update-ref", "-d", `refs/remotes/origin/${b}`);
+    }
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), "<<<<<<< ours\nb\n=======\nmain's b\n>>>>>>> theirs\n");
+    g(w.repo, "commit", "-q", "-a", "--amend", "--no-edit");
+    g(w.repo, "checkout", "-q", "main");
+    for (const b of ["c", "d"]) {
+      g(w.repo, "checkout", "-q", b);
+      g(w.repo, "rebase", "-q", "--onto", b === "c" ? "b" : "c", `${b}~1`);
+    }
+    g(w.repo, "checkout", "-q", "main");
+    for (const l of w.repoT.layers(id)) w.repoT.updateLayer(l.id, { tipSha: w.tip(l.branch) });
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    await w.svc.tick();
+    expect(g(w.remote, "for-each-ref", "refs/heads/b")).toBe("");
+    expect(w.external.filter((e) => e.kind === "branch_push")).toEqual([]);
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "markers", branch: "b", files: ["b.txt"], fresh: true }));
+    // 去掉标记、提交：下一轮推上去、开 PR
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), "b fixed\n");
+    g(w.repo, "commit", "-q", "-a", "-m", "fix markers");
+    g(w.repo, "checkout", "-q", "main");
+    for (let i = 0; i < 3; i++) {
+      w.advance(60_000);
+      await w.svc.tick();
+    }
+    expect(g(w.remote, "show", "b:b.txt")).toBe("b fixed");
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
+    expect(w.svc.notices().filter((n) => n.reason === "markers")).toEqual([]);
+  });
+
+  it("in a reverse fork (layers on the fork, the stack on origin) doesn't create an unconfigured new bottom on origin; says how to name its remote (BTL-278)", async () => {
+    const w = world();
+    const id = await defineAll(w);
+    const fork = join(tempDir(), "fork.git");
+    g(tempDir(), "clone", "-q", "--bare", w.remote, fork);
+    g(w.repo, "remote", "add", "fork", fork);
+    g(w.repo, "fetch", "-q", "fork");
+    for (const b of ["b", "c", "d"]) {
+      g(w.remote, "branch", "-D", b);
+      g(w.repo, "update-ref", "-d", `refs/remotes/origin/${b}`);
+    }
+    g(fork, "branch", "-D", "b");
+    g(w.repo, "update-ref", "-d", "refs/remotes/fork/b");
+    g(w.repo, "config", "branch.c.pushRemote", "fork");
+    g(w.repo, "config", "branch.d.pushRemote", "fork");
+    const head = w.mergeOnHub("a", "squash");
+    await w.svc.onMerged({ url: "https://github.com/acme/app/pull/1", number: 1, headSha: head, headBranch: "a" }, w.repo);
+    await w.svc.tick();
+    expect(g(w.remote, "for-each-ref", "refs/heads/b")).toBe("");
+    expect(g(fork, "for-each-ref", "refs/heads/b")).toBe("");
+    expect(w.external.filter((e) => e.kind === "branch_push")).toEqual([]);
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toEqual([]);
+    const n = w.svc.notices().find((x) => x.reason === "no_push_remote");
+    expect(n).toMatchObject({ stackId: id, branch: "b" });
+    // 指定了推到 fork：下一轮在 fork 上建、开 PR，origin 上照旧没有
+    g(w.repo, "config", "branch.b.pushRemote", "fork");
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(g(fork, "rev-parse", "b")).toBe(w.tip("b"));
+    expect(g(w.remote, "for-each-ref", "refs/heads/b")).toBe("");
+    expect(fake.calls.filter((c) => c.fn === "prCreate")).toHaveLength(1);
+    expect(w.svc.notices().filter((x) => x.reason === "no_push_remote")).toEqual([]);
+  });
+
+  it("an automatic run doesn't force-push a layer whose conflict-marker check couldn't be done (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    const svc = w.svc as unknown as { markersVsRemote: (s: unknown, l: { branch: string }, ...rest: unknown[]) => Promise<string[] | null> };
+    const real = svc.markersVsRemote.bind(w.svc);
+    vi.spyOn(svc, "markersVsRemote").mockImplementation(async (s, l, ...rest) => (l.branch === "b" ? null : real(s, l, ...rest)));
+    const remoteB = w.remoteTip("b");
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    expect(w.tip("b")).not.toBe(remoteB);
+    expect(w.remoteTip("b")).toBe(remoteB);
+    expect(w.remoteTip("a")).toBe(w.tip("a"));
+    expect(w.repoT.layers(id)[1]!.remoteOkSha).toBe(remoteB);
+  });
+
+  it("pushes a layer whose own commits carry marker-like lines after the trunk adds more to the same file (BTL-278)", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    const body = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const block = (n: string) => `<<<<<<< example ${n}\n>>>>>>> example ${n}\n`;
+    w.pushMain("doc.md", body);
+    await w.svc.tick();
+    expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
+    // b 自己的提交在 doc.md 开头写了一段像冲突标记的例子，已经推上去了
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "doc.md", block("b") + body, "b: doc example");
+    g(w.repo, "checkout", "-q", "main");
+    g(w.repo, "push", "-q", "origin", "b");
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
+    // trunk 在 doc.md 末尾也加了一段：改写后的 b 有两段，一段是它自己的（远端那份就有），一段来自新起点，都不算新冒出来的
+    w.pushMain("doc.md", body + block("main"));
+    w.advance(5 * 60_000);
+    await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "main_updated", outcome: "rebased" });
+    expect(g(w.repo, "show", "b:doc.md")).toBe((block("b") + body + block("main")).trimEnd());
+    expect(w.remoteTips(BRANCHES)).toEqual(w.tips(BRANCHES));
+  });
+
   it("records which layers' sessions got the verify request, and tells each why its rewrite wasn't pushed (BTL-278)", async () => {
     const w = world({ policy: { dailyRebase: false }, allow: (k) => k !== "force_push" });
     const id = await defineAll(w);
@@ -2202,10 +2489,13 @@ describe("StackService guards before rewriting branches (BTL-278)", () => {
     const per = new Map<string, number>();
     for (const c of spy.mock.calls) per.set(c[2], (per.get(c[2]) ?? 0) + 1);
     expect([...per.values()].every((n) => n === 1)).toBe(true);
-    // 下一轮重新认（用户可能刚改了 pushRemote）
-    w.advance(5 * 60_000);
-    w.pushMain("y.txt", "y\n");
+    // 下一轮重新认（用户可能刚改了 pushRemote）：哪怕离上一轮没多久（b 有了新提交）
+    w.advance(10_000);
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b2.txt", "b2\n", "b two");
+    g(w.repo, "checkout", "-q", "main");
     await w.svc.tick();
+    expect(w.repoT.lastRun(id)).toMatchObject({ trigger: "layer_commits", outcome: "rebased" });
     expect(Math.max(...[...new Map(spy.mock.calls.map((c) => [c[2], spy.mock.calls.filter((x) => x[2] === c[2]).length])).values()])).toBe(2);
   });
 

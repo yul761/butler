@@ -276,8 +276,9 @@ export interface StacksView {
 
 /** 栈的提醒（「现在」页）。 */
 /** rewritten：最近一次自动 rebase 改写了这几层、它们还停在 Shipherd 写的顶端（没人编译过，BTL-278）。 */
-/** prs_unreadable：读不到 PR 推迟了一天以上；markers：改写过的顶端有冲突标记，等着的补推没推。 */
-export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten" | "prs_unreadable" | "markers";
+/** prs_unreadable：读不到 PR 推迟了一天以上；markers：改写过（或从没推过）的顶端有冲突标记，没推。 */
+/** no_push_remote：要开 PR 的新栈底认不出该推到哪个 remote，没推、没开 PR。 */
+export type StackNoticeReason = "conflict" | "draft_stale" | "behind" | "stuck" | "confirm" | "rewritten" | "prs_unreadable" | "markers" | "no_push_remote";
 
 export interface StackNoticeInfo {
   reason: StackNoticeReason;
@@ -288,6 +289,8 @@ export interface StackNoticeInfo {
   ticketKey?: string | null;
   /** conflict、markers：冲突（标记）文件，markers 的空表示查不了；stuck：最近的原因；confirm：ready_pr、handoff 或 remote_ahead。 */
   files?: string[];
+  /** markers：远端还没有这个分支（从没推过的新栈底：也没开 PR）。 */
+  fresh?: boolean;
   /** prs_unreadable：remote 的主机（认不出就是 null，当 github.com）。 */
   host?: string | null;
   /** confirm：等确认的几层；rewritten：刚被自动改写的几层。 */

@@ -561,6 +561,7 @@ export const EN: UiStrings = {
       stackStuck: "The stack rebase is stuck",
       stackConfirm: "A stack rebase needs your OK",
       stackMarkers: "A stack layer has conflict markers and wasn't pushed",
+      stackNoPushRemote: "Shipherd can't tell where to push a new stack bottom",
       intake: "Auto-intake needs your decision",
       other: "Shipherd needs a click",
     },
@@ -1979,10 +1980,14 @@ export const EN: UiStrings = {
         host && host !== "github.com"
           ? `Stack "${stack}" hasn't been rebased automatically for over a day: Shipherd can't read the PRs on ${host}, so it can't tell which layers are in review and keeps putting it off. If it's GitHub Enterprise, run gh auth login --hostname ${host} in a terminal and the next round picks it up; if it isn't a GitHub repository, the stack can only be rebased by hand ("Rebase now").`
           : `Stack "${stack}" hasn't been rebased automatically for over a day: Shipherd can't read the open PRs, so it can't tell which layers are in review and keeps putting it off. Most likely gh isn't signed in: run gh auth login in a terminal, and the next round picks it up.`,
-      markers: (stack: string, branch: string, files: string) =>
+      markers: (stack: string, branch: string, files: string, fresh = false) =>
         files
-          ? `${branch} in stack "${stack}" was rewritten but not pushed yet, and ${files} has conflict markers (<<<<<<<) the remote copy doesn't. Shipherd won't push it (rebasing again keeps the markers): have this layer's session remove them and commit; Shipherd checks again next round and pushes once it's clean.`
-          : `${branch} in stack "${stack}" was rewritten but not pushed yet, and Shipherd couldn't check it for conflict markers, so it holds the push and checks again in a while. If this keeps up, look at Shipherd's log.`,
+          ? (fresh
+            ? `${branch} in stack "${stack}" hasn't been pushed yet, and ${files} has conflict markers (<<<<<<<). Shipherd won't push it or open its PR: have this layer's session remove them and commit; Shipherd checks again next round and pushes once it's clean.`
+            : `${branch} in stack "${stack}" was rewritten but not pushed yet, and ${files} has conflict markers (<<<<<<<) the remote copy doesn't. Shipherd won't push it (rebasing again keeps the markers), nor the layers above it for now: have this layer's session remove them and commit; Shipherd checks again next round and pushes once it's clean.`)
+          : `${branch} in stack "${stack}" ${fresh ? "hasn't been pushed yet" : "was rewritten but not pushed yet"}, and Shipherd couldn't check it for conflict markers, so it holds the push and checks again in a while. If this keeps up, look at Shipherd's log.`,
+      no_push_remote: (stack: string, branch: string) =>
+        `${branch}, the new bottom of stack "${stack}", hasn't been pushed yet, and Shipherd can't tell which remote it goes to (this repository has several), so it didn't push it or open its PR. Say which with git config branch.${branch}.pushRemote <remote> in a terminal, and the next round opens it.`,
       confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
         why === "remote_ahead"
           ? `Stack "${stack}": ${branches} has a conflict, but the remote has commits the local branch doesn't (maybe pushed by a reviewer)` +

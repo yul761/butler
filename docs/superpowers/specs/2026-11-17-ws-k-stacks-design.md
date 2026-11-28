@@ -121,7 +121,7 @@
 
 - 冲突的 lease 在 run 的时候定下来，记在 run 的 `detail.conflict.lease` 里（推到哪个 remote、远端的完整 sha、远端是不是有本地没有的提交）。补送（session 停了以后重送）用记下的这一份，不重新读跟踪 ref。远端的 sha 不是本地的祖先（也不是 Shipherd 上次替换掉的那个提交）：自动 run 停成 `needs_confirm`（`remote_ahead`），用户点「马上 rebase」以后照常把冲突交给 session，但不给推送命令，叫它解完报 blocked，由用户决定怎么把远端的提交合进来。
 - 冲突正文里 `rebase --continue` 和 `--skip` 也带 `-c rerere.enabled=false`（`-c` 只管那一条命令，每一步都要带）。
-- 清旧版的 rerere 只清旧版碰过的仓库：这一版第一次启动、建 `rerere-cleaned.json`（`{candidates, done}`）时，把 `stacks` 表里的仓库（删掉的栈也算；只跑过没变化的 run 不留 `stack_runs` 行，所以不按它算）记成候选，升级以后才建栈的仓库不算；不是候选的直接记成已处理、不动。文件读出来改完写临时文件再 rename，同一个进程里串行。`--unset` 失败（同一个键有多个值）记下来、记一笔日志，不再每轮重试。
+- 清旧版的 rerere 只清旧版碰过的仓库：这一版第一次启动、建 `rerere-cleaned.json`（`{candidates, done}`）时，把 `stacks` 表里的仓库（删掉的栈也算；只跑过没变化的 run 不留 `stack_runs` 行，所以不按它算）记成候选，升级以后才建栈的仓库不算；不是候选的直接记成已处理、不动。文件读出来改完写临时文件再 rename，同一个进程里串行。`--unset` 失败（同一个键有多个值）记下来、记一笔日志，不再每轮重试。每轮 tick 先把还没清、目录还在的候选都清一遍，不靠活着的栈（栈都删了的仓库也清）。记录写不进去时内存里留着那份，不按之后的 `stacks` 表重算候选。
 - 别家主机（GitLab、Bitbucket 等）上的 slug（`host/owner/name`，子组更长）不交给 gh：交给它必然读不到，栈就永远推迟。一个 slug 都不剩时按 remote 的种类判断。
 - 读不到 PR 的推迟原因带上主机（`can't read the open PRs on <host>; …`）。推迟超过一天，「现在」页出 `prs_unreadable` 提醒，说明原因和办法（`gh auth login --hostname <host>`）。
 - 补推（`pushPending`）先查冲突标记，再读 PR。标记的检查结果按（层、本地顶端、远端顶端）记在内存里，两头不变就不重查；被拦下的层在「现在」页出 `markers` 提醒。补推读不到 PR 也退避（5 分钟起翻倍，最多 1 小时）。
@@ -134,7 +134,9 @@
 第五轮 review 补的（BTL-278）：
 
 - 每次强推前（自动 run、手动 rebase、复原、补推都走 `forcePush`）按远端那份查冲突标记：旧顶端 = 远端顶端，旧起点 = 它和新起点的 merge-base，和补推一样。引擎自己的护栏按改写前的本地顶端比，本地顶端里已经有、没推出去的标记会被当成层自己的放过去，这里不放：抛错记成推送失败，「现在」页出 `markers` 提醒，叫这一层的 session 去掉标记再提交（重新 rebase 也会带着），干净了下一轮再推。查不了（git 出错、超时）不推，5 分钟起翻倍、最多 1 小时后再查，不永远记成失败。
-- 每一层推到哪个 remote（`pushTarget`，每轮缓存）：PR 的 head 仓库认得出时，推到地址（get-url 和配置里原样的都看，和认 PR 是不是自己的用同一个判断）是那个仓库的 remote；否则看 `branch.<b>.pushRemote`、`remote.pushDefault`、跟踪同名分支的 `branch.<b>.remote`；再否则分支在 origin 上推 origin，在栈的 remote 上推那里。分支只在第三个 remote 上（反向 fork：origin 是主仓库、层在 fork 上；或者 fork 工作流里在别人的 remote 上）就认不出：自动 run 整次推迟（记下输入，同样的 trunk 不反复跑，1 小时起退避重试，原因里写怎么配 `branch.<b>.pushRemote`），冲突交给 session 时不给推送命令、说明认不出该推到哪里，开 draft、开新栈底的 PR 都不在 trunk 的 remote 上新建分支。哪个 remote 上都还没有的层（从没推过）不推迟整个栈，只是不推它。
+- 一层因为标记（或查不了）没推，叠在它上面、包含它本地顶端的层这次也不推（从下往上推，这一轮推上去的层不再查），补推也一样等它；它干净了、推上去以后，上面的层下一轮补推。手动 rebase 也是这样。
+- 开新栈底的 PR 前要把它推上去（`branch_push`）：推之前同样查标记（远端没有它，按起点比）。有标记或查不了就不推、不开 PR，「现在」页出 `markers` 提醒（`fresh`：还没推过，文案说不推也不开 PR）。
+- 每一层推到哪个 remote（`pushTarget`，每轮缓存）：PR 的 head 仓库认得出时，推到地址（get-url 和配置里原样的都看，和认 PR 是不是自己的用同一个判断）是那个仓库的 remote；否则看 `branch.<b>.pushRemote`、`remote.pushDefault`、跟踪同名分支的 `branch.<b>.remote`；再否则分支在 origin 上推 origin，在栈的 remote 上推那里。分支只在第三个 remote 上（反向 fork：origin 是主仓库、层在 fork 上；或者 fork 工作流里在别人的 remote 上）就认不出：自动 run 整次推迟（记下输入，同样的 trunk 不反复跑，1 小时起退避重试，原因里写怎么配 `branch.<b>.pushRemote`），冲突交给 session 时不给推送命令、说明认不出该推到哪里，开 draft、开新栈底的 PR 都不在 trunk 的 remote 上新建分支。哪个 remote 上都还没有的层（从没推过）不推迟整个栈，只是不推它。栈跟着 origin、仓库有别的 remote，同一个栈里又有层推在别的 remote 上（配置或分支所在）时，没配置的新层也不在 origin 上新建：开新栈底 PR 时「现在」页出 `no_push_remote` 提醒，叫用户 `git config branch.<b>.pushRemote <remote>`；只有一个 remote 的普通仓库照旧推 origin。手动 rebase 因为认不出 remote 推迟时返回失败，带本地化的提示（怎么配 `pushRemote`），不说成功。
 - 读不到 PR 只推迟自动 run，手动「马上 rebase」照跑（git 上的检查照做）。推迟超过一天的提醒按主机说：github.com 叫 `gh auth login`；别的主机说是 GitHub Enterprise 就 `gh auth login --hostname <host>`，不是 GitHub 的仓库栈只能手动 rebase。
 - 核对请求说清楚为什么没推：`force_push` 关着、推之前查出了问题（冲突标记、推失败）、远端还没有这个分支或认不出推到哪里。`remote_ahead` 的确认文案按实际说：`force_push` 关着就说不推，冲突不交给 session 时说留给用户（确认里记下 `push` 和 `toSession`）。
 

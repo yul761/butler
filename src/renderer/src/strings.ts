@@ -572,6 +572,7 @@ const ZH = {
       stackStuck: "栈的 rebase 卡住了",
       stackConfirm: "栈的 rebase 等你确认",
       stackMarkers: "栈里有一层带着冲突标记，没推出去",
+      stackNoPushRemote: "新栈底不知道该推到哪个 remote",
       intake: "自动接活拿不准，等你决定",
       other: "Shipherd 要你点一下",
     },
@@ -1999,10 +2000,14 @@ const ZH = {
         host && host !== "github.com"
           ? `栈「${stack}」一天多没自动 rebase 了：Shipherd 读不到 ${host} 上的 PR，没法确认哪些层在 review，就一直推迟。是 GitHub Enterprise 就在终端跑 gh auth login --hostname ${host}，登录后下一轮会自己接着跑；不是 GitHub 的仓库，栈只能手动 rebase（点「马上 rebase」）。`
           : `栈「${stack}」一天多没自动 rebase 了：读不到开着的 PR，Shipherd 没法确认哪些层在 review，就一直推迟。多半是 gh 没登录：在终端跑 gh auth login，登录后下一轮会自己接着跑。`,
-      markers: (stack: string, branch: string, files: string) =>
+      markers: (stack: string, branch: string, files: string, fresh = false) =>
         files
-          ? `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<），远端那份没有。Shipherd 不推它（重新 rebase 也会带着这些标记）：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`
-          : `栈「${stack}」的 ${branch} 改写过、还没推出去，可是查不了里面有没有冲突标记，Shipherd 先不推，过一会儿再查。一直这样就看一下 Shipherd 的日志。`,
+          ? (fresh
+            ? `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它，也不给它开 PR：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`
+            : `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<），远端那份没有。Shipherd 不推它（重新 rebase 也会带着这些标记），叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`)
+          : `栈「${stack}」的 ${branch} ${fresh ? "还没推过" : "改写过、还没推出去"}，可是查不了里面有没有冲突标记，Shipherd 先不推，过一会儿再查。一直这样就看一下 Shipherd 的日志。`,
+      no_push_remote: (stack: string, branch: string) =>
+        `栈「${stack}」的新栈底 ${branch} 还没推过，Shipherd 认不出该推到哪个 remote（这个仓库有好几个 remote），就没推、也没开 PR。在终端跑 git config branch.${branch}.pushRemote <remote> 指定，下一轮就接着开。`,
       confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
         why === "remote_ahead"
           ? `栈「${stack}」的 ${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）` +
