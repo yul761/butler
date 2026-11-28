@@ -27,7 +27,8 @@
  * - 单独的 pass、pin（还有 pinCode、pin_number）当键名（前面连着字母数字的 bypass、spin 不算；pass: true 也会被打）。
  *   键名后面可以直接接一段驼峰后缀（passwordHash、tokenValue；tokenizer、secretary、passwordless 也会被当成键名）。
  * - Kubernetes env 的「name: 含键名的名字」下一行「value: x」：value 后面整行打掉（valueFrom 不算）。
- * - YAML 块标量（password: |、token: >-）：下面缩进不比第一行浅的那几行（含中间的空行）整块打成一个占位符。
+ * - YAML 块标量（password: |、token: >-）：下面缩进不比第一个非空行浅的那几行（含开头和中间的空行）整块打成一个占位符，
+ *   占位符的缩进取第一个非空行的。
  *   值按 shell 的一个词算（-p'x'tail 整个打）。
  *   -p 后面的引号在这条命令里没闭合（引号配错了对），一直打到闭引号和紧连着的字、或行尾，命令后面的部分也打掉。
  * - Cookie 头里名字超过 128 字的 name=value 不打（不然很多个 Cookie: 时每个都扫到结尾）；带数字的长值还有兜底规则。
@@ -58,7 +59,8 @@
  * - 键名带复数、数字编号、一小段后缀的也算（passwords、password_123、DB_PASSWORD_PROD、API_TOKEN_2_STAGING、MY_KEY_PROD）；
  *   后缀最长 16 个字，更长的不算键名。前面紧挨着字母数字的不算（xtoken is …）。
  * - 含全角 ASCII（ｐａｓｓｗｏｒｄ＝、｜）、Default_Ignorable 的字（零宽字符、软连字符 U+00AD、U+2061–2064、方向控制符、变体选择符、
- *   标签字符…）、NFKC 换得成单个 ASCII 字母的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝 这种数学字母、ⓟ、上标字母；①、™、ﬁ 不换）或框线字符（│ ├─┼，psql 的 unicode 边框）的行
+ *   标签字符…）、NFKC 换得成单个 ASCII 字母或数字的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝 这种数学字母、ⓟ、上标字母、上下标数字 ₁ ²、数学数字 𝟏；
+ *   带圈、带框的只换字母，①、⑴、⒈、🄁 不换；™、ﬁ、℃ 也不换）或框线字符（│ ├─┼，psql 的 unicode 边框）的行
  *   先换成半角、去掉不可见的字、兼容字符换成 ASCII、框线换成 | - +，再跑上面的规则。中文常用的全角标点（！（），：；？）不换。
  *   全角冒号「：」不换成半角（它在 URL 后面是 URL 的边界），要它当冒号的规则自己认：URL 里的账号密码（admin：S3cretPw＠db）、
  *   curl -u（admin：hunter2）、Authorization：、Cookie：、「键：值」。
@@ -74,7 +76,9 @@
  *
  * 耗时：主进程同步跑、输入长度不限，每条规则都不能有平方级的回溯（可选的分隔符写成 \s*(?:[:：]\s*)?，
  * 会从很多位置起跑、一直扫到行尾的部分都设上限）。不用反向引用：带 i 标志的规则遇到非 Latin1 的串，(?!\2) 每个字慢十倍，
- * 引号按种类各写一个字符类。开闭不是同一个字的全角引号停在闭引号或行尾、第一次就匹配成功（不然每个开引号都扫到行尾再失败）。
+ * 引号按种类各写一个字符类。例外：YAML 块标量那条用 \2 认后面每一行的缩进——\2 只是行首的一段空白，每行只在行首比一次（不是每个字一次），
+ * 比不上就停，不回溯，总共是线性的；URL 密码段、echo 那两条的 \2 是「先行断言 + 反向引用」一次取整段，也不回溯。
+ * 开闭不是同一个字的全角引号停在闭引号或行尾、第一次就匹配成功（不然每个开引号都扫到行尾再失败）。
  * secrets.timing.test.ts 里有 200KB 对抗输入的耗时用例（每个 50ms 以内：先热身一次，三次取最快），每个都再跑双字节、两种全角引号、
  * 要先换半角的版本，新规则另有单个前缀接 200KB 同一种字的用例。这些用例放在单独的 vitest 项目 timing 里，等别的测试跑完再串行跑。
  */
@@ -106,6 +110,8 @@ interface Rule {
   arg?: RegExp | CommandArgs;
   /** 看了前后文再决定换成什么（返回整个匹配的替换结果）。在 URL 路径里只打像 token 的那几段。 */
   mask?: (hit: Hit) => string;
+  /** 匹配从 KEY 开头（「键 = 值」「键 is 值」、YAML 块标量）：只在 KEY_AT 扫出来的候选起点上试，见 maskRules。 */
+  keyed?: true;
 }
 
 /** 当成文件路径的扩展名：匹配到的长串含 /，后面紧跟这些扩展名之一（前面可以有 .test 之类的段）。 */
@@ -113,7 +119,7 @@ const PATH_EXT = /^(?:\.[\w-]+)*?\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|lock|txt|l
 
 /** 「键 = 值」里算作密钥的键名。键名后面可以紧跟一个引号（JSON / YAML 带引号的键）。 */
 const KEY_NAMES =
-  "password|passwd|passphrase|passcode|pwd|secret[_ -]?key|client[_ -]?secret|secret|token|api[_ -]?key|access[_ -]?key|account[_ -]?key|private[_ -]?key|credentials?|authentication[_ ]string|_auth|密码|口令|密钥|令牌";
+  "password|passwd|passphrase|passcode|pwd|secret[_ -]?key|client[_ -]?secret|secret|token|api[_ -]?key|access[_ -]?key|account[_ -]?key|private[_ -]?key|credential|authentication[_ ]string|_auth|密码|口令|密钥|令牌";
 /**
  * 键名，后面可以带数字编号（password1、pwd2、token1、password_1、token-2、password20240115093000）。编号不设上限：
  * 设上限的话 password123456789=x 整个漏掉。每个键名后面的数字只被从这个键名起跑的那一次扫到，总共是线性的
@@ -516,19 +522,26 @@ const PASS_KEY = String.raw`(?<![A-Za-z0-9]${KQ})(?:pass|pin)(?:[_-]?(?:code|num
 /** k8s env 的 name 里含这些就算密钥。 */
 const K8S_SECRET_NAME = /name[ \t]*:[ \t]*["']?[A-Za-z0-9_.-]*(?:pass|pwd|secret|token|key|credential|auth|dsn)/i;
 
-/** 块标量：匹配到的是缩进不比第一行浅的那几行（空行算进去）；块末尾的空行原样留着（属于后面的内容）。 */
+/**
+ * 块标量：匹配到的是开头的空行、再加缩进不比第一个非空行浅的那几行（中间的空行算进去）。开头的空行和值一起换成占位符，
+ * 占位符的缩进取第一个非空行的；块末尾的空行原样留着（属于后面的内容）。
+ */
 function maskBlockScalar(h: Hit): string {
   const v = h.value;
   const keep = h.match.slice(0, h.match.length - v.length);
-  // 正则只收缩进不少于第一行的行和空行，所以整块都是值；块末尾的空行留着（属于后面的内容）。不切行：一万个块也是线性的。
+  // 正则只收开头的空行、缩进不少于第一个非空行的行和空行，所以整块都是值。不切行：一万个块也是线性的。
+  let lineStart = 0;
   let first = 0;
-  while (v[first] === " " || v[first] === "\t") first++;
+  while (v[first] === " " || v[first] === "\t" || v[first] === "\r" || v[first] === "\n") {
+    if (v[first] === "\n") lineStart = first + 1;
+    first++;
+  }
   let j = v.length;
   while (j > 0 && " \t\r\n".includes(v[j - 1])) j--;
   let lineEnd = j;
   while (lineEnd < v.length && v[lineEnd] !== "\n") lineEnd++;
   const tail = lineEnd > j && v[lineEnd - 1] === "\r" ? "\r" : "";
-  return `${keep}${v.slice(0, first)}${SECRET_MASK}${tail}${v.slice(lineEnd)}`;
+  return `${keep}${v.slice(lineStart, first)}${SECRET_MASK}${tail}${v.slice(lineEnd)}`;
 }
 
 /** 命令里的一个 shell 词（和 P_VALUE 一样的读法）、词之间的空白（行尾 \\ 续行也算空白）。sticky，一个接一个往后读。 */
@@ -598,28 +611,29 @@ const RULES: Rule[] = [
   { re: /-----BEGIN[^-]{0,60}-----[\s\S]*?(?:-----END[^-]{0,60}-----|$)/g },
   // 剩下的 BEGIN 行头。
   { re: /-----BEGIN[^-]{0,60}-----/g },
-  // YAML 的块标量（password: |、token: >-）：值在下面缩进的几行里，整块打成一个占位符。第一行的缩进记下来（第 2 个捕获组），
+  // YAML 的块标量（password: |、token: >-）：值在下面缩进的几行里，整块打成一个占位符。开头的空行跳过（每行都要吃掉一个换行，
+  // 不会回溯），第一个非空行的缩进记下来（第 2 个捕获组），
   // 后面的行要以同样的缩进开头（不比第一行浅），中间的空行算进块里；缩进一变浅，块就到头了，匹配停在那里，下一次从那一行
   // 接着找（嵌套 mapping 里挨着的第二个块 token: | 照样认）。每个匹配只吃掉它自己的块，线性。
-  { re: new RegExp(String.raw`(${KEY}${KQ}[ \t]*:[ \t]*[|>][-+1-9]{0,2}[ \t]*\r?\n)(?!\s*\[REDACTED\])([ \t]+)[^ \t\r\n][^\r\n]*(?:\r?\n(?:\2[^\r\n]*|[ \t]*(?=\r?\n|$)))*`, "gi"), mask: maskBlockScalar },
+  { keyed: true, re: new RegExp(String.raw`(${KEY}${KQ}[ \t]*:[ \t]*[|>][-+1-9]{0,2}[ \t]*\r?\n)(?!\s*\[REDACTED\])(?:[ \t]*\r?\n)*([ \t]+)[^ \t\r\n][^\r\n]*(?:\r?\n(?:\2[^\r\n]*|[ \t]*(?=\r?\n|$)))*`, "gi"), mask: maskBlockScalar },
   // Kubernetes 的 env：- name: DB_PASSWORD 下一行 value: hunter2xyz。name 里含键名的（PASSWORD、TOKEN、SECRET、KEY、DSN…），value 后面整行打掉。
   {
     re: /(\bname[ \t]*:[ \t]*["']?[A-Za-z0-9_.-]{1,128}["']?[ \t]*\r?\n[ \t]*value[ \t]*:[ \t]*)(?!\[REDACTED\])[^\s#][^\r\n]*/g,
     skip: (h) => !K8S_SECRET_NAME.test(h.match.slice(0, h.match.length - h.value.length)),
   },
   // 键后面的值在引号里（"、'、`）：到同一个闭引号整段打掉（"my secret phrase"、'ab'）。要在别的规则之前：不然值里先被换进占位符，剩下的字就漏了。
-  { re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
+  { keyed: true, re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "g") },
   { re: new RegExp(`(\\bkey${DIGITS}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi"), skip: (h) => plainKeyValue(h.value) },
-  { re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
+  { keyed: true, re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${TABLE_KEY}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${PASS_KEY}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   // 引号没闭合、值里有空格（password: "two words、password = 'hunter 2）：照 mysql 的做法打到行尾。闭合了的上面已经打过，
   // 占位符跳过。同一种引号之间不会重叠着扫，总共是线性的。
-  { re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
+  { keyed: true, re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
   { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "g") },
   // 「X is '…」引号没闭合：和 key: '… 一样打到行尾（以前只打第一个词，没冒号的连第一个词都不打）。
-  { re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
+  { keyed: true, re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
   // 闭引号后面紧跟着字（password: 'abc'def123、TOKEN='abc'"def"：shell 里是同一个词）：接着打到这个词结束，闭引号留着。
   // 只接在上面打过码的引号值后面；后面又是一段引号的整段算进去（没闭合的到行尾）。每个字只有一种走法，线性。
   { re: /(\[REDACTED\]["'`”’」』])(?:[^\s，。；,;、)\]}>|"'`“”‘’「」『』]|"[^"\r\n]*"?|'[^'\r\n]*'?|`[^`\r\n]*`?|“[^”\r\n]*”?|‘[^’\r\n]*’?|「[^」\r\n]*」?|『[^』\r\n]*』?)+/g },
@@ -673,10 +687,8 @@ const RULES: Rule[] = [
   },
   { re: command("htpasswd"), arg: htpasswdArgs },
   // --password-stdin 的口令从 here-string（<<< x）或前面的 echo x | 进来。往后、往前都只看 128 字，线性。
-  // 引号里的（<<< "hunter 2"）打到闭引号（没闭合的到行尾）。
-  { re: /(--password-stdin\b[^\n|;&]{0,128}?<<<[ \t]*")(?!\[REDACTED\])[^"\r\n]+/g },
-  { re: /(--password-stdin\b[^\n|;&]{0,128}?<<<[ \t]*')(?!\[REDACTED\])[^'\r\n]+/g },
-  { re: /(--password-stdin\b[^\n|;&]{0,128}?<<<[ \t]*["']?)(?!\[REDACTED\])[^\s"']+/g },
+  // <<< 后面的值按 shell 的一个词读（P_VALUE）：引号里带空格、转义的引号（"hun\"ter 2"）、$'…'、几段引号连写（'a'"b c"）整个打，没闭合的到行尾。
+  { re: new RegExp(String.raw`(--password-stdin\b[^\n|;&]{0,128}?<<<[ \t]*)${P_VALUE}`, "g") },
   // 值用「先行断言 + 反向引用」一次取到整个词、不回溯（不然很长的词后面没有 | 时，每个字都要回退着再试一遍）。
   { re: /(\becho[ \t]+["']?)(?!\[REDACTED\])(?!\$)(?=([^\s"'|]+))\2(?=["']?[ \t]*\|[^\n|]{0,128}--password-stdin)/g },
   // JWT
@@ -698,7 +710,7 @@ const RULES: Rule[] = [
   { re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g },
   // 「密码是 xxx」「token=xxx」「SECRET_KEY=xxx」「_auth=xxx」：只换值。
   // 引号没闭合（被截断的 "hunter2xyz）也照打：前缀后面可以跟一个引号。
-  { re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${VQ})${VAL}`, "gi") },
+  { keyed: true, re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${VQ})${VAL}`, "gi") },
   // 环境变量式的键（区分大小写，免得 primary_key: id 被当成密钥）。
   { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${VQ})${VAL}`, "g") },
   // 单独的 key（key=…、"key": …、表格里的 | key | …）：前面不能连着字母、数字、_（primary_key、monkey 不算）。
@@ -710,10 +722,11 @@ const RULES: Rule[] = [
   // 「token abc…」「secret abc…」：键后面隔一个空格跟着一长串（16 位以上，有字母也有数字）。
   { re: /(\b(?:token|secret|password|passwd|api[_ -]?key)\s+)(?!\[REDACTED\])(?=[A-Za-z0-9._~+/=-]*\d)(?=[A-Za-z0-9._~+/=-]*[A-Za-z])[A-Za-z0-9._~+/=-]{16,}/gi },
   // 「the password is: x」：带冒号的照打。
-  { re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*[:：]\\s*${EMPTY_Q}${VQ})${VAL_ANY}`, "gi") },
+  { keyed: true, re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*[:：]\\s*${EMPTY_Q}${VQ})${VAL_ANY}`, "gi") },
   // 「the password is hunter2xyz」「token is "abc123def」（引号没闭合）：值里要有数字或符号，免得「the token is expired」
   // 「… is expired.」「the token is user's」这种话被打码（句末的 . 不算；! ? 算，宁可误打）。
   {
+    keyed: true,
     re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s+${EMPTY_Q}${VQ})${VAL}`, "gi"),
     // 只有字母（可以带一个撇号：don't、user’s）再加句号的是普通的话。
     skip: (h) => /^[A-Za-z]+(?:['’][A-Za-z]+)*\.*$/.test(h.value),
@@ -760,16 +773,20 @@ const IGNORABLE_BMP: [number, number][] = [
 /** BMP 以外的 Default_Ignorable_Code_Point：U+1BCA0–1BCA3、U+1D173–1D17A、U+E0000–E0FFF（标签字符、变体选择符补充）。 */
 const isIgnorableAstral = (cp: number): boolean => (cp >= 0x1bca0 && cp <= 0x1bca3) || (cp >= 0x1d173 && cp <= 0x1d17a) || (cp >= 0xe0000 && cp <= 0xe0fff);
 /**
- * NFKC 换成单个 ASCII 字母的兼容字符：上下标（ᵖ ⁿ ₐ）、字母式符号（ℙ ℎ）、数字形式（ⅰ）、带圈字母（ⓟ）。
- * 只换成单个字母：换成数字、几个字母或符号的（① ⑴ ⒈ → 1、™ → TM、℡ → TEL、ﬁ → fi、℃ → °C）不动，不然它们和后面的词粘在一起，
- * \b 认不出词头（「步骤：①mysql -pX」「①ghp_…」「配置™Bearer …」）。键名里本来就没有连字。模块加载时按块算一遍（约一千五百个字）。
+ * NFKC 换成单个 ASCII 字母或数字的兼容字符：上下标（ᵖ ⁿ ₐ ¹ ₂）、字母式符号（ℙ ℎ）、数字形式（ⅰ）、带圈字母（ⓟ）。
+ * 上下标数字要换：键名后面的编号（token₁=、password²=）换成 token1、password2 才认得出。
+ * 带圈、带框的（U+2460–24FF、U+1F100–1F1FF）只换字母：① ⑴ ⒈ 🄁 → 1 会和后面的词粘在一起，\b 认不出词头
+ * （「步骤：①mysql -pX」「①ghp_…」）。换成几个字或符号的（™ → TM、℡ → TEL、ﬁ → fi、℃ → °C）也不动（「配置™Bearer …」）；
+ * 键名里本来就没有连字。模块加载时按块算一遍（约一千五百个字）。
  */
-const COMPAT_BLOCKS: [number, number][] = [[0x1d2c, 0x1dbf], [0x2070, 0x209f], [0x2100, 0x218f], [0x2460, 0x24ff]];
+const COMPAT_BLOCKS: [number, number][] = [[0xb2, 0xb3], [0xb9, 0xb9], [0x1d2c, 0x1dbf], [0x2070, 0x209f], [0x2100, 0x218f], [0x2460, 0x24ff]];
+/** 带圈、带框的字：只换字母，不换数字。 */
+const isEnclosed = (cp: number): boolean => (cp >= 0x2460 && cp <= 0x24ff) || (cp >= 0x1f100 && cp <= 0x1f1ff);
 /** BMP 以外换成 ASCII 的兼容字符：数学字母数字符号（𝐩𝐚𝐬𝐬 粗体、斜体、等宽…）、带圈 / 带框字母补充（🄿）。用到时再算，记下来。 */
 const isCompatAstral = (cp: number): boolean => (cp >= 0x1d400 && cp <= 0x1d7ff) || (cp >= 0x1f100 && cp <= 0x1f1ff);
-const asciiCompat = (ch: string): string | null => {
-  const n = ch.normalize("NFKC");
-  return /^[A-Za-z]$/.test(n) ? n : null;
+const asciiCompat = (cp: number): string | null => {
+  const n = String.fromCodePoint(cp).normalize("NFKC");
+  return /^[A-Za-z]$/.test(n) || (/^[0-9]$/.test(n) && !isEnclosed(cp)) ? n : null;
 };
 
 /** 每个 BMP 字怎么换：KEEP 不动，SHIFT 全角换半角，DROP 去掉，TO 查 BMP_TO，HIGH 是代理对的前半。查表比一串范围判断快（200KB 的中文约 1ms）。 */
@@ -788,7 +805,7 @@ for (let c = 0x2500; c <= 0x257f; c++) {
 }
 for (const [lo, hi] of COMPAT_BLOCKS) {
   for (let c = lo; c <= hi; c++) {
-    const to = asciiCompat(String.fromCharCode(c));
+    const to = asciiCompat(c);
     if (to !== null) {
       KIND[c] = TO;
       BMP_TO.set(c, to);
@@ -801,7 +818,7 @@ const ASTRAL_TO = new Map<number, string | null>();
 /**
  * 规范化：全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂、＠）换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），
  * 去掉 Default_Ignorable 的字（零宽字符、软连字符、U+2063…），框线字符（U+2500–257F，psql 的 │ ─ ┼）换成 | - +，
- * NFKC 换得成单个 ASCII 字母的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝、ⓟ）换成那个字母。每个字换成一个 ASCII 字母、或去掉，别的字不动。
+ * NFKC 换得成单个 ASCII 字母或数字的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝、ⓟ、₁、𝟏）换成那个字。每个字换成一个 ASCII 字、或去掉，别的字不动。
  * 一个字一个字查表扫一遍，不用正则回调：每行一次回调的写法在三万多行的短表格上要 7ms（CI 上过了 50ms），这样约 1ms。
  * 一个要换的字都没有就返回原来那个串（调用方用 === 判断）。
  */
@@ -827,7 +844,7 @@ function normalize(s: string): string {
       else if (isCompatAstral(cp)) {
         let t = ASTRAL_TO.get(cp);
         if (t === undefined) {
-          t = asciiCompat(String.fromCodePoint(cp));
+          t = asciiCompat(cp);
           ASTRAL_TO.set(cp, t);
         }
         if (t === null) {
@@ -848,30 +865,94 @@ function normalize(s: string): string {
   return last === 0 ? s : out + s.slice(last);
 }
 
+/**
+ * KEY 规则（keyed）能起跑的位置：后面是键名、可选的引号，再跟分隔符（: = ： 是 为）或「 is」。每条 KEY 规则的开头都是这一段
+ * （YAML 块标量的「键:」、SEP、「键 is」），所以它们的匹配只会从这些位置开始。
+ * 先用这一条零宽先行扫一遍，记下候选起点，8 条 KEY 规则只在这些起点上用 sticky 副本去试：不然每条规则都要在每个位置把 KEY 试一遍
+ * （tokens_、pwds_、credentials_ 连着重复的 200KB，8 条加起来约 20ms，CI 上翻两三倍）。没有候选就整条跳过。
+ */
+const KEY_AT = new RegExp(String.raw`(?=${KEY}${KQ}(?:\s*(?:[:=：]|是|为)|\s+is))`, "gi");
+const keyStarts = (s: string): number[] => {
+  const out: number[] = [];
+  KEY_AT.lastIndex = 0;
+  for (let m = KEY_AT.exec(s); m; m = KEY_AT.exec(s)) {
+    out.push(m.index);
+    KEY_AT.lastIndex = m.index + 1;
+  }
+  return out;
+};
+/** 每条 KEY 规则的 sticky 副本（只在给定的位置试）。 */
+const STICKY = new Map<RegExp, RegExp>();
+const stickyOf = (re: RegExp): RegExp => {
+  let y = STICKY.get(re);
+  if (!y) {
+    y = new RegExp(re.source, re.flags.replace("g", "") + "y");
+    STICKY.set(re, y);
+  }
+  return y;
+};
+
+/** 规则的替换：和 String.prototype.replace 的回调同样的参数（match, 各捕获组…, offset, whole）。 */
+const replacer =
+  ({ skip, mask }: Rule) =>
+  (...args: unknown[]): string => {
+    const m = args[0] as string;
+    // 有捕获组时第二个参数是要保留的前缀。
+    const keep = typeof args[1] === "string" ? args[1] : "";
+    if (skip || mask) {
+      const offset = args[args.length - 2] as number;
+      const whole = args[args.length - 1] as string;
+      if (typeof offset === "number" && typeof whole === "string") {
+        const hit = { match: m, value: m.slice(keep.length), before: whole.slice(0, offset), rest: whole.slice(offset + m.length) };
+        if (mask) return mask(hit);
+        if (skip?.(hit)) return m;
+      }
+    }
+    return `${keep}${SECRET_MASK}`;
+  };
+
+/**
+ * 和 s.replace(re, fn) 一样（从左往右、不重叠），但只在 starts 这些位置试：匹配只可能从这些位置开始，结果相同。
+ * 一处都没换的返回原来那个串。
+ */
+function replaceAt(s: string, re: RegExp, starts: readonly number[], fn: (...args: unknown[]) => string): string {
+  const y = stickyOf(re);
+  let out = "";
+  let last = 0;
+  let changed = false;
+  for (const p of starts) {
+    if (p < last) continue;
+    y.lastIndex = p;
+    const m = y.exec(s);
+    if (!m) continue;
+    out += s.slice(last, p) + fn(...m, p, s);
+    last = p + m[0].length;
+    changed = true;
+  }
+  return changed ? out + s.slice(last) : s;
+}
+
 /** 按顺序跑表头表格和每条规则。 */
 const maskRules = (s: string): string => {
   // 表头表格整格打码：排在前面，整格先换成一个占位符，后面的规则不会把格子拆开。
   let out = maskTables(s);
-  for (const { re, skip, arg, mask } of RULES) {
-    if (arg) {
-      out = maskCommands(out, re, arg);
+  // KEY 规则的候选起点，和算它时的文本：文本被哪条规则改过就重扫。
+  let starts: number[] = [];
+  let startsOf: string | null = null;
+  for (const rule of RULES) {
+    if (rule.arg) {
+      out = maskCommands(out, rule.re, rule.arg);
       continue;
     }
-    out = out.replace(re, (...args: unknown[]) => {
-      const m = args[0] as string;
-      // replace 回调的参数：match, 各捕获组…, offset, whole[, groups]。有捕获组时第二个参数是要保留的前缀。
-      const keep = typeof args[1] === "string" ? args[1] : "";
-      if (skip || mask) {
-        const offset = args[args.length - 2] as number;
-        const whole = args[args.length - 1] as string;
-        if (typeof offset === "number" && typeof whole === "string") {
-          const hit = { match: m, value: m.slice(keep.length), before: whole.slice(0, offset), rest: whole.slice(offset + m.length) };
-          if (mask) return mask(hit);
-          if (skip?.(hit)) return m;
-        }
+    if (rule.keyed) {
+      if (startsOf !== out) {
+        starts = keyStarts(out);
+        startsOf = out;
       }
-      return `${keep}${SECRET_MASK}`;
-    });
+      if (starts.length > 0) out = replaceAt(out, rule.re, starts, replacer(rule));
+      continue;
+    }
+    out = out.replace(rule.re, replacer(rule));
   }
   return out;
 };

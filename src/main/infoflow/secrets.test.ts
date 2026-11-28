@@ -1124,11 +1124,11 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
       expect(maskSecrets("Cookie： abc123secretvalue")).toBe(`Cookie： ${M}`);
     });
 
-    it("b: a quoted --password-stdin here-string is masked up to the closing quote", () => {
-      expect(maskSecrets('docker login --password-stdin <<< "hunter 2"')).toBe(`docker login --password-stdin <<< "${M}"`);
-      expect(maskSecrets("docker login --password-stdin <<< 'hunter2'")).toBe(`docker login --password-stdin <<< '${M}'`);
-      expect(maskSecrets("docker login --password-stdin <<< 'hunter 2'")).toBe(`docker login --password-stdin <<< '${M}'`);
-      expect(maskSecrets('docker login --password-stdin <<< "unclosed val')).toBe(`docker login --password-stdin <<< "${M}`);
+    it("b: a quoted --password-stdin here-string is masked as one shell word, quotes included", () => {
+      expect(maskSecrets('docker login --password-stdin <<< "hunter 2"')).toBe(`docker login --password-stdin <<< ${M}`);
+      expect(maskSecrets("docker login --password-stdin <<< 'hunter2'")).toBe(`docker login --password-stdin <<< ${M}`);
+      expect(maskSecrets("docker login --password-stdin <<< 'hunter 2'")).toBe(`docker login --password-stdin <<< ${M}`);
+      expect(maskSecrets('docker login --password-stdin <<< "unclosed val')).toBe(`docker login --password-stdin <<< ${M}`);
     });
 
     it("c: a --password= value after a line continuation", () => {
@@ -1144,5 +1144,62 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
       expect(maskSecrets("- name: SENTRY_DSN\n  value: https://abc@o1.ingest.sentry.io/1")).toBe(`- name: SENTRY_DSN\n  value: ${M}`);
       expect(maskSecrets("- name: DB_PASSWORD\n  value: # set later")).toBe("- name: DB_PASSWORD\n  value: # set later");
     });
+  });
+});
+
+describe("review of 20531347 (secrets)", () => {
+  const M = SECRET_MASK;
+
+  it("MF1: a block scalar whose first lines are blank (spaces only, or empty) is still masked whole", () => {
+    expect(maskSecrets("password: |\n  \n  Hunter2 xyz\nnext: ok")).toBe(`password: |\n  ${M}\nnext: ok`);
+    expect(maskSecrets("password: |\n\n  Hunter2 xyz\nnext: ok")).toBe(`password: |\n  ${M}\nnext: ok`);
+    expect(maskSecrets("password: |\n\n \t\n    Hunter2 xyz\n    line2\nnext: ok")).toBe(`password: |\n    ${M}\nnext: ok`);
+    // 空行的缩进比第一个非空行深，占位符的缩进还是取第一个非空行的。
+    expect(maskSecrets("password: |\n      \n  Hunter2 xyz\nnext: ok")).toBe(`password: |\n  ${M}\nnext: ok`);
+    expect(maskSecrets("password: |\r\n\r\n  Hunter2 xyz\r\nnext: ok")).toBe(`password: |\r\n  ${M}\r\nnext: ok`);
+    // 下面只有空行、没有值的不打。
+    expect(maskSecrets("password: |\n\n\nnext: ok")).toBe("password: |\n\n\nnext: ok");
+  });
+
+  it("MF2: compat digits after a key name (subscript, superscript, math) are mapped, so the key is recognized", () => {
+    expect(maskSecrets("token₁=Hunter2xyzAbc")).toBe(`token1=${M}`);
+    expect(maskSecrets("password²=Hunter2xyz")).toBe(`password2=${M}`);
+    expect(maskSecrets("password¹=Hunter2xyz")).toBe(`password1=${M}`);
+    expect(maskSecrets("token⁴=Hunter2xyzAbc")).toBe(`token4=${M}`);
+    expect(maskSecrets("𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝𝟏=Hunter2xyz")).toBe(`password1=${M}`);
+    expect(maskSecrets("𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝𝟙=Hunter2xyz")).toBe(`password1=${M}`);
+    // 带圈、带框的数字和 ™ ﬁ ℃ 不换。
+    expect(maskSecrets("①⑴⒈🄁™℡ﬁ℃ ok")).toBe("①⑴⒈🄁™℡ﬁ℃ ok");
+    expect(maskSecrets("步骤：①mysql -uroot -pHunter2xyz")).toBe(`步骤：①mysql -uroot -p${M}`);
+    expect(maskSecrets(`🄁${fake.ghp}`)).toBe(`🄁${M}`);
+  });
+
+  it("MF4: credential / credentials keys", () => {
+    expect(maskSecrets("credential=Hunter2xyz")).toBe(`credential=${M}`);
+    expect(maskSecrets("credentials=Hunter2xyz")).toBe(`credentials=${M}`);
+    expect(maskSecrets("credentials_prod: Hunter2xyz")).toBe(`credentials_prod: ${M}`);
+    expect(maskSecrets("CREDENTIALS2=Hunter2xyz")).toBe(`CREDENTIALS2=${M}`);
+  });
+
+  it("MF4: the shared key scan is redone after a rule changes the text (positions shift)", () => {
+    // 引号值先被打成占位符（长度变了），后面「token=…」的起点跟着挪了，要按新文本重扫。
+    expect(maskSecrets('password: "two words here" token=Hunter2xyz')).toBe(`password: "${M}" token=${M}`);
+    expect(maskSecrets("password: 'a' then token=Hunter2xyz")).toBe(`password: '${M}' then token=${M}`);
+    // 中间的非 KEY 规则（Bearer）改了文本，后面的 KEY 规则也要重扫。
+    expect(maskSecrets("Bearer abcdefgh12345678abcdefgh then secret is S3cr3t!x")).toBe(`${M} then secret is ${M}`);
+  });
+
+  it("1: htpasswd after --, after a continuation, and a password that starts with -", () => {
+    expect(maskSecrets("htpasswd -nb -- -alice hunter2xyz")).toBe(`htpasswd -nb -- -alice ${M}`);
+    expect(maskSecrets("htpasswd \\\n  -b f bob hunter2xyz")).toBe(`htpasswd \\\n  -b f bob ${M}`);
+    expect(maskSecrets("htpasswd -b f bob -Hunter2xyz")).toBe(`htpasswd -b f bob ${M}`);
+  });
+
+  it("2: a here-string value is read as one shell word", () => {
+    expect(maskSecrets('docker login --password-stdin <<< "hun\\"ter 2"')).toBe(`docker login --password-stdin <<< ${M}`);
+    expect(maskSecrets("docker login --password-stdin <<< $'hunter 2'")).toBe(`docker login --password-stdin <<< ${M}`);
+    expect(maskSecrets(`docker login --password-stdin <<< 'a'"b c"`)).toBe(`docker login --password-stdin <<< ${M}`);
+    expect(maskSecrets("docker login --password-stdin <<< hunter2 && echo ok")).toBe(`docker login --password-stdin <<< ${M} && echo ok`);
+    expect(maskSecrets("docker login --password-stdin <<<hunter2")).toBe(`docker login --password-stdin <<<${M}`);
   });
 });

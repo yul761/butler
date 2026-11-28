@@ -180,6 +180,14 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
     tokensUnderscore: "tokens_".repeat(N / 7),
     passwordUnderscore: "password_".repeat(N / 9),
     tokenUnderscore: "token_".repeat(N / 6),
+    // 复核 20531347：别的键名连着 _ 重复（credentials? 以前多一层可选，26ms）。
+    credentialsUnderscore: "credentials_".repeat(N / 12),
+    pwdsUnderscore: "pwds_".repeat(N / 5),
+    clientSecretsUnderscore: "client_secrets_".repeat(N / 15),
+    // MF1：块标量开头的空行。
+    yamlBlankLead: "password: |\n" + " \n".repeat(N / 2),
+    yamlBlankLeadMany: "password: |\n\n".repeat(N / 13),
+    stdinDollar: "--password-stdin <<< $'".repeat(N / 23),
     circledDigits: "①mysql -p".repeat(N / 9),
   };
   const time = (input: string): number => {

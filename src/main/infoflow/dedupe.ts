@@ -214,19 +214,21 @@ const sameSet = (a: Set<string>, b: Set<string>): boolean => a.size === b.size &
 /**
  * 一对反义词按次数比：x 在一句里比另一句多、y 在这句里反而比另一句少，就是换了说法（「Turn off … on Fridays」对「Turn on … on Fridays」：
  * off 多一个、on 少一个）。两边次数都一样、两个都有时看先后（「先关闭旧的再开启新的」对「先开启旧的再关闭新的」）。
- * 只多了一个（「默认开启」对「默认开启，允许用户关闭」）不算：这种交给包含和相似度。
- * count(side, w)：w 在那一句里出现几次；at(side, w)：第一次出现的位置，没有是 -1。
+ * 次数不一样、方向又不相反（一边只多了几个）：一句字面上整个在另一句里的（「默认开启」对「默认开启，允许用户关闭」）不算，
+ * 交给包含和相似度；不是包含的照样看先后（「Turn off … turn on …」对「Turn on … turn off … on Fridays」：on 多一个，但先后反了）。
+ * count(side, w)：w 在那一句里出现几次；at(side, w)：第一次出现的位置，没有是 -1；contained：一句字面上被另一句包含。
  */
 function antonymsClash(
   count: (side: 0 | 1, w: string) => number,
   at: (side: 0 | 1, w: string) => number,
   pairs: readonly [string, string][],
+  contained: boolean,
 ): boolean {
   return pairs.some(([x, y]) => {
     const dx = count(0, x) - count(1, x);
     const dy = count(0, y) - count(1, y);
     if ((dx > 0 && dy < 0) || (dx < 0 && dy > 0)) return true;
-    if (dx !== 0 || dy !== 0) return false;
+    if ((dx !== 0 || dy !== 0) && contained) return false;
     const [ax, ay, bx, by] = [at(0, x), at(0, y), at(1, x), at(1, y)];
     return ax >= 0 && ay >= 0 && bx >= 0 && by >= 0 && ax < ay !== bx < by;
   });
@@ -262,15 +264,20 @@ export function polarityClash(a: string, b: string): boolean {
   const ub = unitsOf(b);
   if (ua.size > 0 && ub.size > 0 && !sameSet(ua, ub)) return true;
   const zh = [factKey(a), factKey(b)];
-  if (antonymsClash((side, w) => occurrences(zh[side], w), (side, w) => zh[side].indexOf(w), ZH_ANTONYMS)) return true;
+  const zhContained = zh[0].includes(zh[1]) || zh[1].includes(zh[0]);
+  if (antonymsClash((side, w) => occurrences(zh[side], w), (side, w) => zh[side].indexOf(w), ZH_ANTONYMS, zhContained)) return true;
   const la = latin(a);
   const lb = latin(b);
   if (swapped(la, lb)) return true;
+  // 按整词包含：前后补空格，on 不算 only 的一部分。
+  const ja = ` ${la.join(" ")} `;
+  const jb = ` ${lb.join(" ")} `;
   const en = [la.map(stem), lb.map(stem)];
   return antonymsClash(
     (side, w) => en[side].filter((x) => x === w).length,
     (side, w) => en[side].indexOf(w),
     [...EN_ANTONYMS, ...prefixPairs(en)],
+    ja.includes(jb) || jb.includes(ja),
   );
 }
 

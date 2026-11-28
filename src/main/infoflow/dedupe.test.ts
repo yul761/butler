@@ -435,3 +435,34 @@ describe("review of 9fe253ff (dedupe)", () => {
     expect(findDuplicate("关闭旧缓存，开启新缓存", ["开启日志，关闭旧缓存，开启新缓存"])).toBe("开启日志，关闭旧缓存，开启新缓存");
   });
 });
+
+describe("review of 20531347 (dedupe)", () => {
+  it.each([
+    ["Turn off caching in staging and turn on caching in prod", "Turn on caching in staging and turn off caching in prod on Fridays"],
+    ["Enable the cache in staging and disable it in prod", "Disable the cache in staging and enable it in prod, enable logs"],
+    ["Keep the logs and drop the cache when deploying", "Drop the logs and keep the cache when deploying, keep backups"],
+    ["测试环境关闭缓存，生产环境开启缓存", "测试环境开启缓存，生产环境关闭缓存，开启日志"],
+    ["测试环境先关闭缓存，生产环境再开启缓存，发布后保持不变", "测试环境先开启缓存，生产环境再关闭缓存，发布后保持不变并开启监控"],
+  ])("MF3: counts differ the same way but the order flipped, so it is a change of mind: %s / %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(findDuplicate(b, [a])).toBeNull();
+  });
+
+  it("MF3: containment is checked both ways and by whole words", () => {
+    const short = "Turn off the old cache and turn on the new cache";
+    const long = "Turn on logs, turn off the old cache and turn on the new cache";
+    expect(polarityClash(short, long)).toBe(false);
+    expect(polarityClash(long, short)).toBe(false);
+    expect(polarityClash("关闭旧缓存，开启新缓存", "开启日志，关闭旧缓存，开启新缓存")).toBe(false);
+    expect(polarityClash("开启日志，关闭旧缓存，开启新缓存", "关闭旧缓存，开启新缓存")).toBe(false);
+    // 只是字面上的子串、不是整词（cturn 在 abcturn 里）：不算包含，照样比先后。
+    expect(polarityClash("cturn off x and turn on y", "on abcturn off x and turn on y")).toBe(true);
+  });
+
+  it("MF3: counts differ the same way and one sentence is literally inside the other: still a duplicate", () => {
+    expect(findDuplicate("关闭旧缓存，开启新缓存", ["开启日志，关闭旧缓存，开启新缓存"])).toBe("开启日志，关闭旧缓存，开启新缓存");
+    expect(findDuplicate("Turn off the old cache and turn on the new cache", ["Turn on logs, turn off the old cache and turn on the new cache"])).toBe(
+      "Turn on logs, turn off the old cache and turn on the new cache",
+    );
+  });
+});
