@@ -21,7 +21,7 @@
 //       之后跑 PostToolUse（tool_name=工具名，也读 --settings 里的 hook）：hook 输出的 additionalContext 记成 additional-context <一行>（信箱，BTL-245）；
 //     输入 /fake-work <秒> <毫秒> [spinner 毫秒] 时像一个在干活的 session（BTL-242 的性能场景）：这么多秒里每隔这么多毫秒写一条 tool_use 和结果、
 //       打印约 2KB 的终端输出，到点后结束这一轮；给了第三个数就再每隔这么多毫秒重画一行 spinner（BTL-277）；
-//     输入 /fake-nostop <回复> 时写完回复、画一个空输入框（两条线夹着「> 」），但不跑 Stop hook（BTL-279：Claude Code 丢了 Stop）；
+//     输入 /fake-nostop <回复> 时写完回复、画一个空输入框（两条线夹着「> 」，下面六行状态栏），但不跑 Stop hook（BTL-279：Claude Code 丢了 Stop）；
 //     输入 /fake-later <毫秒> <一行> 时过这么久再把那一行当成输入（e2e 在别的页面上等它带来的变化）；
 //     输入 /fake-mcp <工具> <JSON 参数> 时像模型调用工具：按 --mcp-config 启动 shipherd-sessions，调用它，结果写进运行记录；
 //     启动时写一份 sessions/<pid>.json 登记文件，Shipherd 从这里查 session 的名字；
@@ -787,7 +787,9 @@ function interactive() {
       // transcript 里的回复也没有 stop_reason（看 transcript 也认不出这一轮结束了），只剩屏幕能看出它停了。
       append({ type: "assistant", uuid: `a-${Date.now()}`, message: { id: messageId(), role: "assistant", stop_reason: null, usage: usage(), content: [{ type: "text", text: nostop[1] }] } });
       const rule = "\u2500".repeat(60);
-      out(`${nostop[1]}\n${rule}\n> \n${rule}\n  ? for shortcuts\n`);
+      // 输入框下面是多行的自定义状态栏加上模式、快捷键提示（六行；Shipherd 原来只认四行以内的，认不出输入框）。
+      const footer = ["  model: opus · ctx 41%", "  branch: main · +3 −1", "  cost: $0.42 today", "  PR #12 · CI green", "  ⏵⏵ accept edits on", "  ? for shortcuts"];
+      out(`${nostop[1]}\n${rule}\n> \n${rule}\n${footer.join("\n")}\n`);
       return;
     }
     const edit = /^\/fake-edit (\S+) (.+)$/.exec(line);

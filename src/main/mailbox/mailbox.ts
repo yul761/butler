@@ -964,9 +964,6 @@ export class Mailbox {
 
   // ---- 定时 ----
 
-  /** tick 正在 flush 的 head（BTL-279）。 */
-  private readonly ticking = new Set<string>();
-
   /** 每个调度 tick：清扫所有投影、删掉关了的终端的投影、给停着的直接输入、清理旧消息。永不 reject。 */
   async tick(): Promise<void> {
     try {
@@ -982,16 +979,9 @@ export class Mailbox {
         if (this.d.repo.prune(now - MESSAGE_KEEP_MS) > 0) this.d.notify();
       }
       // 各送各的（BTL-279）：一个 session 的输入框一直没就绪（deliver 最多等 1 分钟）不能拖住别的 session。
-      // 上一次 tick 还在给它送的这次跳过：不重复记一次「Shipherd 正在往里送」。
-      const heads = [...new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)))].filter((h) => !this.ticking.has(h));
-      await Promise.all(heads.map(async (h) => {
-        this.ticking.add(h);
-        try {
-          await this.flush(h);
-        } finally {
-          this.ticking.delete(h);
-        }
-      }));
+      // 上一次 tick 还在给它贴的，flush 里 inputting 会挡住，不会贴两次。
+      const heads = new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)));
+      await Promise.all([...heads].map((h) => this.flush(h)));
       this.stuckReceipts();
     } catch (e) {
       this.d.log("mailbox: tick failed", e);
