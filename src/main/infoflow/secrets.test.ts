@@ -1333,14 +1333,15 @@ describe("review of adf2412e (secrets)", () => {
   const M = SECRET_MASK;
 
   it("must-fix B: after a key name, compat digits glued to another secret pattern stay as they are (the pattern still starts a word)", () => {
-    expect(maskSecrets(`token²${fake.ghp}`)).toBe(`token²${M}`);
     expect(maskSecrets("password¹mysql -pHunter2xyz")).toBe(`password¹mysql -p${M}`);
     expect(maskSecrets(`token₁${fake.akia}`)).toBe(`token₁${M}`);
-    expect(maskSecrets(`secret²${fake.sk}`)).toBe(`secret²${M}`);
     expect(maskSecrets(`password²${fake.slack}`)).toBe(`password²${M}`);
-    expect(maskSecrets(`pwd²${fake.npm}`)).toBe(`pwd²${M}`);
-    expect(maskSecrets(`passwords¹${fake.ghp}`)).toBe(`passwords¹${M}`);
-    expect(maskSecrets(`the token²${fake.ghp} leaked`)).toBe(`the token²${M} leaked`);
+    // cf12cf39 复核必修 2：换了的读法（token2ghp_…）整个词就是一串长 token，两种读法取并集，键名和数字一起打掉。
+    expect(maskSecrets(`token²${fake.ghp}`)).toBe(M);
+    expect(maskSecrets(`secret²${fake.sk}`)).toBe(M);
+    expect(maskSecrets(`pwd²${fake.npm}`)).toBe(M);
+    expect(maskSecrets(`passwords¹${fake.ghp}`)).toBe(M);
+    expect(maskSecrets(`the token²${fake.ghp} leaked`)).toBe(`the ${M} leaked`);
   });
 
   /**
@@ -1424,7 +1425,9 @@ describe("review of adf2412e (secrets)", () => {
   });
 
   it("suggestion S10: an astral ignorable inside a run of compat digits before a token does not join them to it", () => {
-    expect(maskSecrets(`x₁\u{E0001}₂${fake.ghp}`)).toBe(`x₁₂${M}`);
+    expect(maskSecrets(`x₁\u{E0001}₂${fake.slack}`)).toBe(`x₁₂${M}`);
+    // 换了的读法 x12ghp_… 是一整串长 token（cf12cf39 复核必修 2）：整段打掉。
+    expect(maskSecrets(`x₁\u{E0001}₂${fake.ghp}`)).toBe(M);
   });
 
   it("must-fix B: what follows a key name but is not a separator keeps the digits as they are", () => {
@@ -1437,5 +1440,88 @@ describe("review of adf2412e (secrets)", () => {
     // 键名后面多了一个 _ 或 -（token_-a…）、两个 _（pwd_-x…）：不是「键名 [_-]? 编号」。
     kept("token_-a₁b= Hunter2xyz");
     kept("pwd_-x₁y= Hunter2xyz");
+  });
+});
+
+describe("review of cf12cf39 (secrets)", () => {
+  const M = SECRET_MASK;
+  const kept = (s: string): void => expect(maskSecrets(s), s).toBe(s);
+  /** 打完码以后只剩完整的占位符：去掉占位符，没有半截的 [R、REDACTED、多出来的 ]。 */
+  const whole = (out: string): void => expect(out.split(M).join(""), out).not.toMatch(/\[R|REDACTED|EDACTED|\]\]/);
+
+  it("must-fix 1: ENV-style keys in table cells map their compat digits, case-insensitively (like TABLE_KEY)", () => {
+    expect(maskSecrets("| MY_KEY²_X | Hunter2xyz |")).toBe(`| MY_KEY2_X | ${M} |`);
+    expect(maskSecrets("| DB_PASS₁_X | Hunter2xyz |")).toBe(`| DB_PASS1_X | ${M} |`);
+    expect(maskSecrets("| SENTRY_DSN₁_PROD | Hunter2xyz |")).toBe(`| SENTRY_DSN1_PROD | ${M} |`);
+    expect(maskSecrets("| MY_KEY₁_PROD | Hunter2xyz |")).toBe(`| MY_KEY1_PROD | ${M} |`);
+    expect(maskSecrets("| my_key²_x | Hunter2xyz |")).toBe(`| my_key2_x | ${M} |`);
+    expect(maskSecrets("| DB²_PASSWORD | Hunter2xyz |")).toBe(`| DB2_PASSWORD | ${M} |`);
+    expect(maskSecrets("| MY₁_TOKEN\t| Hunter2xyz |")).toBe(`| MY1_TOKEN\t| ${M} |`);
+    expect(maskSecrets("| __MY_KEY²_X__ | Hunter2xyz |")).toBe(`| __MY_KEY2_X__ | ${M} |`);
+    // 不是 ENV 式的键、竖线前面隔着别的字：不换。
+    kept("| H₂O_LEVEL | 7 |");
+    kept("| MY_KEY²_X: | Hunter2xyz |");
+    // 竖线和键之间只能是空格、制表符（TABLE_KEY 的 [ \t]*），隔着换行不算。
+    // （同一段里别处打了码时，输出是规范化文本，换没换看得出来。）
+    expect(maskSecrets("| MY_KEY²_X\n| v | password=Hunter2xyz")).toBe(`| MY_KEY²_X\n| v | password=${M}`);
+  });
+
+  it("must-fix 2: compat digits left as they are after a key name are also read mapped, and whatever either reading masks is masked", () => {
+    for (const s of [
+      `TOKEN₁2${fake.ghp}`,
+      `TOKEN₁2${fake.sk}`,
+      `TOKEN₁2${fake.npm}`,
+      `credential₁2${fake.akia}`,
+      `credential²_${fake.akia}`,
+      "GITHUB_TOKEN²xdeadbeefcafe12345678",
+      "GITHUB_TOKEN²_deadbeefcafe12345678",
+    ]) {
+      // 整个词一个占位符，原文一个字也不剩。
+      expect(maskSecrets(s), s).toBe(M);
+    }
+    // 前面不换的读法打掉的一段（ghp_…、键后面的值）会把整个词切开：换了的读法要在打码之前认。
+    const split = `${fake.akia}TOKEN𝟏${fake.slack}=${fake.npm}`;
+    // （换了的读法里 = 算长串结尾的填充，和前面一起打掉。）
+    expect(maskSecrets(split)).toBe(`${M}${M}`);
+    expect(maskSecrets(`password=Hunter2xyz TOKEN₁2${fake.ghp} token: Hunter2xyz`)).toBe(`password=${M} ${M} token: ${M}`);
+    // 值本来就以 [R 开头、以 ] 结尾：挪位置不切进占位符里面。
+    for (const s of [`password=[Rabc TOKEN₁2${fake.ghp}]`, `TOKEN₁2${fake.ghp}=[REDACTED]`, `| password |\n|---|\n| TOKEN₁2${fake.ghp} | y |`]) {
+      const out = maskSecrets(s);
+      expect(out, s).not.toContain("ghp_");
+      whole(out.replace("[REDACTED]]", M));
+    }
+    // 只有换了的读法认得出的：hex、AKIA、token 后面的值（保留 token 和空格）；挨着的两段并成一个占位符。
+    expect(maskSecrets("cafe₁2deadbeef")).toBe(M);
+    expect(maskSecrets("AKIAIOSFODNN₇EXAMPLE")).toBe(M);
+    expect(maskSecrets("token x₁2abcdefghijklmnop")).toBe(`token ${M}`);
+    expect(maskSecrets("x₁2aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW==sk-₁2abcdefghijklmnop")).toBe(M);
+    // 前面的表格、命令、别的规则改过文本（位置挪了）；命令里没打的部分不跟着打；同一处替换里的两段只打一次。
+    expect(maskSecrets(`mysql -u TOKEN₁2${fake.ghp} -pHunter2xyz`)).toBe(`mysql -u ${M} -p${M}`);
+    expect(maskSecrets(`mysql -pHunter2xyz TOKEN₁2${fake.ghp}`)).toBe(`mysql -p${M} ${M}`);
+    // 命令那一轮换上去的占位符和原值不一样长（Hunter2xyz 正好 10 个字符，挪不出位置）。
+    expect(maskSecrets(`mysql -pHunter2xyzLonger TOKEN₁2${fake.ghp}`)).toBe(`mysql -p${M} ${M}`);
+    expect(maskSecrets(`mysql -pHunt3r TOKEN₁2${fake.ghp}`)).toBe(`mysql -p${M} ${M}`);
+    expect(maskSecrets(`${fake.sk} TOKEN₁2${fake.ghp}`)).toBe(`${M} ${M}`);
+    expect(maskSecrets(`-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY----- TOKEN₁2${fake.ghp}`)).toBe(`${M} ${M}`);
+    expect(maskSecrets(`| password |\n|---|\n| Hunter2xyz |\nTOKEN₁2${fake.ghp}`)).toBe(`| password |\n|---|\n| ${M} |\n${M}`);
+    expect(maskSecrets(`| password |\n|---|\n| TOKEN₁2${fake.ghp} TOKEN₁2${fake.ghp} |`)).toBe(`| password |\n|---|\n| ${M} |`);
+    // 换上去的占位符两头的 [ ]，和原文的头尾一样也不裁掉：挪过去的范围盖住整个占位符。
+    expect(maskSecrets(`password=TOKEN₁2${fake.ghp}]`)).toBe(`password=${M}`);
+    expect(maskSecrets(`password=[TOKEN₁2${fake.ghp}`)).toBe(`password=${M}`);
+    // 换了也认不出密钥的照旧。
+    for (const s of ["E=mc²", "H₂O", "CO₂emissions", "x²+y²", "第¹章", "25℃", "token₁abc", "token₁2abcDEF"]) kept(s);
+  });
+
+  it("suggestion 2: ENV-style keys may end in one or two underscores before the separator", () => {
+    expect(maskSecrets("DB_PASS₁__: Hunter2xyz")).toBe(`DB_PASS1__: ${M}`);
+    expect(maskSecrets("MY_KEY²__=Hunter2xyz")).toBe(`MY_KEY2__=${M}`);
+    expect(maskSecrets("export DB_KEY²_=Hunter2xyz")).toBe(`export DB_KEY2_=${M}`);
+  });
+
+  it("suggestion 3: CJK corner brackets count as the quote after a key suffix", () => {
+    expect(maskSecrets("token₁apikey「: Hunter2xyz")).toBe(`token1apikey「: ${M}`);
+    expect(maskSecrets("token₁apikey『: Hunter2xyz")).toBe(`token1apikey『: ${M}`);
+    expect(maskSecrets("token₁apikey」: Hunter2xyz")).toBe(`token1apikey」: ${M}`);
+    expect(maskSecrets("token₁apikey』= Hunter2xyz")).toBe(`token1apikey』= ${M}`);
   });
 });

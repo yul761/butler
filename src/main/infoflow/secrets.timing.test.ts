@@ -199,6 +199,10 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
     yamlBlankLeadMany: "password: |\n\n".repeat(N / 13),
     stdinDollar: "--password-stdin <<< $'".repeat(N / 23),
     circledDigits: "①mysql -p".repeat(N / 9),
+    // 复核 cf12cf39 必修 2：一个留着的数字后面接一整段长串（换了的读法是一个 200KB 的词）、每段都被别的规则打掉一截。
+    gluedLongWord: "x₁" + "aA1".repeat(N / 3),
+    gluedLongHex: "TOKEN₁" + "a1".repeat(N / 2),
+    gluedSplitWords: ("x₁" + "aA1".repeat(10) + "ghp_" + "a".repeat(36)).repeat(N / 72),
     // 复核 f780e9ef：前面一小段让每条 KEY 规则都改一次文本，共用扫描以前每次都整篇重扫（CI 约 60–70ms）；后面接各种键名连写。
     rewritesThenPwds1: REWRITE_EACH_KEY_RULE + "pwds_1".repeat(N / 6),
     rewritesThenPwdsPwd: REWRITE_EACH_KEY_RULE + "pwds_pwd=,".repeat(N / 10),
@@ -229,6 +233,9 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
         // 往回看也不设上限：键名中间夹一大片零宽字符、很长的编号、后缀前面一长串字母。
         "tok" + "\u200b".repeat(40) + "en₁a", "k" + "\u200b".repeat(30) + "e" + "\u200b".repeat(30) + "y₁_",
         "token" + "1".repeat(60) + "x₁", "1".repeat(60) + "a₁b", "a".repeat(15) + "₁",
+        // 复核 cf12cf39 必修 1、2：表格里 ENV 式的键；留着没换的数字按换了的读法再认一遍（GLUED_RULES 跑一遍，每处替换都要记下来挪位置）。
+        "| MY_KEY²_X | v |\n", "| db_pass₁_x |", "TOKEN₁2ghp_abcdefghijklmnopqrstuvwxyz0123456789 ", "credential²_AKIAABCDEFGHIJKLMNOP ",
+        "GITHUB_TOKEN²xdeadbeefcafe12345678 ", "x₁2aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW password=Hunter2xyz ", "Bearer x₁a", "token x₁a ",
       ].map((p) => [`compatShortPeriod ${JSON.stringify(p)}`, p.repeat(Math.floor(N / p.length))]),
     ),
   };

@@ -595,9 +595,11 @@ describe("review of adf2412e (dedupe)", () => {
     expect(polarityClash("turn on cache in prod. turn off cache in test.", "turn off cache in prod. turn on cache in test.")).toBe(true);
     // v1.2、3.14 里的点不切：单一极性的同一句，只是写法不同。
     expect(polarityClash("turn on cache v1.2 in prod", "turn on cache v1.2 in prod.")).toBe(false);
-    // 句号切开以后每个分句只有一头：换了个词的同一件事照样算重复（不切的话整句两头都有，就当成换了说法）。
-    expect(findDuplicate("turn on caching in prod. turn off logs in test", ["turn on cache in prod. turn off logs in test"])).not.toBeNull();
-    expect(findDuplicate("turn on cache in prod. turn off logs in test", ["turn on caching in prod. turn off logs in test"])).not.toBeNull();
+    // 整句里一对反义词两头都有（cf12cf39 复核必修 3 改成整句级）：换了个词（caching / cache）也不算重复，多存一条可以接受。
+    expect(findDuplicate("turn on caching in prod. turn off logs in test", ["turn on cache in prod. turn off logs in test"])).toBeNull();
+    expect(findDuplicate("turn on cache in prod. turn off logs in test", ["turn on caching in prod. turn off logs in test"])).toBeNull();
+    // 只差标点、一字不差的仍算重复。
+    expect(findDuplicate("turn on cache in prod. turn off logs in test.", ["turn on cache in prod, turn off logs in test"])).not.toBeNull();
     // v1.2 的点不切：这一句还是两头都有，换了个词也不算重复。
     expect(findDuplicate("turn on caching v1.2 and turn off logs", ["turn on cache v1.2 and turn off logs"])).toBeNull();
     expect(findDuplicate("turn on cache v1.2 and turn off logs", ["turn on caching v1.2 and turn off logs"])).toBeNull();
@@ -610,5 +612,53 @@ describe("review of adf2412e (dedupe)", () => {
     expect(findDuplicate(b, [a])).toBe(a);
     expect(findDuplicate(a, [b])).toBe(b);
     expect(polarityClash(a, b)).toBe(false);
+  });
+});
+
+describe("review of cf12cf39 (dedupe)", () => {
+  // 必修 3：对象带了修饰（在、功能、the），按分句比字面对不上；整句里一对反义词两头都有，又不是字面包含，就不算重复。
+  const decorated: [string, string][] = [
+    ["测试环境关闭缓存，生产环境开启缓存", "在生产环境关闭缓存，在测试环境开启缓存"],
+    ["测试环境关闭缓存，生产环境开启缓存", "生产环境关闭缓存功能，测试环境开启缓存功能"],
+    ["Turn off cache in test, turn on cache in prod", "Turn off the cache in prod, turn on the cache in test"],
+    ["Keep logs in prod, drop logs in test", "Keep the logs in test, drop the logs in prod"],
+  ];
+
+  it.each(decorated)("must-fix 3: %s → %s is a change of mind, not a duplicate (both directions)", (a, b) => {
+    expect(findDuplicate(b, [a])).toBeNull();
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(polarityClash(a, b)).toBe(true);
+    expect(polarityClash(b, a)).toBe(true);
+  });
+
+  it("must-fix 3: the halves of a pair in different clauses count, but the same words, other punctuation or a literal extension stay duplicates", () => {
+    const a = "测试环境关闭缓存，生产环境开启缓存";
+    expect(findDuplicate(a, [a])).toBe(a);
+    expect(findDuplicate("测试环境关闭缓存、生产环境开启缓存。", [a])).toBe(a);
+    expect(polarityClash(a, a + "，日志开启")).toBe(false);
+    // 只有一头的两句不受影响：旧的多说一段（多了个「在」）照样吞。
+    expect(findDuplicate("生产环境开启缓存", ["在生产环境开启缓存"])).toBe("在生产环境开启缓存");
+    expect(polarityClash("生产环境开启缓存", "生产环境开启缓存功能")).toBe(false);
+    // 两个分句各一头、不是同一对：不算 mixed。
+    expect(polarityClash("生产环境开启缓存，测试环境禁用限流", "生产环境开启缓存，测试环境禁用限流")).toBe(false);
+    // 只有一句两头都有（另一句只有一头、对象带了修饰）：哪边是新的都一样拦住。
+    for (const [a, b] of [
+      ["在生产环境开启缓存", "测试环境关闭缓存，生产环境开启缓存"],
+      ["生产环境开启缓存功能", "测试环境关闭缓存，生产环境开启缓存"],
+      ["turn on the cache in prod", "turn off cache in test, turn on cache in prod"],
+    ]) {
+      expect(polarityClash(a, b)).toBe(true);
+      expect(polarityClash(b, a)).toBe(true);
+    }
+    // 英文句号切分句（adf2412e 复核必修 C）在整句级 mixed 以后还管着按分句比的对象：只把「. 」换成「。」的照样算重复。
+    expect(findDuplicate("keep logs。测试环境 drop logs", ["keep logs. 测试环境 drop logs"])).toBe("keep logs. 测试环境 drop logs");
+    expect(polarityClash("keep logs. 测试环境 drop logs", "keep logs。测试环境 drop logs")).toBe(false);
+  });
+
+  it("suggestion 1: zhPieces keeps where each half was found, so the result is the same as searching both from scratch", () => {
+    // 一个词里两头交替出现、重叠的开头：切法要和每次都从头找一样。
+    expect(polarityClash("开启关闭开启缓存", "开启关闭开启缓存")).toBe(false);
+    expect(polarityClash("测试环境开启关闭开启缓存，日志关闭", "测试环境开启关闭开启缓存，日志开启")).toBe(true);
+    expect(findDuplicate("关闭开启关闭开启", ["关闭开启关闭开启"])).toBe("关闭开启关闭开启");
   });
 });

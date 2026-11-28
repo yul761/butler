@@ -263,14 +263,20 @@ const CLAUSE = /(?:[，,、;；。！？!?\n]|\.(?=\s|$))+/;
 /** 一个分句按一对反义词切开以后：一段段的字，和反义词所在的位置（0 / 1：是这一对的哪一头）。 */
 type Piece = string | 0 | 1;
 
-/** 中文的反义词在词（汉字串、拉丁词）里面找：「测试环境关闭缓存」切成「测试环境」、关闭、「缓存」。 */
+/**
+ * 中文的反义词在词（汉字串、拉丁词）里面找：「测试环境关闭缓存」切成「测试环境」、关闭、「缓存」。
+ * 两头各自上一次找到的位置留着，只有被越过了（在 i 前面）才从 i 往后重新找：「开启关闭」重复几万字时，每次两头都从 i 重新找，
+ * 另一头要一路扫到很远，是平方级（cf12cf39 复核建议 1）。-1 是后面再也没有，不用再找；-2 是还没找过。
+ */
 function zhPieces(words: readonly string[], x: string, y: string): Piece[] {
   const out: Piece[] = [];
   for (const w of words) {
     let i = 0;
+    let px = -2;
+    let py = -2;
     for (;;) {
-      const px = w.indexOf(x, i);
-      const py = w.indexOf(y, i);
+      if (px !== -1 && px < i) px = w.indexOf(x, i);
+      if (py !== -1 && py < i) py = w.indexOf(y, i);
       const p = px < 0 ? py : py < 0 ? px : Math.min(px, py);
       if (p < 0) break;
       const side = p === px ? 0 : 1;
@@ -287,16 +293,16 @@ function zhPieces(words: readonly string[], x: string, y: string): Piece[] {
  * 一个分句里每个对象配的是哪一头，交给 add（对象是这一段的字连起来，不带空格）。
  * 只出现一头的（可以出现几次）：整个分句去掉反义词就是对象。两头都有的（「测试环境 cache off 生产环境 cache on」）按反义词的位置切：
  * 以反义词结尾的分句是「X 关闭」的语序，对象是它前面那一段；以反义词开头的是「关闭 X」，对象是它后面那一段；两头都不是的两种都生成
- * （同一个对象在一句里配了两头的，调用方当成说不清、不比）。返回这个分句是不是两头都有。
+ * （同一个对象在一句里配了两头的，调用方当成说不清、不比）。每个反义词至少交给 add 一次，两头都有的分句两头都会报到（clausePolarity 靠这个算 mixed）。
  */
-function clauseObjects(pieces: readonly Piece[], add: (obj: string, side: 0 | 1) => void): boolean {
+function clauseObjects(pieces: readonly Piece[], add: (obj: string, side: 0 | 1) => void): void {
   const at = pieces.flatMap((t, i) => (typeof t === "number" ? [i] : []));
-  if (at.length === 0) return false;
+  if (at.length === 0) return;
   const text = (from: number, to: number): string => pieces.slice(from, to).filter((t) => typeof t === "string").join("");
   const first = pieces[at[0]] as 0 | 1;
   if (at.every((i) => pieces[i] === first)) {
     add(text(0, pieces.length), first);
-    return false;
+    return;
   }
   const startsWith = at[0] === 0;
   const endsWith = at[at.length - 1] === pieces.length - 1;
@@ -305,13 +311,12 @@ function clauseObjects(pieces: readonly Piece[], add: (obj: string, side: 0 | 1)
     if (endsWith || !startsWith) add(text(k === 0 ? 0 : at[k - 1] + 1, p), side);
     if (startsWith || !endsWith) add(text(p + 1, k + 1 < at.length ? at[k + 1] : pieces.length), side);
   });
-  return true;
 }
 
 /** 说不清的对象：同一句里配了两头。 */
 const BOTH = 2;
 
-/** clausePolarity 的结果：每个对象配的是哪一头；有没有一个分句里一对反义词两头都有。 */
+/** clausePolarity 的结果：每个对象配的是哪一头；整句里有没有一对反义词两头都出现过（不管在不在同一个分句）。 */
 interface Polarity {
   objects: Map<string, 0 | 1 | typeof BOTH>;
   mixed: boolean;
@@ -319,32 +324,38 @@ interface Polarity {
 
 /**
  * 每个分句里的对象配上是一对反义词的哪一头（见 clauseObjects）。key 是「第几对|对象」，值是 0 / 1，同一句里两头都配过的是 BOTH。
+ * mixed 按整句算：一对反义词的两头在这句话里都出现过，不管是不是同一个分句。对象带了修饰（「在生产环境」「缓存功能」「the cache」）
+ * 时按分句比字面对不上，改了主意也会被当成重复（cf12cf39 复核必修 3），所以只要两头都有，就交给调用方按「是不是字面包含」判。
  */
 function clausePolarity(s: string): Polarity {
   const out = new Map<string, 0 | 1 | typeof BOTH>();
-  let mixed = false;
+  /** 每一对反义词（z0、e3…）在整句里出现过哪几头：第 0 位是前一头，第 1 位是后一头。 */
+  const seen = new Map<string, number>();
   const add = (key: string, side: 0 | 1): void => {
     const was = out.get(key);
     out.set(key, was === undefined || was === side ? side : BOTH);
   };
+  const saw = (pair: string, side: 0 | 1): void => {
+    seen.set(pair, (seen.get(pair) ?? 0) | (1 << side));
+  };
   for (const clause of plain(s).split(CLAUSE)) {
     const words = clause.match(/[a-z0-9]+|\p{Script=Han}+/gu) ?? [];
     ZH_ANTONYMS.forEach(([x, y], k) => {
-      const both = clauseObjects(zhPieces(words, x, y), (obj, side) => {
+      clauseObjects(zhPieces(words, x, y), (obj, side) => {
         if (obj !== "") add(`z${k}|${obj}`, side);
+        saw(`z${k}`, side);
       });
-      mixed ||= both;
     });
     const stems = words.map((w) => (/^[a-z0-9]+$/.test(w) ? stem(w) : w));
     EN_ANTONYMS.forEach(([x, y], k) => {
       const pieces = words.map((w, i): Piece => (stems[i] === x ? 0 : stems[i] === y ? 1 : w));
-      const both = clauseObjects(pieces, (obj, side) => {
+      clauseObjects(pieces, (obj, side) => {
         if (obj !== "") add(`e${k}|${obj}`, side);
+        saw(`e${k}`, side);
       });
-      mixed ||= both;
     });
   }
-  return { objects: out, mixed };
+  return { objects: out, mixed: [...seen.values()].includes(3) };
 }
 
 /**
@@ -374,9 +385,9 @@ export function polarityClash(a: string, b: string): boolean {
   if (clausesClash(pa, pb)) return true;
   const zh = [factKey(a), factKey(b)];
   const zhContained = zh[0].includes(zh[1]) || zh[1].includes(zh[0]);
-  // 一个分句里一对反义词两头都有（「测试环境关闭缓存生产环境开启缓存」「turn off x and turn on y」）：对象是哪一段说不准，
-  // 按分句比不出来（没有标点隔开，对象切错了就对不上），只要两句不是一字不差、也不是一句整个在另一句里，就当成换了说法
-  // （adf2412e 复核必修 C：宁可多存一条，也不吞掉改主意）。
+  // 一句里一对反义词两头都有（「测试环境关闭缓存生产环境开启缓存」「turn off x and turn on y」，或者分在两个分句里但对象带了修饰：
+  // 「在生产环境关闭缓存，在测试环境开启缓存」）：对象是哪一段说不准，按分句比不出来，只要两句不是一字不差、也不是一句整个在另一句里，
+  // 就当成换了说法（adf2412e 复核必修 C、cf12cf39 复核必修 3：宁可多存一条，也不吞掉改主意）。只差标点的 factKey 相同，仍算重复。
   if (!zhContained && (pa.mixed || pb.mixed)) return true;
   if (antonymsClash((side, w) => occurrences(zh[side], w), (side, w) => zh[side].indexOf(w), ZH_ANTONYMS, zhContained)) return true;
   const la = latin(a);
