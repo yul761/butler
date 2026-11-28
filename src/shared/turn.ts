@@ -150,7 +150,8 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "comments_waiting":
       return true;
     case "cost": return n.breaker.state === "paused";
-    case "stack": return ["conflict", "stuck", "confirm", "prs_unreadable", "markers"].includes(n.stack.reason);
+    // no_push_remote：要你配 branch.<b>.pushRemote（BTL-278）。held_below 不算：拦它的那层自己有一条 markers
+    case "stack": return ["conflict", "stuck", "confirm", "prs_unreadable", "markers", "no_push_remote"].includes(n.stack.reason);
     case "intake": return INTAKE_DECISION_STATES.includes(n.item.state);
     case "lessons_paused":
     case "lessons_failing":

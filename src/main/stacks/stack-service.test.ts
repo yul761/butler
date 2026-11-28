@@ -2932,6 +2932,120 @@ describe("StackService checks every push for conflict markers (BTL-278, seventh 
     expect(held()).toMatchObject({ branches: ["d"], by: "b" });
   });
 
+  it.each([false, true])("once the session pushes the layer with the markers itself, its markers notice and the held-back notice go on the next tick (force_push off above: %s)", async (offAbove) => {
+    let off = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k, scope) => !(k === "force_push" && off && (scope?.ticketKey === "C" || scope?.ticketKey === "D")) });
+    await defineAll(w);
+    amendB(w);
+    for (let i = 0; i < 3; i++) {
+      w.advance(5 * 60_000);
+      await w.svc.tick();
+    }
+    const ours = () => w.svc.notices().filter((n) => n.reason === "markers" || n.reason === "held_below");
+    expect(ours().map((n) => n.reason).sort()).toEqual(["held_below", "markers"]);
+    // 上面的层不会再推（不会再替它们查谁拦着）时，也不能一直提
+    off = offAbove;
+    // b 的 session 自己（强）推了上去：远端现在就是这样，Shipherd 不再拦，也不再提它
+    g(w.repo, "push", "-q", "-f", "origin", "b");
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(ours()).toEqual([]);
+  });
+
+  it("drops the held-back notice when the layer holding it back is pushed by its session, even if the held layer won't be pushed again (V6)", async () => {
+    let on = false;
+    let cOff = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k, scope) => (k !== "force_push" || on) && !(k === "force_push" && cOff && (scope?.ticketKey === "C" || scope?.ticketKey === "D")) });
+    const id = await defineAll(w);
+    w.pushMain("x.txt", "x\n");
+    await w.svc.tick();
+    // b 改写后的顶端带上了标记（像旧版 rerere 套用的那样），c、d 接在它上面
+    g(w.repo, "checkout", "-q", "b");
+    writeFileSync(join(w.repo, "b.txt"), MARK);
+    g(w.repo, "commit", "-q", "-a", "--amend", "--no-edit");
+    g(w.repo, "checkout", "-q", "main");
+    for (const [b, base] of [["c", "b"], ["d", "c"]] as const) {
+      g(w.repo, "checkout", "-q", b);
+      g(w.repo, "rebase", "-q", "--onto", base, `${b}~1`);
+      g(w.repo, "checkout", "-q", "main");
+    }
+    const ls = w.repoT.layers(id);
+    ls.forEach((l, i) => w.repoT.updateLayer(l.id, { tipSha: w.tip(l.branch), baseSha: i === 0 ? l.baseSha : w.tip(ls[i - 1]!.branch) }));
+    on = true;
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.svc.notices().find((n) => n.reason === "held_below")).toMatchObject({ branches: ["c", "d"], by: "b" });
+    // c、d 的 force_push 关掉了（之后不会再替它们查谁拦着）；b 的 session 自己把 b 推了上去
+    cOff = true;
+    g(w.repo, "push", "-q", "-f", "origin", "b");
+    w.advance(60_000);
+    await w.svc.tick();
+    const ns = w.svc.notices().filter((n) => n.reason === "markers" || n.reason === "held_below");
+    expect(ns.filter((n) => n.reason === "markers")).toEqual([]);
+    expect(ns.filter((n) => n.reason === "held_below")).toEqual([]);
+  });
+
+  it("a held-back layer its session pushed itself isn't listed as held any more, even with its force_push off", async () => {
+    let cOff = false;
+    const w = world({ policy: { dailyRebase: false }, allow: (k, scope) => !(k === "force_push" && cOff && scope?.ticketKey === "C") });
+    await defineAll(w);
+    amendB(w);
+    for (let i = 0; i < 3; i++) {
+      w.advance(5 * 60_000);
+      await w.svc.tick();
+    }
+    expect(w.svc.notices().find((n) => n.reason === "held_below")).toMatchObject({ branches: ["c", "d"], by: "b" });
+    cOff = true;
+    g(w.repo, "push", "-q", "-f", "origin", "c");
+    w.advance(60_000);
+    await w.svc.tick();
+    expect(w.svc.notices().filter((n) => n.reason === "held_below")).toEqual([expect.objectContaining({ branches: ["d"], by: "b" })]);
+  });
+
+  it("a layer held back because the check below couldn't be done stops being listed once the check passes, even if its push then fails", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    await defineAll(w);
+    g(w.repo, "checkout", "-q", "b");
+    commit(w.repo, "b2.txt", "b2\n", "b two");
+    g(w.repo, "checkout", "-q", "main");
+    const svc = w.svc as unknown as Spy;
+    const real = svc.markersVsRemote.bind(w.svc);
+    let broken = true;
+    vi.spyOn(svc, "markersVsRemote").mockImplementation(async (s, l, ...rest) => (broken && l.branch === "b" ? null : real(s, l, ...rest)));
+    for (let i = 0; i < 3; i++) {
+      w.advance(5 * 60_000);
+      await w.svc.tick();
+    }
+    expect(w.svc.notices().find((n) => n.reason === "held_below")).toMatchObject({ branches: ["c", "d"], by: "b" });
+    const tips = w.tips(["c", "d"]);
+    // 查得了了：b 干净，c、d 不再被拦；可是推 c、d 失败了
+    broken = false;
+    const attempt = w.deps.external.attempt.bind(w.deps.external);
+    w.deps.external.attempt = (async (kind, detail, run) =>
+      attempt(kind, detail, async () => {
+        if (kind === "force_push" && (detail.target === "c" || detail.target === "d")) throw new Error("network down");
+        return run();
+      })) as typeof attempt;
+    w.advance(60 * 60_000);
+    await w.svc.tick();
+    expect(w.tips(["c", "d"])).toEqual(tips);
+    expect(w.svc.notices().filter((n) => n.reason === "held_below")).toEqual([]);
+  });
+
+  it("doesn't show a markers notice for a tip the layer has moved off, until the new tip is checked", async () => {
+    const w = world({ policy: { dailyRebase: false } });
+    const id = await defineAll(w);
+    amendB(w);
+    for (let i = 0; i < 3; i++) {
+      w.advance(5 * 60_000);
+      await w.svc.tick();
+    }
+    expect(w.svc.notices()).toContainEqual(expect.objectContaining({ reason: "markers", branch: "b" }));
+    const lb = w.repoT.layers(id)[1]!;
+    w.repoT.updateLayer(lb.id, { tipSha: w.tip("main") });
+    expect(w.svc.notices().filter((n) => n.reason === "markers")).toEqual([]);
+  });
+
   it("the markers notice goes by the latest check of the layer's tip, not an older one against another remote tip", async () => {
     const w = world({ policy: { dailyRebase: false } });
     const id = await defineAll(w);
@@ -3218,6 +3332,36 @@ describe("StackService checks every push for conflict markers (BTL-278, seventh 
         await w.svc.tick();
         expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe("true");
       }
+    } finally {
+      if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prevGlobal;
+    }
+  });
+
+  it("uses the old rerere record from memory when it can't be written to the new place, instead of recomputing the candidates", async () => {
+    const prevGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const globalFile = join(tempDir(), "gitconfig");
+    writeFileSync(globalFile, "");
+    process.env.GIT_CONFIG_GLOBAL = globalFile;
+    try {
+      const w = world({ policy: { dailyRebase: false } });
+      // 栈已经在了；上一版的记录说没有候选（这个仓库的 rerere 是用户自己开的）
+      await defineAll(w);
+      g(w.repo, "config", "--local", "rerere.enabled", "true");
+      mkdirSync(w.deps.workRoot, { recursive: true });
+      const legacy = join(w.deps.workRoot, "rerere-cleaned.json");
+      writeFileSync(legacy, JSON.stringify({ candidates: [], done: [] }));
+      // 新位置写不进去（是个目录）
+      rmSync(rerereFile(w), { force: true });
+      mkdirSync(rerereFile(w), { recursive: true });
+      w.svc = new StackService(w.deps);
+      w.svc.cleanupWork();
+      expect(existsSync(legacy)).toBe(false);
+      w.pushMain("x.txt", "x\n");
+      w.advance(60_000);
+      await w.svc.tick();
+      expect(w.repoT.lastRun(w.repoT.list()[0]!.id)).toMatchObject({ outcome: "rebased" });
+      expect(g(w.repo, "config", "--local", "--get", "rerere.enabled")).toBe("true");
     } finally {
       if (prevGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
       else process.env.GIT_CONFIG_GLOBAL = prevGlobal;

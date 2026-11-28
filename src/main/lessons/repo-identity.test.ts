@@ -42,6 +42,31 @@ describe("RepoIdentity", () => {
     expect(sync).not.toHaveBeenCalled();
   });
 
+  it("slugOfAsync: a missing path is not cached; a non-repo is cached as null; neither runs git", async () => {
+    const slash = (p: string) => p.replace(/\\/g, "/");
+    let mounted = false;
+    let plainHasGit = false;
+    const asyncGit = vi.fn(async () => "git@github.com:acme/web.git");
+    const id = new RepoIdentity({
+      git: () => {
+        throw new Error("sync git must not run");
+      },
+      asyncGit,
+      exists: (p) => {
+        const s = slash(p);
+        return s.startsWith("/plain") ? (s.endsWith("/.git") ? plainHasGit : true) : mounted;
+      },
+    });
+    expect(await id.slugOfAsync("/mnt/x")).toBeNull();
+    expect(await id.slugOfAsync("/plain")).toBeNull();
+    expect(asyncGit).not.toHaveBeenCalled();
+    mounted = true;
+    plainHasGit = true;
+    expect(await id.slugOfAsync("/mnt/x")).toBe("acme/web");
+    expect(await id.slugOfAsync("/plain")).toBeNull();
+    expect(asyncGit).toHaveBeenCalledTimes(1);
+  });
+
   it("remoteSlugsOf gives origin and upstream, deduplicated, each cached on its own (fork workflow, BTL-261)", () => {
     let up = 0;
     const id = new RepoIdentity({ git: () => "git@github.com:me/web.git", upstreamGit: () => (up++, "https://github.com/acme/web.git"), exists: () => true });

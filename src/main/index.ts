@@ -268,7 +268,7 @@ import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
 import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
-import { StackService, stackMailRepoIdOf, stackMailRef, type OwnedBranch, type StackMailTo } from "./stacks/stack-service";
+import { StackService, stackMailRepoIdOf, stackMailRef, stackTicketLive, type OwnedBranch, type StackMailTo } from "./stacks/stack-service";
 import { StackControl } from "./control/stack-control";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
@@ -2586,8 +2586,8 @@ async function bootstrap(): Promise<void> {
       ticketKey: r.ticketKey, ticketRepoId: r.id, ticketTitle: tickets.get(r.ticketKey)?.title ?? null,
       worktree: r.workMode === "worktree" && r.worktreePath && r.worktreeRemovedAt === null && existsSync(r.worktreePath) ? r.worktreePath : null,
     });
-    // 只认没归档的 ticket；分支名被重复用过时取最新的那个
-    const live = (r: TicketRepo): boolean => { const t = tickets.get(r.ticketKey); return t !== null && t.archivedAt === null; };
+    // 只认没归档、没关掉的 ticket；分支名被重复用过时取最新的那个
+    const live = (r: TicketRepo): boolean => stackTicketLive(tickets.get(r.ticketKey));
     const direct = tickets.reposByBranch(branch).filter((r) => samePath(r.repoPath, repoPath) && live(r)).at(-1);
     if (direct) return own(direct);
     for (const o of branchOwners.byBranch(branch)) {
@@ -2603,7 +2603,7 @@ async function bootstrap(): Promise<void> {
     // 自动化档位（BTL-247）：栈里各层 ticket 所在 epic 自己选的档位盖在三层策略上；「半自动」epic 的仓库也做栈检测。
     overlay: (base, keys) => automation.stack(base, keys),
     autoRebaseRepos: () => [
-      ...new Set(tickets.list().filter((t) => t.archivedAt === null && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
+      ...new Set(tickets.list().filter((t) => stackTicketLive(t) && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
     ],
     external: externalActions,
     workRoot: join(paths.home, "stack-work"),
