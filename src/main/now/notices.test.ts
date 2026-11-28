@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AvailabilityHit, AvailabilityView } from "../../shared/availability";
 import type { LessonRunStatus } from "../../shared/lessons";
 import type { CostBreakerView } from "../../shared/cost";
-import { buildNotices, ciNotices, commentNotices, costNotices, stackNotices } from "./notices";
+import { buildNotices, ciNotices, collectNotices, commentNotices, costNotices, stackNotices, type NoticeSources } from "./notices";
+import type { NowNotice } from "../../shared/types";
 
 const hit = (kind: AvailabilityHit["kind"]): AvailabilityHit => ({ kind, resetsAt: 5000, message: "m", at: 1, source: "headless", job: "lessons", sessionId: null });
 const view = (over: Partial<AvailabilityView> = {}): AvailabilityView => ({ state: "ok", current: null, lastHit: null, retryAt: null, lessonsPause: null, ...over });
@@ -92,5 +93,17 @@ describe("stackNotices (workstream K)", () => {
       { kind: "stack", stack: withTicket, target: { page: "ticket", key: "T-2", sessionId: null } },
       { kind: "stack", stack: without, target: null },
     ]);
+  });
+});
+
+describe("collectNotices", () => {
+  it("keeps every source, the behalf answers and the info flow ones included, in a fixed order", () => {
+    const behalf: NowNotice = { kind: "behalf_answered", askId: 7, question: "q", answer: "a", by: "epic 总控", at: 1, target: { page: "ticket", key: "BTL-1", sessionId: null }, title: null };
+    const flow: NowNotice = { kind: "flow_synced", actionId: 3, label: "关掉 BTL-12", source: "epic 总控", at: 1 };
+    const intake: NowNotice = { kind: "flow_capped", used: 1, cap: 1, resumesAt: 0, dropped: 0 };
+    const empty: NoticeSources = { built: [], ci: [], cost: [], comments: [], stack: [], backtest: [], intake: [], behalf: [], infoflow: [] };
+    expect(collectNotices({ ...empty, behalf: [behalf] })).toEqual([behalf]);
+    expect(collectNotices({ ...empty, infoflow: [flow] })).toEqual([flow]);
+    expect(collectNotices({ ...empty, infoflow: [flow], behalf: [behalf], intake: [intake] })).toEqual([intake, behalf, flow]);
   });
 });

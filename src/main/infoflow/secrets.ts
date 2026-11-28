@@ -22,8 +22,8 @@
  * - Markdown 表格：任何「| 键名 |」单元格后面的值都打（a | token | grep foo 的 grep 会被误打），echo $token | grep 不算（键名前面没有 |）。
  *   表头是键名的表格（| user | password | 下面跟着分隔行）：那一列在后面连着的各行里整格打码；没有分隔行的不算表头。
  *   表头格子里按词边界含键名就算（Access Token、数据库密码），驼峰先拆开（accessToken、APIKey），复数、数字编号也算（tokens、password1），
- *   pass、pass word、PassCode、credentials 也算（| Pass | Fail | 那一列会被误打）。全大写或全小写连写的（DBPASSWORD、userpwd）
- *   含键名就算，不看词边界（tokenizer、secretary 这种全小写的会被误打；key、pass 不在这条里）。
+ *   pass、pass word、PassCode、credentials 也算（| Pass | Fail | 那一列会被误打）。连写的（DBPASSWORD、userpwd、Authtoken）
+ *   含键名就算，不看词边界、不看大小写（tokenizer、Tokenizer、secretary 会被误打；key、pass 不在这条里）。
  *   含 key / token 这个词的也算：| Key | Action |、Primary Key、Token count 那一列会被整列误打（宁可误打）。超过 128 字的格子不当表头。
  *   表里一行下面跟着分隔行时分不清是数据还是下一张表的表头，两头都做：已知密钥列照打，这行的键名列也并进来。
  *   下一张表的表头格子落在上一张表的密钥列上会被误打（宁可误打）。
@@ -43,16 +43,22 @@
  *   带 + 或 = 的是标准 base64（路径不会这样写），整串打掉。
  *   查询串里的值（?code=、&sig=）、片段里的不放过。往前只看 256 个字，更远的 :// 不算（照打）。
  *
+ * - 键名带复数、数字编号、一小段后缀的也算（passwords、password_123、DB_PASSWORD_PROD、API_TOKEN_2_STAGING、MY_KEY_PROD）；
+ *   后缀最长 16 个字，更长的不算键名。前面紧挨着字母数字的不算（xtoken is …）。
+ * - 含全角 ASCII（ｐａｓｓｗｏｒｄ＝、｜）、零宽字符（U+200B–U+200D、U+2060、U+FEFF）或框线字符（│ ├─┼，psql 的 unicode 边框）的行
+ *   先换成半角、去掉零宽字符、框线换成 | - +，再跑上面的规则。中文常用的全角标点（！（），：；？）不换。
+ *   打到了码就返回换过的那一份（这几行的全角字、框线跟着变成半角）；什么都没打到就原样返回。
+ *
  * 已知漏打（认不出来，没有打码）：
- * - 框线字符画的表格（│ ├─┼ 这种，psql 的 unicode 边框）、TSV（mysql -B 的制表符输出）、JSON 字符串里用字面 \n 写的表格：
- *   表头那一列下面的值认不出来（行内的「键 = 值」照打）。
+ * - TSV（mysql -B 的制表符输出）、JSON 字符串里用字面 \n 写的表格：表头那一列下面的值认不出来（行内的「键 = 值」照打）。
  * - 有开引号的值里，引号后面跟着括号再接着字（password: 'ab')cd'）：值停在 ab，后面的 )cd 留着。
  * - 只用 \r 换行时，命令（mysql -p 之类）不按 \r 切开，只会多打。
  *
  * 耗时：主进程同步跑、输入长度不限，每条规则都不能有平方级的回溯（可选的分隔符写成 \s*(?:[:：]\s*)?，
  * 会从很多位置起跑、一直扫到行尾的部分都设上限）。不用反向引用：带 i 标志的规则遇到非 Latin1 的串，(?!\2) 每个字慢十倍，
  * 引号按种类各写一个字符类。开闭不是同一个字的全角引号停在闭引号或行尾、第一次就匹配成功（不然每个开引号都扫到行尾再失败）。
- * secrets.test.ts 里有几百 KB 对抗输入的耗时用例，每个都再跑双字节和两种全角引号的版本，新规则另有两百万字的单扫用例。
+ * secrets.timing.test.ts 里有 200KB 对抗输入的耗时用例（每个 50ms 以内：先热身一次，三次取最快），每个都再跑双字节、两种全角引号、
+ * 要先换半角的版本，新规则另有单个前缀接 200KB 同一种字的用例。这些用例放在单独的 vitest 项目 timing 里，等别的测试跑完再串行跑。
  */
 
 export const SECRET_MASK = "[REDACTED]";
@@ -87,11 +93,18 @@ const PATH_EXT = /^(?:\.[\w-]+)*?\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|lock|txt|l
 const KEY_NAMES =
   "password|passwd|passphrase|passcode|pwd|secret[_ -]?key|client[_ -]?secret|secret|token|api[_ -]?key|access[_ -]?key|private[_ -]?key|credentials?|authentication[_ ]string|_auth|密码|口令|密钥|令牌";
 /**
- * 键名，后面可以带数字编号（password1、pwd2、token1）。编号最多 8 位：不设上限的话，键名后面跟着一长串数字时
- * 用到键名的几条规则每条都要把它扫一遍（两百万个数字约 37ms）。
+ * 键名，后面可以带数字编号（password1、pwd2、token1、password_1、token-2、password20240115093000）。编号不设上限：
+ * 设上限的话 password123456789=x 整个漏掉。每个键名后面的数字只被从这个键名起跑的那一次扫到，总共是线性的
+ * （两百万个数字约 37ms，200KB 约 4ms）。
  */
-const DIGITS = String.raw`\d{0,8}`;
-const KEY = String.raw`(?:${KEY_NAMES})${DIGITS}`;
+const DIGITS = String.raw`(?:[_-]?\d+)?`;
+/**
+ * 键名后面的一个单词后缀（DB_PASSWORD_PROD、SECRET_KEY_A、password_prod、token-v2）：一个 _ 或 -，再跟 1 到 16 个字母数字。
+ * 限长、只认一段：从每个键名起跑最多多看 17 个字，线性（password_policy、token_count 这种也会被当成键名，宁可误打）。
+ */
+const KEY_SUFFIX = String.raw`(?:[_-][A-Za-z0-9]{1,16})?`;
+/** 键名，可以是复数（passwords、tokens、secrets），再跟编号和一个单词后缀。 */
+const KEY = String.raw`(?:${KEY_NAMES})s?${DIGITS}${KEY_SUFFIX}`;
 /**
  * 值：不含空白、中英文标点，至少 4 个字符；已经打过码的跳过。
  * 首字不能是引号（引号开头的归引号规则管）；后面的引号（ASCII 和全角）只在后面还紧跟着字（不是空白、中英文标点、、 ) ] } >）时
@@ -107,6 +120,12 @@ const VALUE = String.raw`${VALUE_HEAD}${VALUE_TAIL}{3,}`;
  */
 const VALUE_TAIL_BARE = String.raw`(?:[^\s，。；,;"'\`“”‘’「」『』]|["'\`“”‘’「」『』](?=[)\]}>]*[^\s，。；,;、)\]}>]))`;
 const VAL = String.raw`(?:(?<!(?:^|[^"'\`“”‘’「」『』])["'\`“”‘’「」『』])${VALUE_HEAD}${VALUE_TAIL_BARE}{3,}|${VALUE})`;
+/** 和 VAL 一样分有没有开引号，但不限长度（「the password is: x」带冒号的，一个字也打）。 */
+const VAL_ANY = String.raw`(?:(?<!(?:^|[^"'\`“”‘’「」『』])["'\`“”‘’「」『』])${VALUE_HEAD}${VALUE_TAIL_BARE}*|${VALUE_HEAD}${VALUE_TAIL}*)`;
+/**
+ * 「X is Y」的键名前面：不能紧挨着字母数字（不用 \b：The DB_PASSWORD is … 里 _ 和 P 之间没有 \b，环境变量式的键名也要认）。
+ */
+const NOT_AFTER_ALNUM = String.raw`(?<![A-Za-z0-9])`;
 /** 开引号（规则里是第 2 个捕获组）：" ' ` 和全角的 “ ‘ 「 『。 */
 const OPEN = String.raw`(["'\`“‘「『])`;
 /**
@@ -125,16 +144,22 @@ const UNCLOSED = String.raw`(?!\[REDACTED\])(?:(?<=")(?:[^"\\\r\n]|\\[^\r\n])+\\
 const KQ = String.raw`(?:["'\`“”‘’「」『』]|\*\*?|__?)?`;
 /** 值前面可选的引号（不含 * _：值本身可能以它们开头，不能让它们留在外面）。 */
 const VQ = String.raw`["'\`“”‘’「」『』]?`;
-/** 值前面的一对空引号（password: “” hunter2xyz、密码：『』abc123def）：跳过它，后面的值照打。 */
-const EMPTY_Q = String.raw`(?:(?:""|''|\`\`|“”|‘’|「」|『』)\s*)?`;
+/**
+ * 值前面的空引号（password: “” hunter2xyz、密码：『』abc123def、password: """" x、the password is "" "" x）：跳过，后面的值照打。
+ * 可以有好几对：每对是固定的两个字、和后面的空白不重叠，没有歧义，线性。
+ */
+const EMPTY_Q = String.raw`(?:(?:""|''|\`\`|“”|‘’|「」|『』)\s*)*`;
 /** 冒号后面的粗体 / 斜体收尾（**password:** x、*password:* x）：后面要跟着空白，免得把值开头的 * _ 当成收尾。 */
 const EMPH_END = String.raw`(?:(?:\*\*?|__?)(?=\s))?`;
 /** 键和值之间：冒号、等号、「是」「为」；冒号后面可以跟着粗体的收尾。 */
 const SEP = String.raw`${KQ}\s*(?:[:=：]|是|为)${EMPH_END}\s*`;
 /** 环境变量式的键、单独的 key 后面：只认冒号、等号（不认「是」「为」）。 */
 const ENV_SEP = String.raw`${KQ}\s*[:=：]${EMPH_END}\s*`;
-/** 环境变量式的键：大写、以 _KEY / _TOKEN / _SECRET / _PASSWORD 之类结尾（区分大小写，免得 primary_key: id 被当成密钥）。 */
-const ENV_TAIL = String.raw`_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|AUTH)(?:_?\d{1,8})?`;
+/**
+ * 环境变量式的键：大写、以 _KEY / _TOKEN / _SECRET / _PASSWORD 之类结尾（区分大小写，免得 primary_key: id 被当成密钥）。
+ * 可以是复数（MY_KEYS），带编号，再跟一段大写后缀（MY_KEY_PROD：_KEY 不在不分大小写的键名里，只能在这里认）。
+ */
+const ENV_TAIL = String.raw`_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|AUTH)S?(?:_?\d+)?(?:_[A-Z0-9]{1,16})?`;
 const ENV_KEY = String.raw`\b[A-Z][A-Z0-9_]*${ENV_TAIL}`;
 /**
  * Markdown 表格里的「| 键 | 值」：键名两边都要有 |，所以 echo $token | grep 不算；但不管是不是第一列，
@@ -199,12 +224,12 @@ const plainKeyValue = (v: string): boolean => /^[A-Z]+-\d+$/.test(v) || /^[{([]/
  * 所以不会从段里每个位置都重新往后扫；后面没有别的东西，外层的 * 不会回溯。
  */
 const command = (names: string): RegExp =>
-  new RegExp(String.raw`\b(?:${names})\b(?:[^\n|;&"'\\]+|\\(?:\r?\n|[^\n])|"(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?)*`, "g");
+  new RegExp(String.raw`\b(?:${names})\b(?:[^\n|;&"'\\]+|\\(?:\r?\n|[^\n])|"(?:[^"\\\n]|\\(?:\r?\n|[^\n]))*"?|'(?:[^'\\\n]|\\(?:\r?\n|[^\n]))*'?)*`, "g");
 /**
- * -p 后面的值：shell 的一个词，到引号外的空白为止。带引号的到闭引号（认 \" \' 这种转义；没闭合就到段尾），
+ * -p 后面的值：shell 的一个词，到引号外的空白为止。带引号的到闭引号（认 \" \' 这种转义、引号里行尾 \ 续行；没闭合就到段尾），
  * 引号前后紧接着的字也算（-p'x'tail、-pa"b c"d：bash 会接成同一个词），引号外 \ 转义的空白也算（-pMy\ Secret）。
  */
-const P_VALUE = String.raw`(?!\[REDACTED\])(?:\\(?:\r?\n|[^\n])|"(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?|[^\s"'\\])+`;
+const P_VALUE = String.raw`(?!\[REDACTED\])(?!\\\r?\n)(?:\\(?:\r?\n|[^\n])|"(?:[^"\\\n]|\\(?:\r?\n|[^\n]))*"?|'(?:[^'\\\n]|\\(?:\r?\n|[^\n]))*'?|[^\s"'\\])+`;
 
 /** 值里最后一个引号在这条命令里没闭合：返回那种引号（按 P_VALUE 的读法，一个字一个字地走）。 */
 const openQuoteAtEnd = (v: string): string | null => {
@@ -280,10 +305,15 @@ const maskCommands = (s: string, cmd: RegExp, arg: RegExp): string => {
  * （Primary Key、Token count 也会算，误打可以接受）。比 TABLE_KEY 多认 pass（pass word、Pass_word、PassCode 拆开后都落在它上面），
  * 后面可以跟复数 s 和数字编号（tokens、password1、Token2）。超过 128 字的格子不当表头（限长：不然长格子里每个位置都要试一遍）。
  */
-const HEADER_KEY = new RegExp(String.raw`(?:^|[^A-Za-z0-9])(?:${KEY_NAMES}|pass|[A-Z][A-Z0-9_]*${ENV_TAIL}|key)s?${DIGITS}(?![A-Za-z0-9])`, "i");
+/*
+ * _ 在这里算词边界，所以 DB_PASSWORD、API_TOKEN_2 这种环境变量式的名字由键名本身认出来；只有 X_AUTH 要单独认
+ * （auth 不在键名里，_auth 前面又是字母数字）。以前写成 [A-Z][A-Z0-9_]*_AUTH…：每个 _ 都能起跑、各扫到格子末尾，
+ * 格子里是平方级的（A_ 重复 200KB 约 21ms）。现在每个起点只往后看定长的字，线性。
+ */
+const HEADER_KEY = new RegExp(String.raw`(?:(?:^|[^A-Za-z0-9])(?:${KEY_NAMES}|pass|key)|[A-Za-z0-9]_auth)s?${DIGITS}(?![A-Za-z0-9])`, "i");
 /**
- * 全大写或全小写连写的格子（DBPASSWORD、dbpassword、SECRETKEY）没有驼峰可拆、也没有词边界：只要里面含这些键名就算。
- * key、pass 太常见（monkey、Keystone、passenger），不在里面。大小写混着的（Tokenizer）按驼峰拆开后的词边界算，不走这条。
+ * 连写的格子（DBPASSWORD、dbpassword、SECRETKEY、Authtoken、Dbpassword）没有驼峰可拆、也没有词边界：只要里面含这些键名就算，
+ * 不看大小写（Tokenizer、Secretary 会被误打，宁可误打）。key、pass 太常见（monkey、Keystone、passenger），不在里面。
  */
 const HEADER_RUN = /password|passwd|passphrase|passcode|pwd|secret|token|credential|apikey|api_key|accesskey|privatekey/i;
 /** 表头格子先把驼峰拆开（accessToken → access Token、APIKey → API Key），再按词边界找键名（复数 tokens、passwords 也算）。 */
@@ -327,10 +357,9 @@ const headerCols = (line: string): number[] => {
     // 空格子直接跳过（很多个 | 的行每格都跑两三条正则，200KB 约 30ms）。
     if (t.length === 0 || t.length > 128) return;
     // 拆开前后都试：拆开会把 PassWord、PassPhrase、PASSWord 这种整词切断（Pass Word），原样的也要认。
-    if (HEADER_KEY.test(t)) out.push(k);
-    else if (t === t.toLowerCase() || t === t.toUpperCase()) {
-      if (HEADER_RUN.test(t)) out.push(k);
-    } else {
+    // 连写的（DBPASSWORD、userpwd、Authtoken、Dbpassword）不论大小写都按 HEADER_RUN 认（Tokenizer、Secretary 会被误打）。
+    if (HEADER_KEY.test(t) || HEADER_RUN.test(t)) out.push(k);
+    else {
       const u = splitCamel(t);
       if (u !== t && HEADER_KEY.test(u)) out.push(k);
     }
@@ -400,12 +429,14 @@ const RULES: Rule[] = [
   { re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "g") },
   { re: new RegExp(`(\\bkey${DIGITS}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi"), skip: (h) => plainKeyValue(h.value) },
-  { re: new RegExp(`(\\b${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
+  { re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${TABLE_KEY}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   // 引号没闭合、值里有空格（password: "two words、password = 'hunter 2）：照 mysql 的做法打到行尾。闭合了的上面已经打过，
   // 占位符跳过。同一种引号之间不会重叠着扫，总共是线性的。
   { re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
   { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "g") },
+  // 「X is '…」引号没闭合：和 key: '… 一样打到行尾（以前只打第一个词，没冒号的连第一个词都不打）。
+  { re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
   // 闭引号后面紧跟着字（password: 'abc'def123、TOKEN='abc'"def"：shell 里是同一个词）：接着打到这个词结束，闭引号留着。
   // 只接在上面打过码的引号值后面；后面又是一段引号的整段算进去（没闭合的到行尾）。每个字只有一种走法，线性。
   { re: /(\[REDACTED\]["'`”’」』])(?:[^\s，。；,;、)\]}>|"'`“”‘’「」『』]|"[^"\r\n]*"?|'[^'\r\n]*'?|`[^`\r\n]*`?|“[^”\r\n]*”?|‘[^’\r\n]*’?|「[^」\r\n]*」?|『[^』\r\n]*』?)+/g },
@@ -433,10 +464,10 @@ const RULES: Rule[] = [
   // mysql -pxxx / -p'two words'（只认 mysql、mysqldump、mariadb、mysqladmin 后面的 -p：mkdir -pv、gcc -pthread 不算）；
   // sshpass -p xxx（-p 和值之间可以有空格）。引号没闭合的到行尾。
   { re: /((?:^|\s)(?:-u|--user)(?:\s+|=)?["']?[^\s:"']*:)(?!\[REDACTED\])[^\s"']+/g },
-  { re: /((?:^|\s)--?(?:password|passwd|pass|passphrase|token|api-key|apikey|secret|auth-token)(?:\s+|=)["']?)(?!\[REDACTED\])[^\s"']+/gi },
-  { re: command(String.raw`docker\s+login`), arg: new RegExp(String.raw`(\s-p\s+)${P_VALUE}`, "g") },
-  { re: command("mysql|mysqldump|mariadb|mysqladmin"), arg: new RegExp(String.raw`(\s-p)${P_VALUE}`, "g") },
-  { re: command("sshpass"), arg: new RegExp(String.raw`(\s-p\s*)${P_VALUE}`, "g") },
+  { re: /((?:^|\s)--?(?:password|passwd|pass|passphrase|token|api-key|apikey|secret|auth-token)(?:(?:\s|\\\r?\n)+|=)["']?)(?!\[REDACTED\])(?!\\\r?\n)[^\s"']+/gi },
+  { re: command(String.raw`docker\s+login`), arg: new RegExp(String.raw`(\s-p(?:\s|\\\r?\n)*)${P_VALUE}`, "g") },
+  { re: command("mysql|mysqldump|mariadb|mysqladmin"), arg: new RegExp(String.raw`(\s-p(?:\\\r?\n)*)${P_VALUE}`, "g") },
+  { re: command("sshpass"), arg: new RegExp(String.raw`(\s-p(?:\s|\\\r?\n)*)${P_VALUE}`, "g") },
   // JWT
   { re: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g },
   // GitHub
@@ -466,11 +497,11 @@ const RULES: Rule[] = [
   // 「token abc…」「secret abc…」：键后面隔一个空格跟着一长串（16 位以上，有字母也有数字）。
   { re: /(\b(?:token|secret|password|passwd|api[_ -]?key)\s+)(?!\[REDACTED\])(?=[A-Za-z0-9._~+/=-]*\d)(?=[A-Za-z0-9._~+/=-]*[A-Za-z])[A-Za-z0-9._~+/=-]{16,}/gi },
   // 「the password is: x」：带冒号的照打。
-  { re: new RegExp(`(\\b${KEY}${KQ}\\s+is\\s*[:：]\\s*${EMPTY_Q}${VQ})${VALUE_HEAD}${VALUE_TAIL}*`, "gi") },
+  { re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*[:：]\\s*${EMPTY_Q}${VQ})${VAL_ANY}`, "gi") },
   // 「the password is hunter2xyz」「token is "abc123def」（引号没闭合）：值里要有数字或符号，免得「the token is expired」
   // 「… is expired.」「the token is user's」这种话被打码（句末的 . 不算；! ? 算，宁可误打）。
   {
-    re: new RegExp(`(\\b${KEY}${KQ}\\s+is\\s+${EMPTY_Q}${VQ})${VALUE}`, "gi"),
+    re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s+${EMPTY_Q}${VQ})${VAL}`, "gi"),
     // 只有字母（可以带一个撇号：don't、user’s）再加句号的是普通的话。
     skip: (h) => /^[A-Za-z]+(?:['’][A-Za-z]+)*\.*$/.test(h.value),
   },
@@ -496,8 +527,34 @@ const RULES: Rule[] = [
   },
 ];
 
-/** 把能认出来的密钥换成 SECRET_MASK。 */
-export function maskSecrets(s: string): string {
+/**
+ * 规则本来就认的全角标点（：当分隔符，，；当值的结尾，！？（）和半角的一样算进值）：不用换，原样留着，中文的话不变样。
+ */
+const KEPT_FULLWIDTH = "！（），：；？";
+/**
+ * 要先规范化的行：有别的全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂），零宽字符（U+200B–200D、U+2060、U+FEFF），
+ * 或者框线字符（U+2500–257F，psql 的 │ ─ ┼）。m 标志下 ^ 只在行首起跑、. 不跨行：每行最多扫一遍，线性。
+ */
+const NEEDS_NORMALIZE = new RegExp(String.raw`^.*(?:(?![${KEPT_FULLWIDTH}])[\uff01-\uff5e]|[\u200b-\u200d\u2060\ufeff\u2500-\u257f]).*$`, "gm");
+const FULLWIDTH = new RegExp(String.raw`(?![${KEPT_FULLWIDTH}])[\uff01-\uff5e]`, "g");
+/** 竖线类框线字符换成 |，横线换成 -，别的（交叉、拐角、T 形）换成 +：psql 的 unicode 边框变成 mysql 那种 +---+、| a |。 */
+const BOX_V = /[│┃║╎╏┆┇┊┋]/g;
+const BOX_H = /[─━═╌╍┄┅┈┉]/g;
+const BOX_X = /[\u2500-\u257f]/g;
+/**
+ * 一行规范化：全角 ASCII 换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），去掉零宽字符，框线换成 | - +。
+ * 每个字换成一个字或去掉。
+ */
+const normalizeLine = (line: string): string =>
+  line
+    .replace(FULLWIDTH, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[\u200b-\u200d\u2060\ufeff]/g, "")
+    .replace(BOX_V, "|")
+    .replace(BOX_H, "-")
+    .replace(BOX_X, "+");
+
+/** 按顺序跑表头表格和每条规则。 */
+const maskRules = (s: string): string => {
   // 表头表格整格打码：排在前面，整格先换成一个占位符，后面的规则不会把格子拆开。
   let out = maskTables(s);
   for (const { re, skip, arg, mask } of RULES) {
@@ -522,6 +579,21 @@ export function maskSecrets(s: string): string {
     });
   }
   return out;
+};
+
+/**
+ * 把能认出来的密钥换成 SECRET_MASK。
+ * 有全角字母符号、零宽或框线字符的行先规范化（normalizeLine）再打码：打了码的，输出用规范化以后的文本
+ * （这几行的全角字母、＝、框线会变成半角，中文标点不动；存进记忆的是规范化文本）。什么都没打的原样返回原文，一个字都不改
+ * （hasSecret 不会因为一个全角字母就说有密钥）。规范化只把字换得更像 ASCII（规则都是按 ASCII 写的），原文认得出的
+ * 规范化以后也认得出，所以不再按原文打一遍（再打一遍最慢的输入要翻倍，200KB 约 38ms）。没有这些字符的文本不规范化。
+ */
+export function maskSecrets(s: string): string {
+  NEEDS_NORMALIZE.lastIndex = 0;
+  if (!NEEDS_NORMALIZE.test(s)) return maskRules(s);
+  const normalized = s.replace(NEEDS_NORMALIZE, normalizeLine);
+  const masked = maskRules(normalized);
+  return masked === normalized ? s : masked;
 }
 
 /** 有没有能认出来的密钥（打码前后不一样）。 */

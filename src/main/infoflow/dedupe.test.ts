@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DUP_SIMILARITY, findDuplicate, normalizeFact, polarityClash, similarity } from "./dedupe";
+import { DUP_SIMILARITY, findDuplicate, normalizeFact, polarityClash, similarity, stem } from "./dedupe";
 
 describe("normalizeFact", () => {
   it("drops a source note whose session name has brackets", () => {
@@ -142,5 +142,148 @@ describe("findDuplicate keeps a change of mind (BTL-280 L3)", () => {
     expect(polarityClash("move the button to the top right corner", "move the button to the top right")).toBe(false);
     expect(polarityClash("show the shower", "hide the shower")).toBe(true);
     expect(polarityClash("the shower stays", "the shower hides")).toBe(false);
+  });
+});
+
+describe("findDuplicate, opus review of bd556adf (BTL-272)", () => {
+  // 必须修 1：同一个否定的几种写法、常见复合词里的「非」「未」：还是重复，不再发一遍。
+  it.each([
+    ["We don't merge on Fridays.", "We do not merge on Fridays."],
+    ["Deploys can't run before the 9am freeze ends.", "Deploys cannot run before the 9am freeze ends."],
+    ["The bot won't retry failed webhook deliveries.", "The bot will not retry failed webhook deliveries."],
+    ["Never commit .env files", "Do not ever commit .env files"],
+    ["别在周五下午往生产环境发版", "不要在周五下午往生产环境发版"],
+    ["勿在周五下午往生产环境发版", "不在周五下午往生产环境发版"],
+    ["这个改动不用等 alice review 了", "这个改动不等 alice review 了"],
+    ["发版不用等 CI", "发版不要等 CI"],
+    ["We won't merge", "We will not merge"],
+    ["未来所有新包都统一用 pnpm 管理依赖", "以后所有新包都统一用 pnpm 管理依赖"],
+    ["这个接口非常重要，必须先做分页", "这个接口很重要，必须先做分页"],
+    ["所有接口无论内外都要加鉴权", "所有接口不管内外都要加鉴权"],
+    ["别人提的 PR 也要跑一遍 e2e", "其他人提的 PR 也要跑一遍 e2e"],
+  ])("same meaning, negation spelled differently: %s ~ %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBe(b);
+    expect(findDuplicate(b, [a])).toBe(a);
+  });
+
+  it("keeps 不同意 and 不过关 as negations (not the 不同 / 不过 compounds)", () => {
+    expect(findDuplicate("我不同意这个发版方案的回滚步骤", ["我同意这个发版方案的回滚步骤"])).toBeNull();
+    expect(findDuplicate("这次的性能测试不过关，要重跑", ["这次的性能测试过关，要重跑"])).toBeNull();
+    // 不同、不过 本身不是否定：「两个仓库的分支名不同」和「两个仓库的分支名不一样」不因为否定词对不上就算新的。
+    expect(polarityClash("两个仓库用的分支名不同，记得区分", "两个仓库用的分支名有差异，记得区分")).toBe(false);
+  });
+
+  // 必须修 2：writeNote 存的「<note> #2」变体，注记里的 session 名带否定词。
+  it.each([
+    ["接口要分页，每页最多 100 条", "接口要分页，每页最多 100 条（来自 修复不能登录 的对话） #2"],
+    ["List endpoints are paginated, at most 100 per page", "List endpoints are paginated, at most 100 per page (from fix-no-cache's conversation) #2"],
+    ["List endpoints are paginated, at most 100 per page", "List endpoints are paginated, at most 100 per page (from don't-retry's conversation) #12"],
+  ])("matches a memory note with the ' #N' variant suffix: %s ~ %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBe(b);
+    expect(normalizeFact(b)).toBe(normalizeFact(a));
+  });
+
+  it("keeps a trailing #N that is not after a source note: PR #2 and PR #3 are different facts", () => {
+    expect(normalizeFact("先合并 PR #2")).toBe("先合并pr2");
+    expect(findDuplicate("先合并 PR #3", ["先合并 PR #2"])).toBeNull();
+  });
+
+  // 必须修 3：改主意的词只在一边出现：不是重复，包含规则也不能吞掉。
+  it.each([
+    ["每周五下午三点准时发版到生产环境", "取消每周五下午三点准时发版到生产环境"],
+    ["每天凌晨自动同步上游仓库的定时任务", "停止每天凌晨自动同步上游仓库的定时任务"],
+    ["夜间构建的自动重试功能先停掉", "夜间构建的自动重试功能先开着"],
+    ["每天凌晨自动同步上游仓库的定时任务", "暂停每天凌晨自动同步上游仓库的定时任务"],
+    ["每天凌晨自动同步上游仓库的定时任务", "撤销每天凌晨自动同步上游仓库的定时任务"],
+    ["每天凌晨自动同步上游仓库的定时任务", "每天凌晨自动同步上游仓库的定时任务去掉"],
+    ["每周五下午三点准时发版到生产环境", "改成每周五下午三点准时发版到生产环境"],
+    ["每周五下午三点准时发版到生产环境", "改为每周五下午三点准时发版到生产环境"],
+    ["Release every Friday at 3pm to production", "Cancel the release every Friday at 3pm to production"],
+    ["The nightly mirror job syncs the upstream repo", "Stop the nightly mirror job that syncs the upstream repo"],
+    ["The nightly mirror job syncs the upstream repo", "The nightly mirror job syncs the upstream repo, paused for now"],
+    ["The nightly mirror job syncs the upstream repo", "Reverted: the nightly mirror job syncs the upstream repo"],
+    ["Release is blocked on the security review", "Release is no longer blocked on the security review"],
+    ["Release every Friday at 3pm to production", "Cancelled the release every Friday at 3pm to production"],
+  ])("a change of mind is new either way: %s vs %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(findDuplicate(b, [a])).toBeNull();
+  });
+
+  // 建议 a、b：补的反义词，按词干比；w 对 un+w、dis+w。
+  it.each([
+    ["Keep the legacy export endpoint for now", "Drop the legacy export endpoint for now"],
+    ["Keep the legacy export endpoint", "Remove the legacy export endpoint"],
+    ["We will stop using the old staging cluster", "We will keep using the old staging cluster"],
+    ["Pause the nightly deploy job", "Resume the nightly deploy job"],
+    ["The setting enables auto-merge for all repos", "The setting disables auto-merge for all repos"],
+    ["Retries are increased to five", "Retries are decreased to five"],
+    ["Uploads are allowed for guest users", "Uploads are disallowed for guest users"],
+    ["The repo is locked for the release", "The repo is unlocked for the release"],
+    ["The bot keeps old branches around", "The bot removes old branches around"],
+  ])("antonyms by stem and un- / dis- prefixes: %s vs %s", (a, b) => {
+    expect(polarityClash(a, b)).toBe(true);
+    expect(findDuplicate(a, [b])).toBeNull();
+  });
+
+  it("stems common inflections the same way", () => {
+    for (const [w, s] of [["enable", "enabl"], ["enabled", "enabl"], ["enables", "enabl"], ["deny", "deny"], ["denied", "deny"], ["denies", "deny"],
+      ["stopped", "stop"], ["stopping", "stop"], ["added", "add"], ["add", "add"], ["closes", "clos"], ["this", "this"], ["class", "class"], ["status", "status"]]) {
+      expect(stem(w), w).toBe(s);
+    }
+  });
+
+  // 建议 c：拉丁词、数字一样，顺序对调了。
+  it.each([
+    ["Use pnpm, not npm, for this repo", "Use npm, not pnpm, for this repo"],
+    ["用 pnpm 不用 npm 管理这个仓库的依赖", "用 npm 不用 pnpm 管理这个仓库的依赖"],
+    ["先做 BTL-12 再做 BTL-13", "先做 BTL-13 再做 BTL-12"],
+    ["Migrate from MySQL to Postgres", "Migrate from Postgres to MySQL"],
+    ["Ship the staging build first, then production", "Ship the production build first, then staging"],
+  ])("A and B swapped is not a duplicate: %s vs %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+  });
+
+  // 建议 d：单位变了。
+  it.each([
+    ["Rate limit is 100 requests per minute", "Rate limit is 100 requests per second"],
+    ["接口限流是每分钟 100 次请求", "接口限流是每秒 100 次请求"],
+    ["Uploads are capped at 10 MB per file", "Uploads are capped at 10 GB per file"],
+    ["Cache entries expire after 30m", "Cache entries expire after 30s"],
+    ["日志保留 30 天，到期自动清理", "日志保留 30 周，到期自动清理"],
+  ])("a different unit is not a duplicate: %s vs %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+  });
+
+  it("still finds a duplicate with the same unit, or a unit only on one side", () => {
+    expect(findDuplicate("Rate limit is 100 requests per minute.", ["Rate limit is 100 requests per minute"])).not.toBeNull();
+    expect(findDuplicate("接口限流是每分钟 100 次请求。", ["接口限流是每分钟 100 次请求"])).not.toBeNull();
+    expect(polarityClash("the timeout is 30 for every endpoint", "the timeout is 30 seconds for every endpoint")).toBe(false);
+  });
+
+  // 建议 e：有意的取舍。只是换了说法、动作的先后跟着换了，被当成新的：多发一次比吞掉一个改主意强（根治放 BTL-280 第 4 步）。
+  it.each([
+    ["Close the old PR and open a new one for the fix", "Open a new PR for the fix and close the old one"],
+    ["Run lint before tests, after install", "After install, run lint before tests"],
+    ["先关闭旧的开关再开启新的开关", "开启新的开关之前先关闭旧的开关"],
+  ])("intended trade-off: a reworded sentence whose actions swap order counts as new: %s vs %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+  });
+
+  // 变异测试漏网的（P14、P15）：语气词只在分句末尾去掉；keep / drop 这一对。
+  it("strips a filler particle only at the end of a clause, not inside a word", () => {
+    // 词中间的「呢」「啦」「吧」不是语气词：去掉的话两句就一字不差了。
+    expect(findDuplicate("呢子大衣和啦啦队的吧台", ["子大衣和队的台"])).toBeNull();
+    expect(findDuplicate("子大衣和队的台", ["呢子大衣和啦啦队的吧台"])).toBeNull();
+    expect(findDuplicate("先开始实现吧", ["先开始实现"])).toBe("先开始实现");
+  });
+
+  it("tells 'without' apart from 'not': shipping without a review is not 'not shipping with a review'", () => {
+    expect(polarityClash("release ships without a manual review step", "release doesn't ship with a manual review step")).toBe(true);
+    expect(polarityClash("release ships without a manual review step", "release ships without any manual review step")).toBe(false);
+  });
+
+  it("counts keep and drop as opposites", () => {
+    expect(polarityClash("keep the cache", "drop the cache")).toBe(true);
+    expect(polarityClash("drop the cache", "keep the cache")).toBe(true);
   });
 });

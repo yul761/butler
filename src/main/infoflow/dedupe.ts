@@ -1,7 +1,9 @@
 /**
  * 信息流转（BTL-272）的去重：一条要点和记忆里已有的事实、最近抽过的要点是不是说的同一件事。
  * 不问模型：去掉标点、空白和大小写后比较字的二元组（Dice 系数），或者新的这条整个被旧的包含。
- * 否定词、反义词对不上的（改主意）不算重复（polarityClash）。
+ * 否定词、改主意的词、反义词、单位对不上的，拉丁词对调了的（改主意或者说的不是一回事）不算重复（polarityClash）。
+ * 已知的取舍：只是换了说法、动作的先后跟着换了的（「Close the old PR and open a new one」和「Open a new PR and close the old one」）
+ * 会被当成新的、多发一次。多发一次比吞掉一个改主意强；根治放在 BTL-280 第 4 步，交给模型判断。
  */
 
 /** Dice 系数到这个值就算同一件事。 */
@@ -12,17 +14,45 @@ const CONTAIN_MIN = 12;
 /** 句末语气词：只在一个分句末尾（后面是标点、空白或结尾）时去掉，「再开始实现吧」和「再开始实现」是一回事。 */
 const FILLERS = /[啦吧呢啊哦呀嘛]+(?=[\s\p{P}\p{S}]|$)/gu;
 
-/** 只留字母、数字和汉字，转小写。记忆条目末尾的「（来自……）」来源注记先去掉。 */
+/**
+ * 记忆条目末尾的来源注记（「（来自 X 的对话）」「 (from X's conversation)」）。StateCore 把原句藏掉时 writeNote 存的是
+ * 「<note> #2」：注记后面的「 #N」变体后缀一起去掉（以前只认句尾的注记，带 #2 的认不出来，session 名里的「不」「no」就被当成否定）。
+ * 只在注记后面才去 #N：句子本身以「PR #2」结尾的，数字要留着比。
+ * 注记里的 session 名字可能带括号（「（来自 S(t12) 的对话）」）：从「（来自」一直到结尾的括号。
+ */
+const SOURCE_NOTE = /[（(]\s*(来自|from).*?[）)](?:\s*#\d+)?\s*$/iu;
+const stripNote = (s: string): string => s.replace(SOURCE_NOTE, "");
+
+/** 只留字母、数字和汉字，转小写。记忆条目末尾的来源注记先去掉。 */
 export function normalizeFact(s: string): string {
-  return s
-    // 来源注记里的 session 名字可能带括号（「（来自 S(t12) 的对话）」）：从「（来自」一直到结尾的括号。
-    .replace(/[（(]\s*(来自|from).*?[）)]\s*$/iu, "")
+  return stripNote(s)
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
-/** 去重比较用的形式：normalizeFact 之前先去掉句末语气词（只在这里用；actions 找原话照旧用 normalizeFact）。 */
-const factKey = (s: string): string => normalizeFact(s.replace(FILLERS, ""));
+/**
+ * 同一个否定的几种写法归成一种（去重比较和数否定词都用这一份）：don't → do not、can't / cannot → can not、won't → will not、
+ * never → not ever，再 do not → not（「Never commit」和「Do not ever commit」）；别、勿、不要、不用 → 不，不管 → 无论。
+ * 不然「We don't merge」和「We do not merge」、「别在周五发版」和「不要在周五发版」否定词对不上，被当成改主意又发一遍。
+ */
+const NEG_CANON: [RegExp, string][] = [
+  [/\bwon['’]t\b/g, "will not"],
+  [/\bshan['’]t\b/g, "shall not"],
+  [/\bcan['’]t\b/g, "can not"],
+  [/\bcannot\b/g, "can not"],
+  [/\bain['’]t\b/g, "is not"],
+  [/n['’]t\b/g, " not"],
+  [/\bnever\b/g, "not ever"],
+  [/\bdo not\b/g, "not"],
+  [/不管/g, "无论"],
+  [/不要|不用|别|勿/g, "不"],
+];
+const canonNeg = (lower: string): string => NEG_CANON.reduce((t, [re, to]) => t.replace(re, to), lower);
+
+/**
+ * 去重比较用的形式：去掉句末语气词、来源注记，否定词归一，再 normalizeFact（只在这里用；actions 找原话照旧用 normalizeFact）。
+ */
+const factKey = (s: string): string => normalizeFact(canonNeg(stripNote(s.replace(FILLERS, "")).toLowerCase()));
 
 function bigrams(s: string): Map<string, number> {
   const cps = [...s];
@@ -61,38 +91,89 @@ function numbersClash(a: Set<string>, b: Set<string>): boolean {
 
 /**
  * 改主意（BTL-280 实测）：「不等 #109」对「等 #109」、「must not ask」对「must ask」、「默认关闭」对「默认开启」字面很像，Dice 都过 0.8，
- * 但说的是相反的事。下面两种都不算重复：两句的否定词集合不同；或者一句里有一对反义词里的一个、另一句里是对面那个。
- * 宁可多发一遍，不能把改主意当成重复吞掉。
+ * 但说的是相反的事。下面几种都不算重复（polarityClash）：否定词集合不同；「取消」「停止」这类改主意的词只在一边；
+ * 一对反义词各占一边；拉丁词和数字一样、顺序反了（A↔B 对调）；单位变了。宁可多发一遍，不能把改主意当成重复吞掉。
  */
-/** 中文否定词：按字（去掉标点空白以后）。「非常」「无论」这类也算进来：多发一遍可以接受。 */
-const ZH_NEGATIONS = ["不", "没", "别", "无", "非", "未", "勿"];
-/** 英文否定词：按整词（notify、another、know 不算）。n't 单独认（don't、shouldn't、can’t）。 */
-const EN_NEGATION = /\b(not|no|never|without|cannot)\b/g;
-const EN_NT = /n['’]t\b/;
-/** 反义词对：中文按子串（在去掉标点空白的文本里找），英文按整词。 */
+/** 中文否定词：按字（归一、去掉标点空白以后）。别、勿、不要、不用已经归成「不」。 */
+const ZH_NEGATIONS = ["不", "没", "无", "非", "未"];
+/**
+ * 数否定词前先去掉的常见复合词：「非常重要」和「很重要」、「未来」和「以后」说的是一回事。别 归成 不 之前去掉，
+ * 「别人」「特别」也不算否定。「不同意」「不过关」是否定，不去。
+ */
+const ZH_COMPOUNDS = /非常|无论|不管|未来|除非|不过(?!关)|不同(?!意)|不错|不少|不久|不断|别人|别的|特别|区别|分别|级别|类别|识别|告别|性别|差别|个别/g;
+/** 英文否定词：按整词（notify、another、know 不算）。归一以后 n't、cannot、never 都成了 not；no 也算 not。 */
+const EN_NEGATION = /\b(not|no|without)\b/g;
+
+/** 改主意的词：只在一边出现时和否定词一样算冲突（「取消每周五发版」不是「每周五发版」的重复）。 */
+const ZH_REVERSALS = ["取消", "停止", "停掉", "暂停", "撤销", "不再", "改成", "改为", "去掉"];
+const EN_REVERSAL = /\b(?:(cancel)(?:s|led|ed|ling|ing)?|(stop)(?:s|ped|ping)?|(paus)(?:e|es|ed|ing)|(revert)(?:s|ed|ing)?|(no longer))\b/g;
+
+/** 反义词对：中文按子串（在去掉标点空白的文本里找），英文按词干（enables / disables、increased / decreased 一样认）。 */
 const ZH_ANTONYMS: [string, string][] = [
   ["开启", "关闭"], ["开启", "关掉"], ["打开", "关闭"], ["打开", "关掉"], ["启用", "停用"], ["启用", "禁用"], ["允许", "禁止"],
   ["同意", "拒绝"], ["接受", "拒绝"], ["显示", "隐藏"], ["保留", "删除"], ["保留", "删掉"], ["增加", "减少"], ["提高", "降低"], ["加上", "去掉"],
+  ["停掉", "开着"],
 ];
-const EN_ANTONYMS: [string, string][] = [
-  ["enable", "disable"], ["enabled", "disabled"], ["on", "off"], ["allow", "deny"], ["allowed", "denied"], ["accept", "reject"],
-  ["include", "exclude"], ["show", "hide"], ["add", "remove"], ["increase", "decrease"], ["before", "after"], ["true", "false"],
-  ["public", "private"], ["open", "close"], ["start", "stop"], ["keep", "drop"],
+const EN_ANTONYM_WORDS: [string, string][] = [
+  ["enable", "disable"], ["on", "off"], ["allow", "deny"], ["accept", "reject"], ["include", "exclude"], ["show", "hide"], ["add", "remove"],
+  ["increase", "decrease"], ["before", "after"], ["true", "false"], ["public", "private"], ["open", "close"], ["start", "stop"], ["keep", "drop"],
+  ["keep", "remove"], ["stop", "keep"], ["pause", "resume"],
 ];
 
-/** 去掉来源注记、转小写，保留空白和标点（英文要按整词找）。 */
-const plain = (s: string): string => s.replace(/[（(]\s*(来自|from).*?[）)]\s*$/iu, "").toLowerCase();
-const words = (s: string): string[] => plain(s).match(/[\p{L}\p{N}]+/gu) ?? [];
+/**
+ * 粗略的英文词干：去掉 -ies/-ied（→ y）、-ing/-ed（双写的辅音去一个：stopped → stop）、-es/-s，再去掉末尾的 e。
+ * enable / enabled / enables 都是 enabl，deny / denied 都是 deny。三个字以内的词不动（on、off、add）。
+ */
+export function stem(w: string): string {
+  if (w.length <= 3) return w;
+  if (/i(?:es|ed)$/.test(w)) return w.slice(0, -3) + "y";
+  const ed = /^(.{3,}?)(?:ing|ed)$/.exec(w);
+  if (ed) return ed[1].replace(/([bgmnprt])\1$/, "$1").replace(/e$/, "");
+  if (/(?:ss|us|is)$/.test(w)) return w;
+  return w.replace(/e?s$/, "").replace(/e$/, "");
+}
+const EN_ANTONYMS: [string, string][] = EN_ANTONYM_WORDS.map(([x, y]) => [stem(x), stem(y)]);
+
+/** 时间、大小的单位（「30 分钟」和「30 秒」、minutes 和 seconds 不是一回事）。 */
+const ZH_UNITS: [RegExp, string][] = [
+  [/毫秒/g, "ms"], [/秒/g, "s"], [/分钟/g, "min"], [/小时|钟头/g, "h"], [/天/g, "d"], [/周|星期/g, "w"], [/月/g, "mo"], [/年/g, "y"],
+];
+const EN_UNITS: [RegExp, string][] = [
+  [/^\d*(?:ms|msecs?|milliseconds?)$/, "ms"], [/^(?:\d+s|\d*secs?|\d*seconds?)$/, "s"], [/^\d*(?:mins?|minutes?)$/, "min"], [/^\d+m$/, "min"],
+  [/^(?:\d+h|\d*hrs?|\d*hours?)$/, "h"], [/^(?:\d+d|days?)$/, "d"], [/^weeks?$/, "w"], [/^months?$/, "mo"], [/^years?$/, "y"],
+  [/^\d*(?:kb|kib)$/, "kb"], [/^\d*(?:mb|mib)$/, "mb"], [/^\d*(?:gb|gib)$/, "gb"], [/^\d*(?:tb|tib)$/, "tb"], [/^bytes?$/, "byte"],
+];
+
+/** 去掉来源注记、转小写、否定词归一，保留空白和标点（英文要按整词找）。 */
+const plain = (s: string): string => canonNeg(stripNote(s).toLowerCase());
+/** 英文的词（只要拉丁字母和数字：「用pnpm管理」里的 pnpm 也算一个）。 */
+const latin = (s: string): string[] => plain(s).match(/[a-z0-9]+/g) ?? [];
 
 function negations(s: string): Set<string> {
   const out = new Set<string>();
-  const zh = factKey(s);
+  const zh = normalizeFact(canonNeg(stripNote(s).toLowerCase().replace(ZH_COMPOUNDS, "")));
   for (const n of ZH_NEGATIONS) if (zh.includes(n)) out.add(n);
-  const p = plain(s);
-  for (const m of p.matchAll(EN_NEGATION)) out.add(m[1] === "cannot" ? "not" : m[1]);
-  if (EN_NT.test(p)) out.add("n't");
+  for (const m of plain(s).matchAll(EN_NEGATION)) out.add(m[1] === "without" ? "without" : "not");
   return out;
 }
+
+function reversals(s: string): Set<string> {
+  const out = new Set<string>();
+  const zh = factKey(s);
+  for (const r of ZH_REVERSALS) if (zh.includes(r)) out.add(r);
+  for (const m of plain(s).matchAll(EN_REVERSAL)) out.add(m.slice(1).find((g) => g !== undefined) ?? m[0]);
+  return out;
+}
+
+function unitsOf(s: string): Set<string> {
+  const out = new Set<string>();
+  const zh = factKey(s);
+  for (const [re, u] of ZH_UNITS) if (zh.search(re) >= 0) out.add(u);
+  for (const w of latin(s)) for (const [re, u] of EN_UNITS) if (re.test(w)) out.add(u);
+  return out;
+}
+
+const sameSet = (a: Set<string>, b: Set<string>): boolean => a.size === b.size && [...a].every((x) => b.has(x));
 
 /**
  * 一对反义词在两句里各占一边：一句只有 x、另一句只有 y。两句都两个都有时看先后（「先关闭旧的再开启新的」对「先开启旧的再关闭新的」）。
@@ -108,15 +189,38 @@ function antonymsClash(at: (side: 0 | 1, w: string) => number, pairs: readonly [
   });
 }
 
-/** a 和 b 说的是相反的事（否定词不一样，或者反义词各占一边）：再像也不算重复。 */
+/** w 和 un+w、dis+w（allowed / disallowed、locked / unlocked）：从两句里出现的 un… / dis… 词生成反义词对。 */
+function prefixPairs(stems: readonly string[][]): [string, string][] {
+  const out: [string, string][] = [];
+  for (const w of new Set(stems.flat())) {
+    const m = /^(?:un|dis)(.{3,})$/.exec(w);
+    if (m) out.push([m[1], w]);
+  }
+  return out;
+}
+
+/** 拉丁词和数字一样多、一样的词，只是顺序不同（pnpm / npm 换了位置、BTL-12 和 BTL-13 反了、from MySQL to Postgres）。 */
+function swapped(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length < 2 || a.length !== b.length || a.every((w, i) => w === b[i])) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((w, i) => w === sb[i]);
+}
+
+/** a 和 b 说的是相反的事、或者不是同一件事（见上面的几种）：再像也不算重复。 */
 export function polarityClash(a: string, b: string): boolean {
-  const na = negations(a);
-  const nb = negations(b);
-  if (na.size !== nb.size || [...na].some((n) => !nb.has(n))) return true;
+  if (!sameSet(negations(a), negations(b))) return true;
+  if (!sameSet(reversals(a), reversals(b))) return true;
+  const ua = unitsOf(a);
+  const ub = unitsOf(b);
+  if (ua.size > 0 && ub.size > 0 && !sameSet(ua, ub)) return true;
   const zh = [factKey(a), factKey(b)];
   if (antonymsClash((side, w) => zh[side].indexOf(w), ZH_ANTONYMS)) return true;
-  const en = [words(a), words(b)];
-  return antonymsClash((side, w) => en[side].indexOf(w), EN_ANTONYMS);
+  const la = latin(a);
+  const lb = latin(b);
+  if (swapped(la, lb)) return true;
+  const en = [la.map(stem), lb.map(stem)];
+  return antonymsClash((side, w) => en[side].indexOf(w), [...EN_ANTONYMS, ...prefixPairs(en)]);
 }
 
 /** text 和 existing 里的某一条是同一件事：返回那一条，否则 null。 */

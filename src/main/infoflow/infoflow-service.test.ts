@@ -1039,6 +1039,22 @@ describe("InfoflowService (BTL-272)", () => {
       expect(t.svc.synced()).toEqual([]);
       expect(t.calls.some((c) => c.startsWith("reopen"))).toBe(false);
     });
+
+    it("says what the retry actually did: only sessions, only PRs, or both", async () => {
+      const prErrors = [{ url: "https://x/pull/41", error: "gh: 502", kind: "failed" as const }];
+      const sessionErrors = [{ id: "sess-0123456789", error: "busy" }];
+      const cases: [typeof prErrors, typeof sessionErrors, "sessions" | "prs" | "both"][] = [
+        [[], sessionErrors, "sessions"],
+        [prErrors, [], "prs"],
+        [prErrors, sessionErrors, "both"],
+      ];
+      for (const [p, s, how] of cases) {
+        const { t, id, v } = await start([{ kind: "partial", leftovers: { prErrors: p, sessionErrors: s, closedMeanwhile: true } }, { kind: "done" }]);
+        expect(v().action).toMatchObject({ state: "partial", leftovers: { closedMeanwhile: true } });
+        expect(await t.svc.act(id, "retry")).toBe(true);
+        expect(v().action, how).toMatchObject({ state: "already", error: MAIN_STRINGS.zh.infoflow.closedMeanwhile[how], undoable: false, leftovers: null });
+      }
+    });
   });
 
   describe("with BTL-270's real closeTicket (routing must name the PRs)", () => {

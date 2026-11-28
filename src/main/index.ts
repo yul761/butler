@@ -26,7 +26,7 @@ import { parseGateRequest, type GateRequest, type GateResult } from "../shared/g
 import { IPC } from "../shared/ipc";
 import type { LimitHit } from "../shared/availability";
 import { ClaudeAvailability } from "./claude/availability";
-import { buildNotices, ciNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
+import { buildNotices, ciNotices, collectNotices, commentNotices, costNotices, intakeNotices, stackNotices } from "./now/notices";
 import { BackgroundRepo } from "./db/background-repo";
 import { CostRepo } from "./db/cost-repo";
 import { readBgSettings } from "./background/bg-settings";
@@ -3547,22 +3547,23 @@ async function bootstrap(): Promise<void> {
     log: logger,
   });
   /** 「现在」页和「谁该动」看板共用的一份 Shipherd 提醒。 */
-  const currentNotices = (): NowNotice[] => [
-    ...buildNotices({
-      availability: availability.view(),
-      recentRuns: lessonRuns.recentFinished(20),
-      routing: routing.attention(),
-      sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
-    }),
-    ...ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
-    ...costNotices(costBreaker?.views() ?? [], costTargetOf),
-    ...commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
-    ...stackNotices(stackService.notices()),
-    ...backtest.notices(),
-    ...intakeNotices(intake.notices()),
-    ...inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
-    ...infoflow.notices(),
-  ];
+  const currentNotices = (): NowNotice[] =>
+    collectNotices({
+      built: buildNotices({
+        availability: availability.view(),
+        recentRuns: lessonRuns.recentFinished(20),
+        routing: routing.attention(),
+        sharedMcpError: sharedMcpOn(settings) && mcpHub.status().state === "failed" ? mcpHub.status().error : null,
+      }),
+      ci: ciNotices(ciDelivery.undelivered(), (key) => tickets.get(key)?.title ?? null),
+      cost: costNotices(costBreaker?.views() ?? [], costTargetOf),
+      comments: commentNotices(commentLoop.waiting(), (key) => tickets.get(key)?.title ?? null),
+      stack: stackNotices(stackService.notices()),
+      backtest: backtest.notices(),
+      intake: intakeNotices(intake.notices()),
+      behalf: inboxService.behalfNotices((key) => tickets.get(key)?.title ?? null),
+      infoflow: infoflow.notices(),
+    });
   // 请你 review 的 PR（UI 重做第 1 层，计划 R9）：gh search 的结果整体替换进 review_requests。
   const reviewRequests = new ReviewRequestsRepo(db);
   let unbindReviewFocus: (() => void) | null = null;

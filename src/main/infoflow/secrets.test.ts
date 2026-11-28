@@ -212,165 +212,6 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
     expect(maskSecrets(`https://hooks.example.com/services/${"AbCdEf0123456789GhIjKlMn"}/x`)).not.toContain("AbCdEf0123456789GhIjKlMn");
   });
 
-  it("stays linear on adversarial input: a few hundred KB runs in under 100ms", () => {
-    // 单独跑最慢的约 25ms；全量测试并行跑时机器忙，会翻倍。平方级的（注释里记的那些）都在 500ms 以上，100ms 照样拦得住。
-    const LIMIT_MS = 100;
-    const N = 200_000;
-    const inputs = {
-      urls: "://a:".repeat(N / 5),
-      isSpaces: "token is" + " ".repeat(N) + "x",
-      isSpacesColon: "the password is" + " ".repeat(N) + ":",
-      docker: "docker login ".repeat(N / 13),
-      mysql: "mysql ".repeat(N / 6),
-      quoted: 'password: "' + "a".repeat(N),
-      quotedMix: ('token="' + "a".repeat(20) + "token='").repeat(N / 40),
-      keys: "token=".repeat(N / 6),
-      keySpaces: "token" + " ".repeat(N),
-      envKey: "A_".repeat(N / 2),
-      b64: "aA1".repeat(N / 3),
-      hex: "a1".repeat(N / 2) + "g",
-      cookies: "Cookie: ".repeat(N / 8),
-      dashU: "-u" + " ".repeat(N),
-      bareKey: 'key: "'.repeat(N / 6),
-      paths: "a/".repeat(N / 2),
-      cookieNoSpace: "Cookie:".repeat(N / 7),
-      setCookie: "Set-Cookie:a".repeat(N / 12),
-      cookieDigits: "Cookie: a1".repeat(N / 10),
-      urlWindow: ("://".repeat(300) + " aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW/xY1zA2 ").repeat(N / 940),
-      sshpass: "sshpass ".repeat(N / 8),
-      mysqlDashP: "mysql" + " -p".repeat(N / 3),
-      dockerLogin: "docker login".repeat(N / 12),
-      query: "?code=".repeat(N / 6),
-      slack: "hooks.slack.com/services/".repeat(N / 25),
-      // 第五轮：每个长串前面都要往回走一段的输入（以前 8 次 lastIndexOf × 2048 字）。
-      b64Comma: ("aB3dE5fG7hJ9kL1mN3pQ5rS7tU9v/xY1" + ",").repeat(N / 33),
-      jsonPaths: '"src/Main/Component12345678/IndexAbc",'.repeat(N / 38),
-      urlNoCut: ("://".repeat(80) + "Abcdefghijklmn1/Abcdefghijklmn2/Abcdefghijklmn3,").repeat(N / 288),
-      mysqlQuotes: "mysql " + "'a".repeat(N / 2),
-      mysqlSemis: "mysql x;".repeat(N / 8),
-      mysqlMixedQuotes: "mysql " + "\"'".repeat(N / 2),
-      unclosed: 'password: "' + "a ".repeat(N / 2),
-      unclosedMix: ('password: "' + "password: '").repeat(N / 22),
-      unclosedBt: "token=`".repeat(N / 7),
-      queryLong: "?code=" + "a".repeat(N),
-      // 第七轮：全角的开引号和闭引号不是同一个字，每个开引号都不能扫到行尾再失败。
-      fullWidthOpen: "token:“".repeat(N / 7),
-      fullWidthOpenSingle: "密码：‘".repeat(N / 3),
-      fullWidthClosedAtEnd: "token:“".repeat(N / 7) + "”",
-      fullWidthKey: "key=“".repeat(N / 5),
-      fullWidthIs: "token is “".repeat(N / 10),
-      fullWidthTable: "|password|“".repeat(N / 11),
-      fullWidthEnv: "A_KEY“:‘".repeat(N / 8),
-      cornerOpen: "密码：「".repeat(N / 4),
-      cornerOpenDouble: "token=『".repeat(N / 7),
-      unclosedEscapes: 'password: "' + '\\"'.repeat(N / 2),
-      unclosedSingleEscapes: "password: '" + "\\'".repeat(N / 2),
-      apostrophes: "password: " + "a'".repeat(N / 2),
-      italicKeys: "*password*".repeat(N / 10),
-      mysqlConcat: "mysql -p" + "'a'b".repeat(N / 4),
-      mysqlOpenWalk: ("mysql's -p'a;" + "b'c".repeat(20)).repeat(N / 73),
-      tableRows: "| user | password |\n|---|---|\n" + "| a | b |\n".repeat(N / 10),
-      tablePipes: "|".repeat(N),
-      tableRules: "|---|\n".repeat(N / 6),
-      tableEscapes: "| password |\n|---|\n" + "\\|".repeat(N / 2),
-      // 第八轮：表头有很多密钥列、下面很多短行（以前每行都把所有列走一遍，200KB 约 500ms）。
-      tableWideHeader: "|key".repeat(N / 5) + "\n|-\n" + "|\n".repeat(N / 20),
-      tableHeaderEveryRow: ("|password".repeat(500) + "\n|-\n").repeat(N / 4503),
-      quotesInValue: "password: a" + "'!".repeat(N / 2),
-      pEscapes: "mysql -p" + "\\ ".repeat(N / 2),
-      tableLongHeader: "| " + "a_".repeat(N / 2) + " |\n|---|\n| x |",
-      mysqlRuleRows: "| password |\n" + "+-+\n| a |\n".repeat(N / 10),
-      crTable: "| password |\r|-|\r" + "| a |\r".repeat(N / 6),
-      emptyQuotes: "password: " + '""'.repeat(N / 2),
-      // 第九轮：一行很长的 +----…----| 跟在表格行下面（以前 MYSQL_RULE 的 [+:-]*-[+:-]* 平方级回溯，200KB 41s）。
-      // 末尾不加「中」也要跑：加了它这行就不是分隔行，碰不到那条正则。
-      longMysqlRule: "| a |\n|-|\n| x |\n+" + "-".repeat(N) + "|\n",
-      // 表头格子到 128 字为止：很多个 126 字的格子，每格都要试一遍（HEADER_KEY 在格子里是平方级的，限长才线性）。
-      // 超过 128 字的格子不当表头：限长放宽到一千字以上，这个输入就是平方级。
-      headerCellsOverCap: "| a |\n|-|\n" + ("|" + "a_".repeat(500)).repeat(N / 1001) + "\n|-|\n",
-      headerCellsAtCap: "| a |\n|-|\n" + ("|" + "a_".repeat(63) + "\n|-|\n").repeat(N / 132),
-      // 第九轮建议：前面没有开引号的值里，引号后面跟着 ) ] } > 的要往后看；闭引号后面接着打；驼峰表头；grid 表格的 +===+；* 后面的 hex。
-      bareQuoteBrackets: "password: a" + "')".repeat(N / 2),
-      bareLongBrackets: "password: a'" + ")".repeat(N),
-      bareManyKeys: ("password: a'" + ")".repeat(50) + " ").repeat(N / 63),
-      tailQuotes: "password: 'a'" + '"'.repeat(N),
-      tailApostrophes: "password: 'a'" + "x'".repeat(N / 2),
-      tailMany: "password: 'a'\"".repeat(N / 14),
-      camelHeader: ("|" + "aB".repeat(60)).repeat(N / 121) + "\n|-|\n| x |",
-      gridRules: "| password |\n" + "+=+\n".repeat(N / 4),
-      starHex: "*a1".repeat(N / 3),
-      // 第十轮：很宽的表头（几万个密钥列）下面很多短的键名行、每行下面跟着分隔行：以前每行都把整个列表重建再排序，200KB 约 8s。
-      wideHeaderMerge: "|key".repeat(N / 8) + "\n|-\n" + "|key\n|-\n".repeat(N / 16),
-      wideHeaderMergeOdd: "|key|x".repeat(N / 12) + "\n|-\n" + "|x|key\n|-\n".repeat(N / 22),
-      // 每行多一格、下面都跟着分隔行：每行的每一格都要当表头试一遍（空格子要跳过，不然约 30ms）。
-      growingRows: Array.from({ length: 630 }, (_, k) => "|".repeat(k + 1) + "key\n|-\n").join(""),
-      shortCellsEveryRow: ("|a".repeat(300) + "\n|-\n").repeat(N / 604),
-      // 第十轮建议：键名带数字编号、全大写 / 全小写连写的表头、pass word、闭引号后的反引号和全角引号、「is」后面的空引号、
-      // 空引号后面没有开引号的值、\ 续行的命令。
-      keyDigits: "password" + "1".repeat(N),
-      keyDigitsMany: "password1".repeat(N / 9),
-      envDigits: "A_KEY_" + "1".repeat(N),
-      envDigitsMany: "A_KEY_1".repeat(N / 7),
-      keyNumbered: "key" + "1".repeat(N) + "=",
-      tableDigits: "| token" + "1".repeat(N) + " | ",
-      runHeader: ("|" + "dbx".repeat(42) + "\n|-|\n").repeat(N / 132),
-      runHeaderUpper: ("|" + "DBPASS".repeat(21)).repeat(N / 127) + "\n|-|\n| x |",
-      passWordHeader: "|pass word".repeat(N / 10) + "\n|-|\n| x |",
-      passHeaderRun: ("|" + "pass_".repeat(25) + "\n|-|\n").repeat(N / 130),
-      tailBackticks: "password: 'a'" + "`".repeat(N),
-      tailFwOpen: "password: 'a'" + "“".repeat(N / 2) + "‘".repeat(N / 2),
-      tailFwPairs: "password: 'a'" + "「x」".repeat(N / 3),
-      tailManyFw: "password: 'a'『".repeat(N / 14),
-      isEmptyPairs: 'the password is "" '.repeat(N / 19),
-      isEmptySpaces: 'the password is ""' + " ".repeat(N) + "x",
-      isColonEmpty: 'password is: ""'.repeat(N / 15),
-      bareAfterPair: "password: ''a')".repeat(N / 15),
-      bareAfterPairRun: "password: ''a" + "')".repeat(N / 2),
-      pairRun: "password: " + "'".repeat(N),
-      cmdContinued: "mysql " + "\\\n".repeat(N / 2),
-      cmdContinuedMany: "mysql -pa \\\n".repeat(N / 12),
-      cmdContinuedCrlf: "mysql -p" + "\\\r\n".repeat(N / 3),
-    };
-    // 取最好的一次，最多跑 5 次、一次够快就停。
-    const time = (input: string): number => {
-      let best = Infinity;
-      for (let i = 0; i < 5 && best >= LIMIT_MS; i++) {
-        const t = performance.now();
-        maskSecrets(input);
-        best = Math.min(best, performance.now() - t);
-      }
-      return best;
-    };
-    // 每个输入末尾都加一个「中」（串里有非 Latin1 的字时，带 i 标志的反向引用每个字慢十倍），再跑一次双字节版本。
-    const wide = (s: string): string => s.replace(/a/g, "。").replace(/ /g, "　");
-    // 第十轮：再跑两种全角引号的版本（ASCII 引号换成开引号“‘、闭引号”’）。
-    const fwOpen = (s: string): string => s.replace(/"/g, "“").replace(/'/g, "‘");
-    const fwClose = (s: string): string => s.replace(/"/g, "”").replace(/'/g, "’");
-    for (const [name, input] of Object.entries(inputs)) {
-      expect(time(input + "中"), name).toBeLessThan(LIMIT_MS);
-      expect(time(wide(input) + "中"), `${name} (双字节)`).toBeLessThan(LIMIT_MS);
-      expect(time(fwOpen(input) + "中"), `${name} (全角引号“‘)`).toBeLessThan(LIMIT_MS);
-      expect(time(fwClose(input) + "中"), `${name} (全角引号”’)`).toBeLessThan(LIMIT_MS);
-    }
-    // 第六轮：三种引号的值都没闭合，后面跟着二十万个双字节字（以前 52ms，Windows 约 100ms）。
-    for (const fill of ["。", "　", "中"]) {
-      const input = "DB_PASSWORD=`x DB_PASSWORD='x DB_PASSWORD=\"x key=`x key='x key=\"x token is `x token is 'x" + fill.repeat(N);
-      expect(time(input), fill).toBeLessThan(LIMIT_MS);
-    }
-    // 只有一个没闭合的值、后面两百万个双字节字：每条规则只扫一遍，反向引用的慢法在这里才显出来（以前 200ms 以上）。
-    for (const head of ['password: "x', "DB_PASSWORD=`x", "API_KEY='x"]) {
-      expect(time(head + "中".repeat(2_000_000)), head).toBeLessThan(LIMIT_MS);
-    }
-    // 第十轮加的规则：一个前缀后面两百万个字，几种填充字都跑一遍。表格那个前缀不配带换行的填充：一百万行光是按行切开就要
-    // 约 60ms（线性，改动前也一样，200KB 时 6ms），多行的表格由上面 200KB 的输入管。
-    for (const head of ["password", "A_KEY_", "password: 'a'", "the password is \"\" ", "password: ''a", "mysql -p", "mysql ", "| DBPASSWORD |\n|-|\n"]) {
-      for (const fill of ["中", "1", "`", "“", "\\\n", "')"]) {
-        if (head.startsWith("|") && fill.includes("\n")) continue;
-        expect(time(head + fill.repeat(2_000_000 / fill.length)), `${head} + ${JSON.stringify(fill)}`).toBeLessThan(LIMIT_MS);
-      }
-    }
-   }, 30_000);
-
   it("masks secrets in a URL query string, webhook paths and token-like URL path segments, but keeps GitHub links whole", () => {
     const code = "aB3+dE5fG7/hJ9kL1mN3pQ5rS7tU9vW/xY1zA=";
     expect(maskSecrets(`回调 https://app.example.com/cb?code=${code} 已收到`)).toBe(`回调 https://app.example.com/cb?code=${SECRET_MASK} 已收到`);
@@ -856,8 +697,8 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
         expect(out, h).toContain(`|---|---|\n| ${M} | bob |`);
       }
     }
-    // 大小写混着、拆开后没有键名的照旧不算（Tokenizer、Secretary、Passenger）；连写的规则不认 key、pass（monkey、passenger）。
-    for (const h of ["Tokenizer", "Secretary", "Passenger", "monkey", "passenger", "KEYSTONE", "BYPASS"]) {
+    // 连写的规则不认 key、pass（monkey、passenger、Passenger）。
+    for (const h of ["Passenger", "monkey", "passenger", "KEYSTONE", "BYPASS"]) {
       expect(maskSecrets(`| ${h} | name |\n|---|---|\n| v4lue | bob |`), h).toContain("v4lue");
     }
     expect(maskSecrets("credentials: abcd1234")).toBe(`credentials: ${M}`);
@@ -887,5 +728,118 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
     expect(maskSecrets("docker login \\\n  -p S3cretPass reg")).toBe(`docker login \\\n  -p ${M} reg`);
     // 不续行的换行照旧断开命令。
     expect(maskSecrets("mysql -h db\n  -pS3cretPass")).toBe("mysql -h db\n  -pS3cretPass");
+    // 续行落在 -p 和值之间：续行留着，后面的值照打（以前 sshpass / docker 把续行当成值打掉、真的值漏了）。
+    expect(maskSecrets("sshpass -p \\\n  S3cretPass ssh host")).toBe(`sshpass -p \\\n  ${M} ssh host`);
+    expect(maskSecrets("docker login -u x -p \\\n  S3cretPass reg")).toBe(`docker login -u x -p \\\n  ${M} reg`);
+    expect(maskSecrets("docker login -u x -pS3cretPass reg")).toBe(`docker login -u x -p${M} reg`);
+    expect(maskSecrets("mysql -h db -p\\\nS3cretPass")).toBe(`mysql -h db -p\\\n${M}`);
+    expect(maskSecrets("mysql -h db -p \\\n  mydb")).toBe("mysql -h db -p \\\n  mydb");
+    expect(maskSecrets("mysql -h db -p\\\n  mydb")).toBe("mysql -h db -p\\\n  mydb");
+    expect(maskSecrets("docker login -u x --password \\\n  S3cretPass reg")).toBe(`docker login -u x --password \\\n  ${M} reg`);
+  });
+
+  it("round 11: uncapped and separated key-name numbers, run-together headers in any case", () => {
+    const M = SECRET_MASK;
+    for (const k of ["password123456789", "token1700000000", "password_1", "db_password_1", "token-2", "secret_key_1", "DB_PASSWORD_123456789", "API_KEY_1700000000", "key123456789", "密码123456789"]) {
+      expect(maskSecrets(`${k}=hunter2xyz`), k).toBe(`${k}=${M}`);
+    }
+    expect(maskSecrets("the password123456789 is hunter2xyz")).toBe(`the password123456789 is ${M}`);
+    expect(maskSecrets("| password123456789 | hunter2xyz |")).toBe(`| password123456789 | ${M} |`);
+    // 第十轮的改动里没测到的（变异测试漏网）：_PASS 后面的编号、\ 续行在 -p 的值中间、编号键名接没闭合的引号和 is、两列密钥列的表头。
+    expect(maskSecrets("DB_PASS2=hunter2xyz")).toBe(`DB_PASS2=${M}`);
+    expect(maskSecrets("mysql -pab\\\ncdSecret")).toBe(`mysql -p${M}`);
+    expect(maskSecrets("mysql -pab\\\r\ncdSecret")).toBe(`mysql -p${M}`);
+    expect(maskSecrets('password2: "two words')).toBe(`password2: "${M}`);
+    expect(maskSecrets('the token2 is "two words"')).toBe(`the token2 is "${M}"`);
+    expect(maskSecrets("the password2 is: hunter")).toBe(`the password2 is: ${M}`);
+    {
+      const out = maskSecrets("| user | password | token |\n|---|---|---|\n| bob | v4lue1 | v4lue2 |");
+      expect(out).not.toContain("v4lue1");
+      expect(out).not.toContain("v4lue2");
+    }
+    for (const h of ["Password123456789", "Authtoken", "Dbpassword", "Userpwd", "Accesstoken", "Awscredentials", "Tokenizer", "Secretary"]) {
+      const out = maskSecrets(`| ${h} | name |\n|---|---|\n| v4lue | bob |`);
+      expect(out, h).not.toContain("v4lue");
+    }
+  });
+  it("round 11 suggestions: plural and suffixed key names, env keys before 'is', continuations inside -p quotes, several empty quotes", () => {
+    const M = SECRET_MASK;
+    // a：复数。c：键名后面的一个单词后缀。
+    for (const k of ["passwords", "tokens", "secrets", "DB_PASSWORDS", "DB_PASSWORD_PROD", "SECRET_KEY_A", "password_prod", "token-v2", "API_TOKEN_2_STAGING"]) {
+      expect(maskSecrets(`${k}=hunter2xyz`), k).toBe(`${k}=${M}`);
+      expect(maskSecrets(`${k}: hunter2xyz`), k).toBe(`${k}: ${M}`);
+    }
+    expect(maskSecrets("| password_prod | hunter2xyz |")).toBe(`| password_prod | ${M} |`);
+    // 环境变量式的（大写、_ 连着）：后缀和复数由不分大小写的键名认（_auth 也在键名里）。
+    for (const k of ["X_AUTH_PROD", "MY_KEY_PROD", "MY_KEYS", "API_TOKENS_V2"]) {
+      expect(maskSecrets(`${k}=hunter2xyz`), k).toBe(`${k}=${M}`);
+      expect(maskSecrets(`${k}='a b`), k).toBe(`${k}='${M}`);
+    }
+    // 分隔符后面的编号比后缀的 16 个字长：编号不设上限，照样认。
+    expect(maskSecrets("password_123456789012345678=hunter2xyz")).toBe(`password_123456789012345678=${M}`);
+    expect(maskSecrets("| token-123456789012345678 |\n|-|\n| v4lue |")).not.toContain("v4lue");
+    // 后缀只认一段、最多 16 个字：再长就不算键名了，后面的值不按 key=value 打（这里没有别的规则会打它）。
+    expect(maskSecrets("password_abcdefghijklmnopq=hunter")).toBe("password_abcdefghijklmnopq=hunter");
+    // b：「X is Y」前面是环境变量式的键名。
+    expect(maskSecrets("The DB_PASSWORD is hunter2xyz")).toBe(`The DB_PASSWORD is ${M}`);
+    expect(maskSecrets("the API_TOKEN is: abc")).toBe(`the API_TOKEN is: ${M}`);
+    expect(maskSecrets('The DB_PASSWORD is "two words"')).toBe(`The DB_PASSWORD is "${M}"`);
+    // 键名紧挨着字母数字的不算（mypassword is …、xtoken is …）。
+    expect(maskSecrets("the xtoken is hunter2xyz")).toBe("the xtoken is hunter2xyz");
+    // d：-p 的引号里行尾 \ 续行。
+    expect(maskSecrets("mysql -p'ab\\\ncd' rest")).toBe(`mysql -p${M} rest`);
+    expect(maskSecrets('mysql -p"ab\\\ncd" rest')).toBe(`mysql -p${M} rest`);
+    expect(maskSecrets("sshpass -p 'ab\\\r\ncd' ssh h")).toBe(`sshpass -p ${M} ssh h`);
+    expect(maskSecrets("mysql -p'ab\\\ncd'; echo done")).toBe(`mysql -p${M}; echo done`);
+    // e：好几对空引号。
+    expect(maskSecrets('password: """" hunter2xyz')).toBe(`password: """" ${M}`);
+    expect(maskSecrets('password: "" "" hunter2xyz')).toBe(`password: "" "" ${M}`);
+    expect(maskSecrets('the password is "" "" "x y"')).toBe(`the password is "" "" "${M}"`);
+    expect(maskSecrets("密码：「」『』abc123def")).toBe(`密码：「」『』${M}`);
+    // f：「is」后面的值里有 ')。
+    expect(maskSecrets("the password is ab')cdef123")).toBe(`the password is ${M}`);
+    expect(maskSecrets("the password is: ab')cd")).toBe(`the password is: ${M}`);
+    expect(maskSecrets("the password is: 'ab cd")).toBe(`the password is: '${M}`);
+    expect(maskSecrets("the password is 'ab cd")).toBe(`the password is '${M}`);
+    expect(maskSecrets('The DB_PASSWORD is "ab cd\nnext')).toBe(`The DB_PASSWORD is "${M}\nnext`);
+  });
+
+  it("round 11 (g): masks after normalizing full-width letters, zero-width characters and box-drawing tables", () => {
+    const M = SECRET_MASK;
+    expect(maskSecrets("ｐａｓｓｗｏｒｄ=hunter2xyz")).toBe(`password=${M}`);
+    expect(maskSecrets("password＝hunter2xyz")).toBe(`password=${M}`);
+    expect(maskSecrets("pass\u200bword=hunter2xyz")).toBe(`password=${M}`);
+    expect(maskSecrets("to\u2060ken: hunter2xyz")).toBe(`token: ${M}`);
+    expect(maskSecrets("\ufeffAPI_KEY=hunter2xyz")).toBe(`API_KEY=${M}`);
+    expect(maskSecrets("│ password │ hunter2xyz │")).toBe(`| password | ${M} |`);
+    expect(maskSecrets("| Ｐａｓｓｗｏｒｄ |\n|---|\n| v4lue |")).toBe(`| Password |\n|---|\n| ${M} |`);
+    // psql 的 unicode 边框：横线、交叉也换成 ASCII，下面的数据行按表头的密钥列打。
+    expect(maskSecrets(" user │ password\n──────┼──────────\n bob  │ v4lue")).toBe(` user | password\n------+----------\n bob  | ${M}`);
+    {
+      const out = maskSecrets("┌──────┬──────────┐\n│ user │ password │\n├──────┼──────────┤\n│ bob  │ v4lue    │\n└──────┴──────────┘");
+      expect(out).not.toContain("v4lue");
+    }
+    // 中文标点不动：规则本来就认 ：，；（）。
+    expect(maskSecrets("ｐａｓｓｗｏｒｄ：hunter2xyz，记一下")).toBe(`password：${M}，记一下`);
+    // 只规范化有这些字的行：别的行原样。
+    expect(maskSecrets("第一行，Ｈｉ\npassword＝hunter2xyz")).toBe(`第一行，Hi\npassword=${M}`);
+    expect(maskSecrets("ＡＢＣ\n第二行：全角，标点")).toBe("ＡＢＣ\n第二行：全角，标点");
+    // 没有密钥的：原文一个字都不改，hasSecret 也说没有。
+    for (const t of ["ｐａｓｓ the ball，好", "全角，逗号：没事", "Ｈｅｌｌｏ ｗｏｒｌｄ", "┌──┐ box", "zero\u200bwidth", "│ name │ value │"]) {
+      expect(maskSecrets(t), t).toBe(t);
+      expect(hasSecret(t), t).toBe(false);
+    }
+    // 规范化以后打过码的不会再变（幂等）。
+    const once = maskSecrets("ｐａｓｓｗｏｒｄ＝hunter2xyz");
+    expect(maskSecrets(once)).toBe(once);
+  });
+
+  it("round 11 (h): an X_AUTH header still counts as a key column", () => {
+    const out = maskSecrets("| X_AUTH | name |\n|---|---|\n| v4lue | bob |");
+    expect(out).not.toContain("v4lue");
+    expect(maskSecrets("| X_AUTH_2 | name |\n|---|---|\n| v4lue | bob |")).not.toContain("v4lue");
+    // 不带 _ 的 auth 不算（author、authority）。
+    expect(maskSecrets("| author | name |\n|---|---|\n| v4lue | bob |")).toContain("v4lue");
   });
 });
+

@@ -165,6 +165,15 @@ describe("approval notice (UI redesign layer 1)", () => {
   });
 });
 
+describe("behalf_answered notice (BTL-269 A2)", () => {
+  it("shows who answered what, and offers correct, open and dismiss", () => {
+    const n: NowNotice = { kind: "behalf_answered", askId: 7, question: "用哪个库？", answer: "pnpm", by: "epic 总控", at: 1, target: { page: "ticket", key: "BTL-1", sessionId: "s" }, title: "登录" };
+    for (const L of [STRINGS.zh, STRINGS.en]) {
+      expect(noticeText(n, L, 0)).toEqual({ text: L.noticeBehalf("epic 总控", "用哪个库？", "pnpm", "登录"), actions: ["correct", "open", "dismiss"] });
+    }
+  });
+});
+
 describe("info flow notices (BTL-272)", () => {
   it("asks before syncing and offers undo after, in both languages", () => {
     const p = { kind: "flow_proposal", actionId: 3, label: "关掉 BTL-12", source: "epic 总控", text: "BTL-12 不做了", at: 1 } as const;

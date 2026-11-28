@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { LessonAction } from "../../shared/lessons";
 import { backgroundActionArg, costSetArg, costSubjectArg } from "./validate";
 import { convListOptsArg, convQueryArg, convRootArg } from "./validate";
-import { devMessageArg, forkIdArg, forkQuestionArg, reportsPageArg } from "./validate";
+import { devMessageArg, forkIdArg, forkQuestionArg, messageIdArg, reportsPageArg } from "./validate";
 import { TASK_LIMIT } from "../../shared/control";
 import { FORK_QUESTION_MAX } from "../../shared/fork";
 import { CONV_LIST_MAX, CONV_QUERY_MAX } from "../../shared/conversation";
@@ -610,5 +610,18 @@ describe("info flow args (BTL-272)", () => {
     for (const bad of [0, -2, 1.5, "7", null]) expect(() => flowIdArg(bad)).toThrow();
     for (const ok of ["apply", "reject", "undo", "dismiss"]) expect(flowActArg(ok)).toBe(ok);
     for (const bad of ["delete", "", 1, null]) expect(() => flowActArg(bad)).toThrow();
+  });
+});
+
+describe("messageIdArg (BTL-269 mailbox message ids)", () => {
+  it("accepts a UUID and other safe ids", () => {
+    expect(messageIdArg("0b6f3c1e-8f2a-4d6b-9c1e-2f3a4b5c6d7e")).toBe("0b6f3c1e-8f2a-4d6b-9c1e-2f3a4b5c6d7e");
+    expect(messageIdArg("a")).toBe("a");
+    expect(messageIdArg("x".repeat(100))).toBe("x".repeat(100));
+  });
+  it("rejects anything else: not a string, empty, too long, unsafe characters", () => {
+    for (const v of [undefined, null, 1, {}, ["a"], "", "x".repeat(101), "a b", "a/b", "../x", "a;b", "a\nb", "ａ"]) {
+      expect(() => messageIdArg(v), JSON.stringify(v)).toThrow("invalid message id");
+    }
   });
 });

@@ -695,7 +695,10 @@ export class InfoflowService {
     const change = parseChange(a.change);
     const left = parseLeftovers(a.leftovers);
     if (a.state !== "partial" || !change || change.op !== "close_ticket" || !left || this.acting.has(a.id)) return false;
-    if (!retryRequest(left)) return false;
+    const again = retryRequest(left);
+    if (!again) return false;
+    // 别人先关的那一种重试成了：按这次实际重试了什么说（只重试了 session 的不说「关了 PR」）。
+    const how = again.prUrls.length > 0 && again.sessionIds.length > 0 ? "both" : again.prUrls.length > 0 ? "prs" : "sessions";
     this.acting.add(a.id);
     let ok = false;
     try {
@@ -703,7 +706,7 @@ export class InfoflowService {
       // 别人先关的那一种：重试后仍然不是这里关的。剩下的还标着，做完了记成本来就是这样（没有撤销），不变成「已同步」。
       ok = this.record(a.id, ["partial"], !left.closedMeanwhile ? step
         : step.kind === "partial" ? { kind: "partial", leftovers: { ...step.leftovers, closedMeanwhile: true } }
-        : step.kind === "done" ? { kind: "closed_meanwhile", how: "prs" }
+        : step.kind === "done" ? { kind: "closed_meanwhile", how }
         : step);
     } catch (e) {
       d.log(`infoflow: retry close for action ${a.id} failed`, e);
