@@ -446,14 +446,17 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(repo.get(first.requestId)?.status).toBe("delivered");
   });
 
-  it("does not reopen a coordinator the user ended; the message waits for the user (BTL-256)", async () => {
-    const { call, opened, repo, sessions } = setup();
+  it("reopens a coordinator the user ended when the global control sends to it afterwards, and the message goes in (BTL-279, was BTL-256)", async () => {
+    const { call, opened, repo, sessions, submitted } = setup();
     sessions.setUserEnded("dc", 123);
-    const r = value<{ requestId: string; wake: string; note: string }>(await call({ op: "send_message", epic: "docs", text: "看一下" }));
-    expect(r.wake).toBe("ended_by_user");
-    expect(r.note).toContain("用户自己结束");
-    expect(opened).toEqual([]);
-    expect(repo.get(r.requestId)?.status).toBe("queued");
+    const r = value<{ requestId: string; sessionId: string; opened: string; wake?: string }>(await call({ op: "send_message", epic: "docs", text: "看一下" }));
+    expect(r.wake).toBeUndefined();
+    expect(r).toMatchObject({ sessionId: "dc", opened: "resumed" });
+    expect(opened).toHaveLength(1);
+    await tick();
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0][1]).toContain("看一下");
+    expect(repo.get(r.requestId)?.status).toBe("delivered");
   });
 
   it("says waiting_memory when memory is too short to reopen a coordinator (BTL-256)", async () => {

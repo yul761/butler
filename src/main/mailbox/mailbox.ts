@@ -30,6 +30,18 @@ export const AGE_NOTE_MS = 10 * 60_000;
 export const STUCK_RECEIPT_MS = 2 * 60_000;
 /** 只是这一轮还在干活（turn）的等更久才回执：跑几分钟的工具很正常，不为一句「还没送到」叫醒总控。 */
 export const STUCK_TURN_RECEIPT_MS = 10 * 60_000;
+/**
+ * 刚停下、还在判断是不是在问用户（judging）最多压总控的消息这么久（BTL-279）：判断一般几秒到一分钟，排队排满了、模型一直没回来时
+ * 不能一直压着，过了就送进去，注明不是用户的回答。
+ */
+export const JUDGING_HOLD_MS = 90_000;
+/** 跟着角色走、不跟着对话走的消息（BTL-279）：收件的总控关了、另一个接替了它，就改投给接替的那个。 */
+const FOLLOWS_ROLE = new Set<string>(["reply", "report"]);
+/**
+ * 「在确认」（unsure：记录说在干活、屏幕上画着空输入框、没有转圈和确认框，只是还没安静够久）挡了这么久就送进去（BTL-279）：
+ * 判断不准时倾向送达。安静够 45 秒的早就放行了，挡这么久的是输出一直有点动静（状态栏、后台日志）的。
+ */
+export const UNSURE_DELIVER_MS = 3 * 60_000;
 /** send_message 最多等这么久看消息送没送到，再如实返回（MCP 请求 60 秒超时，留足余量）。 */
 export const SETTLE_MS = 15_000;
 /** 用户在打字、有草稿：这时不发「还没送到」的回执，等用户。 */
@@ -112,13 +124,19 @@ export interface MailboxDeps {
   openTerms(): string[];
   /** 直接输入前的 guard。answer：这一批里有 ask_user 的回答、换新以后的「接着做」或用户自己的话，不看「需要你」（它等的就是这些）。 */
   /** force：用户点了「现在送进去」（DeliveryGuard.check 的 force）。 */
-  check(sessionId: string, o: { answer: boolean; force?: boolean }): DeliveryCheck;
-  recheckAfter(sessionId: string, passed: { termId: string }, o: { answer: boolean; force?: boolean }): () => boolean;
+  /** lenient：排着的已经「在确认」（unsure）挡了 UNSURE_DELIVER_MS（DeliveryGuard.check 的 lenient，BTL-279）。 */
+  check(sessionId: string, o: { answer: boolean; force?: boolean; lenient?: boolean }): DeliveryCheck;
+  recheckAfter(sessionId: string, passed: { termId: string }, o: { answer: boolean; force?: boolean; lenient?: boolean }): () => boolean;
   /**
    * 这条消息是收件人自己的总控发的指示（epic 总控发给自己 epic 里的 session、全局总控发给 epic 总控）：「需要你」时也送进去，
    * 注明是总控在回答（BTL-269 A）。没接时都不算。
    */
   fromController?(m: SessionMessage, headId: string): boolean;
+  /**
+   * 这条消息是收件人管的 session 发来的（BTL-279：epic 里的 session 给 epic 总控的汇报、epic 总控给全局总控的）：和 fromController
+   * 同一个判断（isControllerOf），方向反过来。它在等用户回答时这些也送进去，注明不是用户的回答。没接时都不算。
+   */
+  fromSubordinate?(m: SessionMessage, headId: string): boolean;
   /** 这个 session（head）休眠着（终端是 Shipherd 为了省内存关的）。没接时都算关着。 */
   hibernated?(headId: string): boolean;
   deliver(termId: string, text: string, recheck: () => boolean): Promise<DeliverResult>;
@@ -151,6 +169,11 @@ export interface MailboxDeps {
    * 约定广播不为它叫醒谁。
    */
   wake?(headId: string): void;
+  /**
+   * 这个关着的 head 的角色现在由另一个开着的 session 担着（新开的全局总控、同一个 epic 新开的总控）；没有为 null（BTL-279）。
+   * 发给它的回复和汇报改投给那个：不然用户换了一个总控对话，回复就一直等着旧的那个。
+   */
+  successor?(headId: string): string | null;
   /**
    * 正在换新的 session（head）：不往磁盘上投影（BTL-248）。换新的 /handoff 那一轮里 hook 送进去的消息会被紧接着的 /clear 清掉；
    * 直接输入本来就被 guard 的 refreshing 挡着。换新结束后调用方 syncTerm 再 flush。
@@ -243,6 +266,18 @@ export class Mailbox {
   /** 送达时调：按 ref 的前缀分发（汇报标成 answered、预审写 deliveredAt 之类）。 */
   on(prefix: string, fn: (m: SessionMessage) => void): void {
     this.handlers.set(prefix, fn);
+  }
+
+  private successorOf(head: string): string | null {
+    try {
+      const next = this.d.successor?.(head) ?? null;
+      // 只交给开着的：接替的也关着就照样排在原来的信箱里，免得在两个关着的之间来回改投。
+      const to = next === null ? null : this.headOf(next);
+      return to === null || to === head || this.d.termOf(to) === null ? null : to;
+    } catch (e) {
+      this.d.log(`mailbox: successor of ${head} failed`, e);
+      return null;
+    }
   }
 
   private headOf(id: string): string {
@@ -577,7 +612,8 @@ export class Mailbox {
    * 用户在对话 tab 里说的话（kind user）不和 Shipherd 的消息合在一起：开头是 user 的这一批只要接着的 user，原样输入，
    * 不加信箱开头，对话里照旧是「你：」；开头不是 user 的这一批碰到 user 就停（BTL-248）。
    */
-  private batch(list: SessionMessage[], head: string, waiting: AwaitingUser | null = null): { text: string; ids: SessionMessage[] } {
+  /** pastHold：它在等用户（或者还在判断）时送进去的（BTL-279）：总控的提示之外的每一条注明不是用户的回答。 */
+  private batch(list: SessionMessage[], head: string, waiting: AwaitingUser | null = null, pastHold = false): { text: string; ids: SessionMessage[] } {
     // 换新以后的「接着做」单独原样输入：它是新上下文的第一句话。
     if (list[0]?.kind === "refresh") return { text: sanitizeTask(list[0].body), ids: [list[0]] };
     const user = list[0]?.kind === "user";
@@ -586,7 +622,7 @@ export class Mailbox {
     let size = 0;
     for (const m of list) {
       if ((m.kind === "user") !== user) break;
-      const part = user ? m.body : this.withAnswerNote(m, head, waiting);
+      const part = user ? m.body : this.withAnswerNote(m, head, waiting, pastHold);
       if (ids.length > 0 && size + part.length > INPUT_LIMIT) break;
       parts.push(part);
       ids.push(m);
@@ -601,9 +637,9 @@ export class Mailbox {
    * 它在等用户回答时送进去的总控指示（BTL-269 A2），每一条前面注明：明确替用户回答了（answeredBy）的说是回答；
    * 别的说不是回答、问题还在等用户。不在等用户、不是自己的总控发的不加。
    */
-  private withAnswerNote(m: SessionMessage, head: string, waiting: AwaitingUser | null): string {
+  private withAnswerNote(m: SessionMessage, head: string, waiting: AwaitingUser | null, pastHold = false): string {
     const text = this.render(m);
-    if (!waiting || !this.fromController(m, head)) return text;
+    if (!waiting || !this.fromController(m, head)) return pastHold ? `${M().mailboxNotUserAnswer}\n${text}` : text;
     const a = answeredBy(m, waiting);
     return `${a ? M().mailboxAnswersQuestion(a.question) : M().mailboxNotAnAnswer}\n${text}`;
   }
@@ -667,7 +703,17 @@ export class Mailbox {
     const head = this.headOf(sessionId);
     const term = this.d.termOf(head);
     if (term === null) {
-      const queued = this.queuedFor(head);
+      let queued = this.queuedFor(head);
+      const next = queued.some((m) => FOLLOWS_ROLE.has(m.kind)) ? this.successorOf(head) : null;
+      if (next !== null) {
+        const moved = queued.filter((m) => FOLLOWS_ROLE.has(m.kind));
+        this.d.repo.readdress(moved.map((m) => m.id), next);
+        this.d.log(`mailbox: ${head} is closed and ${next} took over its role; readdressing ${moved.length} replies/reports`);
+        queued = queued.filter((m) => !FOLLOWS_ROLE.has(m.kind));
+        this.d.notify();
+        await this.flush(next);
+      }
+      if (queued.length === 0) return;
       this.block(head, queued, this.d.hibernated?.(head) ? "hibernated" : "closed");
       if (this.d.wake && queued.some((m) => m.kind !== "convention")) this.d.wake(head);
       return;
@@ -681,31 +727,57 @@ export class Mailbox {
     }
     // ask_user 的回答、换新以后的「接着做」不看「需要你」：session 等的就是它们。
     let answer = queued.some((m) => m.kind === "answer" || m.kind === "refresh");
+    const lenient = this.blockedFor(queued, "unsure") >= UNSURE_DELIVER_MS;
     let list = queued;
-    let gate = this.d.check(head, { answer });
+    let gate = this.d.check(head, { answer, lenient });
     let waiting: AwaitingUser | null = null;
     /** 没进这一批的等什么：needs_you，或者还在判断（judging）。 */
     let held: MailboxBlockReason | null = null;
     if (!gate.ok && gate.block === "needs_you") {
       waiting = this.awaiting(head);
       // 只是刚停下、还没判断完（BTL-269 A1）：不知道它是不是在问用户，总控的也不送、不当作在代答，判断完下一次 tick 再看。
+      // 判断了 JUDGING_HOLD_MS 还没结论（BTL-279）：不再等，总控的照样送，注明不是用户的回答（没有当作代答的提问）。
       held = waiting === null ? "judging" : "needs_you";
+      const judgedLong = waiting === null && this.blockedFor(queued, "judging") >= JUDGING_HOLD_MS;
       // 用户自己在对话 tab 里说的话不看这个：它就是用户在回答。
-      // 判断完、确实在等用户时，自己的总控发来的指示也送（BTL-269 A2），每一条注明是不是在替用户回答。Shipherd 的别的消息接着等。
-      list = queued.filter((m) => m.kind === "user" || (waiting !== null && this.fromController(m, head)));
+      // 判断完、确实在等用户时，自己的总控发来的指示也送（BTL-269 A2），每一条注明是不是在替用户回答。
+      // 给总控的回复、它管的 session 的汇报也送（BTL-279：总控在等用户时一直收不到汇报），注明不是用户的回答。Shipherd 的别的消息接着等。
+      list = queued.filter((m) => m.kind === "user" || ((waiting !== null || judgedLong) && (this.fromController(m, head) || this.forController(m, head))));
       if (list.length === 0) {
         this.block(head, queued, held);
         return;
       }
       answer = true;
-      gate = this.d.check(head, { answer });
+      gate = this.d.check(head, { answer, lenient });
     }
     if (!gate.ok) {
       this.block(head, queued, gate.block === "busy" ? (gate.busy ?? "turn") : gate.block);
       return;
     }
     if (held) this.block(head, queued.filter((m) => !list.includes(m)), held);
-    await this.input(head, gate.termId, list, this.d.recheckAfter(head, gate, { answer }), undefined, undefined, waiting);
+    if (lenient) this.d.log(`mailbox: ${head} looked stopped for ${Math.round(this.blockedFor(queued, "unsure") / 1000)} s without the evidence settling; typing the messages in anyway`);
+    await this.input(head, gate.termId, list, this.d.recheckAfter(head, gate, { answer, lenient }), undefined, undefined, waiting, held !== null);
+  }
+
+  /** 这几条里最早从什么时候起一直因为 reason 挡着，到现在多久；没有的为 0。 */
+  private blockedFor(list: SessionMessage[], reason: MailboxBlockReason): number {
+    const since = list.flatMap((m) => (m.blockedReason === reason && m.blockedSince !== null ? [m.blockedSince] : []));
+    return since.length === 0 ? 0 : this.d.now() - Math.min(...since);
+  }
+
+  /**
+   * 给它的回复、它管的 session 发来的汇报（BTL-279）：它在等用户时也该看到。回复（reply）都是回它自己发出去的消息的
+   * （对方这一轮的最后一段话、Shipherd 的「还没送到」「叫不醒」回执），谁发的都算；汇报要是它管的 session 发的。
+   */
+  private forController(m: SessionMessage, head: string): boolean {
+    if (m.kind === "reply") return true;
+    if (m.kind !== "report" || m.fromSession === null) return false;
+    try {
+      return this.d.fromSubordinate?.(m, head) === true;
+    } catch (e) {
+      this.d.log(`mailbox: fromSubordinate for ${m.id} failed`, e);
+      return false;
+    }
   }
 
   private fromController(m: SessionMessage, head: string): boolean {
@@ -761,7 +833,7 @@ export class Mailbox {
 
   private async input(
     head: string, term: string, queued: SessionMessage[], recheck: () => boolean, forced?: string,
-    submit?: (termId: string, text: string) => Promise<DeliverResult>, waiting: AwaitingUser | null = null,
+    submit?: (termId: string, text: string) => Promise<DeliverResult>, waiting: AwaitingUser | null = null, pastHold = false,
   ): Promise<boolean> {
     this.inputting.add(term);
     const sent = new Set<string>();
@@ -775,7 +847,7 @@ export class Mailbox {
       for (const m of claimed.mine) this.inFlight.add(m.id);
       // 叫停的那一条排在最前，一定在这一批里。
       const list = forced ? [...claimed.mine.filter((m) => m.id === forced), ...claimed.mine.filter((m) => m.id !== forced)] : claimed.mine;
-      const { text, ids } = this.batch(list, head, waiting);
+      const { text, ids } = this.batch(list, head, waiting, pastHold);
       // 这一批里注明了「替用户回答」的那些提问（PR #108 第三轮 review 建议 2）：等输入框的时候（最多 1 分钟）用户可能自己在卡片上
       // 答了。贴进去之前再看一次，有一个已经不在等了就这次不送，留着排队，下一次按新的状态重新写注明。
       const noteAsks = ids.flatMap((m) => (this.fromController(m, head) ? (answeredBy(m, waiting)?.asks ?? []) : []));
@@ -892,6 +964,9 @@ export class Mailbox {
 
   // ---- 定时 ----
 
+  /** tick 正在 flush 的 head（BTL-279）。 */
+  private readonly ticking = new Set<string>();
+
   /** 每个调度 tick：清扫所有投影、删掉关了的终端的投影、给停着的直接输入、清理旧消息。永不 reject。 */
   async tick(): Promise<void> {
     try {
@@ -906,8 +981,17 @@ export class Mailbox {
         this.prunedAt = now;
         if (this.d.repo.prune(now - MESSAGE_KEEP_MS) > 0) this.d.notify();
       }
-      const heads = new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)));
-      for (const h of heads) await this.flush(h);
+      // 各送各的（BTL-279）：一个 session 的输入框一直没就绪（deliver 最多等 1 分钟）不能拖住别的 session。
+      // 上一次 tick 还在给它送的这次跳过：不重复记一次「Shipherd 正在往里送」。
+      const heads = [...new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)))].filter((h) => !this.ticking.has(h));
+      await Promise.all(heads.map(async (h) => {
+        this.ticking.add(h);
+        try {
+          await this.flush(h);
+        } finally {
+          this.ticking.delete(h);
+        }
+      }));
       this.stuckReceipts();
     } catch (e) {
       this.d.log("mailbox: tick failed", e);

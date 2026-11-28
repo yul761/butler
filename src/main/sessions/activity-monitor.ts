@@ -209,6 +209,9 @@ interface Tracked {
   fileSizes: Map<string, number>;
   outputText: string;
   lastOutputAt: number | null;
+  /** 这一轮自己的输出（transcript、前台命令、子 agent）的大小，和最后一次变长的时间：不算后台任务（BTL-279）。 */
+  turnSize: number;
+  turnOutputAt: number | null;
   eligible: boolean;
   lastSampleAt: number;
   childCpuMs: number | null;
@@ -385,6 +388,14 @@ export class ActivityMonitor {
   }
 
   /** 最后一条 assistant 文字回复的全文和它的 message.id（“需要你”的判断用，调用方自己截）；没有回复或者回复没有 id 时为 null。 */
+  /**
+   * 这一轮自己的输出（transcript、前台命令、子 agent 的 transcript）最后一次变长的时间；后台任务的输出不算（BTL-279：
+   * 空闲证据拿它判断「transcript 安静」，dev server 一直在写日志时不能永远当它在动）。没在跟踪、还没读到为 null。
+   */
+  turnOutputAt(sessionId: string): number | null {
+    return this.tracked.get(sessionId)?.turnOutputAt ?? null;
+  }
+
   lastReplyOf(sessionId: string): { id: string; text: string; at: number | null } | null {
     const t = this.tracked.get(sessionId);
     return t?.lastReply && t.lastReplyId ? { id: t.lastReplyId, text: t.lastReply, at: t.lastReplyAt } : null;
@@ -457,6 +468,8 @@ export class ActivityMonitor {
     if (hookless !== null && !full.turnOpen && t.promptAt === null && !this.stopped) this.d.onTurnEnd?.(head.id, hookless);
     const output = await this.readOutput(t, state);
     const grew = size !== t.transcriptSize || output.size !== t.outputSize;
+    if (size !== t.transcriptSize || output.turnSize !== t.turnSize) t.turnOutputAt = now;
+    t.turnSize = output.turnSize;
     t.transcriptSize = size;
     t.outputSize = output.size;
     t.outputText = output.text;
@@ -540,7 +553,7 @@ export class ActivityMonitor {
 
   private track(id: string, termId: string): Tracked {
     const t: Tracked = {
-      id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null,
+      id, termId, cwd: "", scope: null, file: null, tail: null, transcriptSize: 0, outputSize: 0, fileSizes: new Map(), outputText: "", lastOutputAt: null, turnSize: 0, turnOutputAt: null,
       eligible: false, lastSampleAt: Number.NEGATIVE_INFINITY, childCpuMs: null, childCpuQuiet: null, activity: null, lastReply: null, lastReplyId: null, lastReplyAt: null,
       shellKey: "", shellCommands: [], shellAlive: null, shellCheckedAt: Number.NEGATIVE_INFINITY,
       watch: null, recent: [], eventsSince: this.d.now() - EVENT_SLACK_MS, restarts: 0, limitReportedAt: null, promptAt: null, promptSize: 0, turnStartAt: null, hooklessEndAt: null,
@@ -615,7 +628,7 @@ export class ActivityMonitor {
    * 子 agent 在跑时再算上它的 transcript：只读的子 agent 在主 transcript、命令输出和子进程 CPU 上都看不出动静。
    * 这部分只算大小，不显示。
    */
-  private async readOutput(t: Tracked, s: TranscriptState): Promise<{ size: number; lines: string[]; text: string }> {
+  private async readOutput(t: Tracked, s: TranscriptState): Promise<{ size: number; turnSize: number; lines: string[]; text: string }> {
     const dir = t.file ? (this.d.tasksDir ?? tasksDirFor)(t.file, t.id) : null;
     const files = sortedBackground(s).flatMap((task) => task.outputFile ?? (dir ? [join(dir, `${task.taskId}.output`)] : []));
     const tool = currentTool(s);
@@ -633,7 +646,10 @@ export class ActivityMonitor {
     if (unread) for (const [f, n] of t.fileSizes) if (!sizes.has(f)) sizes.set(f, n);
     t.fileSizes = sizes;
     const size = [...sizes.values()].reduce((sum, n) => sum + n, 0);
-    return { size, lines: tail?.lines ?? [], text: tail ? utf8Tail(tail.text, JUDGE_OUTPUT_BYTES) : "" };
+    // 后台任务的输出文件不算这一轮的（dev server、watcher 一直在写，轮次早结束了）。
+    const background = new Set(files);
+    const turnSize = [...sizes].reduce((sum, [f, n]) => (background.has(f) ? sum : sum + n), 0);
+    return { size, turnSize, lines: tail?.lines ?? [], text: tail ? utf8Tail(tail.text, JUDGE_OUTPUT_BYTES) : "" };
   }
 
   /** 卡住检测采样：平时每 3 分钟一次；已经卡住时一有动静马上采，红点不用等到下一次检查才消失。 */

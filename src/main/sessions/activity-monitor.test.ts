@@ -413,6 +413,29 @@ describe("ActivityMonitor activity", () => {
     expect(h.monitor.get("s1")!.lastOutputAt).toBeGreaterThan(first!);
   });
 
+  it("turnOutputAt moves with the transcript and the foreground command, not with a background task's output (BTL-279)", async () => {
+    const h = harness();
+    const out = join(h.dir, "bg.output");
+    writeFileSync(out, "dev server up\n");
+    h.openSession("s1");
+    expect(h.monitor.turnOutputAt("s1")).toBeNull();
+    h.transcript("s1", toolUse("t1", "Bash", { command: "pnpm dev", run_in_background: true }), backgroundStarted("t1", "b1", out), endTurn());
+    await h.beat();
+    const first = h.monitor.turnOutputAt("s1");
+    expect(first).not.toBeNull();
+    // 这一轮结束了，后台的 dev server 还在不停地写：活动的 lastOutputAt 跟着动（卡住检测要看），turnOutputAt 不动。
+    // 不然空闲证据永远等不到「transcript 安静」，消息一直送不进去。
+    await new Promise((r) => setTimeout(r, 5));
+    appendFileSync(out, "GET / 200\n");
+    await h.beat();
+    expect(h.monitor.get("s1")!.lastOutputAt).toBeGreaterThan(first!);
+    expect(h.monitor.turnOutputAt("s1")).toBe(first);
+    await new Promise((r) => setTimeout(r, 5));
+    h.transcript("s1", toolResult("s1-t"));
+    await h.beat();
+    expect(h.monitor.turnOutputAt("s1")).toBeGreaterThan(first!);
+  });
+
   it("notifies only when the content changed", async () => {
     const h = harness();
     h.openSession("s1");

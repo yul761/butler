@@ -40,10 +40,11 @@ export interface ResumableContext {
  * 能不能自动恢复：Shipherd 开的、属于一个 epic 或 ticket 的、总控管的 session。ticket 的 session 要是总控开的（用户自己点开的不算），
  * epic 级的（epic 总控、修复 session）都算。Shipherd 总控、复盘分析 session、隐藏了的、被替换的、ticket 或 epic 归档了的不算。
  * 用户点 × 结束的另外看（userEndedAt）。
+ * insisted（BTL-279「关了的就打开」）：它自己的总控发来的指示在等着，用户自己点开的 ticket session 也恢复；别的照样不算。
  */
-export function resumable(h: Session, ctx: ResumableContext): boolean {
+export function resumable(h: Session, ctx: ResumableContext, insisted = false): boolean {
   if (h.origin !== "shipherd" || h.shipherd || h.lessonRunId !== null || h.dismissed || h.replacedBy !== null) return false;
-  if (h.ticketKey !== null) return h.spawnedBy !== null && !ctx.ticketArchived(h.ticketKey);
+  if (h.ticketKey !== null) return (h.spawnedBy !== null || insisted) && !ctx.ticketArchived(h.ticketKey);
   return h.featureId !== null && !ctx.epicArchived(h.featureId);
 }
 
@@ -58,7 +59,12 @@ export interface ResumerDeps {
   /** 这条链现在开着终端。 */
   running(headId: string): boolean;
   /** 见 resumable（index.ts 带上 ticket、epic 的归档状态）。 */
-  resumable(h: Session): boolean;
+  resumable(h: Session, insisted?: boolean): boolean;
+  /**
+   * 排着等这个 head 的、它自己的总控（isControllerOf）发来的指示里最新一条的排队时间；没有为 null（BTL-279）。
+   * 有就算「总控要它」：用户点 × 之后才发来的也恢复，用户自己点开的 ticket session 也恢复。
+   */
+  controllerMailSince?(headId: string): number | null;
   transcript(headId: string): TranscriptState;
   /** 和 start_session 一样的内存准入（admitOrRefuse）。 */
   admit(what: string): Promise<{ ok: true; release: () => void } | { ok: false; error: string }>;
@@ -110,14 +116,18 @@ export class Resumer {
     this.stopped = true;
   }
 
-  /** 总控看的状态（list_sessions）。不问内存、不改状态。 */
-  status(sessionId: string): WakeState {
+  /**
+   * 总控看的状态（list_sessions）。不问内存、不改状态。
+   * asController：问的是它的总控（list_sessions 只列自己管的）：「总控现在发一条会怎样」，用户结束的、用户点开的也会恢复（BTL-279）。
+   */
+  status(sessionId: string, o: { asController?: boolean } = {}): WakeState {
     const h = this.d.head(sessionId);
     if (!h) return "not_managed";
     if (this.d.running(h.id)) return "running";
     if (h.hibernatedAt) return "hibernated";
-    if (!this.d.resumable(h)) return "not_managed";
-    if (h.userEndedAt != null) return "ended_by_user";
+    const insisted = o.asController === true || this.insisted(h);
+    if (!this.d.resumable(h, insisted)) return "not_managed";
+    if (h.userEndedAt != null && !insisted) return "ended_by_user";
     if (this.inflight.has(h.id) || this.starting.has(h.id)) return "resuming";
     if (this.blockedByFailure(h) !== null) return "resume_failed";
     const m = this.memory.get(h.id);
@@ -219,11 +229,22 @@ export class Resumer {
     return null;
   }
 
+  /**
+   * 它自己的总控有指示在等它（BTL-279「关了的就打开」）。用户点过 × 的，只认点 × 之后才发来的：
+   * 不然用户刚关掉，还排着的那条马上又把它拉起来；之后总控再发一条，才是总控要它。
+   */
+  private insisted(h: Session): boolean {
+    const since = this.d.controllerMailSince?.(h.id) ?? null;
+    return since !== null && (h.userEndedAt == null || since > h.userEndedAt);
+  }
+
   private async doRequest(h: Session, why: "mail" | "restart"): Promise<ResumeStart> {
     if (this.d.running(h.id)) return { state: "running" };
     if (h.hibernatedAt) return { state: "hibernated" };
-    if (!this.d.resumable(h)) return { state: "not_managed" };
-    if (h.userEndedAt != null) return { state: "ended_by_user" };
+    const insisted = this.insisted(h);
+    if (!this.d.resumable(h, insisted)) return { state: "not_managed" };
+    if (h.userEndedAt != null && !insisted) return { state: "ended_by_user" };
+    if (insisted && (h.userEndedAt != null || !this.d.resumable(h))) this.d.log(`resume ${h.id}: its coordinator sent an instruction; opening it though ${h.userEndedAt != null ? "the user ended it" : "the user opened it"}`);
     const blocked = this.blockedByFailure(h);
     if (blocked !== null) return { state: "resume_failed", error: blocked };
     const m = this.memory.get(h.id);
@@ -250,20 +271,22 @@ export class Resumer {
     if (!opened.ok) return this.fail(h, M().resumeOpenFailed(opened.reason), PERMANENT_OPEN.has(opened.reason));
     if (opened.alreadyOpen) return { state: "running" };
     const termId = opened.termId;
-    const wait = this.waitStarted(h, termId).finally(() => this.starting.delete(h.id));
+    const wait = this.waitStarted(h, termId, h.userEndedAt ?? null).finally(() => this.starting.delete(h.id));
     this.starting.set(h.id, wait);
     this.d.notify();
     return { state: "resuming" };
   }
 
-  private async waitStarted(h: Session, termId: string): Promise<void> {
+  /** endedBefore：恢复前的 userEndedAt。之后变了才是用户这次点了 ×（打开时 opened 会清掉它）。 */
+  private async waitStarted(h: Session, termId: string, endedBefore: number | null): Promise<void> {
     const deadline = this.d.now() + (this.d.startTimeoutMs ?? RESUME_START_TIMEOUT_MS);
     for (;;) {
       if (this.stopped) return;
       if (this.d.started(termId)) break;
       if (!this.d.isOpen(termId)) {
         // 用户在它起来之前点了 ×：不算恢复失败，也不再试。
-        if (this.d.head(h.id)?.userEndedAt != null) return;
+        const ended = this.d.head(h.id)?.userEndedAt ?? null;
+        if (ended !== null && ended !== endedBefore) return;
         this.fail(h, M().resumeExited, false);
         return;
       }

@@ -729,6 +729,67 @@ describe("PtyManager draft: clearing keys and the screen (BTL-269 C)", () => {
     await p;
   });
 
+  it("a terminal open for long without a SessionStart does not wait another minute before the stable screen counts (BTL-279)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    // SessionStart 没来（hook 没通）、终端开了好几分钟。之前「起来了」从这次 deliver 开始算 60 秒，而 deliver 也只等 60 秒：
+    // 状态栏一直在刷新时永远等不到，每次都超时。
+    later(5 * 60_000);
+    const draw = (n: number) => spawned[0].pty.emit("\x1b[2J\x1b[H" + `● done\r\n${RULE}\r\n❯ \r\n${RULE}\r\n  ctx ${n}%`);
+    draw(0);
+    await mgr.screenSettled("t1");
+    const p = mgr.deliver("t1", "hi", { idleMs: 800, screenStableMs: 1000, timeoutMs: 60_000 });
+    for (let i = 1; i <= 8 && spawned[0].pty.written.length === 0; i++) {
+      later(300);
+      draw(i);
+      await mgr.screenSettled("t1");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(spawned[0].pty.written[0]).toBe("\x1b[200~hi\x1b[201~");
+    mgr.kill("t1");
+    await p;
+  });
+
+  it("the box is not recognised (footer too tall) and the last line keeps redrawing: the screen down to the last rule being stable counts (BTL-279)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.markStarted("t1");
+    const footer = Array.from({ length: 12 }, (_, i) => `  status ${i}`).join("\r\n");
+    const draw = (n: number) => spawned[0].pty.emit("\x1b[2J\x1b[H" + `● done\r\n${RULE}\r\n❯ \r\n${RULE}\r\n${footer}\r\n  tick ${n}`);
+    draw(0);
+    await mgr.screenSettled("t1");
+    const p = mgr.deliver("t1", "hi", { idleMs: 800, screenStableMs: 1000, timeoutMs: 60_000 });
+    for (let i = 1; i <= 8 && spawned[0].pty.written.length === 0; i++) {
+      later(300);
+      draw(i);
+      await mgr.screenSettled("t1");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(spawned[0].pty.written[0]).toBe("\x1b[200~hi\x1b[201~");
+    mgr.kill("t1");
+    await p;
+  });
+
+  it("the stable-screen fallback never pastes while the spinner turns or a dialog is up (BTL-279)", async () => {
+    const { mgr, spawned } = setup();
+    mgr.open("t1", spec, opts);
+    mgr.markStarted("t1");
+    const footer = Array.from({ length: 12 }, (_, i) => `  status ${i}`).join("\r\n");
+    const draw = (n: number) => spawned[0].pty.emit("\x1b[2J\x1b[H" + `● step\r\n✻ Working… (esc to interrupt)\r\n${RULE}\r\n❯ \r\n${RULE}\r\n${footer}\r\n  tick ${n}`);
+    draw(0);
+    await mgr.screenSettled("t1");
+    const p = mgr.deliver("t1", "hi", { idleMs: 800, screenStableMs: 1000, timeoutMs: 3000 });
+    for (let i = 1; i <= 12; i++) {
+      later(300);
+      draw(i);
+      await mgr.screenSettled("t1");
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(spawned[0].pty.written).toEqual([]);
+    mgr.kill("t1");
+    await p;
+  });
+
   it("text in the box the user did not type is not their draft: Shipherd's unsubmitted paste, claude's suggested next line", async () => {
     const { mgr, spawned } = setup();
     mgr.open("t1", spec, opts);

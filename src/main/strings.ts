@@ -391,7 +391,7 @@ const ZH = {
             ? `Shipherd 之前没能恢复它（${error ?? ""}），暂时不再自动试。消息排着，用户打开它时会送到。`
             : wake === "hibernated"
               ? "它在休眠，Shipherd 正在叫醒它，醒来就送。"
-              : "它不是总控开的 session，Shipherd 不自动恢复它。消息排着，下次打开时送到。",
+              : "它已经隐藏或归档了，或者不是 Shipherd 管的 session，Shipherd 不自动恢复它。消息排着，下次打开时送到。",
   resumeReceiptDelivered: (name: string, ids: string[]) => `【回执】${name} 的终端原来关着，Shipherd 已在后台恢复它（接着原来的对话），你的消息 ${ids.join("、")} 已经送到。它的回复会以【回复】另外送来。`,
   resumeReceiptFailed: (name: string, ids: string[], why: string, retry: boolean) =>
     `【回执】Shipherd 没能在后台恢复 ${name}：${why}。你的消息 ${ids.join("、")} 还排在它的信箱里，用户打开它时会送到。${retry ? "过 10 分钟 Shipherd 会再试一次。" : "Shipherd 不再自动试；要它接着做，用 ask_user 告诉用户。"}`,
@@ -772,6 +772,7 @@ const ZH = {
   // BTL-269：信箱里的消息为什么还没送到、什么时候能送到。
   mailboxAnswersQuestion: (question: string) => `（你在等用户回答『${question}』。下面这条是你的总控替用户答的，当作那个问题的回答。用户要是另有想法，会再告诉你。）`,
   mailboxNotAnAnswer: "（你在等用户回答问题。下面这条是你的总控发来的，但不是对那个提问的回答，问题还在等用户。）",
+  mailboxNotUserAnswer: "（下面这条不是用户的回答。你要是在等用户回答问题，问题还在等用户。）",
   inboxCorrection: (question: string, coordinator: string, answer: string) =>
     `【用户更正】你问的『${question}』，之前总控替用户答的是：${coordinator}\n用户自己的回答：${answer}\n以用户的回答为准。`,
   mailboxBlocked: {
@@ -1146,7 +1147,7 @@ const EN: MainStrings = {
             ? `Shipherd could not resume it earlier (${error ?? ""}) and is not retrying for now. The message stays queued and is delivered when the user opens it.`
             : wake === "hibernated"
               ? "It is hibernating; Shipherd is waking it and delivers the message when it is up."
-              : "It is not a session a coordinator started, so Shipherd does not resume it on its own. The message stays queued and is delivered the next time it opens.",
+              : "It is hidden or archived, or not a session Shipherd manages, so Shipherd does not resume it on its own. The message stays queued and is delivered the next time it opens.",
   resumeReceiptDelivered: (name: string, ids: string[]) => `[Receipt] ${name}'s terminal was closed. Shipherd resumed it in the background (continuing its conversation) and delivered your message ${ids.join(", ")}. Its reply comes separately as [Reply].`,
   resumeReceiptFailed: (name: string, ids: string[], why: string, retry: boolean) =>
     `[Receipt] Shipherd could not resume ${name} in the background: ${why}. Your message ${ids.join(", ")} is still queued in its mailbox and is delivered when the user opens it. ${retry ? "Shipherd tries once more in 10 minutes." : "Shipherd will not retry on its own; if it should continue, tell the user with ask_user."}`,
@@ -1515,6 +1516,7 @@ const EN: MainStrings = {
   // BTL-269: why a queued message has not gone in yet, and when it will.
   mailboxAnswersQuestion: (question: string) => `(You are waiting for the user to answer "${question}". The next message is your coordinator answering for the user; take it as the answer. If the user thinks otherwise they will tell you.)`,
   mailboxNotAnAnswer: "(You are waiting for the user to answer a question. The next message is from your coordinator, but it is not an answer to that question; the question is still waiting for the user.)",
+  mailboxNotUserAnswer: "(The next message is not the user's answer. If you are waiting for the user to answer a question, it is still waiting for the user.)",
   inboxCorrection: (question: string, coordinator: string, answer: string) =>
     `[User correction] You asked "${question}". Your coordinator answered for the user: ${coordinator}\nThe user's own answer: ${answer}\nGo with the user's answer.`,
   mailboxBlocked: {

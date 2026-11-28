@@ -167,6 +167,12 @@ export class SessionMessagesRepo {
     for (const id of ids) stmt.run(at, result, id);
   }
 
+  /** 这几条（还排着的）改投给 to（BTL-279：收件的总控关了、另一个接替了它）：挡住的原因清掉，按新收件人重新判断。 */
+  readdress(ids: string[], to: string): void {
+    const stmt = this.db.prepare(`UPDATE session_messages SET to_session = ?, blocked_reason = NULL, blocked_since = NULL WHERE id = ? AND status = 'queued'`);
+    for (const id of ids) stmt.run(to, id);
+  }
+
   /** 这几条（还排着的）的「还没送到」回执撤回了：清掉记号，按现在的原因重发。 */
   clearStuckReceipt(ids: string[]): void {
     const stmt = this.db.prepare(`UPDATE session_messages SET stuck_receipt_at = NULL WHERE id = ? AND status = 'queued'`);

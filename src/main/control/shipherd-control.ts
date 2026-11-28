@@ -216,11 +216,8 @@ export function shipherdControl(d: ControlHandlerDeps, h: ShipherdControlHelpers
       if (!svc.openFeature) return fail(M().ctlStartUnavailable);
       const given = target.session && target.session.coordinator && target.session.replacedBy === null ? target.session : undefined;
       const resume = given ?? d.sessions.listFeatureCoordinators(f.id).find((x) => x.coordinator && x.replacedBy === null && !x.dismissed);
-      // 用户点 × 结束的（BTL-256）：不替用户再打开，消息排着，用户打开时送到。
-      if (resume && resume.userEndedAt != null) {
-        const r = enqueue(resume.id, text, featureId, false, false, meta);
-        return ok({ queued: true, sessionId: resume.id, requestId: r.id, state: r.state, wake: "ended_by_user", note: `${M().mailboxWakeNote("ended_by_user")}${M().mailboxReplyNote}` });
-      }
+      // 用户点 × 结束的也接着打开（BTL-279「关了的就打开」）：这条是全局总控在这之后新发的，总控要它干活。
+      // 打开时 opened 清掉 userEndedAt；用户之后再点 ×，还排着的不会再把它拉起来（Resumer.insisted 只认点 × 之后发的）。
       const openFeature = svc.openFeature.bind(svc);
       const open = (): Promise<OpenSessionResult> => openFeature({ featureId: f.id, ...(resume && { sessionId: resume.id }) });
       // 先排进接着的那个的信箱：打开时一起送；打不开也不丢。

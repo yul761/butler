@@ -146,3 +146,47 @@ test("Shipherd control messages an open feature coordinator nobody has typed int
   await page.locator(".messages-box > summary").click();
   await expect(page.getByTestId("message-list")).toContainText(S.messageStatus.replied);
 });
+
+/**
+ * BTL-279：开着、停着，但 Claude Code 丢了 Stop（记录一直说它在干活，transcript 里也看不出这一轮结束了）。
+ * 原来全局总控发的消息一直排着送不进去，要用户手动叫它看信箱。现在屏幕上画着空输入框、安静够了就校正成停着，
+ * 消息直接送进去，它这一轮的回复带着 requestId 以【回复】回到全局总控。
+ */
+test("Shipherd control reaches an open coordinator whose Stop got lost, and gets its reply back (BTL-279)", async ({ makeSandbox, launch }) => {
+  test.setTimeout(180_000);
+  const s = makeSandbox();
+  s.env = { SHIPHERD_ACTIVITY_TICK_MS: "200", SHIPHERD_GATE_TYPING_QUIET_MS: "1000", SHIPHERD_IDLE_QUIET_MS: "2000" };
+  const shop = join(s.dir, "shop");
+  const { page } = await launch(s);
+  await completeWizard(page, s);
+  makeGitRepo(join(shop, "frontend"));
+  makeGitRepo(join(shop, "backend"));
+  const side = page.locator(".sidebar");
+  await create(page, await newButton(page, "newFeature"), S.featureName, "lost-stop", shop);
+  const workspace = join(s.dir, "shop-features", "lost-stop");
+  await openTab(page, S.lay.tabControl);
+  await page.locator(".feature-page").getByRole("button", { name: `+ ${S.newCoordinator}`, exact: true }).click();
+  await expect.poll(() => sessionsIn(s, workspace).length).toBe(1);
+  const [coordinator] = sessionsIn(s, workspace);
+  await expect.poll(() => terminalText(page)).toContain(`fake claude ready (${coordinator.slice(0, 8)})`);
+  // 这一轮做完了，但没有 Stop：屏幕上是空输入框。
+  await typeLine(page, "/fake-nostop 规划写好了");
+  await expect.poll(() => terminalText(page)).toContain("规划写好了");
+
+  await side.getByRole("button", { name: S.shipherdNav, exact: true }).click();
+  await page.locator(".shipherd-page").getByRole("button", { name: `+ ${S.newShipherdSession}`, exact: true }).click();
+  await expect.poll(() => terminalText(page)).toContain("fake claude ready");
+  await page.waitForTimeout(1500);
+
+  const sent = await callTool(page, s, "send_message", { epic: "lost-stop", text: "接着拆 ticket" });
+  expect(sent.error).toBe(false);
+  const { requestId, sessionId } = JSON.parse(sent.text) as { requestId: string; sessionId: string };
+  expect(sessionId).toBe(coordinator);
+  // 不用谁去叫它看信箱：几秒之内送进去。
+  await expect.poll(() => flat(messagesIn(s, workspace)[coordinator]?.at(-1)), { timeout: 30_000 }).toContain("接着拆 ticket");
+  expect(sessionsIn(s, workspace)).toEqual([coordinator]);
+  // 它这一轮（这次有 Stop）的回复回到全局总控，带着 requestId。
+  const shipherdWorkspace = join(s.shipherdHome, "workspaces", "_shipherd");
+  const back = () => Object.values(messagesIn(s, shipherdWorkspace)).flat().map(flat).find((m) => m.includes("【回复】") && m.includes(requestId));
+  await expect.poll(back, { timeout: 30_000 }).toContain("收到：");
+});

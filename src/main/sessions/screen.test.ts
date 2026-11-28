@@ -237,7 +237,7 @@ describe("dialogOnScreen / permissionOnScreen", () => {
 describe("permissionOnScreen (BTL-269 D: a quoted question is not a prompt)", () => {
   it("needs a numbered first option after the question", () => {
     // 回复里引用了这句话、输入框没认出来（底部提示多了一行）：没有选项，不算确认框。
-    const reply = ["⏺ 计划写好了。Would you like to proceed? 你看一下再说。", "", RULE, "❯ ", RULE, "  ⏵⏵ auto mode on", "  ctx 40%", "  model opus", "  branch x", "  extra"];
+    const reply = ["⏺ 计划写好了。Would you like to proceed? 你看一下再说。", "", RULE, "❯ ", RULE, "  ⏵⏵ auto mode on", ...Array.from({ length: 10 }, (_, i) => `  status ${i}`)];
     expect(inputBoxText(reply)).toBeNull();
     expect(permissionOnScreen(reply)).toBe(false);
     expect(permissionOnScreen(["Would you like to proceed?"])).toBe(false);
@@ -251,6 +251,25 @@ describe("workingOnScreen / inputBoxEmpty", () => {
   it("sees the spinner line of a running turn", () => {
     expect(workingOnScreen(["✻ Thinking… (12s · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
     expect(workingOnScreen(["⏺ done", RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(false);
+  });
+
+  it("only the spinner line or the footer counts, not 'esc to interrupt' quoted in the conversation above (BTL-279)", () => {
+    // 对话里贴过日志、在改 Shipherd 自己的代码：上面的内容里有这几个字不算在跑。
+    const quoted = ["⏺ The guard checks for `esc to interrupt` on screen:", "  return lines.some((l) => squash(l).includes(\"esctointerrupt\"));", "⏺ done"];
+    expect(workingOnScreen([...quoted, RULE, "❯ ", RULE, "  ? for shortcuts"])).toBe(false);
+    // 转圈那一行（✻ ✶ ✳ ✢ · 开头）和新版画在输入框下面的提示照样算。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    expect(workingOnScreen([...quoted, RULE, "❯ ", RULE, "  · esc to interrupt · ← for agents"])).toBe(true);
+    // 没有输入框线（启动中、整屏重画）：照旧看整屏。
+    expect(workingOnScreen(["Working on it (esc to interrupt)"])).toBe(true);
+  });
+
+  it("finds the box under a tall footer: a multi-line statusline plus mode and notices (BTL-279)", () => {
+    const footer = ["  ~/code/app  main*  ctx 41%", "  Opus 5.5 · $1.23 today", "  ⏵⏵ accept edits on (shift+tab to cycle)", "  1 background task", "  ✓ Update installed · Restart to apply", "  ? for shortcuts"];
+    expect(inputBoxEmpty(["⏺ done", RULE, "❯ ", RULE, ...footer])).toBe(true);
+    expect(aboveInputBox(["⏺ done", RULE, "❯ ", RULE, ...footer])).toEqual(["⏺ done"]);
+    // 太高的就不当作输入框（对话框下面的长列表）。
+    expect(inputBoxEmpty(["⏺ done", RULE, "❯ ", RULE, ...Array.from({ length: 20 }, (_, i) => `  line ${i}`)])).toBeNull();
   });
 
   it("an empty box is empty; text is not, even text that reads like the placeholder; no box is null", () => {
@@ -295,7 +314,7 @@ describe("inputBoxText / pasteInInputBox", () => {
     expect(inputBoxText([RULE, " ❯ No, exit"])).toBeNull();
     // 两条线之间不是「❯」开头、或者第二条线下面还有一大段：不是输入框。
     expect(inputBoxText([RULE, "| a | b |", RULE])).toBeNull();
-    expect(inputBoxText([RULE, "❯ x", RULE, "1", "2", "3", "4", "5"])).toBeNull();
+    expect(inputBoxText([RULE, "❯ x", RULE, ...Array.from({ length: 11 }, (_, i) => `${i}`)])).toBeNull();
   });
 
   it("tells whether this paste is still sitting in the box", () => {

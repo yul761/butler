@@ -27,6 +27,13 @@ describe("resumable", () => {
     expect(resumable(session({ origin: "discovered" as Session["origin"] }), ctx)).toBe(false);
     expect(resumable(session({ replacedBy: "s2" }), ctx)).toBe(false);
   });
+  it("takes a ticket session the user opened when its coordinator insists, but still not hidden, archived or outside ones (BTL-279)", () => {
+    expect(resumable(session({ spawnedBy: null }), ctx, true)).toBe(true);
+    expect(resumable(session({ spawnedBy: null, dismissed: true }), ctx, true)).toBe(false);
+    expect(resumable(session({ spawnedBy: null }), { ...ctx, ticketArchived: () => true }, true)).toBe(false);
+    expect(resumable(session({ ticketKey: null, shipherd: true, spawnedBy: null }), ctx, true)).toBe(false);
+    expect(resumable(session({ origin: "discovered" as Session["origin"] }), ctx, true)).toBe(false);
+  });
   it("leaves out archived tickets and epics", () => {
     expect(resumable(session(), { ...ctx, ticketArchived: () => true })).toBe(false);
     expect(resumable(session({ ticketKey: null, featureId: 3, coordinator: true }), { ...ctx, epicArchived: () => true })).toBe(false);
@@ -56,7 +63,7 @@ function setup(over: Partial<ResumerDeps> = {}) {
   const d: ResumerDeps = {
     head: (id) => heads.get(id) ?? null,
     running: (id) => running.has(id),
-    resumable: (h) => resumable(h, ctx),
+    resumable: (h, insisted) => resumable(h, ctx, insisted),
     transcript: () => "present",
     admit: vi.fn(async () => ({ ok: true as const, release })),
     open: vi.fn(async (h: Session): Promise<Opened> => {
@@ -129,6 +136,61 @@ describe("Resumer", () => {
     await expect(r.request("s1", "mail")).resolves.toEqual({ state: "ended_by_user" });
     expect(r.status("s1")).toBe("ended_by_user");
     expect(d.admit).not.toHaveBeenCalled();
+  });
+
+  it("resumes a session the user ended when its coordinator sends an instruction after that, not for one queued before (BTL-279)", async () => {
+    let since: number | null = 3;
+    const { r, d, heads } = setup({ controllerMailSince: () => since });
+    heads.set("s1", session({ userEndedAt: 5 }));
+    // 用户点 × 之前就排着的：不因为它又拉起来。
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "ended_by_user" });
+    expect(d.admit).not.toHaveBeenCalled();
+    // 总控在那之后又发了一条：打开。
+    since = 7;
+    expect(r.status("s1")).toBe("resumes");
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "resuming" });
+    expect(d.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("list_sessions (asked by the coordinator) says a session the user ended or opened resumes when it sends (BTL-279)", () => {
+    const { r, heads } = setup();
+    heads.set("s1", session({ userEndedAt: 5 }));
+    expect(r.status("s1")).toBe("ended_by_user");
+    expect(r.status("s1", { asController: true })).toBe("resumes");
+    heads.set("s1", session({ spawnedBy: null }));
+    expect(r.status("s1")).toBe("not_managed");
+    expect(r.status("s1", { asController: true })).toBe("resumes");
+    // 隐藏了的、归档的照样不恢复。
+    heads.set("s1", session({ dismissed: true }));
+    expect(r.status("s1", { asController: true })).toBe("not_managed");
+  });
+
+  it("resumes a ticket session the user opened when its coordinator's instruction waits; Shipherd's own notices do not (BTL-279)", async () => {
+    let since: number | null = null;
+    const { r, d, heads } = setup({ controllerMailSince: () => since, resumable: (h, insisted) => resumable(h, ctx, insisted) });
+    heads.set("s1", session({ spawnedBy: null }));
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "not_managed" });
+    since = 10;
+    await expect(r.request("s1", "mail")).resolves.toEqual({ state: "resuming" });
+    expect(d.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ended session resumed for its coordinator that exits before starting counts as a failure, unless the user ends it again (BTL-279)", async () => {
+    const a = setup({ controllerMailSince: () => 10, started: () => false, isOpen: () => false, running: () => false });
+    a.heads.set("s1", session({ userEndedAt: 5 }));
+    await a.r.request("s1", "mail");
+    await a.r.idle();
+    expect(a.r.status("s1")).toBe("resume_failed");
+    const b = setup({ controllerMailSince: () => 10, started: () => false, isOpen: () => false, running: () => false });
+    b.heads.set("s1", session({ userEndedAt: 5 }));
+    b.d.open = vi.fn(async (h: Session): Promise<Opened> => {
+      b.heads.set(h.id, session({ userEndedAt: 20 }));
+      return { ok: true, termId: h.id, alreadyOpen: false };
+    });
+    await b.r.request("s1", "mail");
+    await b.r.idle();
+    expect(b.receipts).toEqual([]);
+    expect(b.r.status("s1")).toBe("ended_by_user");
   });
 
   it("does not resume sessions it does not manage", async () => {

@@ -260,8 +260,11 @@ function isRule(line: string): boolean {
   return n >= t.length * 0.9;
 }
 
-/** 输入框下面最多几行非空的提示（模式、快捷键、状态栏）。 */
-const MAX_FOOTER_LINES = 4;
+/**
+ * 输入框下面最多几行非空的提示（模式、快捷键、状态栏）。多行的自定义状态栏加上模式、后台任务、更新提示能有六七行（BTL-279：
+ * 原来是 4，超了就认不出输入框，空闲证据、草稿校正、deliver 的「屏幕稳定」一起失灵，消息一直送不进去）。
+ */
+const MAX_FOOTER_LINES = 10;
 
 /**
  * claude 的输入框：屏幕下方两条「────」线，中间第一行以「❯」开头，下面只剩几行提示。返回两条线的行号；没画输入框返回 null。
@@ -320,9 +323,20 @@ export function permissionOnScreen(lines: string[]): boolean {
   return ask >= 0 && area.slice(ask + 1).some((l) => FIRST_OPTION.test(l.trim()));
 }
 
-/** 这一轮还在跑：claude 在转圈的那一行写着「esc to interrupt」。 */
+/** 转圈那一行开头的字（claude 轮着画这几个）。 */
+const SPINNER = /^[✻✶✳✢·✽✺✹✸✷*∗]/;
+
+/**
+ * 这一轮还在跑：claude 在转圈的那一行（或者新版画在输入框下面的提示）写着「esc to interrupt」。
+ * 只看转圈的那一行和最后一条线下面（BTL-279）：对话内容里引用了这几个字（贴的日志、在改 Shipherd 自己）不算，
+ * 不然一直当它在干活，消息永远送不进去。一条线都没有（启动中、整屏重画）照旧看整屏。
+ */
 export function workingOnScreen(lines: string[]): boolean {
-  return lines.some((l) => squash(l).includes("esctointerrupt"));
+  let last = -1;
+  lines.forEach((l, i) => {
+    if (isRule(l)) last = i;
+  });
+  return lines.some((l, i) => squash(l).includes("esctointerrupt") && (last < 0 || i > last || SPINNER.test(l.trim())));
 }
 
 /**
@@ -333,6 +347,21 @@ export function inputBoxEmpty(lines: string[]): boolean | null {
   const text = inputBoxText(lines);
   if (text === null) return null;
   return text === "";
+}
+
+/**
+ * deliver 看「屏幕稳定」用的那一块：输入框以上（aboveInputBox）。输入框没认出来（BTL-279：底部提示太多、样式变了）就看到最后一条线为止，
+ * 下面会刷新的状态栏不算；屏幕上看得出在跑（转圈）、一条线都没有时返回 null（只能等输出停下）。
+ */
+export function stableArea(lines: string[]): string[] | null {
+  const above = aboveInputBox(lines);
+  if (above !== null) return above;
+  if (workingOnScreen(lines)) return null;
+  let last = -1;
+  lines.forEach((l, i) => {
+    if (isRule(l)) last = i;
+  });
+  return last < 0 ? null : lines.slice(0, last + 1);
 }
 
 /** 输入框上面的那部分屏幕（对话的内容），不含输入框和下面会刷新的状态栏；没画输入框返回 null。 */

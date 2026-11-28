@@ -1,5 +1,5 @@
 import type { SpawnSpec } from "../claude/spawn";
-import { aboveInputBox, dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, squash, TermScreen, type DimMode } from "./screen";
+import { dialogOnScreen, inputBoxEmpty, inputBoxText, pasteInInputBox, permissionOnScreen, squash, stableArea, TermScreen, type DimMode } from "./screen";
 
 export interface PtyProcess {
   readonly pid: number;
@@ -673,11 +673,12 @@ export class PtyManager {
       const t = this.terms.get(termId);
       if (!t || t.exited) return "exited";
       const now = this.now();
-      const started = t.started || now - start >= (o.startWaitMs ?? 60_000);
+      // 从终端打开起算（BTL-279）：开了很久、只是 SessionStart 没来的不再从这次 deliver 起重新等一分钟（deliver 自己也只等一分钟）。
+      const started = t.started || now - Math.min(start, t.openedAt) >= (o.startWaitMs ?? 60_000);
       let idle = t.lastOutputAt > 0 && now - t.lastOutputAt >= idleMs;
       if (!idle && started && t.lastOutputAt > 0) {
         // 输出一直不停，但只是输入框下面的状态栏在刷新（BTL-269 review）：输入框以上的内容 stableMs 没变也算就绪。
-        const above = aboveInputBox(this.screenLines(termId));
+        const above = stableArea(this.screenLines(termId));
         const key = above === null ? null : above.join("\n");
         if (key === null) shown = null;
         else if (shown?.key !== key) shown = { key, since: now };
