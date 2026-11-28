@@ -2621,6 +2621,9 @@ const ZH = {
     delivering: "Shipherd 正在往里送，稍等几秒",
     gone: "这条已经不在排队了",
     failed: "没送进去，Shipherd 每 10 秒会再试",
+    /** 没送进去的尝试（BTL-279）：次数、最后一次的时间和结果。 */
+    attempts: (n: number, at: string | null, what: string | null) => `试过 ${n} 次${at ? `，最后一次 ${at}` : ""}${what ? `（${what}）` : ""}`,
+    attempt: { recheck: "粘贴前复查没过", exited: "终端退出了" } as Record<"recheck" | "exited", string>,
   },
 };
 

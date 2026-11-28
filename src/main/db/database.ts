@@ -116,10 +116,15 @@ export class NewerDatabaseError extends Error {
   }
 }
 
-export function migrate(db: Db): number {
+/**
+ * 把数据库升到 target（默认最新）。target 只给测试用：单独看某一条迁移改了什么，不被后面合进来的迁移带上（4.3.0 rebase 时
+ * BTL-270 的「别的表没动」被 BTL-279 后加的 session_messages 列弄红过）。
+ */
+export function migrate(db: Db, target: number = MIGRATIONS.length): number {
   const current = userVersion(db);
   if (current > MIGRATIONS.length) throw new NewerDatabaseError(current, MIGRATIONS.length);
-  for (let i = current; i < MIGRATIONS.length; i++) {
+  if (!Number.isInteger(target) || target < current || target > MIGRATIONS.length) throw new Error(`migrate target ${target} outside ${current}..${MIGRATIONS.length}`);
+  for (let i = current; i < target; i++) {
     // 重建表（改 CHECK）的迁移要 DROP 别的表外键指着的表：外键只能在事务外关，提交前查一遍有没有这条迁移新造成的违规。
     const fkOff = MIGRATIONS[i].includes(FOREIGN_KEYS_OFF) && fkOn(db);
     if (fkOff) db.exec("PRAGMA foreign_keys = OFF");
@@ -139,7 +144,7 @@ export function migrate(db: Db): number {
       if (fkOff) db.exec("PRAGMA foreign_keys = ON");
     }
   }
-  return MIGRATIONS.length;
+  return target;
 }
 
 /** 迁移里写了这一行：migrate 在它的事务外关掉外键（见 BTL-270 重建 tickets 表）。 */

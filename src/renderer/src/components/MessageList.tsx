@@ -7,6 +7,8 @@ import { api } from "../api";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
 
+const MESSAGE_SCOPES = ["data", "messages"] as const;
+
 const shortTime = (iso: string) => new Date(iso).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 export function MessageListItems({ messages }: { messages: MessageView[] }) {
@@ -27,6 +29,7 @@ export function MessageListItems({ messages }: { messages: MessageView[] }) {
             </span>
           </div>
           {m.status === "queued" && <QueuedLine m={m} />}
+          {m.attempts > 0 && <p className="muted message-attempts" data-testid="message-attempts">{attemptsText(m)}</p>}
           <p className="message-text">{m.text}</p>
           {m.reply !== null && (
             <div className="message-reply">
@@ -59,6 +62,13 @@ function QueuedLine({ m }: { m: MessageView }) {
   );
 }
 
+/** 没送进去的尝试（BTL-279）：几次、最后一次的时间和结果。送到了也留着：看得出试了多久才进去。 */
+function attemptsText(m: MessageView): string {
+  const L = S.mailboxBlocked;
+  const what = m.lastAttempt === null ? null : m.lastAttempt === "recheck" || m.lastAttempt === "exited" ? L.attempt[m.lastAttempt] : L.reason[m.lastAttempt];
+  return L.attempts(m.attempts, m.lastAttemptAt ? shortTime(m.lastAttemptAt) : null, what);
+}
+
 function resultText(r: DeliverNowResult): string {
   const L = S.mailboxBlocked;
   if (r.delivered) return L.delivered;
@@ -80,6 +90,7 @@ export function MessageListSummary({ messages }: { messages: MessageView[] | nul
 
 export function Messages({ scope }: { scope: MessageScope }) {
   const key = "shipherd" in scope ? "messages:shipherd" : `messages:feature:${scope.featureId}`;
-  const messages = useStateRefetch(key, () => api.messages(scope));
+  // 重试次数、最后一次尝试只通知 messages（BTL-279）：别的变化照常走 data。
+  const messages = useStateRefetch(key, () => api.messages(scope), { scopes: MESSAGE_SCOPES });
   return <MessageListSummary messages={messages} />;
 }

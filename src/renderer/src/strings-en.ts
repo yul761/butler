@@ -2592,5 +2592,7 @@ export const EN: UiStrings = {
     delivering: "Shipherd is typing it in; give it a few seconds",
     gone: "This message is no longer queued",
     failed: "Not delivered; Shipherd tries again every 10 seconds",
+    attempts: (n: number, at: string | null, what: string | null) => `Tried ${n} time${n === 1 ? "" : "s"}${at ? `, last at ${at}` : ""}${what ? ` (${what})` : ""}`,
+    attempt: { recheck: "the last check before pasting failed", exited: "the terminal exited" } as Record<"recheck" | "exited", string>,
   },
 };

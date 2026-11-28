@@ -23,6 +23,18 @@ describe("migrate", () => {
     const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(v.user_version).toBe(MIGRATIONS.length);
   });
+
+  it("stops at a target version, then goes on to the latest; rejects a target outside the range", () => {
+    const db = new DatabaseSync(":memory:");
+    expect(migrate(db, 5)).toBe(5);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+    expect(() => migrate(db, 4)).toThrow(/outside 5\.\./);
+    expect(() => migrate(db, MIGRATIONS.length + 1)).toThrow(/outside/);
+    expect(() => migrate(db, 5.5)).toThrow(/outside/);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: MIGRATIONS.length });
+  });
 });
 
 describe("TicketsRepo", () => {

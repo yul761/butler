@@ -398,6 +398,8 @@ if (shouldSetAppId(process.platform)) app.setAppUserModelId(APP_ID);
 
 /** 性能诊断（BTL-242）：bootstrap 里装上。 */
 let diag: DiagService | null = null;
+/** 诊断导出里的信箱状态（BTL-279）：信箱建好之后才接上。 */
+let mailboxDiagnostics: (() => unknown) | null = null;
 /**
  * 渲染进程的健康（BTL-262）：崩了记原因和退出码、限频自动重新加载（5 分钟最多 3 次，超过就停下弹框）；
  * 卡住和恢复也记下来。这些都进导出诊断（BTL-242）。整个进程一份，换了窗口记录也还在。
@@ -648,6 +650,7 @@ async function bootstrap(): Promise<void> {
     },
     writeFile: (path, text) => writeFileAsync(path, text, "utf8"),
     rendererEvents: () => rendererHealth.events(),
+    mailbox: () => mailboxDiagnostics?.() ?? null,
     cpuTimes: () => {
       const t: Record<string, number> = {};
       for (const m of app.getAppMetrics()) t[m.type] = (t[m.type] ?? 0) + (m.cpu.cumulativeCPUUsage ?? 0);
@@ -2221,9 +2224,12 @@ async function bootstrap(): Promise<void> {
     },
     delivered: (m) => resumer?.delivered(m),
     notify,
+    // 又试了一次（BTL-279）：只有消息列表跟着变。
+    notifyMessages: () => notify("messages"),
     now: Date.now,
     log: logger,
   });
+  mailboxDiagnostics = () => mailbox.diagnostics();
   const inboxRepo = new InboxRepo(db);
   const inboxService: InboxService = new InboxService({
     repo: inboxRepo,

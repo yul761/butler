@@ -1714,4 +1714,11 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE followups ADD COLUMN prior_snoozed_until TEXT;
   ALTER TABLE ticket_prs ADD COLUMN shipherd_closed_at INTEGER;
   `,
+  // BTL-279（4.3.0 里排在最后，rebase 时挪到数组末尾）：每条消息试着送了几次（attempts），最后一次的时间（last_attempt_at）和结果（last_attempt：
+  // 挡住它的原因 MailboxBlockReason，或者直接输入的结果 recheck / exited）。只在排队时记，送到后留着：诊断导出和消息列表看得出卡在哪、试了多久。
+  `
+  ALTER TABLE session_messages ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE session_messages ADD COLUMN last_attempt_at INTEGER;
+  ALTER TABLE session_messages ADD COLUMN last_attempt TEXT;
+  `,
 ];

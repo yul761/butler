@@ -8,7 +8,7 @@ import { MESSAGE_LIMIT, sanitizeTask, TASK_LIMIT } from "../../shared/control";
 import {
   DONE_SUFFIX, MAIN_SUFFIX, MSG_SUFFIX, messageFileName, messageIdOf, TAKEN_SUFFIX, type MailboxFile,
 } from "../../shared/mailbox";
-import type { MailboxBlockReason, MessageKind, MessageScope, MessageView, Session } from "../../shared/types";
+import type { MailboxAttempt, MailboxBlockReason, MessageKind, MessageScope, MessageView, Session } from "../../shared/types";
 import type { NewSessionMessage, SessionMessage, SessionMessagesRepo } from "../db/session-messages-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
@@ -161,6 +161,8 @@ export interface MailboxDeps {
   /** 收件人所在的 epic（ticket 的 session 从 ticket 往上找）：没写 featureId 的消息记在这里，epic 的消息列表看得到。 */
   featureOf?(headId: string): number | null;
   notify(): void;
+  /** 只有消息列表要变（BTL-279：又试了一次、次数和时间变了）：只通知 messages 范围，不惊动别的界面。没接时用 notify。 */
+  notifyMessages?(): void;
   now(): number;
   newId?: () => string;
   log(msg: string, err?: unknown): void;
@@ -179,6 +181,32 @@ export interface SendInput {
   meta?: unknown;
   /** 调用方马上用 opened 交给刚打开的终端：这里先不直接输入（也不写投影）。 */
   hold?: boolean;
+}
+
+/** 诊断导出里的一条消息（BTL-279）：不带正文。ref 只留前缀（report、stuck……）。 */
+export interface MailboxDiagRow {
+  id: string;
+  kind: MessageKind;
+  ref: string | null;
+  from: string | null;
+  to: string;
+  /** 现在的收件人（按 head 链找到的最新一个）。 */
+  head: string;
+  /** 排着的：收件人现在跑在哪个终端（null = 关着、休眠着）。 */
+  term: string | null;
+  status: SessionMessage["status"];
+  via: SessionMessage["via"];
+  queuedAt: string;
+  deliveredAt: string | null;
+  repliedAt: string | null;
+  blockedReason: MailboxBlockReason | null;
+  blockedSince: string | null;
+  attempts: number;
+  lastAttemptAt: string | null;
+  lastAttempt: MailboxAttempt | null;
+  stuckReceiptAt: string | null;
+  /** 正在往里贴（直接输入、叫停）。 */
+  inFlight: boolean;
 }
 
 /** 发出那一刻目标的状态：在忙（下一次工具调用时送）、停着（马上送）、关着（下次打开时送）。 */
@@ -295,26 +323,44 @@ export class Mailbox {
    * 排给这个 session（任何一个 id）、还没送到的：几条、最早那条排了多久、挡住它的原因（BTL-269：list_sessions、session_activity 里显示）。
    * 一条都没有返回 null。
    */
-  pendingFor(sessionId: string): { queued: number; oldestQueuedAt: number; reason: MailboxBlockReason | null; since: number | null } | null {
+  pendingFor(sessionId: string): {
+    queued: number; oldestQueuedAt: number; reason: MailboxBlockReason | null; since: number | null; attempts: number; lastAttemptAt: number | null;
+  } | null {
     const mine = this.d.repo.queued().filter((m) => this.headOf(m.toSession) === this.headOf(sessionId));
     if (mine.length === 0) return null;
     const first = mine.reduce((a, b) => (b.queuedAt < a.queuedAt ? b : a));
     const blocked = mine.find((m) => m.blockedReason !== null) ?? first;
-    return { queued: mine.length, oldestQueuedAt: first.queuedAt, reason: blocked.blockedReason, since: blocked.blockedSince };
+    // 次数看试得最多的那条（最早排的那条一般就是它），最后一次尝试看所有排着的里最近的（BTL-279）。
+    const attempts = Math.max(...mine.map((m) => m.attempts));
+    const last = mine.reduce<number | null>((a, m) => (m.lastAttemptAt !== null && (a === null || m.lastAttemptAt > a) ? m.lastAttemptAt : a), null);
+    return { queued: mine.length, oldestQueuedAt: first.queuedAt, reason: blocked.blockedReason, since: blocked.blockedSince, attempts, lastAttemptAt: last };
   }
 
   /** 给 list_sessions、session_activity 的一项（BTL-269）：几条在排队、挡住的原因和开始时间、一句话；没有在排队的为 null。 */
-  pendingView(sessionId: string): { queued: number; oldestQueuedAt: string; blockedBy: MailboxBlockReason | null; blockedSince: string | null; note: string } | null {
+  pendingView(sessionId: string): {
+    queued: number; oldestQueuedAt: string; blockedBy: MailboxBlockReason | null; blockedSince: string | null; attempts: number; lastAttemptAt: string | null; note: string;
+  } | null {
     const p = this.pendingFor(sessionId);
     if (!p) return null;
     const note = Mailbox.note({ delivery: "queued", reason: p.reason, since: p.since }, this.d.now());
-    return { queued: p.queued, oldestQueuedAt: new Date(p.oldestQueuedAt).toISOString(), blockedBy: p.reason, blockedSince: iso(p.since), note };
+    return {
+      queued: p.queued, oldestQueuedAt: new Date(p.oldestQueuedAt).toISOString(), blockedBy: p.reason, blockedSince: iso(p.since),
+      attempts: p.attempts, lastAttemptAt: iso(p.lastAttemptAt), note,
+    };
   }
 
 
-  /** 记下挡住这几条的原因（只记变了的），变了就写日志、通知界面。 */
+  /** 这几条这次没送进去（BTL-279）：次数加一，记下时间和结果，通知消息列表。 */
+  private attempted(list: SessionMessage[], result: MailboxAttempt): void {
+    if (list.length === 0) return;
+    this.d.repo.attempted(list.map((m) => m.id), this.d.now(), result);
+    (this.d.notifyMessages ?? this.d.notify)();
+  }
+
+  /** 记下挡住这几条的原因（只记变了的），变了就写日志、通知界面。每一次都算一次尝试。 */
   private block(head: string, list: SessionMessage[], reason: MailboxBlockReason): void {
     if (list.length === 0) return;
+    this.attempted(list, reason);
     const changed = this.d.repo.setBlocked(list.map((m) => m.id), reason, this.d.now());
     if (changed.length === 0) return;
     this.d.log(`mailbox: ${head} blocked (${reason}): ${changed.length} message(s) waiting`);
@@ -755,6 +801,7 @@ export class Mailbox {
         this.d.log(`mailbox: input to ${head}: ${result}`);
         // 没等到输入框（BTL-269）：如实记下来，别留着之前的原因（比如还说「在干活」）。recheck 没过、终端退出的下一次检查会记真正的原因。
         if (result === "timeout") this.block(head, claimed.mine, "deliver_failed");
+        else this.attempted(claimed.mine, result === "exited" ? "exited" : "recheck");
         return false;
       }
       for (const m of ids) {
@@ -936,6 +983,27 @@ export class Mailbox {
     return m.mailboxQueued(m.mailboxBlocked[r.reason], m.mailboxEta[r.reason], minutes);
   }
 
+  // ---- 诊断 ----
+
+  /**
+   * 诊断导出用（BTL-279）：排着的每一条为什么还没送进去、从什么时候起、试了几次、最后一次的时间和结果，收件人现在跑在哪个终端；
+   * 最近的几条怎么送进去的、回复了没有；正在往里贴的终端。不带正文（导出的文件用户会发给别人）。
+   */
+  diagnostics(limit = RECENT_MESSAGES): { queued: MailboxDiagRow[]; recent: MailboxDiagRow[]; inputting: string[] } {
+    const row = (m: SessionMessage): MailboxDiagRow => {
+      const head = this.headOf(m.toSession);
+      return {
+        id: m.id, kind: m.kind, ref: m.ref?.split(":")[0] ?? null, from: m.fromSession, to: m.toSession, head, term: m.status === "queued" ? this.d.termOf(head) : null,
+        status: m.status, via: m.via, queuedAt: new Date(m.queuedAt).toISOString(), deliveredAt: iso(m.deliveredAt), repliedAt: iso(m.repliedAt),
+        blockedReason: m.blockedReason, blockedSince: iso(m.blockedSince), attempts: m.attempts, lastAttemptAt: iso(m.lastAttemptAt), lastAttempt: m.lastAttempt,
+        stuckReceiptAt: iso(m.stuckReceiptAt), inFlight: this.inFlight.has(m.id) || this.interrupting.has(m.id),
+      };
+    };
+    const queued = this.d.repo.queued();
+    const recent = this.d.repo.recentAll(limit).filter((m) => m.status !== "queued");
+    return { queued: queued.map(row), recent: recent.map(row), inputting: [...this.inputting] };
+  }
+
   // ---- 界面 ----
 
   /** 一个 session（任何一个 id）发出或收到的最近几条；scope 见 MessageScope，shipherd 时给 Shipherd 总控的 session id 们。 */
@@ -945,6 +1013,7 @@ export class Mailbox {
       id: x.id, kind: x.kind, from: this.d.nameOf(x.fromSession), to: this.d.nameOf(x.toSession), toSession: x.toSession, status: x.status, via: x.via,
       interrupt: x.interrupt, text: x.body, queuedAt: new Date(x.queuedAt).toISOString(), deliveredAt: iso(x.deliveredAt), reply: x.replyText, repliedAt: iso(x.repliedAt),
       blocked: x.status === "queued" && x.blockedReason !== null ? { reason: x.blockedReason, since: iso(x.blockedSince) } : null,
+      attempts: x.attempts, lastAttemptAt: iso(x.lastAttemptAt), lastAttempt: x.lastAttempt,
     }));
   }
 }

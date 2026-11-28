@@ -37,6 +37,7 @@ function world() {
   const typing = new Set<string>();
   const drafts = new Set<string>();
   const logs: string[] = [];
+  let messageNotices = 0;
   /** coordinatorAnswered 的调用：head 加上那几个 ask_user、答案、谁答的、那条消息排进来的时间。 */
   const coordinatorAnswered: ({ head: string } & { asks: number[]; answer: string; by: string; queuedAt: number })[] = [];
   /**
@@ -94,6 +95,7 @@ function world() {
     held: (h) => held.has(h),
     featureOf: (h) => (h === "t9" ? 9 : null),
     notify: () => {},
+    notifyMessages: () => messageNotices++,
     now: () => now,
     log: (m) => logs.push(m),
   });
@@ -109,6 +111,7 @@ function world() {
     tick: (ms: number) => (now += ms),
     now: () => now,
     failDeliver: (r: DeliverResult) => (deliverResult = r),
+    messageNotices: () => messageNotices,
     hook: (term: string, tool = "Read") => runMailbox(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: tool }), { SHIPHERD_SESSION: term }, root),
   };
 }
@@ -794,6 +797,66 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     w.terms.delete("t1");
     await w.mb.tick();
     expect(w.repo.get(id)!.blockedReason).toBe("closed");
+  });
+
+  it("counts every attempt that did not get a message in, with its time and result; the message list and pendingView show them (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", false);
+    const { id } = w.mb.send(msg("t1", "hello"));
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 1, lastAttemptAt: w.now(), lastAttempt: "turn" });
+    const firstNotices = w.messageNotices();
+    w.tick(10_000);
+    await w.mb.tick();
+    w.tick(10_000);
+    await w.mb.tick();
+    // 原因没变也算一次：看得出一直在试。每次都通知消息列表（只通知 messages，不惊动别的界面）。
+    expect(w.repo.get(id)).toMatchObject({ attempts: 3, lastAttemptAt: w.now(), lastAttempt: "turn", blockedSince: w.now() - 20_000 });
+    expect(w.messageNotices()).toBe(firstNotices + 2);
+    // 等输入框超时、粘贴前复查没过、终端退出：都记下来。
+    w.setWaiting("t1", true);
+    w.failDeliver("timeout");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 4, lastAttempt: "deliver_failed" });
+    w.failDeliver("blocked");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 5, lastAttempt: "recheck" });
+    w.failDeliver("exited");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 6, lastAttemptAt: w.now(), lastAttempt: "exited" });
+    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ attempts: 6, lastAttemptAt: new Date(w.now()).toISOString(), lastAttempt: "exited" });
+    expect(w.mb.pendingView("t1")).toMatchObject({ attempts: 6, lastAttemptAt: new Date(w.now()).toISOString() });
+    // 送到了：次数留着。
+    w.failDeliver("sent");
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ status: "delivered", attempts: 6 });
+    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ status: "delivered", attempts: 6, blocked: null });
+  });
+
+  it("diagnostics lists every queued message with why it waits and how often it was tried, and recent ones with how they went in; never the text (BTL-279)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.add("t2", true);
+    const a = w.mb.send(msg("t1", "secret plan A"));
+    const b = w.mb.send(msg("t2", "secret plan B"));
+    await flushPromises();
+    w.tick(10_000);
+    await w.mb.tick();
+    const d = w.mb.diagnostics();
+    expect(d.queued).toEqual([
+      expect.objectContaining({
+        id: a.id, kind: "instruction", from: "boss", to: "t1", head: "t1", term: "t1", queuedAt: new Date(w.now() - 10_000).toISOString(),
+        blockedReason: "turn", blockedSince: new Date(w.now() - 10_000).toISOString(), attempts: 2, lastAttemptAt: new Date(w.now()).toISOString(), lastAttempt: "turn",
+        stuckReceiptAt: null, inFlight: false,
+      }),
+    ]);
+    expect(d.recent).toEqual(expect.arrayContaining([expect.objectContaining({ id: b.id, status: "delivered", via: "input", attempts: 0 })]));
+    expect(d.inputting).toEqual([]);
+    expect(JSON.stringify(d)).not.toContain("secret plan");
   });
 
   it("settle says delivered when it went in, and queued with the reason when it did not", async () => {

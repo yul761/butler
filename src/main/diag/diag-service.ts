@@ -18,7 +18,7 @@ export interface DiagServiceDeps {
   /** 读日志尾巴之前把还攒着的行写进去（BTL-242 起日志是攒一会儿再写的）。 */
   flushLog?: () => Promise<void>;
   /** 导出时要的其他信息（版本、进程指标……）。 */
-  info: () => Omit<Parameters<typeof buildDiagnostics>[0], "now" | "mode" | "current" | "history" | "logTail" | "rendererEvents">;
+  info: () => Omit<Parameters<typeof buildDiagnostics>[0], "now" | "mode" | "current" | "history" | "logTail" | "rendererEvents" | "mailbox">;
   /** 弹保存对话框，返回选的路径（取消为 null）。 */
   pickSavePath: (defaultName: string) => Promise<string | null>;
   writeFile: (path: string, text: string) => Promise<void>;
@@ -26,6 +26,8 @@ export interface DiagServiceDeps {
   cpuTimes?: () => Record<string, number>;
   /** 渲染进程最近的崩溃、卡住、恢复（BTL-262）。 */
   rendererEvents?: () => unknown[];
+  /** 信箱现在的状态（BTL-279）：导出时才读。 */
+  mailbox?: () => unknown;
 }
 
 /** 直方图量的是定时器实际的间隔，里面包含采样间隔本身：减掉它，剩下的才是事件循环被占住的时间。 */
@@ -151,8 +153,19 @@ export class DiagService {
       current: this.stats?.current() ?? { start: now, end: now, eld: null, sends: {}, invokes: {}, ops: {}, renderer: { longTasks: 0, totalMs: 0, maxMs: 0, xterm: null } },
       history: this.stats?.history() ?? [],
       rendererEvents: this.d.rendererEvents?.() ?? [],
+      mailbox: this.mailboxState(),
       logTail: await readLogTail(this.d.logFile),
     });
+  }
+
+  /** 读信箱状态出错不该让整份诊断导不出来。 */
+  private mailboxState(): unknown {
+    try {
+      return this.d.mailbox?.() ?? null;
+    } catch (e) {
+      this.d.log(`diag: reading the mailbox state failed: ${String(e)}`);
+      return { error: String(e) };
+    }
   }
 
   /** 导出：选了路径就写进去，返回路径；取消返回 null。 */

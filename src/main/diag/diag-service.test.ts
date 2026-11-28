@@ -49,6 +49,15 @@ describe("DiagService", () => {
     await svc.export();
     expect(JSON.parse(written[0]).renderer).toEqual({ events });
   });
+
+  it("the exported file carries the mailbox's state read at export time (BTL-279)", async () => {
+    const written: string[] = [];
+    let state = { queued: [{ id: "m1" }] };
+    svc = new DiagService({ mode: "off", now: () => 0, log: () => undefined, logFile: "/nope", info, pickSavePath: async () => "/x.json", writeFile: async (_p, t) => void written.push(t), mailbox: () => state });
+    state = { queued: [{ id: "m2" }] };
+    await svc.export();
+    expect(JSON.parse(written[0]).mailbox).toEqual({ queued: [{ id: "m2" }] });
+  });
 });
 
 describe("DiagService measure", () => {

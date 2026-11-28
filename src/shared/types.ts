@@ -763,7 +763,14 @@ export interface MessageView {
   repliedAt: string | null;
   /** 还在排队时，上一次试着送被什么挡住、从什么时候开始（BTL-269）；没挡过、送到了为 null。 */
   blocked: { reason: MailboxBlockReason; since: string | null } | null;
+  /** 没送进去的尝试有几次、最后一次的时间和结果（BTL-279）：送到后留着，看得出试了多久。 */
+  attempts: number;
+  lastAttemptAt: string | null;
+  lastAttempt: MailboxAttempt | null;
 }
+
+/** 一次没送进去的尝试的结果（BTL-279）：挡住它的原因，或者 recheck（粘贴前复查没过）、exited（终端退出了）。 */
+export type MailboxAttempt = MailboxBlockReason | "recheck" | "exited";
 
 /** messages:list 的范围：Shipherd 总控的，或者一个 feature 的。 */
 export type MessageScope = { shipherd: true } | { featureId: number };

@@ -27,6 +27,8 @@ export interface DiagInput {
   logTail: string[];
   /** 渲染进程的崩溃、卡住、恢复（RendererHealth.events()）。 */
   rendererEvents?: unknown[];
+  /** 信箱现在的状态（BTL-279，Mailbox.diagnostics()）：排着的每条为什么还没送进去、试了几次。没有为 null。 */
+  mailbox?: unknown;
 }
 
 export interface DiagnosticsFile {
@@ -39,6 +41,7 @@ export interface DiagnosticsFile {
   mainMemory: Record<string, number>;
   perf: { current: PerfWindow; history: PerfWindow[] };
   renderer: { events: unknown[] };
+  mailbox: unknown;
   logTail: string[];
 }
 
@@ -53,6 +56,7 @@ export function buildDiagnostics(i: DiagInput): DiagnosticsFile {
     mainMemory: i.mainMemory,
     perf: { current: i.current, history: i.history },
     renderer: { events: i.rendererEvents ?? [] },
+    mailbox: i.mailbox ?? null,
     logTail: i.logTail.slice(-LOG_TAIL_LINES),
   };
 }

@@ -61,7 +61,7 @@ async function setup(opts: {
   const trace: string[] = [];
   /** 它在等用户回答什么（BTL-269 A2）：head id → awaitingUser。 */
   const awaiting = new Map<string, AwaitingUser>();
-  const pendingMail = new Map<string, { queued: number; oldestQueuedAt: string; blockedBy: "turn" | null; blockedSince: string | null; note: string }>();
+  const pendingMail = new Map<string, { queued: number; oldestQueuedAt: string; blockedBy: "turn" | null; blockedSince: string | null; attempts: number; lastAttemptAt: string | null; note: string }>();
   const mailbox = {
     send: (x: SendInput) => (mailed.push(x), { id: `m${mailed.length}`, state: opts.mailState ?? ("busy" as const) }),
     opened: async () => true,
@@ -294,7 +294,7 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     if (!c.ok) throw new Error("no coordinator");
     const child = await handle({ ...base, from: c.termId, op: "start_session", ticket: "DMS-1", task: "a" });
     const id = child.ok ? (child.value as { sessionId: string }).sessionId : "";
-    const view = { queued: 2, oldestQueuedAt: "2026-11-26T00:00:00.000Z", blockedBy: "turn" as const, blockedSince: "2026-11-26T00:00:05.000Z", note: "排着：它这一轮还在干活" };
+    const view = { queued: 2, oldestQueuedAt: "2026-11-26T00:00:00.000Z", blockedBy: "turn" as const, blockedSince: "2026-11-26T00:00:05.000Z", attempts: 3, lastAttemptAt: "2026-11-26T00:00:25.000Z", note: "排着：它这一轮还在干活" };
     pendingMail.set(id, view);
     const listed = await handle({ ...base, op: "list_sessions" });
     const rows = (listed.ok ? listed.value : []) as { id: string; mailbox: unknown }[];
