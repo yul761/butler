@@ -573,7 +573,7 @@ const ZH = {
       stackConfirm: "栈的 rebase 等你确认",
       stackMarkers: "栈里有一层带着冲突标记，没推出去",
       stackNoPushRemote: "新栈底不知道该推到哪个 remote",
-      stackTicketClosed: "栈里有一层的 ticket 关掉了，栈停着没 rebase",
+      stackTicketClosed: "栈里有一层的 ticket 关掉了（或分支不归它了），栈停着没 rebase",
       intake: "自动接活拿不准，等你决定",
       other: "Shipherd 要你点一下",
     },
@@ -2020,7 +2020,7 @@ const ZH = {
       no_push_remote: (stack: string, branch: string) =>
         `栈「${stack}」的新栈底 ${branch} 还没推过，Shipherd 认不出该推到哪个 remote（这个仓库有好几个 remote），就没推、也没开 PR。在终端跑 git config branch.${branch}.pushRemote <remote> 指定，下一轮就接着开。`,
       ticket_closed: (stack: string, branches: string) =>
-        `栈「${stack}」的 ${branches} 所在的 ticket 已经关掉或归档了。Shipherd 不再改写、推送它的分支，也不给它开 PR，所以整个栈先停着不 rebase。把它移出栈（或者重新打开 ticket），下一轮就接着来。`,
+        `栈「${stack}」的 ${branches} 所在的 ticket 已经关掉或归档了，或者这个分支已经不属于它。Shipherd 不再改写、推送它，也不给它开 PR，所以整个栈先停着不 rebase。让那个 ticket 的 session 或总控用 stack_define 把它移出栈，或者在栈区块点「不再管这个栈」，或者重新打开 ticket，下一轮就接着来。`,
       confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
         why === "remote_ahead"
           ? `栈「${stack}」的 ${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）` +
