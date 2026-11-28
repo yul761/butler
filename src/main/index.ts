@@ -274,7 +274,7 @@ import { CiTriage } from "./loop/ci-triage";
 import { CommentLoop } from "./loop/comment-loop";
 import { StacksRepo } from "./db/stacks-repo";
 import { StackPolicyService } from "./stacks/stack-policy";
-import { StackService, type OwnedBranch } from "./stacks/stack-service";
+import { StackService, stackMailRepoIdOf, stackMailRef, stackTicketLive, type OwnedBranch, type StackMailTo } from "./stacks/stack-service";
 import { StackControl } from "./control/stack-control";
 import { prStateFromEnvelope, ticketsForPrCommands, type PrCommandDeps } from "./prwatch/pr-command";
 import { TicketControl } from "./control/ticket-control";
@@ -2667,8 +2667,8 @@ async function bootstrap(): Promise<void> {
       ticketKey: r.ticketKey, ticketRepoId: r.id, ticketTitle: tickets.get(r.ticketKey)?.title ?? null,
       worktree: r.workMode === "worktree" && r.worktreePath && r.worktreeRemovedAt === null && existsSync(r.worktreePath) ? r.worktreePath : null,
     });
-    // 只认没归档的 ticket；分支名被重复用过时取最新的那个
-    const live = (r: TicketRepo): boolean => { const t = tickets.get(r.ticketKey); return t !== null && t.archivedAt === null; };
+    // 只认没归档、没关掉的 ticket；分支名被重复用过时取最新的那个
+    const live = (r: TicketRepo): boolean => stackTicketLive(tickets.get(r.ticketKey));
     const direct = tickets.reposByBranch(branch).filter((r) => samePath(r.repoPath, repoPath) && live(r)).at(-1);
     if (direct) return own(direct);
     for (const o of branchOwners.byBranch(branch)) {
@@ -2677,13 +2677,14 @@ async function bootstrap(): Promise<void> {
     }
     return null;
   };
+  const stackMailRepoId = (to: StackMailTo): number | null => stackMailRepoIdOf(to, tickets.listRepos(to.ticketKey), samePath);
   const stackService = new StackService({
     repo: new StacksRepo(db, Date.now),
     policy: stackPolicy,
     // 自动化档位（BTL-247）：栈里各层 ticket 所在 epic 自己选的档位盖在三层策略上；「半自动」epic 的仓库也做栈检测。
     overlay: (base, keys) => automation.stack(base, keys),
     autoRebaseRepos: () => [
-      ...new Set(tickets.list().filter((t) => t.archivedAt === null && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
+      ...new Set(tickets.list().filter((t) => stackTicketLive(t) && automation.overrideForTicket(t.key) === "semi").flatMap((t) => t.repos.map((r) => r.repoPath))),
     ],
     external: externalActions,
     workRoot: join(paths.home, "stack-work"),
@@ -2691,7 +2692,9 @@ async function bootstrap(): Promise<void> {
     now: Date.now,
     log: logger,
     owned: stackOwned,
-    slugOf: async (path) => repoIdentity.slugOf(path),
+    slugOf: (path) => repoIdentity.slugOfAsync(path),
+    // fork 工作流：层的 PR 开在 upstream 上（BTL-278）；异步、有缓存，不每轮同步起 git
+    remoteSlugs: (path) => repoIdentity.remoteSlugsOfAsync(path),
     // 开着终端、在这个目录里、正在干活的 session（同一个 head 只看一次）。
     sessionBusy: (path) => pty.openIds().some((t) => {
       const h = sessions.head(t);
@@ -2701,13 +2704,18 @@ async function bootstrap(): Promise<void> {
     trunkBusy: (repoPath, trunk, ignore) => gateRepo.activeHolds().some((h) => samePath(h.repoPath, repoPath) && h.target === trunk && !ignore.includes(h.branch)),
     awaitingCheck: (url): boolean => ticketPrs.byUrl(url).some((r): boolean => commentLoop.awaitingCheck(r.id)),
     // 和 CI、评论同一个收件人；排进它的信箱（BTL-248），同一层新的冲突换掉还没送的旧的。认不出收件人时返回 false。
-    deliver: async (to, text) => {
-      const repoId = to.ticketRepoId ?? tickets.listRepos(to.ticketKey).find((r) => r.branch === to.branch)?.id ?? null;
+    // ref 带上 ticket 的仓库（BTL-278）：同一个 ticket 跨仓库、分支同名时，一边的新信不能换掉、撤掉另一边的
+    deliver: async (to, text, topic) => {
+      const repoId = stackMailRepoId(to);
       if (repoId === null) return false;
       const rcpt = loopRecipient(to.ticketKey, repoId, to.branch);
       if (!rcpt.ok) return false;
-      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: `stack:${to.ticketKey}:${to.branch}` });
+      mailbox.send({ kind: "stack", from: null, to: rcpt.sessionId, featureId: null, body: sanitizeTask(text), ref: stackMailRef(to, repoId, topic) });
       return true;
+    },
+    withdraw: (to, topic) => {
+      const repoId = stackMailRepoId(to);
+      if (repoId !== null) mailbox.withdraw(stackMailRef(to, repoId, topic));
     },
     record: recordEvent,
     onChange: () => notify(),
@@ -3685,7 +3693,8 @@ async function bootstrap(): Promise<void> {
     policySet: (scope: LoopScope, overrides: LoopPolicyOverrides) => loopPolicies.setLayer(scope, overrides),
   };
   const stackPolicyIo = {
-    policyView: (scope: PolicyScope) => stackPolicy.view(scope),
+    // BTL-278：被 epic 档位盖过的栈在设置页说出来
+    policyView: (scope: PolicyScope) => ({ ...stackPolicy.view(scope), epic: stackService.epicNote(scope) }),
     policySet: (scope: PolicyScope, overrides: Record<string, unknown>): StackPolicySetResult => {
       try {
         stackPolicy.setLayer(scope, overrides);
@@ -3756,7 +3765,7 @@ async function bootstrap(): Promise<void> {
     transaction: (fn) => withTransaction(db, fn),
     // 哪些开着的 PR 能关、怎么关、怎么结束 session：tickets/ticket-close-wiring.ts（单独测）。
     ...closeWiring({
-      tickets, ticketPrs, branchOwners, ghDir: prGhDir, slugOf: (path) => repoIdentity.slugOfWarm(path), defaultBranch: (repo) => git.defaultBranch(repo), prHead, prClose, external: externalActions,
+      tickets, ticketPrs, branchOwners, ghDir: prGhDir, slugOf: (path) => repoIdentity.slugOfAsync(path), defaultBranch: (repo) => git.defaultBranch(repo), prHead, prClose, external: externalActions,
       sessions: {
         activityKind: (id) => activityMonitor.get(id)?.kind ?? null,
         waitingForInput: (id) => sessions.get(id)?.waitingForInput ?? false,

@@ -38,6 +38,12 @@ describe("session guide", () => {
     }
   });
 
+  it("tells both coordinators that stack_rebase on needs_confirm confirms the rewrite: ask the user first (BTL-278)", () => {
+    for (const lang of ["zh", "en"] as const) {
+      for (const kind of ["coordinator", "shipherd"] as const) expect(sessionGuide(lang, kind)).toMatch(/needs_confirm[^。.]*ask_user|needs_confirm[\s\S]{0,120}ask_user/);
+    }
+  });
+
   it("只有 ticket session 被告知自我 review 之后用 report 说明结果（PR 进度时间线）", () => {
     expect(sessionGuide("zh", "ticket")).toContain("自我 review");
     expect(sessionGuide("zh", "ticket")).toContain("进度时间线");

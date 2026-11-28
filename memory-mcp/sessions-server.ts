@@ -371,7 +371,8 @@ export const STACK_TOOLS = [
   },
   {
     name: "stack_rebase",
-    description: "马上把一个栈整个 rebase 到最新的 trunk 上（要这个仓库开了「允许 Shipherd 自动 rebase 栈」）。有冲突时停下、原样复原，冲突交给那一层的 session。返回结果和栈现在的样子。",
+    description: "马上把一个栈整个 rebase 到最新的 trunk 上（要这个仓库开了「允许 Shipherd 自动 rebase 栈」）。有冲突时停下、原样复原，冲突交给那一层的 session。返回结果和栈现在的样子。" +
+      "栈的最近一次是 needs_confirm（等确认：有在 review 的 PR，或者冲突还在某层 session 手里）时，调它就等于替用户确认改写、强推正在 review 的 PR：除非用户事先说过可以，先用 ask_user 问用户，同意了再调。Shipherd 只做 git rebase，不编译、不跑测试。",
     inputSchema: {
       type: "object",
       properties: { stack: { type: "integer", minimum: 1, description: "栈 id（list_stacks 里的 id）" } },
@@ -414,7 +415,8 @@ export const STACK_TOOLS_EN = [
   },
   {
     ...STACK_TOOLS[2],
-    description: "Rebase a whole stack onto the latest trunk now (needs \"Let Shipherd rebase stacks\" on for the repo). On a conflict it stops, puts everything back, and hands the conflict to that layer's session. Returns the result and the stack as it is now.",
+    description: "Rebase a whole stack onto the latest trunk now (needs \"Let Shipherd rebase stacks\" on for the repo). On a conflict it stops, puts everything back, and hands the conflict to that layer's session. Returns the result and the stack as it is now. " +
+      "When the stack's latest run is needs_confirm (waiting for an OK: a PR is under review, or a conflict is still with a layer's session), calling this confirms the rewrite and force-push of PRs under review on the user's behalf: unless the user said beforehand that it's fine, ask them with ask_user first and call it only once they agree. Shipherd only runs git rebase; it doesn't build or run tests.",
     inputSchema: { ...STACK_TOOLS[2].inputSchema, properties: { stack: { type: "integer", minimum: 1, description: "the stack id (id in list_stacks)" } } },
   },
   {

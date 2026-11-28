@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { copyRepo, makeRepo, tempDir } from "../test-utils";
 import { isAncestor, parseGitVersion, parseWorktreeList, refsUnder, supportsUpdateRefs } from "./git-stack";
-import { runEngine, type EngineLayer } from "./rebase-engine";
+import { batchByLength, markersAdded, runEngine, type EngineLayer } from "./rebase-engine";
 
 // 真的 git 仓库、每次 rebase 还要起一次 node（sequence editor）：整套并行跑时 5 秒不够。
 // 夹具已经按文件共享（BTL-240），剩下的是被测代码自己的 git 调用（一个用例几十到上百个进程）：Windows runner 上
@@ -172,6 +172,10 @@ describe.each(["update_refs", "per_layer"] as const)("runEngine (%s)", (mode) =>
     expect(r.onto).not.toBe(tips.b);
     expect(await isAncestor(repo, trunk, r.onto)).toBe(true);
     expect(g(repo, "rev-list", "--count", `${trunk}..${r.onto}`)).toBe("4");
+    // 冲突那层下面的 a、b 这次都挪到了新 main 上：报出它们的新顶端，b 的就是 onto
+    expect(r.below.map((t) => t.branch)).toEqual(["a", "b"]);
+    expect(r.below.every((t) => t.newTip !== t.oldTip)).toBe(true);
+    expect(r.below[1]!.newTip).toBe(r.onto);
     // session 照提示在自己的 worktree 里做
     const resolved = resolveAsSession(repo, "c", r.onto, r.upstream, "c.txt", "c1\n");
     expect(g(repo, "rev-list", "--count", `${r.onto}..${resolved}`)).toBe("2");
@@ -273,25 +277,97 @@ describe("runEngine special cases", () => {
     expect(g(repo, "log", "--format=%s", `${tips.a}..${g2.tips[1]!.newTip}`)).toBe("b two\nb one");
   });
 
-  it("replays a resolution rerere already knows", async () => {
+  it("does not reuse a resolution rerere remembers, even one the session gave up on (BTL-278)", async () => {
     const { repo, tips } = fourLayers();
     const trunk = commit(repo, "c.txt", "main's c\n", "main edits c");
-    const rr = (...a: string[]) => {
-      try {
-        return g(repo, "-c", "rerere.enabled=true", ...a);
-      } catch {
-        return "";
-      }
-    };
-    // 用户以前手动解过一次同样的冲突
-    rr("checkout", "-q", "-b", "practice", tips.c!);
-    rr("rebase", "-q", trunk);
+    // rr-cache 在共用的 git 目录里，所有 worktree 共用：session 在自己的 worktree 里解过、又放弃的解法也记在这里
+    g(repo, "config", "rerere.enabled", "true");
+    g(repo, "config", "rerere.autoUpdate", "true");
+    g(repo, "checkout", "-q", "-b", "practice", tips.c!);
+    try {
+      g(repo, "rebase", "-q", trunk);
+    } catch {
+      // 冲突
+    }
+    // 「解法」：第二个提交接着它能干净地叠上去（只有第一个提交冲突）
     writeFileSync(join(repo, "c.txt"), "c1\n");
     g(repo, "add", "c.txt");
-    execFileSync("git", ["-c", "rerere.enabled=true", "-c", "core.editor=true", "rebase", "--continue"], { cwd: repo, stdio: "ignore", env: { ...process.env, GIT_EDITOR: "true" } });
+    execFileSync("git", ["-c", "core.editor=true", "rebase", "--continue"], { cwd: repo, stdio: "ignore", env: { ...process.env, GIT_EDITOR: "true" } });
     g(repo, "checkout", "-q", "main");
     g(repo, "branch", "-D", "practice");
     const r = await runEngine(input(repo, { layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
-    expect(r.kind).toBe("rebased");
+    expect(r).toMatchObject({ kind: "conflict", branch: "c", files: ["c.txt"] });
+    expect(revs(repo, ["a", "b", "c", "d"])).toEqual(["a", "b", "c", "d"].map((b) => tips[b]));
+  });
+
+  it("refuses a result that gained conflict markers, but not markers a layer already had (BTL-278)", async () => {
+    const { repo, tips } = fourLayers();
+    // 一个「解决」冲突时把冲突标记留在文件里还报成功的合并驱动：结果里多出来的标记要拦下来
+    const driver = join(tempDir(), "sloppy-merge.sh");
+    writeFileSync(driver, `printf '<<<<<<< ours\\nx\\n=======\\ny\\n>>>>>>> theirs\\n' > "$1"\nexit 0\n`);
+    g(repo, "config", "merge.sloppy.driver", `sh '${driver.replace(/\\/g, "/")}' %A`);
+    writeFileSync(join(g(repo, "rev-parse", "--git-common-dir").replace(/^(?!\/|[A-Za-z]:)/, `${repo}/`), "info", "attributes"), "c.txt merge=sloppy\n");
+    const trunk = commit(repo, "c.txt", "main's c\n", "main edits c");
+    // 用户开了颜色：git grep 的输出带颜色码也要认得出来
+    g(repo, "config", "color.ui", "always");
+    const r = await runEngine(input(repo, { layers: layers(repo, ["a", "b", "c", "d"]), trunk }));
+    expect(r.kind).toBe("failed");
+    if (r.kind === "failed") expect(r.reason).toMatch(/conflict markers.*c\.txt/);
+    expect(revs(repo, ["a", "b", "c", "d"])).toEqual(["a", "b", "c", "d"].map((b) => tips[b]));
+
+    // 标记本来就在层里（比如测试夹具）：照常 rebase
+    const { repo: repo2 } = fourLayers();
+    g(repo2, "checkout", "-q", "b");
+    commit(repo2, "fixture.txt", "<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n", "b adds a fixture");
+    g(repo2, "checkout", "-q", "main");
+    const trunk2 = commit(repo2, "z.txt", "z\n", "main adds z");
+    const r2 = await runEngine(input(repo2, { layers: layers(repo2, ["a", "b", "c", "d"]), trunk: trunk2 }));
+    expect(r2.kind).toBe("rebased");
+  });
+
+  it("markersAdded looks only at the files a layer changes, reads odd file names literally, and throws when git fails", async () => {
+    const repo = makeRepo();
+    const base = g(repo, "rev-parse", "main");
+    // trunk 里本来就有一个带标记的文件、一堆别的文件：层没动它们，不看
+    for (let k = 0; k < 150; k++) writeFileSync(join(repo, `f${k}.txt`), `${k}\n`);
+    writeFileSync(join(repo, "fixture.txt"), "<<<<<<< ours\nx\n>>>>>>> theirs\n");
+    g(repo, "add", ".");
+    g(repo, "commit", "-q", "-m", "trunk");
+    const newBase = g(repo, "rev-parse", "HEAD");
+    g(repo, "checkout", "-q", "-b", "l");
+    // 名字像 pathspec 的 magic（:! 是排除）：不按字面读就认不出它自己。Windows 的文件名不能带 :，那里只用普通名字
+    const odd = process.platform === "win32" ? "odd.txt" : ":!odd.txt";
+    writeFileSync(join(repo, odd), "<<<<<<< ours\nx\n>>>>>>> theirs\n");
+    writeFileSync(join(repo, "f3.txt"), "three\n");
+    g(repo, "add", ".");
+    g(repo, "commit", "-q", "-m", "layer");
+    const newTip = g(repo, "rev-parse", "HEAD");
+    const t = { branch: "l", oldTip: base, oldBase: base, newBase, newTip };
+    expect(await markersAdded(repo, [t])).toEqual([{ branch: "l", files: [odd] }]);
+    // 层没改任何文件：不起 git grep
+    expect(await markersAdded(repo, [{ ...t, newTip: newBase }])).toEqual([]);
+    // 版本不存在：抛出，不当成「没有标记」
+    await expect(markersAdded(repo, [{ ...t, newTip: "f".repeat(40) }])).rejects.toThrow();
+  });
+
+  it("markersAdded splits git grep by the length of its arguments, not by a count of paths (BTL-278)", async () => {
+    // 按总长度分：长路径少放几个，单个就超了的自己一批
+    expect(batchByLength(["aaaa", "bbbb", "cccc"], 14)).toEqual([["aaaa", "bbbb"], ["cccc"]]);
+    expect(batchByLength(["x".repeat(50), "y"], 14)).toEqual([["x".repeat(50)], ["y"]]);
+    expect(batchByLength([], 14)).toEqual([]);
+    // 预算很小、版本和路径都要分好几批：每一批里的标记都认得出，计数不串
+    const repo = makeRepo();
+    const base = g(repo, "rev-parse", "main");
+    g(repo, "checkout", "-q", "-b", "l");
+    const names = Array.from({ length: 12 }, (_, k) => `dir-${k}/${"n".repeat(20)}-${k}.txt`);
+    for (const [k, f] of names.entries()) {
+      mkdirSync(join(repo, `dir-${k}`), { recursive: true });
+      writeFileSync(join(repo, f), k === 11 ? "<<<<<<< ours\nx\n>>>>>>> theirs\n" : `${k}\n`);
+    }
+    g(repo, "add", ".");
+    g(repo, "commit", "-q", "-m", "layer");
+    const newTip = g(repo, "rev-parse", "HEAD");
+    const t = { branch: "l", oldTip: base, oldBase: base, newBase: base, newTip };
+    expect(await markersAdded(repo, [t], 300)).toEqual([{ branch: "l", files: [names[11]] }]);
   });
 });

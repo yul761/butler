@@ -1,7 +1,7 @@
 import {
   parseStackOverrides, STACK_MERGE_METHODS, STACK_OVERVIEWS, STACK_POLICY_DEFAULTS, StackPolicyError, stackIntRange,
   type StackLayerView, type StackNoticeInfo, type StackPolicyKey, type StackPolicyKeyView, type StackPolicyOverrides, type StackPolicyValue,
-  type StackPolicyView, type StackRunView, type StackView,
+  type StackEpicNote, type StackPolicyView, type StackRunView, type StackView,
 } from "../../shared/stacks";
 import { resetClock } from "./availability-view";
 import type { UiStrings } from "./strings";
@@ -14,7 +14,34 @@ export function stackNoticeText(n: StackNoticeInfo, S: UiStrings): string {
     case "draft_stale": return t.draft_stale(n.stackName, n.branch, n.days ?? 0);
     case "behind": return t.behind(n.stackName, n.commits ?? 0, n.days ?? 0);
     case "stuck": return t.stuck(n.stackName, n.detail ?? "—");
+    case "prs_unreadable": return t.prs_unreadable(n.stackName, n.host ?? null);
+    case "markers": return t.markers(n.stackName, n.branch, (n.files ?? []).join(", "), n.where ?? "rewritten");
+    case "held_below": return t.held_below(n.stackName, (n.branches ?? [n.branch]).join(", "), n.by ?? "—");
+    case "no_push_remote": return t.no_push_remote(n.stackName, n.branch);
+    case "ticket_closed": return t.ticket_closed(n.stackName, (n.branches ?? [n.branch]).join(", "));
+    case "confirm":
+      return t.confirm(n.stackName, (n.branches ?? [n.branch]).join(", "), n.detail === "handoff" || n.detail === "remote_ahead" ? n.detail : "ready_pr", n.push ?? true, n.toSession ?? true);
+    case "rewritten": {
+      const all = n.branches ?? [n.branch];
+      const asked = n.asked ?? [];
+      return t.rewritten(n.stackName, all.join(", "), asked.join(", "), all.filter((b) => !asked.includes(b)).join(", "));
+    }
   }
+}
+
+/** 栈卡片上 autoRebase 的那句话（BTL-278：epic 档位定的要说出来）；开着、按策略开的不说。 */
+export function stackAutoRebaseNote(s: StackView, S: UiStrings): string | null {
+  if (s.autoRebaseBy === "explicit_off") return S.sk.autoRebaseExplicitOff;
+  if (s.autoRebaseBy === "epic") return s.autoRebase ? S.sk.autoRebaseEpicOn : S.sk.autoRebaseEpicOff;
+  return s.autoRebase ? null : S.sk.autoRebaseOff;
+}
+
+/** 设置页：这个范围里被 epic 档位打开的栈、epic 要开却被明确关掉的栈。 */
+export function stackEpicLines(n: StackEpicNote | undefined, S: UiStrings): string[] {
+  const out: string[] = [];
+  if (n?.on.length) out.push(S.sk.epicOn(n.on.join(", ")));
+  if (n?.ignored.length) out.push(S.sk.epicIgnored(n.ignored.join(", ")));
+  return out;
 }
 
 /** 最近一次 rebase 的一行字（没有为 null），外加冲突和没推的分支。 */
@@ -23,6 +50,7 @@ export function lastRunLines(r: StackRunView | null, S: UiStrings, now: number):
   const lines = [S.sk.lastRun(S.sk.outcome[r.outcome], S.sk.trigger[r.trigger], resetClock(r.startedAt, now))];
   if (r.reason && (r.outcome === "deferred" || r.outcome === "failed")) lines[0] += ` · ${r.reason}`;
   if (r.conflict) lines.push(S.sk.conflict(r.conflict.branch, r.conflict.files.join(", ") || "—"));
+  if (r.outcome === "needs_confirm" && r.confirm) lines.push(S.sk.confirmLine(r.confirm.why, r.confirm.branches.join(", "), r.confirm.push ?? true, r.confirm.toSession ?? true));
   if (r.unpushed.length > 0) lines.push(S.sk.unpushedList(r.unpushed.join(", ")));
   return lines;
 }

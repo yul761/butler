@@ -150,7 +150,9 @@ export function noticeNeedsYou(n: NowNotice): boolean {
     case "comments_waiting":
       return true;
     case "cost": return n.breaker.state === "paused";
-    case "stack": return n.stack.reason === "conflict" || n.stack.reason === "stuck";
+    // no_push_remote：要你配 branch.<b>.pushRemote（BTL-278）。held_below 不算：拦它的那层自己有一条 markers
+    // ticket_closed：要你把关掉的 ticket 的层移出栈（不然整个栈一直不 rebase）
+    case "stack": return ["conflict", "stuck", "confirm", "prs_unreadable", "markers", "no_push_remote", "ticket_closed"].includes(n.stack.reason);
     case "intake": return INTAKE_DECISION_STATES.includes(n.item.state);
     case "flow_proposal":
     case "flow_partial":

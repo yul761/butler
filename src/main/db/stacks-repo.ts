@@ -1,6 +1,6 @@
 import type { SQLInputValue } from "node:sqlite";
 import type {
-  StackLayerMode, StackLayerState, StackRunMode, StackRunOutcome, StackSource, StackTrigger,
+  ConflictLease, StackConfirmWhy, StackLayerMode, StackLayerState, StackRunMode, StackRunOutcome, StackSource, StackTrigger,
 } from "../../shared/stacks";
 import { type Db, withTransaction } from "./database";
 
@@ -61,7 +61,25 @@ export interface RunLayerDetail {
 
 export interface RunDetail {
   layers?: RunLayerDetail[];
-  conflict?: { branch: string; files: string[]; commit: string | null; onto: string; upstream: string };
+  /** key：交给 session 后记到层的 conflictKey 上的值；ident：同一个冲突的判断（冲突文件和它们在 onto 里的内容）。 */
+  /** lease：交给 session 的强推命令锁哪个 remote 的哪个 sha，ahead = 远端有本地没有的提交（BTL-278）。 */
+  conflict?: { branch: string; files: string[]; commit: string | null; onto: string; upstream: string; ident?: string; key?: string; lease?: ConflictLease };
+  /**
+   * 引擎跑出这次结果时的输入（BTL-278）：trunk 和各层顶端（有交给 session 的冲突时只算它下面的层）。
+   * 上一次没落地（冲突、失败、要确认、回滚）、输入又没变时不再跑。
+   */
+  inputs?: string;
+  /** needs_confirm：为什么、哪几层。 */
+  /** push：确认以后会不会强推（这几层的「强推」开关开着），文案用；旧行没有，按会推算。 */
+  confirm?: { why: StackConfirmWhy; branches: string[]; push?: boolean; toSession?: boolean };
+  /** 改写后真的排进了 session 信箱的核对请求（BTL-278）。 */
+  verifyAsked?: string[];
+  /** needs_confirm：这次是 autosquash（确认时也 autosquash）。 */
+  autosquash?: boolean;
+  /** 手动 run：谁点的（BTL-278）。 */
+  actor?: "user" | "coordinator" | "shipherd";
+  /** 手动 run 确认的是哪一次 needs_confirm。 */
+  confirms?: number;
   mergeMethod?: "squash" | "merge";
   pushed?: string[];
   unpushed?: string[];
@@ -210,6 +228,14 @@ export class StacksRepo {
     return r ? toStack(r) : null;
   }
 
+  /**
+   * 建过栈的仓库（删掉的栈也算，栈只做软删除）：旧版在这些仓库里打开过 rerere（BTL-278）。
+   * 不按 stack_runs 算：只跑过没变化的 run 的仓库（那种 run 不留行）旧版也打开过。
+   */
+  repoPathsOfStacks(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT repo_path AS p FROM stacks`).all() as { p: string }[]).map((r) => r.p);
+  }
+
   /** 没删的栈，按 id。 */
   list(): StackRow[] {
     return (this.db.prepare(`SELECT * FROM stacks WHERE removed_at IS NULL ORDER BY id`).all() as Raw[]).map(toStack);
@@ -319,17 +345,17 @@ export class StacksRepo {
    * 推迟（或同一原因的失败）：上一条 run 是同样的结果和原因就只更新它的时间和次数，不每分钟记一行。
    * 返回 true = 新记了一行。
    */
-  recordRepeatable(stackId: number, trigger: StackTrigger, outcome: "deferred" | "failed", reason: string): boolean {
+  recordRepeatable(stackId: number, trigger: StackTrigger, outcome: "deferred" | "failed", reason: string, extra?: RunDetail): boolean {
     const last = this.lastRun(stackId);
     const at = this.now();
     if (last && last.outcome === outcome && last.reason === reason) {
-      const detail = { ...last.detail, repeats: (last.detail.repeats ?? 1) + 1 };
+      const detail = { ...last.detail, ...extra, repeats: (last.detail.repeats ?? 1) + 1 };
       this.db.prepare(`UPDATE stack_runs SET finished_at = ?, detail = ? WHERE id = ?`).run(at, JSON.stringify(detail), last.id);
       return false;
     }
     this.db
       .prepare(`INSERT INTO stack_runs (stack_id, trigger, outcome, reason, detail, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(stackId, trigger, outcome, reason, JSON.stringify({ repeats: 1 }), at, at);
+      .run(stackId, trigger, outcome, reason, JSON.stringify({ ...extra, repeats: 1 }), at, at);
     return true;
   }
 

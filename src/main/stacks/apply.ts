@@ -134,7 +134,8 @@ export async function applyTips(i: ApplyInput): Promise<ApplyResult> {
   const pushed: string[] = [];
   const unpushed: string[] = [];
   const pushFailed: { branch: string; error: string }[] = [];
-  for (const l of changed) {
+  // 从下往上推：上面的层要知道下面的推没推上去（BTL-278）
+  for (const l of [...changed].sort((a, b) => a.position - b.position)) {
     if (!l.remoteTip) continue;
     try {
       if (await i.push(l)) pushed.push(l.branch);

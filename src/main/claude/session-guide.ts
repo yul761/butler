@@ -99,12 +99,14 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
           ? "几个 ticket 前后依赖（后一个要在前一个的改动上做）时用栈：create_ticket 带 stack_on 把新 ticket 接在上一个之上，或者用 stack_define 把已有的分支定成栈。"
           : "几个 Shipherd 分支前后依赖时可以用 stack_define 把它们定成栈（从下到上）。") +
           "只有栈底的 PR 给人 review；栈底合并或 trunk 更新后 Shipherd 会整栈 rebase、把下一层开成 PR，冲突交给那一层的 session，不用手动 rebase 上面的层。" +
-          "list_stacks 看状态，stack_rebase 马上 rebase 一次，上面某层要跑 CI 时用 stack_layer_mode 开成 draft。"
+          "list_stacks 看状态，stack_rebase 马上 rebase 一次，上面某层要跑 CI 时用 stack_layer_mode 开成 draft。" +
+          "栈在 needs_confirm（等确认）时调 stack_rebase 就是替用户确认改写、强推正在 review 的 PR：除非用户事先说过可以，先用 ask_user 问。Shipherd 只做 git rebase，不编译、不跑测试；改写后它会请各层的 session 核对。"
         : (kind === "coordinator"
           ? "When tickets depend on each other (one builds on another's changes), use a stack: create_ticket with stack_on puts the new ticket on top of the previous one, or stack_define turns existing branches into a stack. "
           : "When Shipherd branches depend on each other you can turn them into a stack with stack_define (bottom to top). ") +
           "Only the bottom PR is for human review; when the bottom merges or trunk moves, Shipherd rebases the whole stack, opens the next layer as a PR, and hands conflicts to that layer's session, so nobody rebases the layers above by hand. " +
-          "Use list_stacks for the state, stack_rebase to rebase once now, and stack_layer_mode to open a layer above as a draft when it needs CI.",
+          "Use list_stacks for the state, stack_rebase to rebase once now, and stack_layer_mode to open a layer above as a draft when it needs CI. " +
+          "When a stack is needs_confirm (waiting for an OK), calling stack_rebase confirms rewriting and force-pushing PRs under review on the user's behalf: unless the user said beforehand that it's fine, ask them with ask_user first. Shipherd only runs git rebase; it doesn't build or run tests, and after a rewrite it asks each layer's session to check.",
   // PR 进度：自我 review 的结果用 report 写进时间线（只给 ticket session 和修复 session）。
   (lang, kind) =>
     kind !== "ticket"

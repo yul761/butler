@@ -61,7 +61,8 @@ export interface NewTip {
 export type EngineResult =
   | { kind: "noop"; tips: NewTip[] }
   | { kind: "rebased"; tips: NewTip[] }
-  | { kind: "conflict"; position: number; branch: string; files: string[]; commit: string | null; onto: string; upstream: string }
+  /** below：冲突那层下面各层这次的新顶端（没动的 newTip 等于 oldTip）。 */
+  | { kind: "conflict"; position: number; branch: string; files: string[]; commit: string | null; onto: string; upstream: string; below: NewTip[] }
   | { kind: "failed"; reason: string };
 
 interface Planned {
@@ -164,9 +165,11 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
   const wt = join(work, "wt");
   const hooks = join(work, "hooks");
   mkdirSync(hooks, { recursive: true });
-  // abbreviateCommands 关掉：sequence editor 认的是完整的 update-ref 行（它也认缩写，双保险）
+  // abbreviateCommands 关掉：sequence editor 认的是完整的 update-ref 行（它也认缩写，双保险）。
+  // rerere 关掉（BTL-278）：rr-cache 在共用的 git 目录里，所有 worktree 共用一份，session 解过又放弃的解法也在里面；
+  // 自动 rebase 套用它、再强推，等于把没人核对过的解法推上去。冲突一律交给那一层的 session。
   const pre = [
-    "-c", `core.hooksPath=${hooks.replace(/\\/g, "/")}`, "-c", "rerere.enabled=true", "-c", "rerere.autoUpdate=true", "-c", "rebase.abbreviateCommands=false",
+    "-c", `core.hooksPath=${hooks.replace(/\\/g, "/")}`, "-c", "rerere.enabled=false", "-c", "rebase.abbreviateCommands=false",
   ];
   const env = sequenceEditorEnv(work, i.execPath, tmpPrefix(i.runId));
   try {
@@ -184,7 +187,7 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
       if (i.mode === "update_refs" && seg.length > 1) args.push("--update-refs");
       args.push(i.autosquash ? "--autosquash" : "--no-autosquash", "--empty=drop", "--onto", onto, first.upstream, tmpName(i.runId, top.layer.position));
       log(`stack run ${i.runId}: git ${args.join(" ")}`);
-      const conflict = await rebaseWithRerere(wt, args, pre, env);
+      const conflict = await rebaseOnce(wt, args, pre, env);
       if (conflict) {
         let ownerIdx = seg.length - 1;
         if (conflict.commit) {
@@ -207,7 +210,9 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
       }
       return { kind: "ok", tips: out };
     };
+    let doneInSeg: NewTip[] = [];
     for (const seg0 of segments(planned, start, i.mode)) {
+      doneInSeg = [];
       let r = await rebaseSeg(seg0, newParent);
       let seg = seg0;
       if (r.kind === "conflict" && r.ownerIdx > 0) {
@@ -215,6 +220,7 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
         // 改成一层一层地重做这一段，冲突那条命令的 onto 就是它下面那层真正的新顶端。
         for (const p of seg0) await gitOk(i.repo, ["update-ref", tmpRef(i.runId, p.layer.position), p.layer.tip]);
         const acc: NewTip[] = [];
+        doneInSeg = acc;
         let onto = newParent;
         r = { kind: "ok", tips: acc };
         for (const p of seg0) {
@@ -233,7 +239,10 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
       if (r.kind === "conflict") {
         // owner 那一层要在自己的 worktree 里做的那一条：它的新父是 owner 下面那层的新顶端（段首就是这段的 onto）。
         const owner = seg[r.ownerIdx]!;
-        return { kind: "conflict", position: owner.layer.position, branch: owner.layer.branch, files: r.files, commit: r.commit, onto: newParent, upstream: owner.upstream };
+        return {
+          kind: "conflict", position: owner.layer.position, branch: owner.layer.branch, files: r.files, commit: r.commit, onto: newParent, upstream: owner.upstream,
+          below: [...tips, ...doneInSeg],
+        };
       }
       tips.push(...r.tips);
       newParent = r.tips[r.tips.length - 1]!.newTip;
@@ -247,6 +256,12 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
       }
     }
     const changed = tips.some((t) => t.newTip !== t.oldTip);
+    if (changed && !i.autosquash) {
+      // 强推前的护栏（BTL-278）：结果里比应有的多出冲突标记（合并驱动、hook 之类把没解完的冲突当成解完了）就不落地。
+      const bases = new Map(planned.map((p) => [p.layer.branch, p.upstream]));
+      const bad = await markersAdded(i.repo, tips.filter((t) => t.newTip !== t.oldTip).map((t) => ({ ...t, oldBase: bases.get(t.branch)! })));
+      if (bad.length > 0) return { kind: "failed", reason: `conflict markers left in ${bad.map((b) => `${b.branch}: ${b.files.join(", ")}`).join("; ")}` };
+    }
     return { kind: changed ? "rebased" : "noop", tips };
   } catch (e) {
     return { kind: "failed", reason: (e as Error).message };
@@ -255,30 +270,102 @@ export async function runEngine(i: EngineInput): Promise<EngineResult> {
   }
 }
 
-/** 跑 rebase；rerere 解完的冲突自动 --continue。还有没解的冲突时 abort 并返回冲突信息；别的失败抛出。 */
-async function rebaseWithRerere(
+/**
+ * 跑一次 rebase。停下来有没解的冲突：abort 并返回冲突信息。停下来却没有冲突（不该发生：rerere 关着、
+ * sequence editor 只写 pick 和 update-ref）：abort 并抛出，不自己 --continue（BTL-278）。别的失败也抛出。
+ */
+async function rebaseOnce(
   wt: string, args: string[], pre: string[], env: Record<string, string>,
 ): Promise<{ files: string[]; commit: string | null } | null> {
-  let r = await runGit(wt, args, { pre, env, timeoutMs: REBASE_TIMEOUT_MS });
-  // 栈不限层数（工作流 R，K8），一次 --update-refs 可能要停很多次：不按次数封顶，
-  // 而是每次 --continue 都得往前走（停下的提交变了）；停在同一个提交上就放弃。
-  let last: string | null | undefined;
-  for (;;) {
-    if (r.code === 0 && !(await inRebase(wt))) return null;
-    if (!(await inRebase(wt))) throw new Error(`git rebase failed: ${(r.stderr || r.stdout).trim()}`);
-    const files = await unmergedFiles(wt);
-    const at = await revParse(wt, "REBASE_HEAD");
-    if (files.length > 0) {
-      await runGit(wt, ["rebase", "--abort"], { pre, env });
-      return { files, commit: at };
-    }
-    if (at === last) break;
-    last = at;
-    // rerere 已经解完并 add 了（rerere.autoUpdate）：接着走。
-    r = await runGit(wt, ["rebase", "--continue"], { pre, env, timeoutMs: REBASE_TIMEOUT_MS });
+  const r = await runGit(wt, args, { pre, env, timeoutMs: REBASE_TIMEOUT_MS });
+  if (!(await inRebase(wt))) {
+    if (r.code === 0) return null;
+    throw new Error(`git rebase failed: ${(r.stderr || r.stdout).trim()}`);
   }
+  const files = await unmergedFiles(wt);
+  const at = await revParse(wt, "REBASE_HEAD");
   await runGit(wt, ["rebase", "--abort"], { pre, env });
-  throw new Error("git rebase did not finish");
+  if (files.length > 0) return { files, commit: at };
+  throw new Error(`git rebase stopped without a conflict: ${(r.stderr || r.stdout).trim()}`);
+}
+
+const MARKER = "^(<<<<<<<|>>>>>>>)( |$)";
+
+/**
+ * 一次 git grep 的参数最多多长（BTL-278）：Windows 的整条命令行最长 32767 个字符，git 的路径、引号、转义还要占一些；
+ * 原来按 100 个路径一批，路径一长（monorepo 里 200 多字的很常见）就超了。
+ */
+const GREP_ARGS_BUDGET = 24_000;
+
+/** 按总长度分批（每个参数另算 3 个字符：空格和可能加的一对引号）；单个就超了的自己一批。 */
+export function batchByLength(items: string[], budget: number): string[][] {
+  const out: string[][] = [];
+  let cur: string[] = [];
+  let len = 0;
+  for (const it of items) {
+    const n = it.length + 3;
+    if (cur.length > 0 && len + n > budget) {
+      out.push(cur);
+      cur = [];
+      len = 0;
+    }
+    cur.push(it);
+    len += n;
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
+
+/**
+ * 每层新顶端里比「应有的」多出冲突标记的文件。应有的 = 新起点里的 + 这一层自己那段提交带进来的（旧顶端减旧起点），
+ * 这样层里、trunk 里本来就有的标记（测试夹具之类）不算。只看这一层（新起点..新顶端）改到的文件（BTL-278：原来每个
+ * 版本的整棵树都 grep 一遍，大仓库里会超时）：没改到的文件新顶端和新起点一样，不会多出标记。git 出错、超时都抛出。
+ */
+export async function markersAdded(
+  repo: string, tips: { branch: string; oldTip: string; newTip: string; oldBase: string; newBase: string }[], budget = GREP_ARGS_BUDGET,
+): Promise<{ branch: string; files: string[] }[]> {
+  if (tips.length === 0) return [];
+  const touched = new Set<string>();
+  for (const t of tips) {
+    const d = await runGit(repo, ["diff", "--name-only", "--no-renames", "-z", t.newBase, t.newTip]);
+    if (d.code !== 0) throw new Error(`git diff failed: ${d.stderr.trim()}`);
+    for (const f of d.stdout.split("\0")) if (f) touched.add(f);
+  }
+  if (touched.size === 0) return [];
+  const revs = [...new Set(tips.flatMap((t) => [t.oldTip, t.newTip, t.oldBase, t.newBase]))];
+  const counts = new Map<string, Map<string, number>>();
+  // 用户配了 color.ui=always 时输出带颜色码，下面就一行都认不出来：关掉颜色。路径按字面认（文件名开头的 :! 之类不当 pathspec 的 magic）。
+  const fixed = ["--literal-pathspecs", "-c", "color.grep=false", "grep", "--no-color", "-I", "-c", "-E", MARKER, "--"];
+  const room = budget - fixed.reduce((a, x) => a + x.length + 3, 0);
+  // 版本和路径都按长度分：版本最多占一半
+  const batches: [string[], string[]][] = [];
+  for (const rs of batchByLength(revs, Math.floor(room / 2))) {
+    const left = room - rs.reduce((a, x) => a + x.length + 3, 0);
+    for (const ps of batchByLength([...touched], left)) batches.push([rs, ps]);
+  }
+  for (const [rs, ps] of batches) {
+    const r = await runGit(repo, [...fixed.slice(0, -1), ...rs, "--", ...ps]);
+    // 1 = 一处都没有
+    if (r.code !== 0 && r.code !== 1) throw new Error(`git grep failed: ${r.stderr.trim()}`);
+    let seen = 0;
+    for (const line of r.stdout.split(/\r?\n/)) {
+      const m = /^([0-9a-f]{7,64}):(.*):(\d+)$/.exec(line);
+      if (!m) continue;
+      seen++;
+      const per = counts.get(m[1]!) ?? new Map<string, number>();
+      per.set(m[2]!, Number(m[3]));
+      counts.set(m[1]!, per);
+    }
+    // 有匹配却一行都没认出来：输出格式不对，不能当成「没有标记」放过去
+    if (r.code === 0 && seen === 0) throw new Error(`git grep: unexpected output: ${r.stdout.slice(0, 200)}`);
+  }
+  const n = (rev: string, f: string) => counts.get(rev)?.get(f) ?? 0;
+  const out: { branch: string; files: string[] }[] = [];
+  for (const t of tips) {
+    const files = [...(counts.get(t.newTip)?.keys() ?? [])].filter((f) => n(t.newTip, f) > n(t.newBase, f) + Math.max(0, n(t.oldTip, f) - n(t.oldBase, f)));
+    if (files.length > 0) out.push({ branch: t.branch, files });
+  }
+  return out;
 }
 
 async function inRebase(wt: string): Promise<boolean> {

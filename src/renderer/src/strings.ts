@@ -25,7 +25,7 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
-import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
+import type { StackLayerState, StackMarkersWhere, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
@@ -570,6 +570,10 @@ const ZH = {
       commentsUndelivered: (n: number) => `有 ${n} 条评论没送到 session`,
       stackConflict: "栈里有冲突没交给 session",
       stackStuck: "栈的 rebase 卡住了",
+      stackConfirm: "栈的 rebase 等你确认",
+      stackMarkers: "栈里有一层带着冲突标记，没推出去",
+      stackNoPushRemote: "新栈底不知道该推到哪个 remote",
+      stackTicketClosed: "栈里有一层的 ticket 关掉了（或分支不归它了），栈停着没 rebase",
       intake: "自动接活拿不准，等你决定",
       other: "Shipherd 要你点一下",
     },
@@ -1952,13 +1956,31 @@ const ZH = {
     noUpdateRefs: "这台电脑的 git 不支持 --update-refs（要 2.38 以上），Shipherd 会一层一层 rebase，慢一些。",
     repoTrunk: (repo: string, trunk: string) => `${repo} · trunk ${trunk}`,
     autoRebaseOff: "这个仓库没开「允许 Shipherd 自动 rebase 栈」：Shipherd 只看，不改分支。",
+    autoRebaseEpicOn: "自动 rebase：因为 epic 是半自动，已开着。",
+    autoRebaseEpicOff: "自动 rebase：因为 epic 是手动，已关着。Shipherd 只看，不改分支。",
+    autoRebaseExplicitOff: "epic 是半自动，但这个仓库明确关了自动 rebase，按关。Shipherd 只看，不改分支。",
+    epicOn: (names: string) => `因为 epic 是半自动，这些栈的自动 rebase 已开着：${names}`,
+    epicIgnored: (names: string) => `这些栈的 epic 是半自动，但这里明确关了自动 rebase，按关：${names}`,
+    confirmLine: (why: "ready_pr" | "handoff" | "remote_ahead", branches: string, push = true, toSession = true) => {
+      if (why === "remote_ahead") {
+        const then = toSession ? "会把冲突交给 session 解" : "会把冲突留给你解（「冲突交给 session」关着）";
+        const noPush = push ? "不给推送命令" : "「强推」开关关着，Shipherd 不推，也不给推送命令";
+        return `${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）。Shipherd 没把冲突交出去；点「马上 rebase」${then}，${noPush}，远端的提交怎么合进来由你决定。`;
+      }
+      const how = push
+        ? "Shipherd 只做 git rebase 再强推，不编译、不跑测试，改写后会请各层的 session 核对。"
+        : "Shipherd 只在本地做 git rebase（「强推」开关关着，不推），不编译、不跑测试，改写后会请各层的 session 核对。";
+      return why === "ready_pr"
+        ? `${branches} 有在 review 的 PR，Shipherd 没改写。要改写就点「马上 rebase」：${how}`
+        : `${branches} 现在归 session 管（最下面那层的冲突还没解完），Shipherd 没动。要改写就点「马上 rebase」：${how}`;
+    },
     source: { mcp: "总控定的", ticket: "stack_on 建的", detected: "自动识别" } as Record<StackSource, string>,
     state: { branch_only: "分支", draft: "draft PR", ready: "PR", merged: "已合并" } as Record<StackLayerState, string>,
     bottom: "栈底",
     behind: (n: number) => `落后 trunk ${n} 个提交`,
     unpushed: "改写过，还没推",
     lastRun: (outcome: string, trigger: string, when: string) => `最近一次：${outcome}（${trigger}，${when}）`,
-    outcome: { rebased: "rebase 好了", noop: "不用 rebase", conflict: "有冲突", deferred: "推迟了", failed: "失败了", rolled_back: "已回滚", restored: "已从备份恢复" } as Record<StackRunOutcome, string>,
+    outcome: { rebased: "rebase 好了", noop: "不用 rebase", conflict: "有冲突", deferred: "推迟了", failed: "失败了", rolled_back: "已回滚", restored: "已从备份恢复", needs_confirm: "等你确认" } as Record<StackRunOutcome, string>,
     trigger: { main_updated: "trunk 更新", bottom_merged: "栈底合并", layer_commits: "某层有新提交", daily: "每日", manual: "手动", autosquash: "autosquash", restore: "恢复" } as Record<StackTrigger, string>,
     conflict: (branch: string, files: string) => `冲突在 ${branch}：${files}`,
     unpushedList: (branches: string) => `「推送分支」开关关着，没推：${branches}`,
@@ -1975,6 +1997,43 @@ const ZH = {
       draft_stale: (stack: string, branch: string, days: number) => `栈「${stack}」的 ${branch} 当 draft 已经 ${days} 天了，不用跑 CI 的话可以降回分支`,
       behind: (stack: string, commits: number, days: number) => `栈「${stack}」的栈底落后 trunk ${commits} 个提交（最早的是 ${days} 天前的）`,
       stuck: (stack: string, detail: string) => `栈「${stack}」的 rebase 卡住了：${detail}`,
+      prs_unreadable: (stack: string, host: string | null) =>
+        host && host !== "github.com"
+          ? `栈「${stack}」一天多没自动 rebase 了：Shipherd 读不到 ${host} 上的 PR，没法确认哪些层在 review，就一直推迟。是 GitHub Enterprise 就在终端跑 gh auth login --hostname ${host}，登录后下一轮会自己接着跑；不是 GitHub 的仓库，栈只能手动 rebase（点「马上 rebase」）。`
+          : `栈「${stack}」一天多没自动 rebase 了：读不到开着的 PR，Shipherd 没法确认哪些层在 review，就一直推迟。多半是 gh 没登录：在终端跑 gh auth login，登录后下一轮会自己接着跑。`,
+      markers: (stack: string, branch: string, files: string, where: StackMarkersWhere = "rewritten") => {
+        const what = { new_bottom: "还没推过", new_layer: "还没推过", rewritten: "改写过、还没推出去", local: "本地有还没推的提交" }[where];
+        if (!files) return `栈「${stack}」的 ${branch} ${what}，可是查不了里面有没有冲突标记，Shipherd 先不推，过一会儿再查。一直这样就看一下 Shipherd 的日志。`;
+        switch (where) {
+          case "new_bottom":
+            return `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它，也不给它开 PR：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`;
+          case "new_layer":
+            return `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它、不给它开 draft，叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，上面的层下一轮补推；要开 draft 就再点一次。`;
+          case "local":
+            return `栈「${stack}」的 ${branch} 本地有还没推的提交，${files} 里有冲突标记（<<<<<<<），远端那份没有。叠在它上面的层推上去就带着这些标记，Shipherd 先不推它们：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就补推上面的层。`;
+          default:
+            return `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<），远端那份没有。Shipherd 不推它（重新 rebase 也会带着这些标记），叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`;
+        }
+      },
+      held_below: (stack: string, branches: string, by: string) =>
+        `栈「${stack}」的 ${branches} 改写过、还没推出去：它们叠在 ${by} 上，${by} 带着冲突标记、还没推，推上去远端就带着那些标记。Shipherd 先不推，等 ${by} 的标记去掉（看 ${by} 那条提醒），下一轮自己补推。`,
+      no_push_remote: (stack: string, branch: string) =>
+        `栈「${stack}」的新栈底 ${branch} 还没推过，Shipherd 认不出该推到哪个 remote（这个仓库有好几个 remote），就没推、也没开 PR。在终端跑 git config branch.${branch}.pushRemote <remote> 指定，下一轮就接着开。`,
+      ticket_closed: (stack: string, branches: string) =>
+        `栈「${stack}」的 ${branches} 所在的 ticket 已经关掉或归档了，或者这个分支已经不属于它。Shipherd 不再改写、推送它，也不给它开 PR，所以整个栈先停着不 rebase。让那个 ticket 的 session 或总控用 stack_define 把它移出栈，或者在栈区块点「不再管这个栈」，或者重新打开 ticket，下一轮就接着来。`,
+      confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>
+        why === "remote_ahead"
+          ? `栈「${stack}」的 ${branches} 有冲突，可是远端有本地没有的提交（可能是 reviewer 推的）` +
+            (push && toSession ? "，照常交给 session 强推会冲掉它们" : "") +
+            `。Shipherd 没动；点「马上 rebase」会把冲突${toSession ? "交给 session" : "留给你"}，` +
+            (push ? "但不给推送命令。" : "「强推」开关关着，不推，也不给推送命令。")
+          : why === "ready_pr"
+          ? `栈「${stack}」要 rebase，可是 ${branches} 有在 review 的 PR。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`
+          : `栈「${stack}」要 rebase，可是 ${branches} 现在归 session 管：最下面那层的冲突交给它了，还没解完。Shipherd 没动，确认要改写就点「马上 rebase」（Shipherd 不编译、不跑测试）。`,
+      rewritten: (stack: string, branches: string, asked: string, rest: string) =>
+        `栈「${stack}」的 ${branches} 刚被 Shipherd 自动 rebase 过：只是 git 合了过去，没编译、没跑测试。` +
+        (asked ? `已经请 ${asked} 的 session 核对。` : "") +
+        (rest ? `${rest} 没有 session 收到核对请求，要自己编译、跑测试。` : ""),
     },
     noticeOpen: "看栈",
     settingsIntro: "栈式 PR 的策略，分三层：全局 → 产品 → 仓库，下层覆盖上层。「允许 Shipherd 自动 rebase 栈」默认关，开了 Shipherd 才会改这个仓库里栈的本地分支；推送、开 PR、贴总览 issue 另外受下面的对外动作开关控制，也都默认关。",

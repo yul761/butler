@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "../src/main/test-utils";
 import { MESSAGE_LIMIT, REASON_LIMIT } from "../src/shared/control";
 import {
-  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, FEATURE_PR_TOOLS, FEATURE_PR_TOOLS_EN, PRE_REVIEW_TOOLS, PRE_REVIEW_TOOLS_EN, PRE_REVIEW_ACT_TOOL, PRE_REVIEW_ACT_TOOL_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, TICKET_TOOLS, TICKET_TOOLS_EN, SessionsServer, LESSONS_TOOL, LESSONS_TOOL_EN,
+  SHIPHERD_TOOLS, SHIPHERD_TOOLS_EN, FEATURE_SEND_TOOL, FEATURE_SEND_TOOL_EN, FEATURE_TOOLS, FEATURE_TOOLS_EN, FEATURE_PR_TOOLS, FEATURE_PR_TOOLS_EN, PRE_REVIEW_TOOLS, PRE_REVIEW_TOOLS_EN, PRE_REVIEW_ACT_TOOL, PRE_REVIEW_ACT_TOOL_EN, INBOX_TOOLS, INBOX_TOOLS_EN, MEMBER_TOOLS, MEMBER_TOOLS_EN, STACK_TOOLS, STACK_TOOLS_EN, TICKET_TOOLS, TICKET_TOOLS_EN, SessionsServer, LESSONS_TOOL, LESSONS_TOOL_EN,
   type SessionsServerOptions,
 } from "./sessions-server";
 import { serveStdio } from "./stdio";
@@ -718,6 +718,16 @@ describe("shipherd-sessions pre-review tools (BTL-271)", () => {
         expect(/[\u4e00-\u9fff]/.test(r.result.content[0].text), `${lang} ${name}`).toBe(lang === "zh");
         expect(existsSync(requestsDir) ? readdirSync(requestsDir) : []).toEqual([]);
       }
+    }
+  });
+});
+
+describe("stack_rebase's description (BTL-278)", () => {
+  it("says a call on needs_confirm confirms the rewrite, so ask the user first", () => {
+    for (const tools of [STACK_TOOLS, STACK_TOOLS_EN]) {
+      const d = tools.find((t) => t.name === "stack_rebase")!.description;
+      expect(d).toContain("needs_confirm");
+      expect(d).toContain("ask_user");
     }
   });
 });
