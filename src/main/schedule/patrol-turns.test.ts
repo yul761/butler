@@ -107,6 +107,25 @@ describe("PatrolTurns (BTL-279 review suggestion 3)", () => {
     }
   });
 
+  it("the user's words arriving through the hook while the typed-in patrol is still being delivered: the patrol's late callback opens no patrol turn (seventh review suggestion 4)", () => {
+    let now = 1000;
+    const t = new PatrolTurns(() => now);
+    // 巡检在 1000 粘贴进去，deliver 还没返回；1005 用户的话从 hook 进了这一轮。
+    now = 1005;
+    t.messageDelivered("bt", { kind: "user", via: "hook", deliveredAt: 1005 });
+    // deliver 返回，巡检的回调带着粘贴时刻 1000 晚到：不再设巡检标记。
+    now = 1010;
+    t.messageDelivered("bt", { kind: "patrol", via: "input", deliveredAt: 1000 });
+    expect(t.active("bt")).toBe(false);
+    // 用户的话之后才粘贴的巡检（下一轮）照样开。
+    t.messageDelivered("bt", { kind: "patrol", via: "input", deliveredAt: 1010 });
+    expect(t.active("bt")).toBe(true);
+    // 一条更早的用户的话晚到，不把结束时间往回拨：1000 粘贴的那条还是不算。
+    t.messageDelivered("bt", { kind: "user", via: "hook", deliveredAt: 900 });
+    t.messageDelivered("bt", { kind: "patrol", via: "input", deliveredAt: 1000 });
+    expect(t.active("bt")).toBe(false);
+  });
+
   it("a delivery time later than now counts from now", () => {
     let now = 0;
     const t = new PatrolTurns(() => now);

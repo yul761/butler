@@ -209,6 +209,19 @@ describe("Mailbox", () => {
     expect(Mailbox.note({ delivery: "queued", reason: "closed", since: 0, kind: "patrol" }, 0)).toContain(M().mailboxEta.closed);
   });
 
+  it("pendingFor takes the kind of the message that is blocked, not of the oldest one (BTL-279 seventh review, surviving mutant M21)", async () => {
+    const w = world();
+    w.add("bt", false);
+    w.mb.send({ kind: "shipherd", from: null, to: "bt", featureId: null, body: "older", ref: "s:1" });
+    w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+    await flushPromises();
+    const [older] = w.repo.queued().filter((m) => m.kind === "shipherd");
+    // 最早那条这会儿没有挡住的原因（刚排进来、还没 tick 到），挡住的是巡检那条。
+    w.repo.setBlocked([older.id], null, w.now());
+    expect(w.mb.pendingFor("bt")).toMatchObject({ queued: 2, oldestQueuedAt: older.queuedAt, reason: "turn", kind: "patrol" });
+    expect(w.mb.pendingView("bt")?.note).toContain(M().mailboxEtaPatrol);
+  });
+
   it("list_sessions' pending note for a busy Shipherd control with a patrol queued uses the patrol ETA (BTL-279 sixth review)", async () => {
     const w = world();
     w.add("bt", false);

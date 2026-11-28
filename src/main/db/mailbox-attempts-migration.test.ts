@@ -14,6 +14,24 @@ const M = MIGRATIONS.findIndex((m) => m.includes("session_messages ADD COLUMN at
 
 const cols = (db: DatabaseSync, table: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 
+/**
+ * 在内存里跑完 steps、版本设成 uv，再 VACUUM INTO 写成 file（一次写盘）。同一组 steps 的内存库留着重用：
+ * 直接在磁盘上跑六十多步迁移，Windows 每步都 fsync，CI 上一个测试要 30 秒以上（35a03fa0 的 Windows CI 超时）。
+ */
+const templates = new Map<string, DatabaseSync>();
+const writeDb = (file: string, steps: readonly string[], uv: number): string => {
+  const key = `${uv}\0${steps.join("\0")}`;
+  let mem = templates.get(key);
+  if (!mem) {
+    mem = new DatabaseSync(":memory:");
+    for (const s of steps) mem.exec(s);
+    mem.exec(`PRAGMA user_version = ${uv}`);
+    templates.set(key, mem);
+  }
+  mem.prepare("VACUUM INTO ?").run(file);
+  return file;
+};
+
 describe("mailbox attempts migration (BTL-279)", () => {
   it("is the last migration and upgrades the database before it without touching its rows", () => {
     // 4.3.0 的迁移顺序：BTL-279 排在最后，rebase 时挪到数组末尾。
@@ -74,12 +92,7 @@ describe("mailbox attempts migration (BTL-279)", () => {
   it("openDatabase points at the newest backup from before the test build", () => {
     const dir = mkdtempSync(join(tmpdir(), "shipherd-order-"));
     try {
-      const file = join(dir, "app.db");
-      const db = new DatabaseSync(file);
-      for (let i = 0; i < M - 1; i++) db.exec(MIGRATIONS[i]);
-      db.exec(MIGRATIONS[M]);
-      db.exec(`PRAGMA user_version = ${M}`);
-      db.close();
+      const file = writeDb(join(dir, "app.db"), [...MIGRATIONS.slice(0, M - 1), MIGRATIONS[M]], M);
       // 装测试版本之前（数据版本 M-3）升级时留的那份；pre-v<M> 是 openDatabase 这次刚备份的、就是这份数据本身。
       writeFileSync(join(dir, `app.db.pre-v${M - 3}`), "");
       expect(() => openDatabase(file)).toThrow(new RegExp(`app\\.db\\.pre-v${M - 3}`));
@@ -93,15 +106,7 @@ describe("mailbox attempts migration (BTL-279)", () => {
 
 describe("migration order: which backup to point at, and when there is none (BTL-279 fourth review)", () => {
   /** 一个被分支版本按另一个顺序升到 M 的 app.db（见上面复核复现）。 */
-  const branchDb = (dir: string): string => {
-    const file = join(dir, "app.db");
-    const db = new DatabaseSync(file);
-    for (let i = 0; i < M - 1; i++) db.exec(MIGRATIONS[i]);
-    db.exec(MIGRATIONS[M]);
-    db.exec(`PRAGMA user_version = ${M}`);
-    db.close();
-    return file;
-  };
+  const branchDb = (dir: string): string => writeDb(join(dir, "app.db"), [...MIGRATIONS.slice(0, M - 1), MIGRATIONS[M]], M);
   const orderError = (file: string): MigrationOrderError => {
     try {
       openDatabase(file);
@@ -153,7 +158,7 @@ describe("migration order: which backup to point at, and when there is none (BTL
           setLang(locale);
           const e = orderError(file);
           expect(e.backup).toBeUndefined();
-          expect(e.hint).toEqual({ dir: resolve(dir), copy: `app.db.pre-v${M}` });
+          expect(e.hint).toEqual({ dir: resolve(dir), copy: `app.db.pre-v${M}`, partial: false });
           expect(e.message).toContain(resolve(dir));
           expect(e.message).toContain(`app.db.pre-v${M}`);
           expect(e.message).toMatch(words);
@@ -180,7 +185,7 @@ describe("migration order: which backup to point at, and when there is none (BTL
       expect(existsSync(join(dir, `app.db.pre-v${M}`))).toBe(false);
       expect(e).toBeInstanceOf(MigrationOrderError);
       const order = e as MigrationOrderError;
-      expect(order.hint).toEqual({ dir: resolve(dir), copy: null });
+      expect(order.hint).toEqual({ dir: resolve(dir), copy: null, partial: false });
       expect(order.message).toContain(resolve(dir));
       expect(order.message).not.toMatch(/pre-v|副本/);
       // 英文也一样（第六轮复核建议 2）：只说数据目录，不提副本。
@@ -197,15 +202,7 @@ describe("migration order: which backup to point at, and when there is none (BTL
   });
 
   /** 分支版本把这一步排在第 M-1 步：库停在 M-1，main 的第 M-1、M 步还没跑过（D10 夹具）。 */
-  const earlierBranchDb = (dir: string): string => {
-    const file = join(dir, "app.db");
-    const db = new DatabaseSync(file);
-    for (let i = 0; i < M - 2; i++) db.exec(MIGRATIONS[i]);
-    db.exec(MIGRATIONS[M]);
-    db.exec(`PRAGMA user_version = ${M - 1}`);
-    db.close();
-    return file;
-  };
+  const earlierBranchDb = (dir: string): string => writeDb(join(dir, "app.db"), [...MIGRATIONS.slice(0, M - 2), MIGRATIONS[M]], M - 1);
   const versionOf = (file: string): number => {
     const db = new DatabaseSync(file);
     try {
@@ -248,12 +245,7 @@ describe("migration order: which backup to point at, and when there is none (BTL
   it("any other migration failure prunes no backup either (BTL-279 sixth review)", () => {
     inTemp((dir) => {
       // 版本 M、session_messages 却不在：这一步报 no table（不是顺序错），迁移失败。
-      const file = join(dir, "app.db");
-      const db = new DatabaseSync(file);
-      for (let i = 0; i < M; i++) db.exec(MIGRATIONS[i]);
-      db.exec("DROP TABLE session_messages");
-      db.exec(`PRAGMA user_version = ${M}`);
-      db.close();
+      const file = writeDb(join(dir, "app.db"), [...MIGRATIONS.slice(0, M), "DROP TABLE session_messages"], M);
       for (const v of [M - 3, M - 5]) writeFileSync(join(dir, `app.db.pre-v${v}`), "");
       expect(() => openDatabase(file)).toThrow(/no table session_messages/);
       expect(backupsIn(dir)).toEqual([`app.db.pre-v${M}`, `app.db.pre-v${M - 3}`, `app.db.pre-v${M - 5}`].sort());
@@ -268,7 +260,7 @@ describe("migration order: which backup to point at, and when there is none (BTL
           setLang(locale);
           const e = orderError(file);
           expect(e.found).not.toBe(e.index);
-          expect(e.hint).toEqual({ dir: resolve(dir), copy: `app.db.pre-v${M - 1}` });
+          expect(e.hint).toEqual({ dir: resolve(dir), copy: `app.db.pre-v${M - 1}`, partial: false });
           expect(e.message).toContain(`app.db.pre-v${M - 1}`);
           expect(e.message).toMatch(words);
         }
@@ -308,8 +300,10 @@ describe("checking the order before any step commits (BTL-279 sixth review)", ()
   };
 
   it("refuses with the data version as it is when a later checked step's column is already there, and commits no earlier step", () => {
-    const list = [...base, "CREATE TABLE v (a INTEGER);", addColumns("t", ["x TEXT"])];
+    const list = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE v (a INTEGER);", addColumns("t", ["x TEXT"])];
     const db = at(2, list);
+    // 版本 2 本不该有 x：是分支版本加的（直接在库上 ALTER，不是 list 里的步骤建的）。
+    db.exec("ALTER TABLE t ADD COLUMN x TEXT");
     let e: unknown;
     try {
       migrate(db, undefined, list);
@@ -355,6 +349,197 @@ describe("checking the order before any step commits (BTL-279 sixth review)", ()
     expect(() => checkMigrationOrder(at(2, base), list, 2, 3)).toThrow(MigrationOrderError);
   });
 });
+
+describe("checking the order against the schema version `from` should have (BTL-279 seventh review: simulated, not guessed from DDL)", () => {
+  const rebuild = "CREATE TABLE t_new (a INTEGER); INSERT INTO t_new (a) SELECT a FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t;";
+  /** 复核里的场景，换成合成的列表：0 建 t，1 建 u，2（库没跑过）重建 t（DROP、RENAME TO），3 给 t 加 x、y。 */
+  const list = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", rebuild, addColumns("t", ["x TEXT", "y INTEGER"])];
+  const inTemp = (fn: (dir: string) => void) => {
+    const dir = mkdtempSync(join(tmpdir(), "shipherd-sim-"));
+    try {
+      fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const schemaOf = (file: string) => {
+    const db = new DatabaseSync(file);
+    try {
+      return { uv: db.prepare("PRAGMA user_version").get(), tables: db.prepare("SELECT name, sql FROM sqlite_master ORDER BY name").all(), rows: db.prepare("SELECT * FROM t").all() };
+    } finally {
+      db.close();
+    }
+  };
+  const backupsIn = (dir: string): string[] => readdirSync(dir).filter((n) => n.includes(".pre-v")).sort();
+
+  it("a table an earlier pending step rebuilds, with columns version `from` should not have: refuses before any step, changes nothing, prunes no backup (like #109 rebuilding session_messages on a 4.3.0 test database)", () => {
+    inTemp((dir) => {
+      // 测试版本把加 x、y 排在第 2 步：库停在 2，已经有 x、y，第 3 步（重建）没跑过。
+      const file = writeDb(join(dir, "app.db"), [list[0], list[1], "ALTER TABLE t ADD COLUMN x TEXT; ALTER TABLE t ADD COLUMN y INTEGER; INSERT INTO t VALUES (1, 'kept', 7);"], 2);
+      for (const v of [1]) writeFileSync(join(dir, `app.db.pre-v${v}`), "");
+      const before = schemaOf(file);
+      let e: unknown;
+      try {
+        openDatabase(file, { migrations: list });
+      } catch (x) {
+        e = x;
+      }
+      expect(e).toBeInstanceOf(MigrationOrderError);
+      expect([(e as MigrationOrderError).found, (e as MigrationOrderError).index, (e as MigrationOrderError).what]).toEqual([2, 3, "column"]);
+      expect((e as MigrationOrderError).backup).toBe(join(dir, "app.db.pre-v1"));
+      // 一点没改：重建没跑，x、y 和里面的值都在。
+      expect(schemaOf(file)).toEqual(before);
+      expect(schemaOf(file).rows).toEqual([{ a: 1, x: "kept", y: 7 }]);
+      // 备份一份没删（这次的 pre-v2 加上原来的）。
+      expect(backupsIn(dir)).toEqual(["app.db.pre-v1", "app.db.pre-v2"]);
+    });
+  });
+
+  it("a column that was there at `from`, is dropped by a rebuild and added back, is not misreported", () => {
+    // 0 建 t(a, x)，1 建 u；2 重建成只有 a；3 再加 x、y：版本 2 的库本来就有 x，不报。
+    const legit = ["CREATE TABLE t (a INTEGER, x TEXT);", "CREATE TABLE u (a INTEGER);", rebuild, addColumns("t", ["x TEXT", "y INTEGER"])];
+    const db = new DatabaseSync(":memory:");
+    for (let i = 0; i < 2; i++) db.exec(legit[i]);
+    db.exec("PRAGMA user_version = 2; INSERT INTO t VALUES (1, 'old');");
+    expect(migrate(db, undefined, legit)).toBe(4);
+    expect(cols(db, "t")).toEqual(["a", "x", "y"]);
+    expect(db.prepare("SELECT * FROM t").all()).toEqual([{ a: 1, x: null, y: null }]);
+  });
+
+  it("a table a pending step creates that is already there, though version `from` should not have it: refuses before any step, with the table wording, and leaves the data as it was (#109 infoflow_turns, #107 workflow_*)", () => {
+    inTemp((dir) => {
+      const withCreate = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE v (a INTEGER);", "CREATE TABLE IF NOT EXISTS w (a INTEGER, b TEXT);"];
+      const file = writeDb(join(dir, "app.db"), [withCreate[0], withCreate[1], "CREATE TABLE w (a INTEGER, b TEXT); INSERT INTO w VALUES (1, 'branch');"], 2);
+      writeFileSync(join(dir, "app.db.pre-v1"), "");
+      const before = new DatabaseSync(file);
+      const tablesBefore = before.prepare("SELECT name, sql FROM sqlite_master ORDER BY name").all();
+      before.close();
+      try {
+        for (const [locale, words] of [["zh", /第 4 步要建的表已经在了.*没有接着升级/], ["en", /the tables step 4 creates are already there.*did not upgrade any further/]] as const) {
+          setLang(locale);
+          let e: unknown;
+          try {
+            openDatabase(file, { migrations: withCreate });
+          } catch (x) {
+            e = x;
+          }
+          expect(e).toBeInstanceOf(MigrationOrderError);
+          expect([(e as MigrationOrderError).found, (e as MigrationOrderError).index, (e as MigrationOrderError).what]).toEqual([2, 3, "table"]);
+          expect((e as Error).message).toMatch(words);
+          expect((e as Error).message).not.toMatch(/already exists/);
+        }
+      } finally {
+        setLang("zh");
+      }
+      const after = new DatabaseSync(file);
+      // 第 3 步（建 v）没提交，版本没动，w 里的行还在。
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(after.prepare("SELECT name, sql FROM sqlite_master ORDER BY name").all()).toEqual(tablesBefore);
+      expect(after.prepare("SELECT * FROM w").all()).toEqual([{ a: 1, b: "branch" }]);
+      after.close();
+      expect(backupsIn(dir)).toEqual(["app.db.pre-v1", "app.db.pre-v2"]);
+    });
+  });
+
+  it("a table that was there at `from`, dropped and created again by a pending step, is not misreported", () => {
+    const list2 = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE w (a INTEGER);", "DROP TABLE w; CREATE TABLE w (a INTEGER, b TEXT);", "ALTER TABLE t RENAME TO t_old; CREATE TABLE t (a INTEGER, c TEXT); DROP TABLE t_old;"];
+    const db = new DatabaseSync(":memory:");
+    for (let i = 0; i < 2; i++) db.exec(list2[i]);
+    db.exec("PRAGMA user_version = 2");
+    expect(migrate(db, undefined, list2)).toBe(4);
+    expect(cols(db, "w")).toEqual(["a", "b"]);
+  });
+
+  it("a normal upgrade (nothing already there) never builds the simulated schema", () => {
+    // 第 0 步在内存库里一跑就报错：要是模拟了，checkMigrationOrder 会抛这个。
+    const poison = ["SELECT no_such_function();", "CREATE TABLE t (a INTEGER);", "CREATE TABLE w (a INTEGER);", addColumns("t", ["x TEXT"])];
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE t (a INTEGER); PRAGMA user_version = 2;");
+    expect(() => checkMigrationOrder(db, poison, 2, 4)).not.toThrow();
+    // 有可疑的列时才模拟（这时就跑到了那一步）。
+    db.exec("ALTER TABLE t ADD COLUMN x TEXT");
+    expect(() => checkMigrationOrder(db, poison, 2, 4)).toThrow(/no_such_function/);
+  });
+
+  it("only checks up to the target (surviving mutant M11): a column a later step adds being there already does not stop migrate(db, target)", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(list[0]);
+    db.exec(list[1]);
+    db.exec("ALTER TABLE t ADD COLUMN x TEXT; PRAGMA user_version = 2;");
+    expect(migrate(db, 2, list)).toBe(2);
+    expect(() => migrate(db, 4, list)).toThrow(MigrationOrderError);
+  });
+
+  it("when a later step is what finds it (some steps already committed), the copy it names is the data from before this upgrade, not a copy of the data as it is now (seventh review suggestion 1, surviving mutant M16)", () => {
+    inTemp((dir) => {
+      // 列表自己就重复加了 x（版本 2 本来就有）：预检放过，走到第 4 步自己的检查才拦下，第 3 步已经提交。
+      const odd = ["CREATE TABLE t (a INTEGER);", addColumns("t", ["x TEXT"]), "CREATE TABLE v (a INTEGER);", addColumns("t", ["x TEXT"])];
+      const file = join(dir, "app.db");
+      try {
+        for (const [locale, words, not] of [
+          ["zh", /app\.db\.pre-v2 是这次升级前的数据/, /只是现在这份数据的副本/],
+          ["en", /app\.db\.pre-v2 in it is the data from before this upgrade/, /only a copy of the current data/],
+        ] as const) {
+          setLang(locale);
+          // 每种语言都从头来：上一次已经把第 3 步提交了、还留了 pre-v2。
+          for (const f of ["app.db", "app.db-wal", "app.db-shm", "app.db.pre-v2"]) rmSync(join(dir, f), { force: true });
+          writeDb(file, odd.slice(0, 2), 2);
+          let e: unknown;
+          try {
+            openDatabase(file, { migrations: odd });
+          } catch (x) {
+            e = x;
+          }
+          expect(e).toBeInstanceOf(MigrationOrderError);
+          const order = e as MigrationOrderError;
+          expect([order.found, order.index]).toEqual([3, 3]);
+          expect(order.hint).toEqual({ dir: resolve(dir), copy: "app.db.pre-v2", partial: true });
+          expect(order.message).toMatch(words);
+          expect(order.message).not.toMatch(not);
+          expect(order.message).toMatch(locale === "zh" ? /数据版本 3，第 4 步/ : /data version 3; the columns step 4/);
+        }
+      } finally {
+        setLang("zh");
+      }
+    });
+  });
+
+  it("the first sentence says it did not upgrade any further, in both languages (surviving mutant M17)", () => {
+    try {
+      setLang("zh");
+      expect(new MigrationOrderError(5, 6).message).toMatch(/所以没有接着升级。$/);
+      setLang("en");
+      expect(new MigrationOrderError(5, 6).message).toMatch(/so Shipherd did not upgrade any further\.$/);
+    } finally {
+      setLang("zh");
+    }
+  });
+
+  it("a failed backup the user chose to go on past: the upgrade succeeds and no old backup is pruned (surviving mutant M12)", () => {
+    inTemp((dir) => {
+      const plain = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE v (a INTEGER);", "CREATE TABLE w (a INTEGER);", "CREATE TABLE x (a INTEGER);"];
+      const file = writeDb(join(dir, "app.db"), plain.slice(0, 4), 4);
+      // 三份旧的，比 KEEP_BACKUPS（2）多：要是裁了，pre-v1 就没了。
+      for (const v of [1, 2, 3]) writeFileSync(join(dir, `app.db.pre-v${v}`), "");
+      // 这一份的临时文件位置是个目录：备份失败。
+      mkdirSync(join(dir, "app.db.pre-v4.tmp"));
+      const db = openDatabase(file, { migrations: plain, onBackupFailed: () => true });
+      db.close();
+      expect(versionOfFile(file)).toBe(5);
+      // 一份都没裁：备份没成功，这次不裁。
+      expect(backupsIn(dir).filter((n) => !n.endsWith(".tmp"))).toEqual(["app.db.pre-v1", "app.db.pre-v2", "app.db.pre-v3"]);
+    });
+  });
+});
+
+const versionOfFile = (file: string): number => {
+  const db = new DatabaseSync(file);
+  try {
+    return (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+  } finally {
+    db.close();
+  }
+};
 
 describe("startupErrorText (the startup failure dialog)", () => {
   it("gives the user's own sentence for data errors, and the stack for anything else", () => {

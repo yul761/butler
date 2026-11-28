@@ -13,11 +13,17 @@ export const PATROL_TURN_MAX_MS = 2 * 3600_000;
  * 已知限制：
  * - 标记只在内存里，Shipherd 重启后丢失；已经发出去的消息的标记存在库里（meta.auto）。
  * - 用户在全局总控里 /exit、或者 claude 进程自己退出，和崩溃一样处理：有总控的消息时照常自动恢复（epic 总控也一样，总控定）。
+ * - 用户直接在全局总控的终端里打的字不经过信箱，不会结束巡检轮：那一轮到停下来之前，send_message 照样按巡检发的算
+ *（不重开用户关掉的 epic 总控）。用户在 Shipherd 的输入框里发的走信箱（kind user），会结束。
  */
 export class PatrolTurns {
   private readonly since = new Map<string, number>();
-  /** 每个 head 最近一次停下的时间：比它早送到的巡检消息，那一轮已经结束了。 */
-  private readonly stoppedAt = new Map<string, number>();
+  /**
+   * 每个 head 巡检标记最近一次被结束的时间：停下来了，或者用户的话送进来了（第七轮复核）。比它早粘贴的巡检消息不再开巡检轮：
+   * 巡检直接输入要等 deliver 返回才回调 delivered，这段时间里用户的话可能已经从 hook 进了这一轮，先跑的 since.delete 是空的，
+   * 不靠时间戳的话巡检的回调随后又会把标记设上。
+   */
+  private readonly endedAt = new Map<string, number>();
 
   constructor(private readonly now: () => number, private readonly maxMs = PATROL_TURN_MAX_MS) {}
 
@@ -28,30 +34,34 @@ export class PatrolTurns {
    */
   messageDelivered(headId: string, m: { kind: string; via: "hook" | "input" | null; deliveredAt: number | null }): void {
     if (m.kind === "patrol" && m.via === "input") this.delivered(headId, m.deliveredAt ?? this.now());
-    else if (m.kind === "user") this.since.delete(headId);
+    else if (m.kind === "user") this.end(headId, m.deliveredAt ?? this.now());
   }
 
-  /** 巡检消息在 at（粘贴的时刻）送到了这个 head。不比它最近一次停下晚的不算。 */
+  /** 巡检消息在 at（粘贴的时刻）送到了这个 head。不比它最近一次停下、或用户的话送到晚的不算。 */
   delivered(headId: string, at: number): void {
-    if (at <= (this.stoppedAt.get(headId) ?? -Infinity)) return;
+    if (at <= (this.endedAt.get(headId) ?? -Infinity)) return;
     this.since.set(headId, Math.min(at, this.now()));
   }
 
   /** 这个 head 停下来了：巡检那一轮结束。 */
   stopped(headId: string): void {
+    this.end(headId, this.now());
+  }
+
+  private end(headId: string, at: number): void {
     this.since.delete(headId);
-    this.stoppedAt.set(headId, this.now());
+    this.endedAt.set(headId, Math.max(at, this.endedAt.get(headId) ?? -Infinity));
   }
 
   /** 这个 head 的终端退出了（或者 session 被移走）：两份记录都清掉。 */
   forget(headId: string): void {
     this.since.delete(headId);
-    this.stoppedAt.delete(headId);
+    this.endedAt.delete(headId);
   }
 
   /** 记着的 head 数（测试看 forget 有没有清干净）。 */
   get size(): number {
-    return new Set([...this.since.keys(), ...this.stoppedAt.keys()]).size;
+    return new Set([...this.since.keys(), ...this.endedAt.keys()]).size;
   }
 
   active(headId: string): boolean {

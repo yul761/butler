@@ -12,6 +12,8 @@ export interface OpenDatabaseOptions {
   log?: (msg: string) => void;
   /** 迁移前的备份失败了怎么办（见 backup.ts 的 OnBackupFailed）：不给就不迁移、抛 DatabaseBackupError。 */
   onBackupFailed?: OnBackupFailed;
+  /** 迁移列表，只给测试用（默认 MIGRATIONS）：拿合成的列表走一遍 openDatabase 的备份、报错和裁剪。 */
+  migrations?: readonly string[];
 }
 
 const userVersion = (db: Db): number => (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
@@ -24,24 +26,27 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
   const db = cacheStatements(new DatabaseSync(file));
   try {
     db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+    const list = o.migrations ?? MIGRATIONS;
     const current = userVersion(db);
-    if (current > MIGRATIONS.length) {
-      const backup = backupPath(file, MIGRATIONS.length);
-      throw new NewerDatabaseError(current, MIGRATIONS.length, file !== ":memory:" && existsSync(backup) ? backup : undefined);
+    if (current > list.length) {
+      const backup = backupPath(file, list.length);
+      throw new NewerDatabaseError(current, list.length, file !== ":memory:" && existsSync(backup) ? backup : undefined);
     }
     let backedUp = false;
-    if (current > 0 && current < MIGRATIONS.length && file !== ":memory:") {
+    if (current > 0 && current < list.length && file !== ":memory:") {
       backedUp = backupBeforeMigrate(db, file, current, { log: o.log, onBackupFailed: o.onBackupFailed, failedMessage: (f) => M().databaseBackupFailed(f.backup, f.reason, f.diskFull) });
     }
     try {
-      migrate(db);
+      migrate(db, undefined, list);
     } catch (e) {
       // 迁移顺序对不上：指给用户装测试版本之前的那份备份（比现在版本旧、最新的一份；刚才那份 pre-v<current> 就是这份数据本身）。
       if (!(e instanceof MigrationOrderError) || file === ":memory:") throw e;
       const backup = olderBackup(file, current);
-      // 找不到更早的（第四轮复核）：说清数据目录在哪、pre-v<current> 只是现在这份的副本，让用户有下一步可走。
+      // 找不到更早的（第四轮复核）：说清数据目录在哪、pre-v<current> 是什么，让用户有下一步可走。预检拦下时一步都没提交，
+      // 它就是现在这份数据的副本；走到后面某一步才拦下（e.found 比 current 新，第七轮复核建议 1）时，它是这次升级前的数据。
       const copy = backupPath(file, current);
-      throw new MigrationOrderError(e.found, e.index, backup !== undefined ? { backup } : { dir: dirname(resolve(file)), copy: existsSync(copy) ? basename(copy) : null });
+      const hint = backup !== undefined ? { backup } : { dir: dirname(resolve(file)), copy: existsSync(copy) ? basename(copy) : null, partial: e.found !== current };
+      throw new MigrationOrderError(e.found, e.index, hint, e.what);
     }
     // 迁移成功了才裁旧备份（BTL-279 第六轮）：失败时（不管什么错）一份都不删，装测试版本之前的那份不会被这次和下次启动的备份挤掉。
     if (backedUp) pruneBackups(file, KEEP_BACKUPS, o.log ?? (() => undefined));
@@ -57,7 +62,7 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
 
 /**
  * 比 current 旧、版本号最大的那份迁移前备份（MigrationOrderError 指给用户的）；没有就是 undefined。
- * 每次备份后只留最新两份（KEEP_BACKUPS），平时这里最多看到一份；备份失败、用户选了不备份接着升时可能有好几份。
+ * 迁移成功后只留最新两份（KEEP_BACKUPS），平时这里最多看到一份；迁移失败、或者备份失败用户选了不备份接着升时不裁，可能有好几份。
  */
 export function olderBackup(file: string, current: number): string | undefined {
   for (let v = current - 1; v > 0; v--) if (existsSync(backupPath(file, v))) return backupPath(file, v);
@@ -147,7 +152,7 @@ export function migrate(db: Db, target?: number, list: readonly string[] = MIGRA
   const current = userVersion(db);
   if (current > list.length) throw new NewerDatabaseError(current, list.length);
   if (!Number.isInteger(end) || end < current || end > list.length) throw new Error(`migrate target ${end} outside ${current}..${list.length}`);
-  // 先把要跑的只加列迁移都查一遍，再提交任何一步（BTL-279 第六轮）：每一步各自提交，走到一半才发现顺序不对的话，
+  // 先把要跑的步骤要加的列、要建的表都查一遍，再提交任何一步（BTL-279 第六、七轮）：每一步各自提交，走到一半才发现顺序不对的话，
   // 前面几步已经升上去了，提示里的「没有升级」就不成立，下次启动的备份还会把装测试版本之前的那份挤掉。
   checkMigrationOrder(db, list, current, end);
   for (let i = current; i < end; i++) {
@@ -174,31 +179,52 @@ export function migrate(db: Db, target?: number, list: readonly string[] = MIGRA
   return end;
 }
 
-/** 迁移里建、删、改名、改结构的表（CREATE / DROP / ALTER TABLE、RENAME TO 后面的名字）。 */
-const DDL_TABLE = /\b(?:CREATE\s+(?:TEMP(?:ORARY)?\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?|ALTER\s+TABLE|RENAME\s+TO)\s+["'`[]?(\w+)/gi;
+/** 迁移里新建的表（CREATE TABLE [IF NOT EXISTS] 后面的名字；TEMP 表不在库里留下，不算）。 */
+const CREATE_TABLE = /\bCREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+["'`[]?(\w+)/gi;
 
 /**
- * 预检（BTL-279 第六轮）：从 from 升到 to 要跑的只加列迁移，按现在的表结构查一遍要加的列是不是已经在了；在了就抛 MigrationOrderError
- *（found 是现在的数据版本），这时一步都还没提交。
- * 前面某条待跑的迁移会动这张表（重建、删掉再建、改名、ALTER）时，现在的表结构说明不了跑到那一步时的样子：这张表不在这里预检，
- * 留给那一步自己的检查（addMissingColumns），不误报。那一步才发现的话前面几步已经提交了，这是已知限制。
+ * 预检（BTL-279 第六、七轮）：从 from 升到 to 之前，一步都还没提交时，先查这份数据是不是被迁移顺序不同的版本动过。
+ * 待跑的只加列迁移要加的列、待跑的迁移要 CREATE 的表，现在的库里已经有了，而照这份迁移列表升到版本 from 本不该有：
+ * 抛 MigrationOrderError（found 是现在的数据版本 from）。
+ * 「版本 from 本该有的表结构」是在内存库里把 list[0..from) 跑一遍得到的，不靠解析 SQL 猜哪些表会被后面的步骤重建
+ *（第七轮复核：#109 先合时它重建 session_messages，按 DDL 跳过这张表会漏掉 4.3.0 测试版本加过的 attempts 三列，
+ * 重建把它们丢掉、BTL-270 永远不跑）。正常升级时库里没有这种列和表，不跑模拟。
+ * 以前有过、被后面的步骤删掉再加回来的列和表，版本 from 时本来就有，不误报。
  */
 export function checkMigrationOrder(db: Db, list: readonly string[], from: number, to: number): void {
-  const touched = new Set<string>();
+  const colsOf = (d: Db, t: string): Set<string> => new Set((d.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((r) => r.name.toLowerCase()));
+  const hasTable = (d: Db, t: string): boolean => d.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE").get(t) !== undefined;
   const have = new Map<string, Set<string>>();
-  for (let i = from; i < to; i++) {
-    if (!list[i].startsWith(CHECKED_ADD_COLUMNS)) {
-      for (const m of list[i].matchAll(DDL_TABLE)) touched.add(m[1].toLowerCase());
-      continue;
+  let expected: DatabaseSync | undefined;
+  const expectedDb = (): DatabaseSync => {
+    if (!expected) {
+      expected = new DatabaseSync(":memory:");
+      // 重建表的迁移要 DROP 被外键指着的表：内存库里没有数据，关掉外键照着跑就行。
+      expected.exec("PRAGMA foreign_keys = OFF");
+      for (let k = 0; k < from; k++) expected.exec(list[k]);
     }
-    for (const line of list[i].split("\n").slice(1)) {
-      const m = ADD_COLUMN.exec(line);
-      // 认不出来的行、不存在的表：留给那一步自己报错。
-      if (!m || touched.has(m[1].toLowerCase())) continue;
-      let cols = have.get(m[1].toLowerCase());
-      if (!cols) have.set(m[1].toLowerCase(), (cols = new Set((db.prepare(`PRAGMA table_info(${m[1]})`).all() as { name: string }[]).map((r) => r.name.toLowerCase()))));
-      if (cols.has(m[2].toLowerCase())) throw new MigrationOrderError(from, i);
+    return expected;
+  };
+  try {
+    for (let i = from; i < to; i++) {
+      if (!list[i].startsWith(CHECKED_ADD_COLUMNS)) {
+        for (const m of list[i].matchAll(CREATE_TABLE)) {
+          if (hasTable(db, m[1]) && !hasTable(expectedDb(), m[1])) throw new MigrationOrderError(from, i, undefined, "table");
+        }
+        continue;
+      }
+      for (const line of list[i].split("\n").slice(1)) {
+        const m = ADD_COLUMN.exec(line);
+        // 认不出来的行、不存在的表：留给那一步自己报错。
+        if (!m) continue;
+        const t = m[1].toLowerCase();
+        let cols = have.get(t);
+        if (!cols) have.set(t, (cols = colsOf(db, t)));
+        if (cols.has(m[2].toLowerCase()) && !colsOf(expectedDb(), t).has(m[2].toLowerCase())) throw new MigrationOrderError(from, i);
+      }
     }
+  } finally {
+    expected?.close();
   }
 }
 
@@ -214,11 +240,21 @@ export class MigrationOrderError extends Error {
   /** 指给用户的备份（比现在版本旧、最新的一份）。 */
   readonly backup?: string;
   /**
-   * hint：找到了更早的备份就是 { backup }；没找到就是数据目录和 pre-v<现在版本>（这次刚备份的、就是现在这份数据）的文件名。
+   * hint：找到了更早的备份就是 { backup }；没找到就是数据目录和 pre-v<打开时的版本>（这次刚备份的）的文件名。
+   * partial：走到后面某一步才发现、前面几步已经提交了（found 比打开时的版本新），那份副本是这次升级前的数据，不是现在这份。
    * migrate 自己抛的没有 hint（它不知道文件在哪），openDatabase 补上再抛。
    */
-  constructor(readonly found: number, readonly index: number, readonly hint?: { backup: string } | { dir: string; copy: string | null }) {
-    super(M().migrationOrder(found, index + 1) + (!hint ? "" : "backup" in hint ? ` ${M().migrationOrderBackup(hint.backup)}` : ` ${M().migrationOrderNoBackup(hint.dir, hint.copy)}`));
+  constructor(
+    readonly found: number,
+    readonly index: number,
+    readonly hint?: { backup: string } | { dir: string; copy: string | null; partial?: boolean },
+    /** 已经在了的是这一步要加的列，还是要建的表（第七轮，总控定：#109、#107 新建的表也查）。 */
+    readonly what: "column" | "table" = "column",
+  ) {
+    super(
+      M().migrationOrder(found, index + 1, what) +
+        (!hint ? "" : "backup" in hint ? ` ${M().migrationOrderBackup(hint.backup)}` : ` ${M().migrationOrderNoBackup(hint.dir, hint.copy, hint.partial === true)}`),
+    );
     if (hint && "backup" in hint) this.backup = hint.backup;
   }
 }
