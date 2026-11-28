@@ -1725,9 +1725,10 @@ function trimEdits(s: string, edits: readonly Edit[]): Edit[] {
 }
 
 /**
- * 按顺序跑表头表格和每条规则。给了 log 的，每一轮真正改了的替换按顺序记一组（位置是那一轮输入里的），maskGlued 按它把位置挪到输出里。
+ * 按顺序跑表头表格和每条规则。给了 log 的，每一轮真正改了的替换按顺序记一组（位置是那一轮输入里的），maskGlued 按它把位置挪到输出里；
+ * 命令参数规则的那几组是 log 里的第几组记进 cmds。
  */
-const maskRules = (s: string, log?: Edit[][]): string => {
+const maskRules = (s: string, log?: Edit[][], cmds?: number[]): string => {
   // 表头表格整格打码：排在前面，整格先换成一个占位符，后面的规则不会把格子拆开。
   const tableEdits: Edit[] = [];
   let out = maskTables(s, log && tableEdits);
@@ -1753,10 +1754,47 @@ const maskRules = (s: string, log?: Edit[][]): string => {
         if (at !== null) starts[kind] = moveStarts(before, out, at, edits, kind);
       }
     }
-    if (log && edits.length > 0) log.push(trimEdits(before, edits));
+    if (log && edits.length > 0) {
+      log.push(trimEdits(before, edits));
+      if (rule.arg) cmds?.push(log.length - 1);
+    }
   }
   return out;
 };
+
+/**
+ * maskRules 打掉的命令参数值，换回它的输入（规范化文本）里的位置：起点终点交替排着、按顺序。log 里命令那一组之前的各组倒着挪回去，
+ * 落进前面某处替换换上去的文字里的，起点挪到那处的开头、终点挪到结尾（maskGlued 反过来）。
+ */
+function commandValues(log: readonly Edit[][], cmds: readonly number[]): number[] {
+  const all: number[] = [];
+  for (const r of cmds) {
+    const pts: number[] = [];
+    for (const e of log[r]) pts.push(e.at, e.at + e.len);
+    for (let g = r - 1; g >= 0; g--) {
+      const edits = log[g];
+      let k = 0;
+      let shift = 0;
+      for (let q = 0; q < pts.length; q++) {
+        const x = pts[q];
+        // 输出里整个在 x 前面（或正好到 x 为止）的替换都算进 shift。
+        while (k < edits.length && edits[k].at + shift + edits[k].to.length <= x) {
+          shift += edits[k].to.length - edits[k].len;
+          k++;
+        }
+        const e = edits[k];
+        pts[q] = e && e.at + shift < x ? (q % 2 === 0 ? e.at : e.at + e.len) : x - shift;
+      }
+    }
+    for (const x of pts) all.push(x);
+  }
+  if (cmds.length === 1) return all;
+  // 几条命令规则的各自按顺序，合起来要按起点排一下（gluedSpans 换算位置要按顺序）。
+  const pairs: [number, number][] = [];
+  for (let q = 0; q < all.length; q += 2) pairs.push([all[q], all[q + 1]]);
+  pairs.sort((x, y) => x[0] - y[0]);
+  return pairs.flat();
+}
 
 /** 只按整个词认的规则（见 Rule.glued）。 */
 const GLUED_RULES = RULES.filter((r) => r.glued);
@@ -1773,7 +1811,7 @@ const PEM_RULE = RULES[0];
  * 留下盖住了换掉的数字的那几处（gluedSpans，位置是规范化文本里的），再按 maskRules 每一轮的替换记录挪到打完码的文本里打掉
  * （maskGlued）。在打码之前找：打完码以后，不换的读法打掉的一段（ghp_… 那个 token、键后面的值）会把整个词切开，就认不出了。
  */
-function gluedSpans(n: string): [number, number][] {
+function gluedSpans(n: string, fill: readonly number[] = []): [number, number][] {
   // 换掉的每个数字在 a 里的位置；它和它前面的数字一共比 n 短了几个 UTF-16 单元（BMP 以外的 𝟏 占两个，换完一个）。
   // 都按 TypedArray 存、只往前写（₁a₁a… 一篇有 10 万个数字，每个数字拼一次串、push 两个数组的话约 2ms）。
   const atBuf = new Int32Array(n.length);
@@ -1800,7 +1838,14 @@ function gluedSpans(n: string): [number, number][] {
     i += w - 1;
   }
   if (count === 0) return [];
-  return readingSpans(buf, len, atBuf.subarray(0, count), shift, false);
+  // fill 是规范化文本里的位置，换成 a 里的：减去它前面的数字一共短了的（按顺序，只往前走）。
+  const fillA: number[] = [];
+  let j = 0;
+  for (const x of fill) {
+    while (j < count && atBuf[j] + (j > 0 ? shift[j - 1] : 0) < x) j++;
+    fillA.push(x - (j > 0 ? shift[j - 1] : 0));
+  }
+  return readingSpans(buf, len, atBuf.subarray(0, count), shift, false, fillA);
 }
 
 /**
@@ -1815,21 +1860,28 @@ const NOT_WORD = 0x2081;
  * 在这些位置（kept，规范化文本里的，按顺序）放回一个不是字母数字的字，在这个读法上跑一遍 GLUED_RULES，留下打掉的部分碰到
  * （盖住或紧挨着）这些位置的那几处：别的匹配两种读法都一样，maskRules 已经打了。长度不变，位置不用换算。
  */
-function keptSpans(n: string, kept: readonly number[]): [number, number][] {
+function keptSpans(n: string, kept: readonly number[], fill: readonly number[] = []): [number, number][] {
   if (kept.length === 0) return [];
   const buf = new Uint16Array(n.length);
   for (let i = 0; i < n.length; i++) buf[i] = n.charCodeAt(i);
   const at = Int32Array.from(kept);
   for (const x of kept) buf[x] = NOT_WORD;
-  return readingSpans(buf, n.length, at, null, true);
+  return readingSpans(buf, n.length, at, null, true, fill);
 }
 
 /**
  * 在另一种读法（buf 的前 len 个字，at 是和规范化文本不一样的那些位置，按顺序）上跑 GLUED_RULES，返回打掉的部分碰到这些位置的
  * 那几处（换回规范化文本里的位置，按顺序、互不重叠）。shift[k] 是 at 里第 k 个位置和它前面的一共比规范化文本短了几个
- * UTF-16 单元（null 是一样长）。touch：紧挨着也算（\b 两边），不然要盖住。
+ * UTF-16 单元（null 是一样长）。touch：紧挨着也算（\b 两边），不然要盖住。fill：先盖上的范围（这个读法里的位置，起点终点交替排着）。
  */
-function readingSpans(buf: Uint16Array, len: number, at: Int32Array, shift: Int32Array | null, touch: boolean): [number, number][] {
+function readingSpans(
+  buf: Uint16Array,
+  len: number,
+  at: Int32Array,
+  shift: Int32Array | null,
+  touch: boolean,
+  fill: readonly number[],
+): [number, number][] {
   const count = at.length;
   // 按 UTF-16 原样建串：Buffer 的 utf16le 不动落单的代理项（TextDecoder 会换成 U+FFFD），比 fromCharCode 分段拼快几倍。
   // 只在 main 进程里跑；Uint16Array 按本机字节序存，支持的平台（x64、arm64）都是小端。
@@ -1870,12 +1922,16 @@ function readingSpans(buf: Uint16Array, len: number, at: Int32Array, shift: Int3
   // 前面的 token 整个打掉，两种读法都不会这样打）。
   const hit: number[] = [];
   // 先盖上私钥块：-----BEGIN 的 - 在 b64 规则的字符类里，块前面紧连的字会被连着打掉（同上，复核 E）。只盖不记。
-  // 别的排在 GLUED_RULES 前面的规则（KEY 规则、命令参数）不在这里重跑（整篇多跑一遍 maskRules 太慢）：它们先打掉一段、
-  // 后面的长串就不够长的，这里还会连着打（多打，不漏）。
   if (a.includes("-----BEGIN")) {
     PEM_RULE.re.lastIndex = 0;
     for (let m = PEM_RULE.re.exec(a); m !== null; m = PEM_RULE.re.exec(a)) hit.push(m.index, m.index + m[0].length);
   }
+  // maskRules 打掉的命令参数值（fill，见 commandValues）也先盖上，只盖不记：maskRules 里命令排在 GLUED_RULES 前面，
+  // 值已经打掉了；-p 的 - 在 b64 规则的字符类里，mysql -px²… 换完 -px2… 是一整串长串，不盖的话连着 -p 一起打（657754bb 复核建议 1）。
+  // 用 maskRules 真打掉的范围，不在这里重跑命令：前面的规则（--password "…"）打掉一段以后，命令可能就不在了。
+  for (let q = 0; q < fill.length; q++) hit.push(fill[q]);
+  // 别的排在 GLUED_RULES 前面的规则（KEY 规则等）不在这里重跑（整篇多跑一遍 maskRules 太慢）：它们先打掉一段、
+  // 后面的长串就不够长的，这里还会连着打（多打，不漏）。
   for (const rule of GLUED_RULES) {
     if (hit.length > 0) {
       for (let q = 0; q < hit.length; q += 2) buf.fill(NOT_WORD, hit[q], hit[q + 1]);
@@ -1985,14 +2041,19 @@ export function maskSecrets(s: string): string {
   const normalized = normalize(s);
   // 留着没换的兼容数字按换了的读法再认一遍（gluedSpans、maskGlued）。
   // 换了的、后面紧跟字母数字的，按没换的读法再认一遍（keptSpans），两边打掉的取并集。
-  const glued = heldDigits ? gluedSpans(normalized) : [];
-  const kept = keptSpans(normalized, keptDigits);
-  const spans = kept.length === 0 ? glued : glued.length === 0 ? kept : mergeSpans([...glued, ...kept]);
   let masked: string;
-  if (spans.length === 0) masked = maskRules(normalized);
+  if (!heldDigits && keptDigits.length === 0) masked = maskRules(normalized);
   else {
     const log: Edit[][] = [];
-    masked = maskGlued(maskRules(normalized, log), spans, log);
+    const cmds: number[] = [];
+    masked = maskRules(normalized, log, cmds);
+    // maskRules 打掉的命令参数值先盖上再认（readingSpans 的 fill）：值已经打掉了，-p 这种选项不连着一起打（657754bb 复核建议 1）。
+    // 所以先跑 maskRules（记着替换），再认两种读法。
+    const values = cmds.length > 0 ? commandValues(log, cmds) : [];
+    const glued = heldDigits ? gluedSpans(normalized, values) : [];
+    const kept = keptSpans(normalized, keptDigits, values);
+    const spans = kept.length === 0 ? glued : glued.length === 0 ? kept : mergeSpans([...glued, ...kept]);
+    if (spans.length > 0) masked = maskGlued(masked, spans, log);
   }
   if (normalized === s) return masked;
   return masked === normalized ? s : masked;

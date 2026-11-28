@@ -1561,7 +1561,7 @@ describe("review of 7c2e090a (secrets)", () => {
     expect(maskSecrets(`sshpass -p x²${long} ssh deploy@host Authorization: Bearer abcdefgh12345678 done`)).toBe(
       `sshpass -p ${M} ssh deploy@host Authorization: ${M} done`,
     );
-    expect(maskSecrets(`mysql -px²${long} -uroot mydb -pHunter2xyz keep`)).toBe(`mysql ${M} -uroot mydb -p${M} keep`);
+    expect(maskSecrets(`mysql -px²${long} -uroot mydb -pHunter2xyz keep`)).toBe(`mysql -p${M} -uroot mydb -p${M} keep`);
     expect(maskSecrets(`gh secret set X --body x²${long} --repo me/r -b Hunter2xyz tail`)).toBe(
       `gh secret set X --body ${M} --repo me/r -b ${M} tail`,
     );
@@ -1590,5 +1590,58 @@ describe("review of 7c2e090a (secrets)", () => {
     expect(maskSecrets(`secret: ${fake.skLive}\u200b${fake.npm}²x | y`)).toBe(`secret: ${M}${M} | y`);
     // 私钥块先盖上：-----BEGIN 的 - 不会把前面的长串和块连成一段。
     expect(maskSecrets(`x₁${long}-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----`)).toBe(`${M}${M}`);
+  });
+});
+
+describe("review of 657754bb (secrets)", () => {
+  const M = SECRET_MASK;
+  const long = "AbCdEfGh1234567890AbCdEfGh12345678";
+
+  it("suggestion 1: a glued compat value of a command option keeps the option (-p) like the A reading does", () => {
+    // 换完 -px2… 是一整串长串（- 在 b64 规则的字符类里）；命令已经打掉的值先盖上再认，-p 不连着一起打。
+    expect(maskSecrets(`mysql -uroot -px²${long} -e "SET PASSWORD = 'Hunter2xyz'" mydb`)).toBe(
+      `mysql -uroot -p${M} -e "SET PASSWORD = '${M}'${M}`,
+    );
+    expect(maskSecrets(`mysql -px²${long}\nnext line`)).toBe(`mysql -p${M}\nnext line`);
+  });
+
+  it("suggestion 1: the values come from what maskRules really masked, so a command an earlier rule broke up does not leak", () => {
+    // --password "… 先打掉一段，sshpass 命令在规范化文本里就不在了；按命令重跑一遍来盖，会把后面的 AKIA 漏掉。
+    const s = `x --password "dq pw && sshpass -p "dq pw ssh h | MY₁AKIAABCDEFGHIJKLMNOP₁_KEY | x\n`;
+    expect(maskSecrets(s)).toBe(`x --password "${M}"dq pw ssh h | MY1${M}1_KEY | x\n`);
+  });
+
+  it("suggestion 1: the kept reading is covered by the command values too", () => {
+    // MY₁_KEY 的 ₁ 换了（是键的编号），没换的读法里 -pAbCd… 也是一整串长串。
+    expect(maskSecrets(`mysql -p${long}MY₁_KEY | x`)).toBe(`mysql -p${M} | x`);
+  });
+
+  it("suggestion 1: values are moved into the glued reading's positions (it is shorter by the astral digits before them)", () => {
+    expect(maskSecrets("𝟏𝟏sshpass -ps abcdefghijklmnopqrstuvwxyz0₂KEEP")).toBe(`𝟏𝟏sshpass -p${M} ${M}`);
+  });
+
+  it("suggestion 1: values are moved back through the rounds before the command round", () => {
+    // 表格那一轮先换掉了一段，命令的值要挪回规范化文本里的位置；不挪的话盖错地方，¹deadbeefcafe 漏掉。
+    expect(maskSecrets("|Pass\n-|\n|bcdefghijklmnop1234pwd|¹deadbeefcafe\nsshpass -p9")).toBe(`|Pass\n-|\n|${M}|${M}\nsshpass -p${M}`);
+  });
+
+  it("suggestion 1: values from several command rules are put in text order", () => {
+    // mysql 规则排在 docker 前面，值却在后面；不排的话换位置时漏算 𝟏 少掉的那些，-p 没盖上。
+    expect(maskSecrets(`mysql -px²${long} 𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏x ; docker login -p x𝟏${long}`)).toBe(
+      `mysql -p${M} 𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏x ; docker login -p ${M}`,
+    );
+  });
+
+  it("suggestion 2: the JWT rule keeps only a prefix that ends in -, so a glued secret before eyJ is not kept", () => {
+    // 前缀放宽成任意字符的话，AKIA… 会当前缀留下来、只打 JWT。
+    const out = maskSecrets(`AKIAABCDEFGHIJKLMNOP１${fake.jwt} | x |`);
+    expect(out).not.toContain("AKIAABCDEFGHIJKLMNOP");
+    expect(out.startsWith(M)).toBe(true);
+    expect(maskSecrets(`abc-${fake.jwt} x`)).toBe(`abc-${M} x`);
+  });
+
+  it("suggestion 3: htpasswd records its edit at the password's offset in the segment, so the words before it are kept", () => {
+    expect(maskSecrets("htpasswd -b f u ¹deadbeefcafe1234₁Ａ | x |")).toBe(`htpasswd -b f u ${M} | x |`);
+    expect(maskSecrets("htpasswd -b yz xoxb-12345678₁x")).toBe(`htpasswd -b yz ${M}`);
   });
 });
