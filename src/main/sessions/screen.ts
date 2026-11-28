@@ -278,7 +278,11 @@ function inputBox(lines: string[]): { top: number; bottom: number } | null {
   if (rules.length < 2) return null;
   const [top, bottom] = rules.slice(-2);
   if (!/^[❯>]/.test(lines[top + 1]?.trim() ?? "")) return null;
-  if (lines.slice(bottom + 1).filter((l) => l.trim() !== "").length > MAX_FOOTER_LINES) return null;
+  const footer = lines.slice(bottom + 1).filter((l) => l.trim() !== "");
+  if (footer.length > MAX_FOOTER_LINES) return null;
+  // 「状态栏」里有编号选项或对话框的字样：那是顶替输入框画的确认框（BTL-279 review）。对话里早先有一条线、下一行又以 > 开头
+  // （引用块）时，倒数第二条线会被当成输入框的上沿；状态栏放宽到十行以后，七八行的确认框也塞得下，认错了就会往确认框里贴。
+  if (footer.some((l) => FIRST_OPTION.test(l.trim()) || [...DIALOG_MARKERS, ...PERMISSION_MARKERS].some((m) => squash(l).includes(m)))) return null;
   return { top, bottom };
 }
 
@@ -336,7 +340,19 @@ export function workingOnScreen(lines: string[]): boolean {
   lines.forEach((l, i) => {
     if (isRule(l)) last = i;
   });
-  return lines.some((l, i) => squash(l).includes("esctointerrupt") && (last < 0 || i > last || SPINNER.test(l.trim())));
+  const phrase = (l: string): boolean => squash(l).includes("esctointerrupt");
+  if (last < 0) return lines.some(phrase);
+  if (lines.slice(last + 1).some(phrase)) return true;
+  // 转圈那一行在窄窗口里会折行（BTL-279 review）：「esc to interrupt」落在下面一两行，甚至被拆开。
+  // 括号没闭合（「(3s · ↑ 1.2k tokens」）才是折了行：连着往下最多两行一起看，碰到线就停。对话里 * · 开头的列表项不连。
+  return lines.slice(0, last).some((l, i) => {
+    if (!SPINNER.test(l.trim())) return false;
+    if (phrase(l)) return true;
+    if (!l.includes("(") || l.lastIndexOf(")") > l.lastIndexOf("(")) return false;
+    let joined = l;
+    for (let j = i + 1; j < Math.min(i + 3, last) && !isRule(lines[j]); j++) joined += lines[j];
+    return phrase(joined);
+  });
 }
 
 /**

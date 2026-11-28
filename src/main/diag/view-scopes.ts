@@ -2,7 +2,7 @@
 // 原来每次 notify 都整个作废，在干活的 session 一分钟三十多次活动变化，每次首页、看板都要从头拼一遍。
 //
 //   data      存下来的东西变了：全部作废。
-//   messages  留给信箱（BTL-245，现在没人发）：保守起见全部作废。
+//   messages  信箱的尝试次数变了（BTL-279）：只有消息列表看它（自己订阅 messages），缓存的视图都不读信箱，只作废 now。
 //   activity  ActivityMonitor 内存里的「在做什么、卡住、撞限」变了：
 //             features（FeatureView.activity 读它）和 turn.input（sessionTurn 读它）作废；
 //             tickets 和 tickets.all 不读活动（session 的 waiting 存在库里，终端开关、改 waiting 的写入都要发 data：hook 事件、终端退出、end_session、onTurnEnd），留着：
@@ -28,7 +28,7 @@ export const VIEW_DEPENDS: Record<string, readonly string[]> = {
 /** undefined：全部作废。 */
 export const SCOPE_INVALIDATES: Record<StateScope, readonly string[] | undefined> = {
   data: undefined,
-  messages: undefined,
+  messages: [VIEW_KEYS.now],
   activity: [VIEW_KEYS.features, VIEW_KEYS.turnInput, VIEW_KEYS.now],
   procs: [VIEW_KEYS.now],
   output: [VIEW_KEYS.now],

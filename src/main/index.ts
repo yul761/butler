@@ -1932,7 +1932,7 @@ async function bootstrap(): Promise<void> {
     idle: (headId, termId) => idleEvidence.check(headId, termId),
     // 凭证据放行：记成在等输入（和没有 Stop 的轮次结束一样），通知界面；停下的后续（sessionStopped）放到这次检查之后，
     // 免得在 guard 里面又开始往同一个终端送别的。
-    // 记录没动（已经在等、之后有过输入）返回 false：guard 这一次直接放行，不再每次校正、每次 unsure（BTL-279）。
+    // 记录没动返回 false：guard 这一次直接放行，不再每次校正、每次 unsure（BTL-279；兜底，只在 head 对不上、时钟回拨时发生）。
     healed: (headId) => {
       if (!markTurnEndedWithoutStop(sessions, headId, Date.now())) return false;
       healedTurns.add(headId);

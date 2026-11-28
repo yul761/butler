@@ -270,6 +270,8 @@ export class Mailbox {
 
   private successorOf(head: string): string | null {
     try {
+      // 休眠是 Shipherd 为了省内存关的，不是用户换了一个（BTL-279 review）：叫醒它自己收，不改投。
+      if (this.d.hibernated?.(head)) return null;
       const next = this.d.successor?.(head) ?? null;
       // 只交给开着的：接替的也关着就照样排在原来的信箱里，免得在两个关着的之间来回改投。
       const to = next === null ? null : this.headOf(next);
@@ -392,11 +394,16 @@ export class Mailbox {
     (this.d.notifyMessages ?? this.d.notify)();
   }
 
-  /** 记下挡住这几条的原因（只记变了的），变了就写日志、通知界面。每一次都算一次尝试。 */
-  private block(head: string, list: SessionMessage[], reason: MailboxBlockReason): void {
+  /**
+   * 记下挡住这几条的原因（只记变了的），变了就写日志、通知界面。
+   * 尝试次数只算真的试过的（BTL-279 review）：原因变了的那几条，或者 tried（这次真的去贴了）。每个 tick 照样挡着的不算，
+   * 不然排一夜的消息一小时涨三百多次，每次还要写库、发通知。
+   */
+  private block(head: string, list: SessionMessage[], reason: MailboxBlockReason, tried = false): void {
     if (list.length === 0) return;
-    this.attempted(list, reason);
     const changed = this.d.repo.setBlocked(list.map((m) => m.id), reason, this.d.now());
+    const ids = new Set(changed);
+    this.attempted(tried ? list : list.filter((m) => ids.has(m.id)), reason);
     if (changed.length === 0) return;
     this.d.log(`mailbox: ${head} blocked (${reason}): ${changed.length} message(s) waiting`);
     // 原因变了：还排着的回执说的是旧原因和旧 ETA，撤回；这几条按现在的原因重新算回执（下一次 tick）。
@@ -711,11 +718,13 @@ export class Mailbox {
         this.d.log(`mailbox: ${head} is closed and ${next} took over its role; readdressing ${moved.length} replies/reports`);
         queued = queued.filter((m) => !FOLLOWS_ROLE.has(m.kind));
         this.d.notify();
-        await this.flush(next);
       }
-      if (queued.length === 0) return;
-      this.block(head, queued, this.d.hibernated?.(head) ? "hibernated" : "closed");
-      if (this.d.wake && queued.some((m) => m.kind !== "convention")) this.d.wake(head);
+      if (queued.length > 0) {
+        this.block(head, queued, this.d.hibernated?.(head) ? "hibernated" : "closed");
+        if (this.d.wake && queued.some((m) => m.kind !== "convention")) this.d.wake(head);
+      }
+      // 改投的那几条放到最后再送（BTL-279 review）：往 next 里贴最多要一分钟，等完再按之前读的状态挡 head、叫醒它就过时了。
+      if (next !== null) await this.flush(next);
       return;
     }
     const queued = this.queuedFor(head).filter((m) => !this.interrupting.has(m.id));
@@ -802,6 +811,10 @@ export class Mailbox {
     const term = this.d.termOf(head);
     if (term === null) {
       await this.flush(head);
+      // flush 可能把它改投给了接替的那个、而且送进去了（BTL-279 review）：按它现在的状态回答。
+      const after = this.d.repo.get(id);
+      if (after && after.status !== "queued") return { delivered: true, reason: null };
+      if (after && this.headOf(after.toSession) !== head) return { delivered: false, reason: after.blockedReason };
       return { delivered: false, reason: this.d.hibernated?.(head) ? "hibernated" : "closed" };
     }
     if (this.inputting.has(term)) return { delivered: false, reason: this.inFlight.has(id) ? "delivering" : "auto_input" };
@@ -858,8 +871,14 @@ export class Mailbox {
         if (!ok) this.d.log(`mailbox: ${head} no longer waits on question ${noteAsks.join(", ")}; not typing in an answer note that is out of date`);
         return ok;
       };
-      const check = (): boolean => stillAsked() && recheck();
-      const at = this.d.now();
+      // 送达时间取在真正贴进去的那一刻（BTL-279 review）：deliver 在贴之前同步调 check，过了马上就贴。
+      // 在 deliver 之前取的话，等输入框那一分钟里旧的一轮写完的回复比它晚，会被当成这条的【回复】。
+      let at = this.d.now();
+      const check = (): boolean => {
+        const ok = stillAsked() && recheck();
+        if (ok) at = this.d.now();
+        return ok;
+      };
       // 用户自己的话不算 Shipherd 输入的：它的 UserPromptSubmit 照样算用户在终端里回答了。
       const typing = ids[0]?.kind === "user" ? undefined : this.d.typing;
       typing?.(head, "start");
@@ -872,7 +891,7 @@ export class Mailbox {
       if (result !== "sent") {
         this.d.log(`mailbox: input to ${head}: ${result}`);
         // 没等到输入框（BTL-269）：如实记下来，别留着之前的原因（比如还说「在干活」）。recheck 没过、终端退出的下一次检查会记真正的原因。
-        if (result === "timeout") this.block(head, claimed.mine, "deliver_failed");
+        if (result === "timeout") this.block(head, claimed.mine, "deliver_failed", true);
         else this.attempted(claimed.mine, result === "exited" ? "exited" : "recheck");
         return false;
       }
@@ -982,9 +1001,28 @@ export class Mailbox {
       // 上一次 tick 还在给它贴的，flush 里 inputting 会挡住，不会贴两次。
       const heads = new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)));
       await Promise.all([...heads].map((h) => this.flush(h)));
+      this.probeAwaiting(heads);
       this.stuckReceipts();
     } catch (e) {
       this.d.log("mailbox: tick failed", e);
+    }
+  }
+
+  /**
+   * 在等【回复】、终端开着、记录还说在干活、又没有排队消息的 head（BTL-279 review）：也过一次 guard。
+   * 回复的那一轮丢了 Stop 时，只有 guard 会凭屏幕证据校正记录（校正按停下处理，停下时查回复）；
+   * 不看一眼的话，要等下一条消息排进来才校正，【回复】一直回不来。
+   * 只看开着的：guard 对关着的会去叫醒休眠的，不能为了查回复叫醒它。有排队消息的 flush 已经看过了。
+   */
+  private probeAwaiting(flushed: Set<string>): void {
+    const heads = new Set(this.d.repo.awaitingReply(this.d.now() - REPLY_WAIT_MS).map((m) => this.headOf(m.toSession)));
+    for (const h of heads) {
+      if (flushed.has(h) || this.d.termOf(h) === null || this.d.head(h)?.waitingForInput === true) continue;
+      try {
+        this.d.check(h, { answer: false });
+      } catch (e) {
+        this.d.log(`mailbox: checking ${h} for a reply that ended without Stop failed`, e);
+      }
     }
   }
 

@@ -44,7 +44,8 @@ export interface DeliveryGuardDeps {
   idle?: (headId: string, termId: string) => { idle: boolean; working: boolean; looksIdle: boolean };
   /**
    * 凭证据放行了一个记录说在跑的 session：把它记成在等输入（index.ts 里是 onTurnEndedWithoutStop）。
-   * 返回 false 表示记录没动（已经在等、之后有过输入……）：这一次直接放行，不然每次都校正、每次都 unsure，永远送不进去（BTL-279）。
+   * 返回 false 表示记录没动：这一次直接放行，不然每次都校正、每次都 unsure，永远送不进去（BTL-279）。
+   * 只有记录不是「在等」时才校正，所以实际只在 head 对不上、或 lastActivityAt 比现在还晚（时钟回拨）时返回 false：是兜底，不是常见路径。
    */
   healed?: (headId: string) => boolean | void;
   /** 打过字之后多久之内不自动输入，默认 USER_TYPING_QUIET_MS（e2e 用环境变量调短）。 */

@@ -207,6 +207,19 @@ describe("TermScreen lazy parsing (BTL-277)", () => {
 });
 
 describe("dialogOnScreen / permissionOnScreen", () => {
+  it("a permission prompt under one rule is not taken for an input box with a tall footer, even when an earlier rule is followed by a quote (BTL-279 review)", () => {
+    const lines = [
+      "⏺ Notes:", RULE, "> quoted from the spec", "⏺ Running the migration", RULE,
+      " Bash command", "   pnpm db:migrate", " Do you want to proceed?", " ❯ 1. Yes", "   2. Yes, and don't ask again", "   3. No, and tell Claude what to do differently (esc)",
+    ];
+    expect(permissionOnScreen(lines)).toBe(true);
+    expect(inputBoxEmpty(lines)).toBeNull();
+    // 真的输入框下面六行状态栏照样认得出。
+    const box = ["⏺ done", RULE, "> ", RULE, "  model: opus · ctx 41%", "  branch: main · +3 −1", "  cost: $0.42 today", "  PR #12 · CI green", "  ⏵⏵ accept edits on", "  ? for shortcuts"];
+    expect(inputBoxEmpty(box)).toBe(true);
+    expect(permissionOnScreen(box)).toBe(false);
+  });
+
   it("finds the 2.1.322 trust dialog and the older one, regardless of spacing", () => {
     expect(dialogOnScreen([" Quick safety check: Is this a project you created or one you trust?", " ❯ No, exit", "   Yes, I trust this folder", " Enter to confirm · Esc to cancel"])).toBe(true);
     expect(dialogOnScreen(["Quicksafetycheck:", "❯no,exit"])).toBe(true);
@@ -262,6 +275,13 @@ describe("workingOnScreen / inputBoxEmpty", () => {
     expect(workingOnScreen([...quoted, RULE, "❯ ", RULE, "  · esc to interrupt · ← for agents"])).toBe(true);
     // 没有输入框线（启动中、整屏重画）：照旧看整屏。
     expect(workingOnScreen(["Working on it (esc to interrupt)"])).toBe(true);
+    // 窄窗口里转圈那一行折行（BTL-279 review）：「esc to interrupt」落在下一行，或者被拆成两半，照样算在干活。
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens", " · esc to interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    expect(workingOnScreen([...quoted, "✶ Hustling… (3s · ↑ 1.2k tokens · esc to", "interrupt)", RULE, "❯ ", RULE])).toBe(true);
+    // 转圈的行已经结束（下面紧跟着线）：上面对话里另起一行引用的不算。
+    expect(workingOnScreen(["✻ Worked for 3s", RULE, "esc to interrupt", RULE, "❯ ", RULE])).toBe(false);
+    // 对话里 * 开头的列表项，下一行引用了这几个字：不是折行的转圈行，不算。
+    expect(workingOnScreen(["* The guard looks for", "  `esc to interrupt` on screen", RULE, "❯ ", RULE])).toBe(false);
   });
 
   it("finds the box under a tall footer: a multi-line statusline plus mode and notices (BTL-279)", () => {

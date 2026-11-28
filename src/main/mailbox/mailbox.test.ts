@@ -44,6 +44,12 @@ function world() {
   const lenientRechecks: boolean[] = [];
   /** head -> 接替它的、开着的那个（新开的全局总控、同一个 epic 新开的总控；BTL-279）。 */
   const successors = new Map<string, string>();
+  /** 休眠着的 head（BTL-279 review：不改投，叫醒它）。 */
+  const hibernated = new Set<string>();
+  /** 这些 head 记录说在干活、屏幕证据说停了：guard 校正成在等，按停下处理（和 index.ts 的 healed 一样放到下一拍）。 */
+  const healOnCheck = new Set<string>();
+  /** guard 被问过的 head（按顺序）。 */
+  const checked: string[] = [];
   /** coordinatorAnswered 的调用：head 加上那几个 ask_user、答案、谁答的、那条消息排进来的时间。 */
   const coordinatorAnswered: ({ head: string } & { asks: number[]; answer: string; by: string; queuedAt: number })[] = [];
   /**
@@ -74,9 +80,15 @@ function world() {
   const mb = new Mailbox({
     repo, root, head, termOf, openTerms: () => [...terms.keys()],
     check: (id, o): DeliveryCheck => {
+      checked.push(head(id)?.id ?? id);
       const t = termOf(id);
       if (t === null) return { ok: false, block: "closed" };
       const h = head(id)!;
+      if (healOnCheck.has(h.id) && !h.waitingForInput) {
+        h.waitingForInput = true;
+        setTimeout(() => void mb.stopped(h.id), 0);
+        return { ok: false, block: "busy", busy: "unsure" };
+      }
       // 和真的 guard 一样：force 只跳过「看着停了、还没安静够久」（unsure），屏幕上看得出在干活（turn）照样挡。
       const busy = busyReason.get(h.id) ?? "turn";
       if ((!h.waitingForInput || blocked.has(h.id)) && !((o.force || o.lenient) && busy === "unsure")) return { ok: false, block: "busy", busy };
@@ -99,6 +111,7 @@ function world() {
     awaitingUser: (h) => (!needsYou.has(h) ? null : awaiting.has(h) ? awaiting.get(h)! : { asks: [], text: { reason: "asked in text", at: 0 } }),
     wake: (h) => woken.push(h),
     successor: (h) => successors.get(h) ?? null,
+    hibernated: (h) => hibernated.has(h),
     delivered: (m) => deliveredMsgs.push({ id: m.id, via: m.via }),
     held: (h) => held.has(h),
     featureOf: (h) => (h === "t9" ? 9 : null),
@@ -114,7 +127,7 @@ function world() {
   const dirFiles = (term: string) => (existsSync(join(root, term)) ? readdirSync(join(root, term)).sort() : null);
   return {
     root, repo, mb, sessions, terms, replies, blocked, needsYou, delivered, deliver, interrupts, typed, woken, deliveredMsgs, held, add, dirFiles,
-    controllerOf, subordinates, busyReason, typing, lenientRechecks, successors, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
+    controllerOf, subordinates, busyReason, typing, lenientRechecks, successors, hibernated, healOnCheck, checked, drafts, logs, coordinatorAnswered, awaiting, whileWaiting,
     setWaiting: (id: string, w: boolean) => (sessions.get(id)!.waitingForInput = w),
     tick: (ms: number) => (now += ms),
     now: () => now,
@@ -379,6 +392,58 @@ describe("Mailbox", () => {
     utimesSync(join(dir, taken), old, old);
     await w.mb.flush("t1");
     expect(w.delivered).toHaveLength(1);
+  });
+
+  it("a reply whose turn ended without Stop still comes back: the tick checks open heads that owe a reply, so the screen evidence heals them (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("t1", true);
+    w.add("t2", true);
+    w.replies.set("t1", { id: "r0", text: "old", at: w.now() - 10 });
+    const { id } = w.mb.send(msg("t1", "question"));
+    const other = w.mb.send(msg("t2", "question for one that gets closed"));
+    await flushPromises();
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    expect(w.repo.get(other.id)?.status).toBe("delivered");
+    // 它因为这条开始干活，写完回复，但 Stop 没来：记录一直说在干活，也没有别的消息排给它。
+    w.setWaiting("t1", false);
+    // t2 也在等回复，但终端关了（休眠）。
+    w.setWaiting("t2", false);
+    w.terms.delete("t2");
+    w.hibernated.add("t2");
+    w.tick(5000);
+    w.replies.set("t1", { id: "r1", text: "answer", at: w.now() });
+    w.healOnCheck.add("t1");
+    w.checked.length = 0;
+    w.tick(10_000);
+    await w.mb.tick();
+    await new Promise((r) => setTimeout(r, 0));
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "replied", replyText: "answer" });
+    expect(w.repo.queued().filter((m) => m.kind === "reply")).toMatchObject([{ toSession: "boss", fromSession: "t1" }]);
+    // 关着的不为查回复去看：guard 会去叫醒休眠的。
+    expect(w.checked).not.toContain("t2");
+    expect(w.woken).not.toContain("t2");
+  });
+
+  it("an old turn's reply written while deliver waited for the input box is the baseline, not the reply to this message (BTL-279 review)", async () => {
+    const w = world();
+    w.add("boss", false);
+    w.add("t1", true);
+    w.replies.set("t1", { id: "r0", text: "old", at: w.now() - 10 });
+    // 等输入框的时候（最多一分钟），旧的那一轮写完了它的最后一段话，然后才贴进去。
+    w.whileWaiting.run = () => {
+      w.tick(30_000);
+      w.replies.set("t1", { id: "r1", text: "the old turn's last words", at: w.now() });
+      w.tick(1);
+    };
+    const { id } = w.mb.send(msg("t1", "question"));
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "delivered", baseReplyId: "r1", deliveredAt: w.now() });
+    // 对方因为这条停下来，最后一条回复还是旧的 r1：不算回复。
+    await w.mb.stopped("t1");
+    expect(w.repo.get(id)?.status).toBe("delivered");
+    expect(w.repo.queued()).toEqual([]);
   });
 
   it("interrupt presses Esc on a busy target and types the message in, keeping it off the hook's path", async () => {
@@ -742,6 +807,50 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(got).toContain(id);
   });
 
+  it("readdressing to the successor does not hold up the closed control's own mail: it is blocked and woken before the paste into the successor (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", true);
+    const reply = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    const inst = w.mb.send(msg("old", "an instruction for the old control"));
+    await flushPromises();
+    // 用户这时另开了一个接替它的。
+    w.successors.set("old", "new");
+    w.woken.length = 0;
+    w.repo.setBlocked([inst.id], null, w.now());
+    // 往接替的那个里贴要等（最多一分钟）：这期间旧的那个的指示已经记成 closed、叫醒了。
+    const seen: { blocked: string | null; woken: boolean }[] = [];
+    w.whileWaiting.run = () => seen.push({ blocked: w.repo.get(inst.id)!.blockedReason, woken: w.woken.includes("old") });
+    await w.mb.flush("old");
+    expect(seen).toEqual([{ blocked: "closed", woken: true }]);
+    expect(w.repo.get(reply.id)).toMatchObject({ status: "delivered", toSession: "new" });
+    expect(w.repo.get(inst.id)).toMatchObject({ status: "queued", toSession: "old" });
+  });
+
+  it("Deliver now on a reply to a closed control says it went in when it was readdressed to the successor and delivered (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", true);
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    w.successors.set("old", "new");
+    expect(await w.mb.deliverNow(id)).toEqual({ delivered: true, reason: null });
+    expect(w.repo.get(id)).toMatchObject({ status: "delivered", toSession: "new" });
+  });
+
+  it("a reply to a hibernated control stays its own even when another control of the epic is open: it is woken, not readdressed (BTL-279 review)", async () => {
+    const w = world();
+    w.add("old", false, false);
+    w.add("new", true);
+    w.hibernated.add("old");
+    w.successors.set("old", "new");
+    const { id } = w.mb.send({ kind: "reply", from: "t1", to: "old", featureId: 1, body: "【回复】x" });
+    await flushPromises();
+    expect(w.repo.get(id)).toMatchObject({ status: "queued", toSession: "old", blockedReason: "hibernated" });
+    expect(w.woken).toContain("old");
+    expect(w.delivered).toEqual([]);
+  });
+
   it("a reply to a closed control with no one taking over waits for it and asks to wake it (BTL-279)", async () => {
     const w = world();
     w.add("coord", false, false);
@@ -981,7 +1090,7 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(w.repo.get(id)!.blockedReason).toBe("closed");
   });
 
-  it("counts every attempt that did not get a message in, with its time and result; the message list and pendingView show them (BTL-279)", async () => {
+  it("counts every real attempt that did not get a message in (a new reason, or a paste that did not go in), with its time and result; the message list and pendingView show them (BTL-279)", async () => {
     const w = world();
     w.add("t1", false);
     const { id } = w.mb.send(msg("t1", "hello"));
@@ -992,31 +1101,35 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     await w.mb.tick();
     w.tick(10_000);
     await w.mb.tick();
-    // 原因没变也算一次：看得出一直在试。每次都通知消息列表（只通知 messages，不惊动别的界面）。
-    expect(w.repo.get(id)).toMatchObject({ attempts: 3, lastAttemptAt: w.now(), lastAttempt: "turn", blockedSince: w.now() - 20_000 });
-    expect(w.messageNotices()).toBe(firstNotices + 2);
-    // 等输入框超时、粘贴前复查没过、终端退出：都记下来。
+    // 原因没变、也没去贴的 tick 不算（BTL-279 review）：不写库、不通知，排一夜也不会涨到几千次。
+    expect(w.repo.get(id)).toMatchObject({ attempts: 1, lastAttemptAt: w.now() - 20_000, lastAttempt: "turn", blockedSince: w.now() - 20_000 });
+    expect(w.messageNotices()).toBe(firstNotices);
+    // 等输入框超时、粘贴前复查没过、终端退出：真的去贴了，每次都算，原因相同也算。
     w.setWaiting("t1", true);
     w.failDeliver("timeout");
     w.tick(10_000);
     await w.mb.tick();
-    expect(w.repo.get(id)).toMatchObject({ attempts: 4, lastAttempt: "deliver_failed" });
+    expect(w.repo.get(id)).toMatchObject({ attempts: 2, lastAttempt: "deliver_failed" });
+    expect(w.messageNotices()).toBe(firstNotices + 1);
+    w.tick(10_000);
+    await w.mb.tick();
+    expect(w.repo.get(id)).toMatchObject({ attempts: 3, lastAttemptAt: w.now(), lastAttempt: "deliver_failed" });
     w.failDeliver("blocked");
     w.tick(10_000);
     await w.mb.tick();
-    expect(w.repo.get(id)).toMatchObject({ attempts: 5, lastAttempt: "recheck" });
+    expect(w.repo.get(id)).toMatchObject({ attempts: 4, lastAttempt: "recheck" });
     w.failDeliver("exited");
     w.tick(10_000);
     await w.mb.tick();
-    expect(w.repo.get(id)).toMatchObject({ attempts: 6, lastAttemptAt: w.now(), lastAttempt: "exited" });
-    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ attempts: 6, lastAttemptAt: new Date(w.now()).toISOString(), lastAttempt: "exited" });
-    expect(w.mb.pendingView("t1")).toMatchObject({ attempts: 6, lastAttemptAt: new Date(w.now()).toISOString() });
+    expect(w.repo.get(id)).toMatchObject({ attempts: 5, lastAttemptAt: w.now(), lastAttempt: "exited" });
+    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ attempts: 5, lastAttemptAt: new Date(w.now()).toISOString(), lastAttempt: "exited" });
+    expect(w.mb.pendingView("t1")).toMatchObject({ attempts: 5, lastAttemptAt: new Date(w.now()).toISOString() });
     // 送到了：次数留着。
     w.failDeliver("sent");
     w.tick(10_000);
     await w.mb.tick();
-    expect(w.repo.get(id)).toMatchObject({ status: "delivered", attempts: 6 });
-    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ status: "delivered", attempts: 6, blocked: null });
+    expect(w.repo.get(id)).toMatchObject({ status: "delivered", attempts: 5 });
+    expect(w.mb.views({ featureId: 1 }, [])[0]).toMatchObject({ status: "delivered", attempts: 5, blocked: null });
   });
 
   it("diagnostics lists every queued message with why it waits and how often it was tried, and recent ones with how they went in; never the text (BTL-279)", async () => {
@@ -1032,7 +1145,7 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(d.queued).toEqual([
       expect.objectContaining({
         id: a.id, kind: "instruction", from: "boss", to: "t1", head: "t1", term: "t1", queuedAt: new Date(w.now() - 10_000).toISOString(),
-        blockedReason: "turn", blockedSince: new Date(w.now() - 10_000).toISOString(), attempts: 2, lastAttemptAt: new Date(w.now()).toISOString(), lastAttempt: "turn",
+        blockedReason: "turn", blockedSince: new Date(w.now() - 10_000).toISOString(), attempts: 1, lastAttemptAt: new Date(w.now() - 10_000).toISOString(), lastAttempt: "turn",
         stuckReceiptAt: null, inFlight: false,
       }),
     ]);
