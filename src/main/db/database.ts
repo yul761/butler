@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { basename, dirname, resolve } from "node:path";
-import { backupBeforeMigrate, backupPath, DatabaseBackupError, type OnBackupFailed } from "./backup";
+import { backupBeforeMigrate, backupPath, DatabaseBackupError, KEEP_BACKUPS, pruneBackups, type OnBackupFailed } from "./backup";
 import { CHECKED_ADD_COLUMNS, MIGRATIONS } from "./migrations";
 import { M } from "../strings";
 
@@ -29,8 +29,9 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
       const backup = backupPath(file, MIGRATIONS.length);
       throw new NewerDatabaseError(current, MIGRATIONS.length, file !== ":memory:" && existsSync(backup) ? backup : undefined);
     }
+    let backedUp = false;
     if (current > 0 && current < MIGRATIONS.length && file !== ":memory:") {
-      backupBeforeMigrate(db, file, current, { log: o.log, onBackupFailed: o.onBackupFailed, failedMessage: (f) => M().databaseBackupFailed(f.backup, f.reason, f.diskFull) });
+      backedUp = backupBeforeMigrate(db, file, current, { log: o.log, onBackupFailed: o.onBackupFailed, failedMessage: (f) => M().databaseBackupFailed(f.backup, f.reason, f.diskFull) });
     }
     try {
       migrate(db);
@@ -42,6 +43,8 @@ export function openDatabase(file: string, o: OpenDatabaseOptions = {}): Db {
       const copy = backupPath(file, current);
       throw new MigrationOrderError(e.found, e.index, backup !== undefined ? { backup } : { dir: dirname(resolve(file)), copy: existsSync(copy) ? basename(copy) : null });
     }
+    // 迁移成功了才裁旧备份（BTL-279 第六轮）：失败时（不管什么错）一份都不删，装测试版本之前的那份不会被这次和下次启动的备份挤掉。
+    if (backedUp) pruneBackups(file, KEEP_BACKUPS, o.log ?? (() => undefined));
     // WAL 下 NORMAL 是安全的（BTL-275）：断电最多丢最后几次提交，库不会坏；FULL 每次自动提交都在主线程 fsync 一次。
     // 迁移完才改：迁移和它前面的备份照旧在 FULL 下跑，备份自己还另外 fsync（backup.ts）。
     db.exec("PRAGMA synchronous = NORMAL;");
@@ -139,20 +142,24 @@ export class NewerDatabaseError extends Error {
  * 把数据库升到 target（默认最新）。target 只给测试用：单独看某一条迁移改了什么，不被后面合进来的迁移带上（4.3.0 rebase 时
  * BTL-270 的「别的表没动」被 BTL-279 后加的 session_messages 列弄红过）。
  */
-export function migrate(db: Db, target: number = MIGRATIONS.length): number {
+export function migrate(db: Db, target?: number, list: readonly string[] = MIGRATIONS): number {
+  const end = target ?? list.length;
   const current = userVersion(db);
-  if (current > MIGRATIONS.length) throw new NewerDatabaseError(current, MIGRATIONS.length);
-  if (!Number.isInteger(target) || target < current || target > MIGRATIONS.length) throw new Error(`migrate target ${target} outside ${current}..${MIGRATIONS.length}`);
-  for (let i = current; i < target; i++) {
+  if (current > list.length) throw new NewerDatabaseError(current, list.length);
+  if (!Number.isInteger(end) || end < current || end > list.length) throw new Error(`migrate target ${end} outside ${current}..${list.length}`);
+  // 先把要跑的只加列迁移都查一遍，再提交任何一步（BTL-279 第六轮）：每一步各自提交，走到一半才发现顺序不对的话，
+  // 前面几步已经升上去了，提示里的「没有升级」就不成立，下次启动的备份还会把装测试版本之前的那份挤掉。
+  checkMigrationOrder(db, list, current, end);
+  for (let i = current; i < end; i++) {
     // 重建表（改 CHECK）的迁移要 DROP 别的表外键指着的表：外键只能在事务外关，提交前查一遍有没有这条迁移新造成的违规。
-    const fkOff = MIGRATIONS[i].includes(FOREIGN_KEYS_OFF) && fkOn(db);
+    const fkOff = list[i].includes(FOREIGN_KEYS_OFF) && fkOn(db);
     if (fkOff) db.exec("PRAGMA foreign_keys = OFF");
     try {
       db.exec("BEGIN");
       try {
         const violations = fkOff ? fkViolations(db) : 0;
-        if (MIGRATIONS[i].startsWith(CHECKED_ADD_COLUMNS)) addMissingColumns(db, MIGRATIONS[i], i);
-        else db.exec(MIGRATIONS[i]);
+        if (list[i].startsWith(CHECKED_ADD_COLUMNS)) addMissingColumns(db, list[i], i);
+        else db.exec(list[i]);
         if (fkOff && fkViolations(db) > violations) throw new Error(`migration ${i + 1} broke foreign keys`);
         db.exec(`PRAGMA user_version = ${i + 1}`);
         db.exec("COMMIT");
@@ -164,7 +171,35 @@ export function migrate(db: Db, target: number = MIGRATIONS.length): number {
       if (fkOff) db.exec("PRAGMA foreign_keys = ON");
     }
   }
-  return target;
+  return end;
+}
+
+/** 迁移里建、删、改名、改结构的表（CREATE / DROP / ALTER TABLE、RENAME TO 后面的名字）。 */
+const DDL_TABLE = /\b(?:CREATE\s+(?:TEMP(?:ORARY)?\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?|DROP\s+TABLE(?:\s+IF\s+EXISTS)?|ALTER\s+TABLE|RENAME\s+TO)\s+["'`[]?(\w+)/gi;
+
+/**
+ * 预检（BTL-279 第六轮）：从 from 升到 to 要跑的只加列迁移，按现在的表结构查一遍要加的列是不是已经在了；在了就抛 MigrationOrderError
+ *（found 是现在的数据版本），这时一步都还没提交。
+ * 前面某条待跑的迁移会动这张表（重建、删掉再建、改名、ALTER）时，现在的表结构说明不了跑到那一步时的样子：这张表不在这里预检，
+ * 留给那一步自己的检查（addMissingColumns），不误报。那一步才发现的话前面几步已经提交了，这是已知限制。
+ */
+export function checkMigrationOrder(db: Db, list: readonly string[], from: number, to: number): void {
+  const touched = new Set<string>();
+  const have = new Map<string, Set<string>>();
+  for (let i = from; i < to; i++) {
+    if (!list[i].startsWith(CHECKED_ADD_COLUMNS)) {
+      for (const m of list[i].matchAll(DDL_TABLE)) touched.add(m[1].toLowerCase());
+      continue;
+    }
+    for (const line of list[i].split("\n").slice(1)) {
+      const m = ADD_COLUMN.exec(line);
+      // 认不出来的行、不存在的表：留给那一步自己报错。
+      if (!m || touched.has(m[1].toLowerCase())) continue;
+      let cols = have.get(m[1].toLowerCase());
+      if (!cols) have.set(m[1].toLowerCase(), (cols = new Set((db.prepare(`PRAGMA table_info(${m[1]})`).all() as { name: string }[]).map((r) => r.name.toLowerCase()))));
+      if (cols.has(m[2].toLowerCase())) throw new MigrationOrderError(from, i);
+    }
+  }
 }
 
 /** addColumns 生成的那一行一条 ALTER TABLE … ADD COLUMN（名字只认 \\w）。 */

@@ -2612,6 +2612,7 @@ const ZH = {
       cost_paused: "它被花费熔断暂停了",
       deliver_failed: "Shipherd 往里输入时没等到它的输入框就绪",
     } as Record<MailboxBlockReason, string>,
+    patrolEta: "巡检不在一轮中间送：等它这一轮结束、停下来以后再输入进去",
     line: (why: string, since: string | null) => `排队中：${why}${since ? `（从 ${since} 起）` : ""}`,
     button: "现在送进去",
     title: "不管它是不是在等你回答、你刚是不是打过字，直接输入进去。屏幕上看得出它还在干活、输入框里有没发出去的字、屏幕上有确认框时照样不送。",

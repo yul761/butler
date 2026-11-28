@@ -74,6 +74,18 @@ describe("MessageListSummary (BTL-245)", () => {
     expect(html).toContain(S.mailboxBlocked.attempts(7, new Date("2026-11-03T09:05:00Z").toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }), S.mailboxBlocked.reason.unsure));
     expect(html).toContain(S.mailboxBlocked.attempt.recheck);
   });
+  it("a queued patrol waiting on a busy turn says it goes in once the turn ends; other kinds and other reasons do not (BTL-279 sixth review)", () => {
+    const html = renderToStaticMarkup(createElement(MessageListSummary, {
+      messages: [
+        msg("queued", { id: "p1", kind: "patrol", blocked: { reason: "turn", since: "2026-11-03T09:02:00Z" } }),
+        msg("queued", { id: "p2", kind: "patrol", blocked: { reason: "closed", since: "2026-11-03T09:02:00Z" } }),
+        msg("queued", { id: "p3", kind: "patrol" }),
+        msg("queued", { id: "s1", blocked: { reason: "turn", since: "2026-11-03T09:02:00Z" } }),
+      ],
+    }));
+    expect(html.match(/data-testid="message-patrol-eta"/g)).toHaveLength(1);
+    expect(html).toContain(S.mailboxBlocked.patrolEta);
+  });
   it("shows (0) and the empty line when there is nothing", () => {
     const html = renderToStaticMarkup(createElement(MessageListSummary, { messages: [] }));
     expect(html).toContain(S.lay.messages(0));

@@ -13,6 +13,7 @@ import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
 import { memDb } from "../test-utils";
 import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { runMailbox } from "../../../hook/mailbox";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionMessagesRepo } from "../db/session-messages-repo";
@@ -516,6 +517,43 @@ describe("Shipherd 总控 send_message and refresh_session (BTL-190 5)", () => {
     expect(opened).toEqual([]);
     expect(repo.get(r.requestId)?.meta).toEqual({ auto: "patrol" });
   });
+
+  for (const via of ["hook", "input"] as const) {
+    it(`the user's own words reaching the patrol turn (${via}) end it: asked to open the epic coordinator the user closed, the Shipherd control opens it (BTL-279 sixth review, controller's call)`, async () => {
+      let now = 5_000;
+      const turns = new PatrolTurns(() => now);
+      const { call, mailbox, mailboxRoot, repo, sessions, opened, setGuard, setNow } = setup({ patrolTurns: turns });
+      setNow(now);
+      sessions.setUserEnded("dc", 123);
+      let busy = false;
+      setGuard((id) => (busy && id === "bt" ? { ok: false, block: "busy", busy: "turn" } : { ok: true, termId: id, headId: id }));
+      sessions.setWaiting("bt", true, now);
+      const patrol = mailbox.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "每日巡检", ref: "patrol:1" });
+      await tick();
+      expect(repo.get(patrol.id)).toMatchObject({ status: "delivered", via: "input" });
+      expect(turns.active("bt")).toBe(true);
+      // 巡检那一轮在跑，用户在对话 tab 里说了话。
+      now += 1000;
+      setNow(now);
+      if (via === "hook") {
+        busy = true;
+        sessions.setWaiting("bt", false, now);
+      }
+      const user = mailbox.send({ kind: "user", from: null, to: "bt", featureId: null, body: "把 docs 的总控打开看看" });
+      await tick();
+      if (via === "hook") {
+        runMailbox(JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Read" }), { SHIPHERD_SESSION: "bt" }, mailboxRoot).commit();
+        mailbox.sweep("bt");
+      }
+      expect(repo.get(user.id)).toMatchObject({ status: "delivered", via });
+      expect(turns.active("bt")).toBe(false);
+      const r = value<{ requestId: string; wake?: string; opened?: string }>(await call({ op: "send_message", epic: "docs", text: "看一下" }));
+      expect(r.wake).toBeUndefined();
+      expect(r.opened).toBe("resumed");
+      expect(opened).toHaveLength(1);
+      expect(repo.get(r.requestId)?.meta ?? null).not.toEqual({ auto: "patrol" });
+    });
+  }
 
   it("a patrol-turn send still opens a coordinator that closed on its own (not by the user), and the send is still marked as a patrol send (BTL-279 review)", async () => {
     const { call, opened, repo } = setup({ patrolling: (id) => id === "bt" });

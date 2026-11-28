@@ -1,4 +1,4 @@
-// 迁移前的备份（BTL-262）：数据库要升级表结构时，先 VACUUM INTO 一份 app.db.pre-v<N>（N 是备份里的数据版本），只留最近两份。
+// 迁移前的备份（BTL-262）：数据库要升级表结构时，先 VACUUM INTO 一份 app.db.pre-v<N>（N 是备份里的数据版本），迁移成功后只留最近两份。
 // 迁移本身每一步都在事务里，失败会回滚；备份是给两种情况用的：迁移逻辑有错（成功了但丢了数据），和用户要装回旧版本。
 import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -125,6 +125,6 @@ export function backupBeforeMigrate(
     return false;
   }
   log(`database: backed up version ${current} to ${basename(target)} in ${now() - started} ms`);
-  pruneBackups(file, KEEP_BACKUPS, log);
+  // 旧备份留给 openDatabase 在迁移成功之后再裁（BTL-279 第六轮）：迁移失败时一份都不删。
   return true;
 }

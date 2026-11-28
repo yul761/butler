@@ -179,6 +179,46 @@ describe("Mailbox", () => {
     expect(w.deliveredMsgs).toContainEqual({ id: patrol.id, via: "input" });
   });
 
+  for (const blocker of ["needs_you", "draft"] as const) {
+    it(`a patrol held back by ${blocker} while the control is stopped is still never written to disk, before or after it gets busy (BTL-279 sixth review, surviving mutant #4)`, async () => {
+      const w = world();
+      w.add("bt", true);
+      (blocker === "needs_you" ? w.needsYou : w.drafts).add("bt");
+      const patrol = w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+      await flushPromises();
+      expect(w.repo.get(patrol.id)).toMatchObject({ status: "queued", blockedReason: blocker });
+      w.mb.syncTerm("bt");
+      expect(w.dirFiles("bt")).toBeNull();
+      // 总控变忙了（用户自己开了一轮）：巡检也不能这时候写出去、被 hook 带进这一轮。
+      w.setWaiting("bt", false);
+      w.mb.syncTerm("bt");
+      await w.mb.flush("bt");
+      expect(w.dirFiles("bt")).toBeNull();
+      expect(w.hook("bt").out).toBe("");
+      expect(w.repo.get(patrol.id)?.status).toBe("queued");
+    });
+  }
+
+  it("a patrol's ETA says it waits for the turn to end, not for a tool call; other kinds keep theirs (BTL-279 sixth review)", () => {
+    for (const reason of ["turn", "auto_input", "deliver_failed"] as const) {
+      const patrol = Mailbox.note({ delivery: "queued", reason, since: 0, kind: "patrol" }, 0);
+      expect(patrol).toContain(M().mailboxEtaPatrol);
+      expect(patrol).not.toContain("调用工具");
+      expect(Mailbox.note({ delivery: "queued", reason, since: 0, kind: "shipherd" }, 0)).toContain(M().mailboxEta[reason]);
+    }
+    expect(Mailbox.note({ delivery: "queued", reason: "closed", since: 0, kind: "patrol" }, 0)).toContain(M().mailboxEta.closed);
+  });
+
+  it("list_sessions' pending note for a busy Shipherd control with a patrol queued uses the patrol ETA (BTL-279 sixth review)", async () => {
+    const w = world();
+    w.add("bt", false);
+    w.mb.send({ kind: "patrol", from: null, to: "bt", featureId: null, body: "daily patrol", ref: "patrol:1" });
+    await flushPromises();
+    expect(w.mb.pendingView("bt")?.note).toContain(M().mailboxEtaPatrol);
+    const r = await w.mb.settle(w.repo.queued()[0].id, 0);
+    expect(Mailbox.note(r, w.now())).toContain(M().mailboxEtaPatrol);
+  });
+
   it("types the user's own words in as they are, never batched with Shipherd's messages; through the hook they carry a note", async () => {
     const w = world();
     w.add("t1", true);
@@ -1422,7 +1462,7 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(await w.mb.settle(a.id, 1000)).toMatchObject({ delivery: "delivered" });
     const b = w.mb.send(msg("t2", "wait"));
     const r = await w.mb.settle(b.id, 1000);
-    expect(r).toEqual({ delivery: "queued", reason: "turn", since: w.now() });
+    expect(r).toEqual({ delivery: "queued", reason: "turn", since: w.now(), kind: "instruction" });
     expect(Mailbox.note(r, w.now())).not.toContain("下一次调用工具时就会读到");
     expect(Mailbox.note(r, w.now())).toContain("它这一轮还在干活");
     expect(Mailbox.note({ delivery: "queued", reason: "unsure", since: w.now() - 3 * 60_000 }, w.now())).toContain("3 分钟");

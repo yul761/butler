@@ -21,9 +21,14 @@ export class PatrolTurns {
 
   constructor(private readonly now: () => number, private readonly maxMs = PATROL_TURN_MAX_MS) {}
 
-  /** 送到了一条消息（Mailbox 的 delivered 回调）：直接输入进去的巡检消息开一轮巡检，别的都不算。 */
+  /**
+   * 送到了一条消息（Mailbox 的 delivered 回调）：直接输入进去的巡检消息开一轮巡检（和它合成一次输入的别的非 user 消息一起，见 Mailbox.batch）。
+   * 用户的话（kind user）不管走 hook 还是直接输入，送进巡检那一轮就结束这一轮的巡检标记（第六轮复核，总控定）：
+   * 之后这一轮按用户发起的算，用户叫全局总控打开自己关掉的 epic 总控时能打开。别的都不算。
+   */
   messageDelivered(headId: string, m: { kind: string; via: "hook" | "input" | null; deliveredAt: number | null }): void {
     if (m.kind === "patrol" && m.via === "input") this.delivered(headId, m.deliveredAt ?? this.now());
+    else if (m.kind === "user") this.since.delete(headId);
   }
 
   /** 巡检消息在 at（粘贴的时刻）送到了这个 head。不比它最近一次停下晚的不算。 */

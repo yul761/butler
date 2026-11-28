@@ -2,7 +2,7 @@
 // 谁发给谁、种类、状态（已排队 / 已送达 / 已回复）、怎么送到的、正文和回复。新的在前。
 // 还在排队的写出挡住它的原因（BTL-269），并给一个「现在送进去」按钮。
 import { useState } from "react";
-import type { DeliverNowResult, MessageView, MessageScope } from "../../../shared/types";
+import { PATROL_ETA_REASONS, type DeliverNowResult, type MessageView, type MessageScope } from "../../../shared/types";
 import { api } from "../api";
 import { S } from "../strings";
 import { useStateRefetch } from "./useStateRefetch";
@@ -54,6 +54,7 @@ function QueuedLine({ m }: { m: MessageView }) {
   return (
     <div className="message-blocked" data-testid="message-blocked">
       {m.blocked && <span className="muted">{L.line(L.reason[m.blocked.reason], m.blocked.since ? shortTime(m.blocked.since) : null)}</span>}
+      {m.kind === "patrol" && m.blocked && PATROL_ETA_REASONS.has(m.blocked.reason) && <span className="muted" data-testid="message-patrol-eta">{L.patrolEta}</span>}
       <button type="button" className="link" title={L.title} disabled={state === "sending"} onClick={deliver} data-testid="message-deliver-now">
         {state === "sending" ? L.sending : L.button}
       </button>

@@ -787,6 +787,12 @@ export type MailboxBlockReason =
   /** guard 放行了，往里贴的时候没成（等输入框超时）。 */
   | "deliver_failed";
 
+/**
+ * 别的消息在这几个原因下会在下一次调用工具时（hook）读到；巡检不走 hook（BTL-279 第五轮），要等这一轮结束、停下来再直接输入，
+ * 主进程给 send_message、list_sessions 的那句话和消息列表都换成巡检自己的一句（第六轮复核）。
+ */
+export const PATROL_ETA_REASONS: ReadonlySet<MailboxBlockReason> = new Set<MailboxBlockReason>(["turn", "auto_input", "deliver_failed"]);
+
 /** messages:deliverNow 的结果（BTL-269）：送进去了；没送进去时的原因（delivering 正在送、gone 消息已经不在排队了）。 */
 export interface DeliverNowResult {
   delivered: boolean;

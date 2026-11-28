@@ -85,7 +85,7 @@ export class ShipherdPatrol {
       return this.record("failed", r.reason);
     }
     const head = this.d.headOf(r.termId);
-    // 刚好别处（例如用户点开）先开了它：照常排队（不 hold），在忙走 hook、停着直接输入。
+    // 刚好别处（例如用户点开）先开了它：照常排队（不 hold）。巡检不走 hook：停着就直接输入，在忙就等它这一轮结束。
     if (r.alreadyOpen) {
       this.send(slot, head);
       return this.record("ok", null);
@@ -93,7 +93,7 @@ export class ShipherdPatrol {
     this.d.onChange?.();
     if (!latest) this.send(slot, head, true);
     this.record("ok", null);
-    // 没交进去也还排着：在忙的 hook 送，停下来时信箱再送。
+    // 没交进去也还排着：巡检不走 hook，等它停下来时信箱再直接输入。
     if (!(await this.d.opened(head, r.termId))) this.d.log?.("shipherd patrol: first message not typed in yet; it stays queued");
   }
 

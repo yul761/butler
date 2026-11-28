@@ -1,9 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { addMissingColumns, DatabaseBackupError, MigrationOrderError, migrate, NewerDatabaseError, olderBackup, openDatabase, startupErrorText } from "./database";
+import { addMissingColumns, checkMigrationOrder, DatabaseBackupError, MigrationOrderError, migrate, NewerDatabaseError, olderBackup, openDatabase, startupErrorText } from "./database";
 import { CHECKED_ADD_COLUMNS } from "./migrations";
 import { setLang } from "../i18n";
 import { addColumns, MIGRATIONS } from "./migrations";
@@ -183,26 +183,98 @@ describe("migration order: which backup to point at, and when there is none (BTL
       expect(order.hint).toEqual({ dir: resolve(dir), copy: null });
       expect(order.message).toContain(resolve(dir));
       expect(order.message).not.toMatch(/pre-v|副本/);
+      // 英文也一样（第六轮复核建议 2）：只说数据目录，不提副本。
+      setLang("en");
+      try {
+        const en = new MigrationOrderError(order.found, order.index, order.hint);
+        expect(en.message).toContain(resolve(dir));
+        expect(en.message).toMatch(/data folder is /);
+        expect(en.message).not.toMatch(/pre-v|copy of the current data/);
+      } finally {
+        setLang("zh");
+      }
     });
   });
 
-  it("data a branch build upgraded with this step earlier: the message names the data version the step was reached at, and the hint points at the older backup (BTL-279 fifth review, D10)", () => {
-    inTemp((dir) => {
-      // 分支版本把这一步排在第 M-1 步：库停在 M-1，再往下 main 的第 M-1、M 步还没跑过。
-      const file = join(dir, "app.db");
-      const db = new DatabaseSync(file);
-      for (let i = 0; i < M - 2; i++) db.exec(MIGRATIONS[i]);
-      db.exec(MIGRATIONS[M]);
-      db.exec(`PRAGMA user_version = ${M - 1}`);
+  /** 分支版本把这一步排在第 M-1 步：库停在 M-1，main 的第 M-1、M 步还没跑过（D10 夹具）。 */
+  const earlierBranchDb = (dir: string): string => {
+    const file = join(dir, "app.db");
+    const db = new DatabaseSync(file);
+    for (let i = 0; i < M - 2; i++) db.exec(MIGRATIONS[i]);
+    db.exec(MIGRATIONS[M]);
+    db.exec(`PRAGMA user_version = ${M - 1}`);
+    db.close();
+    return file;
+  };
+  const versionOf = (file: string): number => {
+    const db = new DatabaseSync(file);
+    try {
+      return (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+    } finally {
       db.close();
+    }
+  };
+  const backupsIn = (dir: string): string[] => readdirSync(dir).filter((n) => n.includes(".pre-v")).sort();
+
+  it("data a branch build upgraded with this step earlier: nothing is committed, the message names the data version as it is, and the hint points at the older backup (BTL-279 fifth review D10, sixth review)", () => {
+    inTemp((dir) => {
+      const file = earlierBranchDb(dir);
       writeFileSync(join(dir, `app.db.pre-v${M - 4}`), "");
       const e = orderError(file);
-      // migrate 每一步都先把 user_version 推到这一步之前：报错时 found 就是走到这一步时的数据版本（第 M-1 步已经提交了）。
-      expect([e.found, e.index]).toEqual([M, M]);
-      expect(e.message).toContain(`${M}`);
-      expect(e.message).toMatch(new RegExp(`(数据版本 ${M}，第 ${M + 1} 步|data version ${M}; the columns step ${M + 1})`));
+      // 预检在任何一步提交之前就拦下：found 是现在的数据版本 M-1，不是走到这一步时的 M。
+      expect([e.found, e.index]).toEqual([M - 1, M]);
+      expect(e.message).toMatch(new RegExp(`(数据版本 ${M - 1}，第 ${M + 1} 步|data version ${M - 1}; the columns step ${M + 1})`));
       expect(e.backup).toBe(join(dir, `app.db.pre-v${M - 4}`));
-      expect(existsSync(join(dir, `app.db.pre-v${M - 1}`))).toBe(true);
+      expect(versionOf(file)).toBe(M - 1);
+      expect(backupsIn(dir)).toEqual([`app.db.pre-v${M - 1}`, `app.db.pre-v${M - 4}`].sort());
+    });
+  });
+
+  it("opening it a second time keeps the pre-test-build backup and still points at it; the version never moves (BTL-279 sixth review)", () => {
+    inTemp((dir) => {
+      const file = earlierBranchDb(dir);
+      writeFileSync(join(dir, `app.db.pre-v${M - 4}`), "");
+      // 再放一份更早的：迁移失败时一份都不裁（不然 KEEP_BACKUPS=2 时这份会被裁掉）。
+      writeFileSync(join(dir, `app.db.pre-v${M - 6}`), "");
+      for (let n = 0; n < 3; n++) {
+        const e = orderError(file);
+        expect(e.backup).toBe(join(dir, `app.db.pre-v${M - 4}`));
+        expect(versionOf(file)).toBe(M - 1);
+        expect(backupsIn(dir)).toEqual([`app.db.pre-v${M - 1}`, `app.db.pre-v${M - 4}`, `app.db.pre-v${M - 6}`].sort());
+      }
+    });
+  });
+
+  it("any other migration failure prunes no backup either (BTL-279 sixth review)", () => {
+    inTemp((dir) => {
+      // 版本 M、session_messages 却不在：这一步报 no table（不是顺序错），迁移失败。
+      const file = join(dir, "app.db");
+      const db = new DatabaseSync(file);
+      for (let i = 0; i < M; i++) db.exec(MIGRATIONS[i]);
+      db.exec("DROP TABLE session_messages");
+      db.exec(`PRAGMA user_version = ${M}`);
+      db.close();
+      for (const v of [M - 3, M - 5]) writeFileSync(join(dir, `app.db.pre-v${v}`), "");
+      expect(() => openDatabase(file)).toThrow(/no table session_messages/);
+      expect(backupsIn(dir)).toEqual([`app.db.pre-v${M}`, `app.db.pre-v${M - 3}`, `app.db.pre-v${M - 5}`].sort());
+    });
+  });
+
+  it("with no older backup in the D10 case, the copy it names is pre-v<the version as it is>, in both languages (BTL-279 sixth review, surviving mutant #18)", () => {
+    inTemp((dir) => {
+      const file = earlierBranchDb(dir);
+      try {
+        for (const [locale, words] of [["zh", /只是现在这份数据的副本/], ["en", /only a copy of the current data/]] as const) {
+          setLang(locale);
+          const e = orderError(file);
+          expect(e.found).not.toBe(e.index);
+          expect(e.hint).toEqual({ dir: resolve(dir), copy: `app.db.pre-v${M - 1}` });
+          expect(e.message).toContain(`app.db.pre-v${M - 1}`);
+          expect(e.message).toMatch(words);
+        }
+      } finally {
+        setLang("zh");
+      }
     });
   });
 
@@ -223,6 +295,64 @@ describe("migration order: which backup to point at, and when there is none (BTL
       expect(() => addMissingColumns(db, [CHECKED_ADD_COLUMNS, `ALTER TABLE t ADD COLUMN d${i} TEXT;`, bad].join("\n"), 0), bad).toThrow(/not an addColumns migration line/);
     });
     expect(() => addMissingColumns(db, [CHECKED_ADD_COLUMNS, "ALTER TABLE nope ADD COLUMN d TEXT;"].join("\n"), 0)).toThrow(/no table nope/);
+  });
+});
+
+describe("checking the order before any step commits (BTL-279 sixth review)", () => {
+  const base = ["CREATE TABLE t (a INTEGER, x TEXT);", "CREATE TABLE u (a INTEGER);"];
+  const at = (n: number, list: readonly string[]): DatabaseSync => {
+    const db = new DatabaseSync(":memory:");
+    for (let i = 0; i < n; i++) db.exec(list[i]);
+    db.exec(`PRAGMA user_version = ${n}`);
+    return db;
+  };
+
+  it("refuses with the data version as it is when a later checked step's column is already there, and commits no earlier step", () => {
+    const list = [...base, "CREATE TABLE v (a INTEGER);", addColumns("t", ["x TEXT"])];
+    const db = at(2, list);
+    let e: unknown;
+    try {
+      migrate(db, undefined, list);
+    } catch (x) {
+      e = x;
+    }
+    expect(e).toBeInstanceOf(MigrationOrderError);
+    expect([(e as MigrationOrderError).found, (e as MigrationOrderError).index]).toEqual([2, 3]);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'v'").all()).toEqual([]);
+  });
+
+  it("does not misreport when an earlier pending step rebuilds the table without that column (like #109 rebuilding session_messages before #111 adds three)", () => {
+    const rebuild = "CREATE TABLE t_new (a INTEGER); INSERT INTO t_new (a) SELECT a FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t;";
+    const list = [...base, rebuild, addColumns("t", ["x TEXT", "y INTEGER"])];
+    const db = at(2, list);
+    db.exec("INSERT INTO t (a, x) VALUES (1, 'old')");
+    expect(migrate(db, undefined, list)).toBe(4);
+    expect(cols(db, "t")).toEqual(["a", "x", "y"]);
+    expect(db.prepare("SELECT a, x FROM t").all()).toEqual([{ a: 1, x: null }]);
+    // 重建的写法换一种（先改名再建）也一样。
+    const renameFirst = ["ALTER TABLE t RENAME TO t_old; CREATE TABLE t (a INTEGER); INSERT INTO t SELECT a FROM t_old; DROP TABLE t_old;", addColumns("t", ["x TEXT"])];
+    expect(() => checkMigrationOrder(at(2, [...base, ...renameFirst]), [...base, ...renameFirst], 2, 4)).not.toThrow();
+  });
+
+  it("does not misreport a table an earlier pending step creates, and leaves unreadable lines to the step itself", () => {
+    const list = [...base, "CREATE TABLE w (a INTEGER);", addColumns("w", ["b TEXT"])];
+    expect(migrate(at(2, list), undefined, list)).toBe(4);
+    const bad = [...base, [CHECKED_ADD_COLUMNS, "UPDATE t SET a = 1;"].join("\n")];
+    expect(() => checkMigrationOrder(at(2, bad), bad, 2, 3)).not.toThrow();
+    expect(() => migrate(at(2, bad), undefined, bad)).toThrow(/not an addColumns migration line/);
+  });
+
+  it("only looks at the steps it is about to run", () => {
+    // 第 3 步（下标 2）已经跑过、x 是它加的：从 3 起没有要跑的只加列迁移，不报。
+    const list = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", addColumns("t", ["x TEXT"]), "CREATE TABLE v (a INTEGER);"];
+    expect(() => checkMigrationOrder(at(3, list), list, 3, 4)).not.toThrow();
+    expect(migrate(at(3, list), undefined, list)).toBe(4);
+    // 只从 2 起查到 2（一步不跑）也不报；从 2 起查到 3 才查到它。
+    const pre = at(2, base);
+    pre.exec("ALTER TABLE t ADD COLUMN y TEXT");
+    expect(() => checkMigrationOrder(pre, list, 2, 2)).not.toThrow();
+    expect(() => checkMigrationOrder(at(2, base), list, 2, 3)).toThrow(MigrationOrderError);
   });
 });
 

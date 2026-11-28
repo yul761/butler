@@ -87,6 +87,26 @@ describe("PatrolTurns (BTL-279 review suggestion 3)", () => {
     expect(t.active("other")).toBe(true);
   });
 
+  it("the user's own words delivered into the patrol turn end it, through the hook or typed in; other kinds do not (sixth review, controller's call)", () => {
+    for (const via of ["hook", "input"] as const) {
+      let now = 1000;
+      const t = new PatrolTurns(() => now);
+      t.messageDelivered("bt", { kind: "patrol", via: "input", deliveredAt: now });
+      t.messageDelivered("other", { kind: "patrol", via: "input", deliveredAt: now });
+      now += 10;
+      for (const kind of ["shipherd", "reply", "report", "instruction"]) t.messageDelivered("bt", { kind, via, deliveredAt: now });
+      expect(t.active("bt")).toBe(true);
+      t.messageDelivered("bt", { kind: "user", via, deliveredAt: now });
+      expect(t.active("bt")).toBe(false);
+      // 只结束那一个 head 的。
+      expect(t.active("other")).toBe(true);
+      // 用户说完之后再来一条直接输入的巡检（下一次停下以后）照样开一轮。
+      now += 10;
+      t.messageDelivered("bt", { kind: "patrol", via: "input", deliveredAt: now });
+      expect(t.active("bt")).toBe(true);
+    }
+  });
+
   it("a delivery time later than now counts from now", () => {
     let now = 0;
     const t = new PatrolTurns(() => now);

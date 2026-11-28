@@ -217,7 +217,7 @@ const ZH = {
   newerDatabase: (found: number, known: number) => `这份数据是更新版本的 Shipherd 创建的（数据版本 ${found}，这个 Shipherd 只认识到 ${known}）。请安装最新版本的 Shipherd 再打开。`,
   newerDatabaseBackup: (path: string) => `升级前留了一份这个版本能打开的备份：${path}。退出 Shipherd 后把它改名成 app.db 就能用旧版本打开，但升级以后的改动会丢掉。`,
   /** 迁移顺序和这份数据走过的不一样（4.3.0 复核）：装过测试版本。 */
-  migrationOrder: (found: number, n: number) => `这份数据被迁移顺序不同的测试版本 Shipherd 升级过（数据版本 ${found}，第 ${n} 步要加的列已经在了），接着升级会跳过一些步骤，所以没有升级。`,
+  migrationOrder: (found: number, n: number) => `这份数据被迁移顺序不同的测试版本 Shipherd 升级过（数据版本 ${found}，第 ${n} 步要加的列已经在了），接着升级会跳过一些步骤，所以没有接着升级。`,
   migrationOrderBackup: (path: string) => `装测试版本之前可能留了一份备份：${path}。退出 Shipherd 后把它改名成 app.db 再打开，测试版本里的改动会丢掉。`,
   migrationOrderNoBackup: (dir: string, copy: string | null) =>
     `没找到装测试版本之前的备份。数据目录在 ${dir}${copy ? `，里面的 ${copy} 只是现在这份数据的副本，换回去也一样` : ""}。可以装回那个测试版本接着用；或者退出 Shipherd，把你自己留的备份改名成 app.db 放进这个目录再打开。`,
@@ -810,6 +810,8 @@ const ZH = {
     cost_paused: "用户在界面上点「继续」以后送到",
     deliver_failed: "Shipherd 每 10 秒会再试，它下一次调用工具时也会读到",
   } as Record<MailboxBlockReason, string>,
+  /** 巡检的 ETA（BTL-279 第六轮）：巡检不走 hook，在忙时不会在下一次调用工具时读到。 */
+  mailboxEtaPatrol: "巡检不在一轮中间送：等它这一轮结束、停下来以后直接输入进去，自成一轮",
   mailboxDelivered: "消息已经送进去了。",
   mailboxDelivering: "Shipherd 正在把消息输入进去（在等它的输入框就绪），一般几秒钟。",
   mailboxQueuedUnknown: "消息排进了它的信箱，还没送到。Shipherd 每 10 秒会再试。",
@@ -1002,7 +1004,7 @@ const EN: MainStrings = {
   notJsonObject: (file: string) => `${file} is not a valid JSON object; Shipherd won't change it`,
   newerDatabase: (found: number, known: number) => `This data was created by a newer Shipherd (data version ${found}; this Shipherd knows up to ${known}). Install the latest Shipherd to open it.`,
   newerDatabaseBackup: (path: string) => `A backup this version can open was kept before the upgrade: ${path}. Quit Shipherd and rename it to app.db to open it with this version; changes made since the upgrade will be lost.`,
-  migrationOrder: (found: number, n: number) => `This data was upgraded by a test build of Shipherd with a different upgrade order (data version ${found}; the columns step ${n} adds are already there). Upgrading on would skip some steps, so nothing was upgraded.`,
+  migrationOrder: (found: number, n: number) => `This data was upgraded by a test build of Shipherd with a different upgrade order (data version ${found}; the columns step ${n} adds are already there). Upgrading on would skip some steps, so Shipherd did not upgrade any further.`,
   migrationOrderBackup: (path: string) => `A backup from before the test build may be here: ${path}. Quit Shipherd, rename it to app.db and open Shipherd again; changes made in the test build will be lost.`,
   migrationOrderNoBackup: (dir: string, copy: string | null) =>
     `No backup from before the test build was found. The data folder is ${dir}${copy ? `; ${copy} in it is only a copy of the current data, so switching to it changes nothing` : ""}. You can go back to that test build, or quit Shipherd, put a backup of your own into that folder as app.db and open Shipherd again.`,
@@ -1558,6 +1560,7 @@ const EN: MainStrings = {
     cost_paused: "It goes in once the user clicks Continue",
     deliver_failed: "Shipherd retries every 10 seconds; it also reads it at its next tool call",
   } as Record<MailboxBlockReason, string>,
+  mailboxEtaPatrol: "A patrol never goes in mid-turn: it is typed in once this turn ends and the session stops, as a turn of its own",
   mailboxDelivered: "The message has gone in.",
   mailboxDelivering: "Shipherd is typing the message in (waiting for its input box), usually a few seconds.",
   mailboxQueuedUnknown: "The message is in its mailbox and has not gone in yet. Shipherd retries every 10 seconds.",

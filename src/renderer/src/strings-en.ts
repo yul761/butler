@@ -2583,6 +2583,7 @@ export const EN: UiStrings = {
       cost_paused: "the cost breaker paused it",
       deliver_failed: "Shipherd tried to type it in but its input box never became ready",
     } as Record<MailboxBlockReason, string>,
+    patrolEta: "A patrol never goes in mid-turn: it is typed in once this turn ends and the session stops",
     line: (why: string, since: string | null) => `Queued: ${why}${since ? ` (since ${since})` : ""}`,
     button: "Deliver now",
     title: "Type it in now, even if it is waiting for your answer or you just typed. It still waits if the screen shows it working, the input box has unsent text, or a prompt is on screen.",

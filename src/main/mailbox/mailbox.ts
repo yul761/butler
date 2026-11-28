@@ -8,7 +8,7 @@ import { MESSAGE_LIMIT, sanitizeTask, TASK_LIMIT } from "../../shared/control";
 import {
   DONE_SUFFIX, MAIN_SUFFIX, MSG_SUFFIX, messageFileName, messageIdOf, TAKEN_SUFFIX, type MailboxFile,
 } from "../../shared/mailbox";
-import type { MailboxAttempt, MailboxBlockReason, MessageKind, MessageScope, MessageView, Session } from "../../shared/types";
+import { PATROL_ETA_REASONS, type MailboxAttempt, type MailboxBlockReason, type MessageKind, type MessageScope, type MessageView, type Session } from "../../shared/types";
 import type { NewSessionMessage, SessionMessage, SessionMessagesRepo } from "../db/session-messages-repo";
 import type { DeliveryCheck } from "../sessions/delivery-guard";
 import type { DeliverResult } from "../sessions/pty-manager";
@@ -253,6 +253,10 @@ const answersWait = (queued: readonly SessionMessage[]): boolean => queued.some(
 
 const EXPECTS_REPLY: ReadonlySet<MessageKind> = new Set(["instruction", "shipherd"]);
 
+/** 什么时候能送到（给 send_message、list_sessions 的那句话）：巡检按 PATROL_ETA_REASONS 换成它自己的一句。 */
+export const etaOf = (reason: MailboxBlockReason, kind?: string): string =>
+  kind === "patrol" && PATROL_ETA_REASONS.has(reason) ? M().mailboxEtaPatrol : M().mailboxEta[reason];
+
 export class Mailbox {
   /** 上次清旧消息的时间（BTL-275）。 */
   private prunedAt: number | null = null;
@@ -347,7 +351,7 @@ export class Mailbox {
   async settle(
     id: string,
     capMs = SETTLE_MS,
-  ): Promise<{ delivery: "delivered"; at: number | null } | { delivery: "queued"; reason: MailboxBlockReason | "delivering" | null; since: number | null }> {
+  ): Promise<{ delivery: "delivered"; at: number | null } | { delivery: "queued"; reason: MailboxBlockReason | "delivering" | null; since: number | null; kind?: string }> {
     const attempt = this.attempts.get(id);
     if (attempt) {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -357,7 +361,7 @@ export class Mailbox {
     const m = this.d.repo.get(id);
     if (m && m.status !== "queued") return { delivery: "delivered", at: m.deliveredAt };
     if (this.inFlight.has(id) || this.interrupting.has(id)) return { delivery: "queued", reason: "delivering", since: null };
-    return { delivery: "queued", reason: m?.blockedReason ?? null, since: m?.blockedSince ?? null };
+    return { delivery: "queued", reason: m?.blockedReason ?? null, since: m?.blockedSince ?? null, kind: m?.kind };
   }
 
   /**
@@ -376,7 +380,7 @@ export class Mailbox {
    * 一条都没有返回 null。
    */
   pendingFor(sessionId: string): {
-    queued: number; oldestQueuedAt: number; reason: MailboxBlockReason | null; since: number | null; attempts: number; lastAttemptAt: number | null;
+    queued: number; oldestQueuedAt: number; reason: MailboxBlockReason | null; since: number | null; kind: string; attempts: number; lastAttemptAt: number | null;
   } | null {
     const mine = this.d.repo.queued().filter((m) => this.headOf(m.toSession) === this.headOf(sessionId));
     if (mine.length === 0) return null;
@@ -385,7 +389,7 @@ export class Mailbox {
     // 次数看试得最多的那条（最早排的那条一般就是它），最后一次尝试看所有排着的里最近的（BTL-279）。
     const attempts = Math.max(...mine.map((m) => m.attempts));
     const last = mine.reduce<number | null>((a, m) => (m.lastAttemptAt !== null && (a === null || m.lastAttemptAt > a) ? m.lastAttemptAt : a), null);
-    return { queued: mine.length, oldestQueuedAt: first.queuedAt, reason: blocked.blockedReason, since: blocked.blockedSince, attempts, lastAttemptAt: last };
+    return { queued: mine.length, oldestQueuedAt: first.queuedAt, reason: blocked.blockedReason, since: blocked.blockedSince, kind: blocked.kind, attempts, lastAttemptAt: last };
   }
 
   /** 给 list_sessions、session_activity 的一项（BTL-269）：几条在排队、挡住的原因和开始时间、一句话；没有在排队的为 null。 */
@@ -394,7 +398,7 @@ export class Mailbox {
   } | null {
     const p = this.pendingFor(sessionId);
     if (!p) return null;
-    const note = Mailbox.note({ delivery: "queued", reason: p.reason, since: p.since }, this.d.now());
+    const note = Mailbox.note({ delivery: "queued", reason: p.reason, since: p.since, kind: p.kind }, this.d.now());
     return {
       queued: p.queued, oldestQueuedAt: new Date(p.oldestQueuedAt).toISOString(), blockedBy: p.reason, blockedSince: iso(p.since),
       attempts: p.attempts, lastAttemptAt: iso(p.lastAttemptAt), note,
@@ -643,6 +647,8 @@ export class Mailbox {
     // 换新以后的「接着做」单独原样输入：它是新上下文的第一句话。
     if (list[0]?.kind === "refresh") return { text: sanitizeTask(list[0].body), ids: [list[0]] };
     const user = list[0]?.kind === "user";
+    // 巡检和同时排着的别的非 user 消息（回复、汇报、指示）合成一次输入：这一轮按巡检处理（PatrolTurns），
+    // 那几条在这一轮里引出的 send_message 也算巡检发的。用户的话不合进来（下面遇到 user 就断开）。
     const parts: string[] = [];
     const ids: SessionMessage[] = [];
     let size = 0;
@@ -1147,13 +1153,13 @@ export class Mailbox {
   }
 
   /** 给 send_message、list_sessions 用的一句话：送到了，或者为什么还没送到、什么时候能送到。 */
-  static note(r: { delivery: "delivered" } | { delivery: "queued"; reason: MailboxBlockReason | "delivering" | null; since: number | null }, now: number): string {
+  static note(r: { delivery: "delivered" } | { delivery: "queued"; reason: MailboxBlockReason | "delivering" | null; since: number | null; kind?: string }, now: number): string {
     const m = M();
     if (r.delivery === "delivered") return m.mailboxDelivered;
     if (r.reason === "delivering") return m.mailboxDelivering;
     if (r.reason === null) return m.mailboxQueuedUnknown;
     const minutes = r.since === null ? 0 : Math.floor((now - r.since) / 60_000);
-    return m.mailboxQueued(m.mailboxBlocked[r.reason], m.mailboxEta[r.reason], minutes);
+    return m.mailboxQueued(m.mailboxBlocked[r.reason], etaOf(r.reason, r.kind), minutes);
   }
 
   // ---- 诊断 ----
