@@ -123,6 +123,44 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
     cmdContinued: "mysql " + "\\\n".repeat(N / 2),
     cmdContinuedMany: "mysql -pa \\\n".repeat(N / 12),
     cmdContinuedCrlf: "mysql -p" + "\\\r\n".repeat(N / 3),
+    // 复核 fed50a04：Authorization 的任意 scheme、续行、引号里带空格的命令行值、pass / pin、驼峰键名、k8s env、YAML 块标量、
+    // gh secret set / openssl / ssh-keygen / aws configure set / htpasswd、--password-stdin。
+    authz: "Authorization: ".repeat(N / 15),
+    authzScheme: "Authorization: a ".repeat(N / 17),
+    authzQuoted: "Authorization=\"".repeat(N / 15),
+    contKey: "password=\\\n".repeat(N / 11),
+    contCli: " --token=\\\n".repeat(N / 11),
+    contUser: " -u a:\\\n".repeat(N / 8),
+    cliUserDq: ' -u "'.repeat(N / 5),
+    cliUserSq: " -u '".repeat(N / 5),
+    cliUserDqNoColon: ' -u "' + "a".repeat(N),
+    cliSecretDq: ' --password "'.repeat(N / 13),
+    cliSecretSq: " --token '".repeat(N / 10),
+    passKeys: "pass: ".repeat(N / 6),
+    pinKeys: '"pin": "'.repeat(N / 8),
+    camelKeys: "passwordHash".repeat(N / 12),
+    camelDigits: "token" + "1a".repeat(N / 2),
+    k8sNames: "- name: DB_PASSWORD\n  value: ".repeat(N / 30),
+    k8sPlainNames: "name: a\nvalue: ".repeat(N / 16),
+    k8sLongName: "name: " + "a".repeat(N),
+    yamlBlocks: "password: |\n ".repeat(N / 14),
+    yamlBlockLines: "password: |\n" + "  a\n".repeat(N / 4),
+    yamlBlockDedent: "password: |\n" + "  a\n a\n".repeat(N / 7),
+    ghSecret: "gh secret set ".repeat(N / 14),
+    ghSecretBody: "gh secret set x -b".repeat(N / 18),
+    openssl: "openssl -k ".repeat(N / 11),
+    opensslPassin: "openssl -passin pass:".repeat(N / 21),
+    sshKeygen: "ssh-keygen -N ".repeat(N / 14),
+    awsSet: "aws configure set ".repeat(N / 18),
+    awsKeyWord: "aws configure set " + "key".repeat(N / 3),
+    awsLongWord: "aws configure set " + "a".repeat(N),
+    htpasswd: "htpasswd -b ".repeat(N / 12),
+    htpasswdWords: "htpasswd -b" + " a".repeat(N / 2),
+    htpasswdFlags: "htpasswd -b" + " -a".repeat(N / 3),
+    stdinMany: "--password-stdin ".repeat(N / 17),
+    stdinSpaces: "--password-stdin" + " ".repeat(N) + "<<<",
+    echoMany: "echo a ".repeat(N / 7),
+    echoPipes: "echo a | ".repeat(N / 9),
   };
   const time = (input: string): number => {
     maskSecrets(input);
@@ -171,7 +209,9 @@ describe("maskSecrets stays linear on adversarial input (BTL-272: 200KB in under
   });
 
   it("one prefix followed by 200KB of one filler", () => {
-    for (const head of ["password", "A_KEY_", "password: 'a'", "the password is \"\" ", "password: ''a", "mysql -p", "mysql ", "| DBPASSWORD |\n|-|\n", "ｐａｓｓｗｏｒｄ＝"]) {
+    for (const head of ["password", "A_KEY_", "password: 'a'", "the password is \"\" ", "password: ''a", "mysql -p", "mysql ", "| DBPASSWORD |\n|-|\n", "ｐａｓｓｗｏｒｄ＝",
+      "Authorization: ", "password: |\n", "- name: DB_PASSWORD\n  value: ", " -u \"a:", " --password \"", "pass: ", "htpasswd -b",
+      "aws configure set ", "echo ", "--password-stdin", "gh secret set x --body ", "password=\\\n"]) {
       for (const fill of ["中", "1", "`", "“", "\\\n", "')", "A_", "\u200b", "│"]) {
         expect(time(head + fill.repeat(N / fill.length)), `${head} + ${JSON.stringify(fill)}`).toBeLessThan(LIMIT_MS);
       }

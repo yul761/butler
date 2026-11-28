@@ -889,5 +889,177 @@ describe("maskSecrets (BTL-272: no secrets in memory, mail or the DB)", () => {
       expect(maskSecrets(`| ${h} | name |\n|---|---|\n| v4lue | bob |`), h).not.toContain("v4lue");
     }
   });
-});
+  describe("review of fed50a04 (secrets)", () => {
+    const M = SECRET_MASK;
 
+    it("S1: a full-width colon counts as the colon in URL credentials, curl -u and Authorization", () => {
+      expect(maskSecrets("postgres://admin：S3cretPw＠db.example.com/app")).toBe(`postgres://admin：${M}@db.example.com/app`);
+      expect(maskSecrets("postgres://admin:S3cretPw＠db.example.com/app")).toBe(`postgres://admin:${M}@db.example.com/app`);
+      expect(maskSecrets("curl -u admin：hunter2xyz https://x")).toBe(`curl -u admin：${M} https://x`);
+      expect(maskSecrets("ｃｕｒｌ －ｕ ａｄｍｉｎ：ｈｕｎｔｅｒ２ｘｙｚ")).toBe(`curl -u admin：${M}`);
+      expect(maskSecrets("ｔｏｋｅｎ：ａｂｃｄ１２３４ｅｆｇｈ")).toBe(`token：${M}`);
+      expect(maskSecrets("Authorization：abcd1234efgh5678")).toBe(`Authorization：${M}`);
+    });
+
+    it("drops every Default_Ignorable code point before masking (soft hyphen, U+2063, variation selectors, tags)", () => {
+      expect(maskSecrets("pass­word=hunter2xyz")).toBe(`password=${M}`);
+      expect(maskSecrets("pass⁣word=hunter2xyz")).toBe(`password=${M}`);
+      const missed: string[] = [];
+      for (let cp = 0; cp <= 0x10ffff; cp++) {
+        if (cp >= 0xd800 && cp <= 0xdfff) continue;
+        const ch = String.fromCodePoint(cp);
+        if (!/\p{Default_Ignorable_Code_Point}/u.test(ch)) continue;
+        if (maskSecrets(`pass${ch}word=hunter2xyz`) !== `password=${M}`) missed.push(cp.toString(16));
+      }
+      expect(missed).toEqual([]);
+      // 不可忽略的字照样留着（ß、é、汉字、® 不会被去掉，键名被它们隔开就不算键名）。
+      for (const ch of ["ß", "é", "中", "®"]) expect(maskSecrets(`pass${ch}word=hunter2xyz`), ch).toBe(`pass${ch}word=hunter2xyz`);
+    });
+
+    it("maps every compatibility character whose NFKC is ASCII (math bold / italic / monospace, circled, superscript)", () => {
+      expect(maskSecrets("𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝=hunter2xyz")).toBe(`password=${M}`);
+      expect(maskSecrets("𝚝𝚘𝚔𝚎𝚗: abcd1234efgh")).toBe(`token: ${M}`);
+      expect(maskSecrets("ⓟⓐⓢⓢⓦⓞⓡⓓ=hunter2xyz")).toBe(`password=${M}`);
+      expect(maskSecrets("𝐩𝐚𝐬𝐬: abc12345xyz")).toBe(`pass: ${M}`);
+      // 每一个 NFKC 以后是 p 的字（各种数学字母、带圈、上下标、全角…）都要换过来。
+      const missed: string[] = [];
+      for (let cp = 0xa0; cp <= 0x1ffff; cp++) {
+        if (cp >= 0xd800 && cp <= 0xdfff) continue;
+        const ch = String.fromCodePoint(cp);
+        if (ch.normalize("NFKC") !== "p") continue;
+        if (maskSecrets(`${ch}assword=hunter2xyz`) !== `password=${M}`) missed.push(cp.toString(16));
+      }
+      expect(missed).toEqual([]);
+      // 没打到码的原样返回（数学字母、℃、① 不改）。
+      expect(maskSecrets("𝐇𝐞𝐥𝐥𝐨 ℃ ①")).toBe("𝐇𝐞𝐥𝐥𝐨 ℃ ①");
+      // 打了码、输出用规范化文本时：NFKC 换不成 ASCII 的（℃ → °C、¼ → 1⁄4）不换。
+      expect(maskSecrets("℃ ¼ password=hunter2xyz")).toBe(`℃ ¼ password=${M}`);
+    });
+
+    it("masks a value continued onto the next line with a backslash, and nothing when the next line is empty", () => {
+      expect(maskSecrets("some-cli --token=\\\nS3cretPw")).toBe(`some-cli --token=\\\n${M}`);
+      expect(maskSecrets("some-cli --password=\\\n  S3cretPw")).toBe(`some-cli --password=\\\n  ${M}`);
+      expect(maskSecrets("curl -u bob:\\\nS3cretPw https://x")).toBe(`curl -u bob:\\\n${M} https://x`);
+      expect(maskSecrets("curl -u \\\n bob:S3cretPw https://x")).toBe(`curl -u \\\n bob:${M} https://x`);
+      expect(maskSecrets("curl --user \\\n  bob:S3cretPw https://x")).toBe(`curl --user \\\n  bob:${M} https://x`);
+      expect(maskSecrets("PGPASSWORD=\\\nS3cretPw psql")).toBe(`PGPASSWORD=\\\n${M} psql`);
+      expect(maskSecrets("password=\\\nS3cretPw")).toBe(`password=\\\n${M}`);
+      expect(maskSecrets("password=\\\r\nS3cretPw")).toBe(`password=\\\r\n${M}`);
+      expect(maskSecrets("key=\\\nabcdefgh1234")).toBe(`key=\\\n${M}`);
+      // 续行后面什么都没有：不打（opus 的杀变异用例）；后面是带空格的引号值：整段打。
+      expect(maskSecrets("some-cli --password \\\n")).toBe("some-cli --password \\\n");
+      expect(maskSecrets('some-cli --password \\\n"S3cret Pw"')).toBe(`some-cli --password \\\n"${M}"`);
+    });
+
+    it("masks Authorization values with any scheme or none", () => {
+      expect(maskSecrets("Authorization: token abcd1234efgh")).toBe(`Authorization: token ${M}`);
+      expect(maskSecrets("Authorization: abcd1234efgh5678")).toBe(`Authorization: ${M}`);
+      expect(maskSecrets("Authorization: Bot fake-bot-value-for-tests")).toBe(`Authorization: Bot ${M}`);
+      expect(maskSecrets("Authorization: Negotiate YIIabc123def")).toBe(`Authorization: Negotiate ${M}`);
+      expect(maskSecrets("authorization=Token abcd1234efgh")).toBe(`authorization=Token ${M}`);
+      expect(maskSecrets("Authorization: Bearer abcd1234efgh5678")).toBe(`Authorization: ${M}`);
+      // 8 个字以下的不打。
+      expect(maskSecrets("Authorization: none")).toBe("Authorization: none");
+    });
+
+    it("masks a whole quoted command-line value with spaces (--password, --token, -u)", () => {
+      expect(maskSecrets("some-cli --password 'S3cret Pw xyz'")).toBe(`some-cli --password '${M}'`);
+      expect(maskSecrets('some-cli --password "S3cret Pw xyz"')).toBe(`some-cli --password "${M}"`);
+      expect(maskSecrets("gh auth login --token 'ab cd ef'")).toBe(`gh auth login --token '${M}'`);
+      expect(maskSecrets("some-cli --password='two words' x")).toBe(`some-cli --password='${M}' x`);
+      expect(maskSecrets('some-cli --password "a\\" b c" next')).toBe(`some-cli --password "${M}" next`);
+      expect(maskSecrets('some-cli --password "S3cret Pw')).toBe(`some-cli --password "${M}`);
+      expect(maskSecrets("curl -u 'admin:S3cret Pw xyz' https://x")).toBe(`curl -u 'admin:${M}' https://x`);
+      expect(maskSecrets('curl -u "admin:S3cret Pw xyz" https://x')).toBe(`curl -u "admin:${M}" https://x`);
+      expect(maskSecrets('curl --user="bob:my pass" x')).toBe(`curl --user="bob:${M}" x`);
+      expect(maskSecrets("-u 'admin:S3cret Pw xyz")).toBe(`-u 'admin:${M}`);
+    });
+
+    it("masks pass / pin keys and camelCase key names, but not words that only contain them", () => {
+      expect(maskSecrets('{"db": {"pass": "hunter2xyz"}}')).toBe(`{"db": {"pass": "${M}"}}`);
+      expect(maskSecrets('{"pin": "4821"}')).toBe(`{"pin": "${M}"}`);
+      expect(maskSecrets("pinCode: 482193")).toBe(`pinCode: ${M}`);
+      expect(maskSecrets("nodemailer auth: { user: 'bob', pass: 'hunter2xyz' }")).toBe(`nodemailer auth: { user: 'bob', pass: '${M}' }`);
+      expect(maskSecrets("smtp:\n  user: bob\n  pass: hunter2xyz")).toBe(`smtp:\n  user: bob\n  pass: ${M}`);
+      expect(maskSecrets("pass: 'two words here'")).toBe(`pass: '${M}'`);
+      expect(maskSecrets('{"passwordHash": "hunter2xyz"}')).toBe(`{"passwordHash": "${M}"}`);
+      expect(maskSecrets("tokenValue=abcd1234efgh")).toBe(`tokenValue=${M}`);
+      expect(maskSecrets("| user | Pin |\n|---|---|\n| bob | 4821 |")).toBe(`| user | Pin |\n|---|---|\n| bob | ${M} |`);
+      expect(maskSecrets("bypass: hunter2xyz")).toBe("bypass: hunter2xyz");
+      expect(maskSecrets("spin: 1234abcd")).toBe("spin: 1234abcd");
+      // opus 的杀变异用例：后缀长度、环境变量键名的长编号、驼峰的表头。
+      expect(maskSecrets("db_password_staging: hunter2xyz")).toBe(`db_password_staging: ${M}`);
+      expect(maskSecrets("token-preview=abcd1234efgh")).toBe(`token-preview=${M}`);
+      expect(maskSecrets("MY_KEY_20240115093000123=hunter2xyz")).toBe(`MY_KEY_20240115093000123=${M}`);
+      expect(maskSecrets("DB_PASS_20240115093000=hunter2xyz")).toBe(`DB_PASS_20240115093000=${M}`);
+      expect(maskSecrets("| user | DbPass |\n|---|---|\n| bob | hunter2 |")).toBe(`| user | DbPass |\n|---|---|\n| bob | ${M} |`);
+      expect(maskSecrets("| host | SshKey |\n|---|---|\n| h1 | AAAAC3Nza |")).toBe(`| host | SshKey |\n|---|---|\n| h1 | ${M} |`);
+    });
+
+    it("masks Azure AccountKey and *_DSN values", () => {
+      expect(maskSecrets("DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=abcd1234efgh5678ijkl==;EndpointSuffix=core.windows.net")).toBe(
+        `DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=${M};EndpointSuffix=core.windows.net`,
+      );
+      expect(maskSecrets("SENTRY_DSN=https://abc123def456@o12345.ingest.sentry.io/123")).toBe(`SENTRY_DSN=${M}`);
+    });
+
+    it("masks Kubernetes env values whose name is a secret, and only those", () => {
+      expect(maskSecrets("- name: DB_PASSWORD\n  value: hunter2xyz")).toBe(`- name: DB_PASSWORD\n  value: ${M}`);
+      expect(maskSecrets('env:\n  - name: API_TOKEN\n    value: "abcd1234efgh"')).toBe(`env:\n  - name: API_TOKEN\n    value: ${M}`);
+      expect(maskSecrets("- name: \"GITHUB_TOKEN\"\n  value: 'abcd 1234'")).toBe(`- name: "GITHUB_TOKEN"\n  value: ${M}`);
+      expect(maskSecrets("- name: LOG_LEVEL\n  value: debug1234")).toBe("- name: LOG_LEVEL\n  value: debug1234");
+      expect(maskSecrets("- name: DB_PASSWORD\n  valueFrom:\n    secretKeyRef: x")).toBe("- name: DB_PASSWORD\n  valueFrom:\n    secretKeyRef: x");
+    });
+
+    it("masks YAML block scalars as one placeholder, keeping the lines that are indented less", () => {
+      expect(maskSecrets("password: |\n  hunter2xyz")).toBe(`password: |\n  ${M}`);
+      expect(maskSecrets("password: >-\n  hunter2xyz")).toBe(`password: >-\n  ${M}`);
+      expect(maskSecrets("password: |\n  line one\n\n  line two\nnext: ok")).toBe(`password: |\n  ${M}\nnext: ok`);
+      expect(maskSecrets("  password: |\n    a1\n    b2\n  user: bob")).toBe(`  password: |\n    ${M}\n  user: bob`);
+      expect(maskSecrets("password: |\r\n  hunter2xyz\r\nuser: bob")).toBe(`password: |\r\n  ${M}\r\nuser: bob`);
+      expect(maskSecrets("token: >-\n  abc\n  def\n")).toBe(`token: >-\n  ${M}\n`);
+      expect(maskSecrets("description: |\n  just text here")).toBe("description: |\n  just text here");
+    });
+
+    it("masks gh secret set, openssl, ssh-keygen, aws configure set and htpasswd passwords", () => {
+      expect(maskSecrets("gh secret set API_TOKEN --body abcd1234efgh")).toBe(`gh secret set API_TOKEN --body ${M}`);
+      expect(maskSecrets("gh secret set API_TOKEN -b'ab cd'")).toBe(`gh secret set API_TOKEN -b${M}`);
+      expect(maskSecrets("gh secret set X --body=abcd1234")).toBe(`gh secret set X --body=${M}`);
+      expect(maskSecrets("gh secret set X --body-file f.txt")).toBe("gh secret set X --body-file f.txt");
+      expect(maskSecrets("openssl enc -k hunter2xyz")).toBe(`openssl enc -k ${M}`);
+      expect(maskSecrets("openssl rsa -passin pass:hunter2xyz -in k")).toBe(`openssl rsa -passin pass:${M} -in k`);
+      expect(maskSecrets("openssl enc -passout pass:hunter2xyz")).toBe(`openssl enc -passout pass:${M}`);
+      expect(maskSecrets('openssl enc -passin "pass:abc def" -in f')).toBe(`openssl enc -passin ${M} -in f`);
+      expect(maskSecrets("openssl enc -k 'two words' -in f")).toBe(`openssl enc -k ${M} -in f`);
+      expect(maskSecrets('openssl enc -passout "pass:abcd efgh" -out f')).toBe(`openssl enc -passout ${M} -out f`);
+      expect(maskSecrets('gh secret set X --body "two words"')).toBe(`gh secret set X --body ${M}`);
+      expect(maskSecrets("ssh-keygen -N hunter2xyz")).toBe(`ssh-keygen -N ${M}`);
+      expect(maskSecrets("ssh-keygen -t ed25519 -N 'two words' -f k")).toBe(`ssh-keygen -t ed25519 -N ${M} -f k`);
+      expect(maskSecrets("ssh-keygen -p -P old1234 -N new5678 -f k")).toBe(`ssh-keygen -p -P ${M} -N ${M} -f k`);
+      expect(maskSecrets("aws configure set aws_secret_access_key abcd1234efgh5678")).toBe(`aws configure set aws_secret_access_key ${M}`);
+      expect(maskSecrets("aws configure set default.aws_session_token abc123")).toBe(`aws configure set default.aws_session_token ${M}`);
+      expect(maskSecrets("aws configure set region us-east-1")).toBe("aws configure set region us-east-1");
+      expect(maskSecrets("htpasswd -b .htpasswd bob hunter2xyz")).toBe(`htpasswd -b .htpasswd bob ${M}`);
+      expect(maskSecrets("htpasswd -bc f bob hunter2xyz")).toBe(`htpasswd -bc f bob ${M}`);
+      expect(maskSecrets("htpasswd -nb bob hunter2xyz")).toBe(`htpasswd -nb bob ${M}`);
+      expect(maskSecrets("htpasswd -c f bob")).toBe("htpasswd -c f bob");
+    });
+
+    it("masks a --password-stdin password given as a here-string or piped from echo", () => {
+      expect(maskSecrets("docker login -u bob --password-stdin <<< S3cretPw")).toBe(`docker login -u bob --password-stdin <<< ${M}`);
+      expect(maskSecrets("echo S3cretPw | docker login -u bob --password-stdin")).toBe(`echo ${M} | docker login -u bob --password-stdin`);
+      expect(maskSecrets('echo "$PW" | docker login --password-stdin')).toBe('echo "$PW" | docker login --password-stdin');
+      expect(maskSecrets("echo hello world")).toBe("echo hello world");
+      expect(maskSecrets("echo hello123 | grep x")).toBe("echo hello123 | grep x");
+    });
+
+    it("opus kill cases: a continuation inside double quotes stays in the command, and normalizing several inputs in a row works", () => {
+      expect(maskSecrets('mysql -e "select 1 \\\n; select 2" -pS3cretPw db')).toBe(`mysql -e "select 1 \\\n; select 2" -p${M} db`);
+      expect(maskSecrets("ｐａｓｓｗｏｒｄ＝hunter2xyz")).toBe(`password=${M}`);
+      expect(maskSecrets("x\nｐａｓｓｗｏｒｄ＝hunter2xyz")).toBe(`x\npassword=${M}`);
+      expect(maskSecrets("ｐａｓｓｗｏｒｄ＝hunter2xyz")).toBe(`password=${M}`);
+      expect(maskSecrets("abc")).toBe("abc");
+      expect(maskSecrets("​password=abc12345")).toBe(`password=${M}`);
+    });
+  });
+});

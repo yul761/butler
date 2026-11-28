@@ -287,3 +287,136 @@ describe("findDuplicate, opus review of bd556adf (BTL-272)", () => {
     expect(polarityClash("drop the cache", "keep the cache")).toBe(true);
   });
 });
+
+describe("review of fed50a04 (dedupe)", () => {
+  it.each([
+    // 否定被当成复合词去掉
+    ["这个配置同步到生产环境", "这个配置不同步到生产环境"],
+    ["e2e 和 lint 同时跑", "e2e 和 lint 不同时跑"],
+    ["每页少于 100 条记录", "每页不少于 100 条记录"],
+    ["登录 token 过期以后要重新登录", "登录 token 不过期以后要重新登录"],
+    // 句子本身以「(from …)」结尾
+    ["Switch the default branch (from master to main)", "Switch the default branch (from main to master)"],
+    // no longer：另一边也有否定词时只靠改主意词
+    ["Don't wait for CI; reviews are required", "Don't wait for CI; reviews are no longer required"],
+    // 不再：另一边也有「不」
+    ["不用等 CI，发版需要 alice review", "不用等 CI，发版不再需要 alice review"],
+    // 反义词各占一边、两边都有时看先后（stop/keep、start/stop、pause/resume、停掉/开着）
+    ["Stop the old cluster and keep the new one", "Keep the old cluster, stop the new one"],
+    ["Start the old job and stop the new one", "Stop the old job, start the new one"],
+    ["Pause the old job and resume the new one", "Resume the old job, pause the new one"],
+    ["旧的重试先停掉，新的重试先开着", "旧的重试先开着，新的重试先停掉"],
+    // 改回、升降级、上下线
+    ["升级 node 到 22", "降级 node 到 22"],
+    ["上线新版本的支付页", "下线新版本的支付页"],
+    ["Move the button to the left side of the toolbar", "Move the button to the right side of the toolbar"],
+    ["Releasing every Friday at 3pm to production", "Releasing every Friday at 3pm to production is dropped"],
+  ])("does not merge %s / %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(findDuplicate(b, [a])).toBeNull();
+  });
+
+  it("does not let a switch back match the older fact it returns to", () => {
+    expect(findDuplicate("这个仓库改回用 npm 管理依赖", ["这个仓库用 npm 管理依赖", "这个仓库改成用 pnpm 管理依赖"])).toBeNull();
+  });
+
+  it.each([
+    ["CI can't run e2e", "CI cannot run the e2e"],
+    ["You shan't skip lint", "You shall not skip the lint"],
+    ["It ain't ready yet", "It is not ready yet"],
+    ["The Friday release is cancelled until March", "The Friday release is canceled until March"],
+    ["这个接口特别重要，必须先做分页", "这个接口很重要，必须先做分页"],
+    ["两个仓库用的分支名不同，记得区分", "两个仓库用的分支名不同，要记得区分"],
+  ])("still merges %s / %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBe(b);
+    expect(findDuplicate(b, [a])).toBe(a);
+  });
+});
+
+describe("review of fed50a04, coordinator decisions (dedupe)", () => {
+  it.each([
+    // 中文句子里的拉丁词按数字比：一边换成了别的词。
+    ["这个仓库用 npm 管理依赖", "这个仓库用 pnpm 管理依赖"],
+    ["默认分支是 main，PR 都开到这里", "默认分支是 master，PR 都开到这里"],
+    ["单测用 vitest 跑，不要用别的", "单测用 jest 跑，不要用别的"],
+    ["主进程的包打成 ESM 格式发布", "主进程的包打成 CJS 格式发布"],
+    // 限定词只在一边：多出来的部分加了条件、例外或期限。
+    ["这个接口在周五发版", "这个接口只在周五发版"],
+    ["这个接口在周五发版", "这个接口仅在周五发版"],
+    ["每个 PR 都要跑完整的 e2e", "除了文档 PR，每个 PR 都要跑完整的 e2e"],
+    ["每个 PR 都要跑完整的 e2e", "每个 PR 都要跑完整的 e2e，除非是热修复"],
+    ["BTL-280 的数据迁移这周开始做", "BTL-280 的数据迁移先缓，这周开始做"],
+    ["新的巡检逻辑默认打开", "新的巡检逻辑暂时默认打开"],
+    ["新的巡检逻辑默认打开", "新的巡检逻辑暂停默认打开"],
+    ["Run the full e2e suite on every pull request", "Run the full e2e suite on every pull request only"],
+    ["Run the full e2e suite on every pull request", "Run the full e2e suite on every pull request except docs"],
+    ["Run the full e2e suite on every pull request", "Run the full e2e suite on every pull request unless it is a hotfix"],
+    ["Run the full e2e suite on every pull request", "Run the full e2e suite on every pull request until March"],
+    ["Run the full e2e suite on every pull request", "Run the full e2e suite on every pull request for now"],
+  ])("does not merge %s / %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(findDuplicate(b, [a])).toBeNull();
+  });
+
+  it.each([
+    // 拉丁词一样、只差标点或语气词：照样是重复。
+    ["这个仓库用 pnpm 管理依赖", "这个仓库用pnpm管理依赖吧"],
+    // 两边都有同一个限定词；「只是」「只要」不算限定词。
+    ["这个接口只在周五发版", "这个接口只在周五发版吧"],
+    ["这个改动只是重命名，不用跑 e2e", "这个改动是重命名，不用跑 e2e"],
+    ["Run the full e2e suite only on release branches", "Run the full e2e suite only on the release branches"],
+  ])("still merges %s / %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBe(b);
+    expect(findDuplicate(b, [a])).toBe(a);
+  });
+
+  it("does not count a Latin word only one side has (like a ticket prefix), and 只要 is not a qualifier", () => {
+    // 新的被旧的包含才算重复：短的那句找得到长的那句。
+    expect(findDuplicate("这个仓库用 pnpm 管理依赖", ["BTL-280 这个仓库用 pnpm 管理依赖"])).toBe("BTL-280 这个仓库用 pnpm 管理依赖");
+    expect(findDuplicate("CI 绿了就可以直接合并到主干", ["只要 CI 绿了就可以直接合并到主干"])).toBe("只要 CI 绿了就可以直接合并到主干");
+  });
+
+  it("treats went back and go back as the same change of mind", () => {
+    expect(findDuplicate("We went back to npm for this repo", ["We go back to npm for this repo"])).not.toBeNull();
+  });
+
+  it("compares English words only when both sentences are Chinese: a Chinese source note does not make an English fact Chinese", () => {
+    // 英文句子换一个词留给 BTL-280：这里照旧靠相似度。
+    expect(findDuplicate("Use pnpm to manage the dependencies of this repo", ["Use pnpm to manage the dependency of this repo"])).not.toBeNull();
+    expect(findDuplicate("Use pnpm to manage the dependencies of this repo（来自 S1 的对话）", ["Use pnpm to manage the dependency of this repo"])).not.toBeNull();
+    expect(findDuplicate("Use pnpm to manage the dependencies of this repo（来自 S1 的对话）", ["Use npm to manage the dependencies of this repo（来自 S2 的对话）"])).not.toBeNull();
+  });
+
+  it.each(["取消", "停止", "停掉", "暂停", "撤销", "不再", "改成", "改为", "去掉", "改回", "换回", "切回", "恢复", "回滚", "作废", "撤回", "废弃", "作罢"])(
+    "counts %s as a change of mind",
+    (w) => {
+      const a = "每周五下午的发版流程照常进行";
+      expect(findDuplicate(a, [`${w}${a}`])).toBeNull();
+      expect(findDuplicate(`${w}${a}`, [a])).toBeNull();
+    },
+  );
+
+  it.each([
+    "cancel", "cancelled", "stop", "stopped", "pause", "paused", "revert", "reverted", "no longer", "undo", "undone", "roll back", "rolled back",
+    "rollback", "switch back", "switched back", "go back", "went back", "call off", "called off", "scrap", "scrapped", "abandon", "abandoned",
+    "restore", "restored", "drop", "dropped", "halt", "halted", "on hold", "deprecate", "deprecated",
+  ])("counts %s as a change of mind", (w) => {
+    const a = "release the desktop app to production every friday at three";
+    expect(findDuplicate(a, [`${w} ${a}`])).toBeNull();
+    expect(findDuplicate(`${w} ${a}`, [a])).toBeNull();
+  });
+
+  it.each([
+    // 分句开头的「不过」是转折，句中的「不过滤」「不过期」是否定。
+    ["日志过滤敏感词以后再上传", "日志不过滤敏感词以后再上传"],
+    ["过期的缓存每天凌晨清理一次", "不过期的缓存每天凌晨清理一次"],
+    ["过夜的任务第二天早上重跑一遍", "不过夜的任务第二天早上重跑一遍"],
+  ])("keeps a mid-word or clause-start 不过 that is a negation: %s / %s", (a, b) => {
+    expect(findDuplicate(a, [b])).toBeNull();
+    expect(findDuplicate(b, [a])).toBeNull();
+  });
+
+  it("still drops a clause-start 不过 (but) before counting negations", () => {
+    expect(findDuplicate("先合 #109，不过 CI 要先绿", ["先合 #109，CI 要先绿"])).not.toBeNull();
+  });
+});

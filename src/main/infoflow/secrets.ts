@@ -16,6 +16,18 @@
  * - URL 里的密码段最长认 256 个字（不然很多个 :// 时是平方级）。更长的、而且带 base64 以外字符的会漏（base64 那条兜不住）。
  *   密码段里不认裸 /（userinfo 里本来就不该有，要写成 %2F）：amqp://u:a/b@h 这种会漏。
  * - mysql 一族、sshpass、docker login 的 -p 只在同一条命令里认（到换行、引号外的 | ; & 为止；行尾用 \ 续行的接着算同一条命令）。
+ *   gh secret set 的 --body / -b、openssl 的 -k / -pass(in|out) pass:、ssh-keygen 的 -N / -P、aws configure set 里键名含
+ *   secret / token / password / key 的值、htpasswd -b 的最后一个位置参数也一样（openssl 的 -pass env:X、file:x 也会被打掉）。
+ *   --password-stdin 前面 echo x | 的 x（往前看 128 字以内）、后面 <<< x 的 x 也打（$VAR 不打）。
+ *   命令行的 --password / --token / -u user: 后面是带空格的引号值的，整段打到闭引号（没闭合的到行尾）。
+ * - 值前面用 \ 续行（password=\⏎x、--token=\⏎x、curl -u bob:\⏎x、-u \⏎bob:x）：跳过续行，打下一行的值；续行后面什么都没有的不打。
+ *   「X is \⏎ Y」这种句子里的续行不认。
+ * - Authorization: 后面不管是什么 scheme（Bearer、Basic、token、Bot、Negotiate…）、或者没写 scheme，8 个字以上的值都打
+ *   （Authorization: required 这种话也会被打掉，宁可误打）。
+ * - 单独的 pass、pin（还有 pinCode、pin_number）当键名（前面连着字母数字的 bypass、spin 不算；pass: true 也会被打）。
+ *   键名后面可以直接接一段驼峰后缀（passwordHash、tokenValue；tokenizer、secretary、passwordless 也会被当成键名）。
+ * - Kubernetes env 的「name: 含键名的名字」下一行「value: x」：value 后面整行打掉（valueFrom 不算）。
+ * - YAML 块标量（password: |、token: >-）：下面缩进不比第一行浅的那几行（含中间的空行）整块打成一个占位符。
  *   值按 shell 的一个词算（-p'x'tail 整个打）。
  *   -p 后面的引号在这条命令里没闭合（引号配错了对），一直打到闭引号和紧连着的字、或行尾，命令后面的部分也打掉。
  * - Cookie 头里名字超过 128 字的 name=value 不打（不然很多个 Cookie: 时每个都扫到结尾）；带数字的长值还有兜底规则。
@@ -45,12 +57,16 @@
  *
  * - 键名带复数、数字编号、一小段后缀的也算（passwords、password_123、DB_PASSWORD_PROD、API_TOKEN_2_STAGING、MY_KEY_PROD）；
  *   后缀最长 16 个字，更长的不算键名。前面紧挨着字母数字的不算（xtoken is …）。
- * - 含全角 ASCII（ｐａｓｓｗｏｒｄ＝、｜）、零宽字符（U+200B–U+200D、U+2060、U+FEFF）或框线字符（│ ├─┼，psql 的 unicode 边框）的行
- *   先换成半角、去掉零宽字符、框线换成 | - +，再跑上面的规则。中文常用的全角标点（！（），：；？）不换。
+ * - 含全角 ASCII（ｐａｓｓｗｏｒｄ＝、｜）、Default_Ignorable 的字（零宽字符、软连字符 U+00AD、U+2061–2064、方向控制符、变体选择符、
+ *   标签字符…）、NFKC 换得成 ASCII 的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝 这种数学字母、ⓟ、上下标、ﬁ）或框线字符（│ ├─┼，psql 的 unicode 边框）的行
+ *   先换成半角、去掉不可见的字、兼容字符换成 ASCII、框线换成 | - +，再跑上面的规则。中文常用的全角标点（！（），：；？）不换。
+ *   全角冒号「：」不换成半角（它在 URL 后面是 URL 的边界），要它当冒号的规则自己认：URL 里的账号密码（admin：S3cretPw＠db）、
+ *   curl -u（admin：hunter2）、Authorization：、「键：值」。
  *   打到了码就返回换过的那一份（这几行的全角字、框线跟着变成半角）；什么都没打到就原样返回。
  *
  * 已知漏打（认不出来，没有打码）：
  * - TSV（mysql -B 的制表符输出）、JSON 字符串里用字面 \n 写的表格：表头那一列下面的值认不出来（行内的「键 = 值」照打）。
+ * - YAML 块标量的键名是单独的 pass / pin、或者 k8s 的 value 也写成块标量（value: |）的：认不出来。
  * - 有开引号的值里，引号后面跟着括号再接着字（password: 'ab')cd'）：值停在 ab，后面的 )cd 留着。
  * - 只用 \r 换行时，命令（mysql -p 之类）不按 \r 切开，只会多打。
  *
@@ -91,7 +107,7 @@ const PATH_EXT = /^(?:\.[\w-]+)*?\.(?:[cm]?[jt]sx?|json|md|ya?ml|toml|lock|txt|l
 
 /** 「键 = 值」里算作密钥的键名。键名后面可以紧跟一个引号（JSON / YAML 带引号的键）。 */
 const KEY_NAMES =
-  "password|passwd|passphrase|passcode|pwd|secret[_ -]?key|client[_ -]?secret|secret|token|api[_ -]?key|access[_ -]?key|private[_ -]?key|credentials?|authentication[_ ]string|_auth|密码|口令|密钥|令牌";
+  "password|passwd|passphrase|passcode|pwd|secret[_ -]?key|client[_ -]?secret|secret|token|api[_ -]?key|access[_ -]?key|account[_ -]?key|private[_ -]?key|credentials?|authentication[_ ]string|_auth|密码|口令|密钥|令牌";
 /**
  * 键名，后面可以带数字编号（password1、pwd2、token1、password_1、token-2、password20240115093000）。编号不设上限：
  * 设上限的话 password123456789=x 整个漏掉。每个键名后面的数字只被从这个键名起跑的那一次扫到，总共是线性的
@@ -99,10 +115,14 @@ const KEY_NAMES =
  */
 const DIGITS = String.raw`(?:[_-]?\d+)?`;
 /**
- * 键名后面的一个单词后缀（DB_PASSWORD_PROD、SECRET_KEY_A、password_prod、token-v2）：一个 _ 或 -，再跟 1 到 16 个字母数字。
- * 限长、只认一段：从每个键名起跑最多多看 17 个字，线性（password_policy、token_count 这种也会被当成键名，宁可误打）。
+ * 键名后面的一个单词后缀（DB_PASSWORD_PROD、SECRET_KEY_A、password_prod、token-v2、驼峰的 passwordHash、tokenValue）：
+ * 一个 _ 或 -，再跟 1 到 16 个字母数字；或者不带分隔符、以字母开头的 1 到 16 个字母数字（驼峰）。限长、只认一段：
+ * 从每个键名起跑最多多看 17 个字，线性（password_policy、token_count、tokenizer、secretary 这种也会被当成键名，宁可误打）。
+ * 不带分隔符的要以字母开头：不然和前面的数字编号抢同一串数字（password 接二十万个 1，每条规则回溯十几倍，200KB 过 100ms）。
+ * 后缀后面必须不是字母数字：KEY 后面接的（KQ、空白、: = |）都不以字母数字开头。后缀开头先看后面是不是连着 17 个以上字母数字，
+ * 是的话这段后缀不可能成立，直接跳过，不进回溯（password1password1… 以前每个键名退 16 次、每次都把 SEP 再试一遍，200KB 约 12ms）。
  */
-const KEY_SUFFIX = String.raw`(?:[_-][A-Za-z0-9]{1,16})?`;
+const KEY_SUFFIX = String.raw`(?:(?:[_-](?![A-Za-z0-9]{17})[A-Za-z0-9]{1,16}|(?![A-Za-z0-9]{17})[A-Za-z][A-Za-z0-9]{0,15})(?![A-Za-z0-9]))?`;
 /** 键名，可以是复数（passwords、tokens、secrets），再跟编号和一个单词后缀。 */
 const KEY = String.raw`(?:${KEY_NAMES})s?${DIGITS}${KEY_SUFFIX}`;
 /**
@@ -151,15 +171,17 @@ const VQ = String.raw`["'\`“”‘’「」『』]?`;
 const EMPTY_Q = String.raw`(?:(?:""|''|\`\`|“”|‘’|「」|『』)\s*)*`;
 /** 冒号后面的粗体 / 斜体收尾（**password:** x、*password:* x）：后面要跟着空白，免得把值开头的 * _ 当成收尾。 */
 const EMPH_END = String.raw`(?:(?:\*\*?|__?)(?=\s))?`;
-/** 键和值之间：冒号、等号、「是」「为」；冒号后面可以跟着粗体的收尾。 */
-const SEP = String.raw`${KQ}\s*(?:[:=：]|是|为)${EMPH_END}\s*`;
+/** 分隔符后面用 \ 续行的（password=\⏎S3cretPw、PGPASSWORD=\⏎…）：跳过续行，值在下一行。只认一次，和前后的空白不重叠，线性。 */
+const CONT = String.raw`(?:\\\r?\n\s*)?`;
+/** 键和值之间：冒号、等号、「是」「为」；冒号后面可以跟着粗体的收尾、\ 续行。 */
+const SEP = String.raw`${KQ}\s*(?:[:=：]|是|为)${EMPH_END}\s*${CONT}`;
 /** 环境变量式的键、单独的 key 后面：只认冒号、等号（不认「是」「为」）。 */
-const ENV_SEP = String.raw`${KQ}\s*[:=：]${EMPH_END}\s*`;
+const ENV_SEP = String.raw`${KQ}\s*[:=：]${EMPH_END}\s*${CONT}`;
 /**
  * 环境变量式的键：大写、以 _KEY / _TOKEN / _SECRET / _PASSWORD 之类结尾（区分大小写，免得 primary_key: id 被当成密钥）。
  * 可以是复数（MY_KEYS），带编号，再跟一段大写后缀（MY_KEY_PROD：_KEY 不在不分大小写的键名里，只能在这里认）。
  */
-const ENV_TAIL = String.raw`_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|AUTH)S?(?:_?\d+)?(?:_[A-Z0-9]{1,16})?`;
+const ENV_TAIL = String.raw`_(?:KEY|TOKEN|SECRET|PASSWORD|PASS|PWD|AUTH|DSN)S?(?:_?\d+)?(?:_[A-Z0-9]{1,16})?`;
 const ENV_KEY = String.raw`\b[A-Z][A-Z0-9_]*${ENV_TAIL}`;
 /**
  * Markdown 表格里的「| 键 | 值」：键名两边都要有 |，所以 echo $token | grep 不算；但不管是不是第一列，
@@ -310,7 +332,7 @@ const maskCommands = (s: string, cmd: RegExp, arg: RegExp): string => {
  * （auth 不在键名里，_auth 前面又是字母数字）。以前写成 [A-Z][A-Z0-9_]*_AUTH…：每个 _ 都能起跑、各扫到格子末尾，
  * 格子里是平方级的（A_ 重复 200KB 约 21ms）。现在每个起点只往后看定长的字，线性。
  */
-const HEADER_KEY = new RegExp(String.raw`(?:(?:^|[^A-Za-z0-9])(?:${KEY_NAMES}|pass|key)|[A-Za-z0-9]_auth)s?${DIGITS}(?![A-Za-z0-9])`, "i");
+const HEADER_KEY = new RegExp(String.raw`(?:(?:^|[^A-Za-z0-9])(?:${KEY_NAMES}|pass|pin|key)|[A-Za-z0-9]_auth)s?${DIGITS}(?![A-Za-z0-9])`, "i");
 /**
  * 连写的格子（DBPASSWORD、dbpassword、SECRETKEY、Authtoken、Dbpassword）没有驼峰可拆、也没有词边界：只要里面含这些键名就算，
  * 不看大小写（Tokenizer、Secretary 会被误打，宁可误打）。key、pass 太常见（monkey、Keystone、passenger），不在里面。
@@ -344,7 +366,7 @@ const cells = (line: string): string[] => {
  * HEADER_KEY、HEADER_RUN（还有拆开驼峰以后的 HEADER_KEY）认得出的键名都含这里的某一段（不看大小写；拆驼峰只插空格，不会多出字）。
  * 一行里一段都没有就不用逐格试：很多个短格子、每行下面都跟着分隔行的表格，每格跑三五条正则，200KB 约 13ms。
  */
-const HEADER_HINT = /pass|pwd|secret|token|key|credential|auth|密码|口令|密钥|令牌/i;
+const HEADER_HINT = /pass|pin|pwd|secret|token|key|credential|auth|密码|口令|密钥|令牌/i;
 
 /** 一行里是密钥类键名的那几格的下标（从小到大）。 */
 const headerCols = (line: string): number[] => {
@@ -471,17 +493,53 @@ const maskTables = (s: string): string => {
 const COOKIE = String.raw`\b(?:Set-)?Cookie\s*:`;
 const NOT_COOKIE = `(?!${COOKIE})`;
 
+/** 命令行里的 -u / --user：后面可以是空白、\ 续行或 =。 */
+const CLI_USER = String.raw`(?:^|\s)(?:-u|--user)(?:(?:\s|\\\r?\n)+|=)?`;
+/** 命令行里的 --password、--token 之类：后面是空白、\ 续行或 =（= 后面也可以续行）。 */
+const CLI_SECRET = String.raw`(?:^|\s)--?(?:password|passwd|pass|passphrase|token|api-key|apikey|secret|auth-token)(?:(?:\s|\\\r?\n)+|=${CONT})`;
+/**
+ * 单独的 pass、pin 键（还有 pinCode、pin_number、pass-no）：前面（隔着可选的引号、* _）不能连着字母数字，只认冒号、等号。从 pass / pin 起跑、往回看前面：
+ * 写成先看前面再匹配可选引号的话，每个位置都要起跑一次（200KB 每条约 0.5ms）。
+ */
+const PASS_KEY = String.raw`(?<![A-Za-z0-9]${KQ})(?:pass|pin)(?:[_-]?(?:code|number|no))?${ENV_SEP}`;
+/** k8s env 的 name 里含这些就算密钥。 */
+const K8S_SECRET_NAME = /name[ \t]*:[ \t]*["']?[A-Za-z0-9_.-]*(?:pass|pwd|secret|token|key|credential|auth|dsn)/i;
+
+/** 块标量：只打缩进不比第一行浅的那几行（空行算进去），后面缩进更浅的行原样留着，交给后面的规则。 */
+function maskBlockScalar(h: Hit): string {
+  const keep = h.match.slice(0, h.match.length - h.value.length);
+  const lines = h.value.split("\n");
+  const indent = (l: string): number => l.length - l.replace(/^[ \t]+/, "").length;
+  const first = indent(lines[0]);
+  let n = 1;
+  while (n < lines.length && (lines[n].trim() === "" || indent(lines[n]) >= first)) n++;
+  // 块后面留着的行：块末尾的空行也留着（属于后面的内容）。
+  while (n > 1 && lines[n - 1].trim() === "") n--;
+  const rest = lines.slice(n);
+  const tail = lines[n - 1].endsWith("\r") ? "\r" : "";
+  return `${keep}${lines[0].slice(0, first)}${SECRET_MASK}${tail}${rest.length ? `\n${rest.join("\n")}` : ""}`;
+}
+
 const RULES: Rule[] = [
   // 私钥 / 证书块：BEGIN 到 END 整段（没有 END 就到结尾）。
   { re: /-----BEGIN[^-]{0,60}-----[\s\S]*?(?:-----END[^-]{0,60}-----|$)/g },
   // 剩下的 BEGIN 行头。
   { re: /-----BEGIN[^-]{0,60}-----/g },
+  // YAML 的块标量（password: |、token: >-）：值在下面缩进的几行里，整块打成一个占位符（只打缩进不比第一行浅的那几行，
+  // 中间的空行算进块里）。每个匹配吃掉它后面的整块，下一次从块后面接着找，线性。
+  { re: new RegExp(String.raw`(${KEY}${KQ}[ \t]*:[ \t]*[|>][-+1-9]{0,2}[ \t]*\r?\n)(?!\s*\[REDACTED\])[ \t]+[^\r\n]+(?:\r?\n(?:[ \t]+[^\r\n]*)?)*`, "gi"), mask: maskBlockScalar },
+  // Kubernetes 的 env：- name: DB_PASSWORD 下一行 value: hunter2xyz。name 里含键名的（PASSWORD、TOKEN、SECRET、KEY、DSN…），value 后面整行打掉。
+  {
+    re: /(\bname[ \t]*:[ \t]*["']?[A-Za-z0-9_.-]{1,128}["']?[ \t]*\r?\n[ \t]*value[ \t]*:[ \t]*)(?!\[REDACTED\])[^\s#][^\r\n]*/g,
+    skip: (h) => !K8S_SECRET_NAME.test(h.match.slice(0, h.match.length - h.value.length)),
+  },
   // 键后面的值在引号里（"、'、`）：到同一个闭引号整段打掉（"my secret phrase"、'ab'）。要在别的规则之前：不然值里先被换进占位符，剩下的字就漏了。
   { re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "g") },
   { re: new RegExp(`(\\bkey${DIGITS}${ENV_SEP}${EMPTY_Q}${OPEN})${QUOTED}`, "gi"), skip: (h) => plainKeyValue(h.value) },
   { re: new RegExp(`(${NOT_AFTER_ALNUM}${KEY}${KQ}\\s+is\\s*(?:[:：]\\s*)?${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   { re: new RegExp(`(${TABLE_KEY}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
+  { re: new RegExp(`(${PASS_KEY}${EMPTY_Q}${OPEN})${QUOTED}`, "gi") },
   // 引号没闭合、值里有空格（password: "two words、password = 'hunter 2）：照 mysql 的做法打到行尾。闭合了的上面已经打过，
   // 占位符跳过。同一种引号之间不会重叠着扫，总共是线性的。
   { re: new RegExp(`(${KEY}${SEP}${EMPTY_Q}${OPEN})${UNCLOSED}`, "gi") },
@@ -494,7 +552,8 @@ const RULES: Rule[] = [
   // URL 里的账号密码：scheme://user:pass@host，只换密码段。用户名可以是空的（redis://:pw@host）；密码里不认裸 /（要写成 %2F）。
   // 冒号后面是纯数字再接 / 的是端口（localhost:5173/@vite/client）。长度设上限：很多个 :// 时不会每个都扫到结尾。
   // 密码段用「先行断言 + 反向引用」一次取到最长、不回溯（密码里没有 @，后面不是 @ 就肯定不是）。
-  { re: /(:\/\/[^\s:@/]{0,256}:)(?!\[REDACTED\])(?!\d+\/)(?=([^\s@/]{1,256}))\2(?=@[^\s@/])/g },
+  // 全角冒号也算（postgres://admin：S3cretPw＠db，＠ 已经换成半角）。
+  { re: /(:\/\/[^\s:：@/]{0,256}[:：])(?!\[REDACTED\])(?!\d+\/)(?=([^\s@/]{1,256}))\2(?=@[^\s@/])/g },
   // URL 查询串里的签名、授权码、token（?code=…、Azure 的 &sig=…、S3 的 X-Amz-Signature=…）：整个值打掉。
   {
     re: /([?&;](?:sig|signature|code|access_token|refresh_token|id_token|auth|apikey|api_key|key|client_secret|x-amz-signature|x-amz-security-token|x-amz-credential|x-goog-signature|x-goog-credential)=)(?!\[REDACTED\])[^\s&#"'<>`)]+/gi,
@@ -507,6 +566,8 @@ const RULES: Rule[] = [
   // Basic：前面是 Authorization:，或者值里有数字、=、+、/（「Basic Settings」「Basic Authentication」不算）。
   { re: /(?<=\bAuthorization["']?\s{0,16}[:=]\s{0,16}["']?)Basic\s+[A-Za-z0-9+/=]{8,}/gi },
   { re: /\bBasic\s+(?=[A-Za-z]*[0-9+/=])[A-Za-z0-9+/=]{8,}/gi },
+  // 别的 scheme（token、Bot、Token、Negotiate…）或者没写 scheme 的 Authorization: 值，8 个字以上整段打掉（Authorization: required 也会被打，宁可误打）。
+  { re: /(\bAuthorization["']?\s{0,16}[:=：]\s{0,16}["']?(?:[A-Za-z][A-Za-z0-9_-]{0,31}\s+)?)(?!\[REDACTED\])[^\s"',;]{8,}/gi },
   // Cookie 头：打掉 name=value; name=value 这一串，后面的话留着。名字限 128 字：不然很多个 Cookie: 时每个都扫到结尾。
   // 名字扫到下一个能起跑的 Cookie: 就停（NOT_COOKIE）：不然很多个挨着的 Cookie: 每个都往后扫 128 字再失败，200KB 约 8ms（CI 上翻几倍）。
   // 停下来的那一段交给下一个 Cookie: 自己去打。
@@ -516,11 +577,32 @@ const RULES: Rule[] = [
   // 命令行：curl -u user:pass / --user user:pass 只换密码；--password xxx、--token xxx（空格或 = 分隔）；docker login -p xxx；
   // mysql -pxxx / -p'two words'（只认 mysql、mysqldump、mariadb、mysqladmin 后面的 -p：mkdir -pv、gcc -pthread 不算）；
   // sshpass -p xxx（-p 和值之间可以有空格）。引号没闭合的到行尾。
-  { re: /((?:^|\s)(?:-u|--user)(?:\s+|=)?["']?[^\s:"']*:)(?!\[REDACTED\])[^\s"']+/g },
-  { re: /((?:^|\s)--?(?:password|passwd|pass|passphrase|token|api-key|apikey|secret|auth-token)(?:(?:\s|\\\r?\n)+|=)["']?)(?!\[REDACTED\])(?!\\\r?\n)[^\s"']+/gi },
+  // 值在引号里、带空格的（--password "S3cret Pw"、-u 'admin:S3cret Pw'）：整段打到闭引号（没闭合的到行尾），排在只打一个词的规则前面。
+  // 用户名最长 256 字：很多个 -u " 都没有冒号时，每个最多往后看 256 字。
+  { re: new RegExp(String.raw`(${CLI_USER}"[^:："\\\r\n]{0,256}[:：])(?!\[REDACTED\])(?:[^"\\\r\n]|\\[\s\S])+`, "g") },
+  { re: new RegExp(String.raw`(${CLI_USER}'[^:：'\r\n]{0,256}[:：])(?!\[REDACTED\])[^'\r\n]+`, "g") },
+  { re: new RegExp(String.raw`(${CLI_SECRET}")(?!\[REDACTED\])(?:[^"\\\r\n]|\\[\s\S])+`, "gi") },
+  { re: new RegExp(String.raw`(${CLI_SECRET}')(?!\[REDACTED\])[^'\r\n]+`, "gi") },
+  { re: new RegExp(String.raw`(${CLI_USER}["']?[^\s:："']*[:：]${CONT})(?!\[REDACTED\])(?!\\\r?\n)[^\s"']+`, "g") },
+  { re: new RegExp(String.raw`(${CLI_SECRET}["']?)(?!\[REDACTED\])(?!\\\r?\n)[^\s"']+`, "gi") },
   { re: command(String.raw`docker\s+login`), arg: new RegExp(String.raw`(\s-p(?:\s|\\\r?\n)*)${P_VALUE}`, "g") },
   { re: command("mysql|mysqldump|mariadb|mysqladmin"), arg: new RegExp(String.raw`(\s-p(?:\\\r?\n)*)${P_VALUE}`, "g") },
   { re: command("sshpass"), arg: new RegExp(String.raw`(\s-p(?:\s|\\\r?\n)*)${P_VALUE}`, "g") },
+  // gh secret set NAME --body x / -b x；openssl 的 -k x、-pass / -passin / -passout pass:x（引号里的 "pass:a b"、env:X 整个打）；ssh-keygen 的 -N / -P（新、旧口令）；
+  // aws configure set 键名里有 secret / token / password / key 的；htpasswd -b（批处理，口令在命令行上）的最后一个位置参数。
+  { re: command(String.raw`gh\s+secret\s+set`), arg: new RegExp(String.raw`(\s(?:--body(?:=|(?:\s|\\\r?\n)+)|-b(?:\s|\\\r?\n)*))${P_VALUE}`, "g") },
+  { re: command("openssl"), arg: new RegExp(String.raw`(\s(?:-k(?:\s|\\\r?\n)+|-pass(?:in|out)?(?:\s|\\\r?\n)+(?:pass:)?))${P_VALUE}`, "g") },
+  { re: command("ssh-keygen"), arg: new RegExp(String.raw`(\s-[NP](?:\s|\\\r?\n)*)${P_VALUE}`, "g") },
+  {
+    re: command(String.raw`aws\s+configure\s+set`),
+    arg: new RegExp(String.raw`(\s(?=[\w.-]{0,64}?(?:secret|token|password|key))[\w.-]+(?:\s|\\\r?\n)+)${P_VALUE}`, "gi"),
+  },
+  // -b 可以和别的单字母参数连写（-bc、-nb）；有 -n 时没有文件参数，口令是第二个位置参数，否则是第三个。
+  { re: command("htpasswd"), arg: new RegExp(String.raw`(\s-[A-Za-z]*b[A-Za-z]*(?:\s+-[A-Za-z]+)*(?:\s+(?!-)\S+){1,2}\s+)${P_VALUE}`, "g") },
+  // --password-stdin 的口令从 here-string（<<< x）或前面的 echo x | 进来。往后、往前都只看 128 字，线性。
+  { re: /(--password-stdin\b[^\n|;&]{0,128}?<<<[ \t]*["']?)(?!\[REDACTED\])[^\s"']+/g },
+  // 值用「先行断言 + 反向引用」一次取到整个词、不回溯（不然很长的词后面没有 | 时，每个字都要回退着再试一遍）。
+  { re: /(\becho[ \t]+["']?)(?!\[REDACTED\])(?!\$)(?=([^\s"'|]+))\2(?=["']?[ \t]*\|[^\n|]{0,128}--password-stdin)/g },
   // JWT
   { re: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g },
   // GitHub
@@ -545,6 +627,8 @@ const RULES: Rule[] = [
   { re: new RegExp(`(${ENV_KEY}${ENV_SEP}${EMPTY_Q}${VQ})${VAL}`, "g") },
   // 单独的 key（key=…、"key": …、表格里的 | key | …）：前面不能连着字母、数字、_（primary_key、monkey 不算）。
   { re: new RegExp(`(\\bkey${DIGITS}${ENV_SEP}${EMPTY_Q}${VQ})${VAL}`, "gi"), skip: (h) => plainKeyValue(h.value) },
+  // 单独的 pass、pin（nodemailer 的 { user, pass }、{"pin": "4821"}、smtp 配置）：前面不能连着字母数字（bypass、spin 不算）。
+  { re: new RegExp(`(${PASS_KEY}${EMPTY_Q}${VQ})${VAL}`, "gi") },
   // Markdown 表格：| password | hunter2xyz |。
   { re: new RegExp(`(${TABLE_KEY}${EMPTY_Q}${VQ})${VAL}`, "gi") },
   // 「token abc…」「secret abc…」：键后面隔一个空格跟着一长串（16 位以上，有字母也有数字）。
@@ -582,19 +666,67 @@ const RULES: Rule[] = [
 
 /**
  * 规则本来就认的全角标点（：当分隔符，，；当值的结尾，！？（）和半角的一样算进值）：不用换，原样留着，中文的话不变样。
+ * 「：」不换成半角：它在 URL 后面是 URL 的边界（https://x/a：长串，长串照打；换成 : 就成了路径的一部分、只打像 token 的段）。
+ * 要它当冒号的规则（URL 里的账号密码、curl -u）自己把 ： 也认成冒号。
  */
 const KEPT_FULLWIDTH = "！（），：；？";
-const KEPT_CODES = new Set([...KEPT_FULLWIDTH].map((c) => c.charCodeAt(0)));
 /** 竖线类框线字符换成 |，横线换成 -，别的（交叉、拐角、T 形）换成 +：psql 的 unicode 边框变成 mysql 那种 +---+、| a |。 */
-const BOX_V = new Set([..."│┃║╎╏┆┇┊┋"].map((c) => c.charCodeAt(0)));
-const BOX_H = new Set([..."─━═╌╍┄┅┈┉"].map((c) => c.charCodeAt(0)));
-/** 零宽字符：U+200B–200D、U+2060、U+FEFF。 */
-const isZeroWidth = (c: number): boolean => (c >= 0x200b && c <= 0x200d) || c === 0x2060 || c === 0xfeff;
+const BOX_V = [..."│┃║╎╏┆┇┊┋"].map((c) => c.charCodeAt(0));
+const BOX_H = [..."─━═╌╍┄┅┈┉"].map((c) => c.charCodeAt(0));
+/**
+ * BMP 里 Default_Ignorable_Code_Point 的全部范围（软连字符 U+00AD、零宽字符、U+2061–2064 这类不可见的运算符、方向控制符、
+ * 变体选择符、U+FEFF…）：去掉。和 \p{Default_Ignorable_Code_Point} 逐个核对过（secrets.test.ts）。
+ */
+const IGNORABLE_BMP: [number, number][] = [
+  [0xad, 0xad], [0x34f, 0x34f], [0x61c, 0x61c], [0x115f, 0x1160], [0x17b4, 0x17b5], [0x180b, 0x180f], [0x200b, 0x200f], [0x202a, 0x202e],
+  [0x2060, 0x206f], [0x3164, 0x3164], [0xfe00, 0xfe0f], [0xfeff, 0xfeff], [0xffa0, 0xffa0], [0xfff0, 0xfff8],
+];
+/** BMP 以外的 Default_Ignorable_Code_Point：U+1BCA0–1BCA3、U+1D173–1D17A、U+E0000–E0FFF（标签字符、变体选择符补充）。 */
+const isIgnorableAstral = (cp: number): boolean => (cp >= 0x1bca0 && cp <= 0x1bca3) || (cp >= 0x1d173 && cp <= 0x1d17a) || (cp >= 0xe0000 && cp <= 0xe0fff);
+/**
+ * NFKC 换成 ASCII 的兼容字符：上下标（ᵖ ⁿ ₐ）、字母式符号（ℙ ℎ）、数字形式（ⅰ）、带圈字母数字（ⓟ ①）、连字（ﬁ）。
+ * 只换 NFKC 结果全是可见 ASCII 的（℃ 这种换出来不是 ASCII 的不动）。模块加载时按块算一遍（约一千五百个字）。
+ */
+const COMPAT_BLOCKS: [number, number][] = [[0x1d2c, 0x1dbf], [0x2070, 0x209f], [0x2100, 0x218f], [0x2460, 0x24ff], [0xfb00, 0xfb06]];
+/** BMP 以外换成 ASCII 的兼容字符：数学字母数字符号（𝐩𝐚𝐬𝐬 粗体、斜体、等宽…）、带圈 / 带框字母补充（🄿）。用到时再算，记下来。 */
+const isCompatAstral = (cp: number): boolean => (cp >= 0x1d400 && cp <= 0x1d7ff) || (cp >= 0x1f100 && cp <= 0x1f1ff);
+const ASCII_ONLY = /^[\x21-\x7e]+$/;
+const asciiCompat = (ch: string): string | null => {
+  const n = ch.normalize("NFKC");
+  return n !== ch && ASCII_ONLY.test(n) ? n : null;
+};
+
+/** 每个 BMP 字怎么换：KEEP 不动，SHIFT 全角换半角，DROP 去掉，TO 查 BMP_TO，HIGH 是代理对的前半。查表比一串范围判断快（200KB 的中文约 1ms）。 */
+const KEEP = 0;
+const SHIFT = 1;
+const DROP = 2;
+const TO = 3;
+const HIGH = 4;
+const KIND = new Uint8Array(0x10000);
+const BMP_TO = new Map<number, string>();
+for (let c = 0xff01; c <= 0xff5e; c++) if (!KEPT_FULLWIDTH.includes(String.fromCharCode(c))) KIND[c] = SHIFT;
+for (const [lo, hi] of IGNORABLE_BMP) for (let c = lo; c <= hi; c++) KIND[c] = DROP;
+for (let c = 0x2500; c <= 0x257f; c++) {
+  KIND[c] = TO;
+  BMP_TO.set(c, BOX_V.includes(c) ? "|" : BOX_H.includes(c) ? "-" : "+");
+}
+for (const [lo, hi] of COMPAT_BLOCKS) {
+  for (let c = lo; c <= hi; c++) {
+    const to = asciiCompat(String.fromCharCode(c));
+    if (to !== null) {
+      KIND[c] = TO;
+      BMP_TO.set(c, to);
+    }
+  }
+}
+for (let c = 0xd800; c <= 0xdbff; c++) KIND[c] = HIGH;
+const ASTRAL_TO = new Map<number, string | null>();
 
 /**
- * 规范化：别的全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂）换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），
- * 去掉零宽字符，框线字符（U+2500–257F，psql 的 │ ─ ┼）换成 | - +。每个字换成一个字或去掉，别的字不动。
- * 一个字一个字扫一遍，不用正则回调：每行一次回调的写法在三万多行的短表格上要 7ms（CI 上过了 50ms），这样约 1ms。
+ * 规范化：全角 ASCII（U+FF01–FF5E：ｐａｓｓｗｏｒｄ、＝、｜、＂、＠）换成半角（和 NFKC 对这一段的做法一样，KEPT_FULLWIDTH 除外），
+ * 去掉 Default_Ignorable 的字（零宽字符、软连字符、U+2063…），框线字符（U+2500–257F，psql 的 │ ─ ┼）换成 | - +，
+ * NFKC 换得成 ASCII 的兼容字符（𝐩𝐚𝐬𝐬𝐰𝐨𝐫𝐝、ⓟ、ﬁ）换成 ASCII。每个字换成一个或几个 ASCII 字、或去掉，别的字不动。
+ * 一个字一个字查表扫一遍，不用正则回调：每行一次回调的写法在三万多行的短表格上要 7ms（CI 上过了 50ms），这样约 1ms。
  * 一个要换的字都没有就返回原来那个串（调用方用 === 判断）。
  */
 function normalize(s: string): string {
@@ -602,15 +734,40 @@ function normalize(s: string): string {
   let last = 0;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
+    // 要换的字都在 U+00AD 以后：ASCII 和常见的拉丁字母直接跳过。
+    if (c < 0xad) continue;
+    const kind = KIND[c];
+    if (kind === KEEP) continue;
     let to: string;
-    if (c >= 0xff01 && c <= 0xff5e) {
-      if (KEPT_CODES.has(c)) continue;
-      to = String.fromCharCode(c - 0xfee0);
-    } else if (isZeroWidth(c)) to = "";
-    else if (c >= 0x2500 && c <= 0x257f) to = BOX_V.has(c) ? "|" : BOX_H.has(c) ? "-" : "+";
-    else continue;
+    let width = 1;
+    if (kind === SHIFT) to = String.fromCharCode(c - 0xfee0);
+    else if (kind === DROP) to = "";
+    else if (kind === TO) to = BMP_TO.get(c) ?? "";
+    else {
+      const d = s.charCodeAt(i + 1);
+      if (!(d >= 0xdc00 && d <= 0xdfff)) continue;
+      const cp = (c - 0xd800) * 0x400 + (d - 0xdc00) + 0x10000;
+      if (isIgnorableAstral(cp)) to = "";
+      else if (isCompatAstral(cp)) {
+        let t = ASTRAL_TO.get(cp);
+        if (t === undefined) {
+          t = asciiCompat(String.fromCodePoint(cp));
+          ASTRAL_TO.set(cp, t);
+        }
+        if (t === null) {
+          i++;
+          continue;
+        }
+        to = t;
+      } else {
+        i++;
+        continue;
+      }
+      width = 2;
+    }
     out += s.slice(last, i) + to;
-    last = i + 1;
+    last = i + width;
+    i += width - 1;
   }
   return last === 0 ? s : out + s.slice(last);
 }
