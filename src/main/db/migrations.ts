@@ -1841,5 +1841,50 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX session_messages_queued_at ON session_messages (queued_at);
   CREATE UNIQUE INDEX session_messages_queued_ref ON session_messages (ref) WHERE ref IS NOT NULL AND status = 'queued';
   `,
+  // 66（BTL-273）：可配的工作流程。workflow_layers 每一层存一份完整的流程（JSON：steps、notes），层是全局、产品、仓库、epic（feature）、ticket。
+  // workflow_progress 记每个 ticket 每一步完成的时间（只增不减，source 是谁标的：session、预审、PR 监视……）。
+  // workflow_bot_requests 记向 Copilot / Codex 请求的每一轮 review：先占一行（requesting）再调 gh，防止同一轮请求两次。
+  // workflow_notices 记最后一次「下一步做什么」提醒的是哪一步：重启以后不再重复送。
+  `
+  CREATE TABLE workflow_layers (
+    id INTEGER PRIMARY KEY,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','product','repo','feature','ticket')),
+    product_id INTEGER,
+    repo_slug TEXT,
+    feature_id INTEGER,
+    ticket_key TEXT,
+    workflow TEXT NOT NULL,
+    updated_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX workflow_layers_scope ON workflow_layers
+    (scope_kind, COALESCE(product_id, 0), COALESCE(repo_slug, ''), COALESCE(feature_id, 0), COALESCE(ticket_key, ''));
+  CREATE TABLE workflow_progress (
+    ticket_key TEXT NOT NULL,
+    step TEXT NOT NULL,
+    done_at INTEGER NOT NULL,
+    detail TEXT,
+    source TEXT NOT NULL,
+    PRIMARY KEY (ticket_key, step));
+  CREATE TABLE workflow_bot_requests (
+    id INTEGER PRIMARY KEY,
+    ticket_key TEXT NOT NULL,
+    pr_id INTEGER NOT NULL,
+    round INTEGER NOT NULL,
+    bot TEXT NOT NULL,
+    sha TEXT,
+    status TEXT NOT NULL CHECK (status IN ('requesting','requested','asked_session','failed')),
+    requested_at INTEGER NOT NULL,
+    reviewed_at INTEGER,
+    review_comments INTEGER,
+    error TEXT,
+    UNIQUE (ticket_key, pr_id, round));
+  CREATE TABLE workflow_notices (
+    ticket_key TEXT PRIMARY KEY,
+    notice TEXT NOT NULL,
+    sent_at INTEGER NOT NULL);
+  `,
+  // 67（BTL-273）：栈层的 workflow_draft_at：栈已经把这一层提升成栈底（去掉前缀、label，换描述），只是工作流程要 PR 先是 draft，
+  // 由 session 按流程改成可以 review。有它的层 PR 是 draft 也算提升好了：reconcilePrs 不改回 draft 层，promoteBottom 不再提升（不然会一轮轮重复提升）。
+  // 只加列，用 addColumns 写。
+  addColumns("stack_layers", ["workflow_draft_at INTEGER"]),
 ];
 

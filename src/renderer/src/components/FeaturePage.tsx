@@ -12,6 +12,7 @@ import { Messages } from "./MessageList";
 import { InfoFlowPanel } from "./InfoFlow";
 import { FeatureSummaryTab, type SummaryRunMessage } from "./FeatureSummaryTab";
 import { EpicLevel } from "./EpicLevel";
+import { FeatureWorkflow } from "./WorkflowParts";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { PageTabs } from "./PageTabs";
 import { ControlSplit, ScopeBoard, ScopeOverview, ScopeRunning, ScopeTicketTable } from "./ScopeParts";
@@ -106,6 +107,7 @@ export function FeaturePage({ feature, onOpenTicket, onTicketCreated, focusSessi
       </WorkspaceHeader>
       {/* 页面的错误（改名、归档、打开 session）放在页签外面：停在哪个页签都看得到。 */}
       {error && <p className="error">{error}</p>}
+      <FeatureWorkflow featureId={feature.id} />
 
       <PageTabs
         page={`feature:${feature.id}`}

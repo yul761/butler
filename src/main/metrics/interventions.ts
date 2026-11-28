@@ -210,6 +210,8 @@ export const NOT_TRIGGERS: ReadonlySet<string> = new Set([
   IPC.updateState, IPC.updateCheck, IPC.updateSkip, IPC.updateDismiss, IPC.updateOpenRelease,
   // 信息流转（BTL-272）：看要点和原话只读；照做 / 撤销是把对话里已经定了的事同步进 Shipherd，不是推动一次工作
   IPC.infoflowList, IPC.infoflowTurn, IPC.infoflowAct,
+  // 工作流程（BTL-273）：读流程、改一层都是搭环境
+  IPC.workflowState, IPC.workflowSet, IPC.workflowTicket, IPC.workflowFeature,
 ]);
 
 /** 这个通道算不算手动触发。 */

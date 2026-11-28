@@ -130,6 +130,19 @@ export const GUIDE_SECTIONS: Array<(lang: Lang, kind: GuideKind) => string | nul
           "用户问预审了没有、结果怎样，用 pre_review_status（ticket 或 pr）；要重新预审用 pre_review_run；预审排着不动时用 pre_review_queue 看谁在跑、谁在排、为什么停着；要取消或提前一次，用 pre_review_queue_act（会作废已经花了额度的预审，要用户确认）。"
         : "Pre-review state is in preReview on list_tickets, list_sessions and list_prs (queued, paused or running means it is waiting on pre-review, not on CI). " +
           "When the user asks whether something was pre-reviewed or how it went, use pre_review_status (ticket or pr); to pre-review again, use pre_review_run; when pre-reviews are not moving, pre_review_queue shows what is running, what is queued and why it is stopped; to cancel one or move it forward, use pre_review_queue_act (it throws away a pre-review that already spent quota, so the user confirms it).",
+  // 工作流程（BTL-273）：两级总控能看、能设。epic 总控只能改自己的 epic 和它的 ticket。
+  (lang, kind) =>
+    kind !== "coordinator" && kind !== "shipherd"
+      ? null
+      : lang === "zh"
+        ? "用户想定 ticket 的做法（写完直接合、要不要预审、要不要 Copilot review、谁来合并）时，用 get_workflow 看现在的流程，list_workflow_presets 看能用的步骤和预设，set_workflow 设好。" +
+          "流程按 全局 → 产品/仓库 → epic → ticket 一层层覆盖；Shipherd 会按流程提醒 session 下一步，开 PR、合并的顺序不对会被拦住。" +
+          "流程里没有合并这一步时，由用户自己合，你也别合。" +
+          (kind === "coordinator" ? "你只能改这个 epic 和它的 ticket；全局、产品、仓库那几层要在 Shipherd 总控里改。" : "")
+        : "When the user wants to decide how tickets get done (merge right after writing, whether to pre-review, whether Copilot reviews, who merges), check the current one with get_workflow, see the steps and presets with list_workflow_presets, and set it with set_workflow. " +
+          "Workflows layer global → product/repo → epic → ticket, each overriding the one before; Shipherd nudges sessions to the next step and stops a PR or merge that comes out of order. " +
+          "When a workflow has no merge step, the user merges; don't merge it yourself." +
+          (kind === "coordinator" ? " You can change only this epic and its tickets; the global, product and repo layers are changed from the Shipherd coordinator." : ""),
 ];
 
 export interface GuideOptions {

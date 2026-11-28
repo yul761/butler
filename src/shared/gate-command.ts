@@ -8,7 +8,9 @@ export type GateAction =
   | { kind: "local_merge"; dir: string | null; source: string }
   /** source：推的是哪个本地分支（可能是 HEAD，即当前分支）。没写 `src:` 时和 target 同名。 */
   | { kind: "push"; dir: string | null; target: string; source?: string }
-  | { kind: "switch"; dir: string | null; branch: string; create: boolean };
+  | { kind: "switch"; dir: string | null; branch: string; create: boolean }
+  /** `gh pr create`（BTL-273 的工作流程闸门）：head 是 --head 写的分支（去掉 `owner:`），没写是 null（当前分支）；draft：带了 --draft / -d。 */
+  | { kind: "pr_create"; dir: string | null; head: string | null; draft: boolean; repo: string | null };
 
 /** 分词并按 && || ; | & 换行切段。引号里的内容留在同一个词里，不当分隔符。 */
 function splitSegments(command: string): string[][] {
@@ -103,6 +105,15 @@ const GH_PR_VALUE_OPTS = ["-b", "--body", "-F", "--body-file", "-t", "--subject"
  * （-R / --repo、PR 链接里的、GH_REPO）。别的 gh 命令返回 null。
  */
 function ghPrCommand(tokens: string[], i: number, ghRepoEnv: string | null): { action: PrStateAction; pr: string | null; repo: string | null } | null {
+  const s = ghPrSub(tokens, i);
+  const action = s && PR_STATE_ACTIONS.find((a) => a === s.sub);
+  if (!s || !action) return null;
+  const pr = positionals(s.args, GH_PR_VALUE_OPTS)[0] ?? null;
+  return { action, pr, repo: prMergeRepo(s.args, pr, ghRepoEnv) };
+}
+
+/** tokens[i] 是 gh：`gh pr [选项] <子命令> [参数]` 拆成子命令和参数（pr 和子命令之间的选项并进参数）。别的 gh 命令返回 null。 */
+function ghPrSub(tokens: string[], i: number): { sub: string | undefined; args: string[] } | null {
   if (tokens[i] !== "gh" || tokens[i + 1] !== "pr") return null;
   // `gh pr -R o/r merge 12`：-R 也可以写在 pr 和子命令之间。
   let j = i + 2;
@@ -112,11 +123,22 @@ function ghPrCommand(tokens: string[], i: number, ghRepoEnv: string | null): { a
     if ((tokens[j] === "-R" || tokens[j] === "--repo") && j + 1 < tokens.length) before.push(tokens[++j]);
     j++;
   }
-  const action = PR_STATE_ACTIONS.find((a) => a === tokens[j]);
-  if (!action) return null;
-  const args = [...before, ...tokens.slice(j + 1)];
-  const pr = positionals(args, GH_PR_VALUE_OPTS)[0] ?? null;
-  return { action, pr, repo: prMergeRepo(args, pr, ghRepoEnv) };
+  return { sub: tokens[j], args: [...before, ...tokens.slice(j + 1)] };
+}
+
+/** `gh pr create` 的参数：--head / -H（`--head=x`、`owner:branch` 都认），--draft / -d，-R / --repo。 */
+function prCreate(args: string[], dir: string | null, env: string | null): GateAction {
+  let head: string | null = null;
+  let draft = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if ((a === "--head" || a === "-H") && args[i + 1]) head = args[++i];
+    else if (a.startsWith("--head=")) head = a.slice(7);
+    else if (a === "--draft" || a === "-d") draft = true;
+    else if (["-t", "--title", "-b", "--body", "-F", "--body-file", "-B", "--base", "-a", "--assignee", "-l", "--label", "-m", "--milestone", "-p", "--project", "-r", "--reviewer", "-T", "--template", "-R", "--repo"].includes(a)) i++;
+  }
+  const branch = head ? head.slice(head.indexOf(":") + 1) || null : null;
+  return { kind: "pr_create", dir, head: branch, draft, repo: prMergeRepo(args, null, env) };
 }
 
 function classifySegment(tokens: string[], dir: string | null): GateAction | null {
@@ -128,6 +150,8 @@ function classifySegment(tokens: string[], dir: string | null): GateAction | nul
   }
   const cmd = tokens[i];
   if (cmd === "gh") {
+    const s = ghPrSub(tokens, i);
+    if (s && (s.sub === "create" || s.sub === "new")) return prCreate(s.args, dir, ghRepoEnv);
     const c = ghPrCommand(tokens, i, ghRepoEnv);
     return c && c.action === "merge" ? { kind: "pr_merge", dir, pr: c.pr, repo: c.repo } : null;
   }
@@ -184,6 +208,8 @@ function classifySegment(tokens: string[], dir: string | null): GateAction | nul
 export function classifyGateCommand(command: string): GateAction | null {
   let dir: string | null = null;
   let ownPush: GateAction | null = null;
+  // 开 PR 也一样往后放：`gh pr create … && gh pr merge --auto` 审核合并（合并的检查已经要求 PR 开之前的步骤都做完）。
+  let prOpen: GateAction | null = null;
   for (const tokens of splitSegments(command)) {
     let i = 0;
     while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
@@ -194,9 +220,32 @@ export function classifyGateCommand(command: string): GateAction | null {
     }
     const action = classifySegment(tokens, dir);
     if (action?.kind === "push" && action.source && action.source !== "HEAD" && action.source === action.target) ownPush ??= action;
+    else if (action?.kind === "pr_create") prOpen ??= action;
     else if (action) return action;
   }
-  return ownPush;
+  // 推自己的分支再开 PR：主动作仍是推送（跑完以后照旧马上查一次），开 PR 由 gatePrCreate 带上、闸门先审。
+  return ownPush ?? prOpen;
+}
+
+export type PrCreateAction = Extract<GateAction, { kind: "pr_create" }>;
+
+/**
+ * 命令里的 `gh pr create`（没有为 null）。classifyGateCommand 只返回一个动作：前面有别的要审的动作时
+ * （`git push origin HEAD && gh pr create`、`gh pr create && gh pr merge --auto`），开 PR 这一步也要单独审（BTL-273）。
+ */
+export function gatePrCreate(command: string): PrCreateAction | null {
+  let dir: string | null = null;
+  for (const tokens of splitSegments(command)) {
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+    if (tokens[i] === "cd") {
+      if (tokens[i + 1]) dir = joinDir(dir, tokens[i + 1]);
+      continue;
+    }
+    const action = classifySegment(tokens, dir);
+    if (action?.kind === "pr_create") return action;
+  }
+  return null;
 }
 
 /**

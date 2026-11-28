@@ -34,14 +34,15 @@ describe("info flow migration (BTL-272)", () => {
   it("is migration 65, after BTL-279's 64, and upgrades a database at 64", () => {
     // 迁移按数组追加：BTL-270 的 tickets 重建是 63，BTL-279 给 session_messages 加三列是 64，信息流转排在最后（user_version 65）。
     expect(AT).toBe(64);
-    expect(AT).toBe(MIGRATIONS.length - 1);
+    // BTL-273 的工作流程迁移（66、67）排在它后面。
+    expect(MIGRATIONS[AT + 1]).toContain("CREATE TABLE workflow_layers");
     expect(MIGRATIONS[AT - 2]).toContain("closed_source");
     expect(MIGRATIONS[AT - 1]).toContain("last_attempt_at");
     const db = before();
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 64 });
     db.exec(`INSERT INTO session_messages (id, kind, from_session, to_session, body, queued_at, blocked_reason, blocked_since, stuck_receipt_at)
       VALUES ('m1', 'report', 'a', 'b', 'hi', 1, 'turn', 5, 7)`);
-    expect(migrate(db)).toBe(65);
+    expect(migrate(db, 65)).toBe(65);
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 65 });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     // BTL-269 的三列连值一起留着。
@@ -59,7 +60,7 @@ describe("info flow migration (BTL-272)", () => {
     const dflt = () => db.prepare("SELECT name, dflt_value FROM pragma_table_info('session_messages') WHERE name LIKE '%attempt%' ORDER BY cid").all();
     const dfltBefore = dflt();
 
-    expect(migrate(db)).toBe(65);
+    expect(migrate(db, 65)).toBe(65);
 
     expect(decl()).toEqual(declBefore);
     expect(dflt()).toEqual(dfltBefore);

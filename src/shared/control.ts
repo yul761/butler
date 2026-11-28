@@ -1,3 +1,4 @@
+import { isWorkflowCoordinatorOp, parseWorkflowCoordinatorOp, parseWorkflowTicketOp, type WorkflowCoordinatorOp, type WorkflowTicketOp } from "./workflow-control";
 import type { Lang } from "./i18n";
 import { isModelName, isTier } from "./model-routing";
 import { MANUAL_TICKET_STATUSES, type ManualTicketStatus } from "./types";
@@ -121,7 +122,9 @@ export type TicketControlRequest =
   /** 开发 session 取自己最近一次预审的结果（工作流 G）。只读。 */
   | { v: 1; ticketKey: string; from: string | null; op: "pre_review_result" }
   /** 开发 session 查这个 ticket 的仓库的规矩全文（BTL-274）：按要改的文件（适用范围）、关键词或 #编号。只读。 */
-  | { v: 1; ticketKey: string; from: string | null; op: "lessons"; paths?: string[]; query?: string };
+  | { v: 1; ticketKey: string; from: string | null; op: "lessons"; paths?: string[]; query?: string }
+  /** 开发 session 标做完流程里的一步（BTL-273）。 */
+  | ({ v: 1; ticketKey: string; from: string | null } & WorkflowTicketOp);
 
 /** lessons 工具一次最多带几个路径、关键词多长。 */
 export const LESSONS_TOOL_MAX_PATHS = 50;
@@ -147,6 +150,7 @@ export const MAX_CREATE_REPOS = 20;
  */
 export type FeatureControlRequest =
   | ({ v: 1; featureId: number; from: string | null } & InboxControlOp)
+  | ({ v: 1; featureId: number; from: string | null } & WorkflowCoordinatorOp)
   | ({ v: 1; featureId: number; from: string | null } & StackControlOp)
   | ({ v: 1; featureId: number; from: string | null } & PreReviewControlOp)
   /** BTL-271：epic 总控也能看自己 epic 的 PR 和一个 PR 的评估（和 Shipherd 总控同一份，只是只列自己的）。 */
@@ -200,6 +204,7 @@ export type ShipherdMessageTarget = { session: string; epic?: undefined } | { ep
 
 export type ShipherdControlRequest =
   | ({ v: 1; shipherd: true; from: string | null } & InboxControlOp)
+  | ({ v: 1; shipherd: true; from: string | null } & WorkflowCoordinatorOp)
   | ({ v: 1; shipherd: true; from: string | null } & StackControlOp)
   | ({ v: 1; shipherd: true; from: string | null } & PreReviewControlOp)
   | ({ v: 1; shipherd: true; from: string | null } & TicketStatusControlOp)
@@ -391,6 +396,10 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (isSessionOp(o.op)) return sessionOp(base, o);
     if (isStackOp(o.op)) return stackOp(base, o);
     if (isTicketStatusOp(o.op)) return ticketStatusOp(base, o);
+    if (isWorkflowCoordinatorOp(o.op)) {
+      const w = parseWorkflowCoordinatorOp(o);
+      return w && { ...base, ...w };
+    }
     if (o.op === "create_ticket") {
       if (!okName(o.ticket, 200)) return null;
       if (o.title !== undefined && (typeof o.title !== "string" || o.title.length > 500)) return null;
@@ -449,6 +458,10 @@ export function parseControlRequest(raw: unknown): ControlRequest | null {
     if (o.query !== undefined && (typeof o.query !== "string" || o.query.length > LESSONS_TOOL_MAX_QUERY)) return null;
     return { ...base, op: "lessons", ...(paths !== undefined && { paths: paths as string[] }), ...(o.query !== undefined && { query: o.query as string }) };
   }
+  if (o.op === "workflow_step_done") {
+    const w = parseWorkflowTicketOp(o);
+    return w && { ...base, ...w };
+  }
   if (o.op === "submit_evidence") {
     const e = o.evidence;
     if (!e || typeof e !== "object" || Array.isArray(e)) return null;
@@ -465,6 +478,10 @@ function parseShipherdRequest(o: Record<string, unknown>, from: string | null): 
   if (isStackOp(o.op)) return stackOp(base, o);
   if (isPreReviewOp(o.op)) return preReviewOp(base, o);
   if (isTicketStatusOp(o.op)) return ticketStatusOp(base, o);
+  if (isWorkflowCoordinatorOp(o.op)) {
+    const w = parseWorkflowCoordinatorOp(o);
+    return w && { ...base, ...w };
+  }
   if (o.op === "list_epics" || o.op === "list_prs" || o.op === "list_sessions" || o.op === "list_inbox") {
     return { ...base, op: o.op };
   }

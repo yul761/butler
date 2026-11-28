@@ -52,7 +52,7 @@ function ticket(key: string, repoPath: string, branch: string, workMode: WorkMod
  */
 const TEST_DEADLINE_MS = 60_000;
 
-function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number; repoOfSlug?: MergeGateDeps["repoOfSlug"] } = {}) {
+function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (pr: string | null) => PrInfo | null; terminals?: Record<string, number>; git?: Partial<MergeGateDeps["git"]>; now?: () => number; deadlineMs?: number; repoOfSlug?: MergeGateDeps["repoOfSlug"]; workflow?: MergeGateDeps["workflow"] } = {}) {
   const repoPath = o.repo ?? makeScenarioRepo();
   const tickets = o.tickets ? o.tickets(repoPath) : ["DMS-1", "DMS-2", "DMS-3"].map((k) => ticket(k, repoPath, k.toLowerCase()));
   const db = memDb();
@@ -70,9 +70,9 @@ function setup(o: { tickets?: (repo: string) => Ticket[]; repo?: string; pr?: (p
   const gate = new MergeGate({
     tickets: { list: () => tickets, listRepos: (key: string) => tickets.find((t) => t.key === key)?.repos ?? [] },
     repo, openTerminals, git: gitDeps, prInfo, notify: (e) => events.push(e), now: o.now ?? (() => 1000), log: (m) => logs.push(m), deadlineMs: o.deadlineMs ?? TEST_DEADLINE_MS,
-    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold, repoOfSlug: o.repoOfSlug,
+    whoOf: (t, b) => (t ? `${t}（支付）` : b), checkSoon, onPrHold, repoOfSlug: o.repoOfSlug, workflow: o.workflow,
   });
-  const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase">> = {}, meta?: { ageMs?: number }) =>
+  const ask = (action: GateAction, extra: Partial<Pick<GateRequest, "session" | "ticket" | "cwd" | "phase" | "prCreate">> = {}, meta?: { ageMs?: number }) =>
     gate.handle({ v: 1, phase: "pre", action, cwd: repoPath, session: "s-req", ticket: null, ...extra } as GateRequest, meta);
   const merge = (source: string, extra: Parameters<typeof ask>[1] = {}, meta?: { ageMs?: number }) => ask({ kind: "local_merge", dir: null, source }, extra, meta);
   const outcomes = () => db.prepare(`SELECT branch, outcome FROM merge_holds ORDER BY id`).all() as { branch: string; outcome: string | null }[];
@@ -746,5 +746,121 @@ describe("commandDir", () => {
     expect(commandDir("C:\\w\\repo", "C:/Users/me/api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
     expect(commandDir("C:\\w\\repo", "..\\api", "win32", "C:\\Users\\me")).toBe("C:\\w\\api");
     expect(commandDir("C:\\w\\repo", "~/api", "win32", "C:\\Users\\me")).toBe("C:\\Users\\me\\api");
+  });
+});
+
+describe("MergeGate: workflow (BTL-273)", () => {
+  const wf = (o: { prCreate?: string | null; merge?: string | null; any?: boolean } = {}) => {
+    const calls: { prCreate: unknown[]; merge: unknown[] } = { prCreate: [], merge: [] };
+    const workflow: NonNullable<MergeGateDeps["workflow"]> = {
+      anyWorkflow: () => o.any ?? true,
+      prCreate: async (i) => {
+        calls.prCreate.push(i);
+        return o.prCreate ?? null;
+      },
+      merge: (i) => {
+        calls.merge.push(i);
+        return o.merge ?? null;
+      },
+    };
+    return { workflow, calls };
+  };
+
+  it("doesn't look at gh pr create when no workflow is set anywhere", async () => {
+    const w = wf({ any: false, prCreate: "no" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.ask({ kind: "pr_create", dir: "$WT", head: null, draft: false, repo: null })).toEqual({ v: 1, decision: "allow" });
+    expect(w.calls.prCreate).toEqual([]);
+  });
+
+  it("asks the workflow about gh pr create for the ticket of this repo and branch", async () => {
+    const w = wf({ prCreate: "先别开 PR" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.ask({ kind: "pr_create", dir: null, head: "dms-2", draft: true, repo: null }, { session: "s2" })).toEqual({ v: 1, decision: "deny", reason: "先别开 PR" });
+    expect(w.calls.prCreate).toEqual([{ ticketKey: "DMS-2", repoPath: t.repoPath, dir: t.repoPath, branch: "dms-2", draft: true, sessionId: "s2" }]);
+    // 命令跑完（post）不拦
+    expect(await t.ask({ kind: "pr_create", dir: null, head: "dms-2", draft: true, repo: null }, { phase: "post" })).toEqual({ v: 1, decision: "allow" });
+  });
+
+  it("the same branch name in another repo belongs to that repo's ticket", async () => {
+    const w = wf({ prCreate: "no" });
+    const other = copyRepo(makeScenarioRepo());
+    const t = setup({ workflow: w.workflow, tickets: (repo) => [ticket("A-1", repo, "dms-1"), ticket("B-1", other, "dms-1")] });
+    await t.ask({ kind: "pr_create", dir: other, head: "dms-1", draft: false, repo: null });
+    expect(w.calls.prCreate).toMatchObject([{ ticketKey: "B-1" }]);
+    // 这个仓库里没有 ticket 用 dms-3：不归任何 ticket，不查
+    await t.ask({ kind: "pr_create", dir: null, head: "dms-3", draft: false, repo: null }, { ticket: "A-1" });
+    expect(w.calls.prCreate).toHaveLength(1);
+  });
+
+  it("gh pr create -R points at the other repo of the same ticket: that repo's pre-review decides, not this directory's", async () => {
+    // 同一 ticket 的 A、B 两个仓库用同名分支 dms-1，只有 A 的预审 clean。在 A 的目录里 `gh pr create -R org/b --head dms-1` 开的是 B 的 PR。
+    const other = copyRepo(makeScenarioRepo());
+    const calls: { repoPath: string | null; dir: string | null }[] = [];
+    let cleanRepo = "";
+    const workflow: NonNullable<MergeGateDeps["workflow"]> = {
+      anyWorkflow: () => true,
+      // 只有 A 的预审 clean；认不出仓库（repoPath 为 null）时 B 也要 clean，所以拦下
+      prCreate: async (i) => (calls.push({ repoPath: i.repoPath, dir: i.dir }), i.repoPath === cleanRepo ? null : "还没通过预审"),
+      merge: () => null,
+    };
+    const twoRepos = (a: string): Ticket[] => {
+      const t = ticket("X-1", a, "dms-1");
+      return [{ ...t, repos: [...t.repos, { ...t.repos[0], id: 1, repoPath: other }] }];
+    };
+    const slugs = (slug: string, cwdRepo?: string) => (cwdRepo === undefined && slug === "org/b" ? { path: other, remote: "origin" } : null);
+    const t = setup({ workflow, tickets: twoRepos, repoOfSlug: slugs });
+    cleanRepo = t.repoPath;
+    const pr = (repo: string | null) => ({ kind: "pr_create" as const, dir: null, head: "dms-1", draft: false, repo });
+    // 没写 -R：开在 A，A 的预审放行
+    expect(await t.ask(pr(null), { ticket: "X-1" })).toEqual({ v: 1, decision: "allow" });
+    // -R 指到 B：按 B 查，目录（A 的）不交给流程读 HEAD
+    expect(await t.ask(pr("org/b"), { ticket: "X-1" })).toEqual({ v: 1, decision: "deny", reason: "还没通过预审" });
+    expect(calls[1]).toEqual({ repoPath: other, dir: null });
+    // -R 的仓库本机找不到：认不出是哪个仓库，交给流程按「同名分支的仓库每个都要 clean」判断
+    expect(await t.ask(pr("org/nowhere"), { ticket: "X-1" })).toMatchObject({ decision: "deny" });
+    expect(calls[2]).toEqual({ repoPath: null, dir: null });
+    // -R 写的就是命令所在的仓库：照常按这个仓库和目录查
+    const here = setup({ workflow, tickets: twoRepos, repoOfSlug: (slug, cwdRepo) => (slug === "org/a" && cwdRepo !== undefined ? { path: cwdRepo, remote: "origin" } : null) });
+    cleanRepo = here.repoPath;
+    calls.length = 0;
+    expect(await here.ask(pr("org/a"), { ticket: "X-1" })).toEqual({ v: 1, decision: "allow" });
+    expect(calls).toEqual([{ repoPath: here.repoPath, dir: here.repoPath }]);
+  });
+
+  it("checks the gh pr create that follows a HEAD push in the same command", async () => {
+    const w = wf({ prCreate: "先别开 PR" });
+    const t = setup({ workflow: w.workflow });
+    const prCreate = { kind: "pr_create" as const, dir: null, head: "dms-2", draft: false, repo: null };
+    // git push -u origin HEAD && gh pr create --fill：主动作是推送，开 PR 跟在请求里
+    expect(await t.ask({ kind: "push", dir: null, target: "HEAD", source: "HEAD" }, { session: "s2", ticket: "DMS-2", prCreate })).toEqual({ v: 1, decision: "deny", reason: "先别开 PR" });
+    expect(w.calls.prCreate).toHaveLength(1);
+    // 开 PR 这步可以了：照常审推送
+    const ok = wf({ prCreate: null });
+    const u = setup({ workflow: ok.workflow });
+    expect(await u.ask({ kind: "push", dir: null, target: "dms-2", source: "dms-2" }, { prCreate })).toEqual({ v: 1, decision: "allow" });
+    expect(ok.calls.prCreate).toHaveLength(1);
+  });
+
+  it("falls back to the session's ticket when the directory is a shell variable", async () => {
+    const w = wf({ prCreate: "no" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.ask({ kind: "pr_create", dir: "$WT", head: null, draft: false, repo: null }, { ticket: "DMS-1" })).toMatchObject({ decision: "deny" });
+    expect(w.calls.prCreate).toMatchObject([{ ticketKey: "DMS-1", repoPath: null, dir: null, branch: null }]);
+  });
+
+  it("denies a merge the workflow doesn't allow before checking conflicts, and holds nothing", async () => {
+    const w = wf({ merge: "别合并：由用户自己合" });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.merge("dms-3", { session: "coord" })).toEqual({ v: 1, decision: "deny", reason: "别合并：由用户自己合" });
+    expect(w.calls.merge).toEqual([{ ticketKey: "DMS-3", sessionId: "coord", prUrl: null }]);
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).toBeNull();
+  });
+
+  it("lets the merge through to the usual checks when the workflow allows it", async () => {
+    const w = wf({ merge: null });
+    const t = setup({ workflow: w.workflow });
+    expect(await t.merge("dms-3")).toEqual({ v: 1, decision: "allow" });
+    expect(t.repo.activeHold(t.repoPath, "dms-3")).not.toBeNull();
   });
 });

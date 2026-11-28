@@ -79,6 +79,7 @@ import type { ConversationStore } from "../conversation/conversation-store";
 import { memoryHandlers } from "./memory-handlers";
 import { convHandlers } from "./conv-handlers";
 import { forkHandlers } from "./fork-handlers";
+import type { workflowHandlers } from "../workflow/workflow-ipc";
 import type { ForkService } from "../fork/fork-service";
 import type { DevSender } from "../fork/dev-send";
 import { settingsHandlers } from "./settings-handlers";
@@ -301,6 +302,8 @@ export interface IpcDeps {
     apply(level: AutomationLevel): void;
     setFeatureLevel(featureId: number, level: AutomationLevel | null): void;
   };
+  /** 工作流程（BTL-273）：设置页的分层、ticket 和 epic 的流程条。 */
+  workflow?: ReturnType<typeof workflowHandlers>;
   window: () => BrowserWindow | null;
   now: () => number;
   notify: () => void;
@@ -492,6 +495,16 @@ export function registerIpc(d: IpcDeps): void {
     d.automation.setFeatureLevel(featureIdArg(id), automationLevelArg(level));
     d.notify();
   });
+  // 工作流程（BTL-273）：没接上时读到的是「没设」，改的话报错。
+  handle(IPC.workflowState, () => d.workflow?.state() ?? { layers: [], targets: { products: [], repos: [], features: [], tickets: [] } });
+  handle(IPC.workflowSet, (scope: unknown, workflow: unknown) => {
+    if (!d.workflow) throw new Error("workflow is not ready");
+    const r = d.workflow.set(scope, workflow);
+    if (r.ok && r.changed) d.notify();
+    return r;
+  });
+  handle(IPC.workflowTicket, (key: unknown) => d.workflow?.ticket(key) ?? null);
+  handle(IPC.workflowFeature, (id: unknown) => d.workflow?.feature(id) ?? null);
   handle(IPC.shipherdView, () => d.sessionService.shipherdView());
   handle(IPC.messagesList, (raw: unknown): MessageView[] => d.messages(messageScopeArg(raw)));
   handle(IPC.messagesDeliverNow, async (raw: unknown): Promise<DeliverNowResult> => {

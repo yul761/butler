@@ -17,6 +17,8 @@ describe("parseGateRequest", () => {
       { kind: "push", dir: "/x", target: "main" },
       { kind: "push", dir: null, target: "main", source: "feat" },
       { kind: "switch", dir: null, branch: "b", create: true },
+      { kind: "pr_create", dir: null, head: null, draft: false, repo: null },
+      { kind: "pr_create", dir: "/x", head: "feat", draft: true, repo: "o/r" },
     ]) expect(parseGateRequest({ ...base, action })).toMatchObject({ action });
   });
 
@@ -24,6 +26,13 @@ describe("parseGateRequest", () => {
     expect(parseGateRequest({ ...base, action: { kind: "pr_merge", dir: null, pr: "3", repo: "org/r" } })?.action).toEqual({ kind: "pr_merge", dir: null, pr: "3", repo: "org/r" });
     expect(parseGateRequest({ ...base, action: { kind: "pr_merge", dir: null, pr: "3" } })?.action).toEqual({ kind: "pr_merge", dir: null, pr: "3", repo: null });
     expect(parseGateRequest({ ...base, action: { kind: "pr_merge", dir: null, pr: "3", repo: 7 } })).toBeNull();
+  });
+
+  it("reads an optional prCreate, and refuses one that is not a pr_create (BTL-273)", () => {
+    const prCreate = { kind: "pr_create", dir: null, head: null, draft: false, repo: null };
+    expect(parseGateRequest({ ...base, prCreate })?.prCreate).toEqual(prCreate);
+    expect(parseGateRequest(base)).not.toHaveProperty("prCreate");
+    expect(parseGateRequest({ ...base, prCreate: { kind: "switch", dir: null, branch: "b", create: true } })).toBeNull();
   });
 
   it("leaves out a push source that was not given", () => {

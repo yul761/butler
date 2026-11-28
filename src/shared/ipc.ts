@@ -276,6 +276,11 @@ export const IPC = {
   infoflowList: "infoflow:list",
   infoflowTurn: "infoflow:turn",
   infoflowAct: "infoflow:act",
+  // 工作流程（BTL-273）：设置页的分层（读、改一层），ticket 首页和 epic 页的流程条（读）。
+  workflowState: "workflow:state",
+  workflowSet: "workflow:set",
+  workflowTicket: "workflow:ticket",
+  workflowFeature: "workflow:feature",
 } as const;
 
 /** 渲染进程 → 主进程，有返回值（ipcRenderer.invoke）。 */
@@ -309,6 +314,7 @@ export const INVOKE_CHANNELS: readonly string[] = [
   IPC.feedbackOpen, IPC.feedbackDiagPreview, IPC.feedbackDiagSave,
   IPC.messagesDeliverNow,
   IPC.infoflowList, IPC.infoflowTurn, IPC.infoflowAct,
+  IPC.workflowState, IPC.workflowSet, IPC.workflowTicket, IPC.workflowFeature,
 ];
 /** 渲染进程 → 主进程，单向高频（键盘输入、尺寸变化）。 */
 export const SEND_CHANNELS: readonly string[] = [IPC.ptyWrite, IPC.ptyResize, IPC.ptyVisible, IPC.ptyDetach, IPC.diagRenderer];

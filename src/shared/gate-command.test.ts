@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyBypass, classifyGateCommand, classifyPush, classifyShip, classifyPrState } from "./gate-command";
+import { classifyBypass, classifyGateCommand, classifyPush, classifyShip, classifyPrState, gatePrCreate } from "./gate-command";
 
 describe("classifyGateCommand", () => {
   it("recognises gh pr merge", () => {
@@ -93,11 +93,29 @@ describe("classifyGateCommand", () => {
     expect(classifyGateCommand("gh pr merge \\\n 12")).toEqual({ kind: "pr_merge", dir: null, pr: "12", repo: null });
     expect(classifyGateCommand("git -C d \\\n merge x")).toEqual({ kind: "local_merge", dir: "d", source: "x" });
   });
+  it("recognises gh pr create with --head and --draft (BTL-273)", () => {
+    expect(classifyGateCommand("gh pr create --fill")).toEqual({ kind: "pr_create", dir: null, head: null, draft: false, repo: null });
+    expect(classifyGateCommand(`cd repo && gh pr create -t "x" --draft -H me:feature/a`)).toEqual({ kind: "pr_create", dir: "repo", head: "feature/a", draft: true, repo: null });
+    expect(classifyGateCommand("gh pr new -d --head=feature/b -R o/r")).toEqual({ kind: "pr_create", dir: null, head: "feature/b", draft: true, repo: "o/r" });
+    // 标题里有 -d 不是 draft
+    expect(classifyGateCommand(`gh pr create -t "-d" -b x`)).toMatchObject({ draft: false });
+  });
+
+  it("checks a merge that follows gh pr create in the same command (BTL-273)", () => {
+    expect(classifyGateCommand("gh pr create --fill && gh pr merge --auto")).toMatchObject({ kind: "pr_merge" });
+    expect(classifyGateCommand("git push -u origin feature/x && gh pr create --fill")).toMatchObject({ kind: "push", source: "feature/x" });
+    expect(gatePrCreate("git push -u origin feature/x && gh pr create --fill")).toMatchObject({ kind: "pr_create" });
+    // 推 HEAD 时主动作是推送（可能推到别的分支，要照常审）；开 PR 由 gatePrCreate 另外带上
+    expect(classifyGateCommand("git push -u origin HEAD && gh pr create --fill")).toMatchObject({ kind: "push" });
+    expect(gatePrCreate("git push -u origin HEAD && cd sub && gh pr create --fill -d")).toEqual({ kind: "pr_create", dir: "sub", head: null, draft: true, repo: null });
+    expect(gatePrCreate("git push origin HEAD:feat")).toBeNull();
+  });
+
   it("ignores everything else", () => {
     for (const c of [
       "git status", "git push", "git merge --abort", "git merge --continue",
       "git checkout -- src/a.ts", "git checkout .", "git checkout HEAD~1 -- a.ts",
-      "gh pr view 12", "gh pr create", "echo 'git merge x'", "git log --merges", "",
+      "gh pr view 12", "gh pr checks 12", "echo 'gh pr create'", "echo 'git merge x'", "git log --merges", "",
     ])
       expect(classifyGateCommand(c), c).toBeNull();
   });

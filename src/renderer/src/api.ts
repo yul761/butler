@@ -14,6 +14,7 @@ import type { ActivityEvent } from "../../shared/activity";
 import type { Lang } from "../../shared/i18n";
 import type { AppMenuAction, UpdateCheckResult, UpdateView } from "../../shared/update";
 import type { FeedbackKind } from "../../shared/feedback";
+import type { FeatureWorkflowView, TicketWorkflowView, Workflow, WorkflowScope, WorkflowSetResult, WorkflowSettingsView } from "../../shared/workflow";
 import { createStateBus } from "./state-bus";
 import type { StateScope } from "../../shared/state-scope";
 import { IPC, type IpcResult } from "../../shared/ipc";
@@ -355,4 +356,9 @@ export const api = {
   infoflowList: (scope: FlowScope) => call<FlowItemView[]>(IPC.infoflowList, scope),
   infoflowTurn: (turnId: number) => call<FlowTurnText>(IPC.infoflowTurn, turnId),
   infoflowAct: (actionId: number, what: "apply" | "reject" | "undo" | "dismiss" | "retry" | "accept") => call<boolean>(IPC.infoflowAct, actionId, what),
+  /** 工作流程（BTL-273）：设置页的各层；改一层（null 清掉）；ticket 首页、epic 页的流程条。 */
+  workflowState: () => call<WorkflowSettingsView>(IPC.workflowState),
+  workflowSet: (scope: WorkflowScope, workflow: Workflow | null) => call<WorkflowSetResult>(IPC.workflowSet, scope, workflow),
+  workflowTicket: (key: string) => call<TicketWorkflowView | null>(IPC.workflowTicket, key),
+  workflowFeature: (id: number) => call<FeatureWorkflowView | null>(IPC.workflowFeature, id),
 };

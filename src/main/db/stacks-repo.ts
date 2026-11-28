@@ -44,6 +44,8 @@ export interface LayerRow {
   /** 合并时 PR 的 head（squash 后 rebase --onto 的起点）。 */
   mergedHead: string | null;
   draftSince: number | null;
+  /** 栈已提升、只是工作流程要 PR 先是 draft 的时间（BTL-273）：有它的层 PR 是 draft 也算 ready。 */
+  workflowDraftAt: number | null;
   mergedAt: number | null;
   lastRebaseAt: number | null;
   /** 最近一次送出去的冲突（同一个冲突只送一次）。 */
@@ -145,7 +147,7 @@ function toLayer(r: Raw): LayerRow {
     ticketRepoId: num(r.ticket_repo_id), mode: r.mode as StackLayerMode, state: r.state as StackLayerState, prNumber: num(r.pr_number),
     prUrl: str(r.pr_url), baseSha: str(r.base_sha), tipSha: str(r.tip_sha), remoteOkSha: str(r.remote_ok_sha), mergedHead: str(r.merged_head),
     draftSince: num(r.draft_since), mergedAt: num(r.merged_at), lastRebaseAt: num(r.last_rebase_at), conflictKey: str(r.conflict_key),
-    createdAt: Number(r.created_at),
+    workflowDraftAt: num(r.workflow_draft_at), createdAt: Number(r.created_at),
   };
 }
 
@@ -172,7 +174,7 @@ const STACK_COLS: Record<string, string> = {
 const LAYER_COLS: Record<string, string> = {
   position: "position", ticketKey: "ticket_key", ticketRepoId: "ticket_repo_id", mode: "mode", state: "state", prNumber: "pr_number", prUrl: "pr_url",
   baseSha: "base_sha", tipSha: "tip_sha", remoteOkSha: "remote_ok_sha", mergedHead: "merged_head", draftSince: "draft_since", mergedAt: "merged_at",
-  lastRebaseAt: "last_rebase_at", conflictKey: "conflict_key",
+  lastRebaseAt: "last_rebase_at", conflictKey: "conflict_key", workflowDraftAt: "workflow_draft_at",
 };
 
 function setClause(cols: Record<string, string>, patch: Record<string, unknown>): [string, SQLInputValue[]] {

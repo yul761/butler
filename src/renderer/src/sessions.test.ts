@@ -50,6 +50,11 @@ describe("initialPane", () => {
     expect(initialPane(list, "c2")).toBe("t-c2");
   });
 
+  it("also takes the terminal id that opening a session returns (BTL-273)", () => {
+    const list = [s("c1", { termId: "c1", coordinator: true }), s("g", { termId: "t-g", coordinator: true })];
+    expect(initialPane(list, "t-g")).toBe("t-g");
+  });
+
   it("falls back to the first open terminal when nothing is named or the named one is not open", () => {
     const list = [s("a"), s("b", { termId: "b" }), s("c", { termId: "c" })];
     expect(initialPane(list, null)).toBe("b");

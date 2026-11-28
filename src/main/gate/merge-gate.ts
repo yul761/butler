@@ -116,6 +116,18 @@ export interface MergeGateDeps {
   repoOfSlug?: (slug: string, cwdRepo?: string) => { path: string; remote: string } | null;
   /** 目录在不在（测试用）。 */
   exists?: (path: string) => boolean;
+  /** 工作流程（BTL-273）：开 PR、合并之前，流程里排在前面的步骤要做完。不给就不查。 */
+  workflow?: WorkflowGate;
+}
+
+/** 工作流程对闸门的回答：返回拦下的原因，放行返回 null。 */
+export interface WorkflowGate {
+  /** 有没有任何一层设过流程（都没有时开 PR 不用找目录、不用查）。 */
+  anyWorkflow(): boolean;
+  /** 开 PR：repoPath 是命令所在仓库的主 checkout（认不出是 null），branch 是 PR 的 head。 */
+  prCreate(i: { ticketKey: string; repoPath: string | null; dir: string | null; branch: string | null; draft: boolean; sessionId: string | null }): Promise<string | null>;
+  /** 合并这个 ticket 的分支：谁合（sessionId）、流程里合并前的步骤做完没有。 */
+  merge(i: { ticketKey: string; sessionId: string | null; prUrl: string | null }): string | null;
 }
 
 /** 确定这条命令不用审核：在这里它本来就跑不起来（目录不存在、不在 git 仓库里），或者合的仓库没有 ticket。只记日志、放行。 */
@@ -257,8 +269,14 @@ export class MergeGate {
 
   private async before(req: GateRequest, clock: Clock): Promise<GateResult> {
     const a = req.action;
+    // 同一条命令里还开 PR（`git push origin HEAD && gh pr create`）：先审开 PR，过了再照常审前面那个动作。
+    if (req.prCreate && a.kind !== "pr_create") {
+      const r = await this.checkPrCreate(req, req.prCreate, clock);
+      if (r.decision === "deny") return r;
+    }
     // 推一个分支到同名的远端分支（git push -u origin feature/x）：推的是它自己，不是合并进别的分支，和目录无关。
     if (a.kind === "push" && a.source && a.source !== "HEAD" && a.source === a.target) return ALLOW;
+    if (a.kind === "pr_create") return this.checkPrCreate(req, a, clock);
     // 写了仓库和 PR 号的 gh pr merge 不看目录。没写 PR 号的合的是 cwd 当前分支的 PR，还得按目录找。
     if (a.kind === "pr_merge" && a.repo !== null && a.pr !== null) return this.checkPrIn(req, a, a.repo, clock);
     // `cd "$WT"`、`git -C $(…)`：hook 看到的是没展开的写法，不知道命令真正在哪个目录跑。
@@ -271,7 +289,11 @@ export class MergeGate {
     const repo = await this.repoAt(dir, a.kind === "pr_merge" ? "gh can't tell which repository to merge into there either" : "the git command can't run there either");
     if (a.kind === "switch") return this.checkSwitch(req, a, repo, clock);
     const m = await this.mergeOf(a, dir, repo);
-    if (!m || !(await this.mergeTreeOk(repo))) return ALLOW;
+    if (!m) return ALLOW;
+    // 工作流程先查（不用 git）：老 git 没有 merge-tree 不审冲突，流程照样要守。
+    const wf = this.workflowMerge(req, m, clock);
+    if (wf) return wf;
+    if (!(await this.mergeTreeOk(repo))) return ALLOW;
     return this.checkMerge(req, m, clock);
   }
 
@@ -298,8 +320,11 @@ export class MergeGate {
     const pr = await this.d.prInfo(repo, ref, PR_TIMEOUT_MS);
     // gh 读不到这个 PR（没登录、断网、超时、写错了号）：判不了，先拦一次，不静默放行。
     if (!pr) throw new Error(`gh couldn't read the PR ${ref} in ${repo}`);
+    const m: Merge = { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url, remote };
+    const wf = this.workflowMerge(req, m, clock);
+    if (wf) return wf;
     if (!(await this.mergeTreeOk(repo))) return ALLOW;
-    return this.checkMerge(req, { repo, branch: pr.head, ref: pr.head, target: pr.base, kind: "pr", prUrl: pr.url, remote }, clock);
+    return this.checkMerge(req, m, clock);
   }
 
   /**
@@ -322,7 +347,7 @@ export class MergeGate {
   /** 命令执行完：本地合并、直接 push 的占位立刻定下来；PR 的占位交给 HoldWatcher。 */
   private async after(req: GateRequest): Promise<GateResult> {
     const a = req.action;
-    if (a.kind === "switch") return ALLOW;
+    if (a.kind === "switch" || a.kind === "pr_create") return ALLOW;
     if (a.kind !== "pr_merge") {
       const dir = commandDir(req.cwd, a.dir);
       const repo = await this.repoAt(dir, "nothing ran there");
@@ -340,7 +365,7 @@ export class MergeGate {
   }
 
   /** 这个动作要合并什么进哪里；不算合并进目标分支的（只推自己的 branch、把 main 合进自己的 branch）返回 null。 */
-  private async mergeOf(a: Exclude<GateAction, { kind: "switch" }>, dir: string, repo: string): Promise<Merge | null> {
+  private async mergeOf(a: Exclude<GateAction, { kind: "switch" | "pr_create" }>, dir: string, repo: string): Promise<Merge | null> {
     if (a.kind === "pr_merge") {
       if (a.pr !== null && /[$`]/.test(a.pr)) throw new Error(`the PR ${a.pr} in the command uses a shell variable or substitution`);
       const pr = await this.d.prInfo(dir, a.pr, PR_TIMEOUT_MS);
@@ -473,6 +498,69 @@ export class MergeGate {
       .list()
       .filter((t) => t.archivedAt === null)
       .flatMap((t) => t.repos.filter((r) => samePath(r.repoPath, repo)).map((r) => ({ ticket: t.key, branch: r.branch })));
+  }
+
+  /**
+   * 工作流程管不管这次合并：合的分支是某个 ticket 的（按仓库 + 分支认），而它的流程不让这时合（不是总控、合并前的步骤没做完、
+   * 流程定了由用户合）就拦下。超过期限就放行（hook 早已放行了）。
+   */
+  private workflowMerge(req: GateRequest, m: Merge, clock: Clock): GateResult | null {
+    const wf = this.d.workflow;
+    if (!wf || !wf.anyWorkflow()) return null;
+    const own = this.ticketOf(m.repo, m.branch);
+    if (own === null) return null;
+    const reason = wf.merge({ ticketKey: own, sessionId: req.session, prUrl: m.prUrl });
+    if (reason === null || this.late(clock)) return null;
+    this.d.log(`merge gate: the workflow of ${own} doesn't allow merging ${m.branch} now`);
+    return deny(reason);
+  }
+
+  /**
+   * `gh pr create`：流程里排在开 PR 前面的步骤（预审、自审……）要先做完。按命令所在仓库 + head 分支认 ticket；
+   * 目录写成变量、不在仓库里时用 session 自己的 ticket。认不出 ticket 就不管。
+   */
+  private async checkPrCreate(req: GateRequest, a: Extract<GateAction, { kind: "pr_create" }>, clock: Clock): Promise<GateResult> {
+    const wf = this.d.workflow;
+    if (!wf || !wf.anyWorkflow()) return ALLOW;
+    let repo: string | null = null;
+    let dir: string | null = null;
+    let branch = a.head;
+    if (a.dir === null || !/[$`]/.test(a.dir)) {
+      dir = commandDir(req.cwd, a.dir);
+      try {
+        repo = await this.repoAt(dir, "gh can't open a PR from there either");
+      } catch (e) {
+        if (!(e instanceof NotChecked)) throw e;
+        dir = null;
+      }
+    }
+    if (repo !== null && dir !== null && branch === null) branch = await this.d.git.currentBranch(dir);
+    // `-R o/r`：PR 开在那个仓库，不是命令所在目录的仓库。同一个 ticket 的几个仓库可能用同名分支，按目录认会拿 A 的预审放行 B。
+    if (a.repo !== null) ({ repo, dir } = await this.prCreateRepo(a.repo, repo, dir));
+    const ticketKey = repo !== null && branch !== null ? (this.ticketOf(repo, branch) ?? null) : req.ticket;
+    if (ticketKey === null) return ALLOW;
+    const reason = await wf.prCreate({ ticketKey, repoPath: repo, dir, branch, draft: a.draft, sessionId: req.session });
+    if (reason === null || this.late(clock)) return ALLOW;
+    return deny(reason);
+  }
+
+  /**
+   * `gh pr create -R <slug>` 的仓库：按 slug 找 ticket 用的主 checkout；找不到时看命令所在目录的仓库是不是它。都对不上就当认不出
+   * （repo 为 null），由流程按「分支对得上的仓库每个都要 clean」判断。命令目录只在就是这个仓库时才留给流程读 HEAD。
+   */
+  private async prCreateRepo(slug: string, cwdRepo: string | null, dir: string | null): Promise<{ repo: string | null; dir: string | null }> {
+    const found = this.d.repoOfSlug?.(slug) ?? null;
+    let repo: string | null = null;
+    if (found !== null) {
+      try {
+        repo = await this.repoAt(found.path, `the checkout of ${slug} is gone`);
+      } catch (e) {
+        if (!(e instanceof NotChecked)) throw e;
+      }
+    } else if (cwdRepo !== null && this.d.repoOfSlug?.(slug, cwdRepo)) {
+      repo = cwdRepo;
+    }
+    return { repo, dir: repo !== null && cwdRepo !== null && samePath(repo, cwdRepo) ? dir : null };
   }
 
   /** branch 属于哪个 ticket：feature 总控合并 PR 时请求里没有 ticket，只能按 branch 找。 */

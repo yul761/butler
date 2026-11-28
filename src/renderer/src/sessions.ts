@@ -33,6 +33,7 @@ export function splitSessions(sessions: SessionView[], limit: number): { shown: 
 
 /** 页面打开时看哪个终端：指名的 session 开着就是它的终端（「现在」页点进来的那个），否则是第一个开着的终端。 */
 export function initialPane(sessions: SessionView[], focus: string | null | undefined): string | null {
-  const named = focus ? sessions.find((s) => s.id === focus)?.termId : null;
+  // 给的可能是 session id，也可能是刚打开时返回的终端 id（/clear 之后两者不同）。
+  const named = focus ? sessions.find((s) => s.id === focus || s.termId === focus)?.termId : null;
   return named ?? sessions.find((s) => s.termId !== null)?.termId ?? null;
 }

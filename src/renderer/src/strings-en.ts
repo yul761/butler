@@ -21,6 +21,7 @@ import type { StackLayerState, StackMarkersWhere, StackPolicyErrorCode, StackPol
 import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 import type { UiStrings } from "./strings";
 import type { AdvancedGroupId, SettingsTabId } from "../../shared/settings-layout";
+import type { MergeBy, WorkflowPresetId, WorkflowScopeKind, WorkflowStepId } from "../../shared/workflow";
 import type { FeatureId } from "../../shared/feature-rows";
 
 /** "1 ticket", "2 tickets". */
@@ -50,7 +51,7 @@ export const EN: UiStrings = {
     openFeatureSettings: "To let it do more, choose Semi-automatic in Settings › Automation, or turn features on one by one under Advanced there",
   },
   set: {
-    tabs: { basic: "Basics", features: "Automation", advanced: "Advanced", health: "Health check", about: "About" } as Record<SettingsTabId, string>,
+    tabs: { basic: "Basics", features: "Automation", workflow: "Workflow", advanced: "Advanced", health: "Health check", about: "About" } as Record<SettingsTabId, string>,
     groups: {
       schedule: "Schedule & status",
       sessions: "Sessions & memory",
@@ -2272,6 +2273,7 @@ export const EN: UiStrings = {
     pr_brief_post: { label: "Post review briefs", hint: "Writes the review brief into the PR description after a pre-review, replacing Shipherd's brief block" },
     intake_tracker_comment: { label: "Intake: ask on the tracker", hint: "When a ticket is missing information, a small session or the coordinator comments on it with questions" },
     intake_tracker_status: { label: "Intake: change ticket status", hint: "When intake starts a ticket, the session first moves it to In Progress" },
+    pr_review_request: { label: "Ask a bot to review", hint: "When a workflow reaches bot review, Shipherd asks Copilot to review or comments @codex review on the PR; when off, the session is reminded to ask itself" },
   } as Record<ExternalActionKind, { label: string; hint: string }>,
   externalAuditHeading: "Outward actions",
   externalAuditNone: "No outward actions recorded yet.",
@@ -2721,5 +2723,56 @@ export const EN: UiStrings = {
     listSep: ", ",
     deliveryItem: (to: string, status: string) => `${to} (${status})`,
     withAuto: (state: string) => `${state} (auto)`,
+  },
+  workflow: {
+    intro: "Set how tickets get done. As each step finishes, Shipherd tells the session what's next, and stops a PR or merge that comes out of order. Lower layers override higher ones; with none set, tickets work as before.",
+    askClaude: "Set it up with Claude",
+    askClaudeHint: "Opens the Shipherd coordinator: say in a sentence how you want to work and it sets it up",
+    prefill: "Help me set up the ticket workflow: ",
+    none: "No layer is set yet, so tickets work as before.",
+    scope: { global: "Global", product: "Product", repo: "Repo", feature: "Epic", ticket: "Ticket" } as Record<WorkflowScopeKind, string>,
+    scopeLabel: (kind: string, label: string) => (label ? `${kind} · ${label}` : kind),
+    add: "Add a layer",
+    edit: "Edit",
+    clear: "Clear",
+    save: "Save",
+    cancel: "Cancel",
+    pickTarget: "Pick one",
+    noTargets: "Nothing to pick",
+    startFrom: "Start from a preset:",
+    preset: { fast: "Fast: write it, open a PR, merge once CI passes", strict: "Strict: self-review, pre-review, Copilot review, fix, then merge" } as Record<WorkflowPresetId, string>,
+    presetName: { fast: "Fast", strict: "Strict" } as Record<WorkflowPresetId, string>,
+    custom: "Custom",
+    steps: {
+      implement: "Write the code", self_review: "Self-review", pre_review: "Pre-review", open_pr: "Open the PR", ci_green: "CI passes",
+      bot_review: "Bot review", address_comments: "Address comments", re_review: "Review again", human_review: "Human review", merge: "Merge",
+    } as Record<WorkflowStepId, string>,
+    addStep: "Add a step:",
+    up: "Move up",
+    down: "Move down",
+    remove: "Remove",
+    draft: "Open as draft",
+    bot: "Reviewer",
+    rounds: "Max rounds",
+    mergeBy: { coordinator: "Coordinator merges", user: "I merge" } as Record<MergeBy, string>,
+    note: "What this step needs (optional)",
+    notes: "Notes for the whole workflow (optional)",
+    noMerge: "There's no Merge step, so no session may merge; you merge it yourself.",
+    count: (n: number, max: number) => `${n} / ${max} characters`,
+    tooLong: (n: number, max: number) => `${n} / ${max} characters: too long to save. The workflow is sent to every session as is, so please shorten it.`,
+    saved: "Saved.",
+    unchanged: "Same as before, nothing changed.",
+    strip: "Workflow",
+    from: (where: string) => `From ${where}`,
+    current: "Now: ",
+    allDone: "All done",
+    loopOn: "This workflow turns the comment loop on: review comments on the PR go to the session. Whether replies go to GitHub still follows your External actions › Reply to review comments switch.",
+    doneAt: (when: string) => `done ${when}`,
+    rounds_: (n: number) => `${n} round${n === 1 ? "" : "s"} asked`,
+    epicOwn: "This epic's workflow",
+    epicInherit: "This epic has no workflow of its own; it follows the layer above.",
+    epicTickets: "Where each ticket is",
+    progress: (done: number, total: number) => `${done}/${total}`,
+    setHere: "Settings",
   },
 };

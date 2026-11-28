@@ -17,6 +17,8 @@ export const EXTERNAL_ACTIONS = [
   // 工作流 N：自动接活在 tracker 上的动作（经用户的 tracker MCP，由 session 或总控去做）。
   "intake_tracker_comment",
   "intake_tracker_status",
+  // BTL-273：工作流程里 Shipherd 替 session 请 Copilot / Codex review（Codex 是在 PR 上评论 @codex review）。
+  "pr_review_request",
 ] as const;
 export type ExternalActionKind = (typeof EXTERNAL_ACTIONS)[number];
 
@@ -36,6 +38,7 @@ export const EXTERNAL_ACTION_SETTINGS = {
   pr_brief_post: "externalPrBriefPost",
   intake_tracker_comment: "externalIntakeTrackerComment",
   intake_tracker_status: "externalIntakeTrackerStatus",
+  pr_review_request: "externalPrReviewRequest",
 } as const satisfies Record<ExternalActionKind, string>;
 export type ExternalActionSetting = (typeof EXTERNAL_ACTION_SETTINGS)[ExternalActionKind];
 

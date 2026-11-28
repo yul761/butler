@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { Ticket } from "../../shared/types";
+import { ticketFinished, type Ticket } from "../../shared/types";
 import { stackTicketLive } from "./stack-service";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -28,6 +28,14 @@ describe("which tickets the stack service works for (BTL-278 review)", () => {
     expect(stackTicketLive(ticket({ archivedAt: 1 }))).toBe(false);
     expect(stackTicketLive(ticket({ statusManual: "closed" }))).toBe(false);
     expect(stackTicketLive(null)).toBe(false);
+  });
+
+  it("agrees with the workflow's ticketFinished on closed and archived tickets (BTL-273)", () => {
+    // 关掉、归档的：栈不再管，工作流程也算完成；needs_decision 两边都还在用。done 只在工作流程那边算完成（栈还要收尾合并后的层）。
+    for (const o of [{ statusManual: "closed" as const }, { status: "closed" as const }, { archivedAt: 1 }, { status: "needs_decision" as const }, {}]) {
+      expect(ticketFinished(ticket(o)), JSON.stringify(o)).toBe(!stackTicketLive(ticket(o)));
+    }
+    expect(ticketFinished(ticket({ statusManual: "done" }))).toBe(true);
   });
 
   it("index.ts goes by it when telling Shipherd branches and the repositories to detect stacks in", () => {

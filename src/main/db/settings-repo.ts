@@ -130,6 +130,8 @@ export const SETTING_DEFAULTS = {
   /** 工作流 N：自动接活缺信息时到 tracker 上提问；开工时把 ticket 改成进行中。 */
   externalIntakeTrackerComment: "0",
   externalIntakeTrackerStatus: "0",
+  /** BTL-273：工作流程里 Shipherd 替 session 请 Copilot / Codex review。关着时提醒 session 自己请。 */
+  externalPrReviewRequest: "0",
   /** 工作流 G：开发 session 交证据、提 PR 前后台预审（复跑、对照规矩、核对证据），结果送回 session：1 开 0 关。 */
   preReviewEnabled: "0",
   /** BTL-271：预审同时最多跑几个（1–8）。不同 worktree 的可以同时跑，同一个 worktree 的一个接一个。新装 2；升级上来的迁移 60 写成 1（以前一次一个）。 */

@@ -45,6 +45,8 @@ export interface BriefLayer {
   prNumber: number | null;
 }
 
+export type WorkflowPrGate = { mode: "open" } | { mode: "draft" } | { mode: "blocked"; reason: string };
+
 export interface StackServiceDeps {
   repo: StacksRepo;
   policy: StackPolicyService;
@@ -59,6 +61,12 @@ export interface StackServiceDeps {
     attempt<T>(kind: ExternalActionKind, detail: ExternalDetail, run: () => Promise<T>): Promise<AttemptResult<T>>;
     allowed(kind: ExternalActionKind, scope?: ExternalDetail["scope"]): boolean;
   };
+  /**
+   * 工作流程（BTL-273）：这一层的 ticket 现在能不能开 PR，和 gh pr create 的 hook 用同一个判断。
+   * open：照常开成可以 review 的；draft：流程要先开 draft；blocked：还不能开（比如预审排在开 PR 前面、这个提交没过）。
+   * 不给，或者这一层不属于 ticket，就是 open。
+   */
+  workflowGate?(i: { ticketKey: string; repoPath: string; branch: string }): Promise<WorkflowPrGate>;
   /** 临时 worktree 的目录（<SHIPHERD_HOME>/stack-work）。 */
   workRoot: string;
   /** 跑 sequence editor 的 node。 */
@@ -447,13 +455,17 @@ export class StackService {
       const pr = prs.find((p) => p.head === l.branch && p.state === "OPEN" && ours(p));
       if (!pr) continue;
       if (pr.headRepo) this.prHeadRepo.set(`${stack.id}\0${l.branch}`, pr.headRepo.toLowerCase());
-      const state = pr.isDraft ? "draft" : "ready";
-      if (l.prNumber === pr.number && l.prUrl === pr.url && l.state === state) continue;
+      // 栈已提升、工作流程要 PR 先是 draft（BTL-273）：PR 是 draft 也算 ready，不改回 draft 层；PR 改成可以 review 了就清掉标记。
+      const wfDraft = pr.isDraft && l.workflowDraftAt !== null;
+      const state = pr.isDraft && !wfDraft ? "draft" : "ready";
+      const workflowDraftAt = wfDraft ? l.workflowDraftAt : null;
+      if (l.prNumber === pr.number && l.prUrl === pr.url && l.state === state && l.workflowDraftAt === workflowDraftAt) continue;
       // mode 说的是「这一层的 PR 是不是 Shipherd 开的 draft」（syncDrafts 会改它的标题和正文）：只有自动检测的栈
       // （PR 本来就是 Shipherd 的）按 PR 认；别的栈里用户自己开的 draft 不算 Shipherd 的，Shipherd 的 draft 被转成 ready 了才回到 branch（BTL-278）
       this.d.repo.updateLayer(l.id, {
-        prNumber: pr.number, prUrl: pr.url, state, mode: stack.source === "detected" || !pr.isDraft ? (pr.isDraft ? "draft" : "branch") : l.mode,
-        draftSince: pr.isDraft ? (l.state === "draft" ? l.draftSince : this.d.now()) : null,
+        prNumber: pr.number, prUrl: pr.url, state, workflowDraftAt,
+        mode: wfDraft ? l.mode : stack.source === "detected" || !pr.isDraft ? (pr.isDraft ? "draft" : "branch") : l.mode,
+        draftSince: state === "draft" ? (l.state === "draft" ? l.draftSince : this.d.now()) : null,
       });
     }
   }
@@ -1214,6 +1226,25 @@ export class StackService {
     return m;
   }
 
+  /** 这一层的 ticket 按工作流程现在能不能开 PR（和 hook 同一个判断）。判断出错就先不开，记一次日志。 */
+  private async workflowGate(repoPath: string, layer: LayerRow): Promise<WorkflowPrGate> {
+    if (!this.d.workflowGate || !layer.ticketKey) return { mode: "open" };
+    let g: WorkflowPrGate;
+    try {
+      g = await this.d.workflowGate({ ticketKey: layer.ticketKey, repoPath, branch: layer.branch });
+    } catch (e) {
+      g = { mode: "blocked", reason: e instanceof Error ? e.message : String(e) };
+    }
+    if (g.mode === "blocked") {
+      const k = `${layer.id}:workflow:${g.reason}`;
+      if (!this.notPromotedLogged.has(k)) {
+        this.notPromotedLogged.add(k);
+        this.d.log(`stacks: not opening ${layer.branch} for review yet: the workflow says ${g.reason}`);
+      }
+    }
+    return g;
+  }
+
   /**
    * 栈底下面有合并掉的层、自己还不是 ready：要提升。栈底的 ticket 关掉、归档了（或分支不归它了）不提升：不推、不开 PR、
    * 不改 base、不标 ready（BTL-278 复核 P1）。promoteBottom、retryPending 都经过这里。
@@ -1221,7 +1252,8 @@ export class StackService {
   private needsPromotion(stack: StackRow): LayerRow | null {
     const all = this.d.repo.layers(stack.id);
     const bottom = all.find((l) => l.state !== "merged");
-    if (!bottom || bottom.state === "ready") return null;
+    // 栈已提升、只是流程要 PR 先是 draft（BTL-273）：不再提升
+    if (!bottom || bottom.state === "ready" || bottom.workflowDraftAt !== null) return null;
     if (!this.live(stack.repoPath, bottom)) return null;
     return all.some((l) => l.state === "merged" && l.position < bottom.position) ? bottom : null;
   }
@@ -1264,10 +1296,20 @@ export class StackService {
           const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `retarget #${pr.number} to ${stack.trunk}` }, () => gh.prEditBase(repo, slug, pr.number, stack.trunk));
           if (!r.ran) return;
         }
+        // 工作流程的闸门（BTL-273）：在 live 之后查；等它的时候 ticket 关了就不动
+        const gate = await this.workflowGate(repo, layer);
+        if (!this.live(repo, layer)) return;
+        // 工作流程还不让开（比如预审排在开 PR 前面、这个提交没过）：留着 draft，等过了下一轮再改。
+        if (pr.isDraft && gate.mode === "blocked") return;
         let ready = !pr.isDraft;
         if (pr.isDraft) {
-          const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `mark #${pr.number} ready for review` }, () => gh.prReady(repo, slug, pr.number));
-          ready = r.ran;
+          if (gate.mode === "draft") {
+            // 流程要 PR 先是 draft：栈这边照样提升（去掉前缀、label，换描述），只是不改成可以 review，由 session 按流程去改。
+            ready = true;
+          } else {
+            const r = await this.d.external.attempt("pr_open", { scope, target: pr.url, summary: `mark #${pr.number} ready for review` }, () => gh.prReady(repo, slug, pr.number));
+            ready = r.ran;
+          }
         }
         const title = stripPrefix(pr.title);
         if (title !== pr.title) await this.d.external.attempt("pr_title_edit", { scope, target: pr.url, summary: `drop the stack prefix`, payload: title }, () => gh.prEditTitle(repo, slug, pr.number, title));
@@ -1277,7 +1319,9 @@ export class StackService {
         const b = await this.d.external.attempt("pr_description_edit", { scope, target: pr.url, summary: `bottom-of-stack description`, payload: newBody }, () => gh.prEditBody(repo, slug, pr.number, newBody));
         if (b.ran) brief?.posted(pr.url);
         if (ready) {
-          this.d.repo.updateLayer(layer.id, { state: "ready", mode: "branch", draftSince: null });
+          // 流程要 draft、PR 留着 draft：记下标记，reconcilePrs 不把它改回 draft 层、也不再提升
+          const workflowDraftAt = pr.isDraft && gate.mode === "draft" ? this.d.now() : null;
+          this.d.repo.updateLayer(layer.id, { state: "ready", mode: "branch", draftSince: null, workflowDraftAt });
           this.d.record?.("stack.pr_open", { kind: "ready" });
         }
         return;
@@ -1299,6 +1343,11 @@ export class StackService {
         if (files === null || files.length > 0) return;
         // 查的时候分支又动了：这轮不推，下一轮按新的顶端再查（PR 的描述、提交列表也是按 tip 写的）
         if ((await revParse(repo, `refs/heads/${layer.branch}`)) !== tip) return;
+      }
+      // 顺序是 live → 冲突标记 → 工作流程的闸门（BTL-273）：闸门拦下就不推、不开 PR；等闸门的时候 ticket 关了也不动
+      const gate = await this.workflowGate(repo, layer);
+      if (!this.live(repo, layer) || gate.mode === "blocked") return;
+      if (!remote && pushTo && tip) {
         // 推查过的那个提交：复查之后到真推之间分支还可能再动
         const r = await this.d.external.attempt("branch_push", { scope, target: layer.branch, summary: `push ${layer.branch} before opening its PR` }, () =>
           pushBranch(repo, pushTo, layer.branch, null, tip));
@@ -1306,11 +1355,14 @@ export class StackService {
       }
       const title = owned?.ticketTitle ? `${owned.ticketKey} ${owned.ticketTitle}` : (commits[0] ?? layer.branch);
       const r = await this.d.external.attempt("pr_open", { scope, target: layer.branch, summary: `open the bottom-of-stack PR for ${layer.branch}`, payload: title }, () =>
-        gh.prCreate(repo, slug, { base: stack.trunk, head: layer.branch, title, body, draft: false, labels: [] }));
+        gh.prCreate(repo, slug, { base: stack.trunk, head: layer.branch, title, body, draft: gate.mode === "draft", labels: [] }));
       if (!r.ran) return;
       brief?.posted(r.value.url);
-      this.d.repo.updateLayer(layer.id, { state: "ready", mode: "branch", prNumber: r.value.number, prUrl: r.value.url, draftSince: null });
-      this.d.record?.("stack.pr_open", { kind: "create" });
+      // 流程要先开 draft 时 PR 是 draft，但它不是栈的 draft 层（没有前缀、不催）：层照样算提升好了，之后由 session 按流程改成可以 review。
+      this.d.repo.updateLayer(layer.id, {
+        state: "ready", mode: "branch", prNumber: r.value.number, prUrl: r.value.url, draftSince: null, workflowDraftAt: gate.mode === "draft" ? this.d.now() : null,
+      });
+      this.d.record?.("stack.pr_open", { kind: gate.mode === "draft" ? "create_draft" : "create" });
     } catch (e) {
       this.d.log(`stacks: promoting ${layer.branch} failed`, e);
     }
@@ -1406,7 +1458,7 @@ export class StackService {
       const r = await this.d.external.attempt("pr_open", { scope, target: layer.branch, summary: `open draft for ${layer.branch}`, payload: title }, () =>
         gh.prCreate(repo, slug, { base: base0, head: layer.branch, title, body, draft: true, labels: lr.ran ? [label] : [] }));
       if (!r.ran) return { ok: false, message: t.switchOff("pr_open") };
-      this.d.repo.updateLayer(layer.id, { mode: "draft", state: "draft", prNumber: r.value.number, prUrl: r.value.url, draftSince: this.d.now() });
+      this.d.repo.updateLayer(layer.id, { mode: "draft", state: "draft", prNumber: r.value.number, prUrl: r.value.url, draftSince: this.d.now(), workflowDraftAt: null });
       this.d.record?.("stack.pr_open", { kind: "draft" });
       this.changed();
       return { ok: true };

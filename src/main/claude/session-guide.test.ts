@@ -273,3 +273,13 @@ describe("session guide: the lessons index (BTL-274)", () => {
     expect(pruneSessionGuides(dir, Date.now())).toBe(1);
   });
 });
+
+describe("workflow tools in the coordinator guide (BTL-273)", () => {
+  it("tells both coordinators about the workflow tools, not ticket sessions", () => {
+    expect(sessionGuide("zh", "coordinator")).toContain("set_workflow");
+    expect(sessionGuide("en", "coordinator")).toContain("set_workflow");
+    expect(sessionGuide("zh", "shipherd")).toContain("set_workflow");
+    expect(sessionGuide("en", "shipherd")).toContain("list_workflow_presets");
+    for (const lang of ["zh", "en"] as const) for (const kind of ["ticket", "lessons"] as const) expect(sessionGuide(lang, kind)).not.toContain("set_workflow");
+  });
+});
