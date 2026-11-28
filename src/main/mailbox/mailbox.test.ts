@@ -752,6 +752,29 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     expect(w.repo.queued()).toEqual([]);
   });
 
+  it("one head's flush throwing does not cost the others their delivery or the tick its reply check; the failure is logged per head (BTL-279 second review)", async () => {
+    const w = world();
+    w.add("bad", false);
+    w.add("good", false);
+    w.add("owes", true);
+    w.mb.send(msg("bad", "for bad"));
+    w.mb.send(msg("good", "for good"));
+    const asked = w.mb.send(msg("owes", "question"));
+    await flushPromises();
+    expect(w.repo.get(asked.id)?.status).toBe("delivered");
+    w.setWaiting("owes", false);
+    w.checked.length = 0;
+    const real = w.mb.flush.bind(w.mb);
+    vi.spyOn(w.mb, "flush").mockImplementation((h) => (h === "bad" ? Promise.reject(new Error("boom")) : real(h)));
+    w.setWaiting("good", true);
+    await w.mb.tick();
+    await flushPromises();
+    expect(w.delivered.some((d) => d.term === "good" && d.text.includes("for good"))).toBe(true);
+    expect(w.checked).toContain("owes");
+    expect(w.logs.some((l) => l.includes("flushing bad failed"))).toBe(true);
+    expect(w.logs.some((l) => l.includes("tick failed"))).toBe(false);
+  });
+
   it("a reply to a global control that was closed for a newer one goes to the one now open; the requestId stays (BTL-279)", async () => {
     const w = world();
     w.add("t1", false);
@@ -884,6 +907,24 @@ describe("Mailbox: getting into an idle session (BTL-269)", () => {
     await v.mb.tick();
     expect(v.delivered).toEqual([]);
     expect(v.repo.get(b.id)!.blockedReason).toBe("turn");
+  });
+
+  it("unsure: a newer message queued behind an old one does not restart the clock; the oldest wait counts (BTL-279 second review)", async () => {
+    const w = world();
+    w.add("t1", false);
+    w.busyReason.set("t1", "unsure");
+    w.mb.send(msg("t1", "old"));
+    await flushPromises();
+    w.tick(UNSURE_DELIVER_MS - 1000);
+    await w.mb.tick();
+    w.mb.send(msg("t1", "new"));
+    await flushPromises();
+    expect(w.delivered).toEqual([]);
+    w.tick(1000);
+    await w.mb.tick();
+    expect(w.delivered).toHaveLength(1);
+    expect(w.delivered[0].text).toContain("old");
+    expect(w.delivered[0].text).toContain("new");
   });
 
   it("A1: right after a stop, before the verdict, the coordinator's message waits as 'judging' and is not taken as an answer; once judged it goes in", async () => {

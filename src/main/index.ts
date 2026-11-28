@@ -4136,8 +4136,9 @@ async function bootstrap(): Promise<void> {
       kill: (termId) => pty.kill(termId),
       // 后台恢复（BTL-256）：信箱已经调过同一个请求，这里拿到同一个结果；熔断压着的不恢复。
       resume: async (id) => (costBreaker?.sessionPaused(id) ? null : isHibernated(id) ? { state: "hibernated" } : (resumer?.request(id, "mail") ?? null)),
-      // list_sessions 只列总控自己管的：答的是「总控现在发一条会怎样」（BTL-279）。
-      wakeState: (id) => (isHibernated(id) ? "hibernated" : (resumer?.status(id, { asController: true }) ?? "not_managed")),
+      // 答的是「调用的这个总控现在发一条会怎样」（BTL-279）：和送信时同一个判断（mailboxControls）。epic 下列出的别的协调者、
+      // 调用方不是它的总控时照常算（用户点 × 关的就是 ended_by_user）（BTL-279 second review）。
+      wakeState: (id, caller) => (isHibernated(id) ? "hibernated" : (resumer?.status(id, { asController: mailboxControls(caller, id) }) ?? "not_managed")),
       endHibernated: (id) => {
         const h = sessions.get(id);
         hibernator?.forget(id, "ended by end_session");

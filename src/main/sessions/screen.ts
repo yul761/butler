@@ -282,8 +282,17 @@ function inputBox(lines: string[]): { top: number; bottom: number } | null {
   if (footer.length > MAX_FOOTER_LINES) return null;
   // 「状态栏」里有编号选项或对话框的字样：那是顶替输入框画的确认框（BTL-279 review）。对话里早先有一条线、下一行又以 > 开头
   // （引用块）时，倒数第二条线会被当成输入框的上沿；状态栏放宽到十行以后，七八行的确认框也塞得下，认错了就会往确认框里贴。
-  if (footer.some((l) => FIRST_OPTION.test(l.trim()) || [...DIALOG_MARKERS, ...PERMISSION_MARKERS].some((m) => squash(l).includes(m)))) return null;
+  // 编号选项要成套：「1. 」后面带空格，下面还有一行「2. 」。状态栏常以「1.2k tokens」「1) feature/x」开头，单看「1.」会把真输入框认丢。
+  if (footerOptions(footer) || footer.some((l) => [...DIALOG_MARKERS, ...PERMISSION_MARKERS].some((m) => squash(l).includes(m)))) return null;
   return { top, bottom };
+}
+
+const FOOTER_OPTION = (n: number): RegExp => new RegExp(`^(?:[❯>]\\s*)?${n}[.)]\\s+\\S`);
+
+/** footer 里有一套编号选项：某行是「1. xxx」，它下面还有一行「2. xxx」。 */
+function footerOptions(footer: string[]): boolean {
+  const first = footer.findIndex((l) => FOOTER_OPTION(1).test(l.trim()));
+  return first >= 0 && footer.slice(first + 1).some((l) => FOOTER_OPTION(2).test(l.trim()));
 }
 
 /**

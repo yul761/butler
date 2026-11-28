@@ -405,6 +405,22 @@ describe("controlHandler for a feature coordinator (design 2026-10-26)", () => {
     expect(trace).toEqual(["release", "outcome"]);
   });
 
+  it("list_sessions asks wakeState on behalf of the caller, so a sibling coordinator it does not control is not reported as reopening (BTL-279 second review)", async () => {
+    const calls: [string, string | null][] = [];
+    const { handle, base, sessionService, feature, sessions } = await setup({
+      wakeState: (id, caller) => (calls.push([id, caller]), caller === null ? "resumes" : "ended_by_user"),
+    });
+    const c = await sessionService.openFeature({ featureId: feature.id });
+    if (!c.ok) throw new Error("no coordinator");
+    sessions.insertIfAbsent({ id: "sib", ticketKey: null, cwd: feature.workspaceDir, origin: "shipherd", createdAt: 1, featureId: feature.id, fixesSession: "x" });
+    const r = await handle({ ...base, from: c.termId, op: "list_sessions" });
+    expect(r.ok).toBe(true);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(([, caller]) => caller === c.termId)).toBe(true);
+    const rows = (r as { value: { id: string; wake: string }[] }).value;
+    expect(rows.find((x) => x.id === "sib")?.wake).toBe("ended_by_user");
+  });
+
   it("send_message to a closed session says whether Shipherd is resuming it, waiting for memory, or the user ended it (BTL-256)", async () => {
     const answers: Record<string, Awaited<ReturnType<NonNullable<ControlHandlerDeps["resume"]>>>> = {};
     const asked: string[] = [];

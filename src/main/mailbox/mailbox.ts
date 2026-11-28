@@ -1000,7 +1000,12 @@ export class Mailbox {
       // 各送各的（BTL-279）：一个 session 的输入框一直没就绪（deliver 最多等 1 分钟）不能拖住别的 session。
       // 上一次 tick 还在给它贴的，flush 里 inputting 会挡住，不会贴两次。
       const heads = new Set(this.d.repo.queued().map((m) => this.headOf(m.toSession)));
-      await Promise.all([...heads].map((h) => this.flush(h)));
+      // flush 本应永不 reject；万一哪个抛了，别的 head 照送，查回复、回执这一拍也照做（BTL-279 second review）。
+      const list = [...heads];
+      const done = await Promise.allSettled(list.map((h) => this.flush(h)));
+      done.forEach((r, i) => {
+        if (r.status === "rejected") this.d.log(`mailbox: flushing ${list[i]} failed`, r.reason);
+      });
       this.probeAwaiting(heads);
       this.stuckReceipts();
     } catch (e) {

@@ -218,6 +218,13 @@ describe("dialogOnScreen / permissionOnScreen", () => {
     const box = ["⏺ done", RULE, "> ", RULE, "  model: opus · ctx 41%", "  branch: main · +3 −1", "  cost: $0.42 today", "  PR #12 · CI green", "  ⏵⏵ accept edits on", "  ? for shortcuts"];
     expect(inputBoxEmpty(box)).toBe(true);
     expect(permissionOnScreen(box)).toBe(false);
+    // 状态栏以「1.2k」「1)」开头（像编号、其实不是选项），真输入框照样认得出（BTL-279 second review）。
+    for (const bar of ["  1.2k tokens · $0.03 · ctx 41%", "  1) feature/BTL-279 ↑2", "1. main · clean"]) {
+      expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, bar])).toBe(true);
+      expect(inputBoxEmpty(["⏺ done", RULE, "> ", RULE, bar, "  ⏵⏵ accept edits on"])).toBe(true);
+    }
+    // 成套的编号选项（1. 下面有 2.）仍然不算输入框。
+    expect(inputBoxEmpty(["⏺ done", RULE, "> quoted", RULE, " ❯ 1. Yes", "   2. No"])).toBeNull();
   });
 
   it("finds the 2.1.322 trust dialog and the older one, regardless of spacing", () => {
