@@ -79,6 +79,32 @@ describe("stack view (workstream K)", () => {
     }
   });
 
+  it("says where the conflict markers are by the layer's place, and which layer holds the ones above back (BTL-278)", () => {
+    for (const S of Object.values(STRINGS)) {
+      const m = (where: "new_bottom" | "new_layer" | "rewritten" | "local", files = ["x.ts"]) =>
+        stackNoticeText({ reason: "markers", stackId: 1, stackName: "pay", branch: "b1", files, where }, S);
+      const texts = (["new_bottom", "new_layer", "rewritten", "local"] as const).map((w) => m(w));
+      expect(new Set(texts).size).toBe(4);
+      for (const x of texts) {
+        expect(x).toContain("x.ts");
+        expect(x).not.toContain(S.sk.rebaseNow);
+      }
+      // 新栈底：说的是 PR；中间层：说的是 draft 和上面的层；改写过的：不是「还没推过」
+      expect(m("new_bottom")).toMatch(/PR/);
+      expect(m("new_bottom")).not.toMatch(/draft/);
+      expect(m("new_layer")).toMatch(/draft/);
+      expect(m("rewritten")).toMatch(/改写过|rewritten/);
+      expect(m("local")).toMatch(/本地有还没推的提交|local commits/);
+      for (const w of ["new_bottom", "new_layer"] as const) expect(m(w)).toMatch(/还没推过|hasn't been pushed/);
+      // 查不了
+      expect(m("new_bottom", [])).toMatch(/查不了|couldn't check/);
+      const held = stackNoticeText({ reason: "held_below", stackId: 1, stackName: "pay", branch: "c", branches: ["c", "d"], by: "b" }, S);
+      expect(held).toContain("c, d");
+      expect(held).toContain("b");
+      expect(held).not.toContain(S.sk.rebaseNow);
+    }
+  });
+
   it("the remote-ahead confirm says what really happens when pushing is off or conflicts stay with the user (BTL-278)", () => {
     for (const S of Object.values(STRINGS)) {
       const line = (push: boolean, toSession: boolean) => S.sk.confirmLine("remote_ahead", "b1", push, toSession);

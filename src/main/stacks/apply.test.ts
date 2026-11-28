@@ -50,7 +50,7 @@ describe("applyTips", () => {
     g(s.repo, "remote", "add", "origin", remote);
     g(s.repo, "push", "-q", "origin", "a");
     s.layers[0]!.remoteTip = s.a;
-    const push = vi.fn(async (l: ApplyLayer) => (await pushBranch(s.repo, "origin", l.branch, l.remoteTip), true));
+    const push = vi.fn(async (l: ApplyLayer) => (await pushBranch(s.repo, "origin", l.branch, l.remoteTip, l.newTip), true));
     const r = await applyTips({ ...base(s.repo, s.layers), push });
     expect(r).toMatchObject({ kind: "applied", pushed: ["a"], unpushed: [] });
     expect(g(s.repo, "rev-parse", "a")).toBe(s.a2);

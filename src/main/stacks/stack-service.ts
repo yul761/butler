@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ExternalActionKind } from "../../shared/external";
 import type { PolicyScope } from "../../shared/admission-policy";
 import {
   isSettledOutcome,
-  type ConflictLease, type StackActionResult, type StackActor, type StackAutoRebaseBy, type StackConfirmWhy, type StackEpicNote, type StackLayerMode, type StackLayerView, type StackNoticeInfo,
+  type ConflictLease, type StackActionResult, type StackActor, type StackAutoRebaseBy, type StackConfirmWhy, type StackEpicNote, type StackLayerMode, type StackLayerView, type StackMarkersWhere, type StackNoticeInfo,
   type StackPolicy, type StackRunMode, type StackRunView, type StackTrigger, type StackView, type StacksFilter, type StacksView,
 } from "../../shared/stacks";
 import { JOB_STACKS_DAILY, type JobsRepo } from "../db/jobs-repo";
@@ -280,9 +280,11 @@ export class StackService {
   /**
    * 强推前查冲突标记的结果，按「层 id:要推的顶端:远端顶端」记（BTL-278）：两头都没变就不再每分钟重查。
    * files 非空 = 多出了标记，「现在」页提醒；null = 查不了（at、n：查的时间、连着查不了几次，退避着重查）。
-   * 只在内存里：重启后第一次推重查一次，查的过程没有别的副作用。
+   * 只在内存里：重启后第一次推重查一次，查的过程没有别的副作用。每层只留最新的一条（local、remote：查的是哪两个顶端，「现在」页按 local 认）。
    */
-  private readonly markersOf = new Map<string, { layerId: number; files: string[] | null; at: number; n: number }>();
+  private readonly markersOf = new Map<string, { layerId: number; local: string; remote: string | null; files: string[] | null; at: number; n: number }>();
+  /** 被下面带标记的层拦住、这次没推的层（「现在」页点名拦它的那一层，BTL-278）：层 → 拦它的分支、它当时要推的顶端。 */
+  private readonly heldOf = new Map<number, { by: string; tip: string }>();
   /** pushTarget 的结果（这一轮里）。 */
   private readonly pushTargetMemo = new Map<string, { at: number; p: Promise<PushTarget> }>();
   /** 要开 PR 的新栈底认不出该推到哪个 remote（「现在」页提醒，BTL-278）：栈 → 那一层。 */
@@ -996,6 +998,7 @@ export class StackService {
       if (n && n !== "origin" && remotes.includes(n)) return true;
       return !all.has(`refs/remotes/origin/${b}`) && remotes.some((r) => r !== "origin" && all.has(`refs/remotes/${r}/${b}`));
     };
+    // remotes.length > 1 其实是多余的（只有 origin 时 elsewhere 不会成立）：写给人看的，说明这条只管有好几个 remote 的仓库
     if (remotes.length > 1 && siblings.some(elsewhere)) return { remote: null, ambiguous: false };
     return { remote: stackRemote, ambiguous: false };
   }
@@ -1037,14 +1040,16 @@ export class StackService {
       const files = await this.markersVsRemote(stack, row, l.newTip, l.remoteTip, newBase);
       if (files === null) throw new Error(`not pushing ${l.branch}: checking for conflict markers failed`);
       if (files.length > 0) throw new Error(`not pushing ${l.branch}: conflict markers in ${files.join(", ")}`);
-      const below = await this.heldBelow(stack, row, l.newTip, pushedNow);
+      const below = await this.heldBelowNoted(stack, row, l.newTip, pushedNow);
       if (below) throw new Error(`not pushing ${l.branch}: ${below} below it has conflict markers that weren't pushed`);
     }
+    // 推查过的那个提交（l.newTip），不推分支现在指着的：查的过程中、推下面的层时 session 可能又提交了（BTL-278）
     const r = await this.d.external.attempt(
       "force_push",
       { scope, target: l.branch, summary: `stack rebase: ${l.branch} ${sha7(l.remoteTip)} → ${sha7(l.newTip)}` },
-      () => pushBranch(stack.repoPath, remote, l.branch, l.remoteTip),
+      () => pushBranch(stack.repoPath, remote, l.branch, l.remoteTip, l.newTip),
     );
+    if (r.ran) this.heldOf.delete(row.id);
     return r.ran;
   }
 
@@ -1273,10 +1278,11 @@ export class StackService {
         if (!tip) return;
         const files = await this.markersVsRemote(stack, layer, tip, null, null);
         if (files === null || files.length > 0) return;
-        // 查的时候分支又动了：推上去的就不是查过的那个，这轮不推，下一轮再查
+        // 查的时候分支又动了：这轮不推，下一轮按新的顶端再查（PR 的描述、提交列表也是按 tip 写的）
         if ((await revParse(repo, `refs/heads/${layer.branch}`)) !== tip) return;
+        // 推查过的那个提交：复查之后到真推之间分支还可能再动
         const r = await this.d.external.attempt("branch_push", { scope, target: layer.branch, summary: `push ${layer.branch} before opening its PR` }, () =>
-          pushBranch(repo, pushTo, layer.branch, null));
+          pushBranch(repo, pushTo, layer.branch, null, tip));
         if (!r.ran) return;
       }
       const title = owned?.ticketTitle ? `${owned.ticketKey} ${owned.ticketTitle}` : (commits[0] ?? layer.branch);
@@ -1348,15 +1354,25 @@ export class StackService {
       if (firstOpen?.id === layer.id) return { ok: false, message: t.isBottom };
       if (layer.prNumber) return { ok: true };
       const parent = all[idx - 1]!;
+      // 远端还没有的父层和这一层先推上去。第一次推也是把内容交出去（BTL-278）：推之前和别的推送一样查冲突标记，
+      // 下面有带标记、没推出去的层也不推（叠在它上面，推上去远端就带着那些标记），推的是查过的那个提交
+      const pushed = new Set<string>();
       for (const b of [parent, layer]) {
         if (b.state === "merged") continue;
         const rm = await this.pushRemote(stack, b.branch);
         if (!rm) return { ok: false, message: t.noPushRemote(b.branch) };
-        if (!(await remoteTip(repo, rm, b.branch))) {
-          const r = await this.d.external.attempt("branch_push", { scope: { repoSlug: slug, ticketKey: b.ticketKey }, target: b.branch, summary: `push ${b.branch} before opening a draft` }, () =>
-            pushBranch(repo, rm, b.branch, null));
-          if (!r.ran) return { ok: false, message: t.switchOff("branch_push") };
-        }
+        if (await remoteTip(repo, rm, b.branch)) continue;
+        const tip = await revParse(repo, `refs/heads/${b.branch}`);
+        if (!tip) return { ok: false, message: t.markersUnchecked(b.branch) };
+        const files = await this.markersVsRemote(stack, b, tip, null, null);
+        if (files === null) return { ok: false, message: t.markersUnchecked(b.branch) };
+        if (files.length > 0) return { ok: false, message: t.markers(b.branch, files.join(", ")) };
+        const below = await this.heldBelow(stack, b, tip, pushed);
+        if (below) return { ok: false, message: t.heldBelow(b.branch, below) };
+        const r = await this.d.external.attempt("branch_push", { scope: { repoSlug: slug, ticketKey: b.ticketKey }, target: b.branch, summary: `push ${b.branch} before opening a draft` }, () =>
+          pushBranch(repo, rm, b.branch, null, tip));
+        if (!r.ran) return { ok: false, message: t.switchOff("branch_push") };
+        pushed.add(b.branch);
       }
       const label = this.policyOf(stack).draftLabel;
       const lr = await this.d.external.attempt("pr_label", { scope, target: label, summary: `create label ${label}` }, () => gh.ensureLabel(repo, slug, label, T().labelDescription));
@@ -1590,7 +1606,11 @@ export class StackService {
     // 开关按层的 ticket 判断：epic 自己选了档位时（BTL-247），那一层的推送、开 PR 按它的档位。
     if (settled) await this.pushPending(s);
     const bottom = settled && p.autoOpenBottomPr ? this.needsPromotion(s) : null;
+    // 不再要提升（autoOpenBottomPr 关了、栈底已经 ready、换了栈底）：「认不出推到哪个 remote」的提醒也不用了（BTL-278）
+    if (settled && !bottom) this.noPushRemote.delete(s.id);
     if (bottom && this.d.external.allowed("pr_open", { ...scope, ticketKey: bottom.ticketKey })) await this.promoteBottom(s);
+    // pr_open 关着、promoteBottom 不来：人已经指定了推到哪个 remote 的话，提醒也该撤（不然一直说「认不出」）
+    else if (bottom && this.noPushRemote.get(s.id)?.layerId === bottom.id && (await this.pushRemote(s, bottom.branch))) this.noPushRemote.delete(s.id);
     if (p.overview === "issue" && this.d.external.allowed("issue_post", scope)) await this.syncOverview(s);
   }
 
@@ -1610,6 +1630,8 @@ export class StackService {
       const remote = await this.layerRemoteTip(s, l.branch);
       if (remote === local) {
         this.d.repo.updateLayer(l.id, { remoteOkSha: null });
+        this.heldOf.delete(l.id);
+        this.dropMarkers(l.id);
         continue;
       }
       if (!local || local !== l.tipSha || remote !== l.remoteOkSha) continue;
@@ -1617,8 +1639,8 @@ export class StackService {
       // forcePush 自己还会查一次（结果记着，不重跑 git）
       const files = await this.markersVsRemote(s, l, local, remote, l.baseSha);
       if (files === null || files.length > 0) continue;
-      // 下面那层带着标记、没推出去：这一层叠在它上面，也先不推（它修好推出去以后再补）
-      if (await this.heldBelow(s, l, local)) continue;
+      // 下面那层带着标记、没推出去：这一层叠在它上面，也先不推（它修好推出去以后再补；「现在」页点名拦它的那层）
+      if (await this.heldBelowNoted(s, l, local)) continue;
       due.push({ l, local, remote });
     }
     if (due.length === 0) return;
@@ -1635,6 +1657,9 @@ export class StackService {
     for (const { l: l0, local, remote } of due) {
       const l = this.d.repo.layer(l0.id) ?? l0;
       if (!confirmed && (l.state === "ready" || l.conflictKey)) continue;
+      // 读 PR、推下面的层的时候 session 又提交了：查过的已经不是它现在的样子，这轮不推（下一次 run 按新的顶端来）。
+      // 推的照样是查过的 local（forcePush 推 newTip）：复查之后到真推之间分支还可能再动
+      if ((await revParse(s.repoPath, `refs/heads/${l.branch}`)) !== local) continue;
       const ok = await this.forcePush(s, { position: l.position, branch: l.branch, oldTip: local, newTip: local, checkout: null, remoteTip: remote, remoteOkSha: l.remoteOkSha }, l, l.baseSha).catch((e) => {
         this.d.log(`stacks: pushing ${l.branch} failed`, e);
         return false;
@@ -1659,12 +1684,28 @@ export class StackService {
       const local = tips.get(`refs/heads/${x.branch}`) ?? null;
       const rm = remotes.get(x.branch);
       const remote = rm ? (tips.get(`refs/remotes/${rm}/${x.branch}`) ?? null) : null;
-      if (!local || local === remote) continue;
+      if (!local || local === remote) {
+        // 已经推上去了（session 自己推的、补推推的）：以前查出的标记不再拦任何层，「现在」页也不再提它
+        if (local) this.dropMarkers(x.id);
+        continue;
+      }
       if (!(await isAncestor(stack.repoPath, local, tip))) continue;
       const files = await this.markersVsRemote(stack, x, local, remote, null);
       if (files === null || files.length > 0) return x.branch;
     }
     return null;
+  }
+
+  /** heldBelow，并记下（或清掉）这一层被谁拦住：自动 run 和补推用，「现在」页点名拦它的那层（BTL-278）。 */
+  private async heldBelowNoted(stack: StackRow, row: LayerRow, tip: string, pushedNow?: ReadonlySet<string>): Promise<string | null> {
+    const below = await this.heldBelow(stack, row, tip, pushedNow);
+    if (below) this.heldOf.set(row.id, { by: below, tip });
+    else this.heldOf.delete(row.id);
+    return below;
+  }
+
+  private dropMarkers(layerId: number): void {
+    for (const [k, v] of this.markersOf) if (v.layerId === layerId) this.markersOf.delete(k);
   }
 
   /**
@@ -1691,8 +1732,8 @@ export class StackService {
       this.d.log(`stacks: not pushing ${l.branch}: checking for conflict markers failed`, e);
     }
     // 同一层旧的结果作废
-    for (const [k, v] of this.markersOf) if (v.layerId === l.id) this.markersOf.delete(k);
-    this.markersOf.set(key, { layerId: l.id, files, at: now, n: files === null ? (prev?.files === null ? prev.n + 1 : 1) : 0 });
+    this.dropMarkers(l.id);
+    this.markersOf.set(key, { layerId: l.id, local, remote, files, at: now, n: files === null ? (prev?.files === null ? prev.n + 1 : 1) : 0 });
     return files;
   }
 
@@ -1705,57 +1746,81 @@ export class StackService {
     return parent ? mergeBase(s.repoPath, tip, parent) : null;
   }
 
-  /** 补推被冲突标记拦住、现在还是那两个顶端的层（「现在」页提醒用）。 */
-  private markerBlocked(l: LayerRow): string[] | null {
+  /**
+   * 因为冲突标记（或者查不了）没推、现在还停在查过的那个顶端的层（「现在」页提醒用）：按这一层最新的那次查认，
+   * 不按 remoteOkSha 拼：Shipherd 没改写过的层（session 自己提交了带标记的解法、没推）也会拦住上面的层（BTL-278）。
+   * remote：查的时候远端那份（null = 远端还没有它）。
+   */
+  private markerBlocked(l: LayerRow): { files: string[]; remote: string | null } | null {
     if (l.state === "merged" || l.tipSha === null) return null;
-    // remoteOkSha 为空：远端还没有它（从没推过的新栈底，BTL-278）；推过、已经同步的层不会按「远端没有」查过
-    const v = this.markersOf.get(`${l.id}:${l.tipSha}:${l.remoteOkSha}`);
-    return v && (v.files === null || v.files.length > 0) ? (v.files ?? []) : null;
+    // 同一个本地顶端可能按不同的远端顶端查过几次（远端动了）：看最近查的那次
+    let v: { files: string[] | null; remote: string | null; at: number } | null = null;
+    for (const x of this.markersOf.values()) if (x.layerId === l.id && x.local === l.tipSha && (!v || x.at >= v.at)) v = x;
+    if (!v) return null;
+    return v.files === null || v.files.length > 0 ? { files: v.files ?? [], remote: v.remote } : null;
   }
 
   /**
    * 旧版（BTL-278 之前）给栈所在的仓库打开过 rerere：没有任何一层配过 rerere.enabled 时写了 local 层的 rerere.enabled=true
    * （autoUpdate 只在引擎的命令行上带，没写进配置）。session 照冲突提示 rebase 时 git 会按它套用 rr-cache 里放弃过的解法。
-   * 每个仓库只看一次（记在 workRoot 的 rerere-cleaned.json 里）：local 层正好是 Shipherd 写的样子（"true"、没有 local 的
+   * 每个仓库只看一次（记在 workRoot 旁边的 stack-rerere-cleaned.json 里）：local 层正好是 Shipherd 写的样子（"true"、没有 local 的
    * autoUpdate、global 和 system 都没配）就删掉这一项，rr-cache 改名留作备份（不删，git 不再用它）。用户自己配的不动。
    */
   /**
-   * rerere-cleaned.json：candidates = 这一版第一次启动（建这个文件）时建过栈的仓库（删掉的栈也算；旧版在那里可能跑过
+   * stack-rerere-cleaned.json：candidates = 这一版第一次启动（建这个文件）时建过栈的仓库（删掉的栈也算；旧版在那里可能跑过
    * rebase、打开过 rerere；只跑过没变化的 run 不留行，所以不按 stack_runs 算），done = 已经处理过的仓库。只清候选；
    * 别的仓库、以及升级以后才建栈的仓库里的 local rerere 是用户自己开的，不动（BTL-278）。
    * 读出来改完再原子地写回（同一个进程里串行），不会并发丢记录。
    */
-  /** 读过、写过的 rerere-cleaned.json（写不进去时也留着这份：不按那时的 stacks 表重算候选）。 */
+  /** 读过、写过的 stack-rerere-cleaned.json（写不进去时也留着这份：不按那时的 stacks 表重算候选）。 */
   private rerereMemoCache: { candidates: string[]; done: string[] } | null = null;
+
+  /**
+   * 记录放在 workRoot 外面（它旁边）：cleanupWork 每次启动和每天都清空 workRoot，放在里面的话重启后就按那时的 stacks 表
+   * 重算候选，把用户后来自己开的 rerere 也关掉（BTL-278）。
+   */
+  private rerereMemoFile(): string {
+    return join(dirname(this.d.workRoot), "stack-rerere-cleaned.json");
+  }
 
   private rerereMemo(): { candidates: string[]; done: string[] } {
     if (this.rerereMemoCache) return this.rerereMemoCache;
-    const file = join(this.d.workRoot, "rerere-cleaned.json");
-    try {
-      const j = JSON.parse(readFileSync(file, "utf8")) as unknown;
-      const strs = (x: unknown) => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string") : []);
-      if (j && typeof j === "object" && !Array.isArray(j)) {
-        const o = j as { candidates?: unknown; done?: unknown };
-        return (this.rerereMemoCache = { candidates: strs(o.candidates), done: strs(o.done) });
+    const read = (file: string): { candidates: string[]; done: string[] } | null => {
+      try {
+        const j = JSON.parse(readFileSync(file, "utf8")) as unknown;
+        const strs = (x: unknown) => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string") : []);
+        if (j && typeof j === "object" && !Array.isArray(j)) {
+          const o = j as { candidates?: unknown; done?: unknown };
+          return { candidates: strs(o.candidates), done: strs(o.done) };
+        }
+      } catch {
+        // 还没有
       }
-    } catch {
-      // 还没有：下面建
-    }
-    const memo = { candidates: [...new Set(this.d.repo.repoPathsOfStacks().map((p) => resolve(p)))], done: [] as string[] };
-    this.writeRerereMemo(memo);
-    return memo;
+      return null;
+    };
+    const memo = read(this.rerereMemoFile());
+    if (memo) return (this.rerereMemoCache = memo);
+    // 上一版放在 workRoot 里（还没被清掉的话）：搬过来，不按现在的 stacks 表重算
+    const legacy = join(this.d.workRoot, "rerere-cleaned.json");
+    const old = read(legacy);
+    const next = old ?? { candidates: [...new Set(this.d.repo.repoPathsOfStacks().map((p) => resolve(p)))], done: [] as string[] };
+    if (this.writeRerereMemo(next) && old) rmSync(legacy, { force: true });
+    return next;
   }
 
-  private writeRerereMemo(memo: { candidates: string[]; done: string[] }): void {
+  /** 写下记录（原子地换掉旧的）；写不进去时内存里留着这份。返回写没写成。 */
+  private writeRerereMemo(memo: { candidates: string[]; done: string[] }): boolean {
     this.rerereMemoCache = memo;
-    const file = join(this.d.workRoot, "rerere-cleaned.json");
+    const file = this.rerereMemoFile();
     try {
-      mkdirSync(this.d.workRoot, { recursive: true });
+      mkdirSync(dirname(file), { recursive: true });
       const tmp = `${file}.${process.pid}.tmp`;
       writeFileSync(tmp, JSON.stringify(memo));
       renameSync(tmp, file);
+      return true;
     } catch (e) {
       this.d.log(`stacks: recording the rerere cleanup failed`, e);
+      return false;
     }
   }
 
@@ -2048,10 +2113,23 @@ export class StackService {
           out.push({ reason: "stuck", stackId: s.id, stackName: s.name, branch: open[0]!.branch, detail: lr.reason, ticketKey: open[0]!.ticketKey });
         }
       }
-      // 补推被冲突标记拦住的层（BTL-278）：不提醒的话它就一直不推，没人知道
+      // 因为冲突标记没推的层（BTL-278）：不提醒的话它就一直不推，没人知道。按它是哪种层说：
+      // 从没推过的新栈底（也没开 PR）、从没推过的中间层、改写过没推出去的、本地有没推的提交（session 自己提交的）
       for (const l of open) {
-        const files = this.markerBlocked(l);
-        if (files) out.push({ reason: "markers", stackId: s.id, stackName: s.name, branch: l.branch, files, fresh: l.remoteOkSha === null, ticketKey: l.ticketKey, prNumber: l.prNumber });
+        const m = this.markerBlocked(l);
+        if (!m) continue;
+        const where: StackMarkersWhere = m.remote === null ? (l.id === open[0]!.id ? "new_bottom" : "new_layer") : l.remoteOkSha !== null ? "rewritten" : "local";
+        out.push({ reason: "markers", stackId: s.id, stackName: s.name, branch: l.branch, files: m.files, where, ticketKey: l.ticketKey, prNumber: l.prNumber });
+      }
+      // 被下面带标记的层拦住、没推的层：点名拦它的那层（那层自己有一条 markers 提醒）。同一层拦住的几层并成一条
+      const held = new Map<string, LayerRow[]>();
+      for (const l of open) {
+        const h = this.heldOf.get(l.id);
+        if (!h || h.tip !== l.tipSha || l.remoteOkSha === null) continue;
+        held.set(h.by, [...(held.get(h.by) ?? []), l]);
+      }
+      for (const [by, ls] of held) {
+        out.push({ reason: "held_below", stackId: s.id, stackName: s.name, branch: ls[0]!.branch, branches: ls.map((l) => l.branch), by, ticketKey: ls[0]!.ticketKey, prNumber: ls[0]!.prNumber });
       }
       // 新栈底认不出推到哪个 remote：不推、不开 PR，要人指定（BTL-278）
       const np = this.noPushRemote.get(s.id);

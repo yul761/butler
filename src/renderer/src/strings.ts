@@ -25,7 +25,7 @@ import type { InterruptCategory } from "../../shared/metrics";
 import type { ReportKind } from "../../shared/control";
 import type { YouKind } from "../../shared/turn";
 import type { TurnTone } from "./turn-tone";
-import type { StackLayerState, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
+import type { StackLayerState, StackMarkersWhere, StackPolicyErrorCode, StackPolicyKey, StackRunOutcome, StackSource, StackTrigger } from "../../shared/stacks";
 import type { ClosePrErrorKind, FeatureHandoffTrigger, FollowupKind, FollowupTrigger, HandoffTrigger, HibernateReason, InboxRole, MailboxBlockReason, MessageKind, MessageStatus, RefreshRefusal, TicketStatus, UsageKind } from "../../shared/types";
 
 const ZH_STATUS: Record<TicketStatus, string> = {
@@ -2000,12 +2000,22 @@ const ZH = {
         host && host !== "github.com"
           ? `栈「${stack}」一天多没自动 rebase 了：Shipherd 读不到 ${host} 上的 PR，没法确认哪些层在 review，就一直推迟。是 GitHub Enterprise 就在终端跑 gh auth login --hostname ${host}，登录后下一轮会自己接着跑；不是 GitHub 的仓库，栈只能手动 rebase（点「马上 rebase」）。`
           : `栈「${stack}」一天多没自动 rebase 了：读不到开着的 PR，Shipherd 没法确认哪些层在 review，就一直推迟。多半是 gh 没登录：在终端跑 gh auth login，登录后下一轮会自己接着跑。`,
-      markers: (stack: string, branch: string, files: string, fresh = false) =>
-        files
-          ? (fresh
-            ? `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它，也不给它开 PR：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`
-            : `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<），远端那份没有。Shipherd 不推它（重新 rebase 也会带着这些标记），叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`)
-          : `栈「${stack}」的 ${branch} ${fresh ? "还没推过" : "改写过、还没推出去"}，可是查不了里面有没有冲突标记，Shipherd 先不推，过一会儿再查。一直这样就看一下 Shipherd 的日志。`,
+      markers: (stack: string, branch: string, files: string, where: StackMarkersWhere = "rewritten") => {
+        const what = { new_bottom: "还没推过", new_layer: "还没推过", rewritten: "改写过、还没推出去", local: "本地有还没推的提交" }[where];
+        if (!files) return `栈「${stack}」的 ${branch} ${what}，可是查不了里面有没有冲突标记，Shipherd 先不推，过一会儿再查。一直这样就看一下 Shipherd 的日志。`;
+        switch (where) {
+          case "new_bottom":
+            return `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它，也不给它开 PR：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`;
+          case "new_layer":
+            return `栈「${stack}」的 ${branch} 还没推过，可是 ${files} 里有冲突标记（<<<<<<<）。Shipherd 不推它、不给它开 draft，叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，上面的层下一轮补推；要开 draft 就再点一次。`;
+          case "local":
+            return `栈「${stack}」的 ${branch} 本地有还没推的提交，${files} 里有冲突标记（<<<<<<<），远端那份没有。叠在它上面的层推上去就带着这些标记，Shipherd 先不推它们：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就补推上面的层。`;
+          default:
+            return `栈「${stack}」的 ${branch} 改写过、还没推出去，可是 ${files} 里有冲突标记（<<<<<<<），远端那份没有。Shipherd 不推它（重新 rebase 也会带着这些标记），叠在它上面的层也先不推：请这一层的 session 去掉标记、提交，Shipherd 下一轮再查，干净了就推。`;
+        }
+      },
+      held_below: (stack: string, branches: string, by: string) =>
+        `栈「${stack}」的 ${branches} 改写过、还没推出去：它们叠在 ${by} 上，${by} 带着冲突标记、还没推，推上去远端就带着那些标记。Shipherd 先不推，等 ${by} 的标记去掉（看 ${by} 那条提醒），下一轮自己补推。`,
       no_push_remote: (stack: string, branch: string) =>
         `栈「${stack}」的新栈底 ${branch} 还没推过，Shipherd 认不出该推到哪个 remote（这个仓库有好几个 remote），就没推、也没开 PR。在终端跑 git config branch.${branch}.pushRemote <remote> 指定，下一轮就接着开。`,
       confirm: (stack: string, branches: string, why: "ready_pr" | "handoff" | "remote_ahead", push = true, toSession = true) =>

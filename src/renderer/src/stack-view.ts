@@ -15,7 +15,8 @@ export function stackNoticeText(n: StackNoticeInfo, S: UiStrings): string {
     case "behind": return t.behind(n.stackName, n.commits ?? 0, n.days ?? 0);
     case "stuck": return t.stuck(n.stackName, n.detail ?? "—");
     case "prs_unreadable": return t.prs_unreadable(n.stackName, n.host ?? null);
-    case "markers": return t.markers(n.stackName, n.branch, (n.files ?? []).join(", "), n.fresh === true);
+    case "markers": return t.markers(n.stackName, n.branch, (n.files ?? []).join(", "), n.where ?? "rewritten");
+    case "held_below": return t.held_below(n.stackName, (n.branches ?? [n.branch]).join(", "), n.by ?? "—");
     case "no_push_remote": return t.no_push_remote(n.stackName, n.branch);
     case "confirm":
       return t.confirm(n.stackName, (n.branches ?? [n.branch]).join(", "), n.detail === "handoff" || n.detail === "remote_ahead" ? n.detail : "ready_pr", n.push ?? true, n.toSession ?? true);

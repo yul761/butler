@@ -211,15 +211,20 @@ export async function deleteRef(cwd: string, ref: string): Promise<void> {
 }
 
 /**
- * 推一个分支。expected 为远端现在的提交时用 --force-with-lease（只在远端还是它时覆盖）；
- * expected 为 null 时远端还没有这个分支：普通 push，并设上游（session 之后 git push 直接能用）。
+ * 推一个分支：推的是 sha 这个提交（查过冲突标记的那个，BTL-278），不是推的那一刻分支指着的提交（查和推之间 session 可能又提交了）。
+ * expected 为远端现在的提交时用 --force-with-lease（只在远端还是它时覆盖）；
+ * expected 为 null 时远端还没有这个分支：普通 push，再设上游（session 之后 git push 直接能用；推的是 sha，git 自己的 --set-upstream 不管用）。
  */
-export async function pushBranch(cwd: string, remote: string, branch: string, expected: string | null): Promise<void> {
-  const spec = `refs/heads/${branch}:refs/heads/${branch}`;
+export async function pushBranch(cwd: string, remote: string, branch: string, expected: string | null, sha: string): Promise<void> {
+  const spec = `${sha}:refs/heads/${branch}`;
   const args = expected
     ? ["push", "--porcelain", `--force-with-lease=refs/heads/${branch}:${expected}`, remote, spec]
-    : ["push", "--porcelain", "--set-upstream", remote, spec];
+    : ["push", "--porcelain", remote, spec];
   await gitOk(cwd, args, { timeoutMs: NET_TIMEOUT_MS });
+  if (expected) return;
+  // 设不上不算推送失败（已经推上去了）
+  await gitOk(cwd, ["config", `branch.${branch}.remote`, remote]).catch(() => undefined);
+  await gitOk(cwd, ["config", `branch.${branch}.merge`, `refs/heads/${branch}`]).catch(() => undefined);
 }
 
 /** 列出某个前缀下的引用。 */
