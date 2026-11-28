@@ -98,7 +98,7 @@ export class RepoIdentity {
     return out;
   }
 
-  /** slugOf 的异步版（BTL-278）：栈服务每轮都要，不阻塞主线程（Windows 上一次 git 要几十毫秒）。缓存和同步版共用。 */
+  /** slugOf 的异步版（BTL-278）：栈服务每轮都要、关 ticket 比较仓库也用，从不在主线程同步跑 git（Windows 上一次 git 要几十毫秒）。缓存和同步版共用；git 失败是 null 且不缓存，下次重读。 */
   async slugOfAsync(path: string): Promise<string | null> {
     const s = await this.remoteSlugAsync(path, this.cache, this.asyncGit, "origin");
     return s === null ? null : this.canonical(s);
@@ -185,15 +185,5 @@ export class RepoIdentity {
     const slug = this.slugOf(path);
     if (slug) return { slug };
     return { reason: this.exists(join(path, ".git")) ? "no_remote" : "not_git" };
-  }
-
-  /**
-   * slugOf，但不在主线程上同步跑 git（BTL-270 审查，关 ticket 时比较仓库用）：先 warm（异步 git），再只看缓存；
-   * git 失败、没缓存上的就是 null（不像 slugOf 那样同步重试）。
-   */
-  async slugOfWarm(path: string): Promise<string | null> {
-    await this.warm([path]);
-    const s = this.cache.get(path);
-    return s === undefined || s === null ? null : this.canonical(s);
   }
 }

@@ -31,14 +31,14 @@ describe("RepoIdentity", () => {
     expect(nullCalls).toBe(1);
   });
 
-  it("slugOfWarm reads the origin with the async git only, never the sync one; a failure is null and not cached (BTL-270 review)", async () => {
+  it("slugOfAsync reads the origin with the async git only, never the sync one; a failure is null and not cached (BTL-270 review)", async () => {
     const sync = vi.fn(() => "git@github.com:acme/web.git");
     let fail = true;
     const id = new RepoIdentity({ git: sync, asyncGit: async () => { if (fail) throw new Error("timeout"); return "git@github.com:Acme/Web.git"; }, exists: () => true, canonical: (s) => `c:${s}` });
-    expect(await id.slugOfWarm("/a")).toBeNull();
+    expect(await id.slugOfAsync("/a")).toBeNull();
     fail = false;
-    expect(await id.slugOfWarm("/a")).toBe("c:acme/web");
-    expect(await id.slugOfWarm("/a")).toBe("c:acme/web");
+    expect(await id.slugOfAsync("/a")).toBe("c:acme/web");
+    expect(await id.slugOfAsync("/a")).toBe("c:acme/web");
     expect(sync).not.toHaveBeenCalled();
   });
 

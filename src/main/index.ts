@@ -3671,7 +3671,7 @@ async function bootstrap(): Promise<void> {
     transaction: (fn) => withTransaction(db, fn),
     // 哪些开着的 PR 能关、怎么关、怎么结束 session：tickets/ticket-close-wiring.ts（单独测）。
     ...closeWiring({
-      tickets, ticketPrs, branchOwners, ghDir: prGhDir, slugOf: (path) => repoIdentity.slugOfWarm(path), defaultBranch: (repo) => git.defaultBranch(repo), prHead, prClose, external: externalActions,
+      tickets, ticketPrs, branchOwners, ghDir: prGhDir, slugOf: (path) => repoIdentity.slugOfAsync(path), defaultBranch: (repo) => git.defaultBranch(repo), prHead, prClose, external: externalActions,
       sessions: {
         activityKind: (id) => activityMonitor.get(id)?.kind ?? null,
         waitingForInput: (id) => sessions.get(id)?.waitingForInput ?? false,
