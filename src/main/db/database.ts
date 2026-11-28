@@ -181,10 +181,14 @@ export function migrate(db: Db, target?: number, list: readonly string[] = MIGRA
 
 /** 迁移里新建的表（CREATE TABLE [IF NOT EXISTS] 后面的名字；TEMP 表不在库里留下，不算）。 */
 const CREATE_TABLE = /\bCREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+["'`[]?(\w+)/gi;
-/** 迁移里新建的索引（CREATE [UNIQUE] INDEX 后面的名字）。带 IF NOT EXISTS 的已经在了也照样能跑，不算（第八轮复核建议 2）。 */
-const CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS\b)["'`[]?(\w+)/gi;
-/** 任何写法的 CREATE INDEX 后面的名字（看版本 from 之前的迁移有没有建过这个名字）。 */
-const ANY_CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`[]?(\w+)/gi;
+/**
+ * 迁移里新建的索引（CREATE [UNIQUE] INDEX [IF NOT EXISTS] 后面的名字）。带 IF NOT EXISTS 的也算（第九轮复核，总控定，和表一致）：
+ * 它已经在了时这一步什么都不做、照样提交，排在它前面的迁移就被悄悄跳过了；不带的反倒有 SQLite 的 already exists 兜底。
+ * 也用来看版本 from 之前的迁移有没有建过这个名字。
+ * 和 CREATE_TABLE 一样只是正则：迁移里注释或字符串中的「CREATE INDEX x」字样也会被认成建索引，待跑的步骤里是误报，
+ * from 之前的步骤里是把一个名字当成建过、筛掉了。真要这么写时改成别的字样。
+ */
+const CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`[]?(\w+)/gi;
 
 /**
  * 预检（BTL-279 第六、七轮）：从 from 升到 to 之前，一步都还没提交时，先查这份数据是不是被迁移顺序不同的版本动过。
@@ -194,7 +198,7 @@ const ANY_CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\
  *（第七轮复核：#109 先合时它重建 session_messages，按 DDL 跳过这张表会漏掉 4.3.0 测试版本加过的 attempts 三列，
  * 重建把它们丢掉、BTL-270 永远不跑）。正常升级时库里没有这种列和表，不跑模拟。
  * 以前有过、被后面的步骤删掉再加回来的列和表，版本 from 时本来就有，不误报。
- * 不带 IF NOT EXISTS 的 CREATE INDEX 要建的索引也一样查（第八轮复核建议 2），但只查 list[0..from) 里从没建过的名字：
+ * CREATE INDEX 要建的索引也一样查（第八轮复核建议 2；带不带 IF NOT EXISTS 都查，第九轮），但只查 list[0..from) 里从没建过的名字：
  * 重建表的迁移 DROP TABLE 会带走索引、再 CREATE INDEX 同名的建回来（v57 重建 memory_samples 和 memory_samples_at），
  * 不先筛一下，从 v30–v56 正常升级的库每次都要跑一遍模拟。分支版本新加的索引都是新名字，照样查得到。
  *
@@ -202,7 +206,7 @@ const ANY_CREATE_INDEX = /\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\
  * - ALTER TABLE … RENAME TO 的目标已经在了；不是 addColumns 写的普通 ALTER TABLE … ADD COLUMN，要加的列已经在了。
  *   这两种照旧在那一步报 SQLite 自己的错、回滚那一步，前面的步骤已经提交了。
  * - CREATE VIRTUAL TABLE；带 main. 之类库名前缀的表名、索引名。
- * - 分支版本建了一个 list[0..from) 里建过、后来又删掉的同名索引。
+ * - 分支版本建了一个 list[0..from) 里建过、后来又删掉的同名索引（包括 DROP TABLE 时顺带删掉的索引）。表不这样筛，建过又删掉的同名表照样查。
  * - 只查已经在了的，不查缺了的（比如开过一个多了迁移的分支版本，再用没合那个分支的版本打开）：另开 ticket。
  * - 运行时建的表不在模拟里：conv_fts（conv-repo.ts 建的 FTS5 虚表）和它的影子表 conv_fts_data、conv_fts_idx 等。
  *   以后哪条迁移要用 CREATE TABLE 建同名的表，正常升级上来的库也会被误报成顺序不对。
@@ -215,7 +219,7 @@ export function checkMigrationOrder(db: Db, list: readonly string[], from: numbe
   const have = new Map<string, Set<string>>();
   let indexedBefore: Set<string> | undefined;
   const indexCreatedBefore = (name: string): boolean => {
-    indexedBefore ??= new Set(list.slice(0, from).flatMap((sql) => [...sql.matchAll(ANY_CREATE_INDEX)].map((m) => m[1].toLowerCase())));
+    indexedBefore ??= new Set(list.slice(0, from).flatMap((sql) => [...sql.matchAll(CREATE_INDEX)].map((m) => m[1].toLowerCase())));
     return indexedBefore.has(name.toLowerCase());
   };
   let expected: DatabaseSync | undefined;

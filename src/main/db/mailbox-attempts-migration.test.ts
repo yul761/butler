@@ -33,9 +33,11 @@ const writeDb = (file: string, steps: readonly string[], uv: number): string => 
 };
 
 describe("mailbox attempts migration (BTL-279)", () => {
-  it("is the last migration and upgrades the database before it without touching its rows", () => {
-    // 4.3.0 的迁移顺序：BTL-279 排在最后，rebase 时挪到数组末尾。
-    expect(M).toBe(MIGRATIONS.length - 1);
+  it("is the one checked migration adding the three columns, and upgrades the database before it without touching its rows", () => {
+    // 按内容找到 BTL-279 那一条，不要求它排在最后（第九轮复核建议 2：#111 先合以后 #109 排到 65）。
+    expect(M).toBeGreaterThanOrEqual(0);
+    expect(MIGRATIONS[M].startsWith(CHECKED_ADD_COLUMNS)).toBe(true);
+    expect(MIGRATIONS.filter((m) => /session_messages ADD COLUMN (attempts|last_attempt_at|last_attempt)\b/.test(m))).toEqual([MIGRATIONS[M]]);
     const db = new DatabaseSync(":memory:");
     db.exec("PRAGMA foreign_keys = ON;");
     for (let i = 0; i < M; i++) db.exec(MIGRATIONS[i]);
@@ -43,7 +45,7 @@ describe("mailbox attempts migration (BTL-279)", () => {
     db.prepare(`INSERT INTO session_messages (id, kind, from_session, to_session, feature_id, body, status, queued_at, blocked_reason, blocked_since)
       VALUES ('m1', 'instruction', 'coord', 's1', 1, 'do it', 'queued', 5, 'turn', 6)`).run();
 
-    expect(migrate(db)).toBe(MIGRATIONS.length);
+    expect(migrate(db, M + 1)).toBe(M + 1);
     expect(cols(db, "session_messages")).toEqual(expect.arrayContaining(["attempts", "last_attempt_at", "last_attempt"]));
     expect(db.prepare("SELECT id, body, status, queued_at, blocked_reason, blocked_since, attempts, last_attempt_at, last_attempt FROM session_messages").all())
       .toEqual([{ id: "m1", body: "do it", status: "queued", queued_at: 5, blocked_reason: "turn", blocked_since: 6, attempts: 0, last_attempt_at: null, last_attempt: null }]);
@@ -520,14 +522,63 @@ describe("checking the order against the schema version `from` should have (BTL-
     checkMigrationOrder(ok, legit, 2, 4, () => okSims.push(1));
     expect(okSims).toEqual([]);
     expect(migrate(ok, undefined, legit)).toBe(4);
-    // 带 IF NOT EXISTS 的已经在了也能跑：不查，也不模拟。
-    const ine = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE INDEX IF NOT EXISTS t_a ON t (a);"];
-    const db2 = new DatabaseSync(":memory:");
-    db2.exec("CREATE TABLE t (a INTEGER); CREATE INDEX t_a ON t (a); PRAGMA user_version = 2;");
+  });
+
+  it("an index created IF NOT EXISTS is checked too, or that step would do nothing and the steps before it would be skipped silently (ninth review suggestion 1, controller's call)", () => {
+    // 分支版本在 v3 跑了 CREATE INDEX IF NOT EXISTS x；这里 v3 是别的迁移 Y（建 y），这条排在 v4。
+    const ine = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE y (a INTEGER);", "CREATE INDEX IF NOT EXISTS x ON t (a);"];
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE t (a INTEGER); CREATE TABLE u (a INTEGER); CREATE INDEX x ON t (a); PRAGMA user_version = 2;");
+    let e: unknown;
+    try {
+      migrate(db, undefined, ine);
+    } catch (x) {
+      e = x;
+    }
+    expect(e).toBeInstanceOf(MigrationOrderError);
+    expect([(e as MigrationOrderError).index, (e as MigrationOrderError).what]).toEqual([3, "index"]);
+    // Y 没跑也没提交。
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'y'").get()).toBeUndefined();
+    db.close();
+    // from 之前用 IF NOT EXISTS 建过的名字照样算建过（surviving mutant M7）：重建表带走再建回来，不模拟。
+    const legit = ["CREATE TABLE t (a INTEGER); CREATE INDEX IF NOT EXISTS x ON t (a);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE t_new (a INTEGER); DROP TABLE t; ALTER TABLE t_new RENAME TO t;", "CREATE INDEX IF NOT EXISTS x ON t (a);"];
+    const ok = new DatabaseSync(":memory:");
+    for (let i = 0; i < 2; i++) ok.exec(legit[i]);
+    ok.exec("PRAGMA user_version = 2");
     const sims: number[] = [];
-    checkMigrationOrder(db2, ine, 2, 3, () => sims.push(1));
+    checkMigrationOrder(ok, legit, 2, 4, () => sims.push(1));
     expect(sims).toEqual([]);
-    expect(migrate(db2, undefined, ine)).toBe(3);
+    expect(migrate(ok, undefined, legit)).toBe(4);
+    ok.close();
+  });
+
+  it("index names in quotes or brackets, and lower-case create index, are read too (surviving mutants M3, M4)", () => {
+    for (const create of ['CREATE INDEX "x" ON t (a);', "CREATE INDEX `x` ON t (a);", "CREATE INDEX [x] ON t (a);", "create unique index x on t (a);", "create index if not exists x on t (a);"]) {
+      const list = ["CREATE TABLE t (a INTEGER);", "CREATE TABLE u (a INTEGER);", "CREATE TABLE y (a INTEGER);", create];
+      const db = new DatabaseSync(":memory:");
+      db.exec("CREATE TABLE t (a INTEGER); CREATE TABLE u (a INTEGER); CREATE INDEX x ON t (a); PRAGMA user_version = 2;");
+      expect(() => migrate(db, undefined, list), create).toThrow(MigrationOrderError);
+      expect(db.prepare("PRAGMA user_version").get(), create).toEqual({ user_version: 2 });
+      db.close();
+    }
+  });
+
+  it("a table created before `from`, dropped, and created again by a branch build is still checked: tables get no \"created before\" pass (surviving mutant M9)", () => {
+    // 0 建 w，1 删 w；分支版本把建 w 排在第 2 步跑过了，这里第 2 步是 Y（建 y），第 3 步才建 w。
+    const list = ["CREATE TABLE t (a INTEGER); CREATE TABLE w (a INTEGER);", "DROP TABLE w;", "CREATE TABLE y (a INTEGER);", "CREATE TABLE IF NOT EXISTS w (a INTEGER, b TEXT);"];
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE t (a INTEGER); CREATE TABLE w (a INTEGER, b TEXT); PRAGMA user_version = 2;");
+    let e: unknown;
+    try {
+      migrate(db, undefined, list);
+    } catch (x) {
+      e = x;
+    }
+    expect(e).toBeInstanceOf(MigrationOrderError);
+    expect([(e as MigrationOrderError).index, (e as MigrationOrderError).what]).toEqual([3, "table"]);
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'y'").get()).toBeUndefined();
+    db.close();
   });
 
   it("only checks up to the target (surviving mutant M11): a column a later step adds being there already does not stop migrate(db, target)", () => {
